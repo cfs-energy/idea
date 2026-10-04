@@ -321,6 +321,26 @@ def test_monthly_checks_only_changed_inputs_and_release_works_when_disabled(
     svc._enqueue.assert_any_call(unchanged, None, 'release')
 
 
+def test_a_resumed_candidate_terminates_its_builder(monkeypatch):
+    svc = service()
+    candidate = row(
+        status='test_launching',
+        image_id='ami-candidate',
+        instance_id='i-builder',
+        checks=[ImageCheck(name='kernel_default', ok=True)],
+    )
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *args: None
+    )
+    monkeypatch.setattr(module, 'ComputeImageCanary', lambda context: Mock())
+    ec2 = Mock()
+    svc.context.aws.return_value.ec2.return_value = ec2
+    svc.promote = Mock()
+    svc._run_pipeline(candidate)
+    ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-builder'])
+    svc.promote.assert_called_once_with(candidate)
+
+
 def test_nonleader_does_no_work():
     svc = service()
     svc.context.is_leader.return_value = False

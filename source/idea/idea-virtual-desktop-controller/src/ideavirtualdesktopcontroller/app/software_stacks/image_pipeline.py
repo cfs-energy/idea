@@ -51,6 +51,7 @@ from ideasdk.aws.image_builds import (
     describe_images_by_id,
     promote_gate,
     resume_record,
+    terminate_builder,
 )
 from ideasdk.aws.stock_amis import resolve_stock_image, stock_unsupported_reason
 from ideasdk.utils import Utils
@@ -836,6 +837,7 @@ class DesktopImagePipeline:
                 f'no ss-base stack for {record.base_os} {record.architecture} to test-launch from'
             )
         self._wait_image_available(record.image_id)
+        terminate_builder(self.context, record.instance_id, self._logger)
         checks = self.tester.test_launch(record, base, self.settings())
         record.checks = list(record.checks or []) + checks
         failing = [c for c in checks if not c.ok]

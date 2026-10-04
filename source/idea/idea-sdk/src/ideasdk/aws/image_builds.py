@@ -237,6 +237,20 @@ def stop_builder(context, instance_id: str, logger) -> None:
         logger.error(f'could not stop builder instance {instance_id}: {e}')
 
 
+def terminate_builder(context, instance_id: Optional[str], logger) -> None:
+    """
+    terminate a bake's builder once its image is available. the bake terminates its own
+    builder, but a row resumed after a restart reaches the test launch without that step;
+    terminating an instance that is already terminated changes nothing.
+    """
+    if not instance_id:
+        return
+    try:
+        context.aws().ec2().terminate_instances(InstanceIds=[instance_id])
+    except Exception as e:
+        logger.warning(f'could not terminate builder {instance_id}: {e}')
+
+
 def terminate_old_stopped_builders(context, logger) -> List[str]:
     """terminate this module's builder instances that have sat stopped for over a day; returns their ids"""
     terminated: List[str] = []

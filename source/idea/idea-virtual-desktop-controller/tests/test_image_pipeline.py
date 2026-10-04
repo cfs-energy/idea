@@ -632,6 +632,28 @@ def test_a_restart_with_the_candidate_built_resumes_at_the_test_launch():
     assert h.ec2.stopped == []
 
 
+def test_a_resumed_row_terminates_its_builder_once_the_image_is_available():
+    # the bake that would have terminated it died with the old controller
+    h = Harness()
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='checking',
+            host='dead-task',
+            ami_name='idea-dcv-host-rocky9-v1',
+            instance_id='i-builder',
+            started_on=T0,
+            release=VERSION,
+        )
+    )
+    h.ec2.add_image('ami-built', name='idea-dcv-host-rocky9-v1')
+    h.pipeline.tick(now=T0, blocking=True)
+    assert h.row().status == 'current'
+    assert h.ec2.terminated == ['i-builder']
+    assert h.ec2.stopped == []
+
+
 def test_a_restart_before_the_snapshot_stops_the_builder_and_retries_once():
     h = Harness()
     h.pipeline._start = lambda record, blocking: True

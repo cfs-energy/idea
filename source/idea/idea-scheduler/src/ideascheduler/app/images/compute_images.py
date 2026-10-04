@@ -54,6 +54,7 @@ from ideasdk.aws.image_builds import (
     terminate_old_stopped_builders,
     promote_gate,
     resume_record,
+    terminate_builder,
     build_stamp,
     describe_images_by_id,
     image_state,
@@ -648,6 +649,7 @@ class ComputeImageService:
                 builder = ComputeNodeAmiBuilder.__new__(ComputeNodeAmiBuilder)
                 builder.context = self.context
             builder.wait_for_image(record.image_id)
+            terminate_builder(self.context, record.instance_id, self._logger)
             record.checks = [
                 c
                 for c in record.checks or []
