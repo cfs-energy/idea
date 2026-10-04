@@ -321,6 +321,26 @@ def test_monthly_checks_only_changed_inputs_and_release_works_when_disabled(
     svc._enqueue.assert_any_call(unchanged, None, 'release')
 
 
+def test_the_monthly_check_runs_once_when_the_settings_copy_lags(monkeypatch):
+    # the scheduler's copy of last-run lags its own write; a second tick 15 s later
+    # still reads the old value and must not check (and rebake) again
+    svc = service()
+    svc.context.config().values['scheduler.images.refreshed_release'] = (
+        module.__version__
+    )
+    changed = row(source_ami='ami-obsolete', release=module.__version__)
+    svc.list_rows = lambda: [changed]
+    monkeypatch.setattr(module, 'find_latest_stock_ami', lambda *args: 'ami-stock')
+    svc._enqueue = Mock()
+    now = datetime(2026, 10, 4, 2, tzinfo=timezone.utc)
+    svc.tick(now)
+    svc.tick(now.replace(second=15))
+    svc._enqueue.assert_called_once_with(changed, None, 'monthly')
+    assert svc.context.config().db.entries[
+        'scheduler.images.image_refresh_last_run_on'
+    ] == int(now.timestamp() * 1000)
+
+
 def test_a_resumed_candidate_terminates_its_builder(monkeypatch):
     svc = service()
     candidate = row(

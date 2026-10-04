@@ -1042,6 +1042,14 @@ class ComputeImageService:
         )
         due = schedule.next_run_after(baseline)
         monthly = due is not None and due <= local
+        if monthly:
+            # claim the period before checking: the settings copy lags this write, and a
+            # tick that still reads the old last run must not run the check again
+            monthly = config.db.set_config_entry_if(
+                config.get_real_key('scheduler.images.image_refresh_last_run_on'),
+                int(now.timestamp() * 1000),
+                last,
+            )
         requested_release = config.get_string(
             'scheduler.images.refresh_requested_release', default=__version__
         )
@@ -1080,11 +1088,6 @@ class ComputeImageService:
                     # release is retried next tick instead of being marked done
                     pending_release = True
                     self._logger.exception(f'{row.base_os}: image refresh check failed')
-            if monthly:
-                self._setting(
-                    'scheduler.images.image_refresh_last_run_on',
-                    int(now.timestamp() * 1000),
-                )
             if release and not pending_release:
                 self._setting('scheduler.images.refreshed_release', requested_release)
         settings = ImagePipelineSettings(

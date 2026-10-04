@@ -913,6 +913,32 @@ def test_the_monthly_check_rebakes_only_rows_whose_vendor_base_moved(monkeypatch
     )
 
 
+def test_the_monthly_check_runs_once_when_the_settings_copy_lags(monkeypatch):
+    tz = ZoneInfo('America/Chicago')
+    h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=tz))
+    stored = {'value': h.config.values['vdc.software_stacks.image_refresh_last_run_on']}
+
+    def set_if(key, value, expected):
+        if stored['value'] != expected:
+            return False
+        stored['value'] = value
+        return True
+
+    h.config.db.set_config_entry_if.side_effect = set_if
+    h.config.put = lambda key, value: None  # this copy never sees the write
+    checks = []
+    monkeypatch.setattr(
+        module,
+        'resolve_stock_image',
+        lambda ec2, base_os, arch, logger: checks.append(base_os)
+        or {'ImageId': f'ami-stock-{base_os}'},
+    )
+    due = datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc)
+    h.pipeline.tick(now=due)
+    h.pipeline.tick(now=due + timedelta(seconds=15))
+    assert sorted(checks) == ['rocky8', 'rocky9']
+
+
 def test_a_quiet_monthly_check_bakes_nothing():
     tz = ZoneInfo('America/Chicago')
     h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=tz))

@@ -185,6 +185,15 @@ class DesktopImagePipeline:
         config.db.set_config_entry(real_key, value)
         config.put(real_key, value)
 
+    def _claim_config(self, key: str, expected, value) -> bool:
+        """write only if the stored value is still `expected`; the settings copy can lag"""
+        config = self.context.config()
+        real_key = config.get_real_key(key)
+        if not config.db.set_config_entry_if(real_key, value, expected):
+            return False
+        config.put(real_key, value)
+        return True
+
     # rows
 
     def _all_stacks(self) -> List[VirtualDesktopSoftwareStack]:
@@ -584,13 +593,16 @@ class DesktopImagePipeline:
         last_ms = config.get_int(LAST_RUN_KEY, default=None)
         if last_ms is None:
             # the release trigger covers a first bake; the schedule counts from here
-            self._set_config(LAST_RUN_KEY, int(now.timestamp() * 1000))
+            self._claim_config(LAST_RUN_KEY, None, int(now.timestamp() * 1000))
             return
         last = datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc).astimezone(tz)
         due = schedule.next_run_after(last)
         if due is None or due > now.astimezone(tz):
             return
-        self._set_config(LAST_RUN_KEY, int(now.timestamp() * 1000))
+        # claim the period first, so a controller reading a lagging copy of last-run
+        # does not run the check twice
+        if not self._claim_config(LAST_RUN_KEY, last_ms, int(now.timestamp() * 1000)):
+            return
         ec2 = self.context.aws().ec2()
         queued = []
         for record in self.seed_rows():

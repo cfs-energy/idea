@@ -136,9 +136,26 @@ class FakeRecords:
         return list(self.items.values())
 
 
+class FakeConfigDB:
+    """the stored settings; FakeConfig.values is the module's (possibly lagging) copy"""
+
+    def __init__(self):
+        self.entries = {}
+
+    def set_config_entry(self, key, value, source='sdk'):
+        self.entries[key] = value
+
+    def set_config_entry_if(self, key, value, expected, source='sdk'):
+        if self.entries.get(key) != expected:
+            return False
+        self.entries[key] = value
+        return True
+
+
 class FakeConfig:
     def __init__(self, values):
         self.values = dict(values)
+        self.db = FakeConfigDB()
 
     def get_string(self, key, required=False, default=None):
         return self.values.get(key, default)

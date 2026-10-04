@@ -473,9 +473,8 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 f'no config entries found matching config prefix: {config_key_prefix}'
             )
 
-    def set_config_entry(self, key: str, value: Any, source: str = 'sdk'):
-        self.log_info(f'updating config: {key} = {value}')
-
+    @staticmethod
+    def _ddb_value(value: Any) -> Any:
         # ddb does not support float. convert Decimal before updating ...
         if value is not None:
             if isinstance(value, float):
@@ -483,7 +482,10 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             elif isinstance(value, list) and len(value) > 0:
                 if isinstance(value[0], float):
                     value = [Decimal(str(x)) for x in value]
+        return value
 
+    def set_config_entry(self, key: str, value: Any, source: str = 'sdk'):
+        self.log_info(f'updating config: {key} = {value}')
         self.cluster_settings_table.update_item(
             Key={'key': key},
             UpdateExpression='SET #value=:value, #source=:source ADD #version :version',
@@ -493,11 +495,50 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 '#source': 'source',
             },
             ExpressionAttributeValues={
-                ':value': value,
+                ':value': ClusterConfigDB._ddb_value(value),
                 ':version': 1,
                 ':source': source,
             },
         )
+
+    def set_config_entry_if(
+        self, key: str, value: Any, expected: Any, source: str = 'sdk'
+    ) -> bool:
+        """
+        write the entry only while the stored value is still `expected` (None: no value
+        yet). False when another writer changed it first, so a caller reading a lagging
+        copy of the settings can claim a run without repeating one.
+        """
+        values = {
+            ':value': ClusterConfigDB._ddb_value(value),
+            ':version': 1,
+            ':source': source,
+        }
+        if expected is None:
+            condition = 'attribute_not_exists(#value)'
+        else:
+            condition = '#value = :expected'
+            values[':expected'] = ClusterConfigDB._ddb_value(expected)
+        try:
+            self.cluster_settings_table.update_item(
+                Key={'key': key},
+                UpdateExpression='SET #value=:value, #source=:source ADD #version :version',
+                ConditionExpression=condition,
+                ExpressionAttributeNames={
+                    '#value': 'value',
+                    '#version': 'version',
+                    '#source': 'source',
+                },
+                ExpressionAttributeValues=values,
+            )
+        except botocore.exceptions.ClientError as e:
+            if e.response.get('Error', {}).get('Code') == (
+                'ConditionalCheckFailedException'
+            ):
+                return False
+            raise
+        self.log_info(f'updating config: {key} = {value} (was {expected})')
+        return True
 
     def get_cluster_s3_bucket(self) -> str:
         cluster_modules = self.get_cluster_modules()
