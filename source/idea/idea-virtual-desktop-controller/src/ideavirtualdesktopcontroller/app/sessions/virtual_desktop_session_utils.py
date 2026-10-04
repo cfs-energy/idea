@@ -1154,16 +1154,33 @@ class VirtualDesktopSessionUtils:
             success_response_list.append(session)
 
         # Handle stopped sessions - always use force termination for deletions
-        servers_to_terminate = []
+        servers_to_terminate = [s.server for s in stopped_sessions if s.server]
+        released = set()
+        terminate_error = None
+        if servers_to_terminate:
+            response = self._server_utils.terminate_dcv_hosts(
+                servers_to_terminate, force=True
+            )
+            terminate_error = Utils.get_value_as_string('ERROR', response, None)
+            released = {
+                Utils.get_value_as_string('InstanceId', i, None)
+                for i in Utils.get_value_as_list('TerminatingInstances', response, [])
+            } | set(Utils.get_value_as_list('MissingInstanceIds', response, []))
 
         for session in stopped_sessions:
+            # a session whose host was not terminated stays, so deleting it again retries
+            if session.server and session.server.instance_id not in released:
+                session.failure_reason = (
+                    f'could not terminate host {session.server.instance_id}: '
+                    f'{terminate_error or "not terminated"}'
+                )
+                self._logger.error(
+                    f'not deleting session {session.idea_session_id}: {session.failure_reason}'
+                )
+                fail_response_list.append(session)
+                continue
             session_db_entries_to_delete.append(session)
-            if session.server:
-                servers_to_terminate.append(session.server)
 
-        # Always use force termination for session deletions to ensure immediate cleanup
-        if servers_to_terminate:
-            self._server_utils.terminate_dcv_hosts(servers_to_terminate, force=True)
         for session in session_db_entries_to_delete:
             self._schedule_utils.delete_schedules_for_session(session)
             self._session_permission_utils.delete_permissions_for_session(session)

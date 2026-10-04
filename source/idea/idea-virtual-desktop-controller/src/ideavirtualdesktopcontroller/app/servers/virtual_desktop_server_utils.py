@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import re
 from typing import List
 
 from botocore.exceptions import ClientError
@@ -145,26 +146,45 @@ class VirtualDesktopServerUtils:
     def _terminate_dcv_hosts(
         self, servers: List[VirtualDesktopServer], force: bool = False
     ) -> dict:
-        instance_ids = []
-        for server in servers:
-            instance_ids.append(server.instance_id)
-
+        """
+        terminate the hosts' instances. one id EC2 no longer knows fails the whole call
+        and terminates none of the others, so the ids it names are dropped and the rest
+        retried; they come back under MissingInstanceIds. any other error is returned as
+        ERROR, with nothing terminated.
+        """
         # Note: EC2 terminate_instances API only supports InstanceIds and DryRun parameters
         # Force and SkipOsShutdown are only available for stop_instances, not terminate_instances
-        kwargs = {'InstanceIds': instance_ids}
-
+        instance_ids = [server.instance_id for server in servers]
+        missing = []
         self._logger.info(
             f'Attempting to terminate instances: {instance_ids} (force parameter ignored - terminate is always immediate)'
         )
-        try:
-            response = self.ec2_client.terminate_instances(**kwargs)
+        while instance_ids:
+            try:
+                response = self.ec2_client.terminate_instances(InstanceIds=instance_ids)
+            except ClientError as e:
+                gone = (
+                    set(re.findall(r'i-[0-9a-f]+', str(e))) & set(instance_ids)
+                    if e.response.get('Error', {}).get('Code')
+                    == 'InvalidInstanceID.NotFound'
+                    else set()
+                )
+                if not gone:
+                    self._logger.error(
+                        f'Failed to terminate instances {instance_ids}: {e}'
+                    )
+                    return {'ERROR': str(e), 'MissingInstanceIds': missing}
+                self._logger.warning(
+                    f'instances no longer exist, terminating the rest: {sorted(gone)}'
+                )
+                missing += sorted(gone)
+                instance_ids = [i for i in instance_ids if i not in gone]
+                continue
             self._logger.info(
                 f'Successfully initiated termination for instances: {instance_ids}'
             )
-            return Utils.to_dict(response)
-        except ClientError as e:
-            self._logger.error(f'Failed to terminate instances {instance_ids}: {e}')
-            return {'ERROR': str(e)}
+            return {**Utils.to_dict(response), 'MissingInstanceIds': missing}
+        return {'TerminatingInstances': [], 'MissingInstanceIds': missing}
 
     def terminate_dcv_hosts(
         self, servers: List[VirtualDesktopServer], force: bool = False
@@ -173,11 +193,14 @@ class VirtualDesktopServerUtils:
             return {}
 
         terminate_response = self._terminate_dcv_hosts(servers, force=force)
-        instances = Utils.get_value_as_list(
-            'TerminatingInstances', terminate_response, []
-        )
-        for instance in instances:
-            instance_id = Utils.get_value_as_string('InstanceId', instance, None)
+        # an instance already gone is released too: its host record and AD computer go
+        instance_ids = [
+            Utils.get_value_as_string('InstanceId', instance, None)
+            for instance in Utils.get_value_as_list(
+                'TerminatingInstances', terminate_response, []
+            )
+        ] + Utils.get_value_as_list('MissingInstanceIds', terminate_response, [])
+        for instance_id in instance_ids:
             computer_name = None
 
             # Get the server details to extract the computer name
