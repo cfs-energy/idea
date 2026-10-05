@@ -5,8 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.10.1] - 2026-10-02
+## [26.10.1] - 2026-10-05
 
+* **Images page**: the admin page is now Images, with a Managed images tab (one row per OS, architecture and GPU variant with status, checks, log link, Refresh and validate all / selected, Force rebake, Rebuild, Roll back, Pin) and a Custom images tab for project images the pipeline never touches
+* **Desktop delete**: deleting desktops whose hosts are partly gone already terminates the rest instead of none of them; a session whose host could not be terminated stays listed as failed instead of disappearing while its instance keeps running
+* **Image pipeline hygiene**: a bake resumed after a controller restart terminates its builder, the monthly check claims its month so it cannot run twice, and every cleanup sweep logs a one-line summary even when it deletes nothing
+* **Security reports**: report security issues through the repository's private vulnerability reporting (Security tab) instead of email
+* **Upgrade note**: builder images from before 26.09 carry no cluster tag, so the automatic cleanup never removes them; review and remove them once by hand after upgrading
 * **Validated images**: desktop and compute images are rebuilt and validated after every upgrade, on a monthly check for newer vendor images, and from Refresh and validate on the Images page, and only an image that passed every check replaces the one in use.
 * **Once a day per image**: an image already baked today (cluster time) is skipped by the monthly check, the upgrade trigger and Refresh and validate, which lists those rows as already updated today; an administrator can bake them again with Force rebake on a row or a selection.
 * **Test-launch limits**: a test launch must reach Ready within 10 minutes on Linux and 15 minutes on Windows (ready_gate_seconds_linux and ready_gate_seconds_windows).
