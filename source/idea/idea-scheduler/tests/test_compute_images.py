@@ -172,6 +172,12 @@ class FakeConfig:
     def get_real_key(self, key):
         return key
 
+    def is_module_enabled(self, name):
+        return name == 'scheduler'
+
+    def get_module_id(self, name):
+        return 'scheduler'
+
     def get_list(self, key, required=False, default=None):
         value = self.values.get(key, default)
         return list(value) if value is not None else value

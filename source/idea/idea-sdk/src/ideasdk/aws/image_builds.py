@@ -289,8 +289,9 @@ def deregister_unreferenced_images(
 ) -> List[str]:
     """
     deregister this cluster's pipeline images (tagged PIPELINE_IMAGE_TAG=pipeline) that are
-    not protected, not a bake still recording its id (by name), and not used by an instance,
-    then delete each one's snapshots that no other image shares
+    not protected, not a bake still recording its id (by name), and not named anywhere else
+    (referenced_images without the image rows), then delete each one's snapshots that no
+    other image shares
     """
     ec2 = context.aws().ec2()
     images = ec2.describe_images(
@@ -313,22 +314,13 @@ def deregister_unreferenced_images(
     ]
     if not candidates:
         return []
-    # anything still running from an image keeps it (hosts launched before a promotion)
-    in_use = set()
-    ids = [i['ImageId'] for i in candidates]
-    for start in range(0, len(ids), 100):
-        result = ec2.describe_instances(
-            Filters=[
-                {'Name': 'image-id', 'Values': ids[start : start + 100]},
-                {
-                    'Name': 'instance-state-name',
-                    'Values': ['pending', 'running', 'stopping', 'stopped'],
-                },
-            ]
-        )
-        for reservation in result.get('Reservations', []):
-            for instance in reservation.get('Instances', []):
-                in_use.add(instance.get('ImageId'))
+    # anything else that names an image keeps it: a running host launched before a promotion,
+    # a launch template version, a setting, queue or stack. the pipeline's own rows are
+    # judged by `protected` (a failed candidate's row still names it). a source that cannot
+    # be read raises, so nothing is deleted
+    in_use = referenced_images(
+        context, [i['ImageId'] for i in candidates], image_rows=False
+    )
     removed = []
     for image in candidates:
         if image['ImageId'] in in_use:
@@ -366,36 +358,38 @@ LEGACY_MAX_PER_SWEEP = 20
 LIVE_INSTANCE_STATES = ['pending', 'running', 'shutting-down', 'stopping', 'stopped']
 
 
-def _reference_tables(context) -> List[str]:
+def _reference_tables(context, image_rows: bool = True) -> List[str]:
     """the cluster tables an image id can be written into: settings, queues, stacks, image rows"""
     cluster = context.cluster_name()
     config = context.config()
     tables = [f'{cluster}.cluster-settings']
     if config.is_module_enabled(constants.MODULE_SCHEDULER):
         module_id = config.get_module_id(constants.MODULE_SCHEDULER)
-        tables += [
-            f'{cluster}.{module_id}.queue-profiles',
-            f'{cluster}.{module_id}.image-builds',
-        ]
+        tables.append(f'{cluster}.{module_id}.queue-profiles')
+        if image_rows:
+            tables.append(f'{cluster}.{module_id}.image-builds')
     if config.is_module_enabled(constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER):
         module_id = config.get_module_id(constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)
-        tables += [
-            f'{cluster}.{module_id}.controller.software-stacks',
-            f'{cluster}.{module_id}.controller.image-builds',
-        ]
+        tables.append(f'{cluster}.{module_id}.controller.software-stacks')
+        if image_rows:
+            tables.append(f'{cluster}.{module_id}.controller.image-builds')
     return tables
 
 
-def referenced_images(context, image_ids: List[str]) -> Dict[str, str]:
+def referenced_images(
+    context, image_ids: List[str], image_rows: bool = True
+) -> Dict[str, str]:
     """
     image id -> where it is still named: any attribute of any item in the reference tables (raw
     items, so a field no model knows still counts), any instance that is not terminated, any
-    launch template version. a source that cannot be read raises, so nothing is deleted
+    launch template version. a source that cannot be read raises, so nothing is deleted.
+    image_rows=False leaves out the image-builds tables, for the pipeline sweep whose rows
+    decide protection themselves
     """
     found: Dict[str, str] = {}
     remaining = lambda: [i for i in image_ids if i not in found]  # noqa: E731
     dynamodb = context.aws().dynamodb()
-    for table in _reference_tables(context):
+    for table in _reference_tables(context, image_rows):
         try:
             for page in dynamodb.get_paginator('scan').paginate(TableName=table):
                 for item in page.get('Items', []):

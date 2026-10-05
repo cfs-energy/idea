@@ -62,6 +62,36 @@ class FakeConfig:
     def put(self, key, value):
         self.values[key] = value
 
+    def is_module_enabled(self, name):
+        return name == 'virtual-desktop-controller'
+
+    def get_module_id(self, name):
+        return 'vdc'
+
+
+class FakePages:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def paginate(self, **kwargs):
+        return self.pages(**kwargs)
+
+
+class FakeDynamodb:
+    """raw table items for referenced_images; a table named in `broken` cannot be read"""
+
+    def __init__(self):
+        self.tables = {}
+        self.broken = set()
+
+    def get_paginator(self, name):
+        def scan(TableName):
+            if TableName in self.broken:
+                raise RuntimeError(f'cannot scan {TableName}')
+            return [{'Items': self.tables.get(TableName, [])}]
+
+        return FakePages(scan)
+
 
 class FakeEc2:
     def __init__(self):
@@ -72,6 +102,37 @@ class FakeEc2:
         self.deleted_snapshots = []
         self.terminated = []
         self.stopped = []
+        # launch template name -> image id of its one version
+        self.launch_templates = {}
+
+    def get_paginator(self, name):
+        if name == 'describe_instances':
+            return FakePages(lambda **kwargs: [self.describe_instances(**kwargs)])
+        if name == 'describe_launch_templates':
+            return FakePages(
+                lambda **kwargs: [
+                    {
+                        'LaunchTemplates': [
+                            {'LaunchTemplateId': n, 'LaunchTemplateName': n}
+                            for n in self.launch_templates
+                        ]
+                    }
+                ]
+            )
+        return FakePages(
+            lambda LaunchTemplateId: [
+                {
+                    'LaunchTemplateVersions': [
+                        {
+                            'VersionNumber': 1,
+                            'LaunchTemplateData': {
+                                'ImageId': self.launch_templates[LaunchTemplateId]
+                            },
+                        }
+                    ]
+                }
+            ]
+        )
 
     def add_image(
         self, image_id, name='idea-dcv-host-rocky9-v1', snapshot=None, state='available'
@@ -226,6 +287,8 @@ class Harness:
         context = Mock()
         context.config.return_value = self.config
         context.aws.return_value.ec2.return_value = self.ec2
+        self.dynamodb = FakeDynamodb()
+        context.aws.return_value.dynamodb.return_value = self.dynamodb
         context.is_leader.return_value = True
         context.cluster_name.return_value = 'idea-test'
         context.module_id.return_value = 'vdc'
@@ -786,6 +849,38 @@ def test_cleanup_keeps_current_previous_references_and_bakes_in_flight():
     assert h.ec2.deleted_snapshots == [
         'snap-ami-old1'
     ]  # snap-shared is still ami-shared2's
+
+
+def test_cleanup_keeps_an_image_a_launch_template_or_setting_names():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='current',
+            current_image_id='ami-current',
+            promoted_on=T0,
+        )
+    )
+    for image_id in ('ami-current', 'ami-template', 'ami-setting', 'ami-old'):
+        h.ec2.add_image(image_id, name=f'idea-dcv-host-rocky9-{image_id}')
+    h.ec2.launch_templates = {'lt-kept': 'ami-template'}
+    h.dynamodb.tables['idea-test.cluster-settings'] = [
+        {'key': {'S': 'some.ami'}, 'value': {'S': 'ami-setting'}}
+    ]
+
+    assert h.pipeline._deregister_unreferenced() == ['ami-old']
+    assert h.ec2.deleted_snapshots == ['snap-ami-old']
+
+
+def test_cleanup_deletes_nothing_when_a_reference_cannot_be_read():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    h.ec2.add_image('ami-old', name='idea-dcv-host-rocky9-ami-old')
+    h.dynamodb.broken.add('idea-test.cluster-settings')
+
+    with pytest.raises(RuntimeError):
+        h.pipeline._deregister_unreferenced()
+    assert h.ec2.deregistered == []
 
 
 def test_cleanup_sweeps_legacy_images_with_the_setting_and_bakes_in_flight(monkeypatch):

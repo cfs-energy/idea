@@ -45,6 +45,7 @@ from ideasdk.aws.image_builds import (
     LEGACY_MIN_AGE_DAYS,
     PIPELINE_IMAGE_TAG,
     deregister_legacy_images,
+    deregister_unreferenced_images,
     builder_log_link,
     is_custom_record,
     ImageBuildRecordsDB,
@@ -980,72 +981,18 @@ class DesktopImagePipeline:
         return protected
 
     def _deregister_unreferenced(self) -> List[str]:
-        ec2 = self.context.aws().ec2()
-        images = ec2.describe_images(
-            Owners=['self'],
-            Filters=[
-                {
-                    'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
-                    'Values': [self.context.cluster_name()],
-                },
-                {'Name': f'tag:{PIPELINE_IMAGE_TAG}', 'Values': ['desktop']},
-                {'Name': 'name', 'Values': [f'{DESKTOP_IMAGE_PREFIX}*']},
-            ],
-        ).get('Images', [])
-        protected = self.protected_images()
         # a bake between CreateImage and recording the id: its image carries the row's name
         baking = {
             r.ami_name for r in self.records.list_all() if r.status not in TERMINAL
         }
-        candidates = [
-            i
-            for i in images
-            if i['ImageId'] not in protected
-            and i.get('Name') not in baking
-            and i.get('State', 'available') == 'available'
-        ]
-        if not candidates:
-            return []
-        # anything still running from an image keeps it (desktops launched before a promotion)
-        in_use = set()
-        ids = [i['ImageId'] for i in candidates]
-        for start in range(0, len(ids), 100):
-            result = ec2.describe_instances(
-                Filters=[
-                    {'Name': 'image-id', 'Values': ids[start : start + 100]},
-                    {
-                        'Name': 'instance-state-name',
-                        'Values': ['pending', 'running', 'stopping', 'stopped'],
-                    },
-                ]
-            )
-            for reservation in result.get('Reservations', []):
-                for instance in reservation.get('Instances', []):
-                    in_use.add(instance.get('ImageId'))
-        removed = []
-        for image in candidates:
-            if image['ImageId'] in in_use:
-                continue
-            ec2.deregister_image(ImageId=image['ImageId'])
-            removed.append(image['ImageId'])
-            for mapping in image.get('BlockDeviceMappings', []):
-                snapshot = (mapping.get('Ebs') or {}).get('SnapshotId')
-                if not snapshot:
-                    continue
-                others = ec2.describe_images(
-                    Owners=['self'],
-                    Filters=[
-                        {
-                            'Name': 'block-device-mapping.snapshot-id',
-                            'Values': [snapshot],
-                        }
-                    ],
-                ).get('Images', [])
-                if all(o['ImageId'] == image['ImageId'] for o in others):
-                    ec2.delete_snapshot(SnapshotId=snapshot)
-        if removed:
-            self._logger.info(f'deregistered unreferenced desktop images: {removed}')
-        return removed
+        return deregister_unreferenced_images(
+            self.context,
+            'desktop',
+            DESKTOP_IMAGE_PREFIX,
+            self.protected_images(),
+            baking,
+            self._logger,
+        )
 
     def _reap_builders(self) -> List[str]:
         ec2 = self.context.aws().ec2()

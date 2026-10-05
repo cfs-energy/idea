@@ -556,7 +556,8 @@ def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
     """
     three promotions and a failed canary: only the first generation and the failed
     candidate go, each with its snapshot; current, previous, an in-flight bake, a queue's
-    image, the scheduler default and an image a node still runs stay
+    image, the scheduler default, an image a node still runs and an image a launch
+    template or a setting names stay
     """
     from ideadatamodel import HpcQueueProfile, SocaJobParams
 
@@ -591,6 +592,8 @@ def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
         'ami-queue': 'q',
         'ami-inuse': 'u',
         'ami-baked': 'rhel9-baking',
+        'ami-template': 't',
+        'ami-setting': 's',
     }
     images = [
         {
@@ -632,6 +635,22 @@ def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
             running = [{'ImageId': 'ami-inuse'}] if 'ami-inuse' in ids else []
             return {'Reservations': [{'Instances': running}]}
 
+        def get_paginator(self, name):
+            pages = {
+                'describe_instances': lambda **kw: [self.describe_instances(**kw)],
+                'describe_launch_templates': lambda **kw: [
+                    {'LaunchTemplates': [{'LaunchTemplateId': 'lt-1'}]}
+                ],
+                'describe_launch_template_versions': lambda **kw: [
+                    {
+                        'LaunchTemplateVersions': [
+                            {'LaunchTemplateData': {'ImageId': 'ami-template'}}
+                        ]
+                    }
+                ],
+            }
+            return Mock(paginate=pages[name])
+
         def deregister_image(self, ImageId):
             deregistered.append(ImageId)
 
@@ -639,8 +658,28 @@ def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
             deleted.append(SnapshotId)
 
     svc.context.aws.return_value.ec2.return_value = Ec2()
+    tables = {
+        'test-cluster.cluster-settings': [{'value': {'S': 'ami-setting'}}],
+        # the failed candidate's own row names it; image rows do not keep an image
+        'test-cluster.scheduler.image-builds': [{'image_id': {'S': 'ami-fail'}}],
+    }
+    unreadable = set()
+
+    def scan(TableName):
+        if TableName in unreadable:
+            raise RuntimeError(f'cannot scan {TableName}')
+        return [{'Items': tables.get(TableName, [])}]
+
+    svc.context.aws.return_value.dynamodb.return_value.get_paginator.return_value = (
+        Mock(paginate=scan)
+    )
     svc.context.config().values['scheduler.compute_node_ami'] = 'ami-gen3'
     monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    monkeypatch.setattr(module, 'deregister_legacy_images', lambda *a: [])
+    unreadable.add('test-cluster.scheduler.queue-profiles')
+    svc.sweep_builders(datetime.now(timezone.utc))
+    assert deregistered == []  # a reference that cannot be read keeps everything
+    unreadable.clear()
     svc.sweep_builders(datetime.now(timezone.utc))
     assert sorted(deregistered) == ['ami-fail', 'ami-gen1']
     assert sorted(deleted) == ['snap-ami-fail', 'snap-ami-gen1']
