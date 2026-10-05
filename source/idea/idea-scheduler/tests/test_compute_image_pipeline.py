@@ -293,6 +293,50 @@ def test_rollback_requires_previous_validation_and_holds_future_promotion(monkey
     )
 
 
+@pytest.mark.parametrize('status', ['current', 'failed'])
+def test_rollback_from_an_idle_row_guards_on_the_status_it_read(monkeypatch, status):
+    """a refresh that failed keeps current + previous; rollback works from that row too"""
+    svc = service()
+    svc.records.put(
+        row(
+            status=status,
+            image_id='ami-failed-candidate',
+            previous_image_id='ami-before',
+            promoted_on=datetime.now(timezone.utc),
+        )
+    )
+    monkeypatch.setattr(
+        module,
+        'describe_images_by_id',
+        lambda *args: {
+            'ami-before': {
+                'State': 'available',
+                'Tags': [{'Key': 'idea:ComputeImageValidated', 'Value': 'release'}],
+            }
+        },
+    )
+    svc.rollback_image(row().row_key())
+    put = svc.context.aws().dynamodb().transact_write_items.call_args.kwargs[
+        'TransactItems'
+    ][0]['Put']
+    condition = put['ConditionExpression']
+    values = decode(put['ExpressionAttributeValues'])
+    # the stored row matches the condition only if #s is compared with what it holds
+    placeholder = condition.split('#s = ')[1].split()[0]
+    assert values[placeholder] == status
+    assert values[':image'] == 'ami-before'
+    assert 'pinned = :false' in condition
+
+
+@pytest.mark.parametrize('status', ['building', 'pinned', 'unsupported'])
+def test_rollback_refuses_a_row_that_is_not_idle(monkeypatch, status):
+    svc = service()
+    svc.records.put(row(status=status, previous_image_id='ami-before'))
+    with pytest.raises(Exception, match='idle, unpinned row'):
+        svc.rollback_image(row().row_key())
+    svc.context.aws().dynamodb().transact_write_items.assert_not_called()
+
+
 def test_monthly_checks_only_changed_inputs_and_release_works_when_disabled(
     monkeypatch,
 ):

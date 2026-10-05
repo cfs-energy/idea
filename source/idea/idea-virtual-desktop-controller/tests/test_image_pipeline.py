@@ -1119,6 +1119,18 @@ def test_rollback_flips_to_the_previous_image_and_holds_automatic_promotion():
     assert h.row().status == 'current'
 
 
+def test_rollback_works_from_a_row_whose_last_refresh_failed():
+    h = promoted_harness()
+    record = h.row()
+    record.status, record.image_id, record.error = 'failed', 'ami-bad', 'check failed'
+    h.records.put(record)
+    record = h.pipeline.rollback(
+        ImageRowKey(base_os='rocky9', architecture='x86_64'), 'admin'
+    )
+    assert (record.status, record.current_image_id) == ('current', 'ami-prev')
+    assert h.row().error is None
+
+
 def test_a_held_row_validated_automatically_is_not_promoted_but_a_button_refresh_clears_the_hold():
     h = promoted_harness()
     h.pipeline.rollback(ImageRowKey(base_os='rocky9', architecture='x86_64'), 'admin')

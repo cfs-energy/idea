@@ -94,6 +94,8 @@ def image_builds_table_name(context) -> str:
 SCHEDULER_DEFAULT_REFERENCE = 'scheduler default'
 # promotion tags the images it validated; only these and vendor stock images are ever moved off
 VALIDATED_IMAGE_TAG = 'idea:ComputeImageValidated'
+# a row can roll back from either idle state that keeps current + previous
+ROLLBACK_IDLE_STATUSES = ('current', 'failed')
 
 
 class ComputeImageService:
@@ -761,8 +763,10 @@ class ComputeImageService:
             )
             del values[':old']
         if rollback:
-            condition += ' AND previous_image_id = :image AND #s = :current'
-            values.update({':image': image_id, ':current': 'current'})
+            # the idle status the rollback request read: current, or failed after a refresh
+            # that kept current + previous
+            condition += ' AND previous_image_id = :image AND #s = :idle'
+            values.update({':image': image_id, ':idle': record.status})
         else:
             condition += ' AND (attribute_not_exists(rollback_hold) OR rollback_hold = :false) AND image_id = :image AND validated_on = :validated AND #s = :promoting'
             values.update(
@@ -887,7 +891,7 @@ class ComputeImageService:
         if (
             not record
             or not record.previous_image_id
-            or record.is_in_flight()
+            or record.status not in ROLLBACK_IDLE_STATUSES
             or record.pinned
         ):
             raise exceptions.invalid_params(
