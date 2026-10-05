@@ -614,8 +614,10 @@ class DesktopImagePipeline:
             try:
                 result = ec2.describe_images(ImageIds=[image_id])
             except ClientError as e:
-                if not e.response.get('Error', {}).get('Code', '').startswith(
-                    'InvalidAMIID'
+                if (
+                    not e.response.get('Error', {})
+                    .get('Code', '')
+                    .startswith('InvalidAMIID')
                 ):
                     raise
                 continue

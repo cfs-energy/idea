@@ -316,9 +316,11 @@ def test_rollback_from_an_idle_row_guards_on_the_status_it_read(monkeypatch, sta
         },
     )
     svc.rollback_image(row().row_key())
-    put = svc.context.aws().dynamodb().transact_write_items.call_args.kwargs[
-        'TransactItems'
-    ][0]['Put']
+    put = (
+        svc.context.aws()
+        .dynamodb()
+        .transact_write_items.call_args.kwargs['TransactItems'][0]['Put']
+    )
     condition = put['ConditionExpression']
     values = decode(put['ExpressionAttributeValues'])
     # the stored row matches the condition only if #s is compared with what it holds
