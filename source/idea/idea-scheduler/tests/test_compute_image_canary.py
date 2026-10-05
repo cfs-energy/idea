@@ -61,7 +61,7 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
         }
     )
     context.projects_client.get_project_by_name.return_value = Project(
-        project_id='project-test', name='image-test'
+        project_id='project-test', name='image-test', enabled=True
     )
     context.queue_profiles.list_queue_profiles.return_value = [
         HpcQueueProfile(name='source')
@@ -179,6 +179,63 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
     context.queue_profiles.delete_queue_profile.assert_called_once_with(
         queue_profile_id='canary-profile'
     )
+
+
+def test_a_compute_only_cluster_creates_the_validation_identity(monkeypatch):
+    """no desktop controller to create them: the canary makes the user and project itself"""
+    from ideasdk.aws import validation_identity
+
+    svc = service()
+    context = svc.context
+    context.accounts_client.get_user.side_effect = exceptions.soca_exception(
+        error_code='AUTH_USER_NOT_FOUND', message='User not found: idea-validate'
+    )
+    context.projects_client.get_project_by_name.side_effect = [
+        exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
+        Project(project_id='p-validate', name='idea-validate', enabled=False),
+        Project(project_id='p-validate', name='idea-validate', enabled=True),
+    ]
+    sent = []
+    monkeypatch.setattr(
+        validation_identity,
+        'invoke_cluster_manager',
+        lambda ctx, namespace, payload: sent.append((namespace, payload)),
+    )
+    # stop right after the identity step: no queue to copy
+    context.queue_profiles.list_queue_profiles.return_value = []
+    with pytest.raises(exceptions.SocaException, match='compute queue profile'):
+        ComputeImageCanary(context).validate(row(image_id='ami-candidate'), Mock())
+    assert [n for n, _ in sent] == [
+        'Accounts.CreateUser',
+        'Projects.CreateProject',
+        'Projects.EnableProject',
+    ]
+    assert sent[0][1].user.username == 'idea-validate'
+
+
+def test_identity_created_meanwhile_by_the_other_module_is_used():
+    """both pipelines provision on first use; losing the create race is not an error"""
+    from ideasdk.aws.validation_identity import ensure_validation_identity
+    from ideadatamodel import ImagePipelineSettings
+
+    context = Mock()
+    context.accounts_client.get_user.side_effect = [
+        exceptions.soca_exception(
+            error_code='AUTH_USER_NOT_FOUND', message='User not found'
+        ),
+        None,
+    ]
+    context.projects_client.get_project_by_name.side_effect = [
+        exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
+        Project(project_id='p-validate', name='idea-validate', enabled=True),
+        Project(project_id='p-validate', name='idea-validate', enabled=True),
+    ]
+
+    def invoke(namespace, payload):
+        raise exceptions.soca_exception(error_code='ALREADY_EXISTS', message='exists')
+
+    project = ensure_validation_identity(context, ImagePipelineSettings(), invoke)
+    assert project.project_id == 'p-validate'
 
 
 def test_canary_probe_script_runs_and_deletes_its_file(tmp_path, monkeypatch, capsys):

@@ -209,6 +209,10 @@ export class SchedulerStack extends IdeaBaseStack {
           cognito.OAuthScope.custom(`${this.moduleId}/read`),
           cognito.OAuthScope.custom(`${this.moduleId}/write`),
           cognito.OAuthScope.custom(`${this.context.config.moduleId(MODULE_CLUSTER_MANAGER)}/read`),
+          // compute image validation creates its service user and hidden project
+          // (Accounts.CreateUser, Projects.CreateProject) on a cluster without the desktop
+          // controller; the cluster manager has no narrower scope for that
+          cognito.OAuthScope.custom(`${this.context.config.moduleId(MODULE_CLUSTER_MANAGER)}/write`),
         ],
       },
       refreshTokenValidity: Duration.days(30),

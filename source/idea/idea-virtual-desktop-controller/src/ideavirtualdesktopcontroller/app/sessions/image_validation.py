@@ -18,24 +18,23 @@ from typing import Callable, List, Optional, Tuple
 from botocore.exceptions import ClientError
 
 from ideadatamodel import (
-    CreateProjectRequest,
-    CreateUserRequest,
-    EnableProjectRequest,
-    GetUserRequest,
     ImageBuildRecord,
     ImageCheck,
     ImagePipelineSettings,
     ImageVariant,
     Project,
     SocaBaseModel,
-    User,
     VirtualDesktopServer,
     VirtualDesktopGPU,
     VirtualDesktopSession,
     VirtualDesktopSessionState,
     VirtualDesktopSoftwareStack,
 )
-from ideasdk.utils import GroupNameHelper, Utils
+from ideasdk.aws.validation_identity import (
+    ensure_validation_identity,
+    invoke_cluster_manager,
+)
+from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     BOOTSTRAP_LOG_STREAM,
@@ -365,113 +364,13 @@ class ImageTestLauncher:
     # identity
 
     def ensure_identity(self, settings: ImagePipelineSettings) -> Project:
-        """
-        the validation user and its hidden project, created once through the cluster
-        manager. the user is a directory (AD) account: the cluster manager creates the
-        IDEA side; in a read-only directory the AD account must already exist.
-        """
-        user = settings.validation_user
-        project_name = settings.validation_project
-        try:
-            self.context.accounts_client.get_user(GetUserRequest(username=user))
-        except Exception as e:
-            if 'not found' not in str(e).lower() and 'AUTH_USER_NOT_FOUND' not in str(
-                e
-            ):
-                raise
-            self._invoke_cluster_manager(
-                'Accounts.CreateUser',
-                CreateUserRequest(
-                    user=User(
-                        username=user, email=f'{user}@validation.invalid', sudo=False
-                    ),
-                    email_verified=False,
-                ),
-            )
-        project = None
-        try:
-            project = self.context.projects_client.get_project_by_name(project_name)
-        except Exception as e:
-            if 'not found' not in str(e).lower() and 'NOT_FOUND' not in str(e):
-                raise
-        if project is None:
-            group = GroupNameHelper(self.context).get_user_group(user)
-            self._invoke_cluster_manager(
-                'Projects.CreateProject',
-                CreateProjectRequest(
-                    project=Project(
-                        name=project_name,
-                        title='Image validation',
-                        description='hidden: desktops the image pipeline launches to validate new images',
-                        ldap_groups=[group],
-                        enable_budgets=False,
-                    )
-                ),
-            )
-            self.context.projects_client.cache.clear()
-            project = self.context.projects_client.get_project_by_name(project_name)
-        # CreateProject always creates a disabled project, and a disabled project is
-        # left out of the user's projects, so CreateSession refuses the validation user
-        if not project.enabled:
-            self._invoke_cluster_manager(
-                'Projects.EnableProject',
-                EnableProjectRequest(project_id=project.project_id),
-            )
-            self.context.projects_client.cache.clear()
-            project = self.context.projects_client.get_project_by_name(project_name)
-        return project
+        """the validation user and its hidden project, shared with the compute canary"""
+        return ensure_validation_identity(
+            self.context, settings, invoke=self._invoke_cluster_manager
+        )
 
     def _invoke_cluster_manager(self, namespace: str, payload: SocaBaseModel):
-        """
-        a write to the cluster manager. it needs cluster-manager/write on the
-        controller's client, which is requested here and nowhere else so a client without
-        it keeps working. payload is the namespace's request model: the envelope is
-        serialized by pydantic, which cannot serialize a SocaAnyPayload
-        """
-        from ideasdk.auth import TokenService, TokenServiceOptions
-        from ideasdk.client.soca_client import SocaClient, SocaClientOptions
-        from ideadatamodel import SocaAnyPayload, constants
-
-        config = self.context.config()
-        module_id = config.get_module_id(constants.MODULE_CLUSTER_MANAGER)
-        base = self.context.token_service.options
-        token_service = TokenService(
-            context=self.context,
-            options=TokenServiceOptions(
-                cognito_user_pool_provider_url=base.cognito_user_pool_provider_url,
-                cognito_user_pool_domain_url=base.cognito_user_pool_domain_url,
-                client_id=base.client_id,
-                client_secret=base.client_secret,
-                client_credentials_scope=[f'{module_id}/write'],
-                administrators_group_name=base.administrators_group_name,
-                managers_group_name=base.managers_group_name,
-            ),
-        )
-        try:
-            token = token_service.get_access_token()
-        except Exception as e:
-            raise RuntimeError(
-                f'the controller cannot create the validation identity ({namespace}): its '
-                f'client has no {module_id}/write scope ({e}). create the user and project '
-                f'by hand or grant the scope'
-            )
-        client = SocaClient(
-            context=self.context,
-            options=SocaClientOptions(
-                endpoint=f'{config.get_cluster_internal_endpoint()}/{module_id}/api/v1',
-                enable_logging=False,
-                verify_ssl=False,
-            ),
-        )
-        try:
-            client.invoke_alt(
-                namespace=namespace,
-                payload=payload,
-                result_as=SocaAnyPayload,
-                access_token=token,
-            )
-        finally:
-            client.close()
+        invoke_cluster_manager(self.context, namespace, payload)
 
     # test launch
 

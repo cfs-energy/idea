@@ -284,6 +284,20 @@ describe('scheduler stack', () => {
 });
 
 describe('scheduler stack branches', () => {
+  test('the scheduler client may create the validation user and project', async () => {
+    const { template } = await synthScheduler();
+    const client = Object.values(template.Resources as Json).find(
+      (resource) => resource.Type === 'AWS::Cognito::UserPoolClient',
+    ) as Json;
+    // compute image validation provisions its identity when no desktop controller does
+    assert.deepEqual(client.Properties.AllowedOAuthScopes, [
+      'scheduler/read',
+      'scheduler/write',
+      'cluster-manager/read',
+      'cluster-manager/write',
+    ]);
+  });
+
   test('the configured hostname agrees across the task and published settings', async () => {
     const hostname = 'batch.idea-demo1.us-east-2.local';
     const { template } = await synthScheduler(configWith({
