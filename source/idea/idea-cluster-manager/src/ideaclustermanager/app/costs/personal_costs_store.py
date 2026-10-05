@@ -118,10 +118,15 @@ class PersonalCostsStore:
             )
         return value
 
-    def records(self, subject, prefix):
+    def records(self, subject, prefix, last=None):
+        """records under a prefix, or between prefix and last inclusive when last is given."""
+        record = (
+            Key('record').begins_with(prefix)
+            if last is None
+            else Key('record').between(prefix, last)
+        )
         request = {
-            'KeyConditionExpression': Key('subject').eq(subject)
-            & Key('record').begins_with(prefix),
+            'KeyConditionExpression': Key('subject').eq(subject) & record,
             'ConsistentRead': True,
         }
         while True:
@@ -178,7 +183,9 @@ class PersonalCostsStore:
             {row['record'].split(':')[1] for row in rows}, reverse=True
         )
         keep = set(generations[:2]) | {current}
-        cutoff = int((time.time() - 86400) * 1000)
+        # a reader pins a generation for seconds and a report snapshot copies what it reads,
+        # so an hour covers every reader. each refresh writes a generation.
+        cutoff = int((time.time() - 3600) * 1000)
         for row in rows:
             generation = row['record'].split(':')[1]
             if generation not in keep and int(generation.split('-')[0]) < cutoff:

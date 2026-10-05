@@ -36,6 +36,15 @@ from ideadatamodel import (
     BuildAllDesktopImagesResponse,
     UseBuiltDesktopImagesRequest,
     UseBuiltDesktopImagesResponse,
+    ListImageRowsRequest,
+    RefreshImagesRequest,
+    RollbackImageRequest,
+    SetImagePinnedRequest,
+    GetImageScheduleRequest,
+    GetImageScheduleResponse,
+    UpdateImageScheduleRequest,
+    UpdateImageScheduleResponse,
+    ImageRefreshSchedule,
     GetSessionInfoRequest,
     GetSessionInfoResponse,
     DeleteSessionRequest,
@@ -74,6 +83,16 @@ from ideadatamodel import errorcodes, exceptions
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
+from datetime import datetime
+
+# the monthly vendor check; the scheduler reads the same key for compute rows
+IMAGE_REFRESH_SCHEDULE_KEY = (
+    'virtual-desktop-controller.software_stacks.image_refresh_schedule'
+)
+# epoch ms of the desktop monthly check's last run, written by that job
+IMAGE_REFRESH_LAST_RUN_KEY = (
+    'virtual-desktop-controller.software_stacks.image_refresh_last_run_on'
+)
 
 
 # app (client-credentials) tokens are authorized by module scope, users by elevation:
@@ -140,6 +159,12 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.BuildDesktopImage': self.build_desktop_image,
             'VirtualDesktopAdmin.BuildAllDesktopImages': self.build_all_desktop_images,
             'VirtualDesktopAdmin.UseBuiltDesktopImages': self.use_built_desktop_images,
+            'VirtualDesktopAdmin.ListImageRows': self.list_image_rows,
+            'VirtualDesktopAdmin.RefreshImages': self.refresh_images,
+            'VirtualDesktopAdmin.RollbackImage': self.rollback_image,
+            'VirtualDesktopAdmin.SetImagePinned': self.set_image_pinned,
+            'VirtualDesktopAdmin.GetImageSchedule': self.get_image_schedule,
+            'VirtualDesktopAdmin.UpdateImageSchedule': self.update_image_schedule,
         }
         self._desktop_images = None
 
@@ -842,8 +867,27 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
                 )
                 return
 
+            # an admin's own image on a base stack is never replaced by the image pipeline:
+            # anything it did not validate pins the stack (SetImagePinned-style target pin)
+            if (
+                new_software_stack.image_pinned is None
+                and new_software_stack.ami_id != old_software_stack.ami_id
+                and (old_software_stack.stack_id or '').startswith('ss-base-')
+            ):
+                from ideasdk.aws.image_builds import validated_image_ids
+                from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+                    pipeline_for,
+                )
+
+                validated = validated_image_ids(pipeline_for(self).records.list_all())
+                if new_software_stack.ami_id not in validated:
+                    old_software_stack.image_pinned = True
+
             # Update the AMI ID if validation passes
             old_software_stack.ami_id = new_software_stack.ami_id
+
+        if new_software_stack.image_pinned is not None:
+            old_software_stack.image_pinned = new_software_stack.image_pinned
 
         # Explicitly handle allowed_instance_types, including empty lists
         # This ensures that when users clear all instance types, the change persists
@@ -1064,6 +1108,107 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             request.stack_ids, requested_by=context.get_username()
         )
         context.success(UseBuiltDesktopImagesResponse(results=results))
+
+    # image pipeline (Images view): desktop rows. the bakes run in the controller
+    # leader loop; these only list, queue, roll back and pin (image_pipeline.py)
+
+    def list_image_rows(self, context: ApiInvocationContext):
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import ListImageRowsResponse
+
+        request = context.get_request_payload_as(ListImageRowsRequest)
+        pipeline = pipeline_for(self)
+        pipeline._check_kind(request.filter)
+        context.success(
+            ListImageRowsResponse(listing=pipeline.list_rows(request.filter))
+        )
+
+    def refresh_images(self, context: ApiInvocationContext):
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import RefreshImagesResponse
+
+        request = context.get_request_payload_as(RefreshImagesRequest)
+        if request.force and not context.is_administrator():
+            raise exceptions.unauthorized_access(
+                'only an administrator can force a rebake'
+            )
+        results = pipeline_for(self).refresh(request, context.get_username())
+        context.success(RefreshImagesResponse(results=results))
+
+    def rollback_image(self, context: ApiInvocationContext):
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import RollbackImageResponse
+
+        request = context.get_request_payload_as(RollbackImageRequest)
+        if request.row is None:
+            raise exceptions.invalid_params('row is required')
+        record = pipeline_for(self).rollback(request.row, context.get_username())
+        context.success(RollbackImageResponse(record=record))
+
+    def set_image_pinned(self, context: ApiInvocationContext):
+        from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+            pipeline_for,
+        )
+        from ideadatamodel import SetImagePinnedResponse
+
+        request = context.get_request_payload_as(SetImagePinnedRequest)
+        if request.row is None or request.pinned is None:
+            raise exceptions.invalid_params('row and pinned are required')
+        record = pipeline_for(self).set_pinned(request.row, request.pinned)
+        context.success(SetImagePinnedResponse(record=record))
+
+    def _image_schedule_next_run(self, schedule: ImageRefreshSchedule):
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo(self.context.cluster_timezone()))
+        return schedule.next_run_after(now)
+
+    def get_image_schedule(self, context: ApiInvocationContext):
+        context.get_request_payload_as(GetImageScheduleRequest)
+        config = self.context.config()
+        schedule = ImageRefreshSchedule(
+            **dict(config.get_config(IMAGE_REFRESH_SCHEDULE_KEY, default={}) or {})
+        )
+        last_run_ms = config.get_int(IMAGE_REFRESH_LAST_RUN_KEY, default=None)
+        context.success(
+            GetImageScheduleResponse(
+                schedule=schedule,
+                last_run_on=Utils.to_datetime(last_run_ms) if last_run_ms else None,
+                next_run_on=self._image_schedule_next_run(schedule),
+            )
+        )
+
+    def update_image_schedule(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(UpdateImageScheduleRequest)
+        schedule = request.schedule
+        if schedule is None:
+            raise exceptions.invalid_params('schedule is required')
+        schedule = ImageRefreshSchedule(
+            enabled=bool(schedule.enabled),
+            day=(schedule.day or '').strip().lower(),
+            hour=schedule.hour,
+        )
+        try:
+            schedule.validate_rule()
+        except ValueError as e:
+            raise exceptions.invalid_params(str(e))
+        config = self.context.config()
+        for field in ('enabled', 'day', 'hour'):
+            key = config.get_real_key(f'{IMAGE_REFRESH_SCHEDULE_KEY}.{field}')
+            config.db.set_config_entry(key, getattr(schedule, field))
+            # the settings stream catches up later; reads on this host see it now
+            config.put(key, getattr(schedule, field))
+        context.success(
+            UpdateImageScheduleResponse(
+                schedule=schedule, next_run_on=self._image_schedule_next_run(schedule)
+            )
+        )
 
     def re_index_software_stacks(self, context: ApiInvocationContext):
         # got a request to reindex everything again.

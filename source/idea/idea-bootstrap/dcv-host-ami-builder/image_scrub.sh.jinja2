@@ -1,0 +1,62 @@
+#!/bin/bash
+# Each command is required: the parent publishes a failure if scrub cannot finish.
+set -e
+# the failed check names the command that stopped the scrub
+trap 'rc=$?; echo "scrub: ${BASH_COMMAND} (exit ${rc})" >> /var/lib/idea/bake-failed' ERR
+source /etc/environment
+# Shared by the compute builder (image_kind = 'compute'), which has no DCV.
+{% set compute = image_kind is defined and image_kind == 'compute' %}
+
+{% if not compute %}
+systemctl disable --now dcvserver
+systemctl disable --now dcv-session-manager-agent
+{% endif %}
+systemctl stop sssd
+# realm leave without --remove clears local membership; do not delete directory objects.
+realms=$(realm list --name-only)
+while IFS= read -r domain; do
+  [[ -z "$domain" ]] || realm leave "$domain"
+done <<< "$realms"
+[[ -z "$(realm list --name-only)" ]]
+rm -f /etc/krb5.keytab /etc/sssd/sssd.conf /etc/sssd/sssd.conf.orig
+rm -rf /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/secrets/*
+
+# cloud-init and systemd regenerate these on the next boot; keep SSM running for read-back.
+cloud-init clean --logs --seed
+: > /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+# dbus-broker hosts (EL9 and later, AL2023) have no /var/lib/dbus; they read /etc/machine-id
+[[ ! -d /var/lib/dbus ]] || ln -s /etc/machine-id /var/lib/dbus/machine-id
+rm -f /etc/ssh/ssh_host_*
+# SSM state stays: the agent is still serving the checks read-back, and its state is
+# keyed by instance id, so a clone registers as itself
+{% if not compute %}
+rm -rf /var/lib/dcv/* /var/lib/dcv-session-manager-agent/*
+rm -f /etc/dcv/dcv.key /etc/dcv/dcv.pem /etc/dcv/dcv.conf
+rm -f /etc/dcv-session-manager-agent/agent.conf
+rm -rf /etc/dcv-session-manager-agent/tags/* /etc/dcv-session-manager-agent/archive-tags/*
+{% endif %}
+rm -rf /opt/idea/.services
+rm -f /root/bootstrap/reboot_required.txt /root/bootstrap/reboot_history.log
+rm -f /root/bootstrap/idea_preinstalled_packages.log /root/bootstrap/idea_system_upgraded.log
+rm -f /var/lib/idea/bake-*.ok
+sed -i '/^AWS_INSTANCE_ID=/d; /^IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR=/d; /^IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR=/d; /^IDEA_AMI_NAME=/d; /^IDEA_SESSION_/d' /etc/environment
+
+# Host setup recreates storage entries, directory membership, DCV config and agent tags.
+# shared-storage also holds plain settings (no mount_dir); an empty directory made this
+# pattern match the root entry and every line with two spaces, so images booted read-only.
+# Match the second fstab field exactly, and require the root entry to survive.
+{% for name, storage in context.config.get_config('shared-storage').items() %}
+{% if storage is mapping and storage.get('mount_dir') and context.eval_shared_storage_scope(shared_storage=storage) %}
+sed -i '\|^[^#[:space:]][^[:space:]]*[[:space:]]\{1,\}{{ storage.mount_dir.rstrip('/') }}/\{0,1\}[[:space:]]|d' /etc/fstab
+{% endif %}
+{% endfor %}
+grep -Eq '^[^#[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab
+(crontab -l 2>/dev/null | grep -v '_ami_builder_post_reboot.sh' || true) | crontab -
+# Checks have captured the evidence; retain JSON, remove host-specific bootstrap logs.
+rm -rf /root/bootstrap/logs
+# The agent keeps a read offset per log path: a clone resumed its new bootstrap log at the
+# builder's offset, so the stream started minutes into the host's bootstrap.
+systemctl stop amazon-cloudwatch-agent 2>/dev/null || true
+rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
+/bin/sync

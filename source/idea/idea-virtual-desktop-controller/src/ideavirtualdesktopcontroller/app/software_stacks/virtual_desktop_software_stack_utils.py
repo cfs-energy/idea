@@ -24,7 +24,6 @@ from ideasdk.analytics.analytics_service import (
     EntryAction,
     EntryContent,
 )
-from ideasdk.aws.image_builds import is_built_image
 from ideasdk.aws.stock_amis import (
     find_latest_image,
     get_ami_pattern_for_stack,
@@ -124,38 +123,22 @@ class VirtualDesktopSoftwareStackUtils:
                         result.status = 'error'
                         result.message = f'newest image {latest_ami_id} is {found}, the stack is {expected}; not updated'
                         continue
-                    # the newest stock image always becomes the base the next build
-                    # starts from. ami_id follows it only while it is itself a stock
-                    # image, so a refresh can never undo a build
-                    launches_from_build = is_built_image(
-                        ec2_client, software_stack.ami_id
+                    # the newest stock image becomes the base the next bake starts
+                    # from. ami_id never moves here: a new stock image is not validated,
+                    # and only the image pipeline promotes a validated one (promote gate)
+                    if software_stack.base_ami_id == latest_ami_id:
+                        result.status = 'up_to_date'
+                        result.message = f'base {latest_ami_id} is already the newest'
+                        continue
+                    software_stack.base_ami_id = latest_ami_id
+                    updated_stack = self._software_stack_db.update(software_stack)
+                    result.new_base_ami = latest_ami_id
+                    result.status = 'base_updated'
+                    result.message = (
+                        f'base image updated to {latest_ami_id}; desktops keep launching from '
+                        f'{software_stack.ami_id} because {latest_ami_id} has not been validated. '
+                        f'run Refresh and validate on the Images page to bake and promote it'
                     )
-                    base_changed = software_stack.base_ami_id != latest_ami_id
-                    if launches_from_build:
-                        if not base_changed:
-                            result.status = 'up_to_date'
-                            result.message = f'launches from built image {software_stack.ami_id}; base {latest_ami_id} is already the newest'
-                            continue
-                        software_stack.base_ami_id = latest_ami_id
-                        updated_stack = self._software_stack_db.update(software_stack)
-                        result.new_base_ami = latest_ami_id
-                        result.status = 'base_updated'
-                        result.message = (
-                            f'base image updated to {latest_ami_id}; stack still launches from '
-                            f'built image {software_stack.ami_id}; rebuild to pick up the new base'
-                        )
-                    else:
-                        if latest_ami_id == software_stack.ami_id:
-                            result.status = 'up_to_date'
-                            continue
-                        software_stack.ami_id = latest_ami_id
-                        software_stack.base_ami_id = latest_ami_id
-                        updated_stack = self._software_stack_db.update(software_stack)
-                        # the row is committed from here on: the result says so even if
-                        # the index write below fails, which the next start reconciles
-                        result.new_ami = latest_ami_id
-                        result.new_base_ami = latest_ami_id
-                        result.status = 'updated'
                     try:
                         self.index_software_stack_entry_to_opensearch(
                             software_stack=updated_stack

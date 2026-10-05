@@ -16,7 +16,7 @@ export interface NodeHandler {
   moduleName: string;
 }
 
-/** The deployed functions whose handler is the port, as the dev27 capture carries them. */
+/** The deployed functions whose handler is the port, as the demo1 capture carries them. */
 export const DEPLOYED_HANDLERS: readonly NodeHandler[] = [
   {
     packageName: 'idea_analytics_sink',

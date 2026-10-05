@@ -1,7 +1,7 @@
 /**
  * Shared test harness: builds a throwaway `IdeaBaseStack` on the captured replay fixtures and
  * hands back a synthesized template, so each construct can be compared against the matching
- * resources of the live dev27 templates.
+ * resources of the live demo1 templates.
  *
  * Fixtures under `tools/parity/{fixtures,live}` are gitignored, and every test that needs them
  * fails when they are absent.
@@ -23,12 +23,12 @@ import { ideaVersion } from '../../src/version.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
 export const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 export const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 export const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 export const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 
-export const CLUSTER = 'idea-dev27';
+export const CLUSTER = 'idea-demo1';
 export const REGION = 'us-east-2';
 export const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
@@ -38,11 +38,11 @@ export const readJson = (path: string): Json => JSON.parse(readFileSync(path, 'u
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
+  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1",
 );
 
 export function liveTemplatePath(stack: string): string {
-  return join(PKG, 'tools', 'parity', 'live', `idea-dev27-${stack}.json`);
+  return join(PKG, 'tools', 'parity', 'live', `idea-demo1-${stack}.json`);
 }
 
 export function haveLive(stack: string): boolean {
@@ -53,7 +53,7 @@ export function haveLive(stack: string): boolean {
 export function requireLiveFixture(stack: string): void {
   requireCapture(
     [liveTemplatePath(stack)],
-    "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+    "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
   );
 }
 
@@ -87,7 +87,7 @@ export interface Harness {
 export interface HarnessOptions {
   moduleId: string;
   moduleName: string;
-  /** Cluster-settings scan file; defaults to the captured dev27 scan. */
+  /** Cluster-settings scan file; defaults to the captured demo1 scan. */
   configFile?: string;
 }
 
@@ -119,7 +119,7 @@ export function harness(options: HarnessOptions): Harness {
 const workdirs: string[] = [];
 
 /**
- * A copy of the dev27 cluster-settings scan with the named keys replaced (added when absent).
+ * A copy of the demo1 cluster-settings scan with the named keys replaced (added when absent).
  * `null` writes a DynamoDB NULL, which every getter reads as absent.
  */
 export function configWith(overrides: Record<string, string | number | boolean | null>): string {

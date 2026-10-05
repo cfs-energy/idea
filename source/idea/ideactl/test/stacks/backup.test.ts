@@ -1,9 +1,9 @@
 /**
  * `constructs/backup.ts`.
  *
- * dev27 has `cluster.backups.enabled: false`, so no live template covers these resources; the
+ * demo1 has `cluster.backups.enabled: false`, so no live template covers these resources; the
  * assertions below are against the shapes the reference implementation fixes, driven by the
- * dev27 `cluster.backups.backup_plan` config, plus the branches that config can take.
+ * demo1 `cluster.backups.backup_plan` config, plus the branches that config can take.
  */
 
 import assert from 'node:assert/strict';
@@ -20,11 +20,11 @@ import type { Json } from '../support/construct-harness.ts';
 after(cleanup);
 
 const PLAN_NAME = `${CLUSTER}-cluster`;
-const PLAN_ID = 'ideadev27cluster19E9865D';
-const SELECTION_ID = 'ideadev27clusterselection7EAA3C5C';
+const PLAN_ID = 'ideademo1cluster24D3D949';
+const SELECTION_ID = 'ideademo1clusterselection3487DCDF';
 
 interface BuildOptions {
-  /** Defaults to the dev27 `cluster.backups.backup_plan` subtree. */
+  /** Defaults to the demo1 `cluster.backups.backup_plan` subtree. */
   backupPlanConfig?: Record<string, unknown>;
   /** Mirrors the VDC stack, which imports the role the cluster stack created. */
   importRole?: boolean;
@@ -60,7 +60,7 @@ describe('BackupPlan', () => {
     const resources = buildPlan();
     const plan = resources[PLAN_ID];
     assert.equal(plan.Type, 'AWS::Backup::BackupPlan');
-    assert.equal(plan.Metadata['aws:cdk:path'], `idea-dev27-cluster/${PLAN_NAME}/Resource`);
+    assert.equal(plan.Metadata['aws:cdk:path'], `idea-demo1-cluster/${PLAN_NAME}/Resource`);
     assert.deepEqual(plan.Properties.BackupPlan, {
       BackupPlanName: PLAN_NAME,
       BackupPlanRule: [
@@ -77,7 +77,7 @@ describe('BackupPlan', () => {
 
     const selection = resources[SELECTION_ID];
     assert.equal(selection.Type, 'AWS::Backup::BackupSelection');
-    assert.equal(selection.Metadata['aws:cdk:path'], `idea-dev27-cluster/${PLAN_NAME}-selection/Resource`);
+    assert.equal(selection.Metadata['aws:cdk:path'], `idea-demo1-cluster/${PLAN_NAME}-selection/Resource`);
     assert.deepEqual(selection.Properties.BackupPlanId, { 'Fn::GetAtt': [PLAN_ID, 'BackupPlanId'] });
     assert.equal(selection.Properties.BackupSelection.SelectionName, `${PLAN_NAME}-selection`);
     assert.deepEqual(selection.Properties.BackupSelection.ListOfTags, [
@@ -115,7 +115,7 @@ describe('BackupPlan', () => {
             schedule_expression: 'cron(0 5 * * ? *)',
           },
         },
-        selection: { tags: ['Key=idea:BackupPlan,Value=idea-dev27-cluster'] },
+        selection: { tags: ['Key=idea:BackupPlan,Value=idea-demo1-cluster'] },
       },
     })[PLAN_ID];
     assert.deepEqual(plan.Properties.BackupPlan.BackupPlanRule[0].Lifecycle, {
@@ -138,7 +138,7 @@ describe('BackupPlan', () => {
     const plan = buildPlan({
       backupPlanConfig: {
         rules: { nightly: rule('nightly', 5), weekly: rule('weekly', 6) },
-        selection: { tags: ['Key=idea:BackupPlan,Value=idea-dev27-cluster'] },
+        selection: { tags: ['Key=idea:BackupPlan,Value=idea-demo1-cluster'] },
       },
     })[PLAN_ID];
     assert.deepEqual(

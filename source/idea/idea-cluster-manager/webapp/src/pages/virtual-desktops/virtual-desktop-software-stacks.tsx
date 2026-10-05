@@ -540,8 +540,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                 actionTitle: 'Refresh Base Stack AMIs',
                 actionText: (
                     <div>
-                        This finds the newest stock AMI for {scopeText}. A stack still launching from a stock image moves to it; a stack launching from a built image keeps that image, and only the base for its next build is updated.
-                        Custom stacks are not touched, running desktops are unaffected, and new desktops from an updated stack use the new AMI.
+                        This records the newest vendor AMI for {scopeText} as the base for its next image build. Desktops keep launching from their current image until a new image is built and passes validation on the Images page.
+                        Custom and pinned stacks are not touched, and running desktops are unaffected.
                     </div>
                 ),
                 onConfirm: () => {

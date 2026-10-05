@@ -18,6 +18,8 @@ from ideadatamodel import (
     exceptions,
     locale,
 )
+from ideadatamodel.reporting.job_cost import job_spend
+
 from .reporting_sources import user_label, ReportingSources, number, timestamp, subject
 from .snapshot_store import (
     SnapshotStore,
@@ -173,37 +175,7 @@ def job_values(job, currency):
         started and requested is not None and requested > 0 and elapsed is not None
     )
     nodes = number(params.get('nodes'))
-    bom = job.get('estimated_bom_cost') or {}
-    lines = [
-        line for line in bom.get('line_items') or [] if line.get('service') == 'aws.ec2'
-    ]
-    prices = []
-    for line in lines:
-        price = line.get('total_price') or {}
-        amount = number(price.get('amount'))
-        if price.get('unit') != currency:
-            amount = None
-        if amount is None and not price:
-            unit_price = line.get('unit_price') or {}
-            rate, quantity = (
-                number(unit_price.get('amount')),
-                number(line.get('quantity')),
-            )
-            if (
-                unit_price.get('unit') == currency
-                and line.get('unit') in ('per hour', 'per second', 'per minute')
-                and rate is not None
-                and quantity is not None
-            ):
-                amount = rate * quantity
-        prices.append(amount)
-    cost = (
-        known_sum(prices)
-        if lines
-        and all(price is not None for price in prices)
-        and not bom.get('price_unavailable')
-        else None
-    )
+    cost = job_spend(job.get('estimated_bom_cost'), currency)
     return dict(
         cost=cost,
         requested=requested / HOUR if matched else None,
@@ -549,7 +521,7 @@ class ReportingService:
                         else 'partial'
                         if priced < len(entries) or job_status == 'partial'
                         else 'estimated',
-                        'Recorded job-compute estimates only.',
+                        'Recorded job estimates only: compute at the rate charged plus job storage.',
                         eligible_count=priced,
                         total_count=len(entries),
                         missing_records=len(entries) - priced,
@@ -698,14 +670,12 @@ class ReportingService:
             if priced_projects
             else new_row('top_project', 'Top project unavailable')
         )
-        warnings.append(
-            'Top project: by recorded job-compute spend; other facets unallocated'
-        )
+        warnings.append('Top project: by recorded job spend; other facets unallocated')
         raw_job_spend = known_sum(
             entry['cost'] for entries in project_jobs.values() for entry in entries
         )
         difference = new_row(
-            'job_spend_difference', 'Projection minus recorded job-compute spend'
+            'job_spend_difference', 'Projection minus recorded job spend'
         )
         if total['spend_by_facet']['jobs'] is not None and raw_job_spend is not None:
             difference['spend_total'] = total['spend_by_facet']['jobs'] - raw_job_spend

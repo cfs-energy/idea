@@ -188,3 +188,30 @@ def job_efficiency(job):
         wasted_core_hours=core_hours * (1 - cpu) if cpu is not None else None,
         nodes=int(nodes) if nodes else None,
     )
+
+
+# the idle stop checks running desktops on a 30-minute schedule, so each check stands
+# for half an hour of the desktop running
+DESKTOP_CHECK_HOURS = 0.5
+
+
+def desktop_check_idle(check, cpu_utilization_threshold):
+    """
+    Whether one idle-stop check found the desktop idle, by the idle stop's own rules: CPU
+    under the threshold, no desktop connection and no login session. The idle stop's
+    grace delay decides when to stop, not whether the desktop is idle, so it is not
+    applied. None when the check cannot be read: it counts as neither idle nor in use.
+    """
+    if not isinstance(check, dict) or not isinstance(check.get('DCV'), dict):
+        return None
+    cpu = numeric(check.get('CPUAveragePerformanceLast10Secs'))
+    if cpu is None:
+        return None
+    if cpu >= cpu_utilization_threshold:
+        return False
+    connections = numeric(check['DCV'].get('num-of-connections'))
+    if connections is None:
+        return None
+    # Windows hosts report no login sessions
+    logins = numeric(check.get('SSH_Connection_Count')) or 0
+    return connections == 0 and logins == 0

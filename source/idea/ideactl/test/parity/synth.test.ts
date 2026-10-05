@@ -9,17 +9,17 @@ import { requireAnyCapture, requireCapture } from '../support/fixtures.ts';
 
 const PKG = resolve(import.meta.dirname, '../..');
 const SYNTH = join(PKG, 'tools/parity/synth.ts');
-const FIXTURE = join(PKG, 'tools/parity/fixtures/idea-dev27');
+const FIXTURE = join(PKG, 'tools/parity/fixtures/idea-demo1');
 requireAnyCapture(
   [join(FIXTURE, 'cdk.context.json'), join(FIXTURE, 'python/_cdk/cdk.context.json')],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
+  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1",
 );
 requireCapture(
   [
     join(FIXTURE, 'python/_cdk/cdk.out.metrics'),
-    join(PKG, 'tools/parity/live/idea-dev27-metrics.json'),
+    join(PKG, 'tools/parity/live/idea-demo1-metrics.json'),
   ],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 /**
@@ -36,17 +36,17 @@ function fakeApp(): string {
       `const PKG = ${JSON.stringify(PKG)};`,
       'const out = process.env.CDK_OUTDIR;',
       'mkdirSync(out, { recursive: true });',
-      "cpSync(join(PKG, 'tools/parity/fixtures/idea-dev27/python/_cdk/cdk.out.metrics'), out, { recursive: true });",
-      "const t = JSON.parse(readFileSync(join(PKG, 'tools/parity/live/idea-dev27-metrics.json'), 'utf8'));",
-      "if (process.argv.includes('--mutate')) t.Resources.ideadev27metricssettings.Properties.module_id = 'mutated';",
-      "writeFileSync(join(out, 'idea-dev27-metrics.template.json'), JSON.stringify(t));",
+      "cpSync(join(PKG, 'tools/parity/fixtures/idea-demo1/python/_cdk/cdk.out.metrics'), out, { recursive: true });",
+      "const t = JSON.parse(readFileSync(join(PKG, 'tools/parity/live/idea-demo1-metrics.json'), 'utf8'));",
+      "if (process.argv.includes('--mutate')) t.Resources.ideademo1metricssettings.Properties.module_id = 'mutated';",
+      "writeFileSync(join(out, 'idea-demo1-metrics.template.json'), JSON.stringify(t));",
     ].join('\n'),
   );
   return `${process.execPath} ${file}`;
 }
 
 test('a synth that reproduces the live template reports PARITY', () => {
-  const r = spawnSync(process.execPath, [SYNTH, '--cluster', 'idea-dev27', '--stack', 'metrics', '--app-override', fakeApp()], {
+  const r = spawnSync(process.execPath, [SYNTH, '--cluster', 'idea-demo1', '--stack', 'metrics', '--app-override', fakeApp()], {
     encoding: 'utf8',
   });
   strictEqual(r.status, 0, r.stdout + r.stderr);
@@ -125,7 +125,7 @@ test("--against synth targets the Python cdk.out instead of the live template", 
 
 test('a synth that differs from the live template exits 1', () => {
   const app = `${fakeApp()} --mutate`;
-  const r = spawnSync(process.execPath, [SYNTH, '--cluster', 'idea-dev27', '--stack', 'metrics', '--app-override', app], {
+  const r = spawnSync(process.execPath, [SYNTH, '--cluster', 'idea-demo1', '--stack', 'metrics', '--app-override', app], {
     encoding: 'utf8',
   });
   strictEqual(r.status, 1, r.stdout + r.stderr);
@@ -275,7 +275,7 @@ test('synth refuses a fixture set that is missing a replay file', () => {
 });
 
 test('bad usage exits 2', () => {
-  const r = spawnSync(process.execPath, [SYNTH, '--cluster', 'idea-dev27'], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [SYNTH, '--cluster', 'idea-demo1'], { encoding: 'utf8' });
   strictEqual(r.status, 2);
   match(r.stderr, /usage: synth\.ts --cluster C --stack MODULE_ID/);
 });

@@ -68,6 +68,25 @@ describe('quick-setup --skip-config', () => {
     rmSync(join(file, '..'), { recursive: true, force: true });
   });
 
+  it('finishes a private cluster whose endpoints the installer cannot reach', async () => {
+    const file = valuesFile();
+    const tables = {
+      ...TABLES,
+      // analytics gives the check an endpoint to fail on
+      [`${CLUSTER}.modules`]: [...TABLES[`${CLUSTER}.modules`], moduleRow('analytics', 'analytics', 'stack')],
+      [`${CLUSTER}.cluster-settings`]: [
+        ...TABLES[`${CLUSTER}.cluster-settings`],
+        { key: 'cluster.load_balancers.external_alb.public', value: false },
+      ],
+    };
+    const deps = fakeDeps({ tables });
+    deps.httpStatus = async () => 0;
+    await quickSetup(deps, { valuesFile: file, skipConfig: true, force: true, moduleSet: 'default' });
+    assert.ok(deps.stdout.some((line) => line.includes('The portal load balancer is internal')));
+    assert.ok(deps.stdout.some((line) => line.includes('Cluster Connection Info')));
+    rmSync(join(file, '..'), { recursive: true, force: true });
+  });
+
   it('refuses --skip-config without --values-file', async () => {
     const deps = fakeDeps({ tables: TABLES });
     await assert.rejects(

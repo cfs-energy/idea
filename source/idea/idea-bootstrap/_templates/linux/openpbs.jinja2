@@ -7,7 +7,9 @@ function install_openpbs_dependencies() {
   yum install -y --skip-broken $(echo ${OPENPBS_PKGS[*]})
   {% endif %}
   {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
-  apt install -y $(echo ${OPENPBS_PKGS[*]})
+  # the build dependencies come from linux_packages.application_deb; this list adds to them
+  OPENPBS_PKGS_DEB="{{ ' '.join(context.config.get_list('global-settings.package_config.openpbs.packages_deb', default=[])) }}"
+  [[ -z "${OPENPBS_PKGS_DEB}" ]] || apt install -y ${OPENPBS_PKGS_DEB}
   {% endif %}
   {% include '_templates/linux/cjson_devel.jinja2' %}
 }
@@ -51,6 +53,7 @@ function install_openpbs_release() {
   # Check if already installed with correct version
   check_openpbs_installed "${OPENPBS_VERSION}" && return 0
 
+  install_openpbs_dependencies
   log_info "Installing OpenPBS version ${OPENPBS_VERSION} from release package..."
 
   local OPENPBS_URL="{{ context.config.get_string('global-settings.package_config.openpbs.url', required=True) }}"
@@ -102,6 +105,7 @@ function install_openpbs_git() {
   # Check if already installed with correct version AND commit
   check_openpbs_git_installed "${OPENPBS_VERSION}" "${OPENPBS_COMMIT}" && return 0
 
+  install_openpbs_dependencies
   local OPENPBS_REPO_URL="{{ context.config.get_string('global-settings.package_config.openpbs.repo_url', required=True) }}"
   local OPENPBS_WORK_DIR="/root/bootstrap/openpbs"
 
@@ -120,9 +124,7 @@ function install_openpbs_git() {
   echo -n "${OPENPBS_COMMIT}" > /opt/pbs/.idea_openpbs_commit
 }
 
-# Install dependencies
-install_openpbs_dependencies
-
+# Dependencies install only when OpenPBS does (a baked image already has both).
 # Determine which installation method to use
 # rhel10/rocky10 ship gcc 14, which rejects the v23.06.06 tarball with 24 incompatible-pointer-type
 # errors in pbs_tclWrap.c; only the git branch carries the fix, so the release path is not offered.

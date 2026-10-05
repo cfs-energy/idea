@@ -33,6 +33,7 @@ from ideaclustermanager.app.costs.monthly_costs_service import (
 )
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
+from ideaclustermanager.app.costs.desktop_activity import DesktopActivity
 from ideaclustermanager.app.costs.storage_rates import daily_storage_rate
 from ideaclustermanager.app.metrics.storage_metrics_service import normalize_user
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
@@ -446,7 +447,7 @@ class DailyCostsCalculator(MonthlyCostsService):
                             and not value.cost
                         ),
                         bool(missing),
-                        'Completed-job compute; missing prices remain excluded.',
+                        'Completed jobs at the rate charged plus job storage; missing prices remain excluded.',
                         missing,
                     )
                 elif facet == 'desktops':
@@ -872,6 +873,7 @@ class PersonalCostsCollector:
     def __init__(self, context, store, calculator=None):
         self.context, self.store = context, store
         self.calculator = calculator or DailyCostsCalculator(context, store)
+        self.activity = DesktopActivity(context, store)
         self.logger = context.logger('personal-costs-collector')
         self._stop = threading.Event()
         self._thread = None
@@ -1046,6 +1048,13 @@ class PersonalCostsCollector:
             self.logger.exception(
                 'Storage scan unavailable; collecting the remaining facets'
             )
+        if due:
+            try:
+                self.activity.capture(local)
+            except Exception:
+                self.logger.exception(
+                    'Desktop idle time unavailable; collecting the remaining facets'
+                )
         for index, username in enumerate(selected):
             if self._stop.is_set() or not self.context.is_leader():
                 return

@@ -213,19 +213,8 @@ class PricingHelper:
                 quantity=ondemand_usage_hours,
                 unit_price=instance_type_unit_price.ondemand,
             )
-
-            reserved_savings = (
-                instance_type_unit_price.ondemand - instance_type_unit_price.reserved
-            )
-            estimated_bom_cost.add_savings(
-                title=f'Compute Reserved: [1yr No Upfront] '
-                f'({self.job.ondemand_nodes()} x {self.job.default_instance_type})',
-                service='aws.ec2',
-                product=f'instance_type={self.job.default_instance_type},lifecycle=default',
-                unit='per hour',
-                quantity=ondemand_usage_hours,
-                unit_price=reserved_savings,
-            )
+            # no reserved-instance savings line: the discount is only real for an
+            # account holding reservations, and subtracting it understated spend.
 
         if self.job.spot_nodes() > 0:
             spot_usage_hours = self.total_time_hours * self.job.spot_nodes()

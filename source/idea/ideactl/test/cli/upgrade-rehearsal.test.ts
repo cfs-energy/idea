@@ -22,7 +22,7 @@ import {
 
 const PKG = resolve(import.meta.dirname, "../..");
 const REHEARSAL = join(PKG, "tools/upgrade-rehearsal/rehearse.ts");
-const FIXTURE = join(PKG, "tools/parity/fixtures/idea-dev27");
+const FIXTURE = join(PKG, "tools/parity/fixtures/idea-demo1");
 const LIVE = join(PKG, "tools/parity/live");
 
 /** The physical prefix rewrite and add-only pass are classified separately. */
@@ -118,7 +118,7 @@ function capturedFixtureAvailable(): boolean {
     join(FIXTURE, "python/values.yml"),
     join(FIXTURE, "synth-reads.json"),
     join(FIXTURE, "cdk.context.json"),
-    join(LIVE, "idea-dev27-cluster.json"),
+    join(LIVE, "idea-demo1-cluster.json"),
   ].every(existsSync);
 }
 
@@ -212,9 +212,11 @@ for (const missingInventory of [false, true]) {
       });
       const result = spawnSync(process.execPath, [join(PKG, "tools/parity/upgrade-dry-run.ts"),
         "--capture", root, "--values", join(root, "values.yml"), "--templates", join(root, "templates"),
+        "--out", join(root, "report.txt"),
         ...(missingInventory ? [] : ["--inventory", join(root, "inventory.json")]),
       ], { cwd: PKG, encoding: "utf8", timeout: 30_000 });
-      const output = result.stdout + result.stderr;
+      // The rehearsal exits explicitly; a large piped stdout can lose its tail.
+      const output = readFileSync(join(root, "report.txt"), "utf8") + result.stderr;
       assert.equal(result.status, missingInventory ? 1 : 0, output);
       if (missingInventory) assert.match(output, /writes=0 deploys=0 stack-updates=0/);
       else {

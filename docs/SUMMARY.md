@@ -64,7 +64,7 @@
     * [Queue Profiles](modules/hpc-workloads/admin-documentation/queue-profiles.md)
     * [Create Web Based Job Submission Workflows](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-workflows.md)
     * [Configure Floating License resources](modules/hpc-workloads/admin-documentation/configure-floating-license-resources.md)
-    * [Custom AMIs](modules/hpc-workloads/admin-documentation/custom-amis.md)
+    * [Images](modules/hpc-workloads/admin-documentation/custom-amis.md)
 * [Cluster Manager](modules/cluster-manager/README.md)
   * [Users Management](modules/cluster-manager/users-management.md)
   * [Groups Management](modules/cluster-manager/groups-management.md)

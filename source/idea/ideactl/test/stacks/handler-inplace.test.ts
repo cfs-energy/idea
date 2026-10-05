@@ -17,7 +17,7 @@ import { DEPLOYED_HANDLERS, type NodeHandler } from "../../tools/parity/node-han
 import { requireCapture } from "../support/fixtures.ts";
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CLUSTER = "idea-dev27";
+const CLUSTER = "idea-demo1";
 const REGION = "us-east-2";
 const DEPLOYMENT_ID = "97999f4c-daaa-4813-b8ac-bd7abaedc26b";
 const FIXTURES = join(PKG, "tools", "parity", "fixtures", CLUSTER);
@@ -51,7 +51,7 @@ requireCapture(
       join(PKG, "tools", "parity", "live", `${CLUSTER}-${moduleId}.json`),
     ),
   ],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 /** Validates a parsed JSON object before it is used as a template section. */

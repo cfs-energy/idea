@@ -174,7 +174,7 @@ const SHIFTED_BY_INSERTION =
 const REMOVE_ON_DEPLOY = 'the scheduler stack is deployed to this cluster, which makes the recorded template current again';
 
 const SCHEDULER_DRIFT: IntendedDrift = {
-  cluster: 'idea-dev27',
+  cluster: 'idea-demo1',
   stack: 'scheduler',
   summary: 'scheduler.use_stable_server_name is on in the captured settings and the recorded template predates it',
   deployedInput: { 'scheduler.use_stable_server_name': false },
@@ -183,7 +183,7 @@ const SCHEDULER_DRIFT: IntendedDrift = {
   endsWhen: REMOVE_ON_DEPLOY,
   differences: [
     {
-      path: 'Resources.ideadev27schedulersettings.Properties.settings.private_dns_name',
+      path: 'Resources.ideademo1schedulersettings.Properties.settings.private_dns_name',
       cause: stableNameSetting.id,
       reason:
         'with the flag on the stack writes the configured scheduler hostname instead of the instance private DNS attribute, so execution hosts keep one server name across a scheduler replacement',

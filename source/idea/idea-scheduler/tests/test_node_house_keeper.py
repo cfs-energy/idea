@@ -149,6 +149,26 @@ def test_unavailable_node_is_reclaimed_after_timeout(context, caplog):
     assert 'scheduler reported node state down,unknown' in caplog.text
 
 
+def test_node_that_never_reported_is_reclaimed_after_timeout_from_launch(context):
+    """
+    the live leak: a mom that never reached the server leaves a state-unknown node with no
+    state change time, so the unavailable timeout never started and the node ran for hours
+    """
+    context.config().pop(
+        'scheduler.job_provisioning.node_unavailable_timeout_seconds', default=None
+    )
+    node = build_node(last_used_time=None)
+    node.states = [SocaComputeNodeState.DOWN, SocaComputeNodeState.UNKNOWN]
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+    instance = build_instance(0)
+    instance._instance['LaunchTime'] = arrow.utcnow().shift(minutes=-31).isoformat()
+    assert session._can_terminate(instance=instance, node=node) is True
+    instance._instance['LaunchTime'] = arrow.utcnow().shift(minutes=-5).isoformat()
+    assert session._can_terminate(instance=instance, node=node) is False
+
+
 def test_unavailable_node_is_retained_before_timeout(context):
     context.config().put(
         'scheduler.job_provisioning.node_unavailable_timeout_seconds', 3600

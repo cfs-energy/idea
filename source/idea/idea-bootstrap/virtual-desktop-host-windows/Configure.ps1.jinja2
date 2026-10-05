@@ -63,20 +63,37 @@ function Configure-WindowsEC2Instance {
 
   # Creating unique hostname to avoid NETBIOS name conflict when using an existing AMI
   [string]$IMDS_Token = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token-ttl-seconds" = "600"} -Method PUT -Uri http://169.254.169.254/latest/api/token
+  $InstanceType = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token" = $IMDS_Token} -Method GET -Uri http://169.254.169.254/latest/meta-data/instance-type
   $InstanceId = Invoke-RestMethod -Headers @{"X-aws-ec2-metadata-token" = $IMDS_Token} -Method GET -Uri http://169.254.169.254/latest/meta-data/instance-id
+  # EC2Launch v2 records a finished user data run only after its postReady stage, and the
+  # restart at the end of this function can take the agent down first: the next boot
+  # then runs all of the user data again (Windows Server 2019: about 2 minutes and a second
+  # reboot after IDEA_BOOTSTRAP_COMPLETE). Once this instance has finished, a repeat is a no-op.
+  $ConfiguredMarker = "$env:SystemDrive\ProgramData\IDEA\configured-$InstanceId"
+  if (Test-Path $ConfiguredMarker) {
+    Write-ToLog -Message "Instance $InstanceId is already configured; skipping the repeated user data run"
+    Stop-Transcript
+    exit 0
+  }
   # flip below lines if you want to enable/disable computer renaming
   $DesktopHostname = Get-IdeaHostname
   # $DesktopHostname = $InstanceId.substring($InstanceId.length - 15, 15).ToUpper()
-  if ($env:COMPUTERNAME -ne $DesktopHostname) {
+  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  # The domain join below renames the computer (Rename-Computer + JoinWithNewName), and the restart at
+  # the end applies both: a rename restart first cost every desktop a full extra boot.
+  $RenameFirst = $false
+  {% else %}
+  $RenameFirst = $env:COMPUTERNAME -ne $DesktopHostname
+  {% endif %}
+  if ($RenameFirst) {
     Write-ToLog -Message "Hostname detected $env:COMPUTERNAME . Renaming Computer to $DesktopHostname ..."
     Rename-Computer -NewName $DesktopHostname -Force
     Write-ToLog -Message "Name has been changed, re-enabling user data as we are about to restart the system ..."
 
     # Check Windows version and use appropriate method for re-enabling user data
-    $OSVersion = [System.Environment]::OSVersion.Version
-    if ($OSVersion.Major -eq 10 -and $OSVersion.Build -ge 20348) {
-        # Windows Server 2022+ (build number 20348 or higher) - uses EC2Launch v2
-        Write-ToLog -Message "Windows Server 2022+ detected, using EC2Launch v2"
+    if (Test-Path 'C:\Program Files\Amazon\EC2Launch\EC2Launch.exe') {
+        # Use the installed agent, including sysprepped Windows Server 2019 images.
+        Write-ToLog -Message "Using installed EC2Launch v2"
         & "C:\Program Files\Amazon\EC2Launch\EC2Launch.exe" reset
     } else {
         # Older Windows versions - uses EC2Launch v1
@@ -99,7 +116,7 @@ function Configure-WindowsEC2Instance {
   $DomainUserName = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}\$LocalUser"
   if ($ServerInAD -eq $false)
   {
-    Start-ADAutomationAuthorization
+    Start-ADAutomationAuthorization -Hostname $DesktopHostname
     Start-ADAutomationWaitForAuthorizationAndJoin
 
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -PropertyType "DWord" -Value 1 -Force
@@ -234,7 +251,23 @@ Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody `$RebootMessage -Mess
   schtasks /create /sc onevent /ec system /mo "*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and (Level=4 or Level=0) and (EventID=1)]]"  /tn IDEAWakeupNotification /tr "powershell -ExecutionPolicy Bypass -File $IdeaScriptsDirectory\IdeaRebootNotification.ps1" /ru system /f
   $Message = "{{ context.vars.dcv_host_ready_message }}"
   # todo - support vpc endpoint
+  # image validation reads this line from the bootstrap_<instance id> CloudWatch stream;
+  # written before the restart below so the agent ships it first
+  Write-ToLog -Message "IDEA_BOOTSTRAP_COMPLETE release={{ context.module_version }}"
   Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody $Message -MessageGroupId $IDEASessionID
+
+  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  # a failed join must run again on the next boot: no marker until the instance is joined
+  $Joined = $ServerInAD -or $global:IdeaDomainJoined -or (Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain
+  {% else %}
+  $Joined = $true
+  {% endif %}
+  if ($Joined) {
+    [IO.Directory]::CreateDirectory((Split-Path $ConfiguredMarker)) | Out-Null
+    [IO.File]::WriteAllText($ConfiguredMarker, "{{ context.module_version }}")
+  } else {
+    Write-ToLog -Message "Instance $InstanceId did not join the domain; the next boot runs the user data again"
+  }
 
   Stop-Transcript
   Restart-Computer -Force

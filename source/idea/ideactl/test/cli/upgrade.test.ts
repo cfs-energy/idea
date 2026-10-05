@@ -1917,7 +1917,7 @@ test("the image row follows the release only when it names the release repositor
   for (const image of [
     `${repository}:26.09.4`,
     `${repository}:26.10.0`,
-    `${repository}:build-6e82332-dev27`,
+    `${repository}:build-6e82332-demo1`,
     `${repository}@sha256:${"0".repeat(64)}`,
     "private.example/idea-control-plane:26.09.3",
   ]) {
@@ -2080,5 +2080,55 @@ test("upgrade forwards explicit host refresh consent and preserves its rerun opt
     };
     await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, refreshHosts: true });
     assert.equal(reached, true);
+  });
+});
+
+for (const metadata of [
+  { Name: 'idea-compute-node-rocky9-v01012020-000000', CreationDate: '2020-01-01T00:00:00Z' },
+  { Name: 'idea-compute-node-rocky9-v01012020-000000' },
+]) {
+  test(`Phase 3 keeps managed compute until validated promotion, date=${metadata.CreationDate ?? 'absent'}`, async () => {
+    await withFixture(async ({ deps, events }) => {
+      deps.ec2.describeImages = async ({ imageIds }) => imageIds.map((ImageId) => ({ ImageId, ...metadata }));
+      await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: 'default', force: true, acceptConfigDrift: true });
+      assert.ok(!events.some((event) => event.startsWith('set:scheduler.compute_node_')));
+      assert.ok(events.includes(`set:scheduler.images.refresh_requested_release=${ideaVersion()}`));
+    });
+  });
+}
+
+for (const unreadable of [false, true]) {
+  test(`Phase 3 preserves a pinned custom compute default, metadata unreadable=${unreadable}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      rows[`${clusterName}.cluster-settings`]!.push(setting('scheduler.images.default_image_pinned', true));
+      if (unreadable) rows[`${clusterName}.cluster-settings`]!.find((row) => row['key'] === 'scheduler.compute_node_ami')!['value'] = 'ami-release';
+      deps.ec2.describeImages = async ({ imageIds }) => {
+        if (unreadable) throw new Error('metadata unavailable');
+        return imageIds.map((ImageId) => ({ ImageId, Name: 'custom-image' }));
+      };
+      await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: 'default', force: true, acceptConfigDrift: true });
+      assert.ok(!events.some((event) => event.startsWith('set:scheduler.compute_node_')));
+    });
+  });
+}
+
+test('compute image metadata failure preserves the image instead of bypassing validation', async () => {
+  await withFixture(async ({ deps, events }) => {
+    deps.ec2.describeImages = async () => { throw new Error('metadata unavailable'); };
+    await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: 'default', force: true, acceptConfigDrift: true });
+    assert.ok(!events.some((event) => event.startsWith('set:scheduler.compute_node_')));
+  });
+});
+
+test('image pipeline checkpoints may advance while the upgrade deploys', async () => {
+  await withFixture(async ({ deps, rows }) => {
+    const keys = ['scheduler.images.refreshed_release', 'scheduler.images.image_refresh_last_run_on', 'vdc.software_stacks.image_refresh_last_run_on', 'vdc.software_stacks.images_baked_release'];
+    rows[`${clusterName}.cluster-settings`]!.push(...keys.map((key) => setting(key, 'before')));
+    const deploy = deps.deploy;
+    deps.deploy = async (input) => {
+      await deploy(input);
+      for (const key of keys) rows[`${clusterName}.cluster-settings`]!.find((row) => row['key'] === key)!['value'] = 'after';
+    };
+    await upgradeCluster(deps, { clusterName, awsRegion, moduleSet: 'default', force: true, acceptConfigDrift: true });
   });
 });

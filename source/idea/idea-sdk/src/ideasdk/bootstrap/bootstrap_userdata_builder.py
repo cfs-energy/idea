@@ -132,6 +132,10 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 export PATH="${!PATH}:/usr/local/bin"
 
 function install_aws_cli () {
+  # an image baked from this bootstrap already has the CLI; reinstalling it cost every boot
+  if [[ -x /usr/local/aws-cli/v2/current/bin/aws && -x /bin/aws ]]; then
+    return 0
+  fi
   if [[ "${!BASE_OS}" == "amazonlinux2023" ]]; then
     yum remove -y awscli
   fi
@@ -231,6 +235,10 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 export PATH="${PATH}:/usr/local/bin"
 
 function install_aws_cli () {
+  # an image baked from this bootstrap already has the CLI; reinstalling it cost every boot
+  if [[ -x /usr/local/aws-cli/v2/current/bin/aws && -x /bin/aws ]]; then
+    return 0
+  fi
   if [[ "${BASE_OS}" == "amazonlinux2023" ]]; then
     yum remove -y awscli
   fi

@@ -96,6 +96,9 @@ class HpcQueueProfilesDAO:
         queue_profile.stack_uuid = Utils.get_value_as_string(
             'stack_uuid', db_queue_profile
         )
+        queue_profile.image_pinned = Utils.get_value_as_bool(
+            'image_pinned', db_queue_profile, False
+        )
 
         queue_management_params = SocaQueueManagementParams()
         queue_profile.queue_management_params = queue_management_params
@@ -311,6 +314,8 @@ class HpcQueueProfilesDAO:
             db_queue_profile['terminate_when_idle'] = queue_profile.terminate_when_idle
         if queue_profile.stack_uuid is not None:
             db_queue_profile['stack_uuid'] = queue_profile.stack_uuid
+        if queue_profile.image_pinned is not None:
+            db_queue_profile['image_pinned'] = queue_profile.image_pinned
 
         queue_management_params = queue_profile.queue_management_params
         if queue_management_params is not None:

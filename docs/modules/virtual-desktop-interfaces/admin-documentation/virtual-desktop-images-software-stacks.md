@@ -121,13 +121,27 @@ This setting will override the global instance type restrictions and only show t
 
 To grant an individual user additional instance types without changing the global or Software Stack allow list, open **Cluster Management** > **Users**, select the user, and choose **Actions** > **Set virtual desktop instance types**. These exceptions remain subject to the global deny list; save an empty selection to clear them.
 
+#### Base stacks and the image pipeline
+
+Stacks named `ss-base-<os>-<arch>-base` are base stacks. IDEA manages their images from **Administration → Images and applications → Images** (see [Images](../../hpc-workloads/admin-documentation/custom-amis.md)):
+
+* A base stack moves only to an image that passed validation. A new vendor image never goes straight onto a base stack.
+* A pinned base stack keeps its image when its image row switches. Setting a base stack's image yourself, through **Edit Software Stack** or the API, to an image the pipeline did not validate pins that stack automatically.
+* Custom stacks, meaning any stack you registered, are never changed by the pipeline.
+
+On the first run after upgrading to 26.10.1, before any image switches, IDEA pins every base stack that launches from an image it did not build: not a vendor image, not an image the release config names, and not one an image row recorded. This keeps an image an administrator set by hand. The controller log names each stack it pinned. To let the pipeline replace its image, set the stack's `image_pinned` to `false` through the `VirtualDesktopAdmin.UpdateSoftwareStack` API.
+
 ### Use your new Virtual Desktop Software Stack
 
 Once created, the Software Stack will be visible to all users who belong to the associated project(s). Refer to [create-a-virtual-desktop-linux-windows.md](../user-documentation/create-a-virtual-desktop-linux-windows.md "mention") to learn how to launch your desktop with the new image
 
 ## Two images on a base stack
 
-A base software stack (`ss-base-<os>-<arch>-base`) records `ami_id`, the image desktops launch from, and `base_ami_id`, the stock image the next build starts from. Refresh Base Stack AMIs (the portal action and `ideactl update-base-stacks`) always advances `base_ami_id` and changes `ami_id` only while it is still a stock image; once a build has repointed the stack, the built image stays until a rebuild or an explicit change. Custom AMIs shows both and offers Use built image to return to the last completed build.
+A base software stack (`ss-base-<os>-<arch>-base`) records `ami_id`, the image desktops launch from, and `base_ami_id`, the vendor image the next build starts from.
+
+* **Refresh Base Stack AMIs** (the portal action and `ideactl update-base-stacks`) moves `base_ami_id` to the newest vendor image. It does not change `ami_id`, because a new vendor image has not been validated. Run **Refresh and validate** on the Images page to bake, validate and switch to it.
+* `ami_id` changes only when the image pipeline switches the row to a validated image, or when you roll the row back to its previous validated image.
+* A pinned stack keeps its `ami_id` in both cases.
 
 Controller startup restores a missing base software-stack record. The **Desktop images** page lists every supported operating-system and architecture combination even when its base stack is missing or disabled, so you can build or restore it instead of losing the option from the page.
 
@@ -137,19 +151,21 @@ On Red Hat Enterprise Linux and Rocky Linux desktops, bootstrap selects the kern
 
 ## Build a desktop image
 
-A desktop launched from a stock vendor AMI spends 13 to 18 minutes installing packages, DCV and drivers on its first boot. `ideactl build-desktop-image` moves that work into a reusable image: it launches a temporary instance from a stock base AMI, runs the instance-independent half of the desktop bootstrap (system packages, system updates, DCV server, session manager agent, and GPU drivers on a GPU instance type), and snapshots it as `idea-dcv-host-<baseos>-v<version>`. Desktops launched from the built image run only per-session configuration and typically reach READY in a few minutes.
+A desktop launched from a vendor AMI spends 13 to 18 minutes installing packages, DCV and drivers on its first boot. A built image moves that work into the image, so desktops reach Ready in a few minutes.
 
-Run it as root on the virtual desktop controller host:
+The base stacks already launch from built, validated images that the image pipeline keeps current. See [Images](../../hpc-workloads/admin-documentation/custom-amis.md).
+
+To build an image for your own software stack, use **Custom images** on the Images page, or run this as root on the virtual desktop controller:
 
 ```bash
 ideactl build-desktop-image \
   --base-os amazonlinux2023 \
-  --base-ami <current stock AMI for your region> \
-  --update-stack --force
+  --base-ami <current vendor AMI for your region> \
+  --force
 ```
 
-The build takes 20 to 30 minutes. With `--update-stack`, the matching `ss-base-<os>-<arch>-base` software stack is pointed at the new image and the search index is rebuilt, so the next desktop from that stack uses it immediately; without the flag, update the stack's Instance AMI yourself.
+The build takes 20 to 30 minutes and produces `idea-dcv-host-<baseos>-v<version>`. It does not change any software stack; register a stack from the image to use it. `--update-stack` is refused, because base stacks only move to validated images.
 
-The instance profile, security groups, subnet and key pair default to the cluster's DCV host settings and can be overridden with the corresponding options. Built images carry no session or user state. Rebuild after changing DCV versions or GPU driver settings, or when the stock base AMI moves.
+The instance profile, security groups, subnet and key pair default to the cluster's DCV host settings and can be overridden with the corresponding options. Built images carry no session or user state. A custom build that nothing references is removed after `images.legacy_cleanup_min_age_days` (30 days by default).
 
 The virtual desktop controller command entry point includes its table-formatting dependency. If an image-building or stack-management command still fails during import, verify that the controller is running this release before troubleshooting its arguments.

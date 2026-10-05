@@ -22,19 +22,19 @@ import { ideaVersion } from '../../src/version.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
-const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-dev27-metrics.json');
+const LIVE_TEMPLATE = join(PKG, 'tools', 'parity', 'live', 'idea-demo1-metrics.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 const DEPLOYMENT_ID = '97999f4c-daaa-4813-b8ac-bd7abaedc26b';
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS, CONTEXT_FILE, LIVE_TEMPLATE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -47,7 +47,7 @@ after(() => {
   for (const workdir of workdirs) rmSync(workdir, { recursive: true, force: true });
 });
 
-/** Copies the dev27 settings scan, setting the `S` value of each named key (adding it if absent). */
+/** Copies the demo1 settings scan, setting the `S` value of each named key (adding it if absent). */
 function configWith(overrides: Record<string, string>): string {
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
@@ -131,7 +131,7 @@ function deployedResources(template: Json): Json {
 }
 
 describe('metrics stack, cloudwatch provider', () => {
-  test('matches the deployed dev27 template resource for resource', async () => {
+  test('matches the deployed demo1 template resource for resource', async () => {
     const template = await synthMetrics();
     assert.deepEqual(deployedResources(template), deployedResources(readJson(LIVE_TEMPLATE)));
   });
@@ -141,9 +141,9 @@ describe('metrics stack, cloudwatch provider', () => {
     const dashboard = resources.cloudwatchdashboard84BE33F2;
     assert.equal(dashboard.Type, 'AWS::CloudWatch::Dashboard');
     assert.equal(dashboard.Properties.DashboardBody, '{"widgets":[]}');
-    assert.equal(dashboard.Properties.DashboardName, 'idea-dev27_us-east-2');
+    assert.equal(dashboard.Properties.DashboardName, 'idea-demo1_us-east-2');
 
-    const settings = resources.ideadev27metricssettings;
+    const settings = resources.ideademo1metricssettings;
     assert.equal(settings.Type, 'Custom::ClusterSettings');
     assert.equal(settings.Properties.module_id, 'metrics');
     assert.equal(settings.Properties.settings.deployment_id, DEPLOYMENT_ID);
@@ -153,7 +153,7 @@ describe('metrics stack, cloudwatch provider', () => {
     assert.equal(arn[0], '');
     assert.equal(arn[1][0], 'arn:');
     assert.deepEqual(arn[1][1], { Ref: 'AWS::Partition' });
-    assert.match(arn[1][2], /^:cloudwatch::\d{12}:dashboard\/idea-dev27_us-east-2$/);
+    assert.match(arn[1][2], /^:cloudwatch::\d{12}:dashboard\/idea-demo1_us-east-2$/);
   });
 });
 
@@ -166,8 +166,8 @@ describe('metrics stack, other providers', () => {
         'metrics.prometheus.query.url': 'https://example.invalid/api/v1/query',
       });
       const resources = deployedResources(await synthMetrics(config));
-      assert.deepEqual(Object.keys(resources), ['ideadev27metricssettings']);
-      assert.deepEqual(resources.ideadev27metricssettings.Properties.settings, {
+      assert.deepEqual(Object.keys(resources), ['ideademo1metricssettings']);
+      assert.deepEqual(resources.ideademo1metricssettings.Properties.settings, {
         deployment_id: DEPLOYMENT_ID,
       });
     });
@@ -182,8 +182,8 @@ describe('metrics stack, other providers', () => {
     const workspace = resources.prometheusworkspace;
     assert.equal(workspace.Type, 'AWS::APS::Workspace');
     assert.equal(workspace.Properties.Alias, 'sample-workspace');
-    assert.equal(workspace.Metadata['aws:cdk:path'], 'idea-dev27-metrics/prometheus-workspace');
-    const settings = resources.ideadev27metricssettings.Properties.settings;
+    assert.equal(workspace.Metadata['aws:cdk:path'], 'idea-demo1-metrics/prometheus-workspace');
+    const settings = resources.ideademo1metricssettings.Properties.settings;
     assert.deepEqual(Object.keys(settings), [
       'deployment_id',
       'amazon_managed_prometheus.workspace_id',

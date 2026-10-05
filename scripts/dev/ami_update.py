@@ -86,7 +86,7 @@ def get_session() -> boto3.Session:
     # the named profile is the workstation setup; on an instance carrying only a role
     # there is no profile, so fall back to the default credential chain.
     try:
-        return boto3.Session(profile_name='idea-dev')
+        return boto3.Session(profile_name='idea')
     except ProfileNotFound:
         return boto3.Session()
 

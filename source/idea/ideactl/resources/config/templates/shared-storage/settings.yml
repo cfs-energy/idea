@@ -108,7 +108,7 @@ data:
 #     file_system_id: fs-09753a84872d3209b
 #     svm:
 #       svm_id: svm-064990494a2dbd4c2
-#       smb_dns: IDEA-DEV-SVM1.IDEA.LOCAL
+#       smb_dns: IDEA-SVM1.IDEA.LOCAL
 #       nfs_dns: svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
 #       management_dns: svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com
 #       iscsi_dns: iscsi.svm-064990494a2dbd4c2.fs-09753a84872d3209b.fsx.us-east-1.amazonaws.com

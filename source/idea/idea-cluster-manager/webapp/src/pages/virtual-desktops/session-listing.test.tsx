@@ -16,6 +16,26 @@ describe('session listing merge', () => {
         expect(next.get('b')?.state).toBe('DELETING');
     });
 
+    it('keeps a just-created desktop the listing does not have yet', () => {
+        const now = Date.parse('2026-10-01T17:00:00Z');
+        const created = session('new', {state: 'PROVISIONING', updated_on: '2026-10-01T16:59:50Z'});
+        const current = new Map([['a', session('a')], ['new', created]]);
+        expect(Array.from(mergeSessions(current, [session('a')], true, now).keys()).sort()).toEqual(['a', 'new']);
+    });
+
+    it('drops a desktop the listing does not have once the grace window has passed', () => {
+        const now = Date.parse('2026-10-01T17:00:00Z');
+        const old = session('old', {updated_on: '2026-10-01T16:50:00Z'});
+        expect(Array.from(mergeSessions(new Map([['old', old]]), [], true, now).keys())).toEqual([]);
+    });
+
+    it('drops a deleted desktop the listing still returns', () => {
+        const now = Date.parse('2026-10-01T17:00:00Z');
+        const current = new Map([['a', session('a', {state: 'DELETED', updated_on: '2026-10-01T16:59:59Z'})]]);
+        const stale = session('a', {state: 'STOPPED', updated_on: '2026-10-01T16:00:00Z'});
+        expect(Array.from(mergeSessions(current, [stale], true, now).keys())).toEqual([]);
+    });
+
     it('keeps a local copy that is newer than the server copy', () => {
         const current = new Map([['a', session('a', {state: 'STOPPING', updated_on: 20})]]);
         expect(mergeSessions(current, [session('a', {state: 'READY', updated_on: 15})], true).get('a')?.state).toBe('STOPPING');

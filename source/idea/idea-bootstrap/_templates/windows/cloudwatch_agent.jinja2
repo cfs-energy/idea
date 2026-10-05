@@ -41,13 +41,12 @@ if ((Test-Path $CloudWatchAgentPath) -and (Test-Path $CloudWatchAgentConfig)) {
         Invoke-WebRequest -Uri $CLOUDWATCH_AGENT_DOWNLOAD_LINK -OutFile $LocalPackagePath -UseBasicParsing
 
         Write-Output "Installing CloudWatch Agent..."
-        Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $LocalPackagePath, "/quiet", "/norestart" -Wait -NoNewWindow
+        $CloudWatchInstall = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $LocalPackagePath, "/quiet", "/norestart" -Wait -NoNewWindow -PassThru
 
-        if ($LASTEXITCODE -eq 0) {
+        if ($CloudWatchInstall.ExitCode -in @(0, 3010)) {
             Write-Output "CloudWatch Agent installation completed successfully."
         } else {
-            Write-Error "CloudWatch Agent installation failed with exit code: $LASTEXITCODE"
-            exit $LASTEXITCODE
+            throw "CloudWatch Agent installation failed with exit code: $($CloudWatchInstall.ExitCode)"
         }
     } catch {
         Write-Error "Failed to download or install CloudWatch Agent: $($_.Exception.Message)"

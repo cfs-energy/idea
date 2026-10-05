@@ -322,6 +322,20 @@ class AWSUtilProtocol(SocaBaseProtocol):
     def get_image_architecture(self, image_id: str) -> Optional[str]: ...
 
     @abstractmethod
+    def is_image_missing(self, image_id: str) -> bool: ...
+
+    @abstractmethod
+    def get_image_dates(self, image_id: str) -> Optional[Dict[str, str]]: ...
+
+    @abstractmethod
+    def get_subnet_availability_zone(self, subnet_id: str) -> Optional[str]: ...
+
+    @abstractmethod
+    def get_instance_types_offered(
+        self, availability_zone: str
+    ) -> Optional[Set[str]]: ...
+
+    @abstractmethod
     def is_instance_type_efa_supported(self, instance_type: str) -> bool: ...
 
     @abstractmethod

@@ -83,6 +83,8 @@ interface HarnessOptions {
     cwd?: string;
     url?: string;
     schedulerDeployed?: boolean;
+    /** The signed-in user's home directory. Unknown by default, which leaves the trail starting at root. */
+    home?: string;
 }
 
 /** Renders the page with every backend call stubbed. Returns the API spies, the flashbar spy and a
@@ -114,6 +116,11 @@ function renderFileBrowser(options: HarnessOptions = {}) {
     };
 
     vi.spyOn(context.auth(), 'getAccessToken').mockResolvedValue('test-access-token');
+    if (options.home != null) {
+        vi.spyOn(context.auth(), 'getUser').mockResolvedValue({ username: 'testuser', home_dir: options.home } as any);
+    } else {
+        vi.spyOn(context.auth(), 'getUser').mockRejectedValue(new Error('unavailable'));
+    }
 
     // The signed-download-URL exchange is a plain fetch, not an IDEA RPC.
     const fetchMock = vi.fn().mockResolvedValue({
@@ -241,6 +248,7 @@ function toolbarButton(label: string): HTMLElement | null {
     const buttons = Array.from(root.querySelectorAll('button')) as HTMLElement[];
     return (
         buttons.find((button) => (button.getAttribute('title') || '').trim() === label) ??
+        buttons.find((button) => (button.getAttribute('aria-label') || '').trim() === label) ??
         buttons.find((button) => (button.textContent || '').trim() === label) ??
         null
     );
@@ -320,7 +328,7 @@ function isVisuallyHidden(element: Element): boolean {
 
 /** An entry in whichever menu is currently open. */
 function openMenuItem(label: string): HTMLElement | null {
-    const items = Array.from(document.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
+    const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]')) as HTMLElement[];
     return (
         items.filter((item) => (item.textContent || '').trim() === label).find((item) => !isVisuallyHidden(item)) ?? null
     );
@@ -382,24 +390,17 @@ async function chooseFromContextMenu(user: User, name: string, action: string) {
     await user.click(openMenuItem(action)!);
 }
 
-/** Choose a named entry from the toolbar's own menus, the view and display options that are not
- * per-file actions. */
+/** Open the toolbar's Actions menu. */
+async function openActionsMenu(user: User) {
+    await user.click(requireToolbarButton('Actions'));
+}
+
+/** Choose a named entry from the toolbar's Actions menu, which holds every per-file action and the
+ * view options. */
 async function chooseFromToolbarMenu(user: User, label: string) {
-    const triggers = (Array.from(browserRoot().querySelectorAll('button')) as HTMLElement[]).filter(
-        (button) => (button.textContent || '').trim() === ''
-    );
-    for (const trigger of triggers) {
-        await user.click(trigger);
-        try {
-            await waitFor(() => expect(openMenuItem(label)).not.toBeNull(), { timeout: 1000 });
-        } catch {
-            await user.keyboard('{Escape}');
-            continue;
-        }
-        await user.click(openMenuItem(label)!);
-        return;
-    }
-    throw new Error(`no toolbar menu entry "${label}"`);
+    await openActionsMenu(user);
+    await waitFor(() => expect(openMenuItem(label)).not.toBeNull(), { timeout: 10000 });
+    await user.click(openMenuItem(label)!);
 }
 
 /** Replace the whole contents of a text field. Not clear() + type(): the rename fields fall back to
@@ -411,7 +412,7 @@ async function replaceText(user: User, field: HTMLElement, value: string) {
 
 /** The number of entries the browser says the directory holds, with thousands separators removed. */
 function reportedItemCount(): number | null {
-    const match = browserText().replace(/[,\u00A0\u200B]/g, '').match(/(\d+)\s+items?/);
+    const match = browserText().replace(/[,\u00A0\u200B]/g, '').match(/\((?:\d+\/)?(\d+)\)/);
     return match ? Number(match[1]) : null;
 }
 
@@ -569,8 +570,8 @@ describe('file browser', () => {
             await waitForRow('notes.txt');
             await user.click(requireToolbarButton('Create folder'));
 
-            const dialog = await findDialogContaining('Create New Folder');
-            await user.type(within(dialog).getByLabelText(/Folder Name/i), 'quarterly');
+            const dialog = await findDialogContaining('Create folder');
+            await user.type(within(dialog).getByLabelText(/Folder name/i), 'quarterly');
 
             api.listFiles.mockClear();
             api.listFiles.mockResolvedValue({ cwd: HOME, listing: [dir('quarterly'), entry('notes.txt')] } as any);
@@ -590,8 +591,8 @@ describe('file browser', () => {
             api.createFile.mockRejectedValue({ errorCode: 'DISK_QUOTA_EXCEEDED', message: 'Disk quota exceeded' });
 
             await user.click(requireToolbarButton('Create folder'));
-            const dialog = await findDialogContaining('Create New Folder');
-            await user.type(within(dialog).getByLabelText(/Folder Name/i), 'quarterly');
+            const dialog = await findDialogContaining('Create folder');
+            await user.type(within(dialog).getByLabelText(/Folder name/i), 'quarterly');
             await user.click(within(dialog).getByRole('button', { name: 'Submit' }));
 
             expect(await within(dialog).findByText('Disk quota exceeded')).toBeInTheDocument();
@@ -677,12 +678,12 @@ describe('file browser', () => {
             await waitForRow('reports');
             await chooseFromContextMenu(user, 'reports', 'Download files');
 
-            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download Ready'), {
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download ready'), {
                 timeout: 10000
             });
             const headers = flashbarSeen.map((item) => item.header);
-            expect(headers.indexOf('Preparing Download')).toBeGreaterThanOrEqual(0);
-            expect(headers.indexOf('Preparing Download')).toBeLessThan(headers.indexOf('Download Ready'));
+            expect(headers.indexOf('Preparing download')).toBeGreaterThanOrEqual(0);
+            expect(headers.indexOf('Preparing download')).toBeLessThan(headers.indexOf('Download ready'));
         });
 
         it('surfaces a failure to prepare the archive', async () => {
@@ -693,10 +694,10 @@ describe('file browser', () => {
 
             await chooseFromContextMenu(user, 'reports', 'Download files');
 
-            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download Failed'), {
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download failed'), {
                 timeout: 10000
             });
-            expect(flashbarSeen.find((item) => item.header === 'Download Failed')!.content).toContain('archive failed');
+            expect(flashbarSeen.find((item) => item.header === 'Download failed')!.content).toContain('archive failed');
         });
     });
 
@@ -787,7 +788,7 @@ describe('file browser', () => {
             await selectEntry(user, 'reports');
             await addToSelection(user, 'notes.txt');
             await user.pointer({target: requireRow('notes.txt'), keys: '[MouseRight]'});
-            await waitFor(() => expect(openMenuItem('Favorite')).not.toBeNull());
+            await waitFor(() => expect(openMenuItem('Add to favorites')).not.toBeNull());
             expect(openMenuItem('Delete files')).toBeNull();
             expect(openMenuItem('Delete folder')).toBeNull();
             expect(api.deleteFiles).not.toHaveBeenCalled();
@@ -799,8 +800,8 @@ describe('file browser', () => {
             await waitForRow('notes.txt');
             await chooseFromContextMenu(user, 'notes.txt', 'Delete files');
 
-            const dialog = await findDialogContaining('Are you sure you want to delete');
-            expect(within(dialog).getByText('Delete File(s)')).toBeInTheDocument();
+            const dialog = await findDialogContaining('Delete these files?');
+            expect(within(dialog).getByText('Delete files')).toBeInTheDocument();
             expect(within(dialog).getByText('notes.txt')).toBeInTheDocument();
 
             api.listFiles.mockClear();
@@ -822,7 +823,7 @@ describe('file browser', () => {
             await addToSelection(user, 'c.txt');
 
             await chooseFromContextMenu(user, 'c.txt', 'Delete files');
-            const dialog = await findDialogContaining('Are you sure you want to delete');
+            const dialog = await findDialogContaining('Delete these files?');
             expect(within(dialog).getByText('a.txt')).toBeInTheDocument();
             expect(within(dialog).getByText('c.txt')).toBeInTheDocument();
             expect(within(dialog).queryByText('b.txt')).toBeNull();
@@ -840,10 +841,10 @@ describe('file browser', () => {
             await waitForRow('notes.txt');
             await chooseFromContextMenu(user, 'notes.txt', 'Delete files');
 
-            const dialog = await findDialogContaining('Are you sure you want to delete');
+            const dialog = await findDialogContaining('Delete these files?');
             await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
-            await waitFor(() => expect(dialogContaining('Are you sure you want to delete')).toBeNull());
+            await waitFor(() => expect(dialogContaining('Delete these files?')).toBeNull());
             expect(api.deleteFiles).not.toHaveBeenCalled();
         });
 
@@ -854,7 +855,7 @@ describe('file browser', () => {
             api.deleteFiles.mockRejectedValue({ errorCode: 'UNAUTHORIZED_ACCESS', message: 'not allowed' });
 
             await chooseFromContextMenu(user, 'notes.txt', 'Delete files');
-            const dialog = await findDialogContaining('Are you sure you want to delete');
+            const dialog = await findDialogContaining('Delete these files?');
             await user.click(within(dialog).getByRole('button', { name: 'Yes' }));
 
             expect(await screen.findByText('Permission denied')).toBeInTheDocument();
@@ -899,7 +900,7 @@ describe('file browser', () => {
 
             api.listFiles.mockClear();
             api.listFiles.mockResolvedValue({ cwd: HOME, listing: [dir('reports'), entry('minutes.txt')] } as any);
-            await user.click(within(dialog).getByRole('button', { name: 'Rename 1 Item' }));
+            await user.click(within(dialog).getByRole('button', { name: 'Rename 1 item' }));
 
             await waitFor(() =>
                 expect(api.renameFile).toHaveBeenCalledWith({ file: `${HOME}/notes.txt`, new_name: 'minutes.txt' })
@@ -929,7 +930,7 @@ describe('file browser', () => {
             await replaceText(user, within(dialog).getByDisplayValue('a.txt'), 'alpha.txt');
             await replaceText(user, within(dialog).getByDisplayValue('b.txt'), 'bravo.txt');
 
-            await user.click(within(dialog).getByRole('button', { name: 'Rename 2 Items' }));
+            await user.click(within(dialog).getByRole('button', { name: 'Rename 2 items' }));
 
             await waitFor(() => expect(api.renameFile).toHaveBeenCalledTimes(2));
             expect(api.renameFile).toHaveBeenCalledWith({ file: `${HOME}/a.txt`, new_name: 'alpha.txt' });
@@ -960,13 +961,13 @@ describe('file browser', () => {
             await chooseFromContextMenu(user, 'ok.txt', 'Rename');
 
             const dialog = await findDialogContaining(RENAME_DIALOG);
-            expect(within(dialog).getByText(/Protected - cannot be renamed/)).toBeInTheDocument();
+            expect(within(dialog).getByText(/Protected, cannot be renamed/)).toBeInTheDocument();
             expect(within(dialog).getByText(/Permission denied/)).toBeInTheDocument();
             expect(within(dialog).getByDisplayValue('locked.txt')).toBeDisabled();
             expect(within(dialog).getByDisplayValue('forbidden.txt')).toBeDisabled();
 
             await replaceText(user, within(dialog).getByDisplayValue('ok.txt'), 'fine.txt');
-            await user.click(within(dialog).getByRole('button', { name: 'Rename 1 Item' }));
+            await user.click(within(dialog).getByRole('button', { name: 'Rename 1 item' }));
 
             await waitFor(() => expect(api.renameFile).toHaveBeenCalledTimes(1));
             expect(api.renameFile).toHaveBeenCalledWith({ file: `${HOME}/ok.txt`, new_name: 'fine.txt' });
@@ -987,7 +988,7 @@ describe('file browser', () => {
             await replaceText(user, within(dialog).getByDisplayValue('notes.txt'), 'bad/name.txt');
 
             expect(await within(dialog).findByText(/cannot contain path separators/i)).toBeInTheDocument();
-            expect(within(dialog).getByRole('button', { name: 'Fix Validation Errors' })).toBeDisabled();
+            expect(within(dialog).getByRole('button', { name: 'Fix invalid names' })).toBeDisabled();
             expect(api.renameFile).not.toHaveBeenCalled();
         });
     });
@@ -1028,7 +1029,7 @@ describe('file browser', () => {
             api.saveFile.mockRejectedValue({ errorCode: 'UNAUTHORIZED_ACCESS', message: 'nope' });
             await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
-            expect(await screen.findByText(/Failed to save file: Permission Denied/)).toBeInTheDocument();
+            expect(await screen.findByText(/Failed to save file: Permission denied/)).toBeInTheDocument();
         });
 
         it('refuses to open a file too large to edit, and does not fetch it', async () => {
@@ -1065,7 +1066,7 @@ describe('file browser', () => {
             const { user, clipboardWrites } = renderFileBrowser();
 
             await waitForRow('notes.txt');
-            await chooseFromContextMenu(user, 'notes.txt', 'Copy selection');
+            await chooseFromContextMenu(user, 'notes.txt', 'Copy path');
 
             await waitFor(() => expect(clipboardWrites).toEqual([`${HOME}/notes.txt`]));
             expect(await screen.findByText(/notes\.txt path copied to clipboard/)).toBeInTheDocument();
@@ -1075,7 +1076,7 @@ describe('file browser', () => {
             const { user, anchorClicks } = renderFileBrowser();
 
             await waitForRow('notes.txt');
-            await chooseFromContextMenu(user, 'notes.txt', 'Tail File');
+            await chooseFromContextMenu(user, 'notes.txt', 'Tail file');
 
             await waitFor(() => expect(anchorClicks).toHaveLength(1));
             expect(anchorClicks[0].href).toBe(`/#/home/file-browser/tail?file=${HOME}/notes.txt&cwd=${HOME}`);
@@ -1086,7 +1087,7 @@ describe('file browser', () => {
             const { api, user } = renderFileBrowser();
 
             await waitForRow('notes.txt');
-            await chooseFromContextMenu(user, 'notes.txt', 'Open in Script Workbench');
+            await chooseFromContextMenu(user, 'notes.txt', 'Open in script editor');
 
             await waitFor(() => expect(api.readFile).toHaveBeenCalledWith({ file: `${HOME}/notes.txt` }));
         });
@@ -1097,7 +1098,7 @@ describe('file browser', () => {
             await waitForRow('binary.bin');
             api.readFile.mockRejectedValue({ errorCode: 'NOT_A_TEXT_FILE', message: 'not text' });
 
-            await chooseFromContextMenu(user, 'binary.bin', 'Open in Script Workbench');
+            await chooseFromContextMenu(user, 'binary.bin', 'Open in script editor');
 
             await waitFor(() => expect(api.readFile).toHaveBeenCalledWith({ file: `${HOME}/binary.bin` }));
             expect(await screen.findByText(/Cannot open binary files in Script Workbench/)).toBeInTheDocument();
@@ -1161,20 +1162,21 @@ describe('file browser', () => {
             const { user } = renderFileBrowser({ schedulerDeployed: false });
 
             await waitForRow('notes.txt');
-            expect(toolbarButton('Submit Job')).toBeNull();
+            await openActionsMenu(user);
+            await waitFor(() => expect(openMenuItem('Rename')).not.toBeNull());
+            expect(openMenuItem('Submit job')).toBeNull();
+            await user.keyboard('{Escape}');
 
             await openContextMenu(user, 'notes.txt');
-            expect(openMenuItem('Submit Job')).toBeNull();
+            expect(openMenuItem('Submit job')).toBeNull();
         });
 
         it('offers job submission for the selected file when the scheduler is deployed', async () => {
             const { user } = renderFileBrowser({ schedulerDeployed: true });
 
             await waitForRow('notes.txt');
-            expect(toolbarButton('Submit Job')).not.toBeNull();
-
             await selectEntry(user, 'notes.txt');
-            await user.click(requireToolbarButton('Submit Job'));
+            await chooseFromToolbarMenu(user, 'Submit job');
 
             await waitFor(() => expect(urlQuery()).toBe(`?input_file=${HOME}/notes.txt`));
         });
@@ -1186,7 +1188,7 @@ describe('file browser', () => {
 
             await waitForRow('notes.txt');
             await selectEntry(user, 'notes.txt');
-            await user.click(requireToolbarButton('Favorite'));
+            await chooseFromToolbarMenu(user, 'Add to favorites');
 
             await user.click(screen.getByRole('tab', { name: 'Favorites' }));
             await waitForRow(`(${HOME}) notes.txt`);
@@ -1197,7 +1199,7 @@ describe('file browser', () => {
 
             await waitForRow('notes.txt');
             await selectEntry(first.user, 'notes.txt');
-            await first.user.click(requireToolbarButton('Favorite'));
+            await chooseFromToolbarMenu(first.user, 'Add to favorites');
             await waitFor(() => expect(localStorage.length).toBeGreaterThan(0));
             first.unmount();
 
@@ -1212,12 +1214,12 @@ describe('file browser', () => {
 
             await waitForRow('notes.txt');
             await selectEntry(user, 'notes.txt');
-            await user.click(requireToolbarButton('Favorite'));
+            await chooseFromToolbarMenu(user, 'Add to favorites');
 
             await user.click(screen.getByRole('tab', { name: 'Favorites' }));
             await waitForRow(`(${HOME}) notes.txt`);
 
-            await chooseFromContextMenu(user, `(${HOME}) notes.txt`, 'Remove Favorite');
+            await chooseFromContextMenu(user, `(${HOME}) notes.txt`, 'Remove from favorites');
 
             await waitForNoRow(`(${HOME}) notes.txt`);
         });
@@ -1227,7 +1229,7 @@ describe('file browser', () => {
 
             await waitForRow('reports');
             await selectEntry(user, 'reports');
-            await user.click(requireToolbarButton('Favorite'));
+            await chooseFromToolbarMenu(user, 'Add to favorites');
 
             await user.click(screen.getByRole('tab', { name: 'Favorites' }));
             await waitForRow(`(${HOME}) reports`);
@@ -1326,7 +1328,7 @@ describe('file browser', () => {
             await addToSelection(user, name(2));
 
             await chooseFromContextMenu(user, name(2), 'Delete files');
-            const dialog = await findDialogContaining('Are you sure you want to delete');
+            const dialog = await findDialogContaining('Delete these files?');
             await user.click(within(dialog).getByRole('button', { name: 'Yes' }));
 
             await waitFor(() =>
@@ -1350,10 +1352,10 @@ describe('file browser', () => {
             await user.click(headerSelectAllCheckbox());
 
             // The count reads against the whole directory rather than the page on screen.
-            expect(browserText()).toMatch(new RegExp(`${count} of ${count} selected`));
+            expect(browserText()).toMatch(new RegExp(`\\(${count}/${count}\\)`));
 
             await chooseFromContextMenu(user, 'file-0000.txt', 'Delete files');
-            const dialog = await findDialogContaining('Are you sure you want to delete');
+            const dialog = await findDialogContaining('Delete these files?');
             await user.click(within(dialog).getByRole('button', { name: 'Yes' }));
 
             const expectedFiles = manyEntries(count).map((file) => `${HOME}/${file.name}`);
@@ -1366,11 +1368,11 @@ describe('file browser', () => {
 
             await waitForRow('file-0000.txt');
             await user.click(headerSelectAllCheckbox());
-            await waitFor(() => expect(browserText()).toMatch(new RegExp(`${count} of ${count} selected`)));
+            await waitFor(() => expect(browserText()).toMatch(new RegExp(`\\(${count}/${count}\\)`)));
 
             await user.click(headerSelectAllCheckbox());
 
-            await waitFor(() => expect(browserText()).not.toMatch(/selected/));
+            await waitFor(() => expect(browserText()).not.toMatch(/\(\d+\/\d+\)/));
             expect(reportedItemCount()).toBe(count);
         });
 
@@ -1383,7 +1385,7 @@ describe('file browser', () => {
 
             await user.keyboard('{Control>}a{/Control}');
 
-            await waitFor(() => expect(browserText()).toMatch(new RegExp(`${count} of ${count} selected`)));
+            await waitFor(() => expect(browserText()).toMatch(new RegExp(`\\(${count}/${count}\\)`)));
         });
 
         it('leaves Ctrl+A alone outside the table, such as while typing in the search box', async () => {
@@ -1393,7 +1395,7 @@ describe('file browser', () => {
             await user.click(searchBox());
             await user.keyboard('{Control>}a{/Control}');
 
-            expect(browserText()).not.toMatch(/selected/);
+            expect(browserText()).not.toMatch(/\(\d+\/\d+\)/);
         });
 
         it('clears the selection with Escape while the table has focus', async () => {
@@ -1401,11 +1403,84 @@ describe('file browser', () => {
 
             await waitForRow('apple.txt');
             await user.click(rowCheckbox('apple.txt'));
-            await waitFor(() => expect(browserText()).toMatch(/1 of 2 selected/));
+            await waitFor(() => expect(browserText()).toMatch(/\(1\/2\)/));
 
             await user.keyboard('{Escape}');
 
-            await waitFor(() => expect(browserText()).not.toMatch(/selected/));
+            await waitFor(() => expect(browserText()).not.toMatch(/\(\d+\/\d+\)/));
+        });
+    });
+
+    describe('toolbar, columns and path', () => {
+        it('keeps only Refresh, Actions, Create folder and Upload files on the toolbar', async () => {
+            const { user } = renderFileBrowser({ schedulerDeployed: true });
+
+            await waitForRow('notes.txt');
+            for (const label of ['Refresh', 'Actions', 'Create folder', 'Upload files']) {
+                expect(toolbarButton(label)).not.toBeNull();
+            }
+            for (const label of ['Favorite', 'Add to favorites', 'Rename', 'Submit job', 'Submit Job']) {
+                expect(toolbarButton(label)).toBeNull();
+            }
+
+            /** Which of the labels are enabled, read from one opening of the Actions menu. */
+            const enabledIn = async (labels: string[]) => {
+                await openActionsMenu(user);
+                await waitFor(() => expect(openMenuItem(labels[0])).not.toBeNull());
+                const result = labels.map((label) => openMenuItem(label)!.getAttribute('aria-disabled') !== 'true');
+                await user.keyboard('{Escape}');
+                return result;
+            };
+            const selectionActions = ['Open', 'Download files', 'Copy path', 'Rename', 'Add to favorites', 'Submit job',
+                'Tail file', 'Open in script editor', 'Delete files'];
+            expect(await enabledIn([...selectionActions, 'Show hidden files'])).toEqual([...selectionActions.map(() => false), true]);
+
+            await selectEntry(user, 'notes.txt');
+            expect(await enabledIn(selectionActions)).toEqual(selectionActions.map(() => true));
+        });
+
+        it('shows date and time, a dash for folder sizes, and the count beside the title', async () => {
+            renderFileBrowser({
+                listing: [dir('reports'), entry('notes.txt', { size: 2048, mod_date: '2026-01-02T03:04:05.000Z' })]
+            });
+
+            const notes = (await waitForRow('notes.txt')).closest('tr')!;
+            const expected = new Intl.DateTimeFormat(undefined, {
+                year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+            }).format(new Date('2026-01-02T03:04:05.000Z'));
+            expect(notes.textContent).toContain(expected);
+            expect(notes.textContent).toContain('2.0 KB');
+            expect(requireRow('reports').closest('tr')!.textContent).toContain('–');
+            expect(browserText()).toMatch(/My files\s*\(2\)/);
+            expect(screen.getByRole('tab', { name: 'My files' })).toBeInTheDocument();
+            expect(screen.getByRole('tab', { name: 'File transfer' })).toBeInTheDocument();
+        });
+
+        it('starts the trail at Home inside the home directory and still copies the real path', async () => {
+            const { api, user, clipboardWrites } = renderFileBrowser({
+                home: HOME,
+                cwd: `${HOME}/reports`,
+                listing: [entry('q1.txt')]
+            });
+
+            await waitForRow('q1.txt');
+            await waitFor(() => expect(breadcrumbTrail()).toEqual(['Home', 'reports']));
+            expect(breadcrumb('Home')!.closest('[title]')!.getAttribute('title')).toBe(HOME);
+
+            await user.click(requireToolbarButton('Copy path'));
+            await waitFor(() => expect(clipboardWrites).toContain(`${HOME}/reports`));
+
+            api.listFiles.mockClear();
+            api.listFiles.mockResolvedValue({ cwd: HOME, listing: [dir('reports')] } as any);
+            await user.click(breadcrumb('Home')!);
+            await waitFor(() => expect(api.listFiles).toHaveBeenCalledWith({ cwd: HOME }));
+        });
+
+        it('shows the whole trail from root outside the home directory', async () => {
+            renderFileBrowser({ home: HOME, cwd: '/data/projects', listing: [entry('run.log')] });
+
+            await waitForRow('run.log');
+            expect(breadcrumbTrail()).toEqual(['root', 'data', 'projects']);
         });
     });
 });

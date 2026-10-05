@@ -40,7 +40,7 @@ describe('portal navigation', () => {
         vi.spyOn(ctx.auth(), 'isModuleAdmin').mockImplementation(module => module === 'virtual-desktop-controller');
         const items = IdeaSideNavItems(ctx);
         expect((items.at(-1) as any).items.map((item: any) => item.text)).toEqual(['Manage desktops', 'Images and applications', 'People and access', 'Operations', 'Settings']);
-        expect(permittedViews(PORTAL_TASKS.find(task => task.id === 'images-applications')!, ctx).map(view => view.label)).toEqual(['Desktop images', 'Custom images']);
+        expect(permittedViews(PORTAL_TASKS.find(task => task.id === 'images-applications')!, ctx).map(view => view.label)).toEqual(['Desktop images', 'Images']);
         vi.spyOn(ctx.getClusterSettingsService(), 'isVirtualDesktopDeployed').mockReturnValue(false);
         expect(IdeaSideNavItems(ctx).some(item => item.type === 'section')).toBe(false);
         expect(IdeaSideNavHeader(ctx).href).toBe('#/home/active-jobs');
@@ -61,7 +61,7 @@ describe('portal navigation', () => {
         ['/soca/queues', 'manage-jobs', 'Queues'], ['/soca/queues/create', 'manage-jobs', 'Queues'], ['/soca/queues/update', 'manage-jobs', 'Queues'],
         ['/soca/licenses', 'manage-jobs', 'Licenses'], ['/soca/licenses/create', 'manage-jobs', 'Licenses'], ['/soca/licenses/update', 'manage-jobs', 'Licenses'],
         ['/soca/applications', 'images-applications', 'Submission forms'], ['/soca/applications/create', 'images-applications', 'Submission forms'], ['/soca/applications/update', 'images-applications', 'Submission forms'],
-        ['/soca/custom-amis', 'images-applications', 'Custom images'], ['/cluster/projects', 'projects', 'Projects'],
+        ['/soca/custom-amis', 'images-applications', 'Images'], ['/cluster/projects', 'projects', 'Projects'],
         ['/cluster/users', 'people-access', 'Users'], ['/cluster/groups', 'people-access', 'Groups'],
         ['/cluster/user-costs', 'costs-usage', 'By user'], ['/cluster/status', 'operations', 'Health'],
         ['/cluster/settings', 'settings', 'Settings'], ['/virtual-desktop/settings', 'settings', 'Settings'], ['/soca/settings', 'settings', 'Settings'], ['/cluster/email-templates', 'settings', 'Settings'],

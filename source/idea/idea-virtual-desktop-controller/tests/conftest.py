@@ -228,6 +228,8 @@ def refresh_loop(monkeypatch, refresh):
     )
     app.context = refresh.context
     app._bootstrap_session_utils = Mock()
+    # the image pipeline tick shares the loop; tests of it live in test_image_pipeline.py
+    app._image_pipeline = Mock()
     app._bootstrap_exit = BootstrapRefreshLoopExit(
         clock, [60, 21599, 21600, 21660, 43200]
     )

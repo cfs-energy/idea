@@ -475,3 +475,625 @@ def test_aws_errors_keep_their_code_and_a_scrubbed_message():
         sanitize_aws_message('x arn:aws:s3:::b y 111122223333 z')
         == 'x <arn> y <account> z'
     )
+
+
+# 26.10.1 pipeline rows
+
+
+class ConditionTable(FakeTable):
+    """evaluates the condition expressions put_if / claim / update_fields build"""
+
+    @staticmethod
+    def holds(item, expression, names, values):
+        import re
+
+        if not expression:
+            return True
+        python = expression
+        python = re.sub(
+            r'attribute_not_exists\(([#\w]+)\)',
+            lambda m: f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)',
+            python,
+        )
+        python = re.sub(r'NOT (#\w+) IN \(([^)]*)\)', r'(\1 not in [\2])', python)
+        python = python.replace('<>', '!=').replace(' = ', ' == ')
+        python = python.replace(' AND ', ' and ').replace(' OR ', ' or ')
+        for placeholder, name in names.items():
+            python = python.replace(placeholder, f'item.get({name!r})')
+        for placeholder in sorted(values, key=len, reverse=True):
+            python = python.replace(placeholder, repr(values[placeholder]))
+        return eval(python, {'item': item})
+
+    def put_item(
+        self,
+        Item,
+        ConditionExpression=None,
+        ExpressionAttributeNames=None,
+        ExpressionAttributeValues=None,
+    ):
+        key = (Item['base_os'], Item['architecture'])
+        if not self.holds(
+            self.items.get(key, {}),
+            ConditionExpression,
+            ExpressionAttributeNames or {},
+            ExpressionAttributeValues or {},
+        ):
+            raise ClientError(
+                {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'PutItem'
+            )
+        self.items[key] = dict(Item)
+
+    def update_item(
+        self,
+        Key,
+        UpdateExpression,
+        ExpressionAttributeNames,
+        ExpressionAttributeValues=None,
+        ConditionExpression=None,
+    ):
+        key = (Key['base_os'], Key['architecture'])
+        item = self.items.setdefault(key, dict(Key))
+        values = ExpressionAttributeValues or {}
+        if not self.holds(item, ConditionExpression, ExpressionAttributeNames, values):
+            raise ClientError(
+                {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
+            )
+        for part in (
+            UpdateExpression.replace('SET ', '').split(' REMOVE ')[0].split(', ')
+        ):
+            if '=' in part:
+                name, value = (t.strip() for t in part.split('='))
+                item[ExpressionAttributeNames[name]] = values[value]
+        if ' REMOVE ' in f' {UpdateExpression}':
+            for name in UpdateExpression.split('REMOVE ')[1].split(', '):
+                item.pop(ExpressionAttributeNames[name.strip()], None)
+
+
+def pipeline_db() -> ImageBuildRecordsDB:
+    db = ImageBuildRecordsDB(context=Mock(), table_name='t', kind='desktop')
+    db._table_obj = ConditionTable()
+    return db
+
+
+def test_gpu_and_custom_rows_get_their_own_range_keys_and_round_trip():
+    from ideasdk.aws.image_builds import custom_build_architecture, is_custom_record
+
+    db = pipeline_db()
+    stamp = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='current',
+            image_id='ami-cpu',
+            validated_on=stamp,
+            promoted_on=stamp,
+            retry_after=stamp,
+        )
+    )
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9', architecture='x86_64', variant='nvidia', status='queued'
+        )
+    )
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture=custom_build_architecture('x86_64'),
+            status='complete',
+            image_id='ami-custom',
+        )
+    )
+
+    assert sorted(db._table_obj.items) == [
+        ('rocky9', 'x86_64'),
+        ('rocky9', 'x86_64#custom'),
+        ('rocky9', 'x86_64#nvidia'),
+    ]
+    cpu = db.get('rocky9', 'x86_64')
+    assert (cpu.validated_on, cpu.promoted_on, cpu.retry_after) == (stamp, stamp, stamp)
+    assert db._table_obj.items[('rocky9', 'x86_64')]['validated_on'] == int(
+        stamp.timestamp() * 1000
+    )
+    gpu = db.get('rocky9', 'x86_64', 'nvidia')
+    assert (gpu.architecture, gpu.variant) == ('x86_64', 'nvidia')
+    custom = db.get('rocky9', 'x86_64#custom')
+    assert is_custom_record(custom) and custom.image_id == 'ami-custom'
+    assert cpu.image_id == 'ami-cpu'  # the custom build never touched the managed row
+
+
+def test_legacy_records_load_migrated_and_never_pass_the_gate():
+    from ideasdk.aws.image_builds import ImageNotValidated, promote_gate
+
+    db = pipeline_db()
+    db._table_obj.items[('rocky9', 'x86_64')] = {
+        'base_os': 'rocky9',
+        'architecture': 'x86_64',
+        'status': 'complete',
+        'image_id': 'ami-legacy',
+        'base_ami': 'ami-stock',
+        'update_target': True,
+    }
+    record = db.get('rocky9', 'x86_64')
+    assert (record.status, record.kind, record.variant, record.source_ami) == (
+        'current',
+        'desktop',
+        'cpu',
+        'ami-stock',
+    )
+    assert record.current_image_id == 'ami-legacy'
+    with pytest.raises(ImageNotValidated):
+        promote_gate(record, 'ami-legacy')
+
+
+def test_the_promote_gate_accepts_only_validated_candidates_and_promoted_images():
+    from ideasdk.aws.image_builds import (
+        ImageNotValidated,
+        promote_gate,
+        validated_image_ids,
+    )
+
+    started = datetime(2026, 10, 2, tzinfo=timezone.utc)
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        image_id='ami-cand',
+        started_on=started,
+        current_image_id='ami-cur',
+        previous_image_id='ami-prev',
+    )
+    for image_id in ('ami-cand', 'ami-cur', 'ami-prev', None):
+        with pytest.raises(ImageNotValidated):
+            promote_gate(record, image_id)
+    record.validated_on = started - timedelta(days=1)  # an older run's validation
+    with pytest.raises(ImageNotValidated):
+        promote_gate(record, 'ami-cand')
+    record.validated_on = started + timedelta(hours=1)
+    promote_gate(record, 'ami-cand')
+    record.promoted_on = started
+    promote_gate(record, 'ami-prev')
+    with pytest.raises(ImageNotValidated):
+        promote_gate(record, 'ami-other')
+    assert validated_image_ids([record]) == {'ami-cand', 'ami-cur', 'ami-prev'}
+
+
+def test_put_if_is_the_queue_claim_and_the_host_fence():
+    db = pipeline_db()
+    row = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', status='queued', host='a'
+    )
+    in_flight = ['queued', 'building']
+    assert db.put_if(row, {'status': in_flight}) is True
+    assert db.put_if(row, {'status': in_flight}) is False  # already queued
+    row.status = 'building'
+    assert db.put_if(row, {'host': 'b'}) is False
+    assert db.put_if(row, {'host': 'a'}) is True
+    fresh = ImageBuildRecord(base_os='rhel9', architecture='x86_64', host='a')
+    assert db.put_if(fresh, {'host': None}) is True
+
+
+def test_claim_refuses_every_in_flight_status_and_a_pinned_row():
+    db = pipeline_db()
+    for status in (
+        'queued',
+        'checking',
+        'test_launching',
+        'promoting',
+        'waiting_capacity',
+    ):
+        db._table_obj.items[('rocky9', 'x86_64')] = {
+            'base_os': 'rocky9',
+            'architecture': 'x86_64',
+            'status': status,
+        }
+        assert (
+            db.claim(
+                ImageBuildRecord(
+                    base_os='rocky9', architecture='x86_64', status='building'
+                )
+            )
+            is False
+        )
+    db._table_obj.items[('rocky9', 'x86_64')] = {
+        'base_os': 'rocky9',
+        'architecture': 'x86_64',
+        'status': 'current',
+        'pinned': True,
+    }
+    assert (
+        db.claim(
+            ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='queued')
+        )
+        is False
+    )
+    db._table_obj.items[('rocky9', 'x86_64')]['pinned'] = False
+    assert (
+        db.claim(
+            ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='queued')
+        )
+        is True
+    )
+    assert db.get('rocky9', 'x86_64').status == 'queued'
+
+
+def test_update_fields_sets_only_those_attributes_unless_a_job_holds_the_row():
+    db = pipeline_db()
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='building',
+            instance_id='i-1',
+        )
+    )
+    row = db.get('rocky9', 'x86_64')
+    assert db.update_fields(row, {'pinned': True}) is True
+    assert (
+        db.update_fields(row, {'status': 'pinned'}, unless_status={'building'}) is False
+    )
+    stored = db.get('rocky9', 'x86_64')
+    assert (stored.pinned, stored.status, stored.instance_id) == (
+        True,
+        'building',
+        'i-1',
+    )
+
+
+def test_resume_goes_to_the_test_launch_when_the_image_exists():
+    from ideasdk.aws.image_builds import resume_record
+
+    db = pipeline_db()
+    context = Mock()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [{'ImageId': 'ami-1', 'State': 'pending'}]
+    }
+    record = resume_record(
+        context,
+        db,
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='building',
+            ami_name='idea-dcv-host-rocky9-v1',
+            instance_id='i-1',
+        ),
+        Mock(),
+    )
+    assert (record.status, record.image_id) == ('test_launching', 'ami-1')
+    context.aws().ec2().stop_instances.assert_not_called()
+
+
+# legacy builder image cleanup
+
+NOW = datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+
+class Pages:
+    def __init__(self, call):
+        self.call = call
+
+    def paginate(self, **kwargs):
+        return [self.call(**kwargs)]
+
+
+class LegacyEc2:
+    """honors the tag, snapshot, image-id and state filters the legacy sweep sends"""
+
+    def __init__(self):
+        self.images = {}
+        self.instances = []
+        self.templates = {}
+        self.deregistered = []
+        self.deleted_snapshots = []
+
+    def add(self, image_id, days_old, cluster='idea-test', module='scheduler', **tags):
+        tags = {'idea:AmiBuilder': 'true', 'idea:ModuleName': module, **tags}
+        if cluster:
+            tags['idea:ClusterName'] = cluster
+        self.images[image_id] = {
+            'ImageId': image_id,
+            'Name': f'idea-compute-node-{image_id}',
+            'State': 'available',
+            'CreationDate': (NOW - timedelta(days=days_old)).strftime(
+                '%Y-%m-%dT%H:%M:%S.000Z'
+            ),
+            'Tags': [{'Key': k, 'Value': v} for k, v in tags.items()],
+            'BlockDeviceMappings': [{'Ebs': {'SnapshotId': 'snap-' + image_id}}],
+        }
+        return self.images[image_id]
+
+    def get_paginator(self, name):
+        return Pages(getattr(self, name))
+
+    def describe_images(self, Owners, Filters):
+        assert Owners == ['self']
+        found = list(self.images.values())
+        for f in Filters:
+            if f['Name'] == 'block-device-mapping.snapshot-id':
+                found = [
+                    i
+                    for i in found
+                    if any(
+                        m['Ebs']['SnapshotId'] in f['Values']
+                        for m in i['BlockDeviceMappings']
+                    )
+                ]
+            else:
+                key = f['Name'][len('tag:') :]
+                found = [
+                    i
+                    for i in found
+                    if {t['Key']: t['Value'] for t in i['Tags']}.get(key) in f['Values']
+                ]
+        return {'Images': found}
+
+    def describe_instances(self, Filters):
+        values = {f['Name']: f['Values'] for f in Filters}
+        return {
+            'Reservations': [
+                {
+                    'Instances': [
+                        i
+                        for i in self.instances
+                        if i['ImageId'] in values['image-id']
+                        and i['State']['Name'] in values['instance-state-name']
+                    ]
+                }
+            ]
+        }
+
+    def describe_launch_templates(self):
+        return {
+            'LaunchTemplates': [
+                {'LaunchTemplateId': k, 'LaunchTemplateName': k} for k in self.templates
+            ]
+        }
+
+    def describe_launch_template_versions(self, LaunchTemplateId):
+        return {
+            'LaunchTemplateVersions': [
+                {'VersionNumber': n, 'LaunchTemplateData': {'ImageId': image_id}}
+                for n, image_id in enumerate(self.templates[LaunchTemplateId], 1)
+            ]
+        }
+
+    def deregister_image(self, ImageId):
+        self.deregistered.append(ImageId)
+        del self.images[ImageId]
+
+    def delete_snapshot(self, SnapshotId):
+        self.deleted_snapshots.append(SnapshotId)
+
+
+class LegacyDynamo:
+    def __init__(self):
+        self.tables = {
+            'idea-test.cluster-settings': [],
+            'idea-test.scheduler.queue-profiles': [],
+            'idea-test.scheduler.image-builds': [],
+            'idea-test.vdc.controller.software-stacks': [],
+            'idea-test.vdc.controller.image-builds': [],
+        }
+        self.failing = None
+
+    def get_paginator(self, name):
+        assert name == 'scan'
+        return Pages(self.scan)
+
+    def scan(self, TableName):
+        if TableName == self.failing:
+            raise ClientError({'Error': {'Code': 'AccessDeniedException'}}, 'Scan')
+        if TableName not in self.tables:
+            raise ClientError({'Error': {'Code': 'ResourceNotFoundException'}}, 'Scan')
+        return {'Items': self.tables[TableName]}
+
+
+def legacy_context(module='scheduler'):
+    ec2, dynamodb = LegacyEc2(), LegacyDynamo()
+    context = Mock()
+    context.cluster_name.return_value = 'idea-test'
+    context.module_name.return_value = module
+    context.config.return_value.is_module_enabled.return_value = True
+    context.config.return_value.get_module_id.side_effect = lambda name: {
+        'scheduler': 'scheduler',
+        'virtual-desktop-controller': 'vdc',
+    }[name]
+    context.aws.return_value.ec2.return_value = ec2
+    context.aws.return_value.dynamodb.return_value = dynamodb
+    return context, ec2, dynamodb
+
+
+def sweep(context, days=30, baking=()):
+    from ideasdk.aws.image_builds import deregister_legacy_images
+
+    return deregister_legacy_images(context, days, set(baking), Mock(), now=NOW)
+
+
+def test_legacy_cleanup_takes_only_images_past_the_minimum_age():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-old', 31)
+    ec2.add('ami-young', 29)
+    assert sweep(context, days=0) == []
+    assert sweep(context) == ['ami-old']
+    assert ec2.deleted_snapshots == ['snap-ami-old']
+
+
+def _reference(context, ec2, dynamodb, where):
+    """name ami-ref in one place the sweep must honor"""
+    ddb = lambda **fields: {k: {'S': v} for k, v in fields.items()}  # noqa: E731
+    tables = {
+        'setting': (
+            'idea-test.cluster-settings',
+            ddb(key='scheduler.compute_node_ami', value='ami-ref'),
+        ),
+        'any setting': (
+            'idea-test.cluster-settings',
+            ddb(key='x.y', value='["ami-ref"]'),
+        ),
+        'queue profile': (
+            'idea-test.scheduler.queue-profiles',
+            ddb(name='normal', param_instance_ami='ami-ref'),
+        ),
+        'compute row current': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', current_image_id='ami-ref'),
+        ),
+        'compute row previous': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', previous_image_id='ami-ref'),
+        ),
+        'compute row candidate': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', image_id='ami-ref'),
+        ),
+        'compute row base': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', source_ami='ami-ref'),
+        ),
+        'base stack': (
+            'idea-test.vdc.controller.software-stacks',
+            ddb(stack_id='ss-base', base_ami_id='ami-ref'),
+        ),
+        'custom stack': (
+            'idea-test.vdc.controller.software-stacks',
+            ddb(stack_id='custom-1', ami_id='ami-ref'),
+        ),
+        'desktop row': (
+            'idea-test.vdc.controller.image-builds',
+            ddb(base_os='rocky9', previous_image_id='ami-ref'),
+        ),
+    }
+    if where in tables:
+        table, item = tables[where]
+        dynamodb.tables[table].append(item)
+    elif where == 'stopped instance':
+        ec2.instances.append(
+            {'InstanceId': 'i-1', 'ImageId': 'ami-ref', 'State': {'Name': 'stopped'}}
+        )
+    elif where == 'launch template version':
+        ec2.templates['lt-1'] = ['ami-other', 'ami-ref', 'ami-latest']
+    else:
+        raise AssertionError(where)
+
+
+@pytest.mark.parametrize(
+    'where',
+    [
+        'setting',
+        'any setting',
+        'queue profile',
+        'compute row current',
+        'compute row previous',
+        'compute row candidate',
+        'compute row base',
+        'base stack',
+        'custom stack',
+        'desktop row',
+        'stopped instance',
+        'launch template version',
+    ],
+)
+def test_legacy_cleanup_keeps_an_image_named_anywhere(where):
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-ref', 90)
+    ec2.add('ami-free', 90)
+    _reference(context, ec2, dynamodb, where)
+    assert sweep(context) == ['ami-free']
+
+
+def test_legacy_cleanup_keeps_an_image_still_baking_under_its_name():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-baking', 90)
+    assert sweep(context, baking={'idea-compute-node-ami-baking'}) == []
+
+
+def test_legacy_cleanup_ignores_terminated_instances():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-gone', 90)
+    ec2.instances.append(
+        {'InstanceId': 'i-1', 'ImageId': 'ami-gone', 'State': {'Name': 'terminated'}}
+    )
+    assert sweep(context) == ['ami-gone']
+
+
+def test_legacy_cleanup_never_touches_another_clusters_or_untagged_or_other_module_images():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-other-cluster', 90, cluster='idea-other')
+    ec2.add('ami-no-cluster-tag', 90, cluster=None)
+    ec2.add('ami-desktop', 90, module='virtual-desktop-controller')
+    ec2.add('ami-pipeline', 90, **{'idea:ImagePipeline': 'compute'})
+    ec2.add('ami-mine', 90)
+    assert sweep(context) == ['ami-mine']
+
+
+def test_legacy_cleanup_keeps_a_custom_stack_image():
+    context, ec2, dynamodb = legacy_context(module='virtual-desktop-controller')
+    ec2.add('ami-custom', 400, module='virtual-desktop-controller')
+    dynamodb.tables['idea-test.vdc.controller.software-stacks'].append(
+        {
+            'stack_id': {'S': 'custom-1'},
+            'ami_id': {'S': 'ami-custom'},
+            'enabled': {'BOOL': False},
+        }
+    )
+    assert sweep(context) == []
+
+
+def test_legacy_cleanup_deletes_at_most_the_cap_per_sweep_oldest_first():
+    from ideasdk.aws.image_builds import LEGACY_MAX_PER_SWEEP
+
+    context, ec2, _ = legacy_context()
+    for n in range(LEGACY_MAX_PER_SWEEP + 5):
+        ec2.add(f'ami-{n:02d}', 100 + n)
+    removed = sweep(context)
+    assert len(removed) == LEGACY_MAX_PER_SWEEP
+    assert removed[0] == f'ami-{LEGACY_MAX_PER_SWEEP + 4:02d}'
+    assert len(sweep(context)) == 5
+
+
+def test_legacy_cleanup_keeps_a_snapshot_another_image_still_uses():
+    context, ec2, dynamodb = legacy_context()
+    shared = {'Ebs': {'SnapshotId': 'snap-shared'}}
+    ec2.add('ami-gone', 90)['BlockDeviceMappings'].append(shared)
+    ec2.add('ami-kept', 90)['BlockDeviceMappings'] = [shared]
+    dynamodb.tables['idea-test.cluster-settings'].append({'value': {'S': 'ami-kept'}})
+    assert sweep(context) == ['ami-gone']
+    assert ec2.deleted_snapshots == ['snap-ami-gone']
+
+
+def test_legacy_cleanup_deletes_nothing_when_a_reference_source_cannot_be_read():
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-free', 90)
+    dynamodb.failing = 'idea-test.vdc.controller.software-stacks'
+    with pytest.raises(ClientError):
+        sweep(context)
+    assert ec2.deregistered == []
+
+
+def test_legacy_cleanup_treats_a_module_table_never_created_as_empty():
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-free', 90)
+    del dynamodb.tables['idea-test.vdc.controller.image-builds']
+    assert sweep(context) == ['ami-free']
+
+
+def test_a_legacy_sweep_that_deletes_nothing_still_logs_its_summary():
+    from ideasdk.aws.image_builds import deregister_legacy_images
+
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-young', 5)
+    ec2.add('ami-ref', 90)
+    dynamodb.tables['idea-test.cluster-settings'].append({'value': {'S': 'ami-ref'}})
+    logger = Mock()
+    assert deregister_legacy_images(context, 30, set(), logger, now=NOW) == []
+    logger.info.assert_called_once_with(
+        'legacy image sweep: 2 candidates, 2 kept (1 referenced, 1 too new, '
+        '0 in flight), 0 deleted, capped=no'
+    )
+    logger = Mock()
+    ec2.images.clear()
+    deregister_legacy_images(context, 30, set(), logger, now=NOW)
+    logger.info.assert_called_once_with(
+        'legacy image sweep: 0 candidates, 0 kept (0 referenced, 0 too new, '
+        '0 in flight), 0 deleted, capped=no'
+    )

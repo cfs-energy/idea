@@ -932,18 +932,12 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     <Table items={(estimated_bom_cost.line_items) ? estimated_bom_cost.line_items! : []}
                            columnDefinitions={getColumnDefinitions()}/>
 
-                    {estimated_bom_cost.savings && estimated_bom_cost.savings.length > 0 && <div>
-                        <h4>Potential Savings: {Utils.getFormattedAmount(estimated_bom_cost.savings_total)}</h4>
-                        <Table items={estimated_bom_cost.savings}
-                               columnDefinitions={getColumnDefinitions()}/>
-                    </div>}
-
                     <ColumnLayout columns={2}>
                         <Box textAlign="left">
                             <h3>Estimated Total Cost Per Hour</h3>
                         </Box>
                         <Box textAlign="right">
-                            <h3>{Utils.getFormattedAmount(estimated_bom_cost?.total)}</h3>
+                            <h3>{Utils.getFormattedAmount(estimated_bom_cost?.line_items_total)}</h3>
                         </Box>
                     </ColumnLayout>
 

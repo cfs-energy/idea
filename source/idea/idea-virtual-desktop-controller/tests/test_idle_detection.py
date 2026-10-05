@@ -170,3 +170,30 @@ def test_naive_timestamp_is_treated_as_utc():
     )
     is_idle, _ = evaluate(sample)
     assert is_idle is True
+
+
+def test_reporting_idle_rule_agrees_with_the_idle_stop():
+    """
+    reports count idle time with a copy of these rules; past the delay, every sample
+    the stop calls idle the report must call idle, and every sample it keeps the report
+    must call in use or unreadable.
+    """
+    from ideadatamodel.reporting.efficiency import desktop_check_idle
+
+    long_ago = NOW - timedelta(hours=3)
+    for cpu in (0.0, 29.9, 30.0, 85.0):
+        for connections in (0, 1):
+            for logins in (0, 2):
+                sample = activity_sample(
+                    cpu_utilization=cpu,
+                    dcv_connections=connections,
+                    login_sessions=logins,
+                    last_disconnection_time=long_ago,
+                )
+                stopped, _ = evaluate(sample)
+                assert (
+                    desktop_check_idle(sample, CPU_UTILIZATION_THRESHOLD) is True
+                ) == stopped
+    for unreadable in (None, {}, {'DCV': {}}, activity_sample(cpu_utilization=None)):
+        assert evaluate(unreadable)[0] is False
+        assert desktop_check_idle(unreadable, CPU_UTILIZATION_THRESHOLD) is not True

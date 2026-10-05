@@ -26,6 +26,9 @@ __all__ = (
     'BuildComputeImageResult',
     'GetInstanceTypeOptionsRequest',
     'GetInstanceTypeOptionsResult',
+    'QueueSummary',
+    'ListQueuesRequest',
+    'ListQueuesResult',
     'CreateQueueProfileRequest',
     'CreateQueueProfileResult',
     'GetQueueProfileRequest',
@@ -74,7 +77,21 @@ __all__ = (
 )
 
 from ideadatamodel import SocaPayload, SocaListingPayload, IdeaOpenAPISpecEntry
-from ideadatamodel.aws import ServiceQuota, ImageBuildRecord, ImageInventoryRow
+from ideadatamodel.aws import (
+    ServiceQuota,
+    ImageBuildRecord,
+    ImageInventoryRow,
+    ListImageRowsRequest,
+    ListImageRowsResponse,
+    RefreshImagesRequest,
+    RefreshImagesResponse,
+    RollbackImageRequest,
+    RollbackImageResponse,
+    SetImagePinnedRequest,
+    SetImagePinnedResponse,
+    GetImageScheduleRequest,
+    GetImageScheduleResponse,
+)
 from ideadatamodel.scheduler.scheduler_model import (
     SocaComputeNodeState,
     SocaComputeNode,
@@ -239,6 +256,23 @@ class GetInstanceTypeOptionsRequest(SocaPayload):
 
 class GetInstanceTypeOptionsResult(SocaPayload):
     instance_types: Optional[List[SocaInstanceTypeOptions]] = Field(default=None)
+
+
+# Scheduler.ListQueues
+class QueueSummary(SocaPayload):
+    name: Optional[str] = Field(default=None)
+    queue_profile: Optional[str] = Field(default=None)
+    base_os: Optional[str] = Field(default=None)
+    architecture: Optional[str] = Field(default=None)
+    instance_types: Optional[List[str]] = Field(default=None)
+
+
+class ListQueuesRequest(SocaPayload):
+    pass
+
+
+class ListQueuesResult(SocaPayload):
+    listing: Optional[List[QueueSummary]] = Field(default=None)
 
 
 # Scheduler.SubmitJob
@@ -518,6 +552,13 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         is_public=False,
     ),
     IdeaOpenAPISpecEntry(
+        namespace='Scheduler.ListQueues',
+        request=ListQueuesRequest,
+        result=ListQueuesResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
         namespace='Scheduler.GetInstanceTypeOptions',
         request=GetInstanceTypeOptionsRequest,
         result=GetInstanceTypeOptionsResult,
@@ -689,6 +730,41 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         namespace='SchedulerAdmin.BuildComputeImage',
         request=BuildComputeImageRequest,
         result=BuildComputeImageResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.ListImageRows',
+        request=ListImageRowsRequest,
+        result=ListImageRowsResponse,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.RefreshImages',
+        request=RefreshImagesRequest,
+        result=RefreshImagesResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.RollbackImage',
+        request=RollbackImageRequest,
+        result=RollbackImageResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.SetImagePinned',
+        request=SetImagePinnedRequest,
+        result=SetImagePinnedResponse,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.GetImageSchedule',
+        request=GetImageScheduleRequest,
+        result=GetImageScheduleResponse,
         is_listing=False,
         is_public=False,
     ),

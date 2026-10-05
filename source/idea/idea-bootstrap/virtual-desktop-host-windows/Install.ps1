@@ -40,7 +40,9 @@ function Write-ToLog {
         }
     }
     # If Level == Error send ses message ?
-    "$FormattedDate $LevelText $Message" | Out-File -FilePath $LogFile -Append
+    # UTF-8: the default file encoding of PowerShell 5.1 is UTF-16, which reached CloudWatch as
+    # NUL-separated bytes ("2 0 2 6 - 1 0 ...") in the bootstrap stream
+    [System.IO.File]::AppendAllText($LogFile, "$FormattedDate $LevelText $Message`r`n")
 }
 
 function Wait-ForService {
@@ -59,6 +61,25 @@ function Wait-ForService {
         }
         Start-Sleep -Milliseconds 250
     }
+}
+
+function Save-Installer {
+    # A background-job download whose job process dies reports no error and leaves no file, so
+    # msiexec then failed with 1619 (package could not be opened). Download in-process, check
+    # the file, and name the failure.
+    Param ([Parameter(Mandatory=$true)] [String] $Uri, [Parameter(Mandatory=$true)] [String] $OutFile)
+    $ProgressPreference = 'SilentlyContinue'
+    foreach ($Attempt in 1..3) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { return }
+            $Reason = 'the download wrote no file'
+        } catch { $Reason = $_.Exception.Message }
+        Write-ToLog -Message "Download of $Uri attempt $Attempt failed: $Reason" -Level 'Warn'
+        Start-Sleep -Seconds 3
+    }
+    Write-ToLog -Message "Could not download $Uri to ${OutFile}: $Reason" -Level 'Error'
+    exit 1
 }
 
   function Install-NiceDCV {
@@ -82,10 +103,9 @@ function Wait-ForService {
       # Information on NICE Virtual Display Driver: https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-winprereq.html#setting-up-installing-general
       # Every supported base_os (2019, 2022, 2025) ships the Indirect Display Driver with
       # DCV 2023.1+, so the Virtual Display Driver is never installed: it conflicts with GPU drivers.
-      Start-Job -Name DCVWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi }
-      Wait-Job -Name DCVWebReq
+      Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi
       $DCVServerInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVServer.msi ADDLOCAL=ALL /quiet /norestart /l*v dcv_install_msi.log " -Wait -PassThru
-      if($DCVServerInstall.ExitCode -ne 0){
+      if($DCVServerInstall.ExitCode -notin @(0, 3010)){
         Write-ToLog -Message "DCV Server install failed with exit code $($DCVServerInstall.ExitCode), see dcv_install_msi.log" -Level 'Error'
         exit 1
       }
@@ -112,10 +132,9 @@ function Wait-ForService {
 
     if(!$DCVSMInstalled -or $Update){
       # Standard distribution link for NICE DCV Session Manager Agent
-      Start-Job -Name SMWebReq -ScriptBlock { Invoke-WebRequest -uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi }
-      Wait-Job -Name SMWebReq
+      Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi
       $SMAgentInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVSMAgent.msi /quiet /norestart " -Wait -PassThru
-      if($SMAgentInstall.ExitCode -ne 0){
+      if($SMAgentInstall.ExitCode -notin @(0, 3010)){
         Write-ToLog -Message "DCV Session Manager Agent install failed with exit code $($SMAgentInstall.ExitCode)" -Level 'Error'
         exit 1
       }
@@ -204,8 +223,19 @@ function Install-WindowsEC2Instance {
     Param(
 
       [switch]$ConfigureForEVDI,
-      [switch]$Update
+      [switch]$Update,
+      [string]$ModuleVersion = (& "$PSScriptRoot\ModuleVersion.ps1")
     )
+    # Configuration always runs; only a matching release may skip installation.
+    $BakedRelease = 'C:\ProgramData\IDEA\baked-release'
+    if (-not $Update -and $ModuleVersion -and (Test-Path $BakedRelease) -and
+        (Get-Content $BakedRelease -Raw).Trim() -eq $ModuleVersion) {
+        if ($ConfigureForEVDI) {
+            Import-Module .\Configure.ps1
+            Configure-WindowsEC2Instance
+        }
+        return
+    }
     Write-ToLog -Message "Installing Windows EC2 Instance" -Level 'Info'
     $timestamp = Get-Date -Format 'yyyyMMddTHHmmssffffZ'
     $InstallEVDI = "$env:SystemDrive\Users\Administrator\IDEA\bootstrap\log\InstallEVDI.log.$timestamp"

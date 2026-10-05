@@ -67,6 +67,17 @@ export interface JobRow {
     walltime_efficiency_pct: number | null;
     wasted_core_hours: number | null;
 }
+export interface DesktopRow {
+    idea_session_id: string;
+    name: string | null;
+    owner: string;
+    project: string | null;
+    instance_type: string | null;
+    checked_hours: number;
+    idle_hours: number;
+    idle_pct: number;
+    idle_cost: string | null;
+}
 export interface ReportingBudget {
     project: string;
     budget_name: string;
@@ -103,9 +114,17 @@ export interface ReportingInsights {
     desktops: {
         cost: string | null;
         hours: number | null;
+        count: number;
         by_user?: Ranked[];
         by_project: Ranked[];
         daily_top_users: {date: string; user: string; cost: string}[];
+        desktops_with_activity: number;
+        checked_hours: number | null;
+        idle_hours: number | null;
+        idle_cost: string | null;
+        idle_by_user?: Ranked[];
+        idle_by_project: Ranked[];
+        least_efficient: DesktopRow[];
     };
     storage: {
         cost: string | null;

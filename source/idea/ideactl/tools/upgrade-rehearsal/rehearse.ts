@@ -35,7 +35,7 @@ import { loadValuesFile, type UserValues } from "../../src/config/values.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, "../..");
-const DEFAULT_FIXTURE_DIR = join(PKG, "tools/parity/fixtures/idea-dev27");
+const DEFAULT_FIXTURE_DIR = join(PKG, "tools/parity/fixtures/idea-demo1");
 const DEFAULT_LIVE_DIR = join(PKG, "tools/parity/live");
 const DEPLOYMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TARGET_IMAGE = "example.invalid/idea-control-plane:rehearsal";

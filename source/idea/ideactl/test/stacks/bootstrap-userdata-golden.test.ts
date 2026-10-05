@@ -13,7 +13,7 @@ import { requireCapture } from '../support/fixtures.ts';
 const pkg = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const liveDir = join(pkg, 'tools', 'parity', 'live');
 const settingsFile = join(
-  pkg, 'tools', 'parity', 'fixtures', 'idea-dev27', 'raw', 'cluster-settings.scan.json',
+  pkg, 'tools', 'parity', 'fixtures', 'idea-demo1', 'raw', 'cluster-settings.scan.json',
 );
 
 // [stack, logical id, base_os settings key, install command, infra config]
@@ -101,12 +101,12 @@ function userDataTemplate(resource: { Type: string; Properties: Record<string, a
 requireCapture(
   [
     settingsFile,
-    ...CASES.map(([stack]) => join(liveDir, `idea-dev27-${stack}.json`)),
+    ...CASES.map(([stack]) => join(liveDir, `idea-demo1-${stack}.json`)),
   ],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
-test('user data matches every live dev27 EC2 resource', () => {
+test('user data matches every live demo1 EC2 resource', () => {
   // Cluster settings are raw DynamoDB scan output with typed attribute values.
   const rows = JSON.parse(readFileSync(settingsFile, 'utf8')).Items as Array<
     Record<string, Record<string, string>>
@@ -127,7 +127,7 @@ test('user data matches every live dev27 EC2 resource', () => {
   const templates = new Map<string, any>();
   const liveUserDataIds: string[] = [];
   for (const stack of new Set(CASES.map(([name]) => name))) {
-    const template = JSON.parse(readFileSync(join(liveDir, `idea-dev27-${stack}.json`), 'utf8'));
+    const template = JSON.parse(readFileSync(join(liveDir, `idea-demo1-${stack}.json`), 'utf8'));
     templates.set(stack, template);
     for (const [logicalId, resource] of Object.entries(template.Resources as Record<string, any>)) {
       if (userDataTemplate(resource as { Type: string; Properties: Record<string, any> }) !== undefined) {

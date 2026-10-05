@@ -58,12 +58,14 @@ function install_microphone_redirect() {
 }
 
 function install_usb_support() {
-  if [[ -z "$(lsmod | grep eveusb)" ]]; then
+  # installed for the running kernel, not loaded: a baked image boots with the module on disk
+  # and dcvserver loads it (ExecStartPre modprobe); rebuilding it through DKMS cost ~90 s
+  if ! modinfo eveusb >/dev/null 2>&1; then
     echo "Installing usb support..."
     DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
     $DCV_USB_DRIVER_INSTALLER --quiet
   else
-    log_info "Found eveusb kernel module pre-installed... skipping installation..."
+    log_info "Found eveusb kernel module installed... skipping installation..."
   fi
 
   echo "# disable x11 display power management system"
@@ -361,14 +363,17 @@ if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
   /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
 fi
 
-if [[ ! -f ${BOOTSTRAP_DIR}/idea_system_upgraded.log ]]; then
+if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
+  : # The upgrade include can be empty when first-boot updates are disabled.
   {% include '_templates/linux/system_upgrade.jinja2' %}
-  echo "System upgrade completed at $(date)" >> ${BOOTSTRAP_DIR}/idea_system_upgraded.log
 else
-  log_info "Found ${BOOTSTRAP_DIR}/idea_system_upgraded.log... skipping system upgrade..."
+  log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping system upgrade"
 fi
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{# Not on 24.04: there the renderer switch leaves systemd-networkd with no link to configure,
+   systemd-networkd-wait-online fails, cloud-init (which runs this script) is sent SIGTERM and
+   NetworkManager never brings the interface back, so the host goes dark mid-bootstrap. #}
+{% if context.base_os == 'ubuntu2204' %}
 cp /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.bak
 
 # Create a small Python script
@@ -401,7 +406,10 @@ systemctl restart NetworkManager
 {% endif %}
 
 
-{% if context.base_os == 'ubuntu2404' %}
+{# 22.04: NetworkManager now owns the interface, so networkd-wait-online waits its full
+   120 s on every later boot (the reboot below included); NetworkManager-wait-online still
+   gates network-online.target. #}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 systemctl disable systemd-networkd-wait-online.service
 {% endif %}
 

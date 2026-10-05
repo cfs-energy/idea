@@ -7,6 +7,7 @@ base AMI a build starts from.
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
+import threading
 
 import pytest
 
@@ -16,6 +17,8 @@ from ideasdk.aws.image_builds import (
     BUILD_STATUS_BUILDING,
     BUILD_STATUS_FAILED,
     ImageBuildRunner,
+    ImageBuildRecordsDB,
+    check_builder_instance_type,
 )
 from ideascheduler.app.images import compute_images as module
 from ideascheduler.app.images.compute_images import ComputeImageService
@@ -116,16 +119,64 @@ class FakeRecords:
         self.put(record)
         return True
 
+    to_item = staticmethod(ImageBuildRecordsDB.to_item)
+
+    def put_if(self, record, expected):
+        existing = self.get(record.base_os, record.row_key().range_key())
+        for key, value in expected.items():
+            current = getattr(existing, key, None)
+            if isinstance(value, (set, frozenset)):
+                if current in value:
+                    return False
+            elif current != value:
+                return False
+        return bool(self.put(record.model_copy(deep=True)))
+
     def list_all(self):
         return list(self.items.values())
 
 
+class FakeConfigDB:
+    """the stored settings; FakeConfig.values is the module's (possibly lagging) copy"""
+
+    def __init__(self):
+        self.entries = {}
+
+    def set_config_entry(self, key, value, source='sdk'):
+        self.entries[key] = value
+
+    def set_config_entry_if(self, key, value, expected, source='sdk'):
+        if self.entries.get(key) != expected:
+            return False
+        self.entries[key] = value
+        return True
+
+
 class FakeConfig:
     def __init__(self, values):
-        self.values = values
+        self.values = dict(values)
+        self.db = FakeConfigDB()
 
     def get_string(self, key, required=False, default=None):
         return self.values.get(key, default)
+
+    def get_config(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_bool(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_int(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_real_key(self, key):
+        return key
+
+    def is_module_enabled(self, name):
+        return name == 'scheduler'
+
+    def get_module_id(self, name):
+        return 'scheduler'
 
     def get_list(self, key, required=False, default=None):
         value = self.values.get(key, default)
@@ -158,6 +209,15 @@ def build_service(config, ec2, profiles=()) -> ComputeImageService:
     service._logger = Mock()
     service.records = FakeRecords()
     service.runner = ImageBuildRunner(context, service.records, service._logger)
+    service._live = {}
+    service._lock = threading.RLock()
+    service._last_sweep = float('inf')  # tests that want the builder sweep call it
+    service._save = lambda record: service.records.put(record.model_copy(deep=True))
+    context.is_leader.return_value = True
+    context.cluster_name.return_value = 'test-cluster'
+    context.module_id.return_value = 'scheduler'
+    context.module_set.return_value = 'default'
+    context.cluster_timezone.return_value = 'UTC'
     return service
 
 
@@ -249,7 +309,7 @@ def test_the_last_build_record_rides_along_and_building_wins():
     service.records.put(
         ImageBuildRecord(
             base_os='amazonlinux2023',
-            architecture='x86_64',
+            architecture='x86_64#custom',
             status=BUILD_STATUS_BUILDING,
             instance_id='i-builder',
             started_on=datetime.now(tz=timezone.utc) - timedelta(minutes=2),
@@ -258,7 +318,7 @@ def test_the_last_build_record_rides_along_and_building_wins():
     service.records.put(
         ImageBuildRecord(
             base_os='rocky9',
-            architecture='x86_64',
+            architecture='x86_64#custom',
             status=BUILD_STATUS_FAILED,
             error='boom',
         )
@@ -276,7 +336,7 @@ def test_builds_on_both_architectures_give_one_os_two_rows():
         service.records.put(
             ImageBuildRecord(
                 base_os='rocky9',
-                architecture=architecture,
+                architecture=f'{architecture}#custom',
                 status='complete',
                 image_id=f'ami-{architecture}',
             )
@@ -295,7 +355,7 @@ def test_an_arm64_build_in_flight_sits_beside_the_stock_x86_64_row():
     service.records.put(
         ImageBuildRecord(
             base_os='rocky9',
-            architecture='arm64',
+            architecture='arm64#custom',
             status=BUILD_STATUS_BUILDING,
             instance_id='i-arm-builder',
             started_on=datetime.now(tz=timezone.utc) - timedelta(minutes=2),
@@ -339,7 +399,7 @@ def test_default_base_ami_never_stacks_on_a_previous_build(monkeypatch):
     monkeypatch.setattr(
         module, 'find_latest_stock_ami', lambda *args: 'ami-freshstock000001'
     )
-    assert stock_default.default_base_ami('rocky9') == 'ami-rocky9stock00001'
+    assert stock_default.default_base_ami('rocky9') == 'ami-freshstock000001'
 
 
 def test_build_rejects_an_unknown_os_and_a_missing_base_ami(monkeypatch):
@@ -349,15 +409,15 @@ def test_build_rejects_an_unknown_os_and_a_missing_base_ami(monkeypatch):
     monkeypatch.setattr(module, 'find_latest_stock_ami', lambda *args: None)
     with pytest.raises(exceptions.SocaException) as exc_info:
         service.build(BuildComputeImageRequest(base_os='rocky8'), 'operator')
-    assert 'provide base_ami' in exc_info.value.message
+    assert 'no stock rocky8 x86_64 image' in exc_info.value.message
 
 
-def test_run_build_records_the_builder_and_its_result():
+def test_run_build_is_a_custom_build_that_never_touches_the_managed_row():
     service = build_service(DEFAULT_CONFIG, FakeEc2())
     builder = Mock()
     builder.base_os = 'rocky9'
+    builder.architecture = 'x86_64'
     builder.base_ami = 'ami-rocky9stock00001'
-    builder.get_image_by_id.return_value = IMAGES['ami-rocky9stock00001']
     builder.get_ami_full_name.return_value = 'idea-compute-node-rocky9-v09012026-120000'
     builder.build.side_effect = lambda progress: 'ami-rocky9built00001'
 
@@ -367,21 +427,25 @@ def test_run_build_records_the_builder_and_its_result():
     assert record.image_id == 'ami-rocky9built00001'
     assert record.requested_by == 'operator'
     assert record.update_target is False
+    assert service.records.get('rocky9', 'x86_64') is None
     assert (
-        service.records.get('rocky9', 'x86_64').ami_name
+        service.records.get('rocky9', 'x86_64#custom').ami_name
         == 'idea-compute-node-rocky9-v09012026-120000'
     )
+    # the pipeline neither lists nor runs it
+    assert all(not r.architecture.endswith('#custom') for r in service.list_rows())
 
 
 def build_with_base_ami(base_ami, instance_type=None, monkeypatch=None):
     service = build_service({**DEFAULT_CONFIG, **BUILDER_CONFIG}, FakeEc2())
-    # only the builder is under test here, not the runner
-    service.run_build = lambda builder, requested_by, blocking: builder
-    return service.build(
-        BuildComputeImageRequest(
-            base_os='rocky9', base_ami=base_ami, instance_type=instance_type
-        ),
-        'operator',
+    # Explicit-image trust and builder architecture are constructor contracts.
+    architecture = IMAGES.get(base_ami, {}).get('Architecture', 'x86_64')
+    check_builder_instance_type(instance_type, architecture)
+    return module.ComputeNodeAmiBuilder(
+        context=service.context,
+        base_os='rocky9',
+        base_ami=base_ami,
+        instance_type=instance_type,
     )
 
 
@@ -427,7 +491,7 @@ def instance_type_arch(service, table):
         if archs is None:
             return None
         ec2_instance_type = Mock()
-        ec2_instance_type.processor_info_supported_architectures.return_value = archs
+        ec2_instance_type.processor_info_supported_architectures = archs
         return ec2_instance_type
 
     service.context.aws_util.return_value.get_ec2_instance_type.side_effect = (

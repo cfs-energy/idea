@@ -1,0 +1,19 @@
+{# pbs_init.d checks the server name after cutting it at the first dot, so the short name
+   has to resolve on this host. Put the cluster's private zone in the resolver search path;
+   the default search path carries only the EC2 domain. glibc reads /etc/resolv.conf: only
+   when it is systemd-resolved's link does resolvectl reach it. Ubuntu bootstrap replaces the
+   link with an immutable copy (systemd_resolved.jinja2), which resolvectl never updates. #}
+{% set private_zone = context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) %}
+RESOLVER_IF=$(ip -o -4 route show default | awk '{print $5}' | head -1)
+if [[ -L /etc/resolv.conf ]] && command -v resolvectl >/dev/null 2>&1 && systemctl is-active systemd-resolved >/dev/null 2>&1; then
+  resolvectl domain "${RESOLVER_IF}" {{ private_zone }} $(resolvectl domain "${RESOLVER_IF}" | sed 's/^[^:]*: *//')
+elif ! grep -q "^search .*{{ private_zone }}" /etc/resolv.conf; then
+  RESOLV_LOCKED=$(lsattr /etc/resolv.conf 2>/dev/null | awk '$1 ~ /i/ {print "yes"}')
+  if [[ -n "${RESOLV_LOCKED}" ]]; then chattr -i /etc/resolv.conf; fi
+  if grep -q "^search " /etc/resolv.conf; then
+    sed -i 's/^search /search {{ private_zone }} /' /etc/resolv.conf
+  else
+    echo "search {{ private_zone }}" >> /etc/resolv.conf
+  fi
+  if [[ -n "${RESOLV_LOCKED}" ]]; then chattr +i /etc/resolv.conf; fi
+fi

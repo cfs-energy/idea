@@ -46,6 +46,9 @@ export type VirtualDesktopTenancy = "default" | "dedicated" | "host";
 export type DayOfWeek = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
 export type VirtualDesktopScheduleType =
   "WORKING_HOURS" | "STOP_ON_IDLE" | "START_ALL_DAY" | "CUSTOM_SCHEDULE" | "NO_SCHEDULE";
+export type ImageKind = "desktop" | "compute";
+export type ImageVariant = "cpu" | "nvidia" | "amd";
+export type ImageBuildTrigger = "release" | "monthly" | "button";
 export type SocaUserInputParamType =
   | "text"
   | "password"
@@ -86,6 +89,18 @@ export type SocaJobState =
   | "suspended";
 export type SocaCapacityType = "on-demand" | "spot" | "mixed";
 export type SocaSortOrder = "asc" | "desc";
+export type ImageRowStatus =
+  | "queued"
+  | "resolving"
+  | "building"
+  | "checking"
+  | "test_launching"
+  | "promoting"
+  | "current"
+  | "failed"
+  | "waiting_capacity"
+  | "pinned"
+  | "unsupported";
 export type SocaComputeNodeState =
   | "busy"
   | "down"
@@ -265,6 +280,7 @@ export interface VirtualDesktopSoftwareStack {
   pool_asg_name?: string;
   launch_tenancy?: VirtualDesktopTenancy;
   allowed_instance_types?: string[];
+  image_pinned?: boolean;
 }
 export interface Project {
   last_task_failure?: {
@@ -394,7 +410,10 @@ export interface BuildComputeImageResult {
   record?: ImageBuildRecord;
 }
 /**
- * the last build for one base OS and architecture, as kept in the module's image-builds table
+ * one image row, as kept in the module's image-builds table.
+ *
+ * rows written before 26.10.1 carry only base_os .. finished_on with status
+ * building | complete | failed; migrated() maps them onto the row model.
  */
 export interface ImageBuildRecord {
   base_os?: string;
@@ -410,6 +429,30 @@ export interface ImageBuildRecord {
   error?: string;
   started_on?: string;
   finished_on?: string;
+  kind?: ImageKind;
+  variant?: ImageVariant;
+  release?: string;
+  source_ami?: string;
+  current_image_id?: string;
+  previous_image_id?: string;
+  validated_on?: string;
+  promoted_on?: string;
+  checks?: ImageCheck[];
+  log_link?: string;
+  attempts?: number;
+  retry_after?: string;
+  trigger?: ImageBuildTrigger;
+  pinned?: boolean;
+  rollback_hold?: boolean;
+}
+/**
+ * one validation check: in-bake (on the builder) or test-launch (from the new image)
+ */
+export interface ImageCheck {
+  name?: string;
+  ok?: boolean;
+  detail?: string;
+  seconds?: number;
 }
 export interface BuildDesktopImageRequest {
   base_os?: string;
@@ -742,6 +785,7 @@ export interface HpcQueueProfile {
   stack_uuid?: string;
   queue_management_params?: SocaQueueManagementParams;
   default_job_params?: SocaJobParams;
+  image_pinned?: boolean;
   created_on?: string;
   updated_on?: string;
   status?: string;
@@ -1105,6 +1149,21 @@ export interface GetHpcLicenseResourceRequest {
 }
 export interface GetHpcLicenseResourceResult {
   license_resource?: HpcLicenseResource;
+}
+export interface GetImageScheduleRequest {}
+export interface GetImageScheduleResponse {
+  schedule?: ImageRefreshSchedule;
+  last_run_on?: string;
+  next_run_on?: string;
+}
+/**
+ * the monthly vendor check, stored at vdc.software_stacks.image_refresh_schedule.
+ * the scheduler reads the same key for compute rows. hour is in cluster.timezone
+ */
+export interface ImageRefreshSchedule {
+  enabled?: boolean;
+  day?: string;
+  hour?: number;
 }
 export interface GetInstanceTypeOptionsRequest {
   enable_ht_support?: boolean;
@@ -1852,6 +1911,22 @@ export interface ListHpcLicenseResourcesResult {
   listing?: HpcLicenseResource[];
   filters?: SocaFilter[];
 }
+export interface ListImageRowsRequest {
+  filter?: ImageRowFilter;
+}
+/**
+ * every field present must match; an empty filter matches every row
+ */
+export interface ImageRowFilter {
+  kind?: ImageKind;
+  base_os_family?: string;
+  architecture?: string;
+  variant?: ImageVariant;
+  statuses?: ImageRowStatus[];
+}
+export interface ListImageRowsResponse {
+  listing?: ImageBuildRecord[];
+}
 export interface ListJobsRequest {
   paginator?: SocaPaginator;
   sort_by?: SocaSortBy;
@@ -2026,6 +2101,17 @@ export interface ListQueueProfilesResult {
   date_range?: SocaDateRange;
   listing?: HpcQueueProfile[];
   filters?: SocaFilter[];
+}
+export interface ListQueuesRequest {}
+export interface ListQueuesResult {
+  listing?: QueueSummary[];
+}
+export interface QueueSummary {
+  name?: string;
+  queue_profile?: string;
+  base_os?: string;
+  architecture?: string;
+  instance_types?: string[];
 }
 export interface ListScheduleTypesRequest {}
 export interface ListScheduleTypesResponse {
@@ -2257,6 +2343,27 @@ export interface RefreshBaseSoftwareStackAmisRequest {
 export interface RefreshBaseSoftwareStackAmisResponse {
   results?: BaseSoftwareStackAmiRefreshResult[];
 }
+export interface RefreshImagesRequest {
+  all?: boolean;
+  rows?: ImageRowKey[];
+  filter?: ImageRowFilter;
+  force?: boolean;
+}
+export interface ImageRowKey {
+  kind?: ImageKind;
+  base_os?: string;
+  architecture?: string;
+  variant?: ImageVariant;
+}
+export interface RefreshImagesResponse {
+  results?: ImageRefreshResult[];
+}
+export interface ImageRefreshResult {
+  row?: ImageRowKey;
+  outcome?: string;
+  message?: string;
+  record?: ImageBuildRecord;
+}
 export interface RemoveSudoUserRequest {
   username?: string;
 }
@@ -2319,6 +2426,12 @@ export interface ResumeSessionsResponse {
   failed?: VirtualDesktopSession[];
   success?: VirtualDesktopSession[];
 }
+export interface RollbackImageRequest {
+  row?: ImageRowKey;
+}
+export interface RollbackImageResponse {
+  record?: ImageBuildRecord;
+}
 export interface SaveFileRequest {
   file?: string;
   content?: string;
@@ -2333,6 +2446,13 @@ export interface ServiceQuota {
   available?: number;
   consumed?: number;
   desired?: number;
+}
+export interface SetImagePinnedRequest {
+  row?: ImageRowKey;
+  pinned?: boolean;
+}
+export interface SetImagePinnedResponse {
+  record?: ImageBuildRecord;
 }
 export interface SetParamRequest {
   module?: string;
@@ -2503,6 +2623,13 @@ export interface UpdateHpcLicenseResourceRequest {
 }
 export interface UpdateHpcLicenseResourceResult {
   license_resource?: HpcLicenseResource;
+}
+export interface UpdateImageScheduleRequest {
+  schedule?: ImageRefreshSchedule;
+}
+export interface UpdateImageScheduleResponse {
+  schedule?: ImageRefreshSchedule;
+  next_run_on?: string;
 }
 export interface UpdateModuleSettingsRequest {
   module_id?: string;

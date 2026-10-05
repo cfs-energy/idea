@@ -17,7 +17,6 @@ import {
     Box,
     Button,
     Cards,
-    Header,
     SegmentedControl,
     SpaceBetween,
 } from "@cloudscape-design/components";
@@ -86,18 +85,36 @@ export interface MyVirtualDesktopSessionsState {
     softwareStacks: { [k: string]: VirtualDesktopSoftwareStack }
 }
 
+// the listing is read from the search index, which trails the session table by a few seconds
+const INDEX_LAG_GRACE_MS = 2 * 60 * 1000
+
 /**
  * The next table contents. A complete listing replaces the table, a partial one updates the rows it
- * names; in both, a local copy newer than the server's copy is kept.
+ * names; in both, a local copy newer than the server's copy is kept. Because the listing trails the
+ * session table, a complete listing keeps a session it does not list yet if that session changed
+ * within the grace window (a desktop just created), and drops one the session table already
+ * deleted even while the listing still returns it.
  */
-export function mergeSessions(current: Map<string, VirtualDesktopSession>, incoming: VirtualDesktopSession[], complete: boolean): Map<string, VirtualDesktopSession> {
+export function mergeSessions(current: Map<string, VirtualDesktopSession>, incoming: VirtualDesktopSession[], complete: boolean, now: number = Date.now()): Map<string, VirtualDesktopSession> {
     const next = new Map<string, VirtualDesktopSession>(complete ? [] : current.entries())
     incoming.forEach(session => {
         const id = session.idea_session_id!
         const local = current.get(id)
         const localIsNewer = local !== undefined && local.updated_on !== undefined && session.updated_on !== undefined && local.updated_on > session.updated_on
+        if (complete && localIsNewer && local.state === 'DELETED') {
+            return
+        }
         next.set(id, localIsNewer ? local : session)
     })
+    if (complete) {
+        current.forEach((local, id) => {
+            const changed = Date.parse(local.updated_on ?? local.created_on ?? '')
+            const leaving = local.state === 'DELETING' || local.state === 'DELETED'
+            if (!next.has(id) && !leaving && now - changed < INDEX_LAG_GRACE_MS) {
+                next.set(id, local)
+            }
+        })
+    }
     return next
 }
 
@@ -1009,45 +1026,42 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
 
         return <Cards
             stickyHeader={true}
+            // the page header already says "My desktops" and the tabs say Owned, so this bar only carries actions
             header={
-                <Header
-                    variant="awsui-h1-sticky"
-                    actions={
-                        <SpaceBetween direction="horizontal" size="l">
-                            <Button variant="normal" iconName="refresh" onClick={() => {
-                                this.setState({
-                                    loading: true
-                                }, () => {
-                                    this.fetchSessions().then(() => {
-                                        this.setState({
-                                            loading: false
-                                        })
+                <div style={{display: 'flex', justifyContent: 'flex-end'}}>
+                    <SpaceBetween direction="horizontal" size="l">
+                        <Button variant="normal" iconName="refresh" ariaLabel="Refresh desktops" onClick={() => {
+                            this.setState({
+                                loading: true
+                            }, () => {
+                                this.fetchSessions().then(() => {
+                                    this.setState({
+                                        loading: false
                                     })
                                 })
-                            }}/>
-                            <SegmentedControl
-                                selectedId={this.state.osFilter}
-                                onChange={({detail}) => {
-                                    this.setState({
-                                        osFilter: detail.selectedId
-                                    }, () => {
-                                        this.fetchSessions().finally()
-                                    })
-                                }}
-                                options={[
-                                    {text: "All", id: OS_FILTER_ALL_ID},
-                                    {text: "Windows", id: OS_FILTER_WINDOWS_ID},
-                                    {text: "Linux", id: OS_FILTER_LINUX_ID}
-                                ]}/>
-                            <Button key="launch-new-virtual-desktop" variant="primary" onClick={() => {
-                                this.showCreateSessionForm()
-                            }}>
-                                Launch New Virtual Desktop
-                            </Button>
-                        </SpaceBetween>
-                    }>
-                    My desktops
-                </Header>
+                            })
+                        }}/>
+                        <SegmentedControl
+                            selectedId={this.state.osFilter}
+                            onChange={({detail}) => {
+                                this.setState({
+                                    osFilter: detail.selectedId
+                                }, () => {
+                                    this.fetchSessions().finally()
+                                })
+                            }}
+                            options={[
+                                {text: "All", id: OS_FILTER_ALL_ID},
+                                {text: "Windows", id: OS_FILTER_WINDOWS_ID},
+                                {text: "Linux", id: OS_FILTER_LINUX_ID}
+                            ]}/>
+                        <Button key="launch-new-virtual-desktop" variant="primary" onClick={() => {
+                            this.showCreateSessionForm()
+                        }}>
+                            Launch desktop
+                        </Button>
+                    </SpaceBetween>
+                </div>
             }
             trackBy="idea_session_id"
             ariaLabels={{
@@ -1055,7 +1069,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 selectionGroupLabel: "Item selection"
             }}
             loading={this.state.loading}
-            loadingText="Retrieving your virtual desktops ..."
+            loadingText="Loading your desktops"
             variant="full-page"
             cardDefinition={{
                 sections: [
@@ -1068,6 +1082,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                                 session={session}
                                 projectAiAccessPending={this.isProjectAiAccessPending(session)}
                                 idleAutoStopDelayMax={this.virtualDesktopSettings?.dcv_session.idle_autostop_delay_max}
+                                workingHours={this.virtualDesktopSettings?.dcv_session.working_hours}
                                 onDeleteSession={this.onDeleteSession}
                                 onStartSession={this.onStartSession}
                                 onStopSession={this.onStopSession}
@@ -1125,14 +1140,10 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             ]}
             empty={
                 <Box textAlign="center" color="inherit" padding={{top: 'xxxl', bottom: "s"}}>
-                    <Box variant="strong">No virtual desktops found.</Box>
-                    <Box
-                        padding={{top: 'xxxl', bottom: "s"}}
-                        variant="p"
-                        color="inherit">
-                        Click the button below to create a new virtual desktop.
-                    </Box>
-                    <Button onClick={() => this.showCreateSessionForm()}>Launch New Virtual Desktop</Button>
+                    <SpaceBetween size="m">
+                        <Box variant="strong">No desktops yet</Box>
+                        <Button onClick={() => this.showCreateSessionForm()}>Launch desktop</Button>
+                    </SpaceBetween>
                 </Box>
             }
             items={getSessions()}

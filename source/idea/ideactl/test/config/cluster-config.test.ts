@@ -14,12 +14,12 @@ import {
 } from '../../src/config/cluster-config.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
-const FIXTURES = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
+const FIXTURES = fileURLToPath(new URL('../../tools/parity/fixtures/idea-demo1/raw/', import.meta.url));
 const SCAN = `${FIXTURES}cluster-settings.scan.json`;
 const MODULES = `${FIXTURES}modules.scan.json`;
-requireCapture([SCAN, MODULES], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27");
+requireCapture([SCAN, MODULES], "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1");
 
-function dev27(): ClusterConfig {
+function demo1(): ClusterConfig {
   return ClusterConfig.fromFile(readFileSync(SCAN, 'utf-8'), readFileSync(MODULES, 'utf-8'));
 }
 
@@ -463,17 +463,17 @@ function dottedKeys(node: unknown, prefix = ''): string[] {
   return entries.flatMap(([key, value]) => dottedKeys(value, prefix === '' ? key : `${prefix}.${key}`));
 }
 
-describe('ClusterConfig against the dev27 cluster-settings scan', () => {
+describe('ClusterConfig against the demo1 cluster-settings scan', () => {
   it('getRealKey(virtual-desktop-controller.x) === vdc.x', () => {
-    assert.equal(dev27().getRealKey('virtual-desktop-controller.x'), 'vdc.x');
+    assert.equal(demo1().getRealKey('virtual-desktop-controller.x'), 'vdc.x');
   });
 
-  it('getString(cluster.cluster_name) === idea-dev27', () => {
-    assert.equal(dev27().getString('cluster.cluster_name'), 'idea-dev27');
+  it('getString(cluster.cluster_name) === idea-demo1', () => {
+    assert.equal(demo1().getString('cluster.cluster_name'), 'idea-demo1');
   });
 
   it('a NULL row returns the default, a real [] stays []', () => {
-    const config = dev27();
+    const config = demo1();
     // vdc.dcv_session.network.private_subnets is stored NULL
     assert.equal(config.get('virtual-desktop-controller.dcv_session.network.private_subnets'), undefined);
     assert.deepEqual(
@@ -490,7 +490,7 @@ describe('ClusterConfig against the dev27 cluster-settings scan', () => {
       Items: Array<{ key: { S: string }; value: Record<string, unknown> }>;
     };
     assert.equal(scan.Items.length, 858);
-    const config = dev27();
+    const config = demo1();
     const tree = config.get('.') as Record<string, unknown>;
     const loaded = new Set(dottedKeys(tree));
     let kept = 0;
@@ -508,7 +508,7 @@ describe('ClusterConfig against the dev27 cluster-settings scan', () => {
   });
 
   it('lists the modules table, enriched from the module metadata', () => {
-    const modules = dev27().modules();
+    const modules = demo1().modules();
     assert.equal(modules.length, 11);
     const vdc = modules.find((module) => module.name === 'virtual-desktop-controller');
     assert.equal(vdc?.module_id, 'vdc');

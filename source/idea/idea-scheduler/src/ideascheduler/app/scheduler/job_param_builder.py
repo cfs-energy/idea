@@ -357,6 +357,33 @@ class JobParamsBuilderContextProtocol(ABC):
         return None
 
 
+def queues_where(soca_context, fits) -> List[str]:
+    """
+    names of the queues whose enabled queue profile default satisfies `fits`, so a rejected
+    job can be pointed at a queue that runs it. a hint only, it never fails validation.
+    """
+    try:
+        profiles = soca_context.queue_profiles.list_queue_profiles()
+    except Exception:  # noqa
+        return []
+    names = set()
+    for profile in profiles or []:
+        if not profile.enabled or profile.default_job_params is None:
+            continue
+        try:
+            if fits(profile.default_job_params):
+                names.update(profile.queues or [])
+        except Exception:  # noqa
+            continue
+    return sorted(names)
+
+
+def queue_hint(queues: List[str], what: str) -> str:
+    if not queues:
+        return ''
+    return f' Queues set up for {what}: {", ".join(queues)}.'
+
+
 class BaseParamBuilder(ParamBuilderProtocol, ABC):
     def __init__(self, context: JobParamsBuilderContextProtocol, job_param: str):
         self.context = context
@@ -962,6 +989,8 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
         instance_ami = self.get()
 
         if instance_ami is None:
+            if not self._validate_ami_exists(self.default(), from_queue_default=True):
+                return False
             return self._validate_base_os_default_ami()
 
         if self.is_restricted_parameter():
@@ -974,7 +1003,39 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
             )
             return False
 
+        if not self._validate_ami_exists(instance_ami, from_queue_default=False):
+            return False
+
         return self._validate_requested_ami_base_os(instance_ami=instance_ami)
+
+    def _validate_ami_exists(
+        self, instance_ami: Optional[str], from_queue_default: bool
+    ) -> bool:
+        """
+        reject an AMI that EC2 says does not exist or is not shared with this account, a
+        launch from it fails every time and the job would wait for a node that never comes.
+        an AMI that cannot be described for any other reason is allowed.
+        """
+        aws_util = self.context.soca_context.aws_util()
+        if Utils.is_empty(instance_ami) or not aws_util.is_image_missing(instance_ami):
+            return True
+
+        if from_queue_default:
+            message = (
+                f'The default instance_ami for this queue ({instance_ami}) does not exist in '
+                f'this region or is not shared with this account. Ask your cluster '
+                f'administrator to update the queue profile AMI.'
+            )
+        else:
+            message = (
+                f'instance_ami: ({instance_ami}) does not exist in this region or is not '
+                f'shared with this account, it may have been deregistered. Remove '
+                f'instance_ami to use the queue default, or specify an AMI that exists.'
+            )
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_AMI, message=message
+        )
+        return False
 
     def _known_ami_base_os(self) -> Dict[str, str]:
         """
@@ -1069,7 +1130,14 @@ class InstanceAmiParamBuilder(BaseParamBuilder):
             message=f'base_os: ({base_os}) does not match the operating system '
             f'({default_ami_os}) of the default AMI: ({self.default()}). '
             f'Specify instance_ami with an AMI built for {base_os} when '
-            f'overriding base_os.',
+            f'overriding base_os.'
+            + queue_hint(
+                queues_where(
+                    self.context.soca_context,
+                    lambda defaults: defaults.base_os == base_os,
+                ),
+                base_os,
+            ),
         )
         return False
 
@@ -1109,7 +1177,10 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             arch_valid = self._validate_architecture_consistency(
                 instance_types=default_instance_types, from_queue_default=True
             )
-            return gpu_valid and arch_valid
+            offered = self._validate_offered_in_subnets(
+                instance_types=default_instance_types, from_queue_default=True
+            )
+            return gpu_valid and arch_valid and offered
 
         if self.is_restricted_parameter():
             return False
@@ -1183,9 +1254,52 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             arch_valid = self._validate_architecture_consistency(
                 instance_types=instance_types
             )
-            success = gpu_valid and arch_valid
+            offered = self._validate_offered_in_subnets(instance_types=instance_types)
+            success = gpu_valid and arch_valid and offered
 
         return success
+
+    def _validate_offered_in_subnets(
+        self, instance_types: Optional[List[str]], from_queue_default: bool = False
+    ) -> bool:
+        """
+        reject when none of the instance types is offered in any availability zone the job's
+        subnets are in: every launch would fail. a lookup that fails is an unknown and
+        allowed. capacity is not visible up front, so a type short of capacity still passes.
+        """
+        if Utils.is_empty(instance_types):
+            return True
+        subnets_builder = self.context.get_builder(constants.JOB_PARAM_SUBNET_IDS)
+        subnet_ids = subnets_builder.get() or subnets_builder.default()
+        if Utils.is_empty(subnet_ids):
+            return True
+        aws_util = self.soca_context.aws_util()
+        zones = set()
+        for subnet_id in subnet_ids:
+            zone = aws_util.get_subnet_availability_zone(subnet_id)
+            if zone is None:
+                return True
+            zones.add(zone)
+        offered = set()
+        for zone in zones:
+            types = aws_util.get_instance_types_offered(zone)
+            if types is None:
+                return True
+            offered |= types
+        if any(instance_type in offered for instance_type in instance_types):
+            return True
+        source = (
+            'The queue profile default instance types'
+            if from_queue_default
+            else 'The requested instance types'
+        )
+        self.add_validation_entry(
+            param=constants.JOB_PARAM_INSTANCE_TYPES,
+            message=f'{source} [{", ".join(instance_types)}] are not offered in the '
+            f"availability zones of this job's subnets ({', '.join(sorted(zones))}). "
+            f'Request instance types offered there.',
+        )
+        return False
 
     def _is_gpu_instance_type(
         self, instance_type: str, gpu_instance_families: List[str]
@@ -1383,7 +1497,20 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             f'{"/".join(sorted(common_architectures))}, but instance_ami: ({instance_ami}) is '
             f'{image_architecture}. Specify an instance_ami built for '
             f'{"/".join(sorted(common_architectures))}, or request '
-            f'{image_architecture} instance types.',
+            f'{image_architecture} instance types.'
+            + queue_hint(
+                queues_where(
+                    self.soca_context,
+                    lambda defaults: common_architectures
+                    & set.intersection(
+                        *[
+                            self._get_supported_architectures(instance_type=t)
+                            for t in defaults.instance_types
+                        ]
+                    ),
+                ),
+                '/'.join(sorted(common_architectures)),
+            ),
         )
         return False
 

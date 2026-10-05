@@ -41,7 +41,7 @@ import {
 
 requireCapture(
   [CONFIG_FILE, SYNTH_READS_FILE, CONTEXT_FILE],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type JsonObject = Record<string, unknown>;
@@ -490,7 +490,7 @@ test("a host instance family whose architecture cannot be resolved is refused", 
 
 test("every load balancer health check completes inside its interval", async () => {
   // ELB rejects a target group whose timeout is not shorter than its interval, and the NLB default
-  // timeout is 10 s, so a 5 s interval without an explicit timeout fails at deploy time (dev27,
+  // timeout is 10 s, so a 5 s interval without an explicit timeout fails at deploy time (demo1,
   // 2026-09-21: the gateway group rolled the whole desktop stack back).
   const templates: Record<string, JsonObject> = {
     vdc: record(await desktop, "vdc template"),

@@ -5,14 +5,12 @@ sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/subscription-manager.conf
 {% endif %}
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 set -x
-snap services amazon-ssm-agent
-if [[ "$?" != "0" ]]; then
+if ! snap services amazon-ssm-agent; then
   snap install amazon-ssm-agent --classic
 fi
 {% endif %}
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
-systemctl status amazon-ssm-agent
-if [[ "$?" != "0" ]]; then
+if ! systemctl status amazon-ssm-agent; then
   machine=$(uname -m)
   if [[ $machine == "x86_64" ]]; then
     yum install -y {{ context.config.get_string('global-settings.package_config.aws_ssm.x86_64', required=True) }}

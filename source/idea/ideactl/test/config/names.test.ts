@@ -10,29 +10,29 @@ import {
 } from '../../src/util/names.ts';
 
 test('shake256Hex matches the CDK bootstrap qualifier', () => {
-  assert.equal(shake256Hex('idea-dev27', 5), '6f3b37a775');
+  assert.equal(shake256Hex('idea-demo1', 5), 'd98389644e');
 });
 
 test('getTargetGroupName suffixes', () => {
-  assert.equal(getTargetGroupName('idea-dev27', 'cluster-manager', 'x').slice(-8), '76c95e5f');
-  assert.equal(getTargetGroupName('idea-dev27', 'scheduler', 'x').slice(-8), '79a59eed');
-  assert.equal(getTargetGroupName('idea-dev27', 'vdc', 'x').slice(-8), 'e8356b3f');
-  assert.equal(getTargetGroupName('idea-dev27', 'analytics', 'x').slice(-8), '2c13f863');
-  assert.equal(getTargetGroupName('idea-dev27', 'cluster-manager', 'web-portal'), 'idea-dev27-web-portal-76c95e5f');
+  assert.equal(getTargetGroupName('idea-demo1', 'cluster-manager', 'x').slice(-8), '4a757a6e');
+  assert.equal(getTargetGroupName('idea-demo1', 'scheduler', 'x').slice(-8), 'f9e4dd3a');
+  assert.equal(getTargetGroupName('idea-demo1', 'vdc', 'x').slice(-8), '80993306');
+  assert.equal(getTargetGroupName('idea-demo1', 'analytics', 'x').slice(-8), 'cf819e92');
+  assert.equal(getTargetGroupName('idea-demo1', 'cluster-manager', 'web-portal'), 'idea-demo1-web-portal-4a757a6e');
 });
 
 test('getTargetGroupName throws over 32 characters', () => {
   assert.throws(
-    () => getTargetGroupName('idea-dev27', 'cluster-manager', 'a-very-long-identifier'),
+    () => getTargetGroupName('idea-demo1', 'cluster-manager', 'a-very-long-identifier'),
     /is longer than 32 characters/,
   );
 });
 
 test('buildResourceName', () => {
-  assert.equal(buildResourceName('idea-dev27', 'cluster-manager-role'), 'idea-dev27-cluster-manager-role');
+  assert.equal(buildResourceName('idea-demo1', 'cluster-manager-role'), 'idea-demo1-cluster-manager-role');
   assert.equal(
-    buildResourceName('idea-dev27', 'cluster-s3-bucket', 'us-east-2'),
-    'idea-dev27-cluster-s3-bucket-us-east-2',
+    buildResourceName('idea-demo1', 'cluster-s3-bucket', 'us-east-2'),
+    'idea-demo1-cluster-s3-bucket-us-east-2',
   );
 });
 
@@ -51,8 +51,8 @@ test('buildTrimmedResourceName matches the Python formula', () => {
 
 test('arn helpers', () => {
   assert.equal(
-    buildInstanceProfileArn('aws', '111111111111', 'idea-dev27-scheduler-instance-profile'),
-    'arn:aws:iam::111111111111:instance-profile/idea-dev27-scheduler-instance-profile',
+    buildInstanceProfileArn('aws', '111111111111', 'idea-demo1-scheduler-instance-profile'),
+    'arn:aws:iam::111111111111:instance-profile/idea-demo1-scheduler-instance-profile',
   );
   assert.equal(
     getKmsKeyArn('abcd1234-0000-0000-0000-00000000abcd', 'aws', 'us-east-2', '111111111111'),

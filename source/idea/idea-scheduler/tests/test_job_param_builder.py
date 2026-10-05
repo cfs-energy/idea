@@ -1611,6 +1611,70 @@ def test_job_builder_base_os_default_ami_mismatch_invalid(context):
     assert result.success is False
 
 
+def _queue_profiles(*profiles):
+    from types import SimpleNamespace
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    return SimpleNamespace(
+        list_queue_profiles=lambda: [
+            HpcQueueProfile(
+                name=name,
+                queues=[name],
+                enabled=True,
+                default_job_params=SocaJobParams(**defaults),
+            )
+            for name, defaults in profiles
+        ]
+    )
+
+
+def _messages(result):
+    return [e.message for e in result.validation_result.results if e.message]
+
+
+def test_job_builder_architecture_mismatch_names_a_queue_that_fits(
+    context, monkeypatch
+):
+    """
+    an arm64 instance type on an x86_64 queue points at the queue set up for arm64
+    """
+    monkeypatch.setattr(
+        context,
+        'queue_profiles',
+        _queue_profiles(
+            ('normal', {'instance_types': ['c5.large']}),
+            ('arm-normal', {'instance_types': ['hpc7g.16xlarge']}),
+        ),
+        raising=False,
+    )
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'hpc7g.16xlarge'},
+    )
+    assert result.success is False
+    assert any(
+        m.endswith('Queues set up for arm64: arm-normal.') for m in _messages(result)
+    )
+
+
+def test_job_builder_base_os_mismatch_names_a_queue_that_fits(context, monkeypatch):
+    """
+    a base_os the queue default AMI is not built for points at the queue that runs it
+    """
+    monkeypatch.setattr(
+        context,
+        'queue_profiles',
+        _queue_profiles(('rhel', {'base_os': 'rhel9'})),
+        raising=False,
+    )
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro', 'base_os': 'rhel9'},
+    )
+    assert result.success is False
+    assert any(m.endswith('Queues set up for rhel9: rhel.') for m in _messages(result))
+
+
 def test_job_builder_base_os_matches_default_os_valid(context):
     """
     base_os matches the cluster default compute node os - the default AMI applies
@@ -2384,6 +2448,65 @@ def test_job_builder_instance_types_architecture_check_skipped_when_ami_not_desc
     assert result.job_params.instance_types == ['hpc7g.16xlarge']
 
 
+def _raise_image_not_found(**_):
+    raise ClientError(
+        {'Error': {'Code': 'InvalidAMIID.NotFound', 'Message': 'not found'}},
+        'DescribeImages',
+    )
+
+
+def test_job_builder_instance_ami_missing_invalid(context, monkeypatch):
+    """
+    a pinned AMI that EC2 says does not exist (deregistered, or never shared) is rejected
+    at submit instead of leaving the job waiting for a node that never launches
+    """
+    monkeypatch.setattr(context.aws().ec2(), 'describe_images', _raise_image_not_found)
+
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'instance_ami': 'ami-deregistered0000',
+        },
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'ami-deregistered0000) does not exist' in message
+        and 'Remove instance_ami' in message
+        for message in messages
+    )
+
+
+def test_job_builder_default_ami_missing_invalid(context, monkeypatch):
+    """
+    a default AMI that no longer exists is rejected too, and points at the administrator
+    """
+    monkeypatch.setattr(context.aws().ec2(), 'describe_images', _raise_image_not_found)
+
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'c5.large'},
+    )
+    assert result.success is False
+    messages = [
+        entry.message
+        for entry in result.validation_result.results
+        if entry.message is not None
+    ]
+    assert any(
+        'default instance_ami for this queue' in message
+        and 'cluster administrator' in message
+        for message in messages
+    )
+
+
 def test_job_builder_instance_types_mixed_architecture_queue_default_invalid(context):
     """
     a queue profile default list that mixes architectures is rejected for jobs that do not
@@ -2720,3 +2843,83 @@ def test_queue_default_placement_group_resolves_subnets(context, nodes, queue_su
     else:
         assert len(result.job_params.subnet_ids) == 1
         assert result.job_params.subnet_ids[0] in private_subnets
+
+
+def _zone_offerings(context, monkeypatch, offered):
+    ec2 = context.aws().ec2()
+    monkeypatch.setattr(
+        ec2,
+        'describe_subnets',
+        lambda **kwargs: {
+            'Subnets': [
+                {'SubnetId': s, 'AvailabilityZone': 'us-east-1c'}
+                for s in kwargs['SubnetIds']
+            ]
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ec2,
+        'describe_instance_type_offerings',
+        lambda **_: {'InstanceTypeOfferings': [{'InstanceType': t} for t in offered]},
+        raising=False,
+    )
+
+
+def test_job_builder_instance_type_not_offered_in_subnet_zone_invalid(
+    context, monkeypatch
+):
+    """
+    an instance type EC2 does not offer in any zone of the job's subnets can never launch,
+    so it is rejected at submit instead of retrying a launch that always fails
+    """
+    _zone_offerings(context, monkeypatch, offered=['c5.large'])
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 't3.micro',
+            'subnet_id': 'subnet-zonec000000001',
+        },
+    )
+    assert result.success is False
+    assert any(
+        't3.micro] are not offered in the availability zones' in m and 'us-east-1c' in m
+        for m in _messages(result)
+    )
+
+
+def test_job_builder_instance_type_offered_in_subnet_zone_valid(context, monkeypatch):
+    _zone_offerings(context, monkeypatch, offered=['c5.large'])
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'subnet_id': 'subnet-zonec000000002',
+        },
+    )
+    assert result.success is True
+
+
+def test_compute_image_canary_defaults_pass_queue_profile_validation(context):
+    """the hidden validation queue is created through the same job parameter validation"""
+    from ideadatamodel import ImageBuildRecord
+    from ideascheduler.app.images.compute_image_canary import canary_job_params
+
+    source = SocaJobParams(
+        base_os='rocky9',
+        instance_types=['hpc7a.96xlarge'],
+        enable_efa_support=True,
+        enable_placement_group=True,
+    )
+    record = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', image_id='ami-0123456789abcdef0'
+    )
+    params = canary_job_params(source, record)
+    assert source.enable_efa_support is True  # the source profile is not changed
+    params.instance_types = ['c5.large']  # the mock region's small x86_64 size
+    result = SocaJobBuilder(context=context, params=Utils.to_dict(params)).validate()
+    assert result.results == [], [e.message for e in result.results]

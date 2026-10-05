@@ -51,7 +51,7 @@ opensource-codeofconduct@amazon.com with any additional questions or comments.
 
 
 ## Security issue notifications
-If you discover a potential security issue in this project we ask that you notify CFS Security via email [infosec@cfs.energy](mailto:infosec@cfs.energy). Please do **not** create a public github issue.
+If you discover a potential security issue in this project, report it privately through the repository's [Security tab](https://github.com/cfs-energy/idea/security/advisories/new). Please do **not** create a public GitHub issue.
 
 
 ## Licensing

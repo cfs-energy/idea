@@ -1,11 +1,14 @@
 """Read recorded projections and activity without refreshing any source."""
 
 import json
+import logging
 import time
 from datetime import datetime
 from decimal import Decimal
 
-from boto3.dynamodb.conditions import Key
+from concurrent.futures import ThreadPoolExecutor
+
+from boto3.dynamodb.conditions import Attr, Key
 
 from ideadatamodel import (
     ListUsersRequest,
@@ -49,6 +52,16 @@ def subject(value):
     return isinstance(value, str) and bool(value) and not value.startswith('!')
 
 
+def source_not_created(error: Exception) -> bool:
+    """a DynamoDB table or OpenSearch index that does not exist yet"""
+    code = getattr(error, 'response', {}).get('Error', {}).get('Code')
+    if code == 'ResourceNotFoundException':
+        return True
+    return getattr(error, 'error', None) == 'index_not_found_exception' or (
+        'index_not_found_exception' in str(error)
+    )
+
+
 class ReportingSources:
     def __init__(self, context):
         self.context = context
@@ -67,6 +80,32 @@ class ReportingSources:
                 break
             request['ExclusiveStartKey'] = page['LastEvaluatedKey']
         check_deadline(deadline)
+
+    @staticmethod
+    def scan_heads(table, deadline, segments=8):
+        """
+        every head record, read in parallel segments. the table is mostly generation and
+        inventory chunks, and one sequential pass over it was most of a report build.
+        """
+
+        def segment(index):
+            request = dict(
+                ConsistentRead=True,
+                Segment=index,
+                TotalSegments=segments,
+                FilterExpression=Attr('record').eq('head'),
+            )
+            rows = []
+            while True:
+                check_deadline(deadline)
+                page = table.scan(**request)
+                rows.extend(page.get('Items', []))
+                if not page.get('LastEvaluatedKey'):
+                    return rows
+                request['ExclusiveStartKey'] = page['LastEvaluatedKey']
+
+        with ThreadPoolExecutor(max_workers=segments) as pool:
+            return [row for rows in pool.map(segment, range(segments)) for row in rows]
 
     @staticmethod
     def listing(read, request_type, deadline):
@@ -169,10 +208,22 @@ class ReportingSources:
             except exceptions.SocaException as error:
                 if error.error_code in ('REPORT_TIMEOUT', 'REPORT_TOO_LARGE'):
                     raise
+                # the report shows the source as missing; the log says why
+                logging.getLogger(__name__).warning(
+                    'report source %s unavailable: %s', name, error
+                )
                 result['coverage'][name] = 'unavailable'
                 result['warnings'].append(f'{name} source unavailable.')
                 return []
-            except Exception:
+            except Exception as error:
+                if source_not_created(error):
+                    # a new cluster has no desktop history table or session index until
+                    # its first desktop: that is no data, not an unreadable source
+                    result['coverage'][name] = 'ready'
+                    return []
+                logging.getLogger(__name__).warning(
+                    'report source %s unavailable', name, exc_info=True
+                )
                 result['coverage'][name] = 'unavailable'
                 result['warnings'].append(f'{name} source unavailable.')
                 return []
@@ -215,7 +266,9 @@ class ReportingSources:
                 for row in (
                     self.context.personal_costs_store.records(scope_username, 'head')
                     if scope_username is not None
-                    else self.scan(self.context.personal_costs_store.table, deadline)
+                    else self.scan_heads(
+                        self.context.personal_costs_store.table, deadline
+                    )
                 )
                 if row.get('record') == 'head'
                 and subject(row.get('subject'))
@@ -336,6 +389,35 @@ class ReportingSources:
             result['desktops'].extend(
                 {'_history': True, '_source': row} for row in history
             )
+            if insights:
+
+                def activity():
+                    # one stored record per day the collector wrote; never the log groups
+                    store = self.context.personal_costs_store
+                    from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
+                    from ideaclustermanager.app.costs.desktop_activity import (
+                        record_key,
+                    )
+
+                    rows = []
+                    for row in store.records(
+                        SYSTEM,
+                        record_key(period.start_date),
+                        record_key(period.end_date),
+                    ):
+                        check_deadline(deadline)
+                        value = store.resolve_source(SYSTEM, json.loads(row['payload']))
+                        sessions = (value or {}).get('sessions') or {}
+                        if scope_username is not None:
+                            sessions = {
+                                key: entry
+                                for key, entry in sessions.items()
+                                if entry.get('owner') == scope_username
+                            }
+                        rows.append(dict(date=row['record'][5:], sessions=sessions))
+                    return rows
+
+                result['desktop_activity'] = optional('desktop_activity', activity)
         else:
             result['coverage']['desktops'] = 'not_applicable'
             result['coverage']['desktop_history'] = 'not_applicable'

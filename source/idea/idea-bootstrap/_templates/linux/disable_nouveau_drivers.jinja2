@@ -1,8 +1,7 @@
 {% if context.is_nvidia_gpu() %}
 # Begin: Disable NVIDIA Nouveau Drivers - Is GPU Instance Type: {{ context.is_gpu_instance_type() }}, Is NVIDIA GPU: {{ context.is_nvidia_gpu() }}
 {% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
-grep -q "rdblacklist=nouveau" /etc/default/grub
-if [[ "$?" != "0" ]]; then
+if ! grep -q "rdblacklist=nouveau" /etc/default/grub; then
   log_info "Disabling the nouveau open source driver for NVIDIA graphics cards"
   cat << EOF | tee --append /etc/modprobe.d/blacklist.conf
 blacklist vga16fb

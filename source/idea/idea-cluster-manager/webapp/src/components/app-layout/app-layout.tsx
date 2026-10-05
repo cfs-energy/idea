@@ -154,7 +154,7 @@ class IdeaAppLayout extends Component<IdeaAppLayoutProps, IdeaAppLayoutState> {
             description={resolved.task.id === 'manage-jobs' ? 'All users' : undefined}
             actions={resolved.task.id === 'my-jobs' ? <SpaceBetween direction="horizontal" size="s">
                 <Button onClick={() => this.props.navigate('/soca/jobs/submit-job')}>Submit</Button>
-                <Button onClick={() => this.props.navigate('/home/script-workbench')}>Write script</Button>
+                <Button variant="primary" onClick={() => this.props.navigate('/home/script-workbench')}>Write script</Button>
             </SpaceBetween> : undefined}>{resolved.task.title}</Header> : this.props.header
         return (
             <div>

@@ -1,6 +1,6 @@
 /**
  * The `constructs/common.ts` classes the nine module stacks instantiate, each rebuilt
- * exactly as its Python call site builds it and compared with the live dev27 resource.
+ * exactly as its Python call site builds it and compared with the live demo1 resource.
  *
  * The base-stack suite covers the cluster-settings trio, `CustomResourceProvider` and `SQSQueue`; the classes
  * pinned here are the rest: `Role`, `Policy`,
@@ -64,7 +64,7 @@ describe('Role, Policy and InstanceProfile: the bastion-host IAM trio', () => {
 
   test('the instance profile carries no hash: it is an L1 child of the stack', () => {
     const profile = (build().Resources as Json).bastionhostinstanceprofile as Json;
-    assert.equal(profile.Properties.InstanceProfileName, 'idea-dev27-bastion-host-instance-profile-us-east-2');
+    assert.equal(profile.Properties.InstanceProfileName, 'idea-demo1-bastion-host-instance-profile-us-east-2');
     assert.deepEqual(profile.Properties.Roles, [{ Ref: 'bastionhostrole430C4862' }]);
   });
 
@@ -107,7 +107,7 @@ describe('ManagedPolicy', () => {
     // `virtual_desktop_controller_stack.py:494-501`.
     const h = harness({ moduleId: 'vdc', moduleName: 'virtual-desktop-controller' });
     new ManagedPolicy(h.ctx, 'vdc-host-policy', h.base.stack, {
-      managedPolicyName: 'idea-dev27-us-east-2-vdc-host',
+      managedPolicyName: 'idea-demo1-us-east-2-vdc-host',
       description: 'Permissions assigned to virtual-desktop-host',
       policyTemplateName: 'virtual-desktop-dcv-host.yml',
     });
@@ -120,13 +120,13 @@ describe('ManagedPolicy: the two cluster-stack copies of AWS managed policies', 
     // `cluster_stack.build_iam_policies()`; the names carry the region, so the stack passes them.
     const h = harness({ moduleId: 'cluster', moduleName: 'cluster' });
     new ManagedPolicy(h.ctx, 'amazon-ssm-managed-instance-core', h.base.stack, {
-      managedPolicyName: 'idea-dev27-us-east-2-amazon-ssm-managed-instance-core',
+      managedPolicyName: 'idea-demo1-us-east-2-amazon-ssm-managed-instance-core',
       description:
         'The policy for Amazon EC2 Role to enable AWS Systems Manager service core functionality.',
       policyTemplateName: 'amazon-ssm-managed-instance-core.yml',
     });
     new ManagedPolicy(h.ctx, 'cloud-watch-agent-server-policy', h.base.stack, {
-      managedPolicyName: 'idea-dev27-us-east-2-cloud-watch-agent-server-policy',
+      managedPolicyName: 'idea-demo1-us-east-2-cloud-watch-agent-server-policy',
       description: 'Permissions required to use AmazonCloudWatchAgent on servers',
       policyTemplateName: 'cloud-watch-agent-server-policy.yml',
     });
@@ -142,8 +142,8 @@ describe('SNSTopic', () => {
     // `cluster_stack.build_ec2_notification_module()`.
     const h = harness({ moduleId: 'cluster', moduleName: 'cluster' });
     const topic = new SNSTopic(h.ctx, 'cluster-ec2-state-change-sns-topic', h.base.stack, {
-      displayName: 'idea-dev27-cluster-ec2-state-change-sns-topic',
-      topicName: 'idea-dev27-cluster-ec2-state-change-sns-topic',
+      displayName: 'idea-demo1-cluster-ec2-state-change-sns-topic',
+      topicName: 'idea-demo1-cluster-ec2-state-change-sns-topic',
       masterKey: h.ctx.config.getString('cluster.sns.kms_key_id'),
     });
     // The stack re-tags the topic afterwards, and the later `Tags.of` call wins at equal
@@ -156,8 +156,8 @@ describe('SNSTopic', () => {
     // `virtual_desktop_controller_stack.build_controller_ssm_commands_notification_infra()`.
     const h = harness({ moduleId: 'vdc', moduleName: 'virtual-desktop-controller' });
     const topic = new SNSTopic(h.ctx, 'virtual-desktop-controller-sns-topic', h.base.stack, {
-      topicName: 'idea-dev27-vdc-ssm-commands-sns-topic',
-      displayName: 'idea-dev27-vdc-ssm-commands-topic',
+      topicName: 'idea-demo1-vdc-ssm-commands-sns-topic',
+      displayName: 'idea-demo1-vdc-ssm-commands-topic',
       masterKey: h.ctx.config.getString('cluster.sns.kms_key_id'),
     });
     h.base.addCommonTags(topic);
@@ -169,8 +169,8 @@ describe('SNSTopic', () => {
     new SNSTopic(h.ctx, 'sample-topic', h.base.stack);
     const resources = h.template().Resources as Json;
     const topic = Object.values(resources).find((resource) => (resource as Json).Type === 'AWS::SNS::Topic') as Json;
-    assert.equal(topic.Properties.TopicName, 'idea-dev27-sample-topic');
-    assert.equal(topic.Properties.DisplayName, 'idea-dev27-sample-topic');
+    assert.equal(topic.Properties.TopicName, 'idea-demo1-sample-topic');
+    assert.equal(topic.Properties.DisplayName, 'idea-demo1-sample-topic');
     let joined = topic.Properties.KmsMasterKeyId['Fn::Join'][1] as unknown[];
     assert.deepEqual(joined[0], 'arn:');
     assert.deepEqual(joined[1], { Ref: 'AWS::Partition' });
@@ -184,8 +184,8 @@ describe('SNSTopic', () => {
     const blankTopic = Object.values(blankResources).find(
       (resource) => (resource as Json).Type === 'AWS::SNS::Topic',
     ) as Json;
-    assert.equal(blankTopic.Properties.TopicName, 'idea-dev27-sample-topic');
-    assert.equal(blankTopic.Properties.DisplayName, 'idea-dev27-sample-topic');
+    assert.equal(blankTopic.Properties.TopicName, 'idea-demo1-sample-topic');
+    assert.equal(blankTopic.Properties.DisplayName, 'idea-demo1-sample-topic');
     joined = blankTopic.Properties.KmsMasterKeyId['Fn::Join'][1] as unknown[];
     assert.match(String(joined[2]), /:alias\/aws\/sns$/);
   });

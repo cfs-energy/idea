@@ -110,38 +110,39 @@ class ValidateDCVSessionDeletionEventHandler(BaseVirtualDesktopControllerEventHa
             message=f'Continuing to delete session... {session.idea_session_id}:{session.name}',
         )
 
+        # terminate first: the row is deleted only once its host is gone, so a failed
+        # termination leaves the session DELETING and the message is retried
+        if session.server:
+            self.log_info(
+                message_id=message_id,
+                message=f'Attempting to terminate EC2 instance for session {session.idea_session_id}, instance_id: {session.server.instance_id} (terminate is always immediate)',
+            )
+            # Note: force parameter is ignored by terminate_instances - terminate is always immediate
+            termination_result = self.server_utils.terminate_dcv_hosts(
+                [session.server], force=True
+            )
+            if 'ERROR' in termination_result:
+                message = (
+                    f'EC2 termination failed for session {session.idea_session_id}: '
+                    f'{termination_result["ERROR"]}; will try again'
+                )
+                self.log_error(message_id=message_id, message=message)
+                raise self.do_not_delete_message_exception(message)
+            self.log_info(
+                message_id=message_id,
+                message=f'EC2 termination initiated successfully for session {session.idea_session_id}',
+            )
+        else:
+            self.log_warning(
+                message_id=message_id,
+                message=f'No server found for session {session.idea_session_id} - skipping EC2 termination',
+            )
+
         try:
             self.schedule_utils.delete_schedules_for_session(session)
             self.session_permission_utils.delete_permissions_for_session(session)
             # delete session entry
             self.session_db.delete(session)
-            self.log_info(
-                message_id=message_id,
-                message=f'Attempting to terminate EC2 instance for session {session.idea_session_id}, instance_id: {session.server.instance_id if session.server else "None"} (terminate is always immediate)',
-            )
-
-            if session.server:
-                # Note: force parameter is ignored by terminate_instances - terminate is always immediate
-                termination_result = self.server_utils.terminate_dcv_hosts(
-                    [session.server], force=True
-                )
-
-                if 'ERROR' in termination_result:
-                    self.log_error(
-                        message_id=message_id,
-                        message=f'EC2 termination failed for session {session.idea_session_id}: {termination_result["ERROR"]}',
-                    )
-                else:
-                    self.log_info(
-                        message_id=message_id,
-                        message=f'EC2 termination initiated successfully for session {session.idea_session_id}',
-                    )
-            else:
-                self.log_warning(
-                    message_id=message_id,
-                    message=f'No server found for session {session.idea_session_id} - skipping EC2 termination',
-                )
-
         except Exception as e:
             self.log_error(
                 message_id=message_id,

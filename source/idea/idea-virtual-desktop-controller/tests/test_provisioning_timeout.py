@@ -131,9 +131,15 @@ class FakeServerUtils:
 
 
 class FakeClusterConfig:
-    def __init__(self, timeout_seconds: Optional[int] = None):
+    def __init__(
+        self, timeout_seconds: Optional[int] = None, logs_enabled: bool = False
+    ):
         self.timeout_seconds = timeout_seconds
+        self.logs_enabled = logs_enabled
         self.requested_keys: List[str] = []
+
+    def get_bool(self, key: str, default: bool = None) -> bool:
+        return self.logs_enabled
 
     def get_int(self, key: str, default: int = None) -> int:
         self.requested_keys.append(key)
@@ -148,6 +154,12 @@ class FakeContext:
 
     def config(self) -> FakeClusterConfig:
         return self._config
+
+    def cluster_name(self) -> str:
+        return 'test'
+
+    def module_id(self) -> str:
+        return 'vdc'
 
 
 def build_utils(
@@ -253,10 +265,9 @@ def test_a_kernel_boot_mismatch_reports_the_image_boot_configuration():
     session = a_session()
 
     assert utils.fail_stuck_provisioning_session(session, 1800) is True
-    assert (
-        'did not boot the kernel installed during bootstrap' in session.failure_reason
-    )
-    assert 'software stack image boot configuration' in session.failure_reason
+    assert 'operating system update did not finish' in session.failure_reason
+    assert 'Ask an administrator' in session.failure_reason
+    assert 'kernel-boot-mismatch' in session.failure_reason
 
 
 def test_the_host_is_released_after_the_reason_is_recorded():
@@ -594,3 +605,139 @@ def test_a_pass_that_runs_out_of_time_keeps_its_place():
 
     assert utils.fail_stuck_provisioning_sessions(time_budget_ms=0) == 0
     assert utils._provisioning_timeout_cursor == '1'
+
+
+# a host that aborted its bootstrap is failed on its next pass, not at the timeout
+
+
+class FakeServerDB:
+    def __init__(self, servers: Dict[str, VirtualDesktopServer]):
+        self.servers = servers
+
+    def get(self, instance_id: str) -> Optional[VirtualDesktopServer]:
+        return self.servers.get(instance_id)
+
+
+class FakePaginatedEc2Client:
+    def __init__(self, instances: List[Dict], error: Optional[Exception] = None):
+        self.instances = instances
+        self.error = error
+        self.filters: List[List[Dict]] = []
+
+    def get_paginator(self, _operation):
+        return self
+
+    def paginate(self, Filters):
+        self.filters.append(Filters)
+        if self.error is not None:
+            raise self.error
+        return [{'Reservations': [{'Instances': self.instances}]}]
+
+
+def build_aborted_sweep(sessions: List[VirtualDesktopSession], ec2_client):
+    session_db = FakeSessionDB()
+    session_db.server_db = FakeServerDB(
+        {
+            s.server.instance_id: VirtualDesktopServer(
+                instance_id=s.server.instance_id,
+                idea_session_id=s.idea_session_id,
+                idea_session_owner=s.owner,
+            )
+            for s in sessions
+        }
+    )
+    by_id = {s.idea_session_id: s for s in sessions}
+    session_db.get_from_db = lambda idea_session_owner, idea_session_id: by_id.get(
+        idea_session_id
+    )
+    server_utils = FakeServerUtils()
+    utils = build_utils(session_db, ec2_client, server_utils)
+    utils._controller_utils.context = Mock(cluster_name=Mock(return_value='test'))
+    return utils, session_db, server_utils
+
+
+def a_failed_host(instance_id: str, status: str) -> Dict:
+    return {'InstanceId': instance_id, 'Tags': [a_bootstrap_status_tag(status)]}
+
+
+def test_an_aborted_bootstrap_fails_the_desktop_well_inside_the_timeout():
+    session = a_session(provisioning_for_minutes=3)
+    ec2_client = FakePaginatedEc2Client(
+        [a_failed_host(INSTANCE_ID, KERNEL_BOOT_MISMATCH)]
+    )
+    utils, session_db, server_utils = build_aborted_sweep([session], ec2_client)
+
+    assert utils.fail_bootstrap_aborted_sessions() == 1
+    assert session.state == VirtualDesktopSessionState.ERROR
+    assert 'kernel-boot-mismatch' in session.failure_reason
+    assert session_db.updated == [session]
+    assert server_utils.terminated == [[session.server]]
+    # one call for the whole cluster, scoped to it and to hosts that recorded a status
+    filters = {f['Name']: f['Values'] for f in ec2_client.filters[0]}
+    assert filters['tag-key'] == [BOOTSTRAP_STATUS_TAG]
+    assert filters['tag:idea:ClusterName'] == ['test']
+
+
+def test_the_aborted_sweep_leaves_desktops_it_should_not_touch():
+    # already failed, or the session moved on to another host: nothing to do.
+    errored = a_session(state=VirtualDesktopSessionState.ERROR, idea_session_id='a')
+    moved = a_session(instance_id='i-00000000000000002', idea_session_id='b')
+    ec2_client = FakePaginatedEc2Client(
+        [
+            a_failed_host(INSTANCE_ID, KERNEL_BOOT_MISMATCH),
+            a_failed_host('i-00000000000000002', KERNEL_BOOT_MISMATCH),
+        ]
+    )
+    utils, session_db, server_utils = build_aborted_sweep([errored, moved], ec2_client)
+    moved.server = VirtualDesktopServer(instance_id='i-00000000000000003')
+
+    assert utils.fail_bootstrap_aborted_sessions() == 0
+    assert moved.state == VirtualDesktopSessionState.PROVISIONING
+    assert session_db.updated == []
+    assert server_utils.terminated == []
+
+
+def test_an_unreadable_ec2_answer_fails_nothing_in_the_aborted_sweep():
+    session = a_session(provisioning_for_minutes=3)
+    ec2_client = FakePaginatedEc2Client(
+        [], error=client_error('RequestLimitExceeded', 'DescribeInstances')
+    )
+    utils, session_db, server_utils = build_aborted_sweep([session], ec2_client)
+
+    assert utils.fail_bootstrap_aborted_sessions() == 0
+    assert session.state == VirtualDesktopSessionState.PROVISIONING
+    assert server_utils.terminated == []
+
+
+# the reason names where the released host's startup log is, when the host ships logs
+
+
+def test_a_timed_out_desktop_names_its_bootstrap_log():
+    session = a_session()
+    utils = build_utils(
+        FakeSessionDB(),
+        FakeEc2Client(),
+        FakeServerUtils(),
+        FakeClusterConfig(logs_enabled=True),
+    )
+
+    assert utils.fail_stuck_provisioning_session(session, 1800) is True
+    assert session.failure_reason.endswith(
+        f'log group /test/vdc/dcv-host, stream bootstrap_{INSTANCE_ID}.'
+    )
+
+
+def test_an_aborted_desktop_names_its_bootstrap_log_only_when_logs_ship():
+    session = a_session(provisioning_for_minutes=3)
+    ec2_client = FakePaginatedEc2Client(
+        [a_failed_host(INSTANCE_ID, KERNEL_BOOT_MISMATCH)]
+    )
+    utils, _, _ = build_aborted_sweep([session], ec2_client)
+    assert utils.fail_bootstrap_aborted_sessions() == 1
+    assert 'CloudWatch' not in session.failure_reason
+
+    session = a_session(provisioning_for_minutes=3)
+    utils, _, _ = build_aborted_sweep([session], ec2_client)
+    utils.context = FakeContext(FakeClusterConfig(logs_enabled=True))
+    assert utils.fail_bootstrap_aborted_sessions() == 1
+    assert f'stream bootstrap_{INSTANCE_ID}' in session.failure_reason

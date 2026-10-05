@@ -7,11 +7,11 @@ import { makeUniqueId } from '../../src/util/unique-id.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
 const LIVE_DIR = fileURLToPath(new URL('../../tools/parity/live', import.meta.url));
-requireCapture([LIVE_DIR], "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2");
+requireCapture([LIVE_DIR], "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2");
 
 test('makeUniqueId: rules that do not need fixtures', () => {
   // single component: no hash
-  assert.equal(makeUniqueId(['idea-dev27-cluster-external-cert', 'Default']), 'ideadev27clusterexternalcert');
+  assert.equal(makeUniqueId(['idea-demo1-cluster-external-cert', 'Default']), 'ideademo1clusterexternalcert');
   // `Resource` dropped from the human part but kept in the hash
   assert.equal(makeUniqueId(['log-retention', 'Resource']), 'logretentionB69DFB48');
   // A component ending with the next component is deduplicated.

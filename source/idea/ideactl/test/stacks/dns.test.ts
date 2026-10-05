@@ -1,7 +1,7 @@
 /**
  * `constructs/dns.ts`. The resolver endpoint/rule/association are covered end to end by
  * `directory-service.test.ts` (they only ever appear under `ActiveDirectory`); this file covers
- * the private hosted zone against the live dev27 `cluster` template, and the resolver defaults on
+ * the private hosted zone against the live demo1 `cluster` template, and the resolver defaults on
  * their own.
  */
 
@@ -22,8 +22,8 @@ describe('PrivateHostedZone', () => {
     const cluster = new ExistingSocaCluster(h.ctx, h.base.stack);
     new PrivateHostedZone(h.ctx, h.base.stack, cluster.vpc);
 
-    const zone = (h.template().Resources as Json).ideadev27privatehostedzone741B171D;
-    const live = liveResources('cluster').ideadev27privatehostedzone741B171D as Json;
+    const zone = (h.template().Resources as Json).ideademo1privatehostedzone9A5F7BB4;
+    const live = liveResources('cluster').ideademo1privatehostedzone9A5F7BB4 as Json;
 
     assert.equal(zone.Metadata['aws:cdk:path'], live.Metadata['aws:cdk:path']);
     assert.deepEqual(zone.Properties.HostedZoneConfig, live.Properties.HostedZoneConfig);
@@ -56,7 +56,7 @@ describe('DNS resolver defaults', () => {
     });
 
     const resources = h.template().Resources as Json;
-    const endpointResource = resources.ideadev27dnsresolverendpoint;
+    const endpointResource = resources.ideademo1dnsresolverendpoint;
     assert.equal(endpointResource.Properties.Direction, 'OUTBOUND');
     assert.equal(endpointResource.Properties.Name, CLUSTER);
     assert.deepEqual(endpointResource.Properties.IpAddresses, [{ SubnetId: 'subnet-0123456789abcdef0' }]);

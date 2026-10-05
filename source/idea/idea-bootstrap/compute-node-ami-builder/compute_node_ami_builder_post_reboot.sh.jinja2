@@ -43,28 +43,24 @@ else
 
   # clean-up
   rm -rf /var/tmp/* /tmp/* /var/crash/*
-  rm -rf /etc/ssh/ssh_host_*
   rm -f /etc/udev/rules.d/70-persistent-net.rules
   grep -l "Created by cloud-init on instance boot automatically" /etc/sysconfig/network-scripts/ifcfg-* | xargs rm -f
-  rm -rf /root/bootstrap/logs
-  rm -f /root/bootstrap/reboot_required.txt
   {% if context.config.get_string('scheduler.provider') == 'openpbs' %}
   systemctl disable pbs
   {% endif %}
 
-  # clear crontab to ensure new image starts from clean slate
-  crontab -l | grep -v 'compute_node_ami_builder_post_reboot.sh' | crontab -
-
-  # create idea_preinstalled_packages.log file indicating packages have been preinstalled on this ami.
-  # echo "$(date)" >> /root/bootstrap/idea_preinstalled_packages.log
-
-  # flush filesystem buffers before signaling ami creation
+  touch /var/lib/idea/bake-drivers.ok
+  # ponytail: no ERR trap on compute (its templates are not audited for benign non-zero
+  # exits); a stage that dies before here never tags and the backend times the bake out.
+  # checks first (they read the stage markers and logs), then the identity scrub, then the
+  # release marker; only the publish step may tag complete
+  export AWS_INSTANCE_ID IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh" || exit 1
+  if ! /bin/bash "${SCRIPT_DIR}/image_scrub.sh"; then
+    /bin/bash "${SCRIPT_DIR}/image_checks.sh" --failed-scrub
+    exit 1
+  fi
+  printf '%s\n' "${IDEA_MODULE_VERSION}" > /var/lib/idea/baked-release
   /bin/sync
-
-  # create tag indicating ec2 instance is ready for creating AMI
-  aws ec2 create-tags \
-  --resources "${AWS_INSTANCE_ID}" \
-  --region "${AWS_REGION}" \
-  --tags Key=idea:AmiBuilderStatus,Value=complete
-
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh" --publish || /bin/bash "${SCRIPT_DIR}/image_checks.sh" --failed-publish
 fi

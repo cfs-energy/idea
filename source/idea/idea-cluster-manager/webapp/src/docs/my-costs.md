@@ -20,11 +20,11 @@ Memory efficiency compares peak use with the request. Without a request, it uses
 
 The single **Top jobs** table sorts by **Highest cost** or **Most unused cores**. Job names open your completed-job records. Hints can suggest fewer cores, per node for multi-node jobs. Low memory use without a memory request can suggest a smaller instance type. **Find rows** searches the table. **Table preferences** controls columns and their order. **Export CSV** includes all matching rows across pages.
 
-**Desktops** shows spend, estimated hours, daily costs, and costs by project. **Storage** shows shared-storage spend and measured storage use. Open **Storage usage: folders and quotas** on the Storage tab for folder sizes, file ages, bytes unchanged for 90 days, and available quotas. It loads only when opened.
+**Desktops** shows spend, estimated hours, daily costs, costs by project, and idle desktop time with its cost. Idle hours count the time a desktop ran with nobody connected and CPU under the idle stop threshold, using the same rules as the idle stop. They come from the checks the idle stop makes every 30 minutes, so desktops without an idle stop in their schedule, and hours outside a schedule's stop window, are left out rather than counted as in use. Their cost is idle hours multiplied by each desktop's on-demand hourly price. The **Idle desktops** table hints at a shorter idle time before stopping when a desktop was idle for at least half of 2 or more checked hours. **Storage** shows shared-storage spend and measured storage use. Open **Storage usage: folders and quotas** on the Storage tab for folder sizes, file ages, bytes unchanged for 90 days, and available quotas. It loads only when opened.
 
 | Tile | Includes |
 | --- | --- |
-| Jobs | Priced completed-job compute records. |
+| Jobs | Priced completed jobs: compute at the on-demand or spot rate charged, plus job storage. |
 | Desktops | Recorded session intervals. Uncertain historical stop times are estimated. Deleting a legacy stopped desktop does not bill its stopped interval as running. |
 | Desktop disks | Observed provisioned storage from collection onward. |
 | Shared storage | Daily storage rates multiplied by dated byte shares. ONTAP includes SSD, throughput, excess IOPS, and capacity-pool bytes. EFS uses storage class. No storage cost-allocation tag is required. |

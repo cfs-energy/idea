@@ -13,7 +13,7 @@ import { policyContext, renderPolicy, resourcesDir } from '../../src/cdk/policy.
 import { jinjaEnv, renderTemplate } from '../../src/config/jinja.ts';
 import { requireCapture, requiredService } from '../support/fixtures.ts';
 
-const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-dev27/raw/', import.meta.url));
+const RAW = fileURLToPath(new URL('../../tools/parity/fixtures/idea-demo1/raw/', import.meta.url));
 const SCAN = `${RAW}cluster-settings.scan.json`;
 const MODULES = `${RAW}modules.scan.json`;
 const ORACLE = fileURLToPath(new URL('./jinja2-oracle.py', import.meta.url));
@@ -33,7 +33,7 @@ function haveJinja2(): boolean {
 
 requireCapture(
   [SCAN, MODULES, ARN_BUILDER],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
+  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1",
 );
 if (!haveJinja2()) requiredService("python3 with jinja2 and PyYAML", "python3 -m pip install --user jinja2 PyYAML");
 
@@ -179,7 +179,7 @@ describe("the scheduler record permission under both engines", () => {
   const ROW = "scheduler.use_stable_server_name";
   const FLAG = "ecs.enabled";
 
-  /** The dev27 scan with named rows removed, written where both engines can read it. */
+  /** The demo1 scan with named rows removed, written where both engines can read it. */
   function scanWithout(removed: readonly string[]): string {
     const scan = JSON.parse(readFileSync(SCAN, "utf-8")) as { Items: { key: { S: string } }[] };
     scan.Items = scan.Items.filter((item) => !removed.includes(item.key.S));

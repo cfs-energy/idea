@@ -295,7 +295,7 @@ test("keeps the observability task definition for a rollback and runs the daemon
     assert.equal(task["DeletionPolicy"], "Retain", `${id} retained`);
     assert.equal(task["UpdateReplacePolicy"], "Retain", `${id} retained on replacement`);
   }
-  // ECS refuses a capacity provider strategy on the DAEMON scheduling strategy (idea-dev27-ecs
+  // ECS refuses a capacity provider strategy on the DAEMON scheduling strategy (idea-demo1-ecs
   // rolled back on exactly that, 2026-09-15); a daemon names the launch type instead.
   for (const [id, service] of byType(resources, "AWS::ECS::Service")) {
     const properties = record(service["Properties"], `${id} properties`);
@@ -356,7 +356,7 @@ test("creates the host observability daemon only when enabled", () => {
   );
 
   // The tasks send to a socket on a host path; the agent listens on UDP unless told to open it
-  // (idea-dev27 ran a day with every module's metrics going nowhere, 2026-09-15).
+  // (a cluster has run a day with every module's metrics going nowhere).
   const [, task] = byType(enabled, "AWS::ECS::TaskDefinition")[0]!;
   const container = record((record(task["Properties"], "task properties")["ContainerDefinitions"] as unknown[])[0], "agent container");
   const environment = Object.fromEntries(

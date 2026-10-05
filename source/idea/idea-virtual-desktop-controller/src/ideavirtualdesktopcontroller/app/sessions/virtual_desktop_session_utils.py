@@ -59,6 +59,7 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     VirtualDesktopControllerUtils,
     build_bootstrap_failure_message,
+    build_bootstrap_log_hint,
     resolve_project_instance_profile_arn,
 )
 
@@ -444,17 +445,28 @@ class VirtualDesktopSessionUtils:
             return False
 
         if Utils.is_not_empty(bootstrap_status):
-            session.failure_reason = build_bootstrap_failure_message(bootstrap_status)
+            failure_reason = build_bootstrap_failure_message(bootstrap_status)
         else:
-            session.failure_reason = PROVISIONING_TIMEOUT_FAILURE_MESSAGE.format(
+            failure_reason = PROVISIONING_TIMEOUT_FAILURE_MESSAGE.format(
                 minutes=int(timeout_seconds / 60)
             )
+        self._fail_provisioning_session(session, failure_reason, bootstrap_status)
+        return True
+
+    def _fail_provisioning_session(
+        self,
+        session: VirtualDesktopSession,
+        failure_reason: str,
+        bootstrap_status: Optional[str],
+    ):
+        session.failure_reason = failure_reason + build_bootstrap_log_hint(
+            self.context, session.server.instance_id
+        )
         session.state = VirtualDesktopSessionState.ERROR
 
         self._logger.error(
-            f'session {session.idea_session_id} for {session.owner} has been '
-            f'provisioning for {int(provisioning_seconds)}s on host '
-            f'{session.server.instance_id}, bootstrap status: '
+            f'session {session.idea_session_id} for {session.owner} failed while '
+            f'provisioning on host {session.server.instance_id}, bootstrap status: '
             f'{bootstrap_status if Utils.is_not_empty(bootstrap_status) else "none"}. '
             f'{session.failure_reason}'
         )
@@ -468,7 +480,45 @@ class VirtualDesktopSessionUtils:
                 f'could not release host {session.server.instance_id} of session '
                 f'{session.idea_session_id}: {Utils.get_value_as_string("ERROR", response)}'
             )
-        return True
+
+    def fail_bootstrap_aborted_sessions(self) -> int:
+        """
+        fail a provisioning desktop as soon as its host records that it gave up, rather
+        than at the provisioning timeout. one ec2 call per pass; the session is looked up
+        from the host, and only a PROVISIONING session still on that host is failed.
+        """
+        failures = self._controller_utils.list_bootstrap_failures()
+        if not failures:
+            return 0
+        failed = 0
+        for instance_id, bootstrap_status in failures.items():
+            try:
+                server = self._session_db.server_db.get(instance_id)
+                if Utils.is_empty(server):
+                    continue
+                session = self._session_db.get_from_db(
+                    idea_session_owner=server.idea_session_owner,
+                    idea_session_id=server.idea_session_id,
+                )
+                if (
+                    Utils.is_empty(session)
+                    or session.state != VirtualDesktopSessionState.PROVISIONING
+                    or Utils.is_empty(session.server)
+                    or session.server.instance_id != instance_id
+                ):
+                    continue
+                self._fail_provisioning_session(
+                    session,
+                    build_bootstrap_failure_message(bootstrap_status),
+                    bootstrap_status,
+                )
+                failed += 1
+            except Exception as e:
+                self._logger.warning(
+                    f'could not fail the desktop on host {instance_id} whose bootstrap '
+                    f'recorded {bootstrap_status}: {e}'
+                )
+        return failed
 
     def fail_stuck_provisioning_sessions(
         self, time_budget_ms: int = PROVISIONING_TIMEOUT_TIME_BUDGET_MS
@@ -1104,16 +1154,33 @@ class VirtualDesktopSessionUtils:
             success_response_list.append(session)
 
         # Handle stopped sessions - always use force termination for deletions
-        servers_to_terminate = []
+        servers_to_terminate = [s.server for s in stopped_sessions if s.server]
+        released = set()
+        terminate_error = None
+        if servers_to_terminate:
+            response = self._server_utils.terminate_dcv_hosts(
+                servers_to_terminate, force=True
+            )
+            terminate_error = Utils.get_value_as_string('ERROR', response, None)
+            released = {
+                Utils.get_value_as_string('InstanceId', i, None)
+                for i in Utils.get_value_as_list('TerminatingInstances', response, [])
+            } | set(Utils.get_value_as_list('MissingInstanceIds', response, []))
 
         for session in stopped_sessions:
+            # a session whose host was not terminated stays, so deleting it again retries
+            if session.server and session.server.instance_id not in released:
+                session.failure_reason = (
+                    f'could not terminate host {session.server.instance_id}: '
+                    f'{terminate_error or "not terminated"}'
+                )
+                self._logger.error(
+                    f'not deleting session {session.idea_session_id}: {session.failure_reason}'
+                )
+                fail_response_list.append(session)
+                continue
             session_db_entries_to_delete.append(session)
-            if session.server:
-                servers_to_terminate.append(session.server)
 
-        # Always use force termination for session deletions to ensure immediate cleanup
-        if servers_to_terminate:
-            self._server_utils.terminate_dcv_hosts(servers_to_terminate, force=True)
         for session in session_db_entries_to_delete:
             self._schedule_utils.delete_schedules_for_session(session)
             self._session_permission_utils.delete_permissions_for_session(session)

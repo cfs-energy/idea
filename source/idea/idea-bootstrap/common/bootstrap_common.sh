@@ -342,3 +342,10 @@ def convert_from_dynamodb_object:
 convert_from_dynamodb_object
 " > /root/.convert_from_dynamodb_object.jq
 }
+
+function remove_from_fstab () {
+  # drop every fstab entry mounted at a directory (with or without a trailing slash)
+  local MOUNT_DIR="$1"
+  [[ -n "${MOUNT_DIR}" ]] || return 0
+  sed -i "\| ${MOUNT_DIR}/\{0,1\} |d" /etc/fstab
+}

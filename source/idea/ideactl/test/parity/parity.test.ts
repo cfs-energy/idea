@@ -37,21 +37,21 @@ const PKG = resolve(import.meta.dirname, '../..');
 const PARITY = join(PKG, 'tools/parity/parity.ts');
 const LIVE = join(PKG, 'tools/parity/live');
 const REQUIRED_TEMPLATES = [
-  "idea-dev27-analytics.json",
-  "idea-dev27-bastion-host.json",
-  "idea-dev27-bootstrap.json",
-  "idea-dev27-cluster-manager.json",
-  "idea-dev27-cluster.json",
-  "idea-dev27-directoryservice.json",
-  "idea-dev27-identity-provider.json",
-  "idea-dev27-metrics.json",
-  "idea-dev27-scheduler.json",
-  "idea-dev27-shared-storage.json",
-  "idea-dev27-vdc.json",
+  "idea-demo1-analytics.json",
+  "idea-demo1-bastion-host.json",
+  "idea-demo1-bootstrap.json",
+  "idea-demo1-cluster-manager.json",
+  "idea-demo1-cluster.json",
+  "idea-demo1-directoryservice.json",
+  "idea-demo1-identity-provider.json",
+  "idea-demo1-metrics.json",
+  "idea-demo1-scheduler.json",
+  "idea-demo1-shared-storage.json",
+  "idea-demo1-vdc.json",
 ] as const;
 requireCapture(
   REQUIRED_TEMPLATES.map((name) => join(LIVE, name)),
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 const oracleGuard = guardOracleDirectory(LIVE);
 
@@ -244,89 +244,89 @@ test("oracle guard detects a create and remove cycle", async () => {
 });
 
 test('the four volatile classes are soft, all in one template', () => {
-  const name = 'idea-dev27-analytics.json';
+  const name = 'idea-demo1-analytics.json';
   const p = mutated(name, (t) => {
     resource(t, 'opensearchprivateips').Properties.UpdateToken = '00000000-1111-2222-3333-444444444444';
-    resource(t, 'ideadev27dashboardtargetgroup').Properties.Name = 'idea-dev27-dashboard-2c13f863-9f';
-    objectProperty(resource(t, 'ideadev27analyticssettings'), 'settings').deployment_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    resource(t, 'ideademo1dashboardtargetgroup').Properties.Name = 'idea-demo1-dashboard-cf819e92-9f';
+    objectProperty(resource(t, 'ideademo1analyticssettings'), 'settings').deployment_id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     objectProperty(resource(t, 'analyticssinklambdaADB37882'), 'Code').S3Key = `cdk/${'0'.repeat(64)}.zip`;
   });
   const { code, out } = diff(join(LIVE, name), p);
   strictEqual(code, 0, out);
   match(out, /^PARITY .*, 0 property diffs, 4 soft$/m);
   match(out, /^VOLATILE Resources\.opensearchprivateips\.Properties\.UpdateToken /m);
-  match(out, /^VOLATILE Resources\.ideadev27dashboardtargetgroup\.Properties\.Name /m);
-  match(out, /^VOLATILE Resources\.ideadev27analyticssettings\.Properties\.settings\.deployment_id /m);
+  match(out, /^VOLATILE Resources\.ideademo1dashboardtargetgroup\.Properties\.Name /m);
+  match(out, /^VOLATILE Resources\.ideademo1analyticssettings\.Properties\.settings\.deployment_id /m);
   match(out, /^ASSET .*Resources\.analyticssinklambdaADB37882\.Properties\.Code\.S3Key /m);
 });
 
 test('a dashboard target group renamed to another cluster is a hard diff', () => {
-  const p = mutated('idea-dev27-analytics.json', (t) => {
-    resource(t, 'ideadev27dashboardtargetgroup').Properties.Name = 'idea-other-dashboard-2c13f863-c7';
+  const p = mutated('idea-demo1-analytics.json', (t) => {
+    resource(t, 'ideademo1dashboardtargetgroup').Properties.Name = 'idea-other-dashboard-cf819e92-c7';
   });
-  const { code, out } = diff(join(LIVE, 'idea-dev27-analytics.json'), p);
+  const { code, out } = diff(join(LIVE, 'idea-demo1-analytics.json'), p);
   strictEqual(code, 1, out);
-  match(out, /^DIFF     Resources\.ideadev27dashboardtargetgroup\.Properties\.Name$/m);
+  match(out, /^DIFF     Resources\.ideademo1dashboardtargetgroup\.Properties\.Name$/m);
 });
 
 test('a changed property is MISMATCH', () => {
-  const p = mutated('idea-dev27-metrics.json', (t) => {
-    resource(t, 'ideadev27metricssettings').Properties.module_id = 'metrics2';
+  const p = mutated('idea-demo1-metrics.json', (t) => {
+    resource(t, 'ideademo1metricssettings').Properties.module_id = 'metrics2';
   });
-  const { code, out } = diff(join(LIVE, 'idea-dev27-metrics.json'), p);
+  const { code, out } = diff(join(LIVE, 'idea-demo1-metrics.json'), p);
   strictEqual(code, 1, out);
   match(out, /^MISMATCH .*1 property diffs/m);
 });
 
 test('aws:cdk:path stays a hard diff', () => {
-  const p = mutated('idea-dev27-metrics.json', (t) => {
-    const metadata = resource(t, 'ideadev27metricssettings').Metadata;
+  const p = mutated('idea-demo1-metrics.json', (t) => {
+    const metadata = resource(t, 'ideademo1metricssettings').Metadata;
     if (!metadata) throw new Error('metrics settings has no metadata');
-    metadata['aws:cdk:path'] = 'idea-dev27-metrics/moved/Default';
+    metadata['aws:cdk:path'] = 'idea-demo1-metrics/moved/Default';
   });
-  const { code, out } = diff(join(LIVE, 'idea-dev27-metrics.json'), p);
+  const { code, out } = diff(join(LIVE, 'idea-demo1-metrics.json'), p);
   strictEqual(code, 1, out);
-  match(out, /^DIFF     Resources\.ideadev27metricssettings\.Path$/m);
+  match(out, /^DIFF     Resources\.ideademo1metricssettings\.Path$/m);
 });
 
 test('Parameters.BootstrapVersion and Rules are compared', () => {
-  const noParam = mutated('idea-dev27-metrics.json', (t) => {
+  const noParam = mutated('idea-demo1-metrics.json', (t) => {
     if (!t.Parameters) throw new Error('metrics template has no Parameters');
     delete t.Parameters.BootstrapVersion;
   });
-  strictEqual(diff(join(LIVE, 'idea-dev27-metrics.json'), noParam).code, 1);
-  const noRule = mutated('idea-dev27-metrics.json', (t) => {
+  strictEqual(diff(join(LIVE, 'idea-demo1-metrics.json'), noParam).code, 1);
+  const noRule = mutated('idea-demo1-metrics.json', (t) => {
     if (!t.Rules) throw new Error('metrics template has no Rules');
     delete t.Rules.CheckBootstrapVersion;
   });
-  const r = diff(join(LIVE, 'idea-dev27-metrics.json'), noRule);
+  const r = diff(join(LIVE, 'idea-demo1-metrics.json'), noRule);
   strictEqual(r.code, 1, r.out);
   match(r.out, /^DIFF     Rules\.CheckBootstrapVersion/m);
 });
 
 test('Description is compared; --ignore-version masks the version', () => {
-  const p = mutated('idea-dev27-metrics.json', (t) => {
+  const p = mutated('idea-demo1-metrics.json', (t) => {
     // A release the reference will never carry, so the strict diff sees a version change.
-    t.Description = 'ModuleId: metrics, Cluster: idea-dev27, Version: 99.99.9';
-    resource(t, 'ideadev27metricssettings').Properties.version = '99.99.9';
+    t.Description = 'ModuleId: metrics, Cluster: idea-demo1, Version: 99.99.9';
+    resource(t, 'ideademo1metricssettings').Properties.version = '99.99.9';
   });
-  const strict = diff(join(LIVE, 'idea-dev27-metrics.json'), p);
+  const strict = diff(join(LIVE, 'idea-demo1-metrics.json'), p);
   strictEqual(strict.code, 1, strict.out);
   match(strict.out, /^DIFF     Description$/m);
-  const masked = diff(join(LIVE, 'idea-dev27-metrics.json'), p, '--ignore-version');
+  const masked = diff(join(LIVE, 'idea-demo1-metrics.json'), p, '--ignore-version');
   strictEqual(masked.code, 0, masked.out);
   // ...but a cluster or module change in the Description still fails with --ignore-version.
-  const renamed = mutated('idea-dev27-metrics.json', (t) => {
-    t.Description = 'ModuleId: metrics2, Cluster: idea-dev27, Version: 26.09.0';
+  const renamed = mutated('idea-demo1-metrics.json', (t) => {
+    t.Description = 'ModuleId: metrics2, Cluster: idea-demo1, Version: 26.09.0';
   });
-  strictEqual(diff(join(LIVE, 'idea-dev27-metrics.json'), renamed, '--ignore-version').code, 1);
+  strictEqual(diff(join(LIVE, 'idea-demo1-metrics.json'), renamed, '--ignore-version').code, 1);
 });
 
 test('a missing resource is MISMATCH and bad usage exits 2', () => {
-  const p = mutated('idea-dev27-metrics.json', (t) => delete t.Resources.ideadev27metricssettings);
-  const { code, out } = diff(join(LIVE, 'idea-dev27-metrics.json'), p);
+  const p = mutated('idea-demo1-metrics.json', (t) => delete t.Resources.ideademo1metricssettings);
+  const { code, out } = diff(join(LIVE, 'idea-demo1-metrics.json'), p);
   strictEqual(code, 1, out);
-  match(out, /^MISSING  ideadev27metricssettings /m);
+  match(out, /^MISSING  ideademo1metricssettings /m);
   const usage = spawnSync(process.execPath, [PARITY, 'diff', 'only-one-arg'], { encoding: 'utf8' });
   strictEqual(usage.status, 2);
   const unreadable = spawnSync(process.execPath, [PARITY, 'diff', '/nope.json', '/nope.json'], { encoding: 'utf8' });
@@ -334,14 +334,14 @@ test('a missing resource is MISMATCH and bad usage exits 2', () => {
 });
 
 test('paths prints one row per non-metadata resource', () => {
-  const r = spawnSync(process.execPath, [PARITY, 'paths', join(LIVE, 'idea-dev27-metrics.json')], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [PARITY, 'paths', join(LIVE, 'idea-demo1-metrics.json')], { encoding: 'utf8' });
   strictEqual(r.status, 0);
   const rows = r.stdout.trim().split('\n');
   strictEqual(rows.length, 2);
   ok(rows.every((row) => row.split('\t').length === 3));
   deepStrictEqual(
     rows.map((row) => row.split('\t')[1]).sort(),
-    ['cloudwatchdashboard84BE33F2', 'ideadev27metricssettings'].sort(),
+    ['cloudwatchdashboard84BE33F2', 'ideademo1metricssettings'].sort(),
   );
 });
 
@@ -349,19 +349,19 @@ test('a volatile value DROPPED from the synth side is a hard diff', () => {
   // Masks apply only when a volatile value changes, not when it disappears.
   const cases: Array<[string, (template: Template) => void, RegExp]> = [
     [
-      'idea-dev27-analytics.json',
+      'idea-demo1-analytics.json',
       (t) => delete resource(t, 'opensearchprivateips').Properties.UpdateToken,
       /^DIFF {5}Resources\.opensearchprivateips\.Properties\.UpdateToken$/m,
     ],
     [
-      'idea-dev27-metrics.json',
-      (t) => delete objectProperty(resource(t, 'ideadev27metricssettings'), 'settings').deployment_id,
-      /^DIFF {5}Resources\.ideadev27metricssettings\.Properties\.settings\.deployment_id$/m,
+      'idea-demo1-metrics.json',
+      (t) => delete objectProperty(resource(t, 'ideademo1metricssettings'), 'settings').deployment_id,
+      /^DIFF {5}Resources\.ideademo1metricssettings\.Properties\.settings\.deployment_id$/m,
     ],
     [
-      'idea-dev27-analytics.json',
-      (t) => delete resource(t, 'ideadev27dashboardtargetgroup').Properties.Name,
-      /^DIFF {5}Resources\.ideadev27dashboardtargetgroup\.Properties\.Name$/m,
+      'idea-demo1-analytics.json',
+      (t) => delete resource(t, 'ideademo1dashboardtargetgroup').Properties.Name,
+      /^DIFF {5}Resources\.ideademo1dashboardtargetgroup\.Properties\.Name$/m,
     ],
   ];
   for (const [name, mutate, line] of cases) {
@@ -374,7 +374,7 @@ test('a volatile value DROPPED from the synth side is a hard diff', () => {
 });
 
 test('a volatile path whose value is no longer a plain string is a hard diff', () => {
-  const name = 'idea-dev27-analytics.json';
+  const name = 'idea-demo1-analytics.json';
   const p = mutated(name, (t) => {
     resource(t, 'opensearchprivateips').Properties.UpdateToken = { Ref: 'AWS::StackId' };
   });
@@ -384,24 +384,24 @@ test('a volatile path whose value is no longer a plain string is a hard diff', (
 });
 
 test('a missing resource does not suppress the diffs of a sibling with the same prefix', () => {
-  const name = 'idea-dev27-metrics.json';
+  const name = 'idea-demo1-metrics.json';
   const p = mutated(name, (t) => {
-    const id = 'ideadev27metricssettings';
+    const id = 'ideademo1metricssettings';
     t.Resources[`${id}extra`] = structuredClone(resource(t, id));
     objectProperty(resource(t, `${id}extra`), 'settings').cluster_name = 'changed';
   });
   // live has neither; the extra pair must both be reported, not swallowed by a prefix match
   const { code, out } = diff(join(LIVE, name), p);
   strictEqual(code, 1, out);
-  match(out, /^EXTRA {4}ideadev27metricssettingsextra/m);
+  match(out, /^EXTRA {4}ideademo1metricssettingsextra/m);
   const { out: back } = diff(p, join(LIVE, name));
-  match(back, /^MISSING {2}ideadev27metricssettingsextra/m);
-  // and the sibling `ideadev27metricssettings` itself still compares clean
+  match(back, /^MISSING {2}ideademo1metricssettingsextra/m);
+  // and the sibling `ideademo1metricssettings` itself still compares clean
   match(back, /, 0 property diffs, /);
 });
 
 test('volatile matchers reject similarly shaped values on a dashboard', () => {
-  const name = 'idea-dev27-metrics.json';
+  const name = 'idea-demo1-metrics.json';
   const cases: Array<[string, (dashboard: Resource, value: string) => void, string, string, RegExp]> = [
     ['asset-shaped module_id', (dashboard, value) => (dashboard.Properties.module_id = value), 'a'.repeat(64), 'b'.repeat(64), /Properties\.module_id$/m],
     ['UpdateToken', (dashboard, value) => (dashboard.Properties.UpdateToken = value), 'first-token', 'second-token', /Properties\.UpdateToken$/m],
@@ -433,7 +433,7 @@ test('volatile matchers reject similarly shaped values on a dashboard', () => {
 });
 
 test('a dashboard-shaped Name on another target group is a hard diff', () => {
-  const name = 'idea-dev27-metrics.json';
+  const name = 'idea-demo1-metrics.json';
   const addTargetGroup = (template: Template, targetGroupName: string) => {
     template.Resources.unrelateddashboardtargetgroup = {
       Type: 'AWS::ElasticLoadBalancingV2::TargetGroup',
@@ -449,16 +449,16 @@ test('a dashboard-shaped Name on another target group is a hard diff', () => {
 });
 
 test('--ignore-version preserves a non-version description suffix', () => {
-  const p = mutated('idea-dev27-metrics.json', (template) => {
-    template.Description = 'ModuleId: metrics, Cluster: idea-dev27, Version: 26.09.0, unexpected suffix';
+  const p = mutated('idea-demo1-metrics.json', (template) => {
+    template.Description = 'ModuleId: metrics, Cluster: idea-demo1, Version: 26.09.0, unexpected suffix';
   });
-  const result = diff(join(LIVE, 'idea-dev27-metrics.json'), p, '--ignore-version');
+  const result = diff(join(LIVE, 'idea-demo1-metrics.json'), p, '--ignore-version');
   strictEqual(result.code, 1, result.out);
   match(result.out, /^DIFF     Description$/m);
 });
 
 test('cdk_nag suppressions are compared; the rest of Metadata stays ignored', () => {
-  const name = 'idea-dev27-identity-provider.json';
+  const name = 'idea-demo1-identity-provider.json';
   const live = join(LIVE, name);
   const nagOf = (resourceValue: Resource): JsonObject => {
     const nag = resourceValue.Metadata?.cdk_nag ?? null;
@@ -468,13 +468,13 @@ test('cdk_nag suppressions are compared; the rest of Metadata stays ignored', ()
 
   // One rule dropped from one resource: the deployed user pool would show a Metadata diff.
   const oneRule = mutated(name, (t) => {
-    const rules = nagOf(resource(t, 'ideadev27userpoolD5C370B5')).rules_to_suppress;
+    const rules = nagOf(resource(t, 'ideademo1userpoolDEB06C35')).rules_to_suppress;
     if (!Array.isArray(rules)) throw new Error('rules_to_suppress is not an array');
     rules.pop();
   });
   const dropped = diff(live, oneRule);
   strictEqual(dropped.code, 1, dropped.out);
-  match(dropped.out, /^DIFF     Resources\.ideadev27userpoolD5C370B5\.Metadata\.cdk_nag\.rules_to_suppress\[1\]$/m);
+  match(dropped.out, /^DIFF     Resources\.ideademo1userpoolDEB06C35\.Metadata\.cdk_nag\.rules_to_suppress\[1\]$/m);
 
   // The whole block gone from every resource.
   const noNag = mutated(name, (t) => {
@@ -493,7 +493,7 @@ test('cdk_nag suppressions are compared; the rest of Metadata stays ignored', ()
   strictEqual(diff(live, reordered).code, 1);
 
   // ...and the synthesis noise under Metadata still compares clean.
-  const assetName = 'idea-dev27-analytics.json';
+  const assetName = 'idea-demo1-analytics.json';
   const assetMetadata = mutated(assetName, (t) => {
     const metadata = resource(t, 'analyticssinklambdaADB37882').Metadata;
     if (!metadata || metadata['aws:asset:path'] === undefined) throw new Error('no asset metadata to mutate');
@@ -505,7 +505,7 @@ test('cdk_nag suppressions are compared; the rest of Metadata stays ignored', ()
 });
 
 test('the stack-level suppression list is compared', () => {
-  const name = 'idea-dev27-analytics.json';
+  const name = 'idea-demo1-analytics.json';
   const live = join(LIVE, name);
   const withoutStackNag = mutated(name, (t) => {
     if (t.Metadata?.cdk_nag === undefined) throw new Error('analytics has no stack-level cdk_nag');

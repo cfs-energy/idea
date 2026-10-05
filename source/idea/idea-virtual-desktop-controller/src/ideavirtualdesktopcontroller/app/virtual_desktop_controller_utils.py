@@ -83,10 +83,35 @@ BOOTSTRAP_STATUS_MESSAGES = {
     'gpu-driver-install-failed': 'The GPU driver failed to install on the host for this desktop, so it never became usable. The host has been released. Ask an administrator to check the GPU driver bootstrap log for this instance type.',
     'gpu-driver-mapping-missing': 'The host for this desktop has GPU hardware that IDEA has no driver for, so it never became usable. The host has been released. Choose a different instance type, or ask an administrator.',
     'gpu-kernel-devel-missing': 'No kernel headers were available on the host for this desktop, so the GPU driver could not be built and the desktop never became usable. The host has been released. Ask an administrator to check the software stack image.',
-    'kernel-boot-mismatch': 'The host for this desktop did not boot the kernel installed during bootstrap, so the desktop never became usable. The host has been released. Ask an administrator to check the software stack image boot configuration.',
+    'kernel-boot-mismatch': "The desktop's operating system update did not finish: it did not start on the kernel it installed. The host has been released. Ask an administrator (reason code: kernel-boot-mismatch).",
+    'lustre-module-missing': "The desktop's operating system has no FSx for Lustre driver for the kernel it runs, so shared Lustre storage could not be mounted. The host has been released. Ask an administrator (reason code: lustre-module-missing).",
+    'kernel-install-failed': "The desktop's operating system update did not finish: its kernel could not be installed. The host has been released. Ask an administrator (reason code: kernel-install-failed).",
 }
 
 BOOTSTRAP_STATUS_DEFAULT_MESSAGE = 'The host for this desktop stopped its own bootstrap with status "{bootstrap_status}", so the desktop never became usable. The host has been released. Ask an administrator to check the bootstrap log for this instance.'
+
+
+# the host ships its bootstrap logs to this stream, so a failed host's log outlives the host.
+BOOTSTRAP_LOG_STREAM = 'bootstrap_{instance_id}'
+
+
+def dcv_host_cloudwatch_logs_enabled(context) -> bool:
+    config = context.config()
+    return config.get_bool(
+        'cluster.cloudwatch_logs.enabled', False
+    ) and config.get_bool('virtual-desktop-controller.cloudwatch_logs.enabled', False)
+
+
+def dcv_host_log_group(context) -> str:
+    return f'/{context.cluster_name()}/{context.module_id()}/dcv-host'
+
+
+def build_bootstrap_log_hint(context, instance_id: Optional[str]) -> str:
+    """where an administrator finds the startup log of a released host; empty when the host ships no logs"""
+    if Utils.is_empty(instance_id) or not dcv_host_cloudwatch_logs_enabled(context):
+        return ''
+    stream = BOOTSTRAP_LOG_STREAM.format(instance_id=instance_id)
+    return f' The host startup log is kept in CloudWatch Logs: log group {dcv_host_log_group(context)}, stream {stream}.'
 
 
 def build_bootstrap_failure_message(bootstrap_status: str) -> str:
@@ -484,6 +509,45 @@ class VirtualDesktopControllerUtils:
                 return Utils.get_value_as_string('Value', tag, '')
         return ''
 
+    def list_bootstrap_failures(self) -> Optional[Dict[str, str]]:
+        """
+        every live host of this cluster whose bootstrap recorded a failure, as instance id to
+        status. one call however many desktops are provisioning. None means ec2 could not
+        be read.
+        """
+        failures = {}
+        try:
+            paginator = self.ec2_client.get_paginator('describe_instances')
+            for page in paginator.paginate(
+                Filters=[
+                    {'Name': 'tag-key', 'Values': [BOOTSTRAP_STATUS_TAG]},
+                    {
+                        'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
+                        'Values': [self.context.cluster_name()],
+                    },
+                    {
+                        'Name': 'instance-state-name',
+                        'Values': ['pending', 'running', 'stopping', 'stopped'],
+                    },
+                ]
+            ):
+                for reservation in Utils.get_value_as_list('Reservations', page, []):
+                    for instance in Utils.get_value_as_list(
+                        'Instances', reservation, []
+                    ):
+                        for tag in Utils.get_value_as_list('Tags', instance, []):
+                            if (
+                                Utils.get_value_as_string('Key', tag)
+                                == BOOTSTRAP_STATUS_TAG
+                            ):
+                                failures[instance['InstanceId']] = (
+                                    Utils.get_value_as_string('Value', tag, '')
+                                )
+        except ClientError as e:
+            self._logger.warning(f'could not list hosts whose bootstrap failed: {e}')
+            return None
+        return {k: v for k, v in failures.items() if Utils.is_not_empty(v)}
+
     def get_instance_profile_association(self, instance_id: str) -> Optional[Dict]:
         """
         the iam instance profile association ec2 reports for the instance. an empty dict
@@ -586,11 +650,7 @@ class VirtualDesktopControllerUtils:
 
         # Configure CloudWatch logging and metrics for virtual desktop hosts
         # Configure CloudWatch with custom metrics options to include instance dimensions
-        cloudwatch_logs_enabled = self.context.config().get_bool(
-            'cluster.cloudwatch_logs.enabled', False
-        ) and self.context.config().get_bool(
-            'virtual-desktop-controller.cloudwatch_logs.enabled', False
-        )
+        cloudwatch_logs_enabled = dcv_host_cloudwatch_logs_enabled(self.context)
 
         metrics_provider = self.context.config().get_string('metrics.provider')
         cloudwatch_metrics_enabled = (
@@ -610,25 +670,41 @@ class VirtualDesktopControllerUtils:
                 CloudWatchAgentConfig,
             )
 
-            # Define log files based on OS
+            # Define log files based on OS. The bootstrap logs go to their own stream named
+            # by instance id, so the controller can point at the log of a host it released.
             log_files = []
             if cloudwatch_logs_enabled:
+                log_group = dcv_host_log_group(self.context)
                 if is_windows:
-                    # For Windows, we rely on windows_events section in the template for Event Logs
-                    # Only include custom log files here if needed
-                    log_files = []
+                    # Event Logs come from the windows_events section of the template
+                    log_files = [
+                        CloudWatchAgentLogFileOptions(
+                            file_path='C:\\ProgramData\\Amazon\\EC2-Windows\\Launch\\Log\\UserdataExecutionIDEA.log',
+                            log_group_name=log_group,
+                            log_stream_name=BOOTSTRAP_LOG_STREAM,  # the agent fills in {instance_id}
+                        ),
+                        CloudWatchAgentLogFileOptions(
+                            file_path='C:\\Users\\Administrator\\IDEA\\bootstrap\\log\\*',
+                            log_group_name=log_group,
+                            log_stream_name=BOOTSTRAP_LOG_STREAM,
+                        ),
+                    ]
                 else:
-                    # Define log files for Linux virtual desktop hosts
                     log_files = [
                         CloudWatchAgentLogFileOptions(
                             file_path='/var/log/messages',
-                            log_group_name=f'/{self.context.cluster_name()}/{self.context.module_id()}/dcv-host',
+                            log_group_name=log_group,
                             log_stream_name='system_{ip_address}',
                         ),
                         CloudWatchAgentLogFileOptions(
                             file_path='/var/log/syslog',
-                            log_group_name=f'/{self.context.cluster_name()}/{self.context.module_id()}/dcv-host',
+                            log_group_name=log_group,
                             log_stream_name='syslog_{ip_address}',
+                        ),
+                        CloudWatchAgentLogFileOptions(
+                            file_path='/root/bootstrap/logs/*.log',
+                            log_group_name=log_group,
+                            log_stream_name=BOOTSTRAP_LOG_STREAM,
                         ),
                     ]
 

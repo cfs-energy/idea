@@ -477,14 +477,28 @@ export async function quickSetup(deps: Deps, options: QuickSetupOptions): Promis
     });
   }
 
-  await checkClusterStatus(deps, {
-    clusterName,
-    awsRegion,
-    awsProfile,
-    wait: true,
-    waitTimeout: 30 * 60,
-    moduleSet: options.moduleSet,
-  });
+  // an internal portal load balancer answers only inside the network, often not where the installer runs
+  if (config.getBool('cluster.load_balancers.external_alb.public', true)) {
+    await checkClusterStatus(deps, {
+      clusterName,
+      awsRegion,
+      awsProfile,
+      wait: true,
+      waitTimeout: 30 * 60,
+      moduleSet: options.moduleSet,
+    });
+  } else {
+    try {
+      await checkClusterStatus(deps, { clusterName, awsRegion, awsProfile, moduleSet: options.moduleSet });
+    } catch (error) {
+      if (!(error instanceof ExitWithCode)) throw error;
+      deps.out(
+        'The portal load balancer is internal, so its endpoints answer only from inside the network. ' +
+          `Run ideactl check-cluster-status --cluster-name ${clusterName} --aws-region ${awsRegion} ` +
+          'from a host that routes to the cluster.',
+      );
+    }
+  }
 
   config = await ClusterConfig.fromDynamoDb(clusterName, awsRegion, {
     moduleSet: options.moduleSet,
@@ -667,11 +681,24 @@ function flagValue(argv: string[], flag: string): string | undefined {
   return value;
 }
 
+/** --cluster-name, or the cluster_name in --values-file (quick-setup names the cluster there) */
+function clusterNameArg(argv: string[]): string | undefined {
+  const named = flagValue(argv, '--cluster-name');
+  if (named !== undefined) return named;
+  const valuesFile = flagValue(argv, '--values-file');
+  if (valuesFile === undefined) return undefined;
+  try {
+    return readFileSync(valuesFile, 'utf8').match(/^cluster_name:\s*['"]?([\w-]+)/m)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 function formatUninitialisedCluster(error: Error, argv: string[]): string {
   if (error.message.includes('Create them with ideactl config update')) return error.message;
   const cluster =
     error.message.match(/cluster:\s*(\S+)/)?.[1] ??
-    flagValue(argv, '--cluster-name') ??
+    clusterNameArg(argv) ??
     'the cluster';
   const region =
     flagValue(argv, '--aws-region') ?? process.env.AWS_DEFAULT_REGION ?? process.env.AWS_REGION ?? '';
@@ -688,7 +715,7 @@ function formatUninitialisedCluster(error: Error, argv: string[]): string {
 }
 
 function formatMissingTables(argv: string[]): string {
-  const cluster = flagValue(argv, '--cluster-name') ?? '<cluster>';
+  const cluster = clusterNameArg(argv) ?? '<cluster>';
   const region =
     flagValue(argv, '--aws-region') ?? process.env.AWS_DEFAULT_REGION ?? process.env.AWS_REGION ?? '<region>';
   return (
@@ -700,7 +727,7 @@ function formatMissingTables(argv: string[]): string {
 
 function formatConfigKeyNotFound(error: ConfigKeyNotFound, argv: string[]): string {
   const key = error.message.match(/, key:\s*(.+)$/)?.[1] ?? error.message;
-  const cluster = flagValue(argv, '--cluster-name') ?? '<cluster>';
+  const cluster = clusterNameArg(argv) ?? '<cluster>';
   const region = flagValue(argv, '--aws-region') ?? '<region>';
   return (
     `Configuration key ${key} is missing for this cluster. Show nearby keys with ideactl config show ` +

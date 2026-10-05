@@ -20,7 +20,7 @@ import {DeleteJobRequest, DeleteJobResult, SocaJob} from "../../client/data-mode
 import {AppContext} from "../../common";
 import {SchedulerAdminClient, SchedulerClient} from "../../client"
 import IdeaSplitPanel from "../../components/split-panel";
-import {Box, ColumnLayout, Container, Header, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
+import {Box, Button, ColumnLayout, SpaceBetween, StatusIndicator, Table, Tabs} from "@cloudscape-design/components";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import IdeaConfirm from "../../components/modals";
 import Utils from "../../common/utils";
@@ -41,18 +41,32 @@ export function JobWaitingSignals(props: { job: SocaJob, now?: Date }) {
 
 export function JobStatus({job}: {job: SocaJob}) {
     const disposition = job.disposition ?? (job.start_time ? (job.exit_status ? 'failed' : 'ran') : 'deleted')
-    const label = job.state === 'finished' ? disposition[0].toUpperCase() + disposition.slice(1)
+    const failed = job.exit_status ? `Failed (exit ${job.exit_status})` : 'Failed'
+    const label = job.state === 'finished' ? (disposition === 'ran' ? 'Finished' : disposition === 'failed' ? failed : disposition[0].toUpperCase() + disposition.slice(1))
         : job.state === 'held' ? 'Held'
         : job.state === 'running' ? 'Running'
-        : job.state === 'exit' ? `Exit (${job.exit_status})`
+        : job.state === 'exit' ? (job.exit_status ? failed : 'Finishing')
         : job.params?.compute_stack === 'tbd' ? 'Queued' : 'Provisioning'
-    const type = label === 'Held' || label === 'Failed' ? 'error'
-        : label === 'Deleted' ? 'stopped' : label === 'Ran' || label === 'Running' ? 'success' : 'pending'
+    const type = label === 'Held' || label.startsWith('Failed') ? 'error'
+        : label === 'Deleted' ? 'stopped' : label === 'Finished' || label === 'Running' ? 'success' : 'pending'
     return <SpaceBetween size="xxs">
         <StatusIndicator type={type}>{label}</StatusIndicator>
         {(job.status_reason || job.error_message) && <Box variant="small">{job.status_reason || job.error_message}</Box>}
         <JobWaitingSignals job={job}/>
     </SpaceBetween>
+}
+
+/** Empty state for the user's Active jobs table: one line and the two ways to start a job. */
+export function ActiveJobsEmpty({navigate}: {navigate: (path: string) => void}) {
+    return <Box textAlign="center" color="inherit">
+        <SpaceBetween size="s">
+            <Box variant="p" color="inherit">You have no active jobs.</Box>
+            <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+                <Button onClick={() => navigate('/soca/jobs/submit-job')}>Submit</Button>
+                <Button variant="primary" onClick={() => navigate('/home/script-workbench')}>Write script</Button>
+            </SpaceBetween>
+        </SpaceBetween>
+    </Box>
 }
 
 export function JobBudgetImpact({job}: {job: SocaJob}) {
@@ -73,64 +87,85 @@ export function JobCosts({job}: {job: SocaJob}) {
     ]
     return <SpaceBetween size="m">
         <Table items={cost?.line_items ?? []} columnDefinitions={columns}/>
-        {Boolean(cost?.savings?.length) && <Container header={<Header variant="h3">Estimated savings: {cost?.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost?.savings_total)}</Header>}>
-            <Table items={cost?.savings ?? []} columnDefinitions={columns}/>
-        </Container>}
         <ColumnLayout columns={2}>
             <Box variant="h3">Estimated Total Cost</Box>
-            <Box variant="h3" textAlign="right">{!cost || cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost.total)}</Box>
+            <Box variant="h3" textAlign="right">{!cost || cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(cost.line_items_total)}</Box>
         </ColumnLayout>
     </SpaceBetween>
 }
 
+const formatDate = (value?: string) => value ? new Date(value).toLocaleString() : '\u2013'
+const timeOf = (value?: string) => value ? new Date(value).getTime() : 0
+const runtimeSeconds = (job: SocaJob, now: Date = new Date()) => new JobUtils(job).getElapsedSeconds(now)
+// spend is the line items. total subtracts a hypothetical reserved-instance discount on older records.
+const costOf = (job: SocaJob) => job.estimated_bom_cost && !job.estimated_bom_cost.price_unavailable ? job.estimated_bom_cost.line_items_total : undefined
+
+/** Columns shared by every jobs view. Completed views add cost estimate and exit status (see jobColumns). */
 export const JOB_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<SocaJob>[] = [
-    {
-        id: 'id',
-        header: 'Job Id',
-        cell: job => job.job_id,
-        sortingField: 'job_id'
-    },
-    {
-        id: 'name',
-        header: 'Name',
-        cell: job => job.name,
-        sortingField: 'name'
-    },
-    {
-        id: 'owner',
-        header: 'Owner',
-        cell: job => job.owner,
-        sortingField: 'owner'
-    },
-    {
-        id: 'queue',
-        header: 'Queue',
-        cell: job => job.queue,
-        sortingField: 'queue'
-    },
-    {
-        id: 'project',
-        header: 'Project',
-        cell: job => job.project,
-        sortingField: 'project'
-    },
-    {
-        id: 'status',
-        header: 'Status',
-        cell: job => <JobStatus job={job}/>,
-        sortingField: 'state'
-    },
+    {id: 'id', header: 'Job ID', cell: job => job.job_id, sortingField: 'job_id'},
+    {id: 'name', header: 'Name', cell: job => job.name, sortingField: 'name'},
+    {id: 'status', header: 'Status', cell: job => <JobStatus job={job}/>, sortingField: 'state'},
+    {id: 'owner', header: 'Owner', cell: job => job.owner, sortingField: 'owner'},
+    {id: 'queue', header: 'Queue', cell: job => job.queue, sortingField: 'queue'},
+    {id: 'project', header: 'Project', cell: job => job.project, sortingField: 'project'},
     {
         id: 'queued-on',
-        header: 'Queue Time',
-        cell: job => new Date(job.queue_time!).toLocaleString(),
-        sortingComparator: (a, b) => {
-            const dateA = a.queue_time ? new Date(a.queue_time).getTime() : 0;
-            const dateB = b.queue_time ? new Date(b.queue_time).getTime() : 0;
-            return dateA - dateB;
-        }
+        header: 'Submitted',
+        cell: job => formatDate(job.queue_time),
+        sortingComparator: (a, b) => timeOf(a.queue_time) - timeOf(b.queue_time)
+    },
+    {
+        id: 'runtime',
+        header: 'Runtime',
+        cell: job => {
+            const seconds = runtimeSeconds(job)
+            return seconds == null ? '\u2013' : formatDurationMinutes(seconds)
+        },
+        sortingComparator: (a, b) => (runtimeSeconds(a) ?? -1) - (runtimeSeconds(b) ?? -1)
     }
 ]
+
+/** Cost is only recorded once a job has finished (from its measured run time), so it is shown on
+ * completed views only; active jobs carry no estimate to show. */
+export function jobColumns(type: string): TableProps.ColumnDefinition<SocaJob>[] {
+    if (type !== 'completed') {
+        return JOB_TABLE_COLUMN_DEFINITIONS
+    }
+    return [
+        ...JOB_TABLE_COLUMN_DEFINITIONS,
+        {
+            id: 'cost',
+            header: 'Cost estimate',
+            cell: job => costOf(job) ? Utils.getFormattedAmount(costOf(job)) : '\u2013',
+            sortingComparator: (a, b) => (costOf(a)?.amount ?? -1) - (costOf(b)?.amount ?? -1)
+        },
+        {id: 'exit_code', header: 'Exit status', cell: job => job.exit_status, sortingField: 'exit_status'}
+    ]
+}
+
+/** Owner is hidden by default on a user's own jobs (it is always them) but stays in the column preferences. */
+export const MY_JOBS_PREFERENCES_KEY = 'my-jobs'
+
+export function hideOwnerByDefault() {
+    // ponytail: seeds IdeaTable's stored column preference because the table has no default-hidden prop;
+    // replace with that prop if one is added to components/table.
+    const storage = AppContext.get().localStorage()
+    const key = `${MY_JOBS_PREFERENCES_KEY}-table-columns`
+    if (storage.getItem(key) == null) {
+        // carry over the columns chosen under the key this view used before, owner hidden
+        let previous = {}
+        try {
+            previous = JSON.parse(storage.getItem('hpc-jobs-table-columns') ?? '{}') ?? {}
+        } catch {
+            previous = {}
+        }
+        storage.setItem(key, JSON.stringify({...previous, owner: false}))
+        const pageSize = storage.getItem('hpc-jobs-table-pageSize')
+        if (pageSize != null && storage.getItem(`${MY_JOBS_PREFERENCES_KEY}-table-pageSize`) == null) {
+            storage.setItem(`${MY_JOBS_PREFERENCES_KEY}-table-pageSize`, pageSize)
+        }
+    }
+}
 
 const ELAPSED_STATUS_INDICATOR: { [k in JobElapsedState]: 'pending' | 'info' | 'warning' | 'error' } = {
     'not-started': 'pending',
@@ -218,6 +253,9 @@ class Jobs extends Component<JobsProps, JobsState> {
         this.deleteJobConfirmModal = React.createRef()
         this.linkedJobId = props.type === 'completed' ? props.searchParams?.get('job_id') ?? null : null
         this.selectedJobId = this.linkedJobId
+        if (props.scope === 'user') {
+            hideOwnerByDefault()
+        }
         this.state = {
             splitPanelOpen: !!this.linkedJobId,
             jobSelected: !!this.linkedJobId
@@ -314,35 +352,22 @@ class Jobs extends Component<JobsProps, JobsState> {
     }
 
     buildListing() {
-        let columnDefinitions = [...JOB_TABLE_COLUMN_DEFINITIONS]
-        if (this.isCompletedJobs()) {
-            columnDefinitions.push({
-                id: 'exit_code',
-                header: 'Exit Status',
-                cell: job => job.exit_status,
-                sortingField: 'exit_status'
-            })
-        }
+        const columnDefinitions = jobColumns(this.props.type)
         return (
             <IdeaListView
                 ref={this.listing}
-                preferencesKey={'hpc-jobs'}
+                empty={this.props.scope === 'user' && this.isActiveJobs() ? <ActiveJobsEmpty navigate={this.props.navigate}/> : undefined}
+                preferencesKey={this.props.scope === 'user' ? MY_JOBS_PREFERENCES_KEY : 'hpc-jobs'}
                 showPreferences={true}
-                title={(this.isActiveJobs()) ? 'Active' : 'Completed'}
-                description={(this.isActiveJobs()) ? 'All active Jobs' : 'All completed Jobs'}
+                title={(this.isActiveJobs()) ? 'Active jobs' : 'Completed jobs'}
                 selectionType="single"
                 enableExportToCsv={this.isCompletedJobs()}
                 csvFilename={() => `completed_jobs_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
                 onExportAllRecords={this.isCompletedJobs() ? async () => {
                     try {
-                        console.log('Starting CSV export for jobs...');
-
                         // Get current filters and date range, with fallbacks
                         const filters = this.getListing()?.getFilters() || [];
                         const dateRange = this.getListing()?.getDateRange();
-
-                        console.log('Filters:', filters);
-                        console.log('Date range:', dateRange);
 
                         const requestParams = {
                             filters: filters,
@@ -356,14 +381,10 @@ class Jobs extends Component<JobsProps, JobsState> {
                             } : undefined
                         };
 
-                        console.log('Request params:', requestParams);
-
                         // Fetch all completed jobs with current filters but no pagination limit
                         const result = this.props.scope === 'user'
                             ? await this.scheduler().listCompletedJobs(requestParams)
                             : await this.schedulerAdmin().listCompletedJobs(requestParams);
-
-                        console.log('Export result:', result);
 
                         const records = result.listing || [];
 
@@ -404,7 +425,7 @@ class Jobs extends Component<JobsProps, JobsState> {
                 secondaryActions={[
                     {
                         id: 'delete-job',
-                        text: 'Delete Job (stops it if running)',
+                        text: 'Delete job (stops it if running)',
                         disabled: !this.isSelected(),
                         onClick: () => {
                             this.getDeleteJobConfirmModal().show()

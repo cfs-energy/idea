@@ -12,8 +12,8 @@ type DynamoItem = Record<string, unknown>;
 type Table = { Items: DynamoItem[] };
 
 const PKG = resolve(import.meta.dirname, '../..');
-const RAW = join(PKG, 'tools/parity/fixtures/idea-dev27/raw');
-requireCapture([RAW], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures/idea-dev27");
+const RAW = join(PKG, 'tools/parity/fixtures/idea-demo1/raw');
+requireCapture([RAW], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures/idea-demo1");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

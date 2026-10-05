@@ -235,8 +235,7 @@ function boot_kernel_with_headers () {
 {% endif %}
 
 function install_nvidia_grid_drivers () {
-  which nvidia-smi > /dev/null 2>&1
-  if [[ "$?" == "0" ]]; then
+  if command -v nvidia-smi > /dev/null 2>&1; then
     log_info "GPU driver already installed. Skip."
     return 0
   fi
@@ -282,7 +281,7 @@ function install_nvidia_grid_drivers () {
   fi
 
   log_info "X server configuration for GPU start..."
-  local NVIDIAXCONFIG=$(which nvidia-xconfig)
+  local NVIDIAXCONFIG=$(command -v nvidia-xconfig || true)
   if [[ -n "${NVIDIAXCONFIG}" ]]; then
     $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
   else
@@ -296,8 +295,7 @@ function install_nvidia_grid_drivers () {
 }
 
 function install_nvidia_public_drivers() {
-  which nvidia-smi > /dev/null 2>&1
-  if [[ "$?" == "0" ]]; then
+  if command -v nvidia-smi > /dev/null 2>&1; then
     log_info "GPU driver already installed. Skip."
     return 0
   fi
@@ -344,7 +342,7 @@ function install_nvidia_public_drivers() {
   fi
 
   log_info "X server configuration for GPU start..."
-  local NVIDIAXCONFIG=$(which nvidia-xconfig)
+  local NVIDIAXCONFIG=$(command -v nvidia-xconfig || true)
   if [[ -n "${NVIDIAXCONFIG}" ]]; then
     $NVIDIAXCONFIG --preserve-busid --enable-all-gpus
   else
@@ -357,8 +355,7 @@ function install_nvidia_public_drivers() {
 }
 {% elif context.is_amd_gpu()  %}
 function install_amd_gpu_drivers() {
-  which /opt/amdgpu-pro/bin/clinfo > /dev/null 2>&1
-  if [[ "$?" == "0" ]]; then
+  if command -v /opt/amdgpu-pro/bin/clinfo > /dev/null 2>&1; then
     log_info "GPU driver already installed. Skip."
     return 0
   fi
@@ -370,8 +367,9 @@ function install_amd_gpu_drivers() {
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
 
-  # Enforce pbs stop to avoid pbs restart during amdgpupro install
-  systemctl stop pbs
+  # Enforce pbs stop to avoid pbs restart during amdgpupro install; an image builder
+  # installs OpenPBS after the drivers, so there may be no unit to stop yet
+  if systemctl cat pbs >/dev/null 2>&1; then systemctl stop pbs; fi
 
   {% if context.base_os in ('rocky8', 'rocky9') %}
     local AMD_RADEON_REPO_BASE_URL="https://repo.radeon.com/amdgpu"

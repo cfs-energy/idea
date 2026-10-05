@@ -22,7 +22,7 @@ import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
 import {Alert, Box, Button, ButtonDropdown, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, TextContent, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import {toast} from "react-toastify";
-import FileBrowserTable, {entryKey, FileBrowserEntry, FileBrowserMenuItem} from "./file-browser-table";
+import FileBrowserTable, {entryIcon, entryKey, FileBrowserEntry, FileBrowserMenuItem} from "./file-browser-table";
 import DeleteFolderDialog from "./delete-folder-dialog";
 import FileBrowserPath, {describeListingFailure} from "./file-browser-path";
 
@@ -75,6 +75,7 @@ export interface IdeaFileBrowserState {
     renameFormValues: {[fileId: string]: string}
     renameValidationErrors: {[fileId: string]: string}
     filePermissions: Map<string, any>
+    homeDir: string
 }
 
 /** One operation on the current selection, offered by the toolbar and the row menu. */
@@ -198,7 +199,7 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
                                     showStatus(true)
                                 }).catch(error => {
                                     if (error.errorCode === 'UNAUTHORIZED_ACCESS') {
-                                        showStatus(false, 'Permission Denied')
+                                        showStatus(false, 'Permission denied')
                                     } else {
                                         showStatus(false, error.message)
                                     }
@@ -304,7 +305,8 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             showRenameModal: false,
             renameFormValues: {},
             renameValidationErrors: {},
-            filePermissions: new Map<string, any>()
+            filePermissions: new Map<string, any>(),
+            homeDir: ''
         }
         this._fileBrowserClient = AppContext.get().client().fileBrowser()
         this.createFolderForm = React.createRef()
@@ -330,6 +332,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 })
             }
         })
+        // Only labels the trail; without it the trail starts at root as before.
+        AppContext.get().auth().getUser().then(user => {
+            this.setState({homeDir: Utils.asString(user?.home_dir)})
+        }).catch(() => undefined)
         this.listFavorites()
         const cwd = this.props.searchParams.get('cwd')
         this.listFiles((cwd) ? cwd : undefined).finally()
@@ -549,7 +555,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             const preparingItem = {
                 type: 'info' as const,
                 loading: true,
-                header: 'Preparing Download',
+                header: 'Preparing download',
                 content: contentMessage,
                 dismissible: false,
                 customId: downloadId
@@ -567,7 +573,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 // Replace with success message
                 const successItem = {
                     type: 'success' as const,
-                    header: 'Download Ready',
+                    header: 'Download ready',
                     content: 'Your download should start automatically.',
                     dismissible: true,
                     customId: downloadId
@@ -601,7 +607,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     // Replace with success message
                     const successItem = {
                         type: 'success' as const,
-                        header: 'Download Ready',
+                        header: 'Download ready',
                         content: 'Download archive is ready! Your download should start automatically.',
                         dismissible: true,
                         customId: downloadId
@@ -635,7 +641,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     // Replace with error message using the same pattern as other error handlers
                     const errorItem = {
                         type: 'error' as const,
-                        header: 'Download Failed',
+                        header: 'Download failed',
                         content: `Failed to prepare download: ${error.message} (${error.errorCode})`,
                         dismissible: true,
                         customId: downloadId
@@ -792,7 +798,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                       name="create-folder"
                       modal={true}
                       modalSize="medium"
-                      title="Create New Folder"
+                      title="Create folder"
                       onSubmit={() => {
                           if (!this.getCreateFolderForm().validate()) {
                               return
@@ -812,7 +818,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                       params={[
                           {
                               name: 'name',
-                              title: 'Folder Name',
+                              title: 'Folder name',
                               description: 'Enter the name of the folder',
                               data_type: 'str',
                               param_type: 'text',
@@ -1019,7 +1025,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 visible={this.state.showRenameModal}
                 onDismiss={closeRenameModal}
                 size="large"
-                header={`Rename ${filesToRename.length === 1 ? 'Item' : `${filesToRename.length} Items`}`}
+                header={`Rename ${filesToRename.length === 1 ? 'item' : `${filesToRename.length} items`}`}
                 footer={
                     <Box float="right">
                         <SpaceBetween size="xs" direction="horizontal">
@@ -1032,10 +1038,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                 disabled={hasValidationErrors || changedItemsCount === 0}
                             >
                                 {hasValidationErrors
-                                    ? 'Fix Validation Errors'
+                                    ? 'Fix invalid names'
                                     : changedItemsCount === 0
-                                        ? 'No Changes to Apply'
-                                        : `Rename ${changedItemsCount} Item${changedItemsCount === 1 ? '' : 's'}`
+                                        ? 'No changes'
+                                        : `Rename ${changedItemsCount} item${changedItemsCount === 1 ? '' : 's'}`
                                 }
                             </Button>
                         </SpaceBetween>
@@ -1051,7 +1057,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         columnDefinitions={[
                             {
                                 id: 'current',
-                                header: 'Current Name',
+                                header: 'Current name',
                                 cell: (item: FileBrowserEntry) => {
                                     const filePath = this.getFilePath(item)
                                     const permissionInfo = filePermissions.get(filePath)
@@ -1060,22 +1066,16 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                     return (
                                         <Box fontWeight="bold">
                                             <SpaceBetween size="xs" direction="horizontal">
-                                                <Box>
-                                                    {item.isDir ? '📁' : '📄'}
-                                                </Box>
+                                                <FontAwesomeIcon icon={entryIcon(item)} fixedWidth={true}/>
                                                 <Box>
                                                     {item.name}
                                                 </Box>
                                             </SpaceBetween>
                                             {isProtected && (
-                                                <Box fontSize="body-s" color="text-status-warning" margin={{top: 'xxxs'}}>
-                                                    🔒 Protected - cannot be renamed
-                                                </Box>
+                                                <StatusIndicator type="warning">Protected, cannot be renamed</StatusIndicator>
                                             )}
                                             {!isProtected && !hasPermission && (
-                                                <Box fontSize="body-s" color="text-status-error" margin={{top: 'xxxs'}}>
-                                                    ❌ Permission denied
-                                                </Box>
+                                                <StatusIndicator type="error">Permission denied</StatusIndicator>
                                             )}
                                         </Box>
                                     )
@@ -1084,7 +1084,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                             },
                             {
                                 id: 'new',
-                                header: 'New Name',
+                                header: 'New name',
                                 cell: (item: FileBrowserEntry) => {
                                     const filePath = this.getFilePath(item)
                                     const permissionInfo = filePermissions.get(filePath)
@@ -1100,7 +1100,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                             <Input
                                                 value={renameValues[item.id] || item.name}
                                                 onChange={(e) => updateRenameValue(item.id, e.detail.value)}
-                                                placeholder={isDisabled ? "Cannot rename" : "Enter new name..."}
+                                                placeholder={isDisabled ? "Cannot rename" : "New name"}
                                                 disabled={isDisabled}
                                                 invalid={hasError}
                                             />
@@ -1178,7 +1178,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return (
             <IdeaConfirm
                 ref={this.deleteFileConfirmModal}
-                title={"Delete File(s)"}
+                title={"Delete files"}
                 onCancel={() => {
                     this.setState({
                         filesToDelete: [],
@@ -1202,7 +1202,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         }
                     })
                 }}>
-                <p>Are you sure you want to delete the following Files? </p>
+                <p>Delete these files? This cannot be undone.</p>
                 {this.state.filesToDelete.map((file, index) => {
                     return <li key={index}>{file.name}</li>
                 })}
@@ -1276,28 +1276,25 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         const actions: FileBrowserAction[] = [
             {id: 'open', text: 'Open', enabled: selected.length === 1, run: () => this.onOpenSelection(selected[0])},
             {id: 'download', text: 'Download files', enabled: any, run: () => this.downloadFiles(selected)},
-            {id: 'copy', text: 'Copy selection', enabled: any, run: () => this.copyPath(selected[0])},
+            {id: 'copy', text: 'Copy path', enabled: any, run: () => this.copyPath(selected[0])},
             {id: 'rename', text: 'Rename', enabled: any, run: () => this.checkRenamePermissions(selected)},
-            {id: 'delete', text: 'Delete files', enabled: any && selected.every(file => !file.isDir), run: () => this.deleteFiles(selected)},
-            {id: 'delete-folder', text: 'Delete folder', enabled: selected.length === 1 && !!selected[0].isDir,
-                run: () => this.setState({folderToDelete: {path: this.getFilePath(selected[0]), name: selected[0].name!}})},
-            {id: 'favorite', text: 'Favorite', enabled: any, run: () => selected.forEach((file) => this.addFavorite(file))},
-            {id: 'tail', text: 'Tail File', enabled: any, run: () => this.tailFile(selected[0])},
-            {
-                id: 'workbench',
-                text: 'Open in Script Workbench',
-                enabled: any,
-                run: () => this.openFileInScriptWorkbench(selected[0])
-            }
+            {id: 'favorite', text: 'Add to favorites', enabled: any, run: () => selected.forEach((file) => this.addFavorite(file))}
         ]
         if (this.isSchedulerDeployed()) {
             actions.push({
                 id: 'submit-job',
-                text: 'Submit Job',
+                text: 'Submit job',
                 enabled: any,
                 run: () => this.props.navigate(`/soca/jobs/submit-job?input_file=${this.getCwd()}/${selected[0].name}`)
             })
         }
+        actions.push(
+            {id: 'tail', text: 'Tail file', enabled: any, run: () => this.tailFile(selected[0])},
+            {id: 'workbench', text: 'Open in script editor', enabled: any, run: () => this.openFileInScriptWorkbench(selected[0])},
+            {id: 'delete', text: 'Delete files', enabled: any && selected.every(file => !file.isDir), run: () => this.deleteFiles(selected)},
+            {id: 'delete-folder', text: 'Delete folder', enabled: selected.length === 1 && !!selected[0].isDir,
+                run: () => this.setState({folderToDelete: {path: this.getFilePath(selected[0]), name: selected[0].name!}})}
+        )
         return actions
     }
 
@@ -1308,7 +1305,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             {id: 'open', text: 'Open', enabled: selected.length === 1, run: () => this.onOpenFavorite(selected[0])},
             {
                 id: 'remove-favorite',
-                text: 'Remove Favorite',
+                text: 'Remove from favorites',
                 enabled: any,
                 run: () => selected.forEach((file) => this.removeFavorite(file))
             }
@@ -1316,7 +1313,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         if (this.isSchedulerDeployed()) {
             actions.push({
                 id: 'submit-job',
-                text: 'Submit Job',
+                text: 'Submit job',
                 enabled: any,
                 run: () => this.props.navigate(`/soca/jobs/submit-job?input_location=${selected[0].path}`)
             })
@@ -1331,18 +1328,20 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return items.concat(extra)
     }
 
-    buildDropdown(actions: FileBrowserAction[], ids: string[]) {
-        const items: ButtonDropdownProps.Item[] = []
-        ids.forEach((id) => {
-            const action = actions.find((candidate) => candidate.id === id)
-            if (action != null) {
-                items.push({id: action.id, text: action.text, disabled: !action.enabled})
-            }
-        })
+    /** Every action in one menu, disabled until the selection allows it, plus any view options. */
+    buildDropdown(actions: FileBrowserAction[], extra: ButtonDropdownProps.ItemOrGroup[] = [], onExtraClick?: (id: string) => void) {
+        const items: ButtonDropdownProps.ItemOrGroup[] = actions.map((action) => ({id: action.id, text: action.text, disabled: !action.enabled}))
         return (
             <ButtonDropdown
-                items={items}
-                onItemClick={(event) => actions.find((action) => action.id === event.detail.id)?.run()}
+                items={items.concat(extra)}
+                onItemClick={(event) => {
+                    const action = actions.find((candidate) => candidate.id === event.detail.id)
+                    if (action != null) {
+                        action.run()
+                    } else {
+                        onExtraClick?.(event.detail.id)
+                    }
+                }}
             >
                 Actions
             </ButtonDropdown>
@@ -1353,6 +1352,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return (
             <FileBrowserPath
                 path={this.getCwd()}
+                home={this.state.homeDir}
                 onNavigate={(path) => this.listFiles(path).finally()}
                 onSubmitPath={(path) => this.navigateToTypedPath(path)}
             />
@@ -1360,31 +1360,16 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     }
 
     buildFilesToolbar(actions: FileBrowserAction[]) {
-        const action = (id: string) => actions.find((candidate) => candidate.id === id)
-        const favorite = action('favorite')!
-        const rename = action('rename')!
-        const submitJob = action('submit-job')
+        const viewOptions: ButtonDropdownProps.ItemOrGroup[] = [{
+            text: 'View',
+            items: [{id: 'toggle-hidden', itemType: 'checkbox', checked: this.state.showHiddenFiles, text: 'Show hidden files'}]
+        }]
         return (
             <SpaceBetween size="xs" direction="horizontal">
-                <Button iconName="refresh" onClick={() => this.listFiles(this.getCwd()).finally()}>Refresh</Button>
-                <Button disabled={!favorite.enabled} onClick={() => favorite.run()}>Favorite</Button>
-                <Button disabled={!rename.enabled} onClick={() => rename.run()}>Rename</Button>
-                {submitJob != null && <Button disabled={!submitJob.enabled} onClick={() => submitJob.run()}>Submit Job</Button>}
-                {this.buildDropdown(actions, ['open', 'download', 'copy', 'delete', 'delete-folder', 'tail', 'workbench'])}
+                <Button variant="icon" iconName="refresh" ariaLabel="Refresh" onClick={() => this.listFiles(this.getCwd()).finally()}/>
+                {this.buildDropdown(actions, viewOptions, () => this.setState({showHiddenFiles: !this.state.showHiddenFiles}))}
                 <Button onClick={() => this.getCreateFolderForm().showModal()}>Create folder</Button>
                 <Button variant="primary" onClick={() => this.showUploadModal()}>Upload files</Button>
-                <ButtonDropdown
-                    variant="icon"
-                    ariaLabel="View options"
-                    items={[
-                        {
-                            id: 'toggle-hidden',
-                            text: 'Show hidden files',
-                            iconName: this.state.showHiddenFiles ? 'check' : undefined
-                        }
-                    ]}
-                    onItemClick={() => this.setState({showHiddenFiles: !this.state.showHiddenFiles})}
-                />
             </SpaceBetween>
         )
     }
@@ -1443,10 +1428,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                             tabs={[
                                 {
                                     id: 'files',
-                                    label: 'My Files',
+                                    label: 'My files',
                                     content: (
                                         <FileBrowserTable
-                                            title="My Files"
+                                            title="My files"
                                             entries={this.state.files}
                                             selectedEntries={this.state.selectedFiles}
                                             onSelectionChange={(entries) => this.setState({selectedFiles: entries})}
@@ -1478,13 +1463,13 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                             onOpen={(entry) => this.onOpenFavorite(entry)}
                                             onContextMenu={(entry) => this.selectForContextMenu(entry, 'favorites')}
                                             menuItems={this.buildMenuItems(favoritesActions)}
-                                            actions={this.buildDropdown(favoritesActions, ['open', 'remove-favorite', 'submit-job'])}
+                                            actions={this.buildDropdown(favoritesActions)}
                                         />
                                     )
                                 },
                                 {
                                     id: 'file-transfer',
-                                    label: 'File Transfer',
+                                    label: 'File transfer',
                                     disabled: !this.state.sshAccess,
                                     content: (
                                         <SpaceBetween size={"s"}>
@@ -1494,12 +1479,12 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                        items={[
                                                            {
                                                                label: 'FileZilla',
-                                                               description: 'Available for download on Windows, MacOS and Linux',
+                                                               description: 'Available for Windows, macOS and Linux',
                                                                value: 'file-zilla'
                                                            },
                                                            {
                                                                label: 'WinSCP',
-                                                               description: 'Available for download on Windows Only',
+                                                               description: 'Available for Windows only',
                                                                value: 'winscp'
                                                            },
                                                            {
@@ -1522,7 +1507,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <h4>Step 1: Download FileZilla</h4>
                                                         <ul>
                                                             <li>
-                                                                <Link external={true} href={"https://filezilla-project.org/download.php?platform=osx"}>Download FileZilla (MacOS)</Link>
+                                                                <Link external={true} href={"https://filezilla-project.org/download.php?platform=osx"}>Download FileZilla (macOS)</Link>
                                                             </li>
                                                             <li>
                                                                 <Link external={true} href={"https://filezilla-project.org/download.php?platform=win64"}>Download FileZilla (Windows)</Link>
@@ -1533,10 +1518,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         </ul>
                                                     </Box>
                                                     <Box>
-                                                        <h4>Step 2: Download Key File</h4>
+                                                        <h4>Step 2: Download key file</h4>
                                                         <SpaceBetween size={"l"} direction={"horizontal"}>
-                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.pem] (MacOS / Linux)</Button>
-                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('ppk')} loading={this.state.downloadPpkLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.ppk] (Windows)</Button>
+                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download key file (.pem, macOS and Linux)</Button>
+                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('ppk')} loading={this.state.downloadPpkLoading}><FontAwesomeIcon icon={faDownload}/> Download key file (.ppk, Windows)</Button>
                                                         </SpaceBetween>
                                                     </Box>
                                                     <Box>
@@ -1555,7 +1540,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <p><b>Save</b> the settings and click <b>Connect</b></p>
                                                     </Box>
                                                     <Box>
-                                                        <h4>Step 4: Connect and transfer file to FileZilla</h4>
+                                                        <h4>Step 4: Connect and transfer files</h4>
                                                         <p>During your first connection, you will be asked whether or not you want to trust {this.state.sshHostIp}. Check "Always Trust this Host" and Click "Ok".</p>
                                                         <p>Once connected, simply drag & drop to upload/download files.</p>
                                                     </Box>
@@ -1579,10 +1564,10 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         </ul>
                                                     </Box>
                                                     <Box>
-                                                        <h4>Step 2: Download Key File</h4>
+                                                        <h4>Step 2: Download key file</h4>
                                                         <SpaceBetween size={"l"} direction={"horizontal"}>
-                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.pem] (MacOS / Linux)</Button>
-                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('ppk')} loading={this.state.downloadPpkLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.ppk] (Windows)</Button>
+                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download key file (.pem, macOS and Linux)</Button>
+                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('ppk')} loading={this.state.downloadPpkLoading}><FontAwesomeIcon icon={faDownload}/> Download key file (.ppk, Windows)</Button>
                                                         </SpaceBetween>
                                                     </Box>
                                                     <Box>
@@ -1603,7 +1588,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <p><b>Save</b> the settings and click <b>Connect</b></p>
                                                     </Box>
                                                     <Box>
-                                                        <h4>Step 4: Connect and transfer file to WinSCP</h4>
+                                                        <h4>Step 4: Connect and transfer files</h4>
                                                         <p>During your first connection, you will be asked whether or not you want to trust {this.state.sshHostIp}. Check "Always Trust this Host" and Click "Ok".</p>
                                                         <p>Once connected, simply drag & drop to upload/download files.</p>
                                                     </Box>
@@ -1631,7 +1616,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                             <li>In the <b>Review and create</b> section click <b>Create server</b></li>
                                                         </ul>
 
-                                                        <h4>Step 2: Create IAM role for your AWS Transfer Users</h4>
+                                                        <h4>Step 2: Create an IAM role for your AWS Transfer users</h4>
                                                         <ul>
                                                             <li>Open AWS Console and navigate to the service named <b>IAM</b> then click <b>Roles</b> on the left sidebar and finally click <b>Create Role</b></li>
                                                             <li>Select <b>AWS Service</b> as Trusted Entity Type and select <b>Transfer</b> as Use Case</li>
@@ -1639,17 +1624,17 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                             <li>Select a Role name (for example <b>TransferEFSClient</b> and save it</li>
                                                         </ul>
 
-                                                        <h4>Step 3: Download PEM Key File (Public)</h4>
+                                                        <h4>Step 3: Get your public key</h4>
                                                         <ul>
                                                             <li>Download your <b>public</b> SSH key. You can retrieve it under <b>$HOME/.ssh/id_rsa.pub</b></li>
                                                         </ul>
 
-                                                        <h4>Step 4: Download your PEM key File (Private)</h4>
+                                                        <h4>Step 4: Download your private key file</h4>
                                                         <SpaceBetween size={"l"} direction={"horizontal"}>
-                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download Key File [*.pem] (MacOS / Linux)</Button>
+                                                            <Button variant={"normal"} onClick={() => this.onDownloadPrivateKey('pem')} loading={this.state.downloadPemLoading}><FontAwesomeIcon icon={faDownload}/> Download key file (.pem, macOS and Linux)</Button>
                                                         </SpaceBetween>
 
-                                                        <h4>Step 5: Register your AWS Transfer Users</h4>
+                                                        <h4>Step 5: Register your AWS Transfer user</h4>
                                                         <Alert onDismiss={() => false}
                                                                dismissAriaLabel="Close alert"
                                                                header="User Information">

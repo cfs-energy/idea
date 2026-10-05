@@ -2,7 +2,7 @@
  * Synthesis harness shared by the constraint tests.
  *
  * `synthEcs` builds the ECS stack from synthetic settings only: it is the shared capacity and
- * nothing else. `synthModuleStack` builds a host-module stack from the captured dev27 replay
+ * nothing else. `synthModuleStack` builds a host-module stack from the captured demo1 replay
  * fixtures, with and without the container flag, so a test can compare the two templates. The
  * three `synth*WithEcs` helpers are the module stacks with the flag on, which is where the five
  * application services are built.
@@ -29,7 +29,7 @@ import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "./ecs-settings.ts";
 export type Json = Record<string, any>;
 
 export const PKG = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const FIXTURES = join(PKG, "tools", "parity", "fixtures", "idea-dev27");
+export const FIXTURES = join(PKG, "tools", "parity", "fixtures", "idea-demo1");
 export const CONFIG_FILE = join(FIXTURES, "cluster-settings.json");
 export const SYNTH_READS_FILE = join(FIXTURES, "synth-reads.json");
 export const CONTEXT_FILE = join(FIXTURES, "cdk.context.json");
@@ -38,11 +38,11 @@ export const ACCOUNT = "123456789012";
 export const ECS_CLUSTER = "idea-test1";
 export const REGION = "us-east-2";
 export const ECS_MODULE_ID = "ecs";
-export const FIXTURE_CLUSTER = "idea-dev27";
+export const FIXTURE_CLUSTER = "idea-demo1";
 const DEPLOYMENT_ID = "97999f4c-daaa-4813-b8ac-bd7abaedc26b";
 
 /** The capacity provider name the gateway service fixture runs its task on. */
-export const ECS_CAPACITY_PROVIDER = "idea-dev27-ecs-capacity-provider";
+export const ECS_CAPACITY_PROVIDER = "idea-demo1-ecs-capacity-provider";
 /** The processor architecture the container stack publishes for its hosts. */
 export const ECS_CPU_ARCHITECTURE = "ARM64";
 /** Sizing of the gateway task, matching the values the ECS settings template carries. */
@@ -228,7 +228,7 @@ export const ECS_SHARED_CAPACITY: Record<string, Attribute> = {
   ),
 };
 
-/** Copies the dev27 settings scan with the named rows set to typed attribute values. */
+/** Copies the demo1 settings scan with the named rows set to typed attribute values. */
 function configWith(overrides: Record<string, Attribute>): string {
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
@@ -245,7 +245,7 @@ function configWith(overrides: Record<string, Attribute>): string {
 }
 
 /**
- * Synthesizes one host-module stack from the dev27 fixtures. `overrides` sets
+ * Synthesizes one host-module stack from the demo1 fixtures. `overrides` sets
  * settings rows, which is how the container flag and its inputs are supplied.
  */
 export async function synthModuleStack(input: {
@@ -331,9 +331,9 @@ export async function synthVdcWithEcs(overrides: Record<string, Attribute> = {})
  * to the rule fails here rather than being recomputed by the test.
  */
 export const TARGET_GROUP_HASH: Readonly<Record<"cluster-manager" | "scheduler" | "vdc", string>> = {
-  "cluster-manager": "76c95e5f",
-  scheduler: "79a59eed",
-  vdc: "e8356b3f",
+  "cluster-manager": "4a757a6e",
+  scheduler: "f9e4dd3a",
+  vdc: "80993306",
 };
 
 /**

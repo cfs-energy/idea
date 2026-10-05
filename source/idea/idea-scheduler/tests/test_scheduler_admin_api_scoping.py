@@ -110,3 +110,27 @@ def test_admin_delete_records_reason_before_deleting():
     )
     assert record in calls
     assert calls.index(record) < calls.index(call.scheduler.delete_job('42'))
+
+
+@pytest.mark.parametrize('administrator', [False, True])
+def test_only_an_administrator_can_force_a_rebake(administrator):
+    from ideadatamodel import RefreshImagesRequest
+
+    context = Mock()
+    context.module_id.return_value = 'scheduler'
+    api = SchedulerAdminAPI(context=context)
+    api._compute_images = Mock()
+    api._compute_images.refresh_images.return_value = []
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = RefreshImagesRequest(
+        all=True, force=True
+    )
+    invocation.is_administrator.return_value = administrator
+    if administrator:
+        api.refresh_images(invocation)
+        assert api._compute_images.refresh_images.call_args.args[0].force is True
+    else:
+        with pytest.raises(exceptions.SocaException) as exc_info:
+            api.refresh_images(invocation)
+        assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+        api._compute_images.refresh_images.assert_not_called()

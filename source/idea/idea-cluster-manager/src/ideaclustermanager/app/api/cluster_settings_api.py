@@ -91,6 +91,8 @@ USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
         'apps.mount_dir',
     ],
     constants.MODULE_BASTION_HOST: [
+        # a dns name users can resolve, set by the administrator (ideactl config set)
+        'ssh_hostname',
         'public',
         'public_ip',
         'private_ip',

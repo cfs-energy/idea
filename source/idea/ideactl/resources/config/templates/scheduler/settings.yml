@@ -86,6 +86,15 @@ cost_estimation:
   provisioned_iops: 0.065 # IOPS per month
   fsx_lustre: 0.000194 # GB per hour
 
+# compute image pipeline. the schedule, ready gate and validation identity come from
+# virtual-desktop-controller.software_stacks.*; clusters without these keys use the same defaults
+images:
+  max_concurrent_bakes: 4
+  keep_generations: 2 # current + previous validated
+  # builder images the pipeline did not bake (older releases, manual builds) are removed once
+  # this many days old and nothing references them; 0 keeps them
+  legacy_cleanup_min_age_days: 30
+
 job_provisioning:
   # Determine if AWS Service Quotas should be used:
   # True (default) - query AWS service quotas API to make sure an incoming job can be deployed.

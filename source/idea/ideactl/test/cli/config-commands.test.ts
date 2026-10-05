@@ -281,10 +281,10 @@ function valuesFileFor(name: string): string {
 // generate and update, driven by the dev cluster fixture when it is present
 // -------------------------------------------------------------------------------------------
 
-const DEV27_VALUES = new URL('../../tools/parity/fixtures/idea-dev27/values.yml', import.meta.url).pathname;
+const DEMO1_VALUES = new URL('../../tools/parity/fixtures/idea-demo1/values.yml', import.meta.url).pathname;
 requireCapture(
-  [DEV27_VALUES],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
+  [DEMO1_VALUES],
+  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1",
 );
 
 describe('config generate', () => {
@@ -324,7 +324,7 @@ describe('config generate', () => {
     const deps = fakeDeps();
     // The captured file is an existing cluster's own values, which predates the container
     // control plane, so this is the regenerate path rather than a new install.
-    const values = await configGenerate(deps, { valuesFile: DEV27_VALUES, configDir, force: true, regenerate: true });
+    const values = await configGenerate(deps, { valuesFile: DEMO1_VALUES, configDir, force: true, regenerate: true });
     assert.equal(typeof values['cluster_name'], 'string');
     assert.ok(existsSync(join(configDir, 'values.yml')));
     assert.ok(existsSync(join(configDir, 'config', 'idea.yml')));

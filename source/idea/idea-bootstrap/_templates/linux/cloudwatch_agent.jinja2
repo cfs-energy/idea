@@ -49,7 +49,8 @@ else
   CLOUDWATCH_AGENT_DOWNLOAD_LINK="$(get_cloudwatch_agent_download_link)"
   CLOUDWATCH_AGENT_PACKAGE_NAME="$(basename ${CLOUDWATCH_AGENT_DOWNLOAD_LINK})"
   pushd ${CLOUDWATCH_AGENT_BOOTSTRAP_DIR} || exit
-  wget "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
+  # curl, not wget: desktop hosts run this before system packages, and stock images may lack wget
+  curl -fsSLO "${CLOUDWATCH_AGENT_DOWNLOAD_LINK}"
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   rpm -U ./${CLOUDWATCH_AGENT_PACKAGE_NAME}

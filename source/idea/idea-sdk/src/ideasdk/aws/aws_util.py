@@ -50,6 +50,15 @@ INVALID_INSTANCE_PROFILE_CACHE_TTL_SECS = 60
 INVALID_S3_BUCKET_HAS_ACCESS_TTL_SECS = 60
 CLOUD_FORMATION_STACK_TTL_SECS = 60
 UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS = 60
+# EC2 answers these when the AMI does not exist or is not shared with this account,
+# the only describe failures that mean a launch from it can never succeed.
+MISSING_IMAGE_ERROR_CODES = (
+    'InvalidAMIID.NotFound',
+    'InvalidAMIID.Unavailable',
+    'InvalidAMIID.Malformed',
+)
+# cached in place of an architecture for an AMI EC2 says does not exist
+MISSING_IMAGE = 'missing'
 COST_EXPLORER_CACHE_TTL_SECS = 6 * 60 * 60
 # cached in place of an answer, so a cost explorer that cannot be read is not asked
 # again on every project read. any request to it is billed.
@@ -282,18 +291,31 @@ class AWSUtil(AWSUtilProtocol):
         cache_key = f'aws.ec2.image.{image_id}.architecture'
         architecture = self._context.cache().long_term().get(key=cache_key)
         if architecture is not None:
-            return architecture if architecture != '' else None
+            return architecture if architecture not in ('', MISSING_IMAGE) else None
 
         try:
             describe_result = self.aws().ec2().describe_images(ImageIds=[image_id])
             images = Utils.get_value_as_list('Images', describe_result, [])
             if len(images) > 0:
                 architecture = Utils.get_value_as_string('Architecture', images[0])
+            else:
+                architecture = MISSING_IMAGE
         except botocore.exceptions.ClientError as e:
             self._logger.debug(
                 f'could not describe image: {image_id} to resolve architecture - {e}'
             )
-            architecture = None
+            if e.response.get('Error', {}).get('Code') in MISSING_IMAGE_ERROR_CODES:
+                architecture = MISSING_IMAGE
+            else:
+                architecture = None
+
+        if architecture == MISSING_IMAGE:
+            self._context.cache().long_term().set(
+                key=cache_key,
+                value=MISSING_IMAGE,
+                ttl=UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS,
+            )
+            return None
 
         if Utils.is_empty(architecture):
             self._context.cache().long_term().set(
@@ -303,6 +325,97 @@ class AWSUtil(AWSUtilProtocol):
 
         self._context.cache().long_term().set(key=cache_key, value=architecture)
         return architecture
+
+    def get_image_dates(self, image_id: str) -> Optional[Dict[str, str]]:
+        """
+        CreationDate and DeprecationTime (when set) of an AMI as EC2 reports them, ISO 8601.
+        None when the AMI cannot be described.
+        """
+        if Utils.is_empty(image_id):
+            return None
+        cache_key = f'aws.ec2.image.{image_id}.dates'
+        dates = self._context.cache().long_term().get(key=cache_key)
+        if dates is not None:
+            return dates or None
+        try:
+            images = Utils.get_value_as_list(
+                'Images',
+                self.aws()
+                .ec2()
+                .describe_images(ImageIds=[image_id], IncludeDeprecated=True),
+                [],
+            )
+        except botocore.exceptions.ClientError as e:
+            self._logger.debug(f'could not describe image: {image_id} - {e}')
+            images = []
+        if len(images) == 0:
+            self._context.cache().long_term().set(
+                key=cache_key, value={}, ttl=UNKNOWN_IMAGE_ARCHITECTURE_TTL_SECS
+            )
+            return None
+        dates = {
+            'created': Utils.get_value_as_string('CreationDate', images[0]),
+            'deprecated': Utils.get_value_as_string('DeprecationTime', images[0]),
+        }
+        self._context.cache().long_term().set(key=cache_key, value=dates)
+        return dates
+
+    def get_subnet_availability_zone(self, subnet_id: str) -> Optional[str]:
+        """the availability zone of a subnet, None when it cannot be described"""
+        cache_key = f'aws.ec2.subnet.{subnet_id}.az'
+        zone = self._context.cache().long_term().get(key=cache_key)
+        if zone is not None:
+            return zone
+        try:
+            subnets = (
+                self.aws().ec2().describe_subnets(SubnetIds=[subnet_id])['Subnets']
+            )
+            zone = subnets[0]['AvailabilityZone'] if subnets else None
+        except Exception as e:  # noqa
+            self._logger.debug(f'could not describe subnet: {subnet_id} - {e}')
+            return None
+        if zone:
+            self._context.cache().long_term().set(key=cache_key, value=zone)
+        return zone
+
+    def get_instance_types_offered(self, availability_zone: str) -> Optional[Set[str]]:
+        """instance types EC2 offers in an availability zone, None when it cannot be read"""
+        cache_key = f'aws.ec2.offerings.{availability_zone}'
+        offered = self._context.cache().long_term().get(key=cache_key)
+        if offered is not None:
+            return set(offered)
+        try:
+            offered = set()
+            request = {
+                'LocationType': 'availability-zone',
+                'Filters': [{'Name': 'location', 'Values': [availability_zone]}],
+            }
+            while True:
+                page = self.aws().ec2().describe_instance_type_offerings(**request)
+                offered.update(
+                    o['InstanceType'] for o in page.get('InstanceTypeOfferings', [])
+                )
+                if not page.get('NextToken'):
+                    break
+                request['NextToken'] = page['NextToken']
+        except Exception as e:  # noqa
+            self._logger.debug(
+                f'could not read instance type offerings in {availability_zone} - {e}'
+            )
+            return None
+        self._context.cache().long_term().set(key=cache_key, value=sorted(offered))
+        return offered
+
+    def is_image_missing(self, image_id: str) -> bool:
+        """
+        True only when EC2 says the AMI does not exist or is not visible to this account.
+        any other describe failure is an unknown, and returns False.
+        """
+        if Utils.is_empty(image_id):
+            return False
+        self.get_image_architecture(image_id=image_id)
+        cache_key = f'aws.ec2.image.{image_id}.architecture'
+        return self._context.cache().long_term().get(key=cache_key) == MISSING_IMAGE
 
     def get_instance_efa_max_interfaces_supported(self, instance_type: str) -> int:
         ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)

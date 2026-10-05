@@ -14,13 +14,13 @@ Administrators have one collapsible **Administration** section. It groups tasks 
 | My jobs | Active, Completed |
 | Manage desktops | Overview, Sessions, Diagnostics |
 | Manage jobs | Active, Completed, Queues, Licenses, Nodes |
-| Images and applications | Desktop images, Custom images, Submission forms |
+| Images and applications | Desktop images, Images, Submission forms |
 | People and access | Users, Groups, Desktop permissions, Reconciliation runs |
 | Costs and usage | By user, AI |
 | Operations | Health, Desktop services, Job service |
 
 Breadcrumbs start with the destination, followed by the selected tab where applicable. Detail pages add their own final breadcrumb. **Settings** keeps a single breadcrumb and groups its content on one searchable page. See [Settings](../cluster-operations/settings.md) for the groups and save controls.
 
-Custom images builds and adopts both job and desktop images at `/soca/custom-amis`. Desktop images manages the desktop catalog and project access.
+Images, at `/soca/custom-amis`, shows the managed desktop and compute images, which switch over only after they pass validation, and the custom images you build yourself. Desktop images manages the desktop catalog and project access.
 
 For status reasons, completion dispositions, and cost details in **My jobs**, see [Job status and costs](../jobs.md).

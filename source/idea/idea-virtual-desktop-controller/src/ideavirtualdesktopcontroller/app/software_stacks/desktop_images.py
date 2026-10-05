@@ -1,13 +1,15 @@
 """
-Desktop image inventory and builds behind VirtualDesktopAdmin.ListDesktopImages and
-BuildDesktopImage. One row per ss-base-<os>-<arch>-base software stack: the AMI desktops
-launch from today, whether it is a built image or a stock one, and how the last build
-ended. A successful build repoints the base stack and reindexes it, the same thing
-ideactl build-desktop-image --update-stack does.
+Desktop image inventory and builds behind VirtualDesktopAdmin.ListDesktopImages,
+BuildDesktopImage, BuildAllDesktopImages and UseBuiltDesktopImages. One row per
+ss-base-<os>-<arch>-base software stack: the AMI desktops launch from today, whether it
+is a built image or a stock one, and how the last build ended.
+
+Since 26.10.1 the managed rows belong to the image pipeline (image_pipeline.py): build
+all queues every row there, and Use built image repoints only to a validated image.
+BuildDesktopImage is a custom (ad hoc) build: it is recorded under its own key, is never
+promoted and never repoints a stack.
 """
 
-import socket
-from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import ideavirtualdesktopcontroller
@@ -22,16 +24,18 @@ from ideadatamodel import (
     VirtualDesktopSoftwareStack,
     exceptions,
 )
+from ideadatamodel import ImageKind, RefreshImagesRequest
 from ideasdk.aws.image_builds import (
-    BUILD_STATUS_BUILDING,
-    MAX_CONCURRENT_BUILDS,
+    ImageNotValidated,
     check_builder_instance_type,
+    custom_build_architecture,
     ImageBuildRecordsDB,
     ImageBuildRunner,
     build_stamp,
     describe_images_by_id,
     image_state,
     new_record,
+    promote_gate,
 )
 from ideasdk.aws.stock_amis import find_latest_stock_ami, stock_unsupported_reason
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (
@@ -88,9 +92,26 @@ class DesktopImageService:
         self._software_stack_utils = software_stack_utils
         self._logger = context.logger('desktop-images')
         self.records = ImageBuildRecordsDB(
-            context, image_builds_table_name(context)
+            context, image_builds_table_name(context), kind=ImageKind.DESKTOP
         ).initialize()
         self.runner = ImageBuildRunner(context, self.records, self._logger)
+        self._pipeline = None
+
+    @property
+    def pipeline(self):
+        # queues only; the controller leader loop runs the bakes
+        if self._pipeline is None:
+            from ideavirtualdesktopcontroller.app.software_stacks.image_pipeline import (
+                DesktopImagePipeline,
+            )
+
+            self._pipeline = DesktopImagePipeline(
+                self.context,
+                self._software_stack_db,
+                self._software_stack_utils,
+                records=self.records,
+            )
+        return self._pipeline
 
     def _all_stacks(self) -> List[VirtualDesktopSoftwareStack]:
         request = ListSoftwareStackRequest(disabled_also=True)
@@ -168,11 +189,11 @@ class DesktopImageService:
             if record is not None:
                 record = self.runner.refresh(record)
                 row.last_build = record
-                if record.status == BUILD_STATUS_BUILDING:
+                if record.is_in_flight():
                     row.state = 'building'
                 elif (
                     row.state == 'built'
-                    and record.status == 'complete'
+                    and record.status == 'current'
                     and record.image_id == stack.ami_id
                     and record.base_ami
                     and stack.base_ami_id
@@ -188,8 +209,9 @@ class DesktopImageService:
         self, stack_ids: Optional[List[str]], requested_by: Optional[str]
     ) -> List[DesktopImageBuildStartResult]:
         """
-        point base stacks at their last completed build without rebuilding: the undo for
-        a refresh or any other repoint. only the base stack row changes.
+        point base stacks at their row's validated image without rebuilding: the undo for
+        a refresh or any other repoint. only the base stack row changes, never an
+        image_pinned one, and only to an image promote_gate accepts.
         """
         wanted = set(stack_ids) if stack_ids else None
         ec2_client = self.context.aws().ec2()
@@ -205,9 +227,27 @@ class DesktopImageService:
             )
             results.append(result)
             record = self.records.get(base_os, architecture)
-            if record is None or record.status != 'complete' or not record.image_id:
+            if record is None or not record.image_id:
                 result.status = 'skipped'
                 result.message = 'no completed build for this stack'
+                continue
+            # the validated candidate, else the row's current image; nothing unvalidated
+            chosen, refusal = None, None
+            for image_id in (record.image_id, record.current_image_id):
+                try:
+                    promote_gate(record, image_id)
+                    chosen = image_id
+                    break
+                except ImageNotValidated as e:
+                    refusal = refusal or str(e)
+            if chosen is None:
+                result.status = 'error'
+                result.message = refusal
+                continue
+            record.image_id = chosen  # this request's view only; never written back
+            if stack.image_pinned:
+                result.status = 'skipped'
+                result.message = 'the stack is pinned to its image'
                 continue
             if stack.ami_id == record.image_id:
                 result.status = 'skipped'
@@ -257,11 +297,21 @@ class DesktopImageService:
     def build(
         self, request: BuildDesktopImageRequest, requested_by: Optional[str]
     ) -> ImageBuildRecord:
+        """
+        a custom build: baked from the vendor's newest image (or request.base_ami),
+        recorded under <arch>#custom so it never touches the managed row, and never used
+        to repoint a stack: that takes a validated image from Refresh and validate
+        """
         base_os = request.base_os
         architecture = request.architecture or 'x86_64'
         if base_os not in BUILD_SUPPORTED_BASE_OS:
             raise exceptions.invalid_params(
                 f'base_os must be one of: {", ".join(BUILD_SUPPORTED_BASE_OS)}'
+            )
+        if Utils.get_as_bool(request.update_stack, False):
+            raise exceptions.invalid_params(
+                'a custom build cannot repoint a base stack: it is not validated. '
+                'use Refresh and validate on the Images page to update base stacks'
             )
         unsupported = stock_unsupported_reason(
             base_os, self.context.aws().ec2().meta.region_name
@@ -273,17 +323,14 @@ class DesktopImageService:
         if stack is None:
             raise exceptions.invalid_params(f'software stack {stack_id} does not exist')
 
-        # the base the refresh keeps current wins over a fresh resolver lookup
-        base_ami = (
-            request.base_ami
-            or stack.base_ami_id
-            or self.default_base_ami(stack, base_os, architecture)
+        # the vendor's newest base, never the stack's possibly stale base_ami_id
+        base_ami = request.base_ami or self.default_base_ami(
+            stack, base_os, architecture
         )
         if Utils.is_empty(base_ami):
             raise exceptions.invalid_params(
                 f'no stock {base_os} {architecture} image could be resolved; provide base_ami'
             )
-        update_stack = Utils.get_as_bool(request.update_stack, True)
         check_builder_instance_type(request.instance_type, architecture)
         # the builder refuses a base_ami that is not ours or the vendor's
         builder = DcvHostImageBuilder(
@@ -295,101 +342,38 @@ class DesktopImageService:
         )
         record = new_record(
             base_os=base_os,
-            architecture=architecture,
+            architecture=custom_build_architecture(architecture),
             ami_name=builder.get_ami_full_name(),
             base_ami=base_ami,
             requested_by=requested_by,
-            update_target=update_stack,
+            update_target=False,
         )
-        on_success = (
-            self._repoint(stack_id, base_os, architecture) if update_stack else None
-        )
-        return self.runner.start(record, build=builder.build, on_success=on_success)
+        return self.runner.start(record, build=builder.build)
 
     def build_all(
         self, requested_by: Optional[str]
     ) -> List[DesktopImageBuildStartResult]:
         """
-        one build per base stack, each isolated exactly like a single build. rows with a
-        build already running are skipped, so a repeated request starts nothing.
+        Refresh and validate every desktop row: queued for the pipeline, which runs
+        them in waves of max_concurrent_bakes. a row already in flight is reported, not
+        queued again, so a repeated request starts nothing.
         """
+        outcome_status = {'queued': 'started', 'in_flight': 'skipped'}
         results: List[DesktopImageBuildStartResult] = []
-        base_stacks, _ = self._supported_base_stacks()
-        in_progress = sum(
-            1
-            for existing in self.records.list_all()
-            if self.runner.refresh(existing).status == BUILD_STATUS_BUILDING
-        )
-        for stack, (base_os, architecture) in sorted(
-            base_stacks, key=lambda entry: (entry[1][0], entry[1][1])
+        for result in self.pipeline.refresh(
+            RefreshImagesRequest(all=True), requested_by
         ):
-            result = DesktopImageBuildStartResult(
-                stack_id=stack.stack_id, base_os=base_os, architecture=architecture
+            row = result.row
+            results.append(
+                DesktopImageBuildStartResult(
+                    stack_id=base_stack_id(row.base_os, row.architecture),
+                    base_os=row.base_os,
+                    architecture=row.architecture,
+                    status=outcome_status.get(result.outcome, result.outcome),
+                    message=result.message,
+                )
             )
-            results.append(result)
-            if in_progress >= MAX_CONCURRENT_BUILDS:
-                result.status = 'skipped'
-                result.message = (
-                    f'{MAX_CONCURRENT_BUILDS} builds already in progress; '
-                    f'start this one when some have finished'
-                )
-                self._note(
-                    base_os, architecture, requested_by, 'skipped', result.message
-                )
-                continue
-            try:
-                record = self.build(
-                    BuildDesktopImageRequest(
-                        base_os=base_os, architecture=architecture, update_stack=True
-                    ),
-                    requested_by=requested_by,
-                )
-                result.status = 'started'
-                result.message = record.ami_name
-                in_progress += 1
-            except exceptions.SocaException as e:
-                if 'already running' in (e.message or ''):
-                    result.status = 'skipped'
-                    result.message = e.message
-                    continue
-                result.status = 'error'
-                result.message = e.message
-                self._note(base_os, architecture, requested_by, 'failed', e.message)
-            except Exception as e:
-                self._logger.error(f'{stack.stack_id}: build could not start: {e}')
-                result.status = 'error'
-                result.message = (
-                    f'{e.__class__.__name__}: could not start, see the controller log'
-                )
-                self._note(
-                    base_os, architecture, requested_by, 'failed', result.message
-                )
         return results
-
-    def _note(
-        self,
-        base_os: str,
-        architecture: str,
-        requested_by: Optional[str],
-        status: str,
-        reason: Optional[str],
-    ):
-        """a row that build all did not start still shows why in its Last build column"""
-        existing = self.records.get(base_os, architecture)
-        if existing is not None and existing.status == BUILD_STATUS_BUILDING:
-            return
-        self.records.put(
-            ImageBuildRecord(
-                base_os=base_os,
-                architecture=architecture,
-                status=status,
-                error=reason,
-                requested_by=requested_by,
-                host=socket.gethostname(),
-                started_on=datetime.now(tz=timezone.utc),
-                finished_on=datetime.now(tz=timezone.utc),
-            )
-        )
 
     def default_base_ami(
         self, stack: VirtualDesktopSoftwareStack, base_os: str, architecture: str
@@ -408,29 +392,3 @@ class DesktopImageService:
         if image and image_state(image.get('Name'), DESKTOP_IMAGE_PREFIX) == 'stock':
             return stack.ami_id
         return None
-
-    def _repoint(self, stack_id: str, base_os: str, architecture: str):
-        def on_success(image_id: str, record: ImageBuildRecord):
-            stack = self._software_stack_db.get(stack_id=stack_id, base_os=base_os)
-            if stack is None:
-                raise exceptions.general_exception(f'{stack_id} no longer exists')
-            image = describe_images_by_id(self.context.aws().ec2(), [image_id]).get(
-                image_id
-            )
-            found = (image or {}).get('Architecture')
-            if found and found != architecture:
-                raise exceptions.general_exception(
-                    f'image {image_id} is {found}, stack {stack_id} is {architecture}; stack not repointed'
-                )
-            stack.ami_id = image_id
-            stack.base_ami_id = record.base_ami or stack.base_ami_id
-            updated = self._software_stack_db.update(stack)
-            self._software_stack_utils.update_software_stack_entry_to_opensearch(
-                updated
-            )
-            self._logger.info(
-                f'{stack_id} now points at {image_id} (built from {stack.base_ami_id}); '
-                f'index update posted'
-            )
-
-        return on_success

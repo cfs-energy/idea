@@ -56,6 +56,26 @@ describe("display layer (R1, R2, R3, R4, R5, R6, R7, R12)", () => {
     assert.deepEqual(deps.stderr, ["deployment failed. could not deploy module: cluster"]);
   });
 
+  it("names the cluster from --values-file when quick-setup finds no tables", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const values = join(mkdtempSync(join(tmpdir(), "values-")), "values.yml");
+    writeFileSync(values, `cluster_name: ${CLUSTER}\naws_region: ${REGION}\n`);
+    const missing = new Error("Requested resource not found");
+    missing.name = "ResourceNotFoundException";
+    const deps = fakeDeps();
+    deps.scan = async () => {
+      throw missing;
+    };
+    assert.equal(
+      await run(["quick-setup", "--values-file", values, "--skip-config", "--force"], deps),
+      1,
+    );
+    assert.ok(!deps.stderr.join("\n").includes("<cluster>"), deps.stderr.join("\n"));
+    assert.ok(deps.stderr.join("\n").includes(`--cluster-name ${CLUSTER}`), deps.stderr.join("\n"));
+  });
+
   it("maps a missing DynamoDB table onto the install sentence (R2)", async () => {
     const missing = new Error("Requested resource not found");
     missing.name = "ResourceNotFoundException";
@@ -258,7 +278,7 @@ describe("other throw sites (R16, R18, R19, R20)", () => {
 
   it("rejects a target group name longer than 32 characters (R18)", () => {
     assert.throws(
-      () => getTargetGroupName("idea-dev27", "cluster-manager", "a-very-long-identifier"),
+      () => getTargetGroupName("idea-demo1", "cluster-manager", "a-very-long-identifier"),
       /Target group name .+ is longer than 32 characters/,
     );
   });

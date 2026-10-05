@@ -25,8 +25,11 @@ repos:
     hooks:
       - id: forbid-crlf
       - id: remove-crlf
+      # captured vendor files (a grub.cfg) keep their tabs; the tests depend on them
       - id: forbid-tabs
+        exclude: ^source/idea/idea-sdk/tests/fixtures/
       - id: remove-tabs
+        exclude: ^source/idea/idea-sdk/tests/fixtures/
   - repo: https://github.com/sirosen/texthooks
     rev: 0.6.8
     hooks:

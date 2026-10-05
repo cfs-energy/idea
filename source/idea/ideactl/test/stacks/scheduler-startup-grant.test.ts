@@ -24,7 +24,7 @@ import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import { optionalFixtures, optionalService } from "../support/fixtures.ts";
 
 const HERE = fileURLToPath(new URL("./", import.meta.url));
-const RAW = fileURLToPath(new URL("../../tools/parity/fixtures/idea-dev27/raw/", import.meta.url));
+const RAW = fileURLToPath(new URL("../../tools/parity/fixtures/idea-demo1/raw/", import.meta.url));
 const SCAN = `${RAW}cluster-settings.scan.json`;
 const MODULES = `${RAW}modules.scan.json`;
 // The bare local tag is a convenience that a registry push can take away, because tagging the pushed
@@ -37,7 +37,7 @@ const SID = "ClusterUserSync";
 
 const haveFixtures = optionalFixtures(
   [SCAN, MODULES],
-  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-dev27/raw --out tools/parity/fixtures/idea-dev27",
+  "node tools/parity/capture.ts --from-raw tools/parity/fixtures/idea-demo1/raw --out tools/parity/fixtures/idea-demo1",
 );
 
 function haveImage(): boolean {
@@ -99,7 +99,7 @@ describe("the account-table grant the container user sync needs", () => {
     assert.deepEqual(asList(statement.Action), ["dynamodb:Scan"]);
     assert.deepEqual(
       asList(statement.Resource).map((arn) => arn.split(":table/")[1]),
-      ["idea-dev27.accounts.users", "idea-dev27.accounts.groups", "idea-dev27.accounts.group-members"],
+      ["idea-demo1.accounts.users", "idea-demo1.accounts.groups", "idea-demo1.accounts.group-members"],
     );
   });
 
@@ -124,7 +124,7 @@ describe("the account-table grant the container user sync needs", () => {
             AWS_ACCOUNT_ID: account,
             AWS_REGION_NAME: "us-east-2",
             DOCKER_CONTEXT: CONTEXT,
-            IDEA_CLUSTER_NAME: "idea-dev27",
+            IDEA_CLUSTER_NAME: "idea-demo1",
             IDEA_IMAGE: IMAGE,
           },
           timeout: 20 * 60 * 1_000,

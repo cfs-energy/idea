@@ -50,14 +50,14 @@ describe("customTagsToKeyValuePairs", () => {
 });
 
 describe("bootstrapTags", () => {
-  it("is idea:ClusterName plus the custom tags, dev27 has none", () => {
-    assert.deepEqual(bootstrapTags("idea-dev27", []), new Map([[IDEA_TAG_CLUSTER_NAME, "idea-dev27"]]));
+  it("is idea:ClusterName plus the custom tags, demo1 has none", () => {
+    assert.deepEqual(bootstrapTags("idea-demo1", []), new Map([[IDEA_TAG_CLUSTER_NAME, "idea-demo1"]]));
   });
 
   it("idea:ClusterName wins if a custom tag reuses the key (merge order in cdk_invoker.py:546)", () => {
     assert.deepEqual(
-      bootstrapTags("idea-dev27", ["Key=idea:ClusterName,Value=bogus"]),
-      new Map([[IDEA_TAG_CLUSTER_NAME, "idea-dev27"]]),
+      bootstrapTags("idea-demo1", ["Key=idea:ClusterName,Value=bogus"]),
+      new Map([[IDEA_TAG_CLUSTER_NAME, "idea-demo1"]]),
     );
   });
 
@@ -86,41 +86,41 @@ describe("bootstrapTags", () => {
 });
 
 describe("buildBootstrapArgv", () => {
-  // dev27 inputs use default termination protection and public-access blocking.
-  const qualifier = shake256Hex("idea-dev27", 5);
+  // demo1 inputs use default termination protection and public-access blocking.
+  const qualifier = shake256Hex("idea-demo1", 5);
 
-  it("matches CdkInvoker.bootstrap_cluster for dev27-shaped inputs", () => {
+  it("matches CdkInvoker.bootstrap_cluster for demo1-shaped inputs", () => {
     const argv = buildBootstrapArgv({
       cdkBin: "cdk",
-      cdkAppCmd: "idea-admin cdk cdk-app --cluster-name idea-dev27 --aws-region us-east-2 --module-id bootstrap --module-name bootstrap --deployment-id 700f4b2c-110b-4395-a208-b13874d20ec5 --termination-protection true",
-      clusterName: "idea-dev27",
-      clusterBucket: "idea-dev27-cluster-us-east-2-123456789012",
+      cdkAppCmd: "idea-admin cdk cdk-app --cluster-name idea-demo1 --aws-region us-east-2 --module-id bootstrap --module-name bootstrap --deployment-id 700f4b2c-110b-4395-a208-b13874d20ec5 --termination-protection true",
+      clusterName: "idea-demo1",
+      clusterBucket: "idea-demo1-cluster-us-east-2-123456789012",
       terminationProtection: true,
       qualifier,
-      templatePath: "/home/example/.idea/clusters/idea-dev27/us-east-2/_cdk/cdk_toolkit_stack.yml",
-      tags: bootstrapTags("idea-dev27", []),
+      templatePath: "/home/example/.idea/clusters/idea-demo1/us-east-2/_cdk/cdk_toolkit_stack.yml",
+      tags: bootstrapTags("idea-demo1", []),
     });
 
-    assert.equal(qualifier, "6f3b37a775");
+    assert.equal(qualifier, "d98389644e");
     assert.deepEqual(argv, [
       "cdk",
       "bootstrap",
       "--app",
-      "idea-admin cdk cdk-app --cluster-name idea-dev27 --aws-region us-east-2 --module-id bootstrap --module-name bootstrap --deployment-id 700f4b2c-110b-4395-a208-b13874d20ec5 --termination-protection true",
+      "idea-admin cdk cdk-app --cluster-name idea-demo1 --aws-region us-east-2 --module-id bootstrap --module-name bootstrap --deployment-id 700f4b2c-110b-4395-a208-b13874d20ec5 --termination-protection true",
       "--bootstrap-bucket-name",
-      "idea-dev27-cluster-us-east-2-123456789012",
+      "idea-demo1-cluster-us-east-2-123456789012",
       "--toolkit-stack-name",
-      "idea-dev27-bootstrap",
+      "idea-demo1-bootstrap",
       "--termination-protection",
       "true",
       "--qualifier",
-      "6f3b37a775",
+      "d98389644e",
       "--template",
-      "/home/example/.idea/clusters/idea-dev27/us-east-2/_cdk/cdk_toolkit_stack.yml",
+      "/home/example/.idea/clusters/idea-demo1/us-east-2/_cdk/cdk_toolkit_stack.yml",
       "--public-access-block-configuration",
       "true",
       "--tags",
-      "idea:ClusterName=idea-dev27",
+      "idea:ClusterName=idea-demo1",
     ]);
   });
 
@@ -128,7 +128,7 @@ describe("buildBootstrapArgv", () => {
     const argv = buildBootstrapArgv({
       cdkBin: "cdk",
       cdkAppCmd: "idea-admin cdk cdk-app ...",
-      clusterName: "idea-dev27",
+      clusterName: "idea-demo1",
       clusterBucket: "bucket",
       terminationProtection: true,
       qualifier: "abc",
@@ -190,6 +190,6 @@ describe("buildBootstrapArgv", () => {
   });
 
   it("bootstrapStackName is \"<cluster>-bootstrap\"", () => {
-    assert.equal(bootstrapStackName("idea-dev27"), "idea-dev27-bootstrap");
+    assert.equal(bootstrapStackName("idea-demo1"), "idea-demo1-bootstrap");
   });
 });

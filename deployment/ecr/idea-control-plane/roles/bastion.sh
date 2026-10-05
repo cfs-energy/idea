@@ -41,6 +41,15 @@ Host *
     UserKnownHostsFile /dev/null
 EOF
 if [[ -n "${IDEA_PBS_SERVER:-}" ]]; then
+  # job ids end in the server's short name (eg. 1.scheduler) and qdel / qstat resolve that
+  # suffix, so search the cluster's private zone as the host bootstrap does
+  PRIVATE_ZONE="${IDEA_PBS_SERVER#*.}"
+  if [[ "${PRIVATE_ZONE}" != "${IDEA_PBS_SERVER}" ]] && ! grep -q "^search .*${PRIVATE_ZONE}" /etc/resolv.conf; then
+    # rewritten in place: the runtime bind-mounts resolv.conf, so sed -i cannot rename over it
+    RESOLV="$(cat /etc/resolv.conf)"
+    SEARCH="$(grep -m1 '^search ' <<< "${RESOLV}" | cut -d' ' -f2-)"
+    { grep -v '^search ' <<< "${RESOLV}"; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
+  fi
   cat > /etc/pbs.conf <<EOF
 PBS_SERVER=${IDEA_PBS_SERVER}
 PBS_START_SERVER=0

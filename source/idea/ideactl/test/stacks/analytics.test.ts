@@ -1,5 +1,5 @@
 /**
- * W5c: `constructs/analytics.ts` (the `OpenSearch` domain) against the live dev27 `analytics`
+ * W5c: `constructs/analytics.ts` (the `OpenSearch` domain) against the live demo1 `analytics`
  * template, including the two L2-generated custom resources the analytics stack inherits from it
  * against the live templates.
  */
@@ -167,7 +167,7 @@ describe('OpenSearch domain', () => {
     assert.equal(role.Properties.Description, 'Role for ES to access resources in the VPC');
     assert.equal(
       role.Metadata['aws:cdk:path'],
-      `idea-dev27-analytics/analytics/${CLUSTER}-es-service-linked-role`,
+      `idea-demo1-analytics/analytics/${CLUSTER}-es-service-linked-role`,
     );
     assert.ok((resources[DOMAIN].DependsOn as string[]).includes(logicalId));
   });

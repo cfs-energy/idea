@@ -67,7 +67,19 @@ import {
     BuildAllDesktopImagesRequest,
     BuildAllDesktopImagesResponse,
     UseBuiltDesktopImagesRequest,
-    UseBuiltDesktopImagesResponse
+    UseBuiltDesktopImagesResponse,
+    ListImageRowsRequest,
+    ListImageRowsResponse,
+    RefreshImagesRequest,
+    RefreshImagesResponse,
+    RollbackImageRequest,
+    RollbackImageResponse,
+    SetImagePinnedRequest,
+    SetImagePinnedResponse,
+    GetImageScheduleRequest,
+    GetImageScheduleResponse,
+    UpdateImageScheduleRequest,
+    UpdateImageScheduleResponse
 } from './data-model'
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
@@ -301,6 +313,48 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
     useBuiltDesktopImages(req: UseBuiltDesktopImagesRequest): Promise<UseBuiltDesktopImagesResponse> {
         return this.apiInvoker.invoke_alt<UseBuiltDesktopImagesRequest, UseBuiltDesktopImagesResponse>(
             'VirtualDesktopAdmin.UseBuiltDesktopImages',
+            req
+        )
+    }
+
+    listImageRows(req: ListImageRowsRequest): Promise<ListImageRowsResponse> {
+        return this.apiInvoker.invoke_alt<ListImageRowsRequest, ListImageRowsResponse>(
+            'VirtualDesktopAdmin.ListImageRows',
+            req
+        )
+    }
+
+    refreshImages(req: RefreshImagesRequest): Promise<RefreshImagesResponse> {
+        return this.apiInvoker.invoke_alt<RefreshImagesRequest, RefreshImagesResponse>(
+            'VirtualDesktopAdmin.RefreshImages',
+            req
+        )
+    }
+
+    rollbackImage(req: RollbackImageRequest): Promise<RollbackImageResponse> {
+        return this.apiInvoker.invoke_alt<RollbackImageRequest, RollbackImageResponse>(
+            'VirtualDesktopAdmin.RollbackImage',
+            req
+        )
+    }
+
+    setImagePinned(req: SetImagePinnedRequest): Promise<SetImagePinnedResponse> {
+        return this.apiInvoker.invoke_alt<SetImagePinnedRequest, SetImagePinnedResponse>(
+            'VirtualDesktopAdmin.SetImagePinned',
+            req
+        )
+    }
+
+    getImageSchedule(req: GetImageScheduleRequest): Promise<GetImageScheduleResponse> {
+        return this.apiInvoker.invoke_alt<GetImageScheduleRequest, GetImageScheduleResponse>(
+            'VirtualDesktopAdmin.GetImageSchedule',
+            req
+        )
+    }
+
+    updateImageSchedule(req: UpdateImageScheduleRequest): Promise<UpdateImageScheduleResponse> {
+        return this.apiInvoker.invoke_alt<UpdateImageScheduleRequest, UpdateImageScheduleResponse>(
+            'VirtualDesktopAdmin.UpdateImageSchedule',
             req
         )
     }

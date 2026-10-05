@@ -9,7 +9,8 @@ from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from ideadatamodel import ReportingInsights, GetUserProjectsRequest, exceptions, locale
-from ideadatamodel.reporting.efficiency import job_efficiency
+from ideadatamodel.reporting.efficiency import job_efficiency, DESKTOP_CHECK_HOURS
+from ideadatamodel.reporting.job_cost import job_spend
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from .reporting_service import resolve_period, known_sum, selected_money
 from .reporting_sources import ReportingSources, number, timestamp, subject, user_label
@@ -207,7 +208,6 @@ class InsightsService:
             key: []
             for key in (
                 'cost',
-                'savings',
                 'cpu_efficiency_pct',
                 'memory_efficiency_pct',
                 'walltime_efficiency_pct',
@@ -235,17 +235,7 @@ class InsightsService:
             seen.add(identity)
             jobs.count += 1
             efficiency = job_efficiency(job)
-            bom = job.get('estimated_bom_cost') or {}
-            cost = (
-                amount(bom.get('total'), currency)
-                if not bom.get('price_unavailable')
-                else None
-            )
-            savings = (
-                amount(bom.get('savings_total'), currency)
-                if not bom.get('price_unavailable')
-                else None
-            )
+            cost = job_spend(job.get('estimated_bom_cost'), currency)
             cpu = efficiency['cpu_efficiency_pct']
             if cpu is not None:
                 jobs.jobs_with_efficiency += 1
@@ -254,7 +244,6 @@ class InsightsService:
             values = dict(
                 efficiency,
                 cost=cost,
-                savings=savings,
                 wasted_cost=cost * (1 - Decimal(str(cpu)) / 100)
                 if cost is not None and cpu is not None
                 else None,
@@ -371,13 +360,14 @@ class InsightsService:
         )
         pricing = MyCostsService(self.context)
         pricing._ondemand_price = lru_cache(maxsize=128)(pricing._ondemand_price)
-        hours = []
+        hours, sources = [], {}
         for source in pricing._newest_per_session(data.get('desktops', [])):
             check_deadline(deadline)
             if not subject(source.get('owner')) or (
                 username is not None and source.get('owner') != username
             ):
                 continue
+            sources[source.get('idea_session_id')] = source
             source = dict(source)
             for key in ('created_on', 'updated_on', 'stopped_on', 'deleted_on'):
                 source[key] = int((timestamp(source.get(key)) or 0) * 1000)
@@ -398,7 +388,70 @@ class InsightsService:
                 cost = self.usd_amount(cost, currency)
                 add_group(projects, project_name(source, data), cost)
         result.desktops.hours = sum(hours) if hours else None
+        result.desktops.count = len(hours)
         result.desktops.by_project = ranked(projects)
+        self.desktop_idle(
+            result, data, period, currency, deadline, username, sources, pricing
+        )
+
+    def desktop_idle(
+        self, result, data, period, currency, deadline, username, sources, pricing
+    ):
+        """idle time from the idle stop's checks; a desktop without checks is left out."""
+        checks, details = defaultdict(lambda: [0, 0]), {}
+        for row in data.get('desktop_activity', []):
+            check_deadline(deadline)
+            if not period.start_date <= row.get('date', '') <= period.end_date:
+                continue
+            for session_id, entry in (row.get('sessions') or {}).items():
+                owner = entry.get('owner')
+                if not subject(owner) or (username is not None and owner != username):
+                    continue
+                total = checks[session_id]
+                total[0] += int(entry.get('checks') or 0)
+                total[1] += int(entry.get('idle') or 0)
+                details[session_id] = entry
+        users, projects, rows = {}, {}, []
+        for session_id, (checked, idle) in checks.items():
+            check_deadline(deadline)
+            if not checked:
+                continue
+            entry, source = details[session_id], sources.get(session_id) or {}
+            instance = entry.get('instance_type') or (source.get('server') or {}).get(
+                'instance_type'
+            )
+            price = self.usd_amount(number(pricing._ondemand_price(instance)), currency)
+            idle_hours = idle * DESKTOP_CHECK_HOURS
+            cost = price * Decimal(str(idle_hours)) if price is not None else None
+            project = project_name(source, data) if source else 'Unassigned'
+            add_group(users, user_label(entry['owner']), cost, None)
+            add_group(projects, project, cost, None)
+            rows.append(
+                dict(
+                    idea_session_id=session_id,
+                    name=source.get('name'),
+                    owner=entry['owner'],
+                    project=project,
+                    instance_type=instance,
+                    checked_hours=checked * DESKTOP_CHECK_HOURS,
+                    idle_hours=idle_hours,
+                    idle_pct=100 * idle / checked,
+                    idle_cost=cost,
+                )
+            )
+        if not rows:
+            return
+        desktops = result.desktops
+        desktops.desktops_with_activity = len(rows)
+        desktops.checked_hours = sum(row['checked_hours'] for row in rows)
+        desktops.idle_hours = sum(row['idle_hours'] for row in rows)
+        desktops.idle_cost = known_sum(row['idle_cost'] for row in rows)
+        desktops.idle_by_user = ranked(users) if username is None else []
+        desktops.idle_by_project = ranked(projects)
+        desktops.least_efficient = sorted(
+            (row for row in rows if row['idle_hours'] > 0),
+            key=lambda row: (-row['idle_hours'], row['idea_session_id']),
+        )[:25]
 
     def usd_amount(self, cost, currency):
         if cost is None or currency == 'USD':

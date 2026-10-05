@@ -13,6 +13,8 @@
 
 import {
     GetInstanceTypeOptionsRequest,
+    ListQueuesRequest,
+    ListQueuesResult,
     GetInstanceTypeOptionsResult,
     GetUserApplicationsRequest,
     GetUserApplicationsResult,
@@ -64,6 +66,13 @@ class SchedulerClient extends IdeaBaseClient<SchedulerClientProps> {
     submitJob(req: SubmitJobRequest): Promise<SubmitJobResult> {
         return this.apiInvoker.invoke_alt<SubmitJobRequest, SubmitJobResult>(
             'Scheduler.SubmitJob',
+            req
+        )
+    }
+
+    listQueues(req: ListQueuesRequest = {}): Promise<ListQueuesResult> {
+        return this.apiInvoker.invoke_alt<ListQueuesRequest, ListQueuesResult>(
+            'Scheduler.ListQueues',
             req
         )
     }

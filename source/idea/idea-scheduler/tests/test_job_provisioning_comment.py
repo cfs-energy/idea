@@ -72,6 +72,9 @@ class MockJobProvisioner:
             self, jobs=jobs, attempt=attempt, applied=applied
         )
 
+    def _ami_note(self, job: SocaJob) -> str:
+        return JobProvisioner._ami_note(self, job)
+
 
 def build_job(job_id: str, provisioned: Optional[bool] = False) -> SocaJob:
     return SocaJob(job_id=job_id, owner='mockuser', provisioned=provisioned)
@@ -205,3 +208,83 @@ def test_set_provisioning_comment_swallows_scheduler_errors(context):
     MockJobProvisioner(context).set_provisioning_comment(
         jobs=[build_job('1001')], attempt=1
     )
+
+
+def _ami_job(job_id: str, ami: str) -> SocaJob:
+    from ideadatamodel import SocaJobParams
+
+    return SocaJob(
+        job_id=job_id,
+        owner='mockuser',
+        queue='normal',
+        params=SocaJobParams(instance_ami=ami),
+    )
+
+
+def _with_images(context, monkeypatch, images):
+    """images: ami id -> describe_images entry"""
+
+    def describe_images(**kwargs):
+        return {'Images': [images[i] for i in kwargs['ImageIds'] if i in images]}
+
+    monkeypatch.setattr(context.aws().ec2(), 'describe_images', describe_images)
+
+
+def test_provisioning_comment_notes_a_deprecated_ami(context, monkeypatch):
+    _with_images(
+        context,
+        monkeypatch,
+        {
+            'ami-pinned000000001': {
+                'ImageId': 'ami-pinned000000001',
+                'CreationDate': '2025-03-02T00:00:00.000Z',
+                'DeprecationTime': '2026-01-01T00:00:00.000Z',
+            }
+        },
+    )
+    scheduler = MockScheduler()
+    context.scheduler = scheduler
+    MockJobProvisioner(context).set_provisioning_comment(
+        jobs=[_ami_job('1', 'ami-pinned000000001')], attempt=2
+    )
+    comment = scheduler.comments['1']
+    assert comment == (
+        'IDEA: provisioning (attempt 2). AMI ami-pinned000000001 is deprecated, '
+        'drop instance_ami to use the queue default'
+    )
+    assert len(comment) <= JOB_COMMENT_MAX_LENGTH
+
+
+def test_provisioning_comment_notes_an_ami_older_than_the_default(context, monkeypatch):
+    _with_images(
+        context,
+        monkeypatch,
+        {
+            'ami-pinned000000002': {
+                'ImageId': 'ami-pinned000000002',
+                'CreationDate': '2025-03-02T00:00:00.000Z',
+            },
+            'ami-mockclustersettings': {
+                'ImageId': 'ami-mockclustersettings',
+                'CreationDate': '2026-08-14T00:00:00.000Z',
+            },
+        },
+    )
+    scheduler = MockScheduler()
+    context.scheduler = scheduler
+    MockJobProvisioner(context).set_provisioning_comment(
+        jobs=[_ami_job('2', 'ami-pinned000000002')], attempt=None
+    )
+    assert scheduler.comments['2'] == (
+        'IDEA: provisioning. AMI ami-pinned000000002 (2025-03-02) is older than the '
+        'queue default (2026-08-14)'
+    )
+
+
+def test_provisioning_comment_has_no_note_for_the_default_ami(context, monkeypatch):
+    scheduler = MockScheduler()
+    context.scheduler = scheduler
+    MockJobProvisioner(context).set_provisioning_comment(
+        jobs=[_ami_job('3', 'ami-mockclustersettings')], attempt=1
+    )
+    assert scheduler.comments['3'] == f'{JOB_COMMENT_PROVISIONING} (attempt 1)'

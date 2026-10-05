@@ -1,0 +1,475 @@
+"""Validate a candidate through qsub and the ordinary compute provisioner."""
+
+import base64
+import hashlib
+import json
+import re
+import time
+import uuid
+from pathlib import Path
+
+from ideadatamodel import (
+    ImageCheck,
+    ImagePipelineSettings,
+    SocaJobParams,
+    SocaQueueManagementParams,
+    SocaQueueMode,
+    SocaScalingMode,
+    SubmitJobRequest,
+    errorcodes,
+    exceptions,
+)
+from ideasdk.aws.image_builds import default_builder_instance_type
+from ideasdk.aws.validation_identity import (
+    ensure_validation_identity,
+    wait_for_local_user,
+)
+
+# OpenPBS PBS_MAXQUEUENAME is 15: this prefix plus 12 digest characters.
+VALIDATION_QUEUE_PREFIX = 'iv-'
+PIPELINE_SETTINGS = 'virtual-desktop-controller.software_stacks.image_pipeline'
+# PBS keeps a finished job in its queue while it exits and stages out (state E); qdel and
+# queue deletion are refused until it leaves, which takes seconds after the exit status.
+CLEANUP_SECONDS = 180
+EXITING_SECONDS = 60
+
+
+def canary_script(queue, output, mounts, token):
+    """PBS stdout carries structured evidence, not a successful shell exit alone."""
+    program = """import json, os, pwd, socket, tempfile, time
+checks = []
+# the job runs as the validation user and probes as any user would: write in its own home
+# when the home is on this filesystem, else at the top when users may write there, else a
+# read (an admin-owned filesystem such as apps is read-only to users by design)
+home = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+for name, mount in MOUNTS:
+    path = None
+    try:
+        if not os.path.ismount(mount):
+            raise RuntimeError('The configured filesystem is not mounted.')
+        top = os.path.realpath(mount)
+        where = home if home == top or home.startswith(top + os.sep) else top
+        if where == top and not os.access(top, os.W_OK):
+            os.listdir(top)
+            checks.append(dict(name='filesystem:' + name, ok=True, detail='Mounted filesystem is read-only to users; listing it worked.', seconds=0))
+            continue
+        with tempfile.NamedTemporaryFile(dir=where, prefix='.idea-validate-', delete=False) as probe:
+            path = probe.name
+            probe.write(TOKEN.encode())
+            probe.flush()
+            os.fsync(probe.fileno())
+        with open(path, 'rb') as probe:
+            if probe.read() != TOKEN.encode():
+                raise RuntimeError('The filesystem probe did not read back its contents.')
+        os.unlink(path)
+        path = None
+        checks.append(dict(name='filesystem:' + name, ok=True, detail='Mounted filesystem passed write, fsync, read and delete.', seconds=0))
+    except Exception as error:
+        checks.append(dict(name='filesystem:' + name, ok=False, detail=str(error), seconds=0))
+    finally:
+        if path is not None:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass  # The failed delete is already recorded by the probe.
+print(json.dumps(dict(token=TOKEN, host=socket.gethostname(), checks=checks)), flush=True)
+# Keep the running job observable to pbsnodes before normal single-job cleanup.
+time.sleep(10)
+raise SystemExit(0 if all(check['ok'] for check in checks) else 1)
+""".replace('MOUNTS', repr(mounts)).replace('TOKEN', repr(token))
+    return (
+        f'#!/bin/bash\n#PBS -N {queue}\n#PBS -q {queue}\n'
+        f'#PBS -o {output}\n#PBS -e {output}.err\n#PBS -l walltime=00:05:00\n'
+        'set -eu\nCANARY_PYTHON=$(command -v python3 || command -v /usr/libexec/platform-python)\n"${CANARY_PYTHON}" - <<\'PY\'\n'
+        + program
+        + 'PY\n'
+    )
+
+
+def canary_job_params(source, record) -> SocaJobParams:
+    """
+    the hidden queue's defaults: the source profile's, on the candidate image, one small
+    node. gpus is left unset: the job builder refuses gpus=0 (it must be > 0 when given)
+    """
+    params = source.model_copy(deep=True) if source else SocaJobParams()
+    params.base_os, params.instance_ami = record.base_os, record.image_id
+    params.nodes = params.cpus = params.mpiprocs = 1
+    params.gpus = None
+    params.memory = None
+    params.instance_types = [
+        default_builder_instance_type(record.architecture, 'c7i.large')
+    ]
+    params.spot = params.enable_efa_support = False
+    params.compute_stack = params.stack_id = params.job_group = None
+    return params
+
+
+class ComputeImageCanary:
+    def __init__(self, context):
+        self.context = context
+
+    def reap(self, profile) -> list:
+        """remove a hidden validation queue and whatever jobs are left in it"""
+        errors = []
+        for job in self.context.scheduler.list_jobs(queue=profile.name):
+            errors += self._release(job.job_id, None)
+        return errors + self._release(None, profile)
+
+    def _release(self, job_id, created) -> list:
+        """
+        wait for the job to leave PBS, delete it only if it is still queued or running after
+        the exiting window, then delete the hidden queue, retrying while PBS reports it busy
+        """
+        scheduler = self.context.scheduler
+        deadline = time.monotonic() + CLEANUP_SECONDS
+        errors = []
+
+        def gone(seconds) -> bool:
+            end = min(deadline, time.monotonic() + seconds)
+            while scheduler.is_job_active(job_id):
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(2)
+            return True
+
+        try:
+            if job_id and not gone(EXITING_SECONDS):
+                try:
+                    scheduler.delete_job(job_id)
+                except exceptions.SocaException:
+                    # qdel refuses a job that is exiting; the wait below decides
+                    pass
+                if not gone(CLEANUP_SECONDS):
+                    errors.append(f'The validation job {job_id} did not leave PBS.')
+        except Exception as error:
+            errors.append(str(error))
+        while created:
+            try:
+                self.context.queue_profiles.delete_queue_profile(
+                    queue_profile_id=created.queue_profile_id
+                )
+                break
+            except exceptions.SocaException as error:
+                busy = error.error_code == errorcodes.SCHEDULER_QUEUE_BUSY
+                if not busy or time.monotonic() >= deadline:
+                    errors.append(str(error))
+                    break
+                time.sleep(5)
+            except Exception as error:
+                errors.append(str(error))
+                break
+        return errors
+
+    def _offers(self, profile, instance_type) -> bool:
+        """
+        whether a zone of the profile's subnets offers instance_type, as submit checks it:
+        the queue's subnets, else the cluster's private subnets; a lookup that fails
+        counts as offered
+        """
+        params = profile.default_job_params
+        subnets = (params.subnet_ids if params else None) or (
+            self.context.config().get_list(
+                'cluster.network.private_subnets', default=[]
+            )
+        )
+        if not subnets:
+            return True
+        aws_util = self.context.aws_util()
+        for subnet in subnets:
+            zone = aws_util.get_subnet_availability_zone(subnet)
+            if zone is None:
+                return True
+            offered = aws_util.get_instance_types_offered(zone)
+            if offered is None or instance_type in offered:
+                return True
+        return False
+
+    def _source_profile(self, record, sources):
+        """
+        the queue the hidden canary queue copies: one whose subnets can launch the canary
+        size, preferring a queue this row serves (its image, else its OS)
+        """
+        size = canary_job_params(None, record).instance_types[0]
+
+        def serves(profile) -> int:
+            params = profile.default_job_params
+            if params is None:
+                return 2
+            if record.current_image_id and params.instance_ami == (
+                record.current_image_id
+            ):
+                return 0
+            return 1 if params.base_os == record.base_os else 2
+
+        for profile in sorted(sources, key=serves):
+            if self._offers(profile, size):
+                return profile
+        raise exceptions.invalid_params(
+            f'No compute queue profile has a subnet in an availability zone that offers '
+            f'{size}, the validation instance type.'
+        )
+
+    def validate(self, record, progress):
+        from ideascheduler.app.api.scheduler_api import SchedulerAPI
+
+        settings = ImagePipelineSettings(
+            **dict(
+                self.context.config().get_config(PIPELINE_SETTINGS, default={}) or {}
+            )
+        )
+        user, project_name = settings.validation_user, settings.validation_project
+        for value in (user, project_name):
+            if not value or not re.fullmatch(r'[A-Za-z0-9_.-]+', value):
+                raise exceptions.invalid_params(
+                    'The validation user and project must be safe account names.'
+                )
+        # created here too: a cluster without the desktop controller has no other creator
+        project = ensure_validation_identity(self.context, settings)
+        if not project or not project.project_id:
+            raise exceptions.invalid_params('The validation project does not exist.')
+        # the submit writes the job script as the user: a user created just now is not
+        # resolvable here until the next user sync
+        wait_for_local_user(self.context, user)
+        profiles = self.context.queue_profiles
+        sources = [
+            p
+            for p in profiles.list_queue_profiles()
+            if not (p.name or '').startswith(VALIDATION_QUEUE_PREFIX)
+        ]
+        if not sources:
+            raise exceptions.invalid_params(
+                'A compute queue profile is required for validation.'
+            )
+        source = self._source_profile(record, sources)
+        token = uuid.uuid4().hex
+        name = (
+            VALIDATION_QUEUE_PREFIX
+            + hashlib.sha256(record.image_id.encode()).hexdigest()[:12]
+        )
+        candidate = source.model_copy(deep=True)
+        candidate.queue_profile_id = None
+        candidate.name = candidate.title = name
+        candidate.queues = [name]
+        candidate.projects = [project]
+        candidate.keep_forever = False
+        candidate.stack_uuid = None
+        candidate.scaling_mode = SocaScalingMode.SINGLE_JOB
+        candidate.queue_mode = SocaQueueMode.FIFO
+        candidate.terminate_when_idle = 0
+        candidate.image_pinned = True
+        candidate.queue_management_params = SocaQueueManagementParams(
+            max_running_jobs=1,
+            max_provisioned_instances=1,
+            max_nodes_per_job=1,
+            restricted_parameters=['instance_ami', 'base_os', 'instance_types'],
+        )
+        candidate.default_job_params = canary_job_params(
+            candidate.default_job_params, record
+        )
+        mounts = []
+        storage = self.context.config().get_config('shared-storage', default={}) or {}
+        # a pyhocon tree's get(key) raises for a missing key; plain dicts take defaults
+        if hasattr(storage, 'as_plain_ordered_dict'):
+            storage = storage.as_plain_ordered_dict()
+        # only what the canary node mounts: the bootstrap's scope rules for the scheduler
+        # module, the validation project and the hidden queue (a list names who gets it)
+        scoped = {
+            'module': ('modules', 'scheduler'),
+            'project': ('projects', project_name),
+            'scheduler:queue-profile': ('queue_profiles', name),
+        }
+        for key, fs in storage.items():
+            if not isinstance(fs, dict) or not fs.get('mount_dir'):
+                continue
+            scope = fs.get('scope') or []
+            if scope and 'cluster' not in scope:
+                if any(
+                    s in scoped
+                    and fs.get(scoped[s][0])
+                    and scoped[s][1] not in fs[scoped[s][0]]
+                    for s in scope
+                ):
+                    continue
+            mounts.append((key, fs['mount_dir']))
+        if not mounts:
+            raise exceptions.invalid_params(
+                'No configured compute shared filesystems were found.'
+            )
+        data = self.context.config().get_string(
+            'shared-storage.data.mount_dir', required=True
+        )
+        output = Path(data) / 'home' / user / 'jobs' / (name + '.json')
+        # PBS directive values cannot contain line breaks or whitespace.
+        if any(ch.isspace() for ch in str(output)):
+            raise exceptions.invalid_params(
+                'The validation output path cannot contain whitespace.'
+            )
+        checks = list(record.checks or [])
+        started = time.monotonic()
+        deadline = started + settings.ready_gate_seconds_linux
+        job_id = None
+        created = None
+
+        def check(check_name, ok, detail, fatal=True):
+            checks.append(
+                ImageCheck(
+                    name=check_name,
+                    ok=ok,
+                    detail=detail,
+                    seconds=int(time.monotonic() - started),
+                )
+            )
+            progress({'checks': checks})
+            if not ok and fatal:
+                raise exceptions.general_exception(detail)
+
+        try:
+            # The deterministic queue name lets a restarted leader reap its prior canary.
+            for stale in profiles.list_queue_profiles():
+                if stale.name == name:
+                    errors = self.reap(stale)
+                    if errors:
+                        raise exceptions.general_exception('; '.join(errors))
+            created = profiles.create_queue_profile(candidate)
+            self.context.scheduler.set_queue_attributes(
+                name,
+                {
+                    'acl_user_enable': True,
+                    'acl_users': user,
+                },
+            )
+            profiles.enable_queue_profile(queue_profile_id=created.queue_profile_id)
+            submission = SchedulerAPI(self.context)._submit_job(
+                request=SubmitJobRequest(
+                    job_script=base64.b64encode(
+                        canary_script(name, str(output), mounts, token).encode()
+                    ).decode(),
+                    job_script_interpreter='pbs',
+                    project=project_name,
+                ),
+                job_owner=user,
+                dry_run=None,
+            )
+            job_id = submission.job.job_id if submission.job else None
+            check(
+                'compute_submit',
+                submission.accepted is True and bool(job_id),
+                'The validation job was accepted by PBS.'
+                if job_id
+                else 'PBS did not accept the validation job.',
+            )
+            observed_node = None
+            finished = None
+            while time.monotonic() < deadline:
+                # qstat -x: plain qstat refuses a finished job (rc 35) instead of returning it
+                job = self.context.scheduler.get_finished_job(job_id)
+                if job:
+                    # qstat's SocaJob has no execution_hosts outside hook events.
+                    # pbsnodes lists the jobs actually running on each registered MOM.
+                    for node in self.context.scheduler.list_nodes():
+                        if job_id in (node.jobs or []) and node.instance_id:
+                            observed_node = node
+                    if job.exit_status is not None:
+                        finished = job
+                        break
+                time.sleep(2)
+            in_time = finished is not None and time.monotonic() < deadline
+            check(
+                'compute_timeout',
+                in_time,
+                'The validation job finished within the ready gate.'
+                if in_time
+                else 'The validation job timed out before completion.',
+            )
+            check(
+                'compute_identity',
+                finished.owner == user
+                and finished.project == project_name
+                and finished.queue == name,
+                'The validation job must run as the configured user in the validation project and queue.',
+            )
+            check(
+                'pbs_registered',
+                observed_node is not None,
+                'The candidate node must register with PBS and run the validation job.',
+            )
+            instances = (
+                self.context.aws()
+                .ec2()
+                .describe_instances(InstanceIds=[observed_node.instance_id])
+            )
+            launched = [
+                i
+                for r in instances.get('Reservations', [])
+                for i in r.get('Instances', [])
+            ]
+            check(
+                'compute_ami',
+                len(launched) == 1 and launched[0].get('ImageId') == record.image_id,
+                'The validation node must launch on the exact candidate AMI.',
+            )
+            evidence = {}
+            while time.monotonic() < deadline:
+                try:
+                    evidence = json.loads(output.read_text())
+                    break
+                except (OSError, ValueError):
+                    time.sleep(2)
+            node_names = {observed_node.host, launched[0].get('PrivateDnsName', '')}
+            node_names |= {
+                name.split('.')[0]
+                for name in node_names
+                if name and not name[0].isdigit()
+            }
+            check(
+                'compute_output',
+                evidence.get('token') == token and evidence.get('host') in node_names,
+                'The validation job must produce its known output on the registered node.',
+            )
+            results = {item.get('name'): item for item in evidence.get('checks', [])}
+            for fs, _ in mounts:
+                result = results.get('filesystem:' + fs, {})
+                check(
+                    'filesystem:' + fs,
+                    result.get('ok') is True,
+                    result.get('detail')
+                    or f'The {fs} filesystem probe did not report a result.',
+                    fatal=False,
+                )
+            check(
+                'compute_job',
+                finished.exit_status == 0,
+                f'The validation job exited with status {finished.exit_status}.',
+                fatal=False,
+            )
+            if any(c.ok is False for c in checks):
+                raise exceptions.general_exception(
+                    next(c.detail for c in checks if c.ok is False)
+                )
+        except Exception as error:
+            if not any(c.ok is False for c in checks):
+                checks.append(
+                    ImageCheck(
+                        name='compute_canary',
+                        ok=False,
+                        detail=getattr(error, 'message', None) or str(error),
+                        seconds=int(time.monotonic() - started),
+                    )
+                )
+                progress({'checks': checks})
+            raise
+        finally:
+            cleanup_errors = self._release(job_id, created)
+            for path in (output, Path(str(output) + '.err')):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as error:
+                    cleanup_errors.append(str(error))
+            if cleanup_errors:
+                # cleanup says nothing about the image: the checks above decide the row, and
+                # the leader sweep reaps a validation queue no row is validating
+                self.context.logger('compute-image-canary').warning(
+                    f'validation queue {name} left for the sweep: '
+                    + '; '.join(cleanup_errors)
+                )
+        return checks

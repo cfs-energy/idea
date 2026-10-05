@@ -1,0 +1,66 @@
+# The scheduler's read-only AWS API access: the describes behind job placement, pricing and
+# capacity checks, and the cluster configuration tables. Rendered into a customer-managed policy
+# attached to the scheduler host and task roles rather than into scheduler.yml: every inline policy
+# on a role shares one 10,240-byte limit, which scheduler.yml reached, while a managed policy has its
+# own 6,144-character limit. test/stacks/iam-policy-size.test.ts holds both under their limits.
+Version: '2012-10-17'
+Statement:
+  - Action:
+      - pricing:GetProducts
+      - budgets:ViewBudget
+      - ec2:DescribeInstances
+      - ec2:DescribeSubnets
+      - ec2:DescribeSecurityGroups
+      - ec2:DescribeImages
+      - ec2:DescribeInstanceAttribute
+      - ec2:DescribeInstanceTypes
+      - ec2:DescribeInstanceTypeOfferings
+      - ec2:DescribeInstanceStatus
+      - ec2:DescribeReservedInstances
+      - ec2:DescribeSpotInstanceRequests
+      - ec2:DescribeVpcClassicLink
+      - ec2:DescribeVolumes
+      - ec2:DescribePlacementGroups
+      - ec2:DescribeKeyPairs
+      - ec2:DescribeLaunchTemplates
+      - ec2:DescribeLaunchTemplateVersions
+      - ec2:DescribeNetworkInterfaces
+      - ec2:DescribeSpotFleetRequests
+      - ec2:DescribeSpotFleetInstances
+      - ec2:DescribeSpotFleetRequestHistory
+      - ec2:DescribeTags
+      - fsx:DescribeFileSystems
+      - iam:GetInstanceProfile
+      - autoscaling:DescribeAutoScalingGroups
+      - autoscaling:DescribeScalingActivities
+      - autoscaling:DescribeLaunchConfigurations
+      - elasticloadbalancing:DescribeRules
+      - elasticloadbalancing:DescribeListeners
+      - elasticloadbalancing:DescribeTargetGroups
+      - savingsplans:DescribeSavingsPlans
+      - servicequotas:ListServiceQuotas
+      - ssm:ListDocuments
+      - ssm:ListDocumentVersions
+      - ssm:DescribeDocument
+      - ssm:GetDocument
+      - ssm:DescribeInstanceInformation
+      - ssm:DescribeDocumentParameters
+      - ssm:DescribeInstanceProperties
+      - ssm:ListCommands
+      - ssm:GetCommandInvocation
+      - ssm:DescribeAutomationExecutions
+    Resource: '*'
+    Effect: Allow
+
+  - Action:
+      - dynamodb:GetItem
+      - dynamodb:Query
+      - dynamodb:Scan
+      - dynamodb:DescribeTable
+      - dynamodb:DescribeStream
+      - dynamodb:GetRecords
+      - dynamodb:GetShardIterator
+      - dynamodb:ListStreams
+    Resource:
+      {{ context.utils.to_yaml(context.arns.cluster_config_ddb_arn) | indent(6) }}
+    Effect: Allow

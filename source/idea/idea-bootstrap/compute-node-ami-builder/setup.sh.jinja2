@@ -18,6 +18,12 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
+# A new bake never inherits success evidence from its source image.
+mkdir -p /var/lib/idea
+if [[ "${1:-}" != crontab ]]; then
+  rm -f /var/lib/idea/bake-*.ok /var/lib/idea/bake-failed /var/lib/idea/baked-release /var/lib/idea/image-checks.json
+fi
+
 echo -e "
 ## [BEGIN] IDEA Environment Configuration - Do Not Delete
 AWS_DEFAULT_REGION={{ context.aws_region }}
@@ -47,6 +53,8 @@ PATH={{ path }}
 
 source /etc/environment
 
+{% include '_templates/linux/dnf_mirror_speed.jinja2' %}
+
 {% if context.base_os == 'amazonlinux2023' %}
 dnf -y install cronie
 systemctl enable crond
@@ -70,6 +78,12 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 {% include '_templates/linux/idea_service_account.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}
+# the pipeline reads the in-bake checks over SSM, and the canary probes clones with it
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
+{% else %}
+systemctl enable --now amazon-ssm-agent
+{% endif %}
 
 {% include '_templates/linux/epel_repo.jinja2' %}
 
@@ -78,6 +92,7 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 mkdir -p ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}
+touch /var/lib/idea/bake-setup.ok
 
 log_info "executing compute_node_ami_builder.sh ..."
 /bin/bash ${SCRIPT_DIR}/compute_node_ami_builder.sh >> "${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}/compute_node_ami_builder_bootstrap.log" 2>&1

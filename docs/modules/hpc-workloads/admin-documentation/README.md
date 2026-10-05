@@ -11,7 +11,7 @@ HPC workload administrators have extensive capabilities to manage job submission
 * [Queue Profiles](queue-profiles.md) - Configure job execution environments and default parameters
 * [Web-Based Job Submission](create-web-based-job-submission-workflows.md) - Create custom forms for simplified job submission
 * [License Resources](configure-floating-license-resources.md) - Manage floating license resources for applications
-* [Custom AMIs](custom-amis.md) - See which images the cluster launches from and build new ones from the portal
+* [Images](custom-amis.md) - Managed desktop and compute images: validation, refresh, rollback, pins and cleanup; custom builds
 * [OpenPBS Hooks](https://github.com/cfs-energy/idea/tree/main/docs/modules/hpc-workloads/admin-documentation/openpbs-hooks.md) - Understand and configure OpenPBS hooks used by IDEA
 
 ## Key Administrative Capabilities

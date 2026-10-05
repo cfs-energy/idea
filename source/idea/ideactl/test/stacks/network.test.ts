@@ -1,6 +1,6 @@
 /**
  * The network constructs, built in throwaway stacks named like the captured module stacks and
- * compared resource for resource with the live dev27 templates.
+ * compared resource for resource with the live demo1 templates.
  *
  * Fixtures under tools/parity/{fixtures,live} are gitignored; the whole suite requires them.
  * Branch tests override single keys of the captured settings scan in memory.
@@ -25,13 +25,13 @@ import { ideaVersion } from '../../src/version.ts';
 import { requireCapture } from '../support/fixtures.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-dev27');
+const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
 const LIVE = join(PKG, 'tools', 'parity', 'live');
 const CONFIG_FILE = join(FIXTURES, 'cluster-settings.json');
 const SYNTH_READS = join(FIXTURES, 'synth-reads.json');
 const CONTEXT_FILE = join(FIXTURES, 'cdk.context.json');
 
-const CLUSTER = 'idea-dev27';
+const CLUSTER = 'idea-demo1';
 const REGION = 'us-east-2';
 
 requireCapture(
@@ -40,10 +40,10 @@ requireCapture(
     SYNTH_READS,
     CONTEXT_FILE,
     ...['cluster', 'cluster-manager', 'scheduler', 'vdc', 'analytics', 'shared-storage'].map(
-      (module) => join(LIVE, `idea-dev27-${module}.json`),
+      (module) => join(LIVE, `idea-demo1-${module}.json`),
     ),
   ],
-  "node tools/parity/capture.ts --live --cluster idea-dev27 --region us-east-2",
+  "node tools/parity/capture.ts --live --cluster idea-demo1 --region us-east-2",
 );
 
 type Json = Record<string, any>;
@@ -51,7 +51,7 @@ type Attr = { S: string } | { N: string } | { BOOL: boolean } | { NULL: true } |
 
 const readJson = (path: string): Json => JSON.parse(readFileSync(path, 'utf8')) as Json;
 
-/** The dev27 settings scan with the named keys replaced (or added). */
+/** The demo1 settings scan with the named keys replaced (or added). */
 function scanWith(overrides: Record<string, Attr>): string {
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
@@ -65,7 +65,7 @@ function scanWith(overrides: Record<string, Attr>): string {
   return JSON.stringify(scan);
 }
 
-/** A bare stack with the dev27 stack id, env and context, so paths and lookups match the capture. */
+/** A bare stack with the demo1 stack id, env and context, so paths and lookups match the capture. */
 function makeStack(moduleId: string, overrides: Record<string, Attr> = {}): { stack: Stack; ctx: IdeaContext } {
   const config = ClusterConfig.fromFile(scanWith(overrides));
   // the account only lives in the gitignored fixture; the AZ and VPC context keys carry it
@@ -91,7 +91,7 @@ function resources(stack: Stack): Json {
   );
 }
 
-const liveResources = (module: string): Json => readJson(join(LIVE, `idea-dev27-${module}.json`)).Resources as Json;
+const liveResources = (module: string): Json => readJson(join(LIVE, `idea-demo1-${module}.json`)).Resources as Json;
 
 /** Every live resource whose type or path matches. */
 function liveIds(live: Json, predicate: (id: string, resource: Json) => boolean): string[] {
@@ -167,7 +167,7 @@ describe('cluster stack network', () => {
       live,
       (id, resource) =>
         isSecurityGroupResource(id, resource) ||
-        /^idea-dev27-cluster\/(vpc|vpc-flow-logs-group|vpc-flow-logs-role)\//.test(
+        /^idea-demo1-cluster\/(vpc|vpc-flow-logs-group|vpc-flow-logs-role)\//.test(
           resource.Metadata?.['aws:cdk:path'] as string,
         ),
     );
@@ -178,11 +178,11 @@ describe('cluster stack network', () => {
     // the token peer counter: first `{IndirectPeer}`, then the quoted `'{IndirectPeer2}'`
     assert.equal(
       mine.bastionhostsecuritygroupfromIndirectPeer22CD87C3C1.Metadata['aws:cdk:path'],
-      'idea-dev27-cluster/bastion-host-security-group/from {IndirectPeer}:22',
+      'idea-demo1-cluster/bastion-host-security-group/from {IndirectPeer}:22',
     );
     assert.equal(
       mine.externalloadbalancersecuritygroupfromIndirectPeer280366DFBAA.Metadata['aws:cdk:path'],
-      "idea-dev27-cluster/external-load-balancer-security-group/from '{IndirectPeer2}':80",
+      "idea-demo1-cluster/external-load-balancer-security-group/from '{IndirectPeer2}':80",
     );
     // the NAT EIP rule is inline, after nothing: it is the only inline ingress on the external group
     assert.equal(mine.externalloadbalancersecuritygroupFBD9BF3A.Properties.SecurityGroupIngress.length, 1);
@@ -195,10 +195,10 @@ describe('cluster stack network', () => {
     const { stack, ctx } = makeStack('cluster');
     const webAcl = new network.WebAcl(ctx, 'external-alb', stack);
     const live = liveResources('cluster');
-    const expected = ['ideadev27externalalbwebacl', 'ideadev27externalalbwafloggroup46833A61', 'ideadev27externalalbwafloggingconfig'];
+    const expected = ['ideademo1externalalbwebacl', 'ideademo1externalalbwafloggroupB3C6BD0B', 'ideademo1externalalbwafloggingconfig'];
     assertSameAsLive(resources(stack), live, expected);
-    assert.deepEqual(stack.resolve(webAcl.webAclArn), { 'Fn::GetAtt': ['ideadev27externalalbwebacl', 'Arn'] });
-    assert.deepEqual(stack.resolve(webAcl.webAclId), { 'Fn::GetAtt': ['ideadev27externalalbwebacl', 'Id'] });
+    assert.deepEqual(stack.resolve(webAcl.webAclArn), { 'Fn::GetAtt': ['ideademo1externalalbwebacl', 'Arn'] });
+    assert.deepEqual(stack.resolve(webAcl.webAclId), { 'Fn::GetAtt': ['ideademo1externalalbwebacl', 'Id'] });
   });
 
   test('extra prefix lists add literal-id rules without touching the token counter', () => {
@@ -210,22 +210,22 @@ describe('cluster stack network', () => {
       .map((resource) => (resource as Json).Metadata?.['aws:cdk:path'] as string)
       .filter((path) => path?.includes('security-group/from '));
     assert.deepEqual(paths, [
-      'idea-dev27-cluster/bastion-host-security-group/from {IndirectPeer}:22',
-      'idea-dev27-cluster/bastion-host-security-group/from pl-11111111111111111:22',
+      'idea-demo1-cluster/bastion-host-security-group/from {IndirectPeer}:22',
+      'idea-demo1-cluster/bastion-host-security-group/from pl-11111111111111111:22',
       // the bastion group does not skip an empty entry; the external group does
-      'idea-dev27-cluster/bastion-host-security-group/from :22',
-      'idea-dev27-cluster/bastion-host-security-group/from pl-22222222222222222:22',
-      'idea-dev27-cluster/external-load-balancer-security-group/from {IndirectPeer}:443',
-      "idea-dev27-cluster/external-load-balancer-security-group/from '{IndirectPeer2}':80",
-      'idea-dev27-cluster/external-load-balancer-security-group/from pl-11111111111111111:443',
-      'idea-dev27-cluster/external-load-balancer-security-group/from pl-11111111111111111:80',
-      'idea-dev27-cluster/external-load-balancer-security-group/from pl-22222222222222222:443',
-      'idea-dev27-cluster/external-load-balancer-security-group/from pl-22222222222222222:80',
-      'idea-dev27-cluster/external-load-balancer-security-group/from ideadev27clusterbastionhostsecuritygroup86FC0C14:80',
-      'idea-dev27-cluster/external-load-balancer-security-group/from ideadev27clusterbastionhostsecuritygroup86FC0C14:443',
+      'idea-demo1-cluster/bastion-host-security-group/from :22',
+      'idea-demo1-cluster/bastion-host-security-group/from pl-22222222222222222:22',
+      'idea-demo1-cluster/external-load-balancer-security-group/from {IndirectPeer}:443',
+      "idea-demo1-cluster/external-load-balancer-security-group/from '{IndirectPeer2}':80",
+      'idea-demo1-cluster/external-load-balancer-security-group/from pl-11111111111111111:443',
+      'idea-demo1-cluster/external-load-balancer-security-group/from pl-11111111111111111:80',
+      'idea-demo1-cluster/external-load-balancer-security-group/from pl-22222222222222222:443',
+      'idea-demo1-cluster/external-load-balancer-security-group/from pl-22222222222222222:80',
+      'idea-demo1-cluster/external-load-balancer-security-group/from ideademo1clusterbastionhostsecuritygroup4F8F29F1:80',
+      'idea-demo1-cluster/external-load-balancer-security-group/from ideademo1clusterbastionhostsecuritygroup4F8F29F1:443',
     ]);
     const rule = Object.values(mine).find(
-      (resource) => (resource as Json).Metadata?.['aws:cdk:path'] === 'idea-dev27-cluster/bastion-host-security-group/from pl-11111111111111111:22',
+      (resource) => (resource as Json).Metadata?.['aws:cdk:path'] === 'idea-demo1-cluster/bastion-host-security-group/from pl-11111111111111111:22',
     ) as Json;
     assert.equal(rule.Properties.SourcePrefixListId, 'pl-11111111111111111');
     assert.equal(rule.Properties.Description, 'Allow SSH access from Prefix List to Bastion Host');
@@ -255,12 +255,12 @@ describe('cluster stack network', () => {
     const mine = resources(stack);
     const paths = Object.values(mine).map((resource) => (resource as Json).Metadata['aws:cdk:path'] as string);
     assert.ok(!paths.some((path) => path.includes('flow-logs') || path.includes('FlowLog')), 'no flow log resources');
-    assert.ok(paths.includes('idea-dev27-cluster/vpc/isolatedSubnet1/Subnet'));
-    assert.ok(paths.includes('idea-dev27-cluster/vpc/isolatedSubnet2/Subnet'));
-    assert.ok(!paths.includes('idea-dev27-cluster/vpc/isolatedSubnet3/Subnet'));
-    assert.ok(!paths.includes('idea-dev27-cluster/vpc/publicSubnet3/Subnet'));
+    assert.ok(paths.includes('idea-demo1-cluster/vpc/isolatedSubnet1/Subnet'));
+    assert.ok(paths.includes('idea-demo1-cluster/vpc/isolatedSubnet2/Subnet'));
+    assert.ok(!paths.includes('idea-demo1-cluster/vpc/isolatedSubnet3/Subnet'));
+    assert.ok(!paths.includes('idea-demo1-cluster/vpc/publicSubnet3/Subnet'));
     const isolated = Object.values(mine).find(
-      (resource) => (resource as Json).Metadata['aws:cdk:path'] === 'idea-dev27-cluster/vpc/isolatedSubnet1/Subnet',
+      (resource) => (resource as Json).Metadata['aws:cdk:path'] === 'idea-demo1-cluster/vpc/isolatedSubnet1/Subnet',
     ) as Json;
     assert.equal(isolated.Properties.Tags.find((tag: Json) => tag.Key === 'aws-cdk:subnet-type').Value, 'Isolated');
   });
@@ -298,9 +298,9 @@ describe('cluster stack network', () => {
     };
 
     // allow_all_outbound=True: the L2's own egress, and the `open=True` 443 rule deduplicates
-    const group = byPath('idea-dev27-cluster/vpc-endpoint-security-group/Resource');
+    const group = byPath('idea-demo1-cluster/vpc-endpoint-security-group/Resource');
     assert.equal(group.Properties.GroupDescription, 'VPC Endpoints Security Group');
-    assert.equal(group.Properties.GroupName, 'idea-dev27-vpc-endpoint-security-group');
+    assert.equal(group.Properties.GroupName, 'idea-demo1-vpc-endpoint-security-group');
     assert.deepEqual(group.Properties.SecurityGroupEgress, [
       { CidrIp: '0.0.0.0/0', Description: 'Allow all outbound traffic by default', IpProtocol: '-1' },
     ]);
@@ -315,7 +315,7 @@ describe('cluster stack network', () => {
     ]);
     assert.deepEqual(group.Metadata.cdk_nag.rules_to_suppress.map((rule: Json) => rule.id), ['AwsSolutions-EC23']);
 
-    const gateway = byPath('idea-dev27-cluster/vpc/s3-gateway-endpoint/Resource');
+    const gateway = byPath('idea-demo1-cluster/vpc/s3-gateway-endpoint/Resource');
     assert.equal(gateway.Type, 'AWS::EC2::VPCEndpoint');
     assert.equal(gateway.Properties.VpcEndpointType, 'Gateway');
     assert.equal(gateway.Properties.RouteTableIds.length, 6);
@@ -331,13 +331,13 @@ describe('cluster stack network', () => {
       [],
     );
 
-    const iface = byPath('idea-dev27-cluster/vpc/ssm-vpc-endpoint/Resource');
+    const iface = byPath('idea-demo1-cluster/vpc/ssm-vpc-endpoint/Resource');
     assert.equal(iface.Properties.VpcEndpointType, 'Interface');
     assert.equal(iface.Properties.PrivateDnsEnabled, true);
     assert.equal(iface.Properties.ServiceName, 'com.amazonaws.us-east-2.ssm');
     const idByPath = (path: string): string =>
       Object.keys(mine).find((id) => (mine[id] as Json).Metadata?.['aws:cdk:path'] === path) as string;
-    const groupId = idByPath('idea-dev27-cluster/vpc-endpoint-security-group/Resource');
+    const groupId = idByPath('idea-demo1-cluster/vpc-endpoint-security-group/Resource');
     assert.match(groupId, /^vpcendpointsecuritygroup[0-9A-F]{8}$/);
     assert.deepEqual(iface.Properties.SecurityGroupIds, [{ 'Fn::GetAtt': [groupId, 'GroupId'] }]);
     assert.equal(iface.Properties.SubnetIds.length, 3);
@@ -346,7 +346,7 @@ describe('cluster stack network', () => {
       { Key: 'idea:ClusterName', Value: CLUSTER },
       { Key: 'Name', Value: 'ssm-vpc-endpoint' },
     ]);
-    const endpointId = idByPath('idea-dev27-cluster/vpc/ssm-vpc-endpoint/Resource');
+    const endpointId = idByPath('idea-demo1-cluster/vpc/ssm-vpc-endpoint/Resource');
     assert.match(endpointId, /^vpcssmvpcendpoint[0-9A-F]{8}$/);
     assert.deepEqual(stack.resolve(ssm.getEndpointUrl()), {
       'Fn::Join': [
@@ -371,9 +371,9 @@ describe('cluster stack network', () => {
     });
     new network.WebAcl(ctx, 'external-alb', stack);
     const mine = resources(stack);
-    assert.deepEqual(Object.keys(mine), ['ideadev27externalalbwebacl']);
+    assert.deepEqual(Object.keys(mine), ['ideademo1externalalbwebacl']);
     assert.deepEqual(
-      mine.ideadev27externalalbwebacl.Properties.Rules.map((rule: Json) => [rule.Name, rule.Priority]),
+      mine.ideademo1externalalbwebacl.Properties.Rules.map((rule: Json) => [rule.Name, rule.Priority]),
       [
         ['AWS-AWSManagedRulesAmazonIpReputationList', 0],
         ['AWS-AWSManagedRulesCommonRuleSet', 1],
@@ -398,11 +398,11 @@ describe('cluster stack network', () => {
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] as string, /^Invalid retention days value: 45\. Valid values are: \[1, 3, 5, 7, 14, 30/);
     const mine = resources(stack);
-    assert.equal(mine.ideadev27externalalbwafloggroup46833A61.Properties.RetentionInDays, 731);
-    assert.equal(mine.ideadev27externalalbwafloggingconfig.Properties.LoggingFilter, undefined);
-    assert.deepEqual(mine.ideadev27externalalbwafloggingconfig.DependsOn, [
-      'ideadev27externalalbwafloggroup46833A61',
-      'ideadev27externalalbwebacl',
+    assert.equal(mine.ideademo1externalalbwafloggroupB3C6BD0B.Properties.RetentionInDays, 731);
+    assert.equal(mine.ideademo1externalalbwafloggingconfig.Properties.LoggingFilter, undefined);
+    assert.deepEqual(mine.ideademo1externalalbwafloggingconfig.DependsOn, [
+      'ideademo1externalalbwafloggroupB3C6BD0B',
+      'ideademo1externalalbwebacl',
     ]);
   });
 });
@@ -529,7 +529,7 @@ describe('module stack security groups', () => {
     );
     const mine = resources(stack);
     const group = Object.values(mine).find((resource) => (resource as Json).Type === 'AWS::EC2::SecurityGroup') as Json;
-    assert.equal(group.Metadata['aws:cdk:path'], 'idea-dev27-directoryservice/directoryservice-security-group/Resource');
+    assert.equal(group.Metadata['aws:cdk:path'], 'idea-demo1-directoryservice/directoryservice-security-group/Resource');
     assert.equal(group.Properties.GroupDescription, 'OpenLDAP server security group');
     assert.deepEqual(
       group.Properties.SecurityGroupIngress.map((rule: Json) => [rule.FromPort, rule.Description]),
@@ -543,7 +543,7 @@ describe('module stack security groups', () => {
     assert.equal(rules.length, 1);
     assert.match(
       rules[0]?.Metadata['aws:cdk:path'],
-      /^idea-dev27-directoryservice\/directoryservice-security-group\/from ideadev27directoryservicebastionhostsecuritygroup[0-9A-F]{8}:22$/,
+      /^idea-demo1-directoryservice\/directoryservice-security-group\/from ideademo1directoryservicebastionhostsecuritygroup[0-9A-F]{8}:22$/,
     );
     assert.equal(rules[0]?.Properties.FromPort, 22);
     assert.equal(rules[0]?.Properties.SourceSecurityGroupId, ctx.config.getString('cluster.network.security_groups.bastion-host'));
@@ -595,7 +595,7 @@ describe('module stack security groups', () => {
     assert.deepEqual(Object.keys(mine), ['sampleeip']);
     assert.deepEqual(mine.sampleeip.Properties.Tags, [
       { Key: 'idea:ClusterName', Value: CLUSTER },
-      { Key: 'Name', Value: 'idea-dev27-sample-eip' },
+      { Key: 'Name', Value: 'idea-demo1-sample-eip' },
     ]);
   });
 });

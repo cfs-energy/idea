@@ -1,7 +1,7 @@
 /**
  * `constructs/backup.ts` against templates the Python administrator generated.
  *
- * The dev27 capture has `cluster.backups.enabled: false`, so no live template contains an
+ * The demo1 capture has `cluster.backups.enabled: false`, so no live template contains an
  * `AWS::Backup::*` resource and `backup.test.ts` can only assert the shapes the spec fixes. The
  * Python-generated `cdk.out` trees under `~/.idea/clusters` (gitignored, present only where the
  * Python administrator has been run) are a two-sided oracle for the same construct: they are the

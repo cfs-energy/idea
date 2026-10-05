@@ -2,7 +2,9 @@
 Server-side base stack AMI refresh (VirtualDesktopAdmin.RefreshBaseSoftwareStackAmis).
 
 The utils method walks ss-base-* rows, resolves the newest AMI through the same
-resolver ideactl uses, updates changed rows and reindexes them. One stack's EC2
+resolver ideactl uses, moves each changed row's base (the image the next bake starts
+from) and reindexes it. ami_id never moves here: a new stock image is not validated, and
+only the image pipeline promotes (the promote gate). One stack's EC2
 failure must not stop the others. Elevated access is enforced centrally in
 VirtualDesktopAdminAPI.invoke, so authorization is not re-tested here.
 """
@@ -98,7 +100,7 @@ def build_utils(
     return utils
 
 
-def test_a_newer_ami_updates_the_row_and_reindexes():
+def test_a_newer_ami_moves_only_the_base_and_reindexes():
     db = FakeStackDb(
         [a_stack('ss-base-amazonlinux2023-x86-64-base', 'ami-oldoldoldoldold01')]
     )
@@ -109,18 +111,25 @@ def test_a_newer_ami_updates_the_row_and_reindexes():
 
     results = utils.refresh_base_software_stack_amis()
 
-    assert [r.status for r in results] == ['updated']
+    assert [r.status for r in results] == ['base_updated']
     assert results[0].old_ami == 'ami-oldoldoldoldold01'
-    assert results[0].new_ami == 'ami-newnewnewnewnew01'
+    assert results[0].new_ami is None
     assert results[0].new_base_ami == 'ami-newnewnewnewnew01'
-    assert db.updated[0].ami_id == 'ami-newnewnewnewnew01'
+    assert 'has not been validated' in results[0].message
+    assert db.updated[0].ami_id == 'ami-oldoldoldoldold01'
     assert db.updated[0].base_ami_id == 'ami-newnewnewnewnew01'
     utils.index_software_stack_entry_to_opensearch.assert_called_once()
 
 
-def test_a_current_ami_is_left_alone():
+def test_a_current_base_is_left_alone():
     db = FakeStackDb(
-        [a_stack('ss-base-amazonlinux2023-x86-64-base', 'ami-newnewnewnewnew01')]
+        [
+            a_stack(
+                'ss-base-amazonlinux2023-x86-64-base',
+                'ami-oldoldoldoldold01',
+                base_ami_id='ami-newnewnewnewnew01',
+            )
+        ]
     )
     ec2 = FakeEc2(
         'ami-newnewnewnewnew01', 'al2023-ami-2023.12.20260817.0-kernel-6.1-x86_64'
@@ -155,7 +164,7 @@ def test_one_failing_stack_does_not_stop_the_rest():
     # the cli resolver swallows the EC2 error and returns None, so the message
     # is the no-match one; what matters is a truthy message and isolation
     assert by_id['ss-base-rhel9-x86-64-base'].message
-    assert by_id['ss-base-amazonlinux2023-x86-64-base'].status == 'updated'
+    assert by_id['ss-base-amazonlinux2023-x86-64-base'].status == 'base_updated'
     assert len(db.updated) == 1
 
 
@@ -186,7 +195,7 @@ def test_selected_ids_refresh_only_those():
     )
 
     assert [r.stack_id for r in results] == ['ss-base-amazonlinux2023-x86-64-base']
-    assert results[0].status == 'updated'
+    assert results[0].status == 'base_updated'
     assert len(db.updated) == 1
 
 
@@ -208,7 +217,7 @@ def test_unknown_and_non_base_ids_error_without_stopping_the_rest():
     )
 
     by_id = {r.stack_id: r for r in results}
-    assert by_id['ss-base-amazonlinux2023-x86-64-base'].status == 'updated'
+    assert by_id['ss-base-amazonlinux2023-x86-64-base'].status == 'base_updated'
     assert by_id['my-custom-stack'].status == 'error'
     assert by_id['my-custom-stack'].message == 'not a refreshable base stack'
     assert by_id['ss-base-ghost-x86-64-base'].status == 'error'
@@ -216,7 +225,7 @@ def test_unknown_and_non_base_ids_error_without_stopping_the_rest():
     assert len(db.updated) == 1
 
 
-def test_the_row_reports_updated_even_when_the_index_write_fails():
+def test_the_row_reports_base_updated_even_when_the_index_write_fails():
     db = FakeStackDb(
         [a_stack('ss-base-amazonlinux2023-x86-64-base', 'ami-oldoldoldoldold01')]
     )
@@ -230,10 +239,10 @@ def test_the_row_reports_updated_even_when_the_index_write_fails():
 
     results = utils.refresh_base_software_stack_amis()
 
-    assert results[0].status == 'updated'
-    assert results[0].new_ami == 'ami-newnewnewnewnew01'
+    assert results[0].status == 'base_updated'
+    assert results[0].new_base_ami == 'ami-newnewnewnewnew01'
     assert 'index' in results[0].message
-    assert db.updated[0].ami_id == 'ami-newnewnewnewnew01'
+    assert db.updated[0].base_ami_id == 'ami-newnewnewnewnew01'
 
 
 def test_an_arm64_match_never_lands_on_an_x86_64_stack():
@@ -289,8 +298,8 @@ def test_a_built_image_survives_the_refresh_and_only_the_base_moves():
     assert results[0].status == 'base_updated'
     assert results[0].new_ami is None
     assert results[0].new_base_ami == 'ami-newnewnewnewnew01'
-    assert 'still launches from built image ami-builtbuiltbuilt1' in results[0].message
-    assert 'rebuild' in results[0].message
+    assert 'keep launching from ami-builtbuiltbuilt1' in results[0].message
+    assert 'Refresh and validate' in results[0].message
     assert db.updated[0].ami_id == 'ami-builtbuiltbuilt1'
     assert db.updated[0].base_ami_id == 'ami-newnewnewnewnew01'
 
