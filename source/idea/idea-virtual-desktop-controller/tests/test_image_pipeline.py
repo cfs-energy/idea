@@ -778,6 +778,100 @@ def test_the_sdk_sweep_keeps_in_flight_rows_for_the_leader():
     db.put.assert_not_called()
 
 
+# upgrade: base stacks an administrator customized before stack pins existed
+
+
+def upgraded_harness():
+    """a 26.10.0-shaped cluster: no image_pinned on any stack, a legacy builder row"""
+    stacks = [
+        base_stack('rocky9', ami='ami-admin'),
+        base_stack('rocky8', ami='ami-seeded'),
+        base_stack('rhel9', ami='ami-legacy-built'),
+        base_stack('rhel8', ami='ami-vendor'),
+        base_stack('amazonlinux2023', ami='ami-stockold'),
+        base_stack('ubuntu2204', ami='ami-gone'),
+        base_stack('ubuntu2404', ami='ami-mine', pinned=True),
+    ]
+    for stack in stacks:
+        stack.image_pinned = stack.image_pinned or None
+    h = Harness(stacks)
+    h.config.values.pop('vdc.software_stacks.images_baked_release')
+    h.stack_db.config['rocky8']['x86-64'] = {
+        'us-east-2': [{'ami-id': 'ami-seeded', 'ss-id-suffix': 'base'}]
+    }
+    # what 26.10.0 left in the image-builds table for a "Use built image" stack
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rhel9',
+            architecture='x86_64',
+            status='complete',
+            image_id='ami-legacy-built',
+            update_target=True,
+        ).migrated(module.ImageKind.DESKTOP)
+    )
+    h.ec2.add_image('ami-admin', name='my-golden-rocky9')
+    h.ec2.images['ami-admin']['OwnerId'] = '111111111111'
+    h.ec2.add_image('ami-vendor', name='RHEL-8.10.0_HVM-x86_64')
+    h.ec2.images['ami-vendor']['OwnerId'] = '309956199498'
+    return h
+
+
+def test_upgrade_pins_only_base_stacks_on_an_administrators_image():
+    h = upgraded_harness()
+    pinned = h.pipeline.pin_customized_base_stacks()
+    assert sorted(pinned) == [
+        'ss-base-rocky9-x86-64-base',
+        'ss-base-ubuntu2204-x86-64-base',
+    ]
+    stacks = h.stack_db.stacks
+    assert stacks['ss-base-rocky9-x86-64-base'].ami_id == 'ami-admin'
+    for managed in ('rocky8', 'rhel9', 'rhel8', 'amazonlinux2023'):
+        assert not stacks[f'ss-base-{managed}-x86-64-base'].image_pinned, managed
+    # idempotent: a second run (every tick until the release settles) changes nothing
+    updates = list(h.stack_db.updated)
+    assert h.pipeline.pin_customized_base_stacks() == []
+    assert h.stack_db.updated == updates
+
+
+def test_upgrade_pins_before_the_release_bake_can_replace_the_image():
+    h = Harness(
+        [
+            base_stack('rocky9', ami='ami-admin'),
+            base_stack('rocky9', suffix='dcv', ami='ami-stockold'),
+        ]
+    )
+    h.stack_db.stacks['ss-base-rocky9-x86-64-base'].image_pinned = None
+    h.config.values.pop('vdc.software_stacks.images_baked_release')
+    h.ec2.add_image('ami-admin', name='my-golden-rocky9')
+    h.ec2.add_image('ami-new', name='idea-dcv-host-rocky9-v10022026-120000-abcd')
+
+    h.pipeline.tick(now=T0, blocking=True)
+
+    assert h.row().current_image_id == 'ami-new'
+    admin = h.stack_db.stacks['ss-base-rocky9-x86-64-base']
+    assert (admin.ami_id, admin.image_pinned) == ('ami-admin', True)
+    assert h.stack_db.stacks['ss-base-rocky9-x86-64-dcv'].ami_id == 'ami-new'
+
+
+def test_upgrade_pins_nothing_when_ec2_cannot_answer():
+    from botocore.exceptions import ClientError
+
+    h = upgraded_harness()
+
+    def throttled(**kwargs):
+        raise ClientError({'Error': {'Code': 'RequestLimitExceeded'}}, 'DescribeImages')
+
+    h.ec2.describe_images = throttled
+    with pytest.raises(ClientError):
+        h.pipeline.tick(now=T0)
+    assert not any(
+        s.image_pinned
+        for s in h.stack_db.stacks.values()
+        if s.stack_id != 'ss-base-ubuntu2404-x86-64-base'
+    )
+    assert h.row('rocky9') is None  # nothing queued either
+
+
 # cleanup
 
 

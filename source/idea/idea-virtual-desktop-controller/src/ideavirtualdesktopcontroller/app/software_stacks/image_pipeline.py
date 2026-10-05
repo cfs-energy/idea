@@ -21,6 +21,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
+from botocore.exceptions import ClientError
+
 from ideadatamodel import (
     IMAGE_ROW_IN_FLIGHT,
     ImageBuildRecord,
@@ -56,7 +58,11 @@ from ideasdk.aws.image_builds import (
     resume_record,
     terminate_builder,
 )
-from ideasdk.aws.stock_amis import resolve_stock_image, stock_unsupported_reason
+from ideasdk.aws.stock_amis import (
+    resolve_stock_image,
+    stock_unsupported_reason,
+    trusted_owners,
+)
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.sessions.image_validation import (
     CapacityWait,
@@ -506,6 +512,12 @@ class DesktopImagePipeline:
 
     def tick(self, now: Optional[datetime] = None, blocking: bool = False):
         now = now or now_utc()
+        # until this release has settled, nothing promotes before customized stacks are
+        # pinned; a failure here stops the tick, and the next tick tries again
+        if self.context.config().get_string(BAKED_RELEASE_KEY, default=None) != (
+            self.version
+        ):
+            self.pin_customized_base_stacks()
         rows = self.managed()
         settings = self.settings()
         for record in rows:
@@ -526,6 +538,90 @@ class DesktopImagePipeline:
         if time.monotonic() - self._last_cleanup > CLEANUP_EVERY_SECONDS:
             self._last_cleanup = time.monotonic()
             self.cleanup()
+
+    def pin_customized_base_stacks(self) -> List[str]:
+        """
+        the upgrade step for base stacks an administrator pointed at their own image before
+        stack pins existed: pin them, so the release bake does not replace that image.
+        managed, and left unpinned: an image the seeding config names, any image a
+        managed row recorded (pipeline and pre-pipeline builder output alike), a stock
+        image a base refresh set (ami_id == base_ami_id), an image this cluster's
+        pipeline tagged, and the vendor's stock image. anything else, including a custom
+        build and an image that no longer exists, is the administrator's. idempotent:
+        pinned stacks are skipped. returns the stack ids it pinned
+        """
+        stacks = [
+            s
+            for s in self._all_stacks()
+            if (s.stack_id or '').startswith('ss-base-')
+            and not s.image_pinned
+            and s.ami_id
+        ]
+        if not stacks:
+            return []
+        region = self.context.aws().ec2().meta.region_name
+        managed = set()
+        for arches in (self._stack_db.get_base_software_stack_config() or {}).values():
+            for arch_config in (arches or {}).values():
+                for entry in (arch_config or {}).get(region) or []:
+                    managed.add((entry or {}).get('ami-id'))
+        for record in self.managed():
+            managed.update(
+                (record.image_id, record.current_image_id, record.previous_image_id)
+            )
+        unknown = [
+            s
+            for s in stacks
+            if s.ami_id not in managed
+            and not (s.base_ami_id and s.ami_id == s.base_ami_id)
+        ]
+        if not unknown:
+            return []
+        images = self._describe_for_pinning({s.ami_id for s in unknown})
+        pinned = []
+        for stack in unknown:
+            image = images.get(stack.ami_id)
+            base_os = getattr(stack.base_os, 'value', stack.base_os)
+            vendors = [o for o in trusted_owners(base_os, region) if o != 'self']
+            if image is not None and (
+                any(
+                    t.get('Key') == PIPELINE_IMAGE_TAG and t.get('Value') == 'desktop'
+                    for t in image.get('Tags', [])
+                )
+                or image.get('OwnerId') in vendors
+                or image.get('ImageOwnerAlias') in vendors
+            ):
+                continue
+            fresh = self._stack_db.get(stack_id=stack.stack_id, base_os=stack.base_os)
+            if fresh is None or fresh.image_pinned or fresh.ami_id != stack.ami_id:
+                continue
+            fresh.image_pinned = True
+            updated = self._stack_db.update(fresh)
+            self._stack_utils.update_software_stack_entry_to_opensearch(updated)
+            pinned.append(stack.stack_id)
+            self._logger.warning(
+                f'{stack.stack_id} pinned: it launches from {stack.ami_id}'
+                f'{"" if image else " (not found)"}, which is neither a stock image nor '
+                'one the image pipeline built; unpin it to let the pipeline replace it'
+            )
+        return pinned
+
+    def _describe_for_pinning(self, image_ids) -> Dict[str, Dict]:
+        """describe_images by id; an id EC2 does not know is absent, any other error raises"""
+        ec2 = self.context.aws().ec2()
+        found: Dict[str, Dict] = {}
+        for image_id in sorted(image_ids):
+            try:
+                result = ec2.describe_images(ImageIds=[image_id])
+            except ClientError as e:
+                if not e.response.get('Error', {}).get('Code', '').startswith(
+                    'InvalidAMIID'
+                ):
+                    raise
+                continue
+            for image in result.get('Images', []):
+                found[image['ImageId']] = image
+        return found
 
     def _alive(self, record) -> bool:
         with _LIVE_LOCK:
