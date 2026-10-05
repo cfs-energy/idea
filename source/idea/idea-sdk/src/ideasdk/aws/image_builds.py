@@ -450,6 +450,7 @@ def deregister_legacy_images(
     image uses. images without this cluster's tag are never candidates
     """
     if not min_age_days or min_age_days <= 0:
+        logger.info('legacy image sweep: disabled (legacy_cleanup_min_age_days is 0)')
         return []
     ec2 = context.aws().ec2()
     images = ec2.describe_images(
@@ -471,23 +472,38 @@ def deregister_legacy_images(
     def created(image: Dict) -> datetime:
         return datetime.fromisoformat(image['CreationDate'].replace('Z', '+00:00'))
 
+    # the pipeline's own images keep current + previous in their own sweep
+    legacy = [
+        i
+        for i in images
+        if not any(t.get('Key') == PIPELINE_IMAGE_TAG for t in i.get('Tags', []))
+    ]
+    in_flight = [
+        i for i in legacy if i.get('State') != 'available' or i.get('Name') in baking
+    ]
+    too_new = [
+        i
+        for i in legacy
+        if i not in in_flight and not (i.get('CreationDate') and created(i) < cutoff)
+    ]
     candidates = sorted(
-        (
-            i
-            for i in images
-            # the pipeline's own images keep current + previous in their own sweep
-            if not any(t.get('Key') == PIPELINE_IMAGE_TAG for t in i.get('Tags', []))
-            and i.get('State') == 'available'
-            and i.get('Name') not in baking
-            and i.get('CreationDate')
-            and created(i) < cutoff
-        ),
-        key=created,
+        (i for i in legacy if i not in in_flight and i not in too_new), key=created
     )
+    removed: List[str] = []
+    capped = False
+
+    def summary(referenced: int) -> None:
+        logger.info(
+            f'legacy image sweep: {len(legacy)} candidates, '
+            f'{referenced + len(too_new) + len(in_flight)} kept ({referenced} referenced, '
+            f'{len(too_new)} too new, {len(in_flight)} in flight), {len(removed)} deleted, '
+            f'capped={"yes" if capped else "no"}'
+        )
+
     if not candidates:
+        summary(0)
         return []
     references = referenced_images(context, [i['ImageId'] for i in candidates])
-    removed = []
     for image in candidates:
         if image['ImageId'] in references:
             continue
@@ -496,6 +512,7 @@ def deregister_legacy_images(
                 f'legacy image cleanup stopped at {LEGACY_MAX_PER_SWEEP} images this '
                 'sweep; the rest are checked again next sweep'
             )
+            capped = True
             break
         ec2.deregister_image(ImageId=image['ImageId'])
         removed.append(image['ImageId'])
@@ -505,6 +522,7 @@ def deregister_legacy_images(
             'setting, queue, stack, image row, instance or launch template names it'
         )
         delete_unshared_snapshots(ec2, image)
+    summary(sum(1 for i in candidates if i['ImageId'] in references))
     return removed
 
 

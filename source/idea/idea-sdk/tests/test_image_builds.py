@@ -1075,3 +1075,25 @@ def test_legacy_cleanup_treats_a_module_table_never_created_as_empty():
     ec2.add('ami-free', 90)
     del dynamodb.tables['idea-test.vdc.controller.image-builds']
     assert sweep(context) == ['ami-free']
+
+
+def test_a_legacy_sweep_that_deletes_nothing_still_logs_its_summary():
+    from ideasdk.aws.image_builds import deregister_legacy_images
+
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-young', 5)
+    ec2.add('ami-ref', 90)
+    dynamodb.tables['idea-test.cluster-settings'].append({'value': {'S': 'ami-ref'}})
+    logger = Mock()
+    assert deregister_legacy_images(context, 30, set(), logger, now=NOW) == []
+    logger.info.assert_called_once_with(
+        'legacy image sweep: 2 candidates, 2 kept (1 referenced, 1 too new, '
+        '0 in flight), 0 deleted, capped=no'
+    )
+    logger = Mock()
+    ec2.images.clear()
+    deregister_legacy_images(context, 30, set(), logger, now=NOW)
+    logger.info.assert_called_once_with(
+        'legacy image sweep: 0 candidates, 0 kept (0 referenced, 0 too new, '
+        '0 in flight), 0 deleted, capped=no'
+    )
