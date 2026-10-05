@@ -181,6 +181,57 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
     )
 
 
+def test_canary_copies_a_queue_whose_subnets_offer_the_canary_size():
+    """a local-zone GPU queue listed first cannot launch c7i.large; the canary skips it"""
+    from ideadatamodel import SocaJobParams
+
+    svc = service()
+    context = svc.context
+    zones = {'subnet-lz': 'us-east-2-lz-1', 'subnet-a': 'us-east-2a'}
+    offered = {'us-east-2-lz-1': {'g5.xlarge'}, 'us-east-2a': {'c7i.large'}}
+    context.aws_util.return_value.get_subnet_availability_zone.side_effect = zones.get
+    context.aws_util.return_value.get_instance_types_offered.side_effect = offered.get
+    gpu = HpcQueueProfile(
+        name='gpu', default_job_params=SocaJobParams(subnet_ids=['subnet-lz'])
+    )
+    other = HpcQueueProfile(
+        name='other',
+        default_job_params=SocaJobParams(base_os='amazonlinux2023', subnet_ids=['subnet-a']),
+    )
+    serving = HpcQueueProfile(
+        name='serving',
+        default_job_params=SocaJobParams(base_os='rocky9', subnet_ids=['subnet-a']),
+    )
+    canary = ComputeImageCanary(context)
+    record = row(image_id='ami-candidate')
+    assert canary._source_profile(record, [gpu, other, serving]).name == 'serving'
+    assert canary._source_profile(record, [gpu, other]).name == 'other'
+    with pytest.raises(exceptions.SocaException, match='c7i.large'):
+        canary._source_profile(record, [gpu])
+
+    # through validate: the hidden queue is a copy of the queue that can launch
+    context.projects_client.get_project_by_name.return_value = Project(
+        project_id='p', name='idea-validate', enabled=True
+    )
+    context.queue_profiles.list_queue_profiles.return_value = [gpu, serving]
+    copied = []
+
+    def create(profile):
+        copied.append(profile)
+        raise RuntimeError('stop after the copy')
+
+    context.queue_profiles.create_queue_profile.side_effect = create
+    context.config().values.update(
+        {
+            'shared-storage.data.mount_dir': '/data',
+            'shared-storage': {'data': {'mount_dir': '/data', 'scope': ['cluster']}},
+        }
+    )
+    with pytest.raises(Exception):
+        canary.validate(record, Mock())
+    assert copied[0].default_job_params.subnet_ids == ['subnet-a']
+
+
 def test_a_compute_only_cluster_creates_the_validation_identity(monkeypatch):
     """no desktop controller to create them: the canary makes the user and project itself"""
     from ideasdk.aws import validation_identity

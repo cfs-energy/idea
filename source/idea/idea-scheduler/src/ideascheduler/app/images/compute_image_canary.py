@@ -157,6 +157,55 @@ class ComputeImageCanary:
                 break
         return errors
 
+    def _offers(self, profile, instance_type) -> bool:
+        """
+        whether a zone of the profile's subnets offers instance_type, as submit checks it:
+        the queue's subnets, else the cluster's private subnets; a lookup that fails
+        counts as offered
+        """
+        params = profile.default_job_params
+        subnets = (params.subnet_ids if params else None) or (
+            self.context.config().get_list(
+                'cluster.network.private_subnets', default=[]
+            )
+        )
+        if not subnets:
+            return True
+        aws_util = self.context.aws_util()
+        for subnet in subnets:
+            zone = aws_util.get_subnet_availability_zone(subnet)
+            if zone is None:
+                return True
+            offered = aws_util.get_instance_types_offered(zone)
+            if offered is None or instance_type in offered:
+                return True
+        return False
+
+    def _source_profile(self, record, sources):
+        """
+        the queue the hidden canary queue copies: one whose subnets can launch the canary
+        size, preferring a queue this row serves (its image, else its OS)
+        """
+        size = canary_job_params(None, record).instance_types[0]
+
+        def serves(profile) -> int:
+            params = profile.default_job_params
+            if params is None:
+                return 2
+            if record.current_image_id and params.instance_ami == (
+                record.current_image_id
+            ):
+                return 0
+            return 1 if params.base_os == record.base_os else 2
+
+        for profile in sorted(sources, key=serves):
+            if self._offers(profile, size):
+                return profile
+        raise exceptions.invalid_params(
+            f'No compute queue profile has a subnet in an availability zone that offers '
+            f'{size}, the validation instance type.'
+        )
+
     def validate(self, record, progress):
         from ideascheduler.app.api.scheduler_api import SchedulerAPI
 
@@ -185,12 +234,13 @@ class ComputeImageCanary:
             raise exceptions.invalid_params(
                 'A compute queue profile is required for validation.'
             )
+        source = self._source_profile(record, sources)
         token = uuid.uuid4().hex
         name = (
             VALIDATION_QUEUE_PREFIX
             + hashlib.sha256(record.image_id.encode()).hexdigest()[:12]
         )
-        candidate = sources[0].model_copy(deep=True)
+        candidate = source.model_copy(deep=True)
         candidate.queue_profile_id = None
         candidate.name = candidate.title = name
         candidate.queues = [name]
