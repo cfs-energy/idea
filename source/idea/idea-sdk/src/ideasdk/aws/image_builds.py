@@ -5,6 +5,7 @@ that executes a build in a thread and keeps that record current, and the helpers
 Custom AMIs page uses to classify what a cluster runs today.
 """
 
+import json
 import re
 import socket
 import threading
@@ -334,20 +335,176 @@ def deregister_unreferenced_images(
             continue
         ec2.deregister_image(ImageId=image['ImageId'])
         removed.append(image['ImageId'])
-        for mapping in image.get('BlockDeviceMappings', []):
-            snapshot = (mapping.get('Ebs') or {}).get('SnapshotId')
-            if not snapshot:
-                continue
-            others = ec2.describe_images(
-                Owners=['self'],
-                Filters=[
-                    {'Name': 'block-device-mapping.snapshot-id', 'Values': [snapshot]}
-                ],
-            ).get('Images', [])
-            if all(o['ImageId'] == image['ImageId'] for o in others):
-                ec2.delete_snapshot(SnapshotId=snapshot)
+        delete_unshared_snapshots(ec2, image)
     if removed:
         logger.info(f'deregistered unreferenced {pipeline} images: {removed}')
+    return removed
+
+
+def delete_unshared_snapshots(ec2, image: Dict) -> None:
+    """delete each snapshot of a deregistered image that no remaining image uses"""
+    for mapping in image.get('BlockDeviceMappings', []):
+        snapshot = (mapping.get('Ebs') or {}).get('SnapshotId')
+        if not snapshot:
+            continue
+        others = ec2.describe_images(
+            Owners=['self'],
+            Filters=[
+                {'Name': 'block-device-mapping.snapshot-id', 'Values': [snapshot]}
+            ],
+        ).get('Images', [])
+        if all(o['ImageId'] == image['ImageId'] for o in others):
+            ec2.delete_snapshot(SnapshotId=snapshot)
+
+
+# a builder image the pipeline did not tag as its own (an older release's bake, a manual build)
+# is deregistered only once it is this many days old and nothing names it.
+# <module>.images.legacy_cleanup_min_age_days; 0 turns legacy cleanup off
+LEGACY_MIN_AGE_DAYS = 30
+# a wrong reference check or setting can take at most this many legacy images per sweep
+LEGACY_MAX_PER_SWEEP = 20
+LIVE_INSTANCE_STATES = ['pending', 'running', 'shutting-down', 'stopping', 'stopped']
+
+
+def _reference_tables(context) -> List[str]:
+    """the cluster tables an image id can be written into: settings, queues, stacks, image rows"""
+    cluster = context.cluster_name()
+    config = context.config()
+    tables = [f'{cluster}.cluster-settings']
+    if config.is_module_enabled(constants.MODULE_SCHEDULER):
+        module_id = config.get_module_id(constants.MODULE_SCHEDULER)
+        tables += [
+            f'{cluster}.{module_id}.queue-profiles',
+            f'{cluster}.{module_id}.image-builds',
+        ]
+    if config.is_module_enabled(constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER):
+        module_id = config.get_module_id(constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)
+        tables += [
+            f'{cluster}.{module_id}.controller.software-stacks',
+            f'{cluster}.{module_id}.controller.image-builds',
+        ]
+    return tables
+
+
+def referenced_images(context, image_ids: List[str]) -> Dict[str, str]:
+    """
+    image id -> where it is still named: any attribute of any item in the reference tables (raw
+    items, so a field no model knows still counts), any instance that is not terminated, any
+    launch template version. a source that cannot be read raises, so nothing is deleted
+    """
+    found: Dict[str, str] = {}
+    remaining = lambda: [i for i in image_ids if i not in found]  # noqa: E731
+    dynamodb = context.aws().dynamodb()
+    for table in _reference_tables(context):
+        try:
+            for page in dynamodb.get_paginator('scan').paginate(TableName=table):
+                for item in page.get('Items', []):
+                    text = json.dumps(item, default=str)
+                    for image_id in remaining():
+                        if image_id in text:
+                            found[image_id] = f'table {table}'
+        except ClientError as e:
+            # a module's table that was never created names nothing
+            if e.response.get('Error', {}).get('Code') != 'ResourceNotFoundException':
+                raise
+    ec2 = context.aws().ec2()
+    ids = remaining()
+    for start in range(0, len(ids), 100):
+        for page in ec2.get_paginator('describe_instances').paginate(
+            Filters=[
+                {'Name': 'image-id', 'Values': ids[start : start + 100]},
+                {'Name': 'instance-state-name', 'Values': LIVE_INSTANCE_STATES},
+            ]
+        ):
+            for reservation in page.get('Reservations', []):
+                for instance in reservation.get('Instances', []):
+                    found.setdefault(
+                        instance.get('ImageId'),
+                        f'instance {instance.get("InstanceId")}',
+                    )
+    if not remaining():
+        return found
+    for page in ec2.get_paginator('describe_launch_templates').paginate():
+        for template in page.get('LaunchTemplates', []):
+            for versions in ec2.get_paginator(
+                'describe_launch_template_versions'
+            ).paginate(LaunchTemplateId=template['LaunchTemplateId']):
+                for version in versions.get('LaunchTemplateVersions', []):
+                    image_id = (version.get('LaunchTemplateData') or {}).get('ImageId')
+                    if image_id in image_ids:
+                        found.setdefault(
+                            image_id,
+                            f'launch template {template.get("LaunchTemplateName")} '
+                            f'version {version.get("VersionNumber")}',
+                        )
+    return found
+
+
+def deregister_legacy_images(
+    context, min_age_days: Optional[int], baking: set, logger, now=None
+) -> List[str]:
+    """
+    deregister this cluster's builder images of this module that the pipeline did not tag
+    (older releases, manual builds) once they are min_age_days old and nothing names them,
+    oldest first and at most LEGACY_MAX_PER_SWEEP per sweep, with the snapshots no remaining
+    image uses. images without this cluster's tag are never candidates
+    """
+    if not min_age_days or min_age_days <= 0:
+        return []
+    ec2 = context.aws().ec2()
+    images = ec2.describe_images(
+        Owners=['self'],
+        Filters=[
+            {
+                'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
+                'Values': [context.cluster_name()],
+            },
+            {'Name': f'tag:{constants.IDEA_TAG_AMI_BUILDER}', 'Values': ['true']},
+            {
+                'Name': f'tag:{constants.IDEA_TAG_MODULE_NAME}',
+                'Values': [context.module_name()],
+            },
+        ],
+    ).get('Images', [])
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=min_age_days)
+
+    def created(image: Dict) -> datetime:
+        return datetime.fromisoformat(image['CreationDate'].replace('Z', '+00:00'))
+
+    candidates = sorted(
+        (
+            i
+            for i in images
+            # the pipeline's own images keep current + previous in their own sweep
+            if not any(t.get('Key') == PIPELINE_IMAGE_TAG for t in i.get('Tags', []))
+            and i.get('State') == 'available'
+            and i.get('Name') not in baking
+            and i.get('CreationDate')
+            and created(i) < cutoff
+        ),
+        key=created,
+    )
+    if not candidates:
+        return []
+    references = referenced_images(context, [i['ImageId'] for i in candidates])
+    removed = []
+    for image in candidates:
+        if image['ImageId'] in references:
+            continue
+        if len(removed) >= LEGACY_MAX_PER_SWEEP:
+            logger.warning(
+                f'legacy image cleanup stopped at {LEGACY_MAX_PER_SWEEP} images this '
+                'sweep; the rest are checked again next sweep'
+            )
+            break
+        ec2.deregister_image(ImageId=image['ImageId'])
+        removed.append(image['ImageId'])
+        logger.info(
+            f'deregistered legacy builder image {image["ImageId"]} ({image.get("Name")}): '
+            f'created {image["CreationDate"]}, older than {min_age_days} days, and no '
+            'setting, queue, stack, image row, instance or launch template names it'
+        )
+        delete_unshared_snapshots(ec2, image)
     return removed
 
 

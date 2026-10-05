@@ -761,3 +761,317 @@ def test_resume_goes_to_the_test_launch_when_the_image_exists():
     )
     assert (record.status, record.image_id) == ('test_launching', 'ami-1')
     context.aws().ec2().stop_instances.assert_not_called()
+
+
+# legacy builder image cleanup
+
+NOW = datetime(2026, 10, 5, tzinfo=timezone.utc)
+
+
+class Pages:
+    def __init__(self, call):
+        self.call = call
+
+    def paginate(self, **kwargs):
+        return [self.call(**kwargs)]
+
+
+class LegacyEc2:
+    """honors the tag, snapshot, image-id and state filters the legacy sweep sends"""
+
+    def __init__(self):
+        self.images = {}
+        self.instances = []
+        self.templates = {}
+        self.deregistered = []
+        self.deleted_snapshots = []
+
+    def add(self, image_id, days_old, cluster='idea-test', module='scheduler', **tags):
+        tags = {'idea:AmiBuilder': 'true', 'idea:ModuleName': module, **tags}
+        if cluster:
+            tags['idea:ClusterName'] = cluster
+        self.images[image_id] = {
+            'ImageId': image_id,
+            'Name': f'idea-compute-node-{image_id}',
+            'State': 'available',
+            'CreationDate': (NOW - timedelta(days=days_old)).strftime(
+                '%Y-%m-%dT%H:%M:%S.000Z'
+            ),
+            'Tags': [{'Key': k, 'Value': v} for k, v in tags.items()],
+            'BlockDeviceMappings': [{'Ebs': {'SnapshotId': 'snap-' + image_id}}],
+        }
+        return self.images[image_id]
+
+    def get_paginator(self, name):
+        return Pages(getattr(self, name))
+
+    def describe_images(self, Owners, Filters):
+        assert Owners == ['self']
+        found = list(self.images.values())
+        for f in Filters:
+            if f['Name'] == 'block-device-mapping.snapshot-id':
+                found = [
+                    i
+                    for i in found
+                    if any(
+                        m['Ebs']['SnapshotId'] in f['Values']
+                        for m in i['BlockDeviceMappings']
+                    )
+                ]
+            else:
+                key = f['Name'][len('tag:') :]
+                found = [
+                    i
+                    for i in found
+                    if {t['Key']: t['Value'] for t in i['Tags']}.get(key) in f['Values']
+                ]
+        return {'Images': found}
+
+    def describe_instances(self, Filters):
+        values = {f['Name']: f['Values'] for f in Filters}
+        return {
+            'Reservations': [
+                {
+                    'Instances': [
+                        i
+                        for i in self.instances
+                        if i['ImageId'] in values['image-id']
+                        and i['State']['Name'] in values['instance-state-name']
+                    ]
+                }
+            ]
+        }
+
+    def describe_launch_templates(self):
+        return {
+            'LaunchTemplates': [
+                {'LaunchTemplateId': k, 'LaunchTemplateName': k} for k in self.templates
+            ]
+        }
+
+    def describe_launch_template_versions(self, LaunchTemplateId):
+        return {
+            'LaunchTemplateVersions': [
+                {'VersionNumber': n, 'LaunchTemplateData': {'ImageId': image_id}}
+                for n, image_id in enumerate(self.templates[LaunchTemplateId], 1)
+            ]
+        }
+
+    def deregister_image(self, ImageId):
+        self.deregistered.append(ImageId)
+        del self.images[ImageId]
+
+    def delete_snapshot(self, SnapshotId):
+        self.deleted_snapshots.append(SnapshotId)
+
+
+class LegacyDynamo:
+    def __init__(self):
+        self.tables = {
+            'idea-test.cluster-settings': [],
+            'idea-test.scheduler.queue-profiles': [],
+            'idea-test.scheduler.image-builds': [],
+            'idea-test.vdc.controller.software-stacks': [],
+            'idea-test.vdc.controller.image-builds': [],
+        }
+        self.failing = None
+
+    def get_paginator(self, name):
+        assert name == 'scan'
+        return Pages(self.scan)
+
+    def scan(self, TableName):
+        if TableName == self.failing:
+            raise ClientError({'Error': {'Code': 'AccessDeniedException'}}, 'Scan')
+        if TableName not in self.tables:
+            raise ClientError({'Error': {'Code': 'ResourceNotFoundException'}}, 'Scan')
+        return {'Items': self.tables[TableName]}
+
+
+def legacy_context(module='scheduler'):
+    ec2, dynamodb = LegacyEc2(), LegacyDynamo()
+    context = Mock()
+    context.cluster_name.return_value = 'idea-test'
+    context.module_name.return_value = module
+    context.config.return_value.is_module_enabled.return_value = True
+    context.config.return_value.get_module_id.side_effect = lambda name: {
+        'scheduler': 'scheduler',
+        'virtual-desktop-controller': 'vdc',
+    }[name]
+    context.aws.return_value.ec2.return_value = ec2
+    context.aws.return_value.dynamodb.return_value = dynamodb
+    return context, ec2, dynamodb
+
+
+def sweep(context, days=30, baking=()):
+    from ideasdk.aws.image_builds import deregister_legacy_images
+
+    return deregister_legacy_images(context, days, set(baking), Mock(), now=NOW)
+
+
+def test_legacy_cleanup_takes_only_images_past_the_minimum_age():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-old', 31)
+    ec2.add('ami-young', 29)
+    assert sweep(context, days=0) == []
+    assert sweep(context) == ['ami-old']
+    assert ec2.deleted_snapshots == ['snap-ami-old']
+
+
+def _reference(context, ec2, dynamodb, where):
+    """name ami-ref in one place the sweep must honor"""
+    ddb = lambda **fields: {k: {'S': v} for k, v in fields.items()}  # noqa: E731
+    tables = {
+        'setting': (
+            'idea-test.cluster-settings',
+            ddb(key='scheduler.compute_node_ami', value='ami-ref'),
+        ),
+        'any setting': (
+            'idea-test.cluster-settings',
+            ddb(key='x.y', value='["ami-ref"]'),
+        ),
+        'queue profile': (
+            'idea-test.scheduler.queue-profiles',
+            ddb(name='normal', param_instance_ami='ami-ref'),
+        ),
+        'compute row current': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', current_image_id='ami-ref'),
+        ),
+        'compute row previous': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', previous_image_id='ami-ref'),
+        ),
+        'compute row candidate': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', image_id='ami-ref'),
+        ),
+        'compute row base': (
+            'idea-test.scheduler.image-builds',
+            ddb(base_os='rocky9', source_ami='ami-ref'),
+        ),
+        'base stack': (
+            'idea-test.vdc.controller.software-stacks',
+            ddb(stack_id='ss-base', base_ami_id='ami-ref'),
+        ),
+        'custom stack': (
+            'idea-test.vdc.controller.software-stacks',
+            ddb(stack_id='custom-1', ami_id='ami-ref'),
+        ),
+        'desktop row': (
+            'idea-test.vdc.controller.image-builds',
+            ddb(base_os='rocky9', previous_image_id='ami-ref'),
+        ),
+    }
+    if where in tables:
+        table, item = tables[where]
+        dynamodb.tables[table].append(item)
+    elif where == 'stopped instance':
+        ec2.instances.append(
+            {'InstanceId': 'i-1', 'ImageId': 'ami-ref', 'State': {'Name': 'stopped'}}
+        )
+    elif where == 'launch template version':
+        ec2.templates['lt-1'] = ['ami-other', 'ami-ref', 'ami-latest']
+    else:
+        raise AssertionError(where)
+
+
+@pytest.mark.parametrize(
+    'where',
+    [
+        'setting',
+        'any setting',
+        'queue profile',
+        'compute row current',
+        'compute row previous',
+        'compute row candidate',
+        'compute row base',
+        'base stack',
+        'custom stack',
+        'desktop row',
+        'stopped instance',
+        'launch template version',
+    ],
+)
+def test_legacy_cleanup_keeps_an_image_named_anywhere(where):
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-ref', 90)
+    ec2.add('ami-free', 90)
+    _reference(context, ec2, dynamodb, where)
+    assert sweep(context) == ['ami-free']
+
+
+def test_legacy_cleanup_keeps_an_image_still_baking_under_its_name():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-baking', 90)
+    assert sweep(context, baking={'idea-compute-node-ami-baking'}) == []
+
+
+def test_legacy_cleanup_ignores_terminated_instances():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-gone', 90)
+    ec2.instances.append(
+        {'InstanceId': 'i-1', 'ImageId': 'ami-gone', 'State': {'Name': 'terminated'}}
+    )
+    assert sweep(context) == ['ami-gone']
+
+
+def test_legacy_cleanup_never_touches_another_clusters_or_untagged_or_other_module_images():
+    context, ec2, _ = legacy_context()
+    ec2.add('ami-other-cluster', 90, cluster='idea-other')
+    ec2.add('ami-no-cluster-tag', 90, cluster=None)
+    ec2.add('ami-desktop', 90, module='virtual-desktop-controller')
+    ec2.add('ami-pipeline', 90, **{'idea:ImagePipeline': 'compute'})
+    ec2.add('ami-mine', 90)
+    assert sweep(context) == ['ami-mine']
+
+
+def test_legacy_cleanup_keeps_a_custom_stack_image():
+    context, ec2, dynamodb = legacy_context(module='virtual-desktop-controller')
+    ec2.add('ami-custom', 400, module='virtual-desktop-controller')
+    dynamodb.tables['idea-test.vdc.controller.software-stacks'].append(
+        {
+            'stack_id': {'S': 'custom-1'},
+            'ami_id': {'S': 'ami-custom'},
+            'enabled': {'BOOL': False},
+        }
+    )
+    assert sweep(context) == []
+
+
+def test_legacy_cleanup_deletes_at_most_the_cap_per_sweep_oldest_first():
+    from ideasdk.aws.image_builds import LEGACY_MAX_PER_SWEEP
+
+    context, ec2, _ = legacy_context()
+    for n in range(LEGACY_MAX_PER_SWEEP + 5):
+        ec2.add(f'ami-{n:02d}', 100 + n)
+    removed = sweep(context)
+    assert len(removed) == LEGACY_MAX_PER_SWEEP
+    assert removed[0] == f'ami-{LEGACY_MAX_PER_SWEEP + 4:02d}'
+    assert len(sweep(context)) == 5
+
+
+def test_legacy_cleanup_keeps_a_snapshot_another_image_still_uses():
+    context, ec2, dynamodb = legacy_context()
+    shared = {'Ebs': {'SnapshotId': 'snap-shared'}}
+    ec2.add('ami-gone', 90)['BlockDeviceMappings'].append(shared)
+    ec2.add('ami-kept', 90)['BlockDeviceMappings'] = [shared]
+    dynamodb.tables['idea-test.cluster-settings'].append({'value': {'S': 'ami-kept'}})
+    assert sweep(context) == ['ami-gone']
+    assert ec2.deleted_snapshots == ['snap-ami-gone']
+
+
+def test_legacy_cleanup_deletes_nothing_when_a_reference_source_cannot_be_read():
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-free', 90)
+    dynamodb.failing = 'idea-test.vdc.controller.software-stacks'
+    with pytest.raises(ClientError):
+        sweep(context)
+    assert ec2.deregistered == []
+
+
+def test_legacy_cleanup_treats_a_module_table_never_created_as_empty():
+    context, ec2, dynamodb = legacy_context()
+    ec2.add('ami-free', 90)
+    del dynamodb.tables['idea-test.vdc.controller.image-builds']
+    assert sweep(context) == ['ami-free']

@@ -42,7 +42,9 @@ from ideadatamodel import (
 )
 from ideasdk.aws.image_builds import (
     IMAGE_BUILD_TAG,
+    LEGACY_MIN_AGE_DAYS,
     PIPELINE_IMAGE_TAG,
+    deregister_legacy_images,
     builder_log_link,
     is_custom_record,
     ImageBuildRecordsDB,
@@ -937,6 +939,22 @@ class DesktopImagePipeline:
             self._deregister_unreferenced()
         except Exception as e:
             self._logger.error(f'image cleanup failed: {e}')
+        try:
+            deregister_legacy_images(
+                self.context,
+                self.context.config().get_int(
+                    'virtual-desktop-controller.images.legacy_cleanup_min_age_days',
+                    default=LEGACY_MIN_AGE_DAYS,
+                ),
+                {
+                    r.ami_name
+                    for r in self.records.list_all()
+                    if r.status not in TERMINAL
+                },
+                self._logger,
+            )
+        except Exception as e:
+            self._logger.error(f'legacy image cleanup failed: {e}')
         try:
             self._reap_builders()
         except Exception as e:

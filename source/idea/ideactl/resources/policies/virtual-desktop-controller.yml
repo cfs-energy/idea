@@ -29,6 +29,8 @@ Statement:
       - ec2:DescribeNetworkInterfaces
       - ec2:DescribeImageAttribute
       - ec2:DescribeImages
+      - ec2:DescribeLaunchTemplates
+      - ec2:DescribeLaunchTemplateVersions
       - ec2:ModifyInstanceAttribute
       - ec2:CreateImage
       - ec2:StartInstances
@@ -139,15 +141,25 @@ Statement:
       - '{{ context.arns.get_log_group_arn("/" + context.config.get_module_id("virtual-desktop-controller") + "/ami-builder*") }}'
     Effect: Allow
 
-  # Image cleanup deletes the snapshots of images this cluster's pipeline baked, nothing else.
+  # Image cleanup deletes the snapshots of this cluster's desktop builder images, nothing else, and
+  # reads the queues and compute image rows first so an image named there is kept.
   - Action:
       - ec2:DeleteSnapshot
     Resource: '{{ context.arns.get_arn("ec2", "snapshot/*", aws_account_id="") }}'
     Condition:
       StringEquals:
         aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
-        aws:ResourceTag/idea:ImagePipeline: desktop
+        aws:ResourceTag/idea:AmiBuilder: 'true'
+        aws:ResourceTag/idea:ModuleName: virtual-desktop-controller
     Effect: Allow
+{% if context.config.is_module_enabled('scheduler') %}
+
+  - Action: dynamodb:Scan
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("scheduler") + ".queue-profiles") }}'
+      - '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("scheduler") + ".image-builds") }}'
+    Effect: Allow
+{% endif %}
 
   - Action:
       - dynamodb:BatchGet*

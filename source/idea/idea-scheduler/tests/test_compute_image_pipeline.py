@@ -704,3 +704,29 @@ def test_the_release_trigger_waits_a_day_for_a_row_baked_today():
     svc._setting.assert_not_called()  # the release is not marked done
     svc.tick(datetime(2026, 10, 5, 0, 1, tzinfo=timezone.utc))
     svc._enqueue.assert_called_once_with(baked, None, 'release')
+
+
+def test_sweep_cleans_legacy_compute_images_with_the_setting_and_bakes_in_flight(
+    monkeypatch,
+):
+    svc = service()
+    svc.records.put(
+        row(
+            base_os='rhel9',
+            status='building',
+            ami_name='idea-compute-node-rhel9-baking',
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        module,
+        'deregister_legacy_images',
+        lambda context, days, baking, logger: calls.append((days, baking)),
+    )
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    monkeypatch.setattr(svc, 'deregister_unreferenced_images', lambda: [])
+    svc.context.queue_profiles.list_queue_profiles.return_value = []
+    svc.context.aws().ec2().describe_instances = lambda **kwargs: {}
+    svc.context.config().values['scheduler.images.legacy_cleanup_min_age_days'] = 0
+    svc.sweep_builders(datetime.now(timezone.utc))
+    assert calls == [(0, {'idea-compute-node-rhel9-baking'})]

@@ -311,6 +311,11 @@ software_stacks:
     validation_user: idea-validate
     validation_project: idea-validate
 
+# builder images the pipeline did not bake (older releases, manual builds) are removed once
+# this many days old and nothing references them; 0 keeps them
+images:
+  legacy_cleanup_min_age_days: 30
+
 # Instance storage configuration for virtual desktop sessions
 instance_storage:
   # Configure mount point for instance store devices (NVMe/SSD)

@@ -60,7 +60,9 @@ from ideasdk.aws.image_builds import (
     image_state,
     new_record,
     newest_owned_image,
+    LEGACY_MIN_AGE_DAYS,
     PIPELINE_IMAGE_TAG,
+    deregister_legacy_images,
     deregister_unreferenced_images,
 )
 from ideasdk.aws.stock_amis import (
@@ -979,6 +981,18 @@ class ComputeImageService:
             self.deregister_unreferenced_images()
         except Exception:
             self._logger.exception('Compute image cleanup failed')
+        try:
+            deregister_legacy_images(
+                self.context,
+                self.context.config().get_int(
+                    'scheduler.images.legacy_cleanup_min_age_days',
+                    default=LEGACY_MIN_AGE_DAYS,
+                ),
+                {r.ami_name for r in self.records.list_all() if r.is_in_flight()},
+                self._logger,
+            )
+        except Exception:
+            self._logger.exception('Legacy compute image cleanup failed')
 
     def protected_images(self) -> set:
         """every image a row, a queue or the scheduler default still names"""

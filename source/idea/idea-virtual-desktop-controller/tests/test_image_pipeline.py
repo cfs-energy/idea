@@ -788,6 +788,29 @@ def test_cleanup_keeps_current_previous_references_and_bakes_in_flight():
     ]  # snap-shared is still ami-shared2's
 
 
+def test_cleanup_sweeps_legacy_images_with_the_setting_and_bakes_in_flight(monkeypatch):
+    h = Harness(config={'vdc.images.legacy_cleanup_min_age_days': 45})
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky8',
+            architecture='x86_64',
+            status='building',
+            ami_name='idea-dcv-host-rocky8-v9',
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        module,
+        'deregister_legacy_images',
+        lambda context, days, baking, logger: calls.append((days, baking)),
+    )
+    h.pipeline.cleanup()
+    assert calls == [(45, {'idea-dcv-host-rocky8-v9'})]
+    h.config.values.pop('vdc.images.legacy_cleanup_min_age_days')
+    h.pipeline.cleanup()
+    assert calls[-1][0] == 30
+
+
 def test_cleanup_reaps_leftover_builders_but_not_a_running_bake():
     h = Harness()
     old = T0 - timedelta(hours=3)
