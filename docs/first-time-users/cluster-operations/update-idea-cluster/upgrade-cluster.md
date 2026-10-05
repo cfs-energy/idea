@@ -60,10 +60,15 @@ the saved maintenance baseline.
 
 ### Compute Node Image
 
-The upgrade moves compute nodes onto the release's AMI for the cluster's Base OS, unless
-each scheduler module's `compute_node_ami` names an image built from **Administration → Images and applications → Custom images** that is newer than the
-release image, which is kept and reported. An older built image is replaced, and can be rebuilt
-from **Custom images** after the upgrade.
+The upgrade moves `scheduler.compute_node_ami` to the release's AMI for the cluster's Base OS when it still names a vendor image. It keeps the current image, and reports it, when the image is one IDEA built (`idea-compute-node-*`), when `scheduler.images.default_image_pinned` is `true`, or when the image cannot be described. A kept built image is replaced only when the compute image pipeline switches to a newly validated image.
+
+### Images After the Upgrade
+
+After the upgrade, every managed desktop and compute image is rebuilt from the newest vendor image and validated, and new desktops and jobs switch to an image only after it passes every check. This runs in the background and does not hold up the upgrade. A bake takes about 45 minutes, four at a time by default. Check **Administration → Images and applications → Images** later and act on any **Failed** row; new launches stay on the previous image until the row succeeds. Pinned rows and pinned targets are skipped, and on 26.10.1 a base software stack that launches from an image an administrator set by hand is pinned before anything switches. See [Images](../../../modules/hpc-workloads/admin-documentation/custom-amis.md).
+
+#### One-time builder image cleanup (upgrading to 26.10.1)
+
+Cleanup removes only builder images that carry the cluster's tag. Desktop and compute builder images made before 26.10.1 have no cluster tag, so they stay until you remove them. After this upgrade, review the account's builder images (names starting `idea-dcv-host-` and `idea-compute-node-`) and deregister the ones nothing uses, with their snapshots. Keep any image that a software stack, queue profile, launch template or `scheduler.compute_node_ami` still names, and if other clusters share the account, any image they use. You only need to do this once.
 
 ### Container Host Instance Type
 
