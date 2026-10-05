@@ -337,6 +337,7 @@ def test_the_validation_identity_is_created_with_the_request_models():
         SocaHeader,
         exceptions,
     )
+    from ideasdk.aws.validation_identity import VALIDATION_PROJECT_DESCRIPTION
     from ideasdk.utils import Utils
 
     api = FakeApi([VirtualDesktopSessionState.READY])
@@ -347,8 +348,18 @@ def test_the_validation_identity_is_created_with_the_request_models():
     )
     context.projects_client.get_project_by_name.side_effect = [
         exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
-        Project(project_id='p-validate', name='idea-validate', enabled=False),
-        Project(project_id='p-validate', name='idea-validate', enabled=True),
+        Project(
+            project_id='p-validate',
+            name='idea-validate',
+            enabled=False,
+            description=VALIDATION_PROJECT_DESCRIPTION,
+        ),
+        Project(
+            project_id='p-validate',
+            name='idea-validate',
+            enabled=True,
+            description=VALIDATION_PROJECT_DESCRIPTION,
+        ),
     ]
     sent = []
     tester._invoke_cluster_manager = lambda namespace, payload: sent.append(

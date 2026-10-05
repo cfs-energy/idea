@@ -20,7 +20,10 @@ from ideadatamodel import (
     exceptions,
 )
 from ideasdk.aws.image_builds import default_builder_instance_type
-from ideasdk.aws.validation_identity import ensure_validation_identity
+from ideasdk.aws.validation_identity import (
+    ensure_validation_identity,
+    wait_for_local_user,
+)
 
 # OpenPBS PBS_MAXQUEUENAME is 15: this prefix plus 12 digest characters.
 VALIDATION_QUEUE_PREFIX = 'iv-'
@@ -224,6 +227,9 @@ class ComputeImageCanary:
         project = ensure_validation_identity(self.context, settings)
         if not project or not project.project_id:
             raise exceptions.invalid_params('The validation project does not exist.')
+        # the submit writes the job script as the user: a user created just now is not
+        # resolvable here until the next user sync
+        wait_for_local_user(self.context, user)
         profiles = self.context.queue_profiles
         sources = [
             p

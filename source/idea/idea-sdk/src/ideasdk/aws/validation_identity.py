@@ -5,6 +5,9 @@ shared by the desktop test launch (virtual desktop controller) and the compute c
 two still validates, and a second caller (or a race between both) finds them in place.
 """
 
+import grp
+import pwd
+import time
 from typing import Callable, Optional
 
 from ideadatamodel import (
@@ -15,9 +18,13 @@ from ideadatamodel import (
     ImagePipelineSettings,
     Project,
     SocaBaseModel,
+    UpdateProjectRequest,
     User,
+    exceptions,
 )
 from ideasdk.utils.group_name_helper import GroupNameHelper
+
+VALIDATION_PROJECT_DESCRIPTION = 'hidden: desktops and compute jobs the image pipelines launch to validate new images'
 
 
 def _not_found(error: Exception) -> bool:
@@ -89,7 +96,7 @@ def ensure_validation_identity(
                     project=Project(
                         name=project_name,
                         title='Image validation',
-                        description='hidden: desktops and compute jobs the image pipelines launch to validate new images',
+                        description=VALIDATION_PROJECT_DESCRIPTION,
                         ldap_groups=[group],
                         enable_budgets=False,
                     )
@@ -107,7 +114,49 @@ def ensure_validation_identity(
             EnableProjectRequest(project_id=project.project_id),
         )
         project = _reread_project(context, project_name)
+    # a project made by an earlier release describes desktops only. the update carries
+    # the description alone: fields left unset are kept as they are
+    if project.description != VALIDATION_PROJECT_DESCRIPTION:
+        invoke(
+            'Projects.UpdateProject',
+            UpdateProjectRequest(
+                project=Project(
+                    project_id=project.project_id,
+                    description=VALIDATION_PROJECT_DESCRIPTION,
+                )
+            ),
+        )
+        project.description = VALIDATION_PROJECT_DESCRIPTION
     return project
+
+
+def wait_for_local_user(
+    context, username: str, timeout_seconds: int = 120, interval_seconds: int = 3
+) -> None:
+    """
+    wait until this host resolves the user, under its directory uid, and the user's
+    group. a host that learns users from a periodic sync (the control plane syncs once
+    a minute) does not know a user created moments ago, or still has the old uid of
+    one recreated, so a job written as that user straight away fails its owner lookup
+    """
+    result = context.accounts_client.get_user(GetUserRequest(username=username))
+    uid = result.user.uid if result and result.user else None
+    group = GroupNameHelper(context).get_user_group(username)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            entry = pwd.getpwnam(username)
+            grp.getgrnam(group)
+            if uid is None or entry.pw_uid == uid:
+                return
+        except KeyError:
+            pass
+        if time.monotonic() >= deadline:
+            raise exceptions.general_exception(
+                f'The validation user {username} did not resolve on this host within '
+                f'{timeout_seconds} seconds of being created. Check the user sync.'
+            )
+        time.sleep(interval_seconds)
 
 
 def invoke_cluster_manager(context, namespace: str, payload: SocaBaseModel) -> None:

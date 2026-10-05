@@ -8,13 +8,16 @@ from unittest.mock import Mock
 
 import pytest
 from ideadatamodel import (
+    GetUserResult,
     HpcQueueProfile,
     Project,
     SocaComputeNode,
     SocaJob,
     SubmitJobResult,
+    User,
     exceptions,
 )
+from ideasdk.aws.validation_identity import VALIDATION_PROJECT_DESCRIPTION
 from ideascheduler.app.images import compute_image_canary as module
 from ideascheduler.app.images.compute_image_canary import (
     ComputeImageCanary,
@@ -61,8 +64,15 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
         }
     )
     context.projects_client.get_project_by_name.return_value = Project(
-        project_id='project-test', name='image-test', enabled=True
+        project_id='project-test',
+        name='image-test',
+        enabled=True,
+        description=VALIDATION_PROJECT_DESCRIPTION,
     )
+    context.accounts_client.get_user.return_value = GetUserResult(
+        user=User(username='image-test', uid=5062)
+    )
+    _resolver(monkeypatch, [5062])
     context.queue_profiles.list_queue_profiles.return_value = [
         HpcQueueProfile(name='source')
     ]
@@ -181,7 +191,7 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
     )
 
 
-def test_canary_copies_a_queue_whose_subnets_offer_the_canary_size():
+def test_canary_copies_a_queue_whose_subnets_offer_the_canary_size(monkeypatch):
     """a local-zone GPU queue listed first cannot launch c7i.large; the canary skips it"""
     from ideadatamodel import SocaJobParams
 
@@ -213,8 +223,15 @@ def test_canary_copies_a_queue_whose_subnets_offer_the_canary_size():
 
     # through validate: the hidden queue is a copy of the queue that can launch
     context.projects_client.get_project_by_name.return_value = Project(
-        project_id='p', name='idea-validate', enabled=True
+        project_id='p',
+        name='idea-validate',
+        enabled=True,
+        description=VALIDATION_PROJECT_DESCRIPTION,
     )
+    context.accounts_client.get_user.return_value = GetUserResult(
+        user=User(username='idea-validate', uid=5062)
+    )
+    _resolver(monkeypatch, [5062])
     context.queue_profiles.list_queue_profiles.return_value = [gpu, serving]
     copied = []
 
@@ -240,13 +257,27 @@ def test_a_compute_only_cluster_creates_the_validation_identity(monkeypatch):
 
     svc = service()
     context = svc.context
-    context.accounts_client.get_user.side_effect = exceptions.soca_exception(
-        error_code='AUTH_USER_NOT_FOUND', message='User not found: idea-validate'
-    )
+    context.accounts_client.get_user.side_effect = [
+        exceptions.soca_exception(
+            error_code='AUTH_USER_NOT_FOUND', message='User not found: idea-validate'
+        ),
+        GetUserResult(user=User(username='idea-validate', uid=5062)),
+    ]
+    _resolver(monkeypatch, [5062])
     context.projects_client.get_project_by_name.side_effect = [
         exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
-        Project(project_id='p-validate', name='idea-validate', enabled=False),
-        Project(project_id='p-validate', name='idea-validate', enabled=True),
+        Project(
+            project_id='p-validate',
+            name='idea-validate',
+            enabled=False,
+            description=VALIDATION_PROJECT_DESCRIPTION,
+        ),
+        Project(
+            project_id='p-validate',
+            name='idea-validate',
+            enabled=True,
+            description=VALIDATION_PROJECT_DESCRIPTION,
+        ),
     ]
     sent = []
     monkeypatch.setattr(
@@ -280,8 +311,18 @@ def test_identity_created_meanwhile_by_the_other_module_is_used():
     ]
     context.projects_client.get_project_by_name.side_effect = [
         exceptions.soca_exception(error_code='PROJECT_NOT_FOUND', message='not found'),
-        Project(project_id='p-validate', name='idea-validate', enabled=True),
-        Project(project_id='p-validate', name='idea-validate', enabled=True),
+        Project(
+            project_id='p-validate',
+            name='idea-validate',
+            enabled=True,
+            description=VALIDATION_PROJECT_DESCRIPTION,
+        ),
+        Project(
+            project_id='p-validate',
+            name='idea-validate',
+            enabled=True,
+            description=VALIDATION_PROJECT_DESCRIPTION,
+        ),
     ]
 
     def invoke(namespace, payload):
@@ -419,3 +460,96 @@ def test_cleanup_deletes_a_stuck_job_and_reports_what_stayed(monkeypatch):
     assert any('busy' in e for e in errors)
     # bounded: the busy retries stop at the cleanup deadline
     assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
+
+
+def _resolver(monkeypatch, lookups, uid=5062):
+    """this host's passwd and group as the user sync leaves them, one answer per poll"""
+    from ideasdk.aws import validation_identity
+
+    now = [0.0]
+    answers = iter(lookups)
+    seen = []
+
+    def getpwnam(name):
+        answer = next(answers)
+        seen.append(answer)
+        if answer is None:
+            raise KeyError(f'getpwnam(): name not found: {name!r}')
+        return SimpleNamespace(pw_uid=answer)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(validation_identity.pwd, 'getpwnam', getpwnam)
+    monkeypatch.setattr(validation_identity.grp, 'getgrnam', lambda name: None)
+    monkeypatch.setattr(validation_identity.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(validation_identity.time, 'sleep', sleep)
+    return seen
+
+
+def _identity_context(uid=5062):
+    svc = service()
+    context = svc.context
+    context.accounts_client.get_user.return_value = GetUserResult(
+        user=User(username='idea-validate', uid=uid)
+    )
+    context.projects_client.get_project_by_name.return_value = Project(
+        project_id='p-validate',
+        name='idea-validate',
+        enabled=True,
+        description=VALIDATION_PROJECT_DESCRIPTION,
+    )
+    # stop right after the identity step: no queue to copy
+    context.queue_profiles.list_queue_profiles.return_value = []
+    return context
+
+
+def test_canary_waits_for_a_new_user_to_reach_the_resolver(monkeypatch):
+    """the user sync runs once a minute: a just-created user, or one recreated under a
+    new uid, is unknown or stale on this host until it does, and the submit's owner
+    lookup would fail"""
+    context = _identity_context()
+    seen = _resolver(monkeypatch, [None, None, 5061, 5062])
+    with pytest.raises(exceptions.SocaException, match='compute queue profile'):
+        ComputeImageCanary(context).validate(row(image_id='ami-candidate'), Mock())
+    assert seen == [None, None, 5061, 5062]
+
+
+def test_canary_fails_plainly_when_the_user_never_resolves(monkeypatch):
+    context = _identity_context()
+    _resolver(monkeypatch, [None] * 1000)
+    with pytest.raises(exceptions.SocaException, match='did not resolve') as raised:
+        ComputeImageCanary(context).validate(row(image_id='ami-candidate'), Mock())
+    assert 'idea-validate' in str(raised.value)
+    context.queue_profiles.list_queue_profiles.assert_not_called()
+
+
+def test_a_stale_project_description_is_brought_up_to_date(monkeypatch):
+    """a project created by an earlier release says it holds desktops only"""
+    from ideasdk.aws.validation_identity import (
+        VALIDATION_PROJECT_DESCRIPTION,
+        ensure_validation_identity,
+    )
+    from ideadatamodel import ImagePipelineSettings
+
+    context = Mock()
+    context.projects_client.get_project_by_name.return_value = Project(
+        project_id='p-validate',
+        name='idea-validate',
+        enabled=True,
+        description='hidden: desktops the image pipeline launches to validate new images',
+    )
+    sent = []
+    project = ensure_validation_identity(
+        context,
+        ImagePipelineSettings(),
+        lambda namespace, payload: sent.append((namespace, payload)),
+    )
+    assert [n for n, _ in sent] == ['Projects.UpdateProject']
+    update = sent[0][1].project
+    assert update.project_id == 'p-validate'
+    assert update.description == VALIDATION_PROJECT_DESCRIPTION
+    assert 'compute jobs' in VALIDATION_PROJECT_DESCRIPTION
+    # only the description: an update with other fields would rewrite them
+    assert update.ldap_groups is None and update.enable_budgets is None
+    assert project.description == VALIDATION_PROJECT_DESCRIPTION
