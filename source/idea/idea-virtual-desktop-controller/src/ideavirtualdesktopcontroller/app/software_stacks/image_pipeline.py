@@ -21,8 +21,6 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from botocore.exceptions import ClientError
-
 from ideadatamodel import (
     IMAGE_ROW_IN_FLIGHT,
     ImageBuildRecord,
@@ -48,6 +46,7 @@ from ideasdk.aws.image_builds import (
     PIPELINE_IMAGE_TAG,
     deregister_legacy_images,
     deregister_unreferenced_images,
+    describe_image_or_none,
     builder_log_link,
     is_custom_record,
     ImageBuildRecordsDB,
@@ -611,18 +610,9 @@ class DesktopImagePipeline:
         ec2 = self.context.aws().ec2()
         found: Dict[str, Dict] = {}
         for image_id in sorted(image_ids):
-            try:
-                result = ec2.describe_images(ImageIds=[image_id])
-            except ClientError as e:
-                if (
-                    not e.response.get('Error', {})
-                    .get('Code', '')
-                    .startswith('InvalidAMIID')
-                ):
-                    raise
-                continue
-            for image in result.get('Images', []):
-                found[image['ImageId']] = image
+            image = describe_image_or_none(ec2, image_id)
+            if image is not None:
+                found[image_id] = image
         return found
 
     def _alive(self, record) -> bool:

@@ -64,6 +64,7 @@ from ideasdk.aws.image_builds import (
     PIPELINE_IMAGE_TAG,
     deregister_legacy_images,
     deregister_unreferenced_images,
+    describe_image_or_none,
 )
 from ideasdk.aws.stock_amis import (
     find_latest_stock_ami,
@@ -722,9 +723,9 @@ class ComputeImageService:
         """
         if not image_id:
             return False
-        image = describe_images_by_id(self.context.aws().ec2(), [image_id]).get(
-            image_id
-        )
+        # an error other than "no such image" raises, so the row is not advanced past
+        # targets it could not judge (they would never match a later promotion)
+        image = describe_image_or_none(self.context.aws().ec2(), image_id)
         if image is None:
             return False
         if any(t.get('Key') == VALIDATED_IMAGE_TAG for t in image.get('Tags', [])):

@@ -621,6 +621,27 @@ def describe_images_by_id(ec2_client, image_ids: List[str]) -> Dict[str, Dict]:
     return found
 
 
+def describe_image_or_none(ec2_client, image_id: str) -> Optional[Dict]:
+    """
+    one image by id; None only when EC2 says the id does not exist (InvalidAMIID.*).
+    any other error (throttling, access) raises: a caller deciding whether an image is
+    managed must not read "could not ask" as "custom or deleted"
+    """
+    try:
+        result = ec2_client.describe_images(ImageIds=[image_id])
+    except Exception as e:
+        code = ''
+        if isinstance(e, ClientError):
+            code = e.response.get('Error', {}).get('Code', '')
+        if code.startswith('InvalidAMIID') or (not code and 'InvalidAMIID' in str(e)):
+            return None
+        raise
+    for image in result.get('Images', []):
+        if image.get('ImageId') == image_id:
+            return image
+    return None
+
+
 def newest_owned_image(ec2_client, name_pattern: str) -> Optional[Dict]:
     """the newest available image this account owns whose name matches the pattern"""
     result = ec2_client.describe_images(

@@ -236,6 +236,37 @@ def test_promotion_leaves_targets_on_an_unmanaged_default(monkeypatch):
     assert candidate.current_image_id == 'ami-new'
 
 
+def test_promotion_does_not_advance_the_row_when_the_current_image_cannot_be_read(
+    monkeypatch,
+):
+    """throttled describe: the row stays on its image, so its queues still match later"""
+    monkeypatch.setitem(IMAGES, 'ami-old', own_image('ami-old', validated=True))
+    profile = queue_profile('managed', 'rocky9', 'ami-old')
+    profile.queue_profile_id = 'managed'
+    svc = service([profile])
+    svc.context.config().values.update({'scheduler.compute_node_ami': 'ami-old'})
+    ec2 = svc.context.aws().ec2()
+    ec2.create_tags = Mock()
+
+    def throttled(**kwargs):
+        raise ClientError(
+            {'Error': {'Code': 'RequestLimitExceeded'}}, 'DescribeImages'
+        )
+
+    monkeypatch.setattr(ec2, 'describe_images', throttled)
+    candidate = row(
+        status='promoting',
+        image_id='ami-new',
+        release=module.__version__,
+        validated_on=datetime.now(timezone.utc),
+        checks=[ImageCheck(name='compute_job', ok=True)],
+    )
+    with pytest.raises(ClientError):
+        svc.promote(candidate)
+    svc.context.aws().dynamodb().transact_write_items.assert_not_called()
+    assert candidate.current_image_id == 'ami-old'
+
+
 def test_transaction_failure_never_updates_in_memory_targets():
     profile = queue_profile('managed', 'rocky9', 'ami-old')
     profile.queue_profile_id = 'managed'
