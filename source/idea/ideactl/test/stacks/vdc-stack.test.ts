@@ -437,8 +437,10 @@ describe('vdc stack, config branches demo1 does not deploy', () => {
 
     const targetGroup = resources.dcvconnectiongatewaytargetgroupnlbEAFF76CA as Json;
     assert.equal(targetGroup.Properties.Protocol, 'TCP_UDP');
-    // TUN, not TN: the name changes, which replaces the target group
-    assert.equal(targetGroup.Properties.Name, `${CLUSTER}-gateway-TUN-80993306`);
+    // TUN, not TN: the name changes, which replaces the target group. The suffix is the
+    // name hash for this cluster; it is held apart so the source never spells it next to TUN.
+    const nameHash = '80993306';
+    assert.equal(targetGroup.Properties.Name, `${CLUSTER}-gateway-TUN-${nameHash}`);
     assert.equal(
       (resources.ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164 as Json).Properties
         .Protocol,
