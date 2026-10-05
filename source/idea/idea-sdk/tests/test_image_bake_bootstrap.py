@@ -902,3 +902,39 @@ def test_windows_user_data_that_runs_again_after_the_final_restart_is_a_no_op(ba
     written = body.index('[IO.File]::WriteAllText($ConfiguredMarker')
     assert body.index('IDEA_BOOTSTRAP_COMPLETE') < written
     assert written < body.rindex('Restart-Computer -Force')
+
+
+@pytest.mark.parametrize('base_os', WINDOWS)
+def test_windows_repeat_run_marker_waits_for_a_successful_domain_join(
+    tmp_path, monkeypatch, base_os
+):
+    """
+    the marker makes the next boot skip user data; a join that failed must run again, so
+    the marker is written only once the instance is in the domain
+    """
+    import test_bootstrap_shell_syntax as shell
+
+    class ActiveDirectory(shell.Config):
+        def __init__(self):
+            super().__init__()
+            self.put('directoryservice.provider', 'aws_managed_activedirectory')
+            for key, value in {
+                'ad_short_name': 'EXAMPLE',
+                'name': 'example.invalid',
+                'ad_automation.sqs_queue_url': 'https://sqs.example.invalid/ad',
+                'ad_automation.ad_join_max_sleep': 10,
+                'ad_automation.ad_join_retry_count': 3,
+                'ad_automation.hostname_prefix': 'IDEA-',
+            }.items():
+                self.put(f'directoryservice.{key}', value)
+
+    monkeypatch.setattr(shell, 'Config', ActiveDirectory)
+    _, component, variables = shell.packages(base_os)[0]
+    scripts = shell.render(tmp_path, base_os, 'm7i.large', component, variables)
+    configure = next(f for f in scripts if f.endswith('Configure.ps1'))
+    text = Path(configure).read_text()
+    write = text.index('[IO.File]::WriteAllText($ConfiguredMarker')
+    guard = text.rindex('if ($Joined) {', 0, write)
+    joined = text[text.rindex('$Joined =', 0, guard) : guard]
+    assert 'PartOfDomain' in joined and '$global:IdeaDomainJoined' in joined
+    assert '$global:IdeaDomainJoined = $joined' in text

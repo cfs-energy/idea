@@ -256,8 +256,18 @@ Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody `$RebootMessage -Mess
   Write-ToLog -Message "IDEA_BOOTSTRAP_COMPLETE release={{ context.module_version }}"
   Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody $Message -MessageGroupId $IDEASessionID
 
-  [IO.Directory]::CreateDirectory((Split-Path $ConfiguredMarker)) | Out-Null
-  [IO.File]::WriteAllText($ConfiguredMarker, "{{ context.module_version }}")
+  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  # a failed join must run again on the next boot: no marker until the instance is joined
+  $Joined = $ServerInAD -or $global:IdeaDomainJoined -or (Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain
+  {% else %}
+  $Joined = $true
+  {% endif %}
+  if ($Joined) {
+    [IO.Directory]::CreateDirectory((Split-Path $ConfiguredMarker)) | Out-Null
+    [IO.File]::WriteAllText($ConfiguredMarker, "{{ context.module_version }}")
+  } else {
+    Write-ToLog -Message "Instance $InstanceId did not join the domain; the next boot runs the user data again"
+  }
 
   Stop-Transcript
   Restart-Computer -Force

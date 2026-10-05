@@ -225,6 +225,8 @@ function Start-ADAutomationWaitForAuthorizationAndJoin
 
     } While ( ($joined -eq $false) -and ((Get-Date) -lt $joinDeadline) )
 
+    # Configure writes its repeat-run marker only after a join that succeeded
+    $global:IdeaDomainJoined = $joined
     Write-ToLog -Message "[Join AD] ------====== AD Join Summary ======------"
     Write-ToLog -Message "[Join AD] Attempts - $attemptNumber"
     Write-ToLog -Message "[Join AD] joinResult - $($joinResult.ToString())"
