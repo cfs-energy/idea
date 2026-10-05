@@ -486,6 +486,24 @@ def test_a_pin_set_between_the_read_and_the_write_keeps_the_stack():
     assert h.stack_db.updated == []
 
 
+def test_a_promotion_that_lost_the_row_leaves_every_stack_alone(monkeypatch):
+    """another controller took the row just before the promote write: no stack moves"""
+    h = Harness([base_stack('rocky9'), base_stack('rocky9', suffix='dcv')])
+    real_gate = module.promote_gate
+
+    def taken_over(record, image_id):
+        stored = h.row()
+        stored.host = 'other-controller'
+        h.records.put(stored)
+        return real_gate(record, image_id)
+
+    monkeypatch.setattr(module, 'promote_gate', taken_over)
+    queue_and_run(h)
+
+    assert {s.ami_id for s in h.stack_db.stacks.values()} == {'ami-old'}
+    assert h.row().current_image_id != 'ami-new'
+
+
 def test_a_failed_in_bake_check_fails_the_row_with_that_check_and_keeps_the_old_image():
     h = Harness()
     FakeBuilder.status = 'failed:lustre_module'

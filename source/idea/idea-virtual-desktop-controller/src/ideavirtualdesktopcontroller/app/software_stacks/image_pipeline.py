@@ -982,7 +982,6 @@ class DesktopImagePipeline:
             self._save(record)
             return
         promote_gate(record, candidate)
-        self._repoint(record, candidate, image_source=record.source_ami)
         # only a validated generation becomes the rollback target: before the first
         # promotion the row's current image is the stock or legacy one it was seeded with
         if (
@@ -996,8 +995,18 @@ class DesktopImagePipeline:
         record.rollback_hold = False
         record.status = S.CURRENT.value
         record.error = None
-        # the one guarded write: still ours, still promoting this validated candidate
+        # the one guarded write: still ours, still promoting this validated candidate.
+        # it comes before any stack moves, so a refused write (LostOwnership) leaves every
+        # stack where it was
         self._save(record, status=S.PROMOTING.value, image_id=candidate)
+        try:
+            self._repoint(record, candidate, image_source=record.source_ami)
+        except Exception as e:
+            # the row is promoted; stacks left behind catch up on Use built image or the
+            # next promotion, which moves every unpinned target
+            self._logger.error(
+                f'{row_id(record)} promoted {candidate} but repointing its stacks failed: {e}'
+            )
         self._logger.info(f'{row_id(record)} promoted {candidate}')
         self.cleanup()
 
