@@ -196,7 +196,9 @@ def test_canary_copies_a_queue_whose_subnets_offer_the_canary_size():
     )
     other = HpcQueueProfile(
         name='other',
-        default_job_params=SocaJobParams(base_os='amazonlinux2023', subnet_ids=['subnet-a']),
+        default_job_params=SocaJobParams(
+            base_os='amazonlinux2023', subnet_ids=['subnet-a']
+        ),
     )
     serving = HpcQueueProfile(
         name='serving',

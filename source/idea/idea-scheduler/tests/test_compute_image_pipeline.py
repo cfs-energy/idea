@@ -249,9 +249,7 @@ def test_promotion_does_not_advance_the_row_when_the_current_image_cannot_be_rea
     ec2.create_tags = Mock()
 
     def throttled(**kwargs):
-        raise ClientError(
-            {'Error': {'Code': 'RequestLimitExceeded'}}, 'DescribeImages'
-        )
+        raise ClientError({'Error': {'Code': 'RequestLimitExceeded'}}, 'DescribeImages')
 
     monkeypatch.setattr(ec2, 'describe_images', throttled)
     candidate = row(
