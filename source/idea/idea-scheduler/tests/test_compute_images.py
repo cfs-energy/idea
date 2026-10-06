@@ -609,3 +609,32 @@ def test_compute_builder_disk_equals_the_base_ami_root():
         )._builder_volume_gb('ami-big')
         == 50
     )
+
+
+@pytest.mark.parametrize(
+    'ami_gb,requested,expected',
+    [(8, None, 10), (8, 8, 10), (11, None, 11), (8, 30, 30)],
+)
+def test_compute_builder_disk_is_at_least_10_gb(
+    monkeypatch, ami_gb, requested, expected
+):
+    """an 8 GB ubuntu 24.04 root filled up mid bake; every compute image baked on 10 GB through 26.10.1"""
+    stock = 'ami-rocky9stock00001'
+    monkeypatch.setitem(
+        IMAGES,
+        stock,
+        {
+            **IMAGES[stock],
+            'BlockDeviceMappings': [
+                {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': ami_gb}}
+            ],
+        },
+    )
+    service = build_service({**DEFAULT_CONFIG, **BUILDER_CONFIG}, FakeEc2())
+    builder = module.ComputeNodeAmiBuilder(
+        context=service.context,
+        base_os='rocky9',
+        base_ami=stock,
+        ebs_volume_size=requested,
+    )
+    assert builder.ebs_volume_size == expected

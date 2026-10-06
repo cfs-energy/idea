@@ -233,7 +233,7 @@ class ComputeImageService:
         return service.list_queue_profiles() or []
 
     def _builder_volume_gb(self, base_ami: str) -> int:
-        """builder disk: the base AMI root. a larger queue grows the filesystem at boot."""
+        """the base AMI root. the builder raises it to its 10 GB floor; a larger queue grows the filesystem at boot."""
         image = describe_images_by_id(self.context.aws().ec2(), [base_ami]).get(
             base_ami
         )

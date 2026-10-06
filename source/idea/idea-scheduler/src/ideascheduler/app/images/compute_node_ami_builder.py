@@ -43,8 +43,11 @@ from pathlib import Path
 import os
 
 DEFAULT_INSTANCE_TYPE = 'c7i.large'
-# the builder disk is the base AMI root. a larger queue grows the filesystem at
-# boot (cloud-init growpart); the snapshot stays the AMI size.
+# the builder disk is max(10 GB, base AMI root): an 8 GB ubuntu 24.04 root fills up
+# mid bake. 10 GB is what every compute image baked on through 26.10.1 and the
+# smallest queue root seen in the field; a larger queue grows the filesystem at
+# boot (cloud-init growpart) and the launch guard raises a smaller one.
+DEFAULT_EBS_VOLUME_SIZE_GB = 10
 
 
 class ComputeNodeAmiBuilder:
@@ -177,7 +180,10 @@ class ComputeNodeAmiBuilder:
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
         # a request smaller than the AMI snapshot is raised, not refused
-        ebs_volume_size = builder_root_gb(ebs_volume_size, ami_ebs_volume_size_gb)
+        ebs_volume_size = builder_root_gb(
+            max(int(ebs_volume_size or 0), DEFAULT_EBS_VOLUME_SIZE_GB),
+            ami_ebs_volume_size_gb,
+        )
 
         # stop/terminate
         if terminate:
