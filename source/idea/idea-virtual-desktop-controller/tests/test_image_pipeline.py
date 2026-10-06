@@ -20,6 +20,8 @@ from ideadatamodel import (
     ImageRowKey,
     RefreshImagesRequest,
     SocaListingPayload,
+    SocaMemory,
+    SocaMemoryUnit,
     VirtualDesktopGPU,
     VirtualDesktopSoftwareStack,
     exceptions,
@@ -1607,3 +1609,68 @@ def test_the_release_and_monthly_triggers_skip_a_row_baked_today(monkeypatch):
     monkeypatch.setattr(module, 'now_utc', lambda: tomorrow)
     h.pipeline.tick(now=tomorrow.astimezone(timezone.utc))
     assert h.row().status == 'queued' and h.row().trigger == 'release'
+
+
+# base stack root storage floor
+
+
+def _gb(value):
+    return SocaMemory(value=value, unit=SocaMemoryUnit.GB)
+
+
+def _floor_harness():
+    low = base_stack('rocky9')
+    low.min_storage = _gb(10)
+    low.image_pinned = True
+    windows = base_stack('windows2022')
+    windows.min_storage = _gb(40)
+    custom = VirtualDesktopSoftwareStack(
+        stack_id='custom-1',
+        base_os='rocky9',
+        ami_id='ami-old',
+        min_storage=_gb(10),
+    )
+    return Harness([low, windows, custom])
+
+
+def test_a_10_gb_base_stack_is_raised_to_20_and_40_stays():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    raised = h.stack_db.stacks['ss-base-rocky9-x86-64-base']
+    assert raised.min_storage.gb() == 20
+    # the floor write uses the table layer, so a pin stays a pin
+    assert raised.image_pinned is True
+    assert h.stack_db.stacks['ss-base-windows2022-x86-64-base'].min_storage.gb() == 40
+    assert h.stack_db.updated == ['ss-base-rocky9-x86-64-base']
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_called_once()
+
+
+def test_a_custom_10_gb_stack_stays_10():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    # the same tick that raises the base stack leaves the custom one alone
+    assert h.stack_db.stacks['ss-base-rocky9-x86-64-base'].min_storage.gb() == 20
+    assert h.stack_db.stacks['custom-1'].min_storage.gb() == 10
+    assert 'custom-1' not in h.stack_db.updated
+
+
+def test_raising_the_storage_floor_twice_does_not_write_again():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    h.stack_db.updated.clear()
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.reset_mock()
+    h.pipeline.tick(now=T0)
+    assert h.stack_db.stacks['ss-base-rocky9-x86-64-base'].min_storage.gb() == 20
+    assert h.stack_db.updated == []
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()
+
+
+def test_a_base_stack_lowered_to_10_gb_is_raised_on_the_next_tick():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    stack_id = 'ss-base-rocky9-x86-64-base'
+    h.stack_db.stacks[stack_id].min_storage = _gb(10)
+    h.stack_db.updated.clear()
+    h.pipeline.tick(now=T0)
+    assert h.stack_db.stacks[stack_id].min_storage.gb() == 20
+    assert h.stack_db.updated == [stack_id]

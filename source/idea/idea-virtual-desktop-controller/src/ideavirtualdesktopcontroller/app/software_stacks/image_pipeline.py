@@ -514,6 +514,9 @@ class DesktopImagePipeline:
 
     def tick(self, now: Optional[datetime] = None, blocking: bool = False):
         now = now or now_utc()
+        # every leader tick, including the upgrade tick below. a stack lowered again
+        # is raised on the next one. no write when it is already at the floor.
+        self.raise_base_stack_min_storage()
         # until this release has settled, nothing promotes before customized stacks are
         # pinned; a failure here stops the tick, and the next tick tries again
         if self.context.config().get_string(BAKED_RELEASE_KEY, default=None) != (
@@ -541,6 +544,27 @@ class DesktopImagePipeline:
             self._last_cleanup = time.monotonic()
             self.cleanup()
 
+    def raise_base_stack_min_storage(self) -> List[str]:
+        """
+        ss-base-* stacks under the root floor are upserted to it through the table,
+        the same write the pin migration uses, so the edit API does not pin them.
+        """
+        from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+            apply_base_stack_storage_floor,
+        )
+
+        raised = apply_base_stack_storage_floor(
+            self._all_stacks(),
+            lambda stack: self._stack_db.get(
+                stack_id=stack.stack_id, base_os=stack.base_os
+            ),
+            self._stack_db.update,
+            self._logger,
+        )
+        for stack in raised:
+            self._stack_utils.update_software_stack_entry_to_opensearch(stack)
+        return [stack.stack_id for stack in raised]
+
     def pin_customized_base_stacks(self) -> List[str]:
         """
         the upgrade step for base stacks an administrator pointed at their own image before
@@ -552,6 +576,8 @@ class DesktopImagePipeline:
         build and an image that no longer exists, is the administrator's. idempotent:
         pinned stacks are skipped. returns the stack ids it pinned
         """
+        # upgrade reconciles the storage floor too, including a pin call that is not a tick
+        self.raise_base_stack_min_storage()
         stacks = [
             s
             for s in self._all_stacks()

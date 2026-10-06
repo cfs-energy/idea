@@ -45,6 +45,56 @@ from ideavirtualdesktopcontroller.app.software_stacks import (
 )
 
 
+def floor_base_stack_storage(memory: Optional[SocaMemory]) -> Optional[SocaMemory]:
+    """the base-stack root floor. a value already at or above it is returned unchanged."""
+    if memory is None or memory.value is None:
+        return memory
+    if memory.gb() >= software_stacks_constants.BASE_STACK_MIN_STORAGE_GB:
+        return memory
+    return SocaMemory(
+        value=software_stacks_constants.BASE_STACK_MIN_STORAGE_GB,
+        unit=SocaMemoryUnit.GB,
+    )
+
+
+def _below_base_stack_storage_floor(stack: VirtualDesktopSoftwareStack) -> bool:
+    if not (stack.stack_id or '').startswith(
+        f'{software_stacks_constants.BASE_STACK_PREFIX}-'
+    ):
+        return False
+    storage = stack.min_storage
+    if storage is None or storage.value is None:
+        return False
+    return storage.gb() < software_stacks_constants.BASE_STACK_MIN_STORAGE_GB
+
+
+def apply_base_stack_storage_floor(stacks, get_stack, update_stack, logger):
+    """
+    raise ss-base-* stacks under the floor to it. no write when the stored value is
+    already at least the floor, and custom stacks are never touched. image_pinned is
+    not changed: the caller writes through the table, not the edit API that auto-pins.
+    """
+    raised = []
+    for stack in stacks:
+        if not _below_base_stack_storage_floor(stack):
+            continue
+        fresh = get_stack(stack)
+        if fresh is None or not _below_base_stack_storage_floor(fresh):
+            continue
+        previous = fresh.min_storage
+        fresh.min_storage = SocaMemory(
+            value=software_stacks_constants.BASE_STACK_MIN_STORAGE_GB,
+            unit=SocaMemoryUnit.GB,
+        )
+        updated = update_stack(fresh)
+        logger.info(
+            f'{fresh.stack_id} min_storage raised from {previous} to '
+            f'{software_stacks_constants.BASE_STACK_MIN_STORAGE_GB}gb'
+        )
+        raised.append(updated)
+    return raised
+
+
 class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
     DEFAULT_PAGE_SIZE = 10
 
@@ -140,6 +190,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             self._logger.error(
                 f'{self.BASE_STACKS_CONFIG_FILE} file is empty. Returning'
             )
+            self.raise_base_stack_min_storage()
             return
 
         default_project = self.context.projects_client.get_default_project().project
@@ -300,9 +351,13 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                                 description=custom_stack_description,
                                 ami_id=ami_id,
                                 enabled=True,
-                                min_storage=SocaMemory(
-                                    value=custom_stack_min_storage_value,
-                                    unit=SocaMemoryUnit(custom_stack_min_storage_unit),
+                                min_storage=floor_base_stack_storage(
+                                    SocaMemory(
+                                        value=custom_stack_min_storage_value,
+                                        unit=SocaMemoryUnit(
+                                            custom_stack_min_storage_unit
+                                        ),
+                                    )
                                 ),
                                 min_ram=SocaMemory(
                                     value=custom_stack_min_ram_value,
@@ -316,6 +371,29 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                                 launch_tenancy=VirtualDesktopTenancy.DEFAULT,
                             )
                         )
+        # existing ss-base rows from an older release are not rewritten above; the floor
+        # still applies to them, and a row someone lowers later is raised on the next tick
+        self.raise_base_stack_min_storage()
+
+    def raise_base_stack_min_storage(self) -> List[VirtualDesktopSoftwareStack]:
+        """
+        upsert every ss-base-* stack whose root minimum is below the floor. already at
+        or above it, and every custom stack, is left unwritten. does not change image_pinned.
+        """
+        request = ListSoftwareStackRequest(disabled_also=True)
+        stacks: List[VirtualDesktopSoftwareStack] = []
+        while True:
+            response = self.list_all_from_db(request)
+            stacks.extend(response.listing or [])
+            if Utils.is_empty(response.cursor):
+                break
+            request.paginator = response.paginator
+        return apply_base_stack_storage_floor(
+            stacks,
+            lambda stack: self.get(stack_id=stack.stack_id, base_os=stack.base_os),
+            self.update,
+            self._logger,
+        )
 
     def get_base_software_stack_config(self) -> dict:
         with open(self.BASE_STACKS_CONFIG_FILE, 'r') as f:

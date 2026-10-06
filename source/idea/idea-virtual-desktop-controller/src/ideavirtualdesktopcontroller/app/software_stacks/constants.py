@@ -1,5 +1,9 @@
 BASE_STACK_PREFIX = 'ss-base'
 
+# a baked desktop image is larger than the vendor image, so a base stack under this
+# cannot launch: the volume must be at least the AMI size. one place to change.
+BASE_STACK_MIN_STORAGE_GB = 20
+
 SOFTWARE_STACK_DB_HASH_KEY = 'base_os'
 SOFTWARE_STACK_DB_RANGE_KEY = 'stack_id'
 SOFTWARE_STACK_DB_NAME_KEY = 'name'

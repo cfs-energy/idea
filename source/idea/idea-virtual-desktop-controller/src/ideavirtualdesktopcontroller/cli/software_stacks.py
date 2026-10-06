@@ -26,6 +26,9 @@ from ideavirtualdesktopcontroller.cli import build_cli_context
 from ideavirtualdesktopcontroller.app.software_stacks import (
     constants as software_stacks_constants,
 )
+from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+    floor_base_stack_storage,
+)
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
 import click
@@ -443,9 +446,11 @@ def merge_software_stacks(file, dry_run, **kwargs):
                     description=custom_stack_description,
                     ami_id=ami_id,
                     enabled=True,
-                    min_storage=SocaMemory(
-                        value=custom_stack_min_storage_value,
-                        unit=SocaMemoryUnit(custom_stack_min_storage_unit),
+                    min_storage=floor_base_stack_storage(
+                        SocaMemory(
+                            value=custom_stack_min_storage_value,
+                            unit=SocaMemoryUnit(custom_stack_min_storage_unit),
+                        )
                     ),
                     min_ram=SocaMemory(
                         value=custom_stack_min_ram_value,
