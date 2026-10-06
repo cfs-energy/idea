@@ -40,6 +40,10 @@ from ideasdk.api import ApiInvocationContext
 
 import ideascheduler
 from ideascheduler.app.provisioning import JobProvisioningUtil
+from ideascheduler.app.provisioning.job_provisioner.job_provisioning_util import (
+    projects_allowed_on_queue,
+    queue_project_names,
+)
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 
 import os
@@ -115,12 +119,16 @@ class OpenPBSAPIInvocationContext:
                 )
 
             # the project is resolved before the builder is created: it decides the
-            # instance profile the job's compute nodes run under.
+            # instance profile the job's compute nodes run under. an omitted -P used
+            # to take projects[0], which is often a project the user is not in.
+            project_note = None
             if Utils.is_empty(project_name):
-                project = self.app_context.projects_client.get_project_by_id(
-                    queue_profile.projects[0].project_id
-                )
-                project_name = project.name
+                project_name = self._project_when_omitted(queue_profile, queue_name)
+                project_note = f'no project given, using {project_name}'
+                self.app_context.logger().info(project_note)
+
+            if self.event.job is not None and Utils.is_not_empty(project_name):
+                self.event.job.project = project_name
 
             job_params = {**old_job_params, **job_params}
             self._job_builder = SocaJobBuilder(
@@ -137,6 +145,11 @@ class OpenPBSAPIInvocationContext:
             )
             self._job.queue = queue_name
             self._job.project = project_name
+            if project_note is not None:
+                if Utils.is_empty(self._job.comment):
+                    self._job.comment = project_note
+                elif project_note not in self._job.comment:
+                    self._job.comment = f'{self._job.comment} {project_note}'
 
             dry_run = self.dry_run_option()
             if dry_run is not None and dry_run == DryRunOption.DEBUG:
@@ -164,6 +177,43 @@ class OpenPBSAPIInvocationContext:
             self._job_submission_result.job = self.job
             self._job_submission_result.validations = self.job_validation_result
             self._job_submission_result.dry_run = self.dry_run_option()
+
+    def _owner_username(self) -> Optional[str]:
+        owner = None
+        job = self.event.job if self.event is not None else None
+        if job is not None:
+            owner = job.Job_Owner or job.euser
+        if Utils.is_empty(owner) and self.event is not None:
+            owner = self.event.requestor
+        if Utils.is_empty(owner):
+            return None
+        return str(owner).split('@')[0]
+
+    def _project_when_omitted(self, queue_profile, queue_name: str) -> str:
+        """
+        First queue project the submitter belongs to. Same membership list check_acls uses.
+        """
+        names = queue_project_names(
+            self.app_context.projects_client, queue_profile.projects
+        )
+        owner = self._owner_username()
+        user_projects = []
+        if Utils.is_not_empty(owner):
+            user_projects = self.app_context.projects_client.get_user_projects(
+                username=owner
+            )
+        allowed = projects_allowed_on_queue(user_projects, names)
+        if len(allowed) == 0:
+            listed = ', '.join(names[:10])
+            raise exceptions.soca_exception(
+                error_code=errorcodes.UNAUTHORIZED_ACCESS,
+                message=(
+                    f'No project given (add `#PBS -P <project>` or `-P <project>`). '
+                    f'Your projects allowed on queue {queue_name}: none; '
+                    f'ask an admin to add you to one of: {listed}'
+                ),
+            )
+        return allowed[0]
 
     @property
     def job_uid(self) -> str:

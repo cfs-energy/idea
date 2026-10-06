@@ -7,6 +7,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [26.10.2] - 2026-10-06
 
+* **Job project**: a job submitted without a project runs under the first project on that queue you belong to, and the job says which one was used. If you belong to none of them, the error lists the projects an admin can add you to. A project you cannot use lists the ones you can.
+* **Job CPUs**: when a job asks for more CPUs than an instance has with hyper-threading off, the error names that instance's cores and says to use that many or turn hyper-threading on.
 * **Windows image bakes**: a Windows desktop image builder launches without the cluster SSH key, so an ED25519 key pair no longer stops the bake. Windows desktops already launch without that key.
 * **Base desktop images**: base desktop images require at least 20 GB; existing base stacks below that are raised on upgrade. An edit saved while that raise is in progress is kept.
 * **Image launches**: a desktop bake, including a custom build, uses the larger of the base stack minimum (20 GB when no size is given) and the base image root disk, and a compute bake uses the larger of 10 GB and the base image root disk. A desktop or job whose root is smaller than the image snapshot launches at the snapshot size. When the image size cannot be read, the launch fails and names the image.

@@ -210,6 +210,7 @@ describe('script workbench', () => {
 
         expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
         expect(submitJob).toHaveBeenCalledTimes(1);
+        expect(submitJob.mock.calls[0][0].project).toBe("default");
     });
 
     it('does not read a priority line as the project', async () => {

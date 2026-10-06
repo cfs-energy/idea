@@ -20,6 +20,7 @@ from ideadatamodel import (
     SocaJobState,
     SocaScalingMode,
     HpcQueueProfile,
+    Project,
     ProvisioningStatus,
     ProvisioningCapacityInfo,
     CloudFormationStack,
@@ -50,6 +51,38 @@ from typing import Dict, Optional, List
 import arrow
 import os
 import logging
+
+
+def queue_project_names(
+    projects_client, projects: Optional[List[Project]]
+) -> List[str]:
+    """
+    Queue profile rows store project ids. Membership, like check_acls, is by name,
+    so an id-only row is resolved before it can be compared or shown to the user.
+    """
+    names = []
+    for project in projects or []:
+        name = project.name
+        if Utils.is_empty(name) and Utils.is_not_empty(project.project_id):
+            try:
+                resolved = projects_client.get_project_by_id(project.project_id)
+            except exceptions.SocaException:
+                resolved = None
+            name = resolved.name if resolved is not None else project.project_id
+        if Utils.is_not_empty(name) and name not in names:
+            names.append(name)
+    return names
+
+
+def projects_allowed_on_queue(
+    user_projects: Optional[List[Project]], queue_names: List[str]
+) -> List[str]:
+    """Queue order, keeping only projects the user is a member of."""
+    member_names = []
+    for project in user_projects or []:
+        if Utils.is_not_empty(project.name) and project.name not in member_names:
+            member_names.append(project.name)
+    return [name for name in queue_names if name in member_names]
 
 
 def _is_transient_ec2_error(exc: BaseException = None) -> bool:
@@ -920,9 +953,21 @@ class JobProvisioningUtil:
                 break
 
         if current_project is None:
+            # a missing queue profile must not hide the rejection; the list is then empty
+            allowed = []
+            try:
+                allowed = projects_allowed_on_queue(
+                    user_projects,
+                    queue_project_names(
+                        self.context.projects_client, self.queue_profile.projects
+                    ),
+                )
+            except exceptions.SocaException:
+                allowed = []
+            allowed_text = ', '.join(allowed) if len(allowed) > 0 else 'none'
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
-                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}.',
+                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}. you can use: {allowed_text}',
             )
 
         return True

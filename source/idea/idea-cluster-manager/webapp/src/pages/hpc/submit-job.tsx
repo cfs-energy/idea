@@ -49,6 +49,7 @@ import {JobTemplate} from "../../service/job-templates-service";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
 import {updateJobScriptSelect} from "./pbs-select";
+import {ncpusExceedsCoresMessage} from "./hpc-utils";
 
 import nunjucks from "nunjucks"
 
@@ -1264,19 +1265,20 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     /** the instance type that sizes the job: the smallest by cpu count of the selected types, or of the
      * queue profile defaults. The name is tracked so the size Alert pairs the count with its type. */
-    getSmallestInstanceTypeOption(instanceTypeOptions: SocaInstanceTypeOptions[], values?: any): { name: string, cpuCount: number } | null {
+    getSmallestInstanceTypeOption(instanceTypeOptions: SocaInstanceTypeOptions[], values?: any): { name: string, cpuCount: number, coreCount: number } | null {
         const instanceTypes = this.getSelectedInstanceTypes(values)
-        let smallest: { name: string, cpuCount: number } | null = null
+        let smallest: { name: string, cpuCount: number, coreCount: number } | null = null
         instanceTypeOptions.forEach(instanceTypeOption => {
             if (instanceTypes.length > 0 && instanceTypes.indexOf(Utils.asString(instanceTypeOption.name)) < 0) {
                 return
             }
-            const optionCpuCount = Utils.asNumber(instanceTypeOption.threads_per_core, 0) * Utils.asNumber(instanceTypeOption.default_core_count, 0)
+            const coreCount = Utils.asNumber(instanceTypeOption.default_core_count, 0)
+            const optionCpuCount = Utils.asNumber(instanceTypeOption.threads_per_core, 0) * coreCount
             if (isNaN(optionCpuCount) || optionCpuCount <= 0) {
                 return
             }
             if (smallest === null || optionCpuCount < smallest.cpuCount) {
-                smallest = {name: Utils.asString(instanceTypeOption.name), cpuCount: optionCpuCount}
+                smallest = {name: Utils.asString(instanceTypeOption.name), cpuCount: optionCpuCount, coreCount: coreCount}
             }
         })
         return smallest
@@ -1478,6 +1480,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 })
             }
             const cpusPerInstance = smallest.cpuCount
+            // threads_per_core stays at the vCPU count when the options were not rebuilt for
+            // hyper-threading off. writing that count as ncpus is rejected by the scheduler.
+            if (this.isHyperThreadingEnabled(values) === false && smallest.coreCount > 0 && cpusPerInstance > smallest.coreCount) {
+                throw new IdeaException({
+                    errorCode: "INVALID_PARAMS",
+                    message: ncpusExceedsCoresMessage(smallest.name, smallest.coreCount),
+                })
+            }
             const requestedCpus = Utils.asNumber(values.cpus, 0)
             if (isNaN(requestedCpus) || requestedCpus <= 0) {
                 throw new IdeaException({
