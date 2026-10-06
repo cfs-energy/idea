@@ -1401,8 +1401,8 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     stack.min_storage = SocaMemory(value=20, unit=SocaMemoryUnit.GB)
     h = Harness(stacks=[stack])
     queue_and_run(h)
-    # the bake has the room a desktop launched from it has
-    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
+    # 20 GB is under the desktop floor, so the builder disk is 40 GB
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 40
     # the page links the bootstrap_<instance id> stream, console-escaped
     assert h.row().log_link.endswith(
         '#logsV2:log-groups/log-group/$252Fidea-test$252Fvdc$252Fami-builder/log-events/bootstrap_i-builder'
@@ -1410,10 +1410,76 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     assert h.row().log_link.startswith('https://us-east-2.console.aws.amazon.com/')
 
 
-def test_a_stack_without_a_size_leaves_the_builder_default():
+def test_a_stack_without_a_size_gets_the_builder_floor():
     h = Harness()
     queue_and_run(h)
-    assert FakeBuilder.made[0]['ebs_volume_size'] is None
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 40
+
+
+def _stock_image(volume_gb, root='/dev/sda1', extra=None):
+    mappings = list(extra or [])
+    mappings.append(
+        {
+            'DeviceName': root,
+            'Ebs': {'VolumeSize': volume_gb, 'SnapshotId': 'snap-root'},
+        }
+    )
+    return {
+        'ImageId': 'ami-stock-rocky9',
+        'Name': 'Rocky-8',
+        'State': 'available',
+        'Architecture': 'x86_64',
+        'RootDeviceName': root,
+        'BlockDeviceMappings': mappings,
+    }
+
+
+def test_a_10_gb_stack_gets_a_40_gb_builder():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 40
+
+
+def test_an_11_gb_ami_with_a_10_gb_stack_gets_at_least_11_gb():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    # a data disk listed first must not hide the 11 GB root
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(
+        11, extra=[{'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}}]
+    )
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] >= 11
+
+
+def test_a_100_gb_stack_keeps_100_gb():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=100, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(11)
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 100
+
+
+def test_the_base_ami_root_sets_the_builder_when_it_is_largest():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(
+        80, extra=[{'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}}]
+    )
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 80
 
 
 def test_a_failed_in_bake_check_reports_its_detail_and_builder(monkeypatch):

@@ -52,8 +52,10 @@ from ideasdk.aws.image_builds import (
     ImageBuildRecordsDB,
     ImageBuildRunner,
     ImageNotValidated,
+    builder_root_gb,
     describe_images_by_id,
     promote_gate,
+    root_device_volume_gb,
     resume_record,
     terminate_builder,
 )
@@ -71,6 +73,7 @@ from ideavirtualdesktopcontroller.app.sessions.image_validation import (
 )
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (
     AMI_BUILDER_STATUS_COMPLETE,
+    DEFAULT_EBS_VOLUME_SIZE_GB,
     DcvHostImageBuilder,
     BUILD_SUPPORTED_BASE_OS,
     is_windows,
@@ -902,11 +905,18 @@ class DesktopImagePipeline:
         record.status = S.TEST_LAUNCHING.value
         self._save(record)
 
-    def _builder_volume_gb(self, record: ImageBuildRecord) -> Optional[int]:
+    def _ami_root_gb(self, image_id: Optional[str]) -> int:
+        if not image_id:
+            return 0
+        image = describe_images_by_id(self.context.aws().ec2(), [image_id]).get(
+            image_id
+        )
+        return root_device_volume_gb(image)
+
+    def _builder_volume_gb(self, record: ImageBuildRecord) -> int:
         """
-        the root size the row's base stacks launch desktops with: the bake needs the same
-        room a desktop has (a GUI does not fit the vendor's default), and a desktop launched
-        from the image needs a root at least as large as the image's
+        builder disk only: max(the row's base-stack minimum, the base AMI root snapshot,
+        the desktop floor). a desktop launched from the image still uses the stack minimum.
         """
         targets = self.targets_for(record.row_key()) or self.targets_for(
             ImageRowKey(
@@ -916,7 +926,10 @@ class DesktopImagePipeline:
             )
         )
         sizes = [int(s.min_storage.int_val()) for s in targets if s.min_storage]
-        return max(sizes) if sizes else None
+        stack_gb = max(sizes) if sizes else 0
+        return builder_root_gb(
+            stack_gb, self._ami_root_gb(record.source_ami), DEFAULT_EBS_VOLUME_SIZE_GB
+        )
 
     def _test_launch(self, record: ImageBuildRecord):
         targets = self.targets_for(record.row_key())

@@ -560,3 +560,52 @@ def test_an_x86_64_builder_type_is_refused_for_an_arm64_compute_image():
     with pytest.raises(exceptions.SocaException) as exc_info:
         build_with_base_ami('ami-rocky9armstock01', instance_type='m6i.large')
     assert 'm6i.large is x86_64' in exc_info.value.message
+
+
+def test_compute_builder_disk_is_max_of_queue_root_ami_and_floor():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    def sized(gb):
+        profile = queue_profile('compute', 'rocky9', 'ami-rocky9stock00001')
+        profile.default_job_params.root_storage_size = SocaMemory(
+            value=gb, unit=SocaMemoryUnit.GB
+        )
+        return profile
+
+    ten = build_service(ROCKY9_STOCK_CONFIG, FakeEc2(), profiles=[sized(10)])
+    # the fixture AMIs are 10 GB; the compute floor is 20
+    assert ten._builder_volume_gb('ami-rocky9stock00001') == 20
+
+    hundred = build_service(ROCKY9_STOCK_CONFIG, FakeEc2(), profiles=[sized(100)])
+    assert hundred._builder_volume_gb('ami-rocky9stock00001') == 100
+
+    class BigRoot:
+        def describe_images(self, **kwargs):
+            return {
+                'Images': [
+                    {
+                        'ImageId': 'ami-big',
+                        'RootDeviceName': '/dev/sda1',
+                        'BlockDeviceMappings': [
+                            {'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}},
+                            {'DeviceName': '/dev/sda1', 'Ebs': {'VolumeSize': 11}},
+                        ],
+                    }
+                ]
+            }
+
+    eleven = build_service(ROCKY9_STOCK_CONFIG, BigRoot(), profiles=[sized(10)])
+    assert eleven._builder_volume_gb('ami-big') >= 11
+
+    class LargerRoot(BigRoot):
+        def describe_images(self, **kwargs):
+            image = super().describe_images()['Images'][0]
+            image['BlockDeviceMappings'][1]['Ebs']['VolumeSize'] = 50
+            return {'Images': [image]}
+
+    assert (
+        build_service(
+            ROCKY9_STOCK_CONFIG, LargerRoot(), profiles=[sized(10)]
+        )._builder_volume_gb('ami-big')
+        == 50
+    )

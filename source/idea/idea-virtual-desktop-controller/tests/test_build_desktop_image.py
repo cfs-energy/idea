@@ -81,7 +81,33 @@ def test_defaults_come_from_cluster_config():
     assert builder.subnet_id == 'subnet-a'
     assert builder.ssh_key_pair == 'idea_test'
     assert builder.block_device_name == '/dev/xvda'
-    assert builder.ebs_volume_size == 10
+    assert builder.ebs_volume_size == 40
+
+
+def test_a_smaller_request_uses_the_root_snapshot_and_the_floor():
+    context = fake_context()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [
+            {
+                'ImageId': 'ami-base',
+                'Architecture': 'x86_64',
+                'RootDeviceName': '/dev/sda1',
+                'BlockDeviceMappings': [
+                    {'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}},
+                    {'DeviceName': '/dev/sda1', 'Ebs': {'VolumeSize': 11}},
+                ],
+            }
+        ]
+    }
+    builder = DcvHostImageBuilder(
+        context=context, base_ami='ami-base', base_os='rocky8', ebs_volume_size=10
+    )
+    assert builder.block_device_name == '/dev/sda1'
+    assert builder.ebs_volume_size >= 11
+    kept = DcvHostImageBuilder(
+        context=context, base_ami='ami-base', base_os='rocky8', ebs_volume_size=100
+    )
+    assert kept.ebs_volume_size == 100
 
 
 def test_vdi_subnets_win_over_cluster_subnets():

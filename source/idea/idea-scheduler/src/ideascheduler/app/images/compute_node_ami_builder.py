@@ -19,9 +19,11 @@ from ideasdk.aws.image_builds import (
     BUILDER_READY_TIMEOUT_SECONDS,
     IMAGE_BUILD_TAG,
     BuildReporter,
+    builder_root_gb,
     check_builder_type_architecture,
     default_builder_instance_type,
     is_throttle,
+    root_ebs_mapping,
     stop_builder,
     unique_build_version,
 )
@@ -39,7 +41,11 @@ from pathlib import Path
 import os
 
 DEFAULT_INSTANCE_TYPE = 'c7i.large'
-DEFAULT_EBS_VOLUME_SIZE_GB = 10
+# builder disk only. the bake installs gcc/gfortran/kernel-devel, builds efs-utils
+# with a rustup toolchain, and compiles OpenPBS plus PostgreSQL. that set and the
+# package cache need more than the 10 GB queue-root default, and there is no desktop
+# group, so 20 GB is enough headroom. jobs still launch at the queue's root size.
+DEFAULT_EBS_VOLUME_SIZE_GB = 20
 
 
 class ComputeNodeAmiBuilder:
@@ -165,21 +171,16 @@ class ComputeNodeAmiBuilder:
             )
         else:
             check_builder_type_architecture(instance_type, self.architecture)
-        ami_block_device_mappings = image['BlockDeviceMappings']
-        ami_block_device = ami_block_device_mappings[0]
+        ami_block_device = root_ebs_mapping(image)
         ami_block_device_name = ami_block_device['DeviceName']
-        ami_block_ebs = ami_block_device['Ebs']
-        ami_ebs_volume_size_gb = ami_block_ebs['VolumeSize']
+        ami_ebs_volume_size_gb = ami_block_device['Ebs']['VolumeSize']
 
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
-        if Utils.is_empty(ebs_volume_size):
-            ebs_volume_size = max(DEFAULT_EBS_VOLUME_SIZE_GB, ami_ebs_volume_size_gb)
-        else:
-            if ebs_volume_size < ami_ebs_volume_size_gb:
-                raise exceptions.invalid_params(
-                    f'ebs volume size must be greater or equal to base ami ebs volume size: {ami_ebs_volume_size_gb}gb'
-                )
+        # a request smaller than the AMI snapshot or the floor is raised, not refused
+        ebs_volume_size = builder_root_gb(
+            ebs_volume_size, ami_ebs_volume_size_gb, DEFAULT_EBS_VOLUME_SIZE_GB
+        )
 
         # stop/terminate
         if terminate:

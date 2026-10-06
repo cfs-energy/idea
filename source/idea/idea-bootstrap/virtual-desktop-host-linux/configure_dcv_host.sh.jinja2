@@ -360,7 +360,9 @@ start_and_configure_dcv_agent_service
 
 # run user customizations if available
 if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
-  /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
+  /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1 || exit 1
+else
+  log_info "no userdata customizations"
 fi
 
 if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then

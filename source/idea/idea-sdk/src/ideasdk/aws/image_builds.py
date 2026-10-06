@@ -597,6 +597,33 @@ def is_built_image(ec2_client, image_id: Optional[str]) -> bool:
     return len(result.get('Images', [])) > 0
 
 
+def root_ebs_mapping(image: Dict) -> Dict:
+    """the root device mapping from a DescribeImages image, else the first mapping"""
+    mappings = image['BlockDeviceMappings']
+    root = image.get('RootDeviceName')
+    if root:
+        for mapping in mappings:
+            ebs = mapping.get('Ebs')
+            if mapping.get('DeviceName') == root and isinstance(ebs, dict):
+                return mapping
+    return mappings[0]
+
+
+def root_device_volume_gb(image: Optional[Dict]) -> int:
+    """VolumeSize of the root device mapping. 0 when the image has no EBS root."""
+    if not isinstance(image, dict) or not image.get('BlockDeviceMappings'):
+        return 0
+    try:
+        return int(root_ebs_mapping(image)['Ebs']['VolumeSize'])
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
+def builder_root_gb(requested: Optional[int], ami_root_gb: int, floor_gb: int) -> int:
+    """builder disk only: max(stack or queue minimum, AMI root snapshot, floor)"""
+    return max(int(requested or 0), int(ami_root_gb or 0), int(floor_gb))
+
+
 def describe_images_by_id(ec2_client, image_ids: List[str]) -> Dict[str, Dict]:
     """
     describe_images for a set of ids, keyed by id. one unknown id fails the whole batch, so

@@ -23,6 +23,7 @@ def render(
     lustre=True,
     drivers=(),
     config=None,
+    variables=None,
 ):
     context = BootstrapContext(
         config=config or Config(),
@@ -38,6 +39,8 @@ def render(
     context.vars.bedrock_env = {}
     context.vars.bedrock_model_messages = []
     context.vars.enabled_drivers = drivers
+    for key, value in (variables or {}).items():
+        setattr(context.vars, key, value)
     if lustre:
         context.has_storage_provider = lambda provider: provider == 'fsx_lustre'
     else:
@@ -938,3 +941,73 @@ def test_windows_repeat_run_marker_waits_for_a_successful_domain_join(
     joined = text[text.rindex('$Joined =', 0, guard) : guard]
     assert 'PartOfDomain' in joined and '$global:IdeaDomainJoined' in joined
     assert '$global:IdeaDomainJoined = $joined' in text
+
+
+USERDATA_HOOKS = (
+    'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+    'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+    'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+    'compute-node/compute_node_post_reboot.sh.jinja2',
+)
+
+
+def _hook_variables(name):
+    if name.startswith('compute-node/'):
+        from test_bootstrap_shell_syntax import job
+
+        return {'job': job()}
+    return None
+
+
+def test_optional_userdata_hooks_are_guarded():
+    for name in USERDATA_HOOKS:
+        text = render(name, 'rocky9', variables=_hook_variables(name))
+        assert 'no userdata customizations' in text, name
+        assert '|| exit' in _hook_block(text), name
+
+
+def _hook_block(text):
+    start = text.index('userdata_customizations.sh')
+    start = text.rindex('if [[ -f', 0, start)
+    end = text.index('fi', start)
+    return text[start : text.index('\n', end)]
+
+
+@pytest.mark.parametrize('case', ['absent', 'fail', 'pass'])
+def test_userdata_customization_hook(tmp_path, case):
+    """a missing hook is skipped; one that exists and fails stops the bake; one that passes runs"""
+    text = render(
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2', 'rocky9'
+    )
+    home = tmp_path / 'cluster'
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    hook = home / 'vdc' / 'ami_builder' / 'userdata_customizations.sh'
+    if case != 'absent':
+        hook.parent.mkdir(parents=True)
+        body = 'echo ran-hook\n' if case == 'pass' else 'echo hook-failed >&2\nexit 1\n'
+        hook.write_text('#!/bin/bash\n' + body)
+        hook.chmod(0o755)
+    script = 'log_info() { echo "$*"; }\n' + _hook_block(text) + '\necho continued\n'
+    result = subprocess.run(
+        ['bash', '-c', script],
+        capture_output=True,
+        text=True,
+        env={
+            'IDEA_CLUSTER_HOME': str(home),
+            'IDEA_MODULE_ID': 'vdc',
+            'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR': str(logs),
+            'PATH': os.environ['PATH'],
+        },
+    )
+    if case == 'absent':
+        assert result.returncode == 0, result.stderr
+        assert 'no userdata customizations' in result.stdout
+        assert 'continued' in result.stdout
+    elif case == 'fail':
+        assert result.returncode != 0
+        assert 'continued' not in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert 'ran-hook' in (logs / 'userdata_customizations.log').read_text()
+        assert 'continued' in result.stdout
