@@ -1523,7 +1523,9 @@ try:
                     e.job.queue = pbs.server().queue(queue_name)
 
                 project = payload.get('project', None)
-                if project is not None:
+                if project is not None and (
+                    event_type != HOOK_EVENT_MODIFYJOB or e.job.project
+                ):
                     e.job.project = project
 
                 resources_updated = payload.get('resources_updated', None)
