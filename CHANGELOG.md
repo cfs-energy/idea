@@ -7,6 +7,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 ## [26.10.2] - 2026-10-06
 
+* **Security**: PyJWT 2.15.0, urllib3 2.8.0, Mako 1.4.2 and multidict 6.9.1, for published advisories including a critical PyJWT one.
 * **Job project**: a job submitted without a project runs under the first project on that queue you belong to, recorded in PBS for `qstat -f` and accounting. If project membership cannot be read, submission is rejected. If you belong to none of them, the error lists the projects an admin can add you to. A project you cannot use lists the ones you can.
 * **Job CPUs**: when a job asks for more CPUs than an instance has with hyper-threading off, the error names that instance's cores and says to use that many or turn hyper-threading on.
 * **Windows image bakes**: a Windows desktop image builder launches without the cluster SSH key, so an ED25519 key pair no longer stops the bake. Windows desktops already launch without that key.
