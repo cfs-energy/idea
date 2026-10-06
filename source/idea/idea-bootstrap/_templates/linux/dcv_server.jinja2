@@ -169,7 +169,8 @@ if [[ $machine == "x86_64" ]]; then
       && echo "${NETTLE_SHA256}  nettle-3.4.tar.gz" | sha256sum -c - \
       && break
   done
-  echo "${NETTLE_SHA256}  nettle-3.4.tar.gz" | sha256sum -c -
+  # nothing here runs under set -e: stop before tar/configure touch an unverified file
+  echo "${NETTLE_SHA256}  nettle-3.4.tar.gz" | sha256sum -c - || exit 1
   tar -xzf nettle-3.4.tar.gz
   cd nettle-3.4
 
