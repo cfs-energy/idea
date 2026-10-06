@@ -15,6 +15,8 @@ from ideadatamodel import (
     BuildDesktopImageRequest,
     ImageBuildRecord,
     SocaListingPayload,
+    SocaMemory,
+    SocaMemoryUnit,
     VirtualDesktopSoftwareStack,
     exceptions,
 )
@@ -271,11 +273,22 @@ def test_the_last_build_record_rides_along():
 class InstantBuilder:
     """stands in for DcvHostImageBuilder: no ec2, returns a per-os image id"""
 
+    ebs_volume_size = None
+
     def __init__(
-        self, context, base_ami, base_os, instance_type=None, force=False, **_
+        self,
+        context,
+        base_ami,
+        base_os,
+        instance_type=None,
+        force=False,
+        ebs_volume_size=None,
+        **_,
     ):
         self.base_ami = base_ami
         self.base_os = base_os
+        self.ebs_volume_size = ebs_volume_size
+        InstantBuilder.ebs_volume_size = ebs_volume_size
 
     def get_ami_full_name(self):
         return f'idea-dcv-host-{self.base_os}-v09022026-000000'
@@ -334,6 +347,25 @@ def test_a_custom_build_never_touches_the_managed_row_or_a_stack(monkeypatch):
     # the leader loop only ever sees managed rows, so it never adopts or runs a custom build
     assert [r.architecture for r in service.pipeline.managed()] == ['x86_64']
     assert 'ami-rocky9-built' in service.pipeline.protected_images()
+
+
+def test_a_custom_build_passes_the_base_stack_minimum(monkeypatch):
+    software_stack = stack('ss-base-rocky9-x86-64-base', 'rocky9', 'ami-old')
+    software_stack.min_storage = SocaMemory(value=20, unit=SocaMemoryUnit.GB)
+    service = build_service([software_stack])
+    monkeypatch.setattr(module, 'find_latest_stock_ami', lambda *args: 'ami-8gb')
+    monkeypatch.setattr(module, 'DcvHostImageBuilder', InstantBuilder)
+    monkeypatch.setattr(service.runner, 'start', lambda record, build, **kwargs: record)
+    service.build(BuildDesktopImageRequest(base_os='rocky9'), 'operator')
+    assert InstantBuilder.ebs_volume_size == 20
+
+    larger = stack('ss-base-rocky9-x86-64-base', 'rocky9', 'ami-old')
+    larger.min_storage = SocaMemory(value=100, unit=SocaMemoryUnit.GB)
+    service = build_service([larger])
+    monkeypatch.setattr(module, 'DcvHostImageBuilder', InstantBuilder)
+    monkeypatch.setattr(service.runner, 'start', lambda record, build, **kwargs: record)
+    service.build(BuildDesktopImageRequest(base_os='rocky9'), 'operator')
+    assert InstantBuilder.ebs_volume_size == 100
 
 
 def test_a_custom_build_cannot_repoint_a_stack():

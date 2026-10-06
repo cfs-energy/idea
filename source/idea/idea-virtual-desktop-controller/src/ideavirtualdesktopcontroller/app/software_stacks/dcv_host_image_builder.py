@@ -35,6 +35,9 @@ from ideasdk.aws.image_builds import (
     wait_until_stopped,
 )
 from ideasdk.aws.stock_amis import trusted_owners
+from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+    BASE_STACK_MIN_STORAGE_GB,
+)
 from typing import Callable, List, Optional, Dict
 import time
 import os.path
@@ -43,7 +46,7 @@ import os
 
 DEFAULT_INSTANCE_TYPE = 'm7i.large'
 # the builder disk is the request or the base AMI root, whichever is larger.
-# the base stack minimum (20 GB) is what leaves room for the GUI group.
+# no request uses the base-stack floor, which leaves room for the GUI group.
 
 # the eVDI base OS set: EL10 has no DCV packages
 BUILD_SUPPORTED_BASE_OS = (
@@ -211,7 +214,10 @@ class DcvHostImageBuilder:
         ami_ebs_volume_size_gb = ami_block_device['Ebs']['VolumeSize']
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
-        # a request smaller than the AMI snapshot is raised, not refused
+        # no size uses the base-stack floor. a request or that floor still cannot
+        # be smaller than the AMI snapshot
+        if ebs_volume_size is None:
+            ebs_volume_size = BASE_STACK_MIN_STORAGE_GB
         ebs_volume_size = builder_root_gb(ebs_volume_size, ami_ebs_volume_size_gb)
 
         if terminate:

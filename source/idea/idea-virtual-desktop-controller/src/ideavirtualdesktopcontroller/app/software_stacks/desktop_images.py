@@ -332,12 +332,18 @@ class DesktopImageService:
                 f'no stock {base_os} {architecture} image could be resolved; provide base_ami'
             )
         check_builder_instance_type(request.instance_type, architecture)
+        # the stack minimum, or none so the builder uses the 20 GB floor.
+        # the builder still keeps the larger of that and the source AMI root
+        ebs_volume_size = None
+        if stack.min_storage is not None and stack.min_storage.value is not None:
+            ebs_volume_size = int(stack.min_storage.gb())
         # the builder refuses a base_ami that is not ours or the vendor's
         builder = DcvHostImageBuilder(
             context=self.context,
             base_ami=base_ami,
             base_os=base_os,
             instance_type=request.instance_type,
+            ebs_volume_size=ebs_volume_size,
             force=True,
         )
         record = new_record(

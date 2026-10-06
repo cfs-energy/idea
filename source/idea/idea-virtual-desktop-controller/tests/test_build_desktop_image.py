@@ -82,7 +82,7 @@ def test_defaults_come_from_cluster_config():
     assert builder.subnet_id == 'subnet-a'
     assert builder.ssh_key_pair == 'idea_test'
     assert builder.block_device_name == '/dev/xvda'
-    assert builder.ebs_volume_size == 10
+    assert builder.ebs_volume_size == 20
 
 
 def _launch_kwargs(base_os: str) -> dict:
@@ -106,6 +106,37 @@ def test_a_windows_builder_launch_has_no_key():
 
 def test_a_linux_builder_launch_keeps_the_key():
     assert _launch_kwargs('amazonlinux2023')['KeyName'] == 'idea_test'
+
+
+def _builder_for_root(volume_gb, ebs_volume_size=None):
+    context = fake_context()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [
+            {
+                'ImageId': 'ami-base',
+                'Architecture': 'x86_64',
+                'RootDeviceName': '/dev/sda1',
+                'BlockDeviceMappings': [
+                    {'DeviceName': '/dev/sda1', 'Ebs': {'VolumeSize': volume_gb}},
+                ],
+            }
+        ]
+    }
+    return DcvHostImageBuilder(
+        context=context,
+        base_ami='ami-base',
+        base_os='rocky8',
+        ebs_volume_size=ebs_volume_size,
+    )
+
+
+def test_a_20_gb_request_on_an_8_gb_source_bakes_at_20():
+    assert _builder_for_root(8, 20).ebs_volume_size == 20
+
+
+def test_no_size_uses_20_unless_the_source_root_is_larger():
+    assert _builder_for_root(8).ebs_volume_size == 20
+    assert _builder_for_root(30).ebs_volume_size == 30
 
 
 def test_a_smaller_request_uses_the_root_snapshot():

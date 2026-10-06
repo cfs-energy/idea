@@ -68,11 +68,12 @@ def _below_base_stack_storage_floor(stack: VirtualDesktopSoftwareStack) -> bool:
     return storage.gb() < software_stacks_constants.BASE_STACK_MIN_STORAGE_GB
 
 
-def apply_base_stack_storage_floor(stacks, get_stack, update_stack, logger):
+def apply_base_stack_storage_floor(stacks, get_stack, raise_min_storage, logger):
     """
-    raise ss-base-* stacks under the floor to it. no write when the stored value is
-    already at least the floor, and custom stacks are never touched. image_pinned is
-    not changed: the caller writes through the table, not the edit API that auto-pins.
+    raise ss-base-* stacks under the floor to it. the write sets only the storage
+    value, unit and updated time, and only while the row still has the storage that
+    was read. a miss is skipped and the next pass reads the row again. image_pinned
+    is not changed.
     """
     raised = []
     for stack in stacks:
@@ -82,11 +83,9 @@ def apply_base_stack_storage_floor(stacks, get_stack, update_stack, logger):
         if fresh is None or not _below_base_stack_storage_floor(fresh):
             continue
         previous = fresh.min_storage
-        fresh.min_storage = SocaMemory(
-            value=software_stacks_constants.BASE_STACK_MIN_STORAGE_GB,
-            unit=SocaMemoryUnit.GB,
-        )
-        updated = update_stack(fresh)
+        updated = raise_min_storage(fresh, previous)
+        if updated is None:
+            continue
         logger.info(
             f'{fresh.stack_id} min_storage raised from {previous} to '
             f'{software_stacks_constants.BASE_STACK_MIN_STORAGE_GB}gb'
@@ -391,7 +390,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         return apply_base_stack_storage_floor(
             stacks,
             lambda stack: self.get(stack_id=stack.stack_id, base_os=stack.base_os),
-            self.update,
+            self.raise_min_storage,
             self._logger,
         )
 
@@ -712,6 +711,68 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                 raise e
 
         return self.convert_db_dict_to_software_stack_object(software_stack_db_entry)
+
+    def raise_min_storage(
+        self,
+        software_stack: VirtualDesktopSoftwareStack,
+        observed: SocaMemory,
+    ) -> Optional[VirtualDesktopSoftwareStack]:
+        """
+        set min_storage to the floor while the row still exists and still has the
+        storage that was read. writes the value, the unit and updated_on. None when
+        the row is gone or the storage changed, so the next tick reads it again.
+        """
+        k = software_stacks_constants
+        base_os = (
+            software_stack.base_os.value
+            if hasattr(software_stack.base_os, 'value')
+            else software_stack.base_os
+        )
+        floor = SocaMemory(value=k.BASE_STACK_MIN_STORAGE_GB, unit=SocaMemoryUnit.GB)
+        old_value = str(observed.value)
+        old_unit = str(observed.unit)
+        names = {
+            '#hk': k.SOFTWARE_STACK_DB_HASH_KEY,
+            '#val': k.SOFTWARE_STACK_DB_MIN_STORAGE_VALUE_KEY,
+            '#unit': k.SOFTWARE_STACK_DB_MIN_STORAGE_UNIT_KEY,
+            '#upd': k.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
+        }
+        values = {
+            ':old_val': old_value,
+            ':old_unit': old_unit,
+            ':val': str(floor.value),
+            ':unit': str(floor.unit),
+            ':upd': Utils.current_time_ms(),
+        }
+        try:
+            result = self._table.update_item(
+                Key={
+                    k.SOFTWARE_STACK_DB_HASH_KEY: base_os,
+                    k.SOFTWARE_STACK_DB_RANGE_KEY: software_stack.stack_id,
+                },
+                UpdateExpression='SET #val = :val, #unit = :unit, #upd = :upd',
+                ConditionExpression=(
+                    'attribute_exists(#hk) AND #val = :old_val AND #unit = :old_unit'
+                ),
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues='ALL_NEW',
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+            return None
+        new_entry = result['Attributes']
+        old_entry = dict(new_entry)
+        old_entry[k.SOFTWARE_STACK_DB_MIN_STORAGE_VALUE_KEY] = old_value
+        old_entry[k.SOFTWARE_STACK_DB_MIN_STORAGE_UNIT_KEY] = old_unit
+        self.trigger_update_event(
+            base_os,
+            software_stack.stack_id,
+            old_entry=old_entry,
+            new_entry=new_entry,
+        )
+        return self.convert_db_dict_to_software_stack_object(new_entry)
 
     def update(
         self, software_stack: VirtualDesktopSoftwareStack

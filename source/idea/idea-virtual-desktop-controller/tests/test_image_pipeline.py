@@ -223,6 +223,26 @@ class FakeStackDb:
         self.updated.append(stack.stack_id)
         return stack
 
+    def raise_min_storage(self, stack, observed):
+        from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+            BASE_STACK_MIN_STORAGE_GB,
+        )
+
+        stored = self.stacks.get(stack.stack_id)
+        if (
+            stored is None
+            or stored.min_storage is None
+            or observed is None
+            or stored.min_storage.gb() != observed.gb()
+            or stored.min_storage.unit != observed.unit
+        ):
+            return None
+        stored.min_storage = SocaMemory(
+            value=BASE_STACK_MIN_STORAGE_GB, unit=SocaMemoryUnit.GB
+        )
+        self.updated.append(stack.stack_id)
+        return stored
+
     def repoint_image(self, stack, old_ami_id, ami_id, base_ami_id=None):
         stored = self.stacks.get(stack.stack_id)
         if stored is None or stored.image_pinned or stored.ami_id != old_ami_id:
@@ -1538,6 +1558,46 @@ def test_the_stack_table_repoint_is_conditional_on_the_old_image_and_no_pin():
     assert db.repoint_image(stack, 'ami-old', 'ami-new') is None
 
 
+def test_the_storage_floor_write_sets_only_storage_and_skips_a_lost_race():
+    from unittest.mock import MagicMock
+
+    from botocore.exceptions import ClientError
+    from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+        VirtualDesktopSoftwareStackDB,
+    )
+
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db._table_obj = MagicMock()
+    db.trigger_update_event = MagicMock()
+    db.convert_db_dict_to_software_stack_object = lambda entry: entry
+    stack = base_stack('rocky9', ami='ami-old')
+    stack.min_storage = _gb(10)
+    stack.image_pinned = False
+    db._table_obj.update_item.return_value = {
+        'Attributes': {
+            'ami_id': 'ami-old',
+            'image_pinned': False,
+            'min_storage_value': '20.0',
+        }
+    }
+    assert db.raise_min_storage(stack, _gb(10))['ami_id'] == 'ami-old'
+    call = db._table_obj.update_item.call_args.kwargs
+    written = set(call['ExpressionAttributeNames'].values())
+    assert written == {'base_os', 'min_storage_value', 'min_storage_unit', 'updated_on'}
+    assert 'ami_id' not in written and 'image_pinned' not in written
+    assert 'attribute_exists' in call['ConditionExpression']
+    assert call['ExpressionAttributeValues'][':old_val'] == '10.0'
+    assert call['ExpressionAttributeValues'][':old_unit'] == 'gb'
+    db.trigger_update_event.assert_called_once()
+
+    db._table_obj.update_item.side_effect = ClientError(
+        {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
+    )
+    db.trigger_update_event.reset_mock()
+    assert db.raise_min_storage(stack, _gb(10)) is None
+    db.trigger_update_event.assert_not_called()
+
+
 # once a day
 
 
@@ -1676,3 +1736,28 @@ def test_a_base_stack_lowered_to_10_gb_is_raised_on_the_next_tick():
     h.pipeline.tick(now=T0)
     assert h.stack_db.stacks[stack_id].min_storage.gb() == 20
     assert h.stack_db.updated == [stack_id]
+
+
+def test_an_admin_edit_during_the_floor_raise_survives():
+    h = _floor_harness()
+    stack_id = 'ss-base-rocky9-x86-64-base'
+    h.stack_db.stacks[stack_id].image_pinned = False
+    original_get = h.stack_db.get
+
+    def get_then_edit(stack_id, base_os):
+        fresh = original_get(stack_id, base_os)
+        if stack_id == 'ss-base-rocky9-x86-64-base':
+            stored = h.stack_db.stacks[stack_id]
+            stored.min_storage = _gb(100)
+            stored.ami_id = 'ami-admin'
+            stored.image_pinned = True
+        return fresh
+
+    h.stack_db.get = get_then_edit
+    h.pipeline.tick(now=T0)
+    kept = h.stack_db.stacks[stack_id]
+    assert kept.min_storage.gb() == 100
+    assert kept.ami_id == 'ami-admin'
+    assert kept.image_pinned is True
+    assert stack_id not in h.stack_db.updated
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()

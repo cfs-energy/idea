@@ -655,16 +655,44 @@ def builder_root_gb(requested: Optional[int], ami_root_gb: int) -> int:
 
 
 def cached_image_root_gb(ec2_client, image_id: Optional[str]) -> int:
-    """root snapshot GiB from DescribeImages, cached by image id. 0 when unknown."""
+    """
+    root snapshot GiB for one image. a throttle is retried once. a miss, a lookup
+    error, or an image with no root raises, naming the image. only a resolved
+    size is cached. 0 only when no image id was given.
+    """
     if not image_id:
         return 0
     cached = _image_root_gb.get(image_id)
     if cached is not None:
         return cached
-    image = describe_images_by_id(ec2_client, [image_id]).get(image_id)
+    image = None
+    error = None
+    for attempt in range(2):
+        try:
+            image = describe_image_or_none(ec2_client, image_id)
+            error = None
+            break
+        except Exception as caught:
+            error = caught
+            if attempt == 0 and is_throttle(caught):
+                time.sleep(1)
+                continue
+            break
+    if error is not None:
+        raise exceptions.general_exception(
+            f'could not read the root disk size of image {image_id}: '
+            f'{sanitize_aws_message(str(error))}'
+        )
+    if image is None:
+        raise exceptions.general_exception(
+            f'could not read the root disk size of image {image_id}: the image was not found'
+        )
     size = root_device_volume_gb(image)
-    if image is not None:
-        _image_root_gb[image_id] = size
+    if size <= 0:
+        raise exceptions.general_exception(
+            f'could not read the root disk size of image {image_id}'
+        )
+    _image_root_gb[image_id] = size
     return size
 
 

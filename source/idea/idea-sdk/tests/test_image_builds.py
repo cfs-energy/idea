@@ -27,6 +27,7 @@ from ideasdk.aws.image_builds import (
     ImageBuildRecordsDB,
     ImageBuildRunner,
     build_stamp,
+    cached_image_root_gb,
     describe_images_by_id,
     image_state,
     new_record,
@@ -245,6 +246,70 @@ def test_a_stale_building_record_is_marked_failed_and_no_longer_blocks():
         blocking=True,
     )
     assert db.get('rocky9', 'x86_64').image_id == 'ami-new'
+
+
+def _root_image(image_id, gb):
+    return {
+        'Images': [
+            {
+                'ImageId': image_id,
+                'RootDeviceName': '/dev/xvda',
+                'BlockDeviceMappings': [
+                    {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': gb}}
+                ],
+            }
+        ]
+    }
+
+
+def test_a_throttled_root_lookup_retries_then_caches(monkeypatch):
+    from ideasdk.aws import image_builds
+
+    image_builds._image_root_gb.clear()
+    monkeypatch.setattr(image_builds.time, 'sleep', lambda _seconds: None)
+    ec2 = Mock()
+    calls = {'n': 0}
+
+    def describe_images(ImageIds):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise ClientError({'Error': {'Code': 'Throttling'}}, 'DescribeImages')
+        return _root_image(ImageIds[0], 20)
+
+    ec2.describe_images.side_effect = describe_images
+    assert cached_image_root_gb(ec2, 'ami-throttle') == 20
+    assert cached_image_root_gb(ec2, 'ami-throttle') == 20
+    assert calls['n'] == 2
+
+
+def test_a_persistent_root_lookup_error_names_the_image(monkeypatch):
+    from ideasdk.aws import image_builds
+
+    image_builds._image_root_gb.clear()
+    monkeypatch.setattr(image_builds.time, 'sleep', lambda _seconds: None)
+    ec2 = Mock()
+    ec2.describe_images.side_effect = ClientError(
+        {'Error': {'Code': 'Throttling', 'Message': 'slow down'}}, 'DescribeImages'
+    )
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        cached_image_root_gb(ec2, 'ami-stuck')
+    assert 'ami-stuck' in exc_info.value.message
+    assert 'ami-stuck' not in image_builds._image_root_gb
+
+
+def test_an_unknown_image_root_lookup_names_the_image():
+    from ideasdk.aws import image_builds
+
+    image_builds._image_root_gb.clear()
+    ec2 = Mock()
+    ec2.describe_images.side_effect = ClientError(
+        {'Error': {'Code': 'InvalidAMIID.NotFound', 'Message': 'not found'}},
+        'DescribeImages',
+    )
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        cached_image_root_gb(ec2, 'ami-missing')
+    assert 'ami-missing' in exc_info.value.message
+    assert 'ami-missing' not in image_builds._image_root_gb
 
 
 def test_describe_images_by_id_survives_an_unknown_id():

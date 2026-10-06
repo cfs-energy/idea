@@ -149,11 +149,12 @@ class RecordingEc2Client:
         self.images = images or {}
 
     def describe_images(self, ImageIds=None, **kwargs) -> Dict[str, Any]:
+        # a launch has to resolve the snapshot. tests that do not care about the
+        # size still get a 1 GB root, which does not raise a larger request
         return {
             'Images': [
-                self.images[image_id]
+                self.images.get(image_id) or image_with_root(image_id, 1)
                 for image_id in (ImageIds or [])
-                if image_id in self.images
             ]
         }
 

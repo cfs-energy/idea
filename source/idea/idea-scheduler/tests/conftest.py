@@ -40,6 +40,10 @@ def mock_describe_images(**kwargs):
             {
                 'ImageId': image_id,
                 'Architecture': MOCK_IMAGE_ARCHITECTURES.get(image_id, 'x86_64'),
+                'RootDeviceName': '/dev/xvda',
+                'BlockDeviceMappings': [
+                    {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': 1}}
+                ],
             }
             for image_id in kwargs.get('ImageIds', [])
         ]

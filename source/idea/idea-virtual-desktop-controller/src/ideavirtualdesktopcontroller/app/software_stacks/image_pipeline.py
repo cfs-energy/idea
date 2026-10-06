@@ -557,7 +557,7 @@ class DesktopImagePipeline:
             lambda stack: self._stack_db.get(
                 stack_id=stack.stack_id, base_os=stack.base_os
             ),
-            self._stack_db.update,
+            self._stack_db.raise_min_storage,
             self._logger,
         )
         for stack in raised:
