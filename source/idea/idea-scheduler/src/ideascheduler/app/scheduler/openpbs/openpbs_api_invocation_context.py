@@ -201,11 +201,29 @@ class OpenPBSAPIInvocationContext:
                 ) from e
         allowed = projects_allowed_on_queue(user_projects, queue_profile.projects)
         if len(allowed) == 0:
-            listed = ', '.join(
-                project.name or project.project_id
-                for project in (queue_profile.projects or [])[:10]
-                if project.name or project.project_id
-            )
+            names = []
+            for project in (queue_profile.projects or [])[:10]:
+                if project.enabled is False:
+                    continue
+                project_id = project.project_id
+                if not project.name and project_id:
+                    try:
+                        # ProjectsClient caches these lookups across submissions.
+                        project = (
+                            self.app_context.projects_client.get_project_by_id(
+                                project_id=project_id
+                            )
+                            or project
+                        )
+                    except Exception:
+                        # A display lookup must never replace the admission rejection.
+                        pass
+                if project.enabled is False:
+                    continue
+                name = project.name or project_id
+                if name:
+                    names.append(name)
+            listed = ', '.join(names)
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
                 message=(

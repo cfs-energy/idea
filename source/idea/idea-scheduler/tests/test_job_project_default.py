@@ -4,7 +4,7 @@ A job with no project must not be charged to the queue profile's first project.
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 import time
 
 import pytest
@@ -109,7 +109,14 @@ def test_missing_project_rejects_when_user_belongs_to_none(context, monkeypatch)
     no -P, and the user belongs to none of the queue's projects
     """
     names = [f'project-{index}' for index in range(1, 13)]
-    _use_queue(context, monkeypatch, _projects(*names))
+    projects = _projects(*names)
+    _use_queue(
+        context,
+        monkeypatch,
+        [Project(project_id=project.project_id) for project in projects],
+    )
+    lookup = Mock(side_effect=projects)
+    monkeypatch.setattr(context.projects_client, 'get_project_by_id', lookup)
     monkeypatch.setattr(
         context.projects_client,
         'get_user_projects',
@@ -130,6 +137,59 @@ def test_missing_project_rejects_when_user_belongs_to_none(context, monkeypatch)
     assert 'project-10' in message
     assert 'project-11' not in message
     assert 'project-12' not in message
+    assert 'id-project-' not in message
+    assert lookup.call_args_list == [
+        call(project_id=project.project_id) for project in projects[:10]
+    ]
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('unavailable'), None, Project()])
+def test_missing_project_name_lookup_failure_falls_back_per_entry(
+    context, monkeypatch, failure
+):
+    _use_queue(
+        context,
+        monkeypatch,
+        [Project(project_id=f'id-project-{letter}') for letter in 'abc'],
+    )
+    monkeypatch.setattr(context.projects_client, 'get_user_projects', lambda **_: [])
+    lookup = Mock(
+        side_effect=[_projects('project-a')[0], failure, _projects('project-c')[0]]
+    )
+    monkeypatch.setattr(context.projects_client, 'get_project_by_id', lookup)
+
+    result = _validate_hook(context, monkeypatch, _hook(context, project=None))
+
+    assert result.accept is False
+    assert (
+        'ask an admin to add you to one of: project-a, id-project-b, project-c'
+    ) in result.formatted_user_message
+
+
+@pytest.mark.parametrize('has_name', [False, True])
+def test_missing_project_does_not_suggest_disabled_projects(
+    context, monkeypatch, has_name
+):
+    projects = _projects('project-a', 'project-b')
+    projects[0].enabled = False
+    projects[1].enabled = True
+    _use_queue(
+        context,
+        monkeypatch,
+        projects if has_name else [Project(project_id=p.project_id) for p in projects],
+    )
+    monkeypatch.setattr(context.projects_client, 'get_user_projects', lambda **_: [])
+    monkeypatch.setattr(
+        context.projects_client, 'get_project_by_id', Mock(side_effect=projects)
+    )
+
+    result = _validate_hook(context, monkeypatch, _hook(context, project=None))
+
+    assert result.accept is False
+    assert 'project-a' not in result.formatted_user_message
+    assert (
+        'ask an admin to add you to one of: project-b' in result.formatted_user_message
+    )
 
 
 def test_unauthorized_project_lists_projects_the_user_can_use(context, monkeypatch):
@@ -156,7 +216,7 @@ def test_unauthorized_project_lists_projects_the_user_can_use(context, monkeypat
 
     assert (
         'User: researcher is not authorized to submit jobs for project: '
-        'project-a on queue: normal. you can use: project-b, project-c'
+        'project-a on queue: normal. You can use: project-b, project-c'
     ) in exc_info.value.message
 
 

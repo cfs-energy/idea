@@ -949,7 +949,7 @@ class JobProvisioningUtil:
             allowed_text = ', '.join(allowed) if len(allowed) > 0 else 'none'
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
-                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}. you can use: {allowed_text}',
+                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}. You can use: {allowed_text}',
             )
 
         return True
