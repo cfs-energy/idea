@@ -58,7 +58,6 @@ from ideasdk.aws.image_builds import (
     build_stamp,
     describe_images_by_id,
     image_state,
-    root_device_volume_gb,
     new_record,
     newest_owned_image,
     LEGACY_MIN_AGE_DAYS,
@@ -232,13 +231,6 @@ class ComputeImageService:
             return []
         return service.list_queue_profiles() or []
 
-    def _builder_volume_gb(self, base_ami: str) -> int:
-        """the base AMI root. the builder raises it to its 10 GB floor; a larger queue grows the filesystem at boot."""
-        image = describe_images_by_id(self.context.aws().ec2(), [base_ami]).get(
-            base_ami
-        )
-        return root_device_volume_gb(image)
-
     # building
 
     def build(
@@ -270,7 +262,6 @@ class ComputeImageService:
             base_os=base_os,
             instance_type=request.instance_type,
             enable_driver=tuple(request.enable_drivers or ()),
-            ebs_volume_size=self._builder_volume_gb(base_ami),
             force=True,
         )
         return self.run_build(builder, requested_by=requested_by, blocking=False)
@@ -643,7 +634,6 @@ class ComputeImageService:
                         context=self.context,
                         base_os=record.base_os,
                         base_ami=source,
-                        ebs_volume_size=self._builder_volume_gb(source),
                         force=True,
                         image_tags={PIPELINE_IMAGE_TAG: 'compute'},
                     )

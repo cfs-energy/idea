@@ -451,7 +451,7 @@ export class JobUtils extends JobParamUtils {
 
 /** Both fixes when ncpus is above an instance's physical cores with hyper-threading off. */
 export function ncpusExceedsCoresMessage(instanceType: string, cores: number): string {
-    return `${instanceType} has ${cores} cores with hyper-threading off; use ncpus=${cores} or -l ht_support=true`
+    return `${instanceType} has ${cores} cores with hyper-threading off; set CPUs per instance to ${cores} or enable hyper-threading`
 }
 
 /** The attempt the job is on, out of the configured cap. The scheduler's persistent per-job counter,

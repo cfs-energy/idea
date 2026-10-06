@@ -271,7 +271,8 @@ def test_membership_lookup_failure_rejects_clearly(context, monkeypatch):
     assert hook.event.job.project is None
 
 
-def test_queuejob_persists_selected_project(context, monkeypatch):
+@pytest.mark.parametrize('event_type', ['queuejob', 'modifyjob'])
+def test_queuejob_persists_selected_project(context, monkeypatch, event_type):
     _use_queue(context, monkeypatch, _projects('project-a', 'project-b'))
     monkeypatch.setattr(
         context.projects_client,
@@ -280,6 +281,9 @@ def test_queuejob_persists_selected_project(context, monkeypatch):
     )
     monkeypatch.setattr(context, 'job_monitor', Mock())
     hook = _hook(context, project=None)
+    hook.event.type = event_type
+    if event_type == 'modifyjob':
+        hook.event.job_o = OpenPBSJob(project='project-b', Job_Owner='researcher@host')
     # Exercise admission and the PBS response consumer, isolating cost/instance checks.
     monkeypatch.setattr(hook, 'is_valid', lambda: True)
     monkeypatch.setattr(hook, 'check_incidentals', Mock())
@@ -290,7 +294,7 @@ def test_queuejob_persists_selected_project(context, monkeypatch):
     assert result.project == 'project-b'
 
     event = SimpleNamespace(
-        type='queuejob',
+        type=event_type,
         job=SimpleNamespace(project=None, Resource_List={}),
         accept=Mock(),
         reject=Mock(),
@@ -308,7 +312,7 @@ def test_queuejob_persists_selected_project(context, monkeypatch):
             'e': event,
             'pbs': pbs,
             'is_applicable': lambda e: True,
-            'PRE_EXECUTION_HOOKS': ['queuejob'],
+            'PRE_EXECUTION_HOOKS': ['queuejob', 'modifyjob'],
             'HOOK_EVENT_QUEUEJOB': 'queuejob',
             'invoke_soca_scheduler': lambda e: {
                 'success': True,
@@ -321,3 +325,49 @@ def test_queuejob_persists_selected_project(context, monkeypatch):
     assert event.job.project == 'project-b'
     event.accept.assert_called_once()
     event.reject.assert_not_called()
+
+
+@pytest.mark.parametrize('memberships', [[], _projects('project-a', 'project-b')])
+@pytest.mark.parametrize('changed_project', [None, 'project-a'])
+def test_modifyjob_preserves_original_project_and_owner(
+    context, monkeypatch, memberships, changed_project
+):
+    _use_queue(context, monkeypatch, _projects('project-a', 'project-b'))
+    lookup = Mock(
+        side_effect=lambda username: _projects('project-b')
+        if username == 'researcher'
+        else memberships
+    )
+    monkeypatch.setattr(context.projects_client, 'get_user_projects', lookup)
+    hook = _hook(context, project=changed_project, requestor='operator')
+    hook.event.type = 'modifyjob'
+    hook.event.job_o = OpenPBSJob(
+        queue='normal',
+        project='project-b',
+        Job_Owner='researcher@submit-host',
+        Resource_List={
+            'select': '1:ncpus=1',
+            'instance_type': 't3.micro',
+            'nodes': '1',
+        },
+    )
+    hook.event.job.Resource_List = {'walltime': '01:00:00'}
+    hook.build_and_validate_job()
+    assert hook.job.project == 'project-b'
+    assert hook.event.job.project == 'project-b'
+    assert hook.job.owner == 'researcher'
+    assert hook._owner_username() == 'researcher'
+    lookup.assert_not_called()
+    assert 'No project given' not in str(hook.job_validation_result)
+    assert JobProvisioningUtil(context=context, jobs=[hook.job]).check_acls()
+    lookup.assert_called_once_with(username='researcher')
+
+
+@pytest.mark.parametrize('projects', [[], [Project(name='disabled', enabled=False)]])
+def test_missing_project_with_no_enabled_queue_projects(context, monkeypatch, projects):
+    _use_queue(context, monkeypatch, projects)
+    monkeypatch.setattr(context.projects_client, 'get_user_projects', lambda **_: [])
+    result = _validate_hook(context, monkeypatch, _hook(context, project=None))
+    assert result.accept is False
+    assert 'Queue normal has no enabled projects' in result.formatted_user_message
+    assert 'one of:' not in result.formatted_user_message

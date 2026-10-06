@@ -196,7 +196,7 @@ dcv_runtime_ok() {
 {% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
   # rpm -q stays green after a failed scriptlet. A missing payload file does not.
   local missing
-  missing=$(rpm -V nice-dcv-server 2>&1 | grep '^missing' || true)
+  missing=$(rpm -V nice-dcv-server 2>&1 | grep -E '^missing +/' || true)
   [[ -z "$missing" ]] || { echo "nice-dcv-server payload is incomplete: ${missing}"; return 1; }
 {% else %}
   # packages_installed required "install ok installed", which is a finished postinst

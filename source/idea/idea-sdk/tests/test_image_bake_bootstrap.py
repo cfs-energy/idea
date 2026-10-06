@@ -153,6 +153,7 @@ aws() { printf '%s\n' "$*" >> "$CALLS"; }
 uname() { echo test-kernel; }
 grubby() { [[ "$FAIL" != kernel ]] && echo /boot/vmlinuz-test-kernel || echo /boot/vmlinuz-other; }
 rpm() {
+  if [[ "$1" == -V && -n "${RPM_MISSING:-}" ]]; then echo "$RPM_MISSING"; return 1; fi
   [[ "$FAIL" != directory || "$*" != *adcli* ]] &&
   [[ "$FAIL" != dcv || "$*" != *nice-dcv-server* ]] &&
   [[ "$FAIL" != ssm || "$*" != *amazon-ssm-agent* ]]
@@ -1019,7 +1020,7 @@ def test_optional_userdata_hooks_are_guarded():
     for name in USERDATA_HOOKS:
         text = render(name, 'rocky9', variables=_hook_variables(name))
         assert 'no userdata customizations' in text, name
-        assert '|| exit' in _hook_block(text), name
+        assert ('|| exit' in _hook_block(text)) == ('ami-builder/' in name), name
 
 
 def _hook_block(text):
@@ -1147,3 +1148,56 @@ def test_site_hook_sees_cluster_home(tmp_path, name, hook_rel, preexported):
     )
     assert result.returncode == 0, result.stderr
     assert (logs / 'userdata_customizations.log').read_text().strip() == str(home)
+
+
+@pytest.mark.parametrize(
+    'name,hook_rel',
+    [
+        (USERDATA_HOOKS[0], 'vdc/ami_builder/userdata_customizations.sh'),
+        (USERDATA_HOOKS[1], 'vdc/ami_builder/userdata_customizations.sh'),
+        (USERDATA_HOOKS[2], 'dcv_host/userdata_customizations.sh'),
+        (USERDATA_HOOKS[3], 'vdc/compute_node/userdata_customizations.sh'),
+    ],
+)
+def test_failed_site_hook_only_stops_bakes(tmp_path, name, hook_rel):
+    text = render(name, 'rocky9', variables=_hook_variables(name))
+    hook = tmp_path / hook_rel
+    hook.parent.mkdir(parents=True)
+    hook.write_text('exit 1\n')
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    script = (
+        'log_warning() { echo "warning: $*"; }\n'
+        + _hook_block(text)
+        + '\necho continued\n'
+    )
+    result = subprocess.run(
+        ['bash', '-c', script],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            'IDEA_CLUSTER_HOME': str(tmp_path),
+            'IDEA_MODULE_ID': 'vdc',
+            'BOOTSTRAP_DIR': str(tmp_path),
+            'IDEA_COMPUTE_NODE_LOGS_DIR': str(logs),
+            'IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR': str(logs),
+            'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR': str(logs),
+        },
+    )
+    bake = 'ami-builder/' in name
+    assert (result.returncode != 0) == bake, result.stderr
+    assert ('continued' in result.stdout) != bake
+    if not bake:
+        assert 'warning:' in result.stdout
+
+
+@pytest.mark.parametrize('marker,ok', [('c', True), ('d', True), ('', False)])
+def test_dcv_missing_config_and_docs_are_optional(tmp_path, monkeypatch, marker, ok):
+    monkeypatch.setitem(
+        os.environ, 'RPM_MISSING', f'missing   {marker} /usr/share/dcv/file'
+    )
+    result, report, _ = run_checks(tmp_path)
+    dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
+    assert dcv['ok'] is ok, dcv['detail']
+    assert result.returncode == (0 if ok else 1)

@@ -90,12 +90,15 @@ class OpenPBSAPIInvocationContext:
             if self.event.job_o:
                 old_job_params = self.event.job_o.get_soca_job_params()
                 job_uid = self.event.job_o.get_job_uid()
+                queue_name = self.event.job_o.queue
+                project_name = self.event.job_o.project
 
             if self.event.job:
                 job_params = self.event.job.get_soca_job_params()
-                queue_name = self.event.job.queue
-                job_uid = self.event.job.get_job_uid()
-                project_name = self.event.job.project
+                queue_name = self.event.job.queue or queue_name
+                job_uid = self.event.job.get_job_uid() or job_uid
+                if self.event.job_o is None:
+                    project_name = self.event.job.project
 
             if Utils.is_empty(job_uid):
                 job_uid = Utils.short_uuid()
@@ -120,7 +123,7 @@ class OpenPBSAPIInvocationContext:
             # the project is resolved before the builder is created: it decides the
             # instance profile the job's compute nodes run under. an omitted -P used
             # to take projects[0], which is often a project the user is not in.
-            if Utils.is_empty(project_name):
+            if self.event.job_o is None and Utils.is_empty(project_name):
                 project_name = self._project_when_omitted(queue_profile, queue_name)
                 self.app_context.logger().info(
                     f'no project given, using {project_name}'
@@ -136,6 +139,11 @@ class OpenPBSAPIInvocationContext:
                 queue_profile=queue_profile,
                 project=project_name,
             )
+
+            # modifyjob contains only changed attributes; retain the job owner,
+            # not the operator making the request, throughout validation.
+            if self.event.job_o is not None and self.event.job is not None:
+                self.event.job.Job_Owner = self._owner_username()
 
             self._job = self.event.as_soca_job(
                 context=self.app_context,
@@ -174,9 +182,12 @@ class OpenPBSAPIInvocationContext:
 
     def _owner_username(self) -> Optional[str]:
         owner = None
-        job = self.event.job if self.event is not None else None
-        if job is not None:
-            owner = job.Job_Owner or job.euser
+        if self.event is not None:
+            for job in (self.event.job_o, self.event.job):
+                if job is not None:
+                    owner = job.Job_Owner or job.euser
+                    if Utils.is_not_empty(owner):
+                        break
         if Utils.is_empty(owner) and self.event is not None:
             owner = self.event.requestor
         if Utils.is_empty(owner):
@@ -223,6 +234,11 @@ class OpenPBSAPIInvocationContext:
                 name = project.name or project_id
                 if name:
                     names.append(name)
+            if not names:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.UNAUTHORIZED_ACCESS,
+                    message=f'Queue {queue_name} has no enabled projects; ask an admin to configure a project for this queue.',
+                )
             listed = ', '.join(names)
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,

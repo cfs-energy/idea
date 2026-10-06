@@ -562,53 +562,30 @@ def test_an_x86_64_builder_type_is_refused_for_an_arm64_compute_image():
     assert 'm6i.large is x86_64' in exc_info.value.message
 
 
-def test_compute_builder_disk_equals_the_base_ami_root():
-    from ideadatamodel import SocaMemory, SocaMemoryUnit
-
-    def sized(gb):
-        profile = queue_profile('compute', 'rocky9', 'ami-rocky9stock00001')
-        profile.default_job_params.root_storage_size = SocaMemory(
-            value=gb, unit=SocaMemoryUnit.GB
-        )
-        return profile
-
-    # the fixture AMIs are 10 GB. the queue root is not baked in.
-    ten = build_service(ROCKY9_STOCK_CONFIG, FakeEc2(), profiles=[sized(10)])
-    assert ten._builder_volume_gb('ami-rocky9stock00001') == 10
-
-    hundred = build_service(ROCKY9_STOCK_CONFIG, FakeEc2(), profiles=[sized(100)])
-    assert hundred._builder_volume_gb('ami-rocky9stock00001') == 10
-
-    class BigRoot:
-        def describe_images(self, **kwargs):
-            return {
-                'Images': [
-                    {
-                        'ImageId': 'ami-big',
-                        'RootDeviceName': '/dev/sda1',
-                        'BlockDeviceMappings': [
-                            {'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}},
-                            {'DeviceName': '/dev/sda1', 'Ebs': {'VolumeSize': 11}},
-                        ],
-                    }
-                ]
-            }
-
-    eleven = build_service(ROCKY9_STOCK_CONFIG, BigRoot(), profiles=[sized(10)])
-    assert eleven._builder_volume_gb('ami-big') == 11
-
-    class LargerRoot(BigRoot):
-        def describe_images(self, **kwargs):
-            image = super().describe_images()['Images'][0]
-            image['BlockDeviceMappings'][1]['Ebs']['VolumeSize'] = 50
-            return {'Images': [image]}
-
-    assert (
-        build_service(
-            ROCKY9_STOCK_CONFIG, LargerRoot(), profiles=[sized(10)]
-        )._builder_volume_gb('ami-big')
-        == 50
+@pytest.mark.parametrize('ami_gb,expected', [(8, 10), (11, 11), (50, 50)])
+def test_compute_build_describes_root_only_in_builder(monkeypatch, ami_gb, expected):
+    stock = 'ami-rocky9stock00001'
+    monkeypatch.setitem(
+        IMAGES,
+        stock,
+        {
+            **IMAGES[stock],
+            'BlockDeviceMappings': [
+                {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': ami_gb}},
+            ],
+        },
     )
+    ec2 = FakeEc2()
+    describe = Mock(wraps=ec2.describe_images)
+    ec2.describe_images = describe
+    service = build_service({**ROCKY9_STOCK_CONFIG, **BUILDER_CONFIG}, ec2)
+    monkeypatch.setattr(service, 'default_base_ami', lambda *a: stock)
+    monkeypatch.setattr(service, 'run_build', lambda builder, **_: builder)
+    builder = service.build(
+        BuildComputeImageRequest(base_os='rocky9', architecture='x86_64'), 'operator'
+    )
+    assert builder.ebs_volume_size == expected
+    describe.assert_called_once()
 
 
 @pytest.mark.parametrize(

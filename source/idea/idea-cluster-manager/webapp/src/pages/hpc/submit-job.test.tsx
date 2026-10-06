@@ -180,7 +180,7 @@ describe('submit job page', () => {
         await user.click(dryRun);
 
         expect(await screen.findByText(
-            'c7i.4xlarge has 8 cores with hyper-threading off; use ncpus=8 or -l ht_support=true'
+            'c7i.4xlarge has 8 cores with hyper-threading off; set CPUs per instance to 8 or enable hyper-threading'
         )).toBeInTheDocument();
         expect(submitJob).not.toHaveBeenCalled();
     });

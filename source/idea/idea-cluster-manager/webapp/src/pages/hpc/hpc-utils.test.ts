@@ -12,9 +12,9 @@ import {SocaJob} from '../../client/data-model';
 const NOW = new Date('2026-08-19T12:00:00Z');
 
 describe('ncpusExceedsCoresMessage', () => {
-    it('names the instance cores and both fixes', () => {
+    it('names the instance cores and form controls', () => {
         expect(ncpusExceedsCoresMessage('c7i.4xlarge', 8)).toBe(
-            'c7i.4xlarge has 8 cores with hyper-threading off; use ncpus=8 or -l ht_support=true'
+            'c7i.4xlarge has 8 cores with hyper-threading off; set CPUs per instance to 8 or enable hyper-threading'
         );
     });
 });

@@ -78,6 +78,10 @@ from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder imp
     is_windows,
 )
 
+from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+    BASE_STACK_MIN_STORAGE_GB,
+)
+
 PIPELINE_SETTINGS_KEY = 'virtual-desktop-controller.software_stacks.image_pipeline'
 SCHEDULE_KEY = 'virtual-desktop-controller.software_stacks.image_refresh_schedule'
 LAST_RUN_KEY = 'virtual-desktop-controller.software_stacks.image_refresh_last_run_on'
@@ -513,9 +517,11 @@ class DesktopImagePipeline:
 
     def tick(self, now: Optional[datetime] = None, blocking: bool = False):
         now = now or now_utc()
-        # every leader tick, including the upgrade tick below. a stack lowered again
-        # is raised on the next one. no write when it is already at the floor.
-        self.raise_base_stack_min_storage()
+        # Housekeeping is retried next tick; a transient failure must not stop bakes.
+        try:
+            self.raise_base_stack_min_storage()
+        except Exception as e:
+            self._logger.warning(f'Could not raise base stack storage floor: {e}')
         # until this release has settled, nothing promotes before customized stacks are
         # pinned; a failure here stops the tick, and the next tick tries again
         if self.context.config().get_string(BAKED_RELEASE_KEY, default=None) != (
@@ -560,8 +566,6 @@ class DesktopImagePipeline:
             self._stack_db.raise_min_storage,
             self._logger,
         )
-        for stack in raised:
-            self._stack_utils.update_software_stack_entry_to_opensearch(stack)
         return [stack.stack_id for stack in raised]
 
     def pin_customized_base_stacks(self) -> List[str]:
@@ -575,8 +579,6 @@ class DesktopImagePipeline:
         build and an image that no longer exists, is the administrator's. idempotent:
         pinned stacks are skipped. returns the stack ids it pinned
         """
-        # upgrade reconciles the storage floor too, including a pin call that is not a tick
-        self.raise_base_stack_min_storage()
         stacks = [
             s
             for s in self._all_stacks()
@@ -948,7 +950,7 @@ class DesktopImagePipeline:
             )
         )
         sizes = [int(s.min_storage.int_val()) for s in targets if s.min_storage]
-        stack_gb = max(sizes) if sizes else 0
+        stack_gb = max([BASE_STACK_MIN_STORAGE_GB, *sizes])
         return builder_root_gb(stack_gb, self._ami_root_gb(record.source_ami))
 
     def _test_launch(self, record: ImageBuildRecord):

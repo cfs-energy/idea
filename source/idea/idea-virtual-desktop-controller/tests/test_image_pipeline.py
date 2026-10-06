@@ -1432,11 +1432,11 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     assert h.row().log_link.startswith('https://us-east-2.console.aws.amazon.com/')
 
 
-def test_a_stack_without_a_size_uses_the_base_ami_root():
+def test_a_stack_without_a_size_uses_the_20_gb_floor():
     h = Harness()
     h.ec2.images['ami-stock-rocky9'] = _stock_image(8)
     queue_and_run(h)
-    assert FakeBuilder.made[0]['ebs_volume_size'] == 8
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
 
 
 def _stock_image(volume_gb, root='/dev/sda1', extra=None):
@@ -1704,7 +1704,7 @@ def test_a_10_gb_base_stack_is_raised_to_20_and_40_stays():
     assert raised.image_pinned is True
     assert h.stack_db.stacks['ss-base-windows2022-x86-64-base'].min_storage.gb() == 40
     assert h.stack_db.updated == ['ss-base-rocky9-x86-64-base']
-    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_called_once()
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()
 
 
 def test_a_custom_10_gb_stack_stays_10():
@@ -1761,3 +1761,38 @@ def test_an_admin_edit_during_the_floor_raise_survives():
     assert kept.image_pinned is True
     assert stack_id not in h.stack_db.updated
     h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()
+
+
+@pytest.mark.parametrize('upgrade', [False, True])
+def test_storage_floor_failure_does_not_stop_tick(monkeypatch, upgrade):
+    h = Harness(
+        config={'vdc.software_stacks.images_baked_release': 'old'} if upgrade else None
+    )
+    h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')
+    floor = Mock(side_effect=RuntimeError('throttled'))
+    monkeypatch.setattr(h.pipeline, 'raise_base_stack_min_storage', floor)
+    adopt = Mock()
+    monkeypatch.setattr(h.pipeline, '_adopt', adopt)
+    monkeypatch.setattr(h.pipeline, '_start', Mock(return_value=True))
+    h.pipeline.tick(now=T0)
+    floor.assert_called_once()
+    assert adopt.called
+    assert 'throttled' in str(h.pipeline._logger.warning.call_args_list)
+
+
+def test_upgrade_runs_storage_floor_once(monkeypatch):
+    h = Harness(config={'vdc.software_stacks.images_baked_release': 'old'})
+    floor = Mock()
+    monkeypatch.setattr(h.pipeline, 'raise_base_stack_min_storage', floor)
+    monkeypatch.setattr(h.pipeline, '_start', Mock(return_value=True))
+    h.pipeline.tick(now=T0)
+    floor.assert_called_once()
+
+
+def test_no_matching_base_stack_keeps_builder_floor():
+    h = Harness(stacks=[])
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(8)
+    record = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', source_ami='ami-stock-rocky9'
+    )
+    assert h.pipeline._builder_volume_gb(record) == 20
