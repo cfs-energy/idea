@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.2] - 2026-10-05
+
+* **Image bakes**: a desktop bake gets a 40 GB builder disk and a compute bake gets 20 GB, or more when the base stack, the queue root, or the base image's own root disk is larger. Desktops and jobs still launch at the size you set.
+* **Image customizations**: a bake or host with no userdata customizations script continues and logs that there are none. A script that is present and fails still fails the bake.
+
 ## [26.10.1] - 2026-10-05
 
 * **Images page**: the admin page is now Images, with a Managed images tab (one row per OS, architecture and GPU variant with status, checks, log link, Refresh and validate all / selected, Force rebake, Rebuild, Roll back, Pin) and a Custom images tab for project images the pipeline never touches
