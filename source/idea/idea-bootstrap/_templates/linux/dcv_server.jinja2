@@ -158,9 +158,18 @@ if [[ $machine == "x86_64" ]]; then
   dnf install -y gcc make gmp-devel
 
   # Download the specific Nettle version (3.4)
-  # ftp.gnu.org drops connections now and then (exit 4 failed a bake); retry, then the mirror redirector
-  wget --tries=5 --waitretry=10 --retry-connrefused https://ftp.gnu.org/gnu/nettle/nettle-3.4.tar.gz \
-    || wget --tries=5 --waitretry=10 --retry-connrefused https://ftpmirror.gnu.org/nettle/nettle-3.4.tar.gz
+  # ftp.gnu.org and its redirector go unreachable for hours (two bakes failed on exit 4).
+  # try independent mirrors and pin the tarball, so a mirror cannot hand over a different file
+  NETTLE_SHA256=ae7a42df026550b85daca8389b6a60ba6313b0567f374392e54918588a411e94
+  for NETTLE_URL in https://ftp.gnu.org/gnu/nettle/nettle-3.4.tar.gz \
+    https://mirrors.kernel.org/gnu/nettle/nettle-3.4.tar.gz \
+    https://mirrors.ocf.berkeley.edu/gnu/nettle/nettle-3.4.tar.gz; do
+    rm -f nettle-3.4.tar.gz
+    wget --tries=2 --timeout=30 --waitretry=5 "${NETTLE_URL}" \
+      && echo "${NETTLE_SHA256}  nettle-3.4.tar.gz" | sha256sum -c - \
+      && break
+  done
+  echo "${NETTLE_SHA256}  nettle-3.4.tar.gz" | sha256sum -c -
   tar -xzf nettle-3.4.tar.gz
   cd nettle-3.4
 

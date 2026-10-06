@@ -104,7 +104,7 @@
     "dcv-connection-gateway/install_app.sh.jinja2": "9269f9124172d85a5194559c334f6942383c03137a16a976604c059da146f36a",
     "dcv-connection-gateway/setup.sh.jinja2": "408afafdd7e8d279e50e502455ca446ea08b4ab852f9264d45d1a49314136e19",
     "dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2": "e3d6c415f1f26f54476e3bfbe322aec009ba223cab1353a07c3bbac390486ac0",
-    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "3c7ab821b87b0ef74ae5acd3af88345cf1deb7c55c344a4e079d16124a8007f7",
+    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "d9243fb58c7e4407ccafd299ef7db6323c3a6933629c235a1b6a07851afba396",
     "dcv-host-ami-builder/setup.sh.jinja2": "c28c01f2ee15a24881707f2bb7707a0fc9d494047deca176037e88e1ba0d43c1",
     "openldap-server/setup.sh.jinja2": "02765010d20a40305e7143f05c4ea2401db4690d5d30f6a91a32f13dde021521",
     "scheduler/install_app.sh.jinja2": "8ad98e05249c5d53d4f42de01b060bbf2398e03e7c218a575cb1bb8dabd64b6b",
@@ -112,7 +112,7 @@
     "scheduler/setup.sh.jinja2": "b72577dd0f8ced529560e0405535f21d06a6b38618c7f083ec937180f4f952c9",
     "virtual-desktop-controller/install_app.sh.jinja2": "14c95b4a399eedd64bb9ed3a757111726b2c2c1ce6f1b87e2596c7b364842850",
     "virtual-desktop-controller/setup.sh.jinja2": "8edb61d137b3e6aa5f8fabd0f84cfebcaaa6c8957b94b8f0a9644e295d02d42c",
-    "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "f3670a5873074e92f5fe42e58c15f763d7635d0d1ed2a87b98abfbb98eb1688f",
+    "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "2f6605e91d49c74794f5b7b1e1871746b43ae8e8d40905a0b7d82f165aa598b0",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "de710cb086527fbc2ffeb702b4f68431d7a506ce959b76741293894d63d96281",
     "virtual-desktop-host-linux/setup.sh.jinja2": "ac9377819542df81c4ab1aad7edc1925e5b64c3fb1ff77e32d277ab6f315e178",
     "virtual-desktop-host-windows/Configure.ps1.jinja2": "da8d7e5c2748ec7ec9330a1da9846bb6f4a6d96d89c68657e206c74a237d8467",
@@ -317,7 +317,7 @@
     "scheduler/setup.sh.jinja2": "46edab56c2387fe0825f687b183357c148595e80b5ab801e4a4e4e611e7a9fca",
     "compute-node/compute_node.sh.jinja2": "f5fcdf0bc2c80b79875c4ef442efcef8899b5f9845d679904e16ebbbd937e55c",
     "dcv-host-ami-builder/setup.sh.jinja2": "c28c01f2ee15a24881707f2bb7707a0fc9d494047deca176037e88e1ba0d43c1",
-    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "75d1e9e311cab2d1b5199a7e18dfb2fb9ebc78ed85c6514c1b04659dc7fc5da0",
+    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "914f56be656f2ce66ecd9b9007ba21f3f5182d062e00c13121fe35d1cf0520f8",
     "compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2": "fd1122208489e22ed09cbc9935ea5045eb9e944f0a82191d23e9b6ee609571a6",
     "compute-node/_templates/scratch_storage.jinja2": "ba6b860c1dd8cbc63a19b00d6139b7cd621f466714c5dfa1e91be182d5f536fb",
     "compute-node/compute_node_post_reboot.sh.jinja2": "c19ee7f7455524916237cd193fd71df98e0f39e20395f6d03d08757d12e069af",
@@ -326,9 +326,9 @@
   "gpu": {
     "_templates/linux/gpu_drivers.jinja2": "57462a7d832adee806e11068344d90ea8b0a379f710ec73f409308cfddc9030d",
     "_templates/linux/disable_nouveau_drivers.jinja2": "99d77d1a76fb788c9b27b9748b49929f47866c0e0cb971bc23bfb0f0f2476af6",
-    "_templates/linux/dcv_server.jinja2": "eb3f3267666b701d9ebc2f363f97d9f694c8e9cc705df3f206efd9636d460cf0",
+    "_templates/linux/dcv_server.jinja2": "7f30a2ef1333e0c3a7c508f75a6a508b35053ed67f25f6e04e831531600a08df",
     "virtual-desktop-host-linux/setup.sh.jinja2": "bc12a769c151bcbc2c2811b169fdf16ff92791eeee7564040414b51bd8e6774e",
-    "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "f3670a5873074e92f5fe42e58c15f763d7635d0d1ed2a87b98abfbb98eb1688f",
+    "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "2f6605e91d49c74794f5b7b1e1871746b43ae8e8d40905a0b7d82f165aa598b0",
     "dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2": "e3d6c415f1f26f54476e3bfbe322aec009ba223cab1353a07c3bbac390486ac0",
     "compute-node/compute_node_post_reboot.sh.jinja2": "a1300d853dfb5548abb11b69ee387ba11c2729ae774bf9968c4f4a6a1e8e80c3"
   },
@@ -358,12 +358,12 @@
   },
   "nested-combination": {
     "virtual-desktop-host-linux/setup.sh.jinja2": "ac9377819542df81c4ab1aad7edc1925e5b64c3fb1ff77e32d277ab6f315e178",
-    "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "f3670a5873074e92f5fe42e58c15f763d7635d0d1ed2a87b98abfbb98eb1688f",
+    "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "2f6605e91d49c74794f5b7b1e1871746b43ae8e8d40905a0b7d82f165aa598b0",
     "virtual-desktop-host-windows/Configure.ps1.jinja2": "da8d7e5c2748ec7ec9330a1da9846bb6f4a6d96d89c68657e206c74a237d8467",
     "compute-node/compute_node.sh.jinja2": "a79b2a032b0ae17dc05a920a9fd1ef2ef5cabd3d20e6bff61e7dbba954c17ec2",
     "compute-node/compute_node_post_reboot.sh.jinja2": "8be6cd36e373217e65d8f9a2a51ec529be3e708f3b8dae5ab1f2c1b61582edd0",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "6c8408a02dc53880c7f2e259eb630996635ab4c283babb749206e48fa33e1c14",
-    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "3c7ab821b87b0ef74ae5acd3af88345cf1deb7c55c344a4e079d16124a8007f7"
+    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "d9243fb58c7e4407ccafd299ef7db6323c3a6933629c235a1b6a07851afba396"
   },
   "storage-scope": {
     "_templates/linux/mount_shared_storage.jinja2": "670f53dee5366066ab8c0745f1d354800e97689090bfe7fb03593c36bd3dbddf",
@@ -374,7 +374,7 @@
     "scheduler/setup.sh.jinja2": "05186b642ea98086ebfe5a60b5e2deaf29f4aea497290f8e5f889466f42df2fe",
     "compute-node/compute_node.sh.jinja2": "f5fcdf0bc2c80b79875c4ef442efcef8899b5f9845d679904e16ebbbd937e55c",
     "dcv-host-ami-builder/setup.sh.jinja2": "5b4dbe4ed557551233c906a941feb2a295f902e6b935cf44974c35d9c505465d",
-    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "75d1e9e311cab2d1b5199a7e18dfb2fb9ebc78ed85c6514c1b04659dc7fc5da0",
+    "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "914f56be656f2ce66ecd9b9007ba21f3f5182d062e00c13121fe35d1cf0520f8",
     "compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2": "fd1122208489e22ed09cbc9935ea5045eb9e944f0a82191d23e9b6ee609571a6"
   }
 }
