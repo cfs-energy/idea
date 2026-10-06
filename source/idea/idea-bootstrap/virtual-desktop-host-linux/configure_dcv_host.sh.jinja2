@@ -12,7 +12,10 @@
 #  and limitations under the License.
 
 set -x
+# cloud-init does not export this file; cron's pam_env does. Hooks are child processes.
+set -a
 source /etc/environment
+set +a
 if [[ -f /etc/profile.d/proxy.sh ]]; then
     source /etc/profile.d/proxy.sh
 fi

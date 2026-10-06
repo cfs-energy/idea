@@ -83,6 +83,7 @@ def test_linux_bake_checks_and_host_release_guards(base_os, instance_type):
     assert '/configure_dcv_host.sh' in setup
     scrub = render('dcv-host-ami-builder/image_scrub.sh.jinja2', base_os, instance_type)
     assert 'cloud-init clean --logs --seed' in scrub
+    assert 'cloud-init.disabled' not in scrub
     assert 'rm -rf /root/bootstrap/logs' in scrub
 
 
@@ -159,6 +160,13 @@ rpm() {
 systemctl() { [[ "$*" != *LoadState* ]] || echo loaded; }
 modprobe() { [[ "$FAIL" != lustre ]]; }
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
+ldd() {
+  if [[ "$FAIL" == dcv-libs ]]; then
+    echo "  libgtk-3.so.0 => not found"
+    return 0
+  fi
+  echo "    libc.so.6 => /lib64/libc.so.6 (0x1)"
+}
 """
 
 
@@ -480,6 +488,16 @@ def test_a_failed_check_reports_what_it_found(tmp_path, failed, detail):
     assert {c['name']: c['detail'] for c in report['checks']}['desktop'] == (
         'GNOME display manager is installed'
     )
+
+
+def test_dcv_check_fails_when_a_library_is_missing(tmp_path):
+    """package presence is not enough: a %post 127 left libgtk unresolved and the check said ok"""
+    result, report, _ = run_checks(tmp_path, 'dcv-libs')
+    assert result.returncode == 1
+    dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
+    assert dcv['ok'] is False
+    assert 'not found' in dcv['detail']
+    assert 'Value=complete' not in _
 
 
 def test_a_missing_stage_marker_names_the_stage(tmp_path):
@@ -1011,3 +1029,83 @@ def test_userdata_customization_hook(tmp_path, case):
         assert result.returncode == 0, result.stderr
         assert 'ran-hook' in (logs / 'userdata_customizations.log').read_text()
         assert 'continued' in result.stdout
+
+
+def _environment_loader(text):
+    source_at = text.index('source /etc/environment')
+    line_start = text.rfind('\n', 0, source_at) + 1
+    previous = text.rfind('\n', 0, line_start - 1) + 1
+    if text.startswith('set -a', previous):
+        line_start = previous
+    line_end = text.find('\n', source_at)
+    line_end = len(text) if line_end == -1 else line_end + 1
+    if text.startswith('set +a', line_end):
+        next_end = text.find('\n', line_end)
+        line_end = len(text) if next_end == -1 else next_end + 1
+    return text[line_start:line_end]
+
+
+@pytest.mark.parametrize(
+    'name,hook_rel',
+    [
+        (
+            'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+            'vdc/ami_builder/userdata_customizations.sh',
+        ),
+        (
+            'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+            'vdc/ami_builder/userdata_customizations.sh',
+        ),
+        (
+            'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+            'dcv_host/userdata_customizations.sh',
+        ),
+        (
+            'compute-node/compute_node_post_reboot.sh.jinja2',
+            'vdc/compute_node/userdata_customizations.sh',
+        ),
+    ],
+)
+@pytest.mark.parametrize('preexported', [False, True])
+def test_site_hook_sees_cluster_home(tmp_path, name, hook_rel, preexported):
+    """
+    preexported is the reboot path (cron pam_env already exported /etc/environment).
+    the other path is cloud-init, which only sources the file.
+    """
+    text = render(name, 'amazonlinux2023', variables=_hook_variables(name))
+    home = tmp_path / 'cluster'
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    hook = home / hook_rel
+    hook.parent.mkdir(parents=True)
+    hook.write_text('#!/bin/bash\nprintf "%s\\n" "$IDEA_CLUSTER_HOME"\n')
+    envfile = tmp_path / 'environment'
+    envfile.write_text(
+        f'IDEA_CLUSTER_HOME={home}\n'
+        'IDEA_MODULE_ID=vdc\n'
+        f'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR={logs}\n'
+        f'IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR={logs}\n'
+        f'IDEA_COMPUTE_NODE_LOGS_DIR={logs}\n'
+        f'BOOTSTRAP_DIR={tmp_path}\n'
+    )
+    loader = _environment_loader(text).replace(
+        'source /etc/environment', f'source "{envfile}"'
+    )
+    script = 'log_info() { echo "$*"; }\n' + loader + '\n' + _hook_block(text) + '\n'
+    parent = {'PATH': os.environ['PATH']}
+    if preexported:
+        parent.update(
+            {
+                'IDEA_CLUSTER_HOME': str(home),
+                'IDEA_MODULE_ID': 'vdc',
+                'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR': str(logs),
+                'IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR': str(logs),
+                'IDEA_COMPUTE_NODE_LOGS_DIR': str(logs),
+                'BOOTSTRAP_DIR': str(tmp_path),
+            }
+        )
+    result = subprocess.run(
+        ['bash', '-c', script], capture_output=True, text=True, env=parent
+    )
+    assert result.returncode == 0, result.stderr
+    assert (logs / 'userdata_customizations.log').read_text().strip() == str(home)

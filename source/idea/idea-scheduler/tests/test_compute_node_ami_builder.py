@@ -151,3 +151,49 @@ def test_in_bake_evidence_is_copied_before_snapshot():
     assert checks[0].ok is True
     assert checks[0].seconds == 3
     progress.assert_called_once_with({'checks': checks})
+
+
+@pytest.mark.parametrize(
+    'base_os', ['ubuntu2204', 'amazonlinux2023', 'rhel8', 'rocky9']
+)
+def test_compute_snapshot_stops_the_builder_and_does_not_reboot(monkeypatch, base_os):
+    from ideasdk.aws import image_builds as images
+
+    builder = ComputeNodeAmiBuilder.__new__(ComputeNodeAmiBuilder)
+    builder.context = MagicMock()
+    builder.base_os = base_os
+    builder.ami_name = 'sample-image'
+    builder.instance_id = None
+    builder.no_reboot = False
+    builder.stop = False
+    builder.terminate = True
+    builder.progress = None
+    builder.get_image_by_name = lambda: None
+    builder.get_ami_full_name = lambda: 'sample-image'
+    builder.get_ami_dir = lambda: '/tmp/ami'
+    instance = MagicMock(instance_id='i-builder', private_ip_address='10.0.0.8')
+    builder.launch_ec2_instance = lambda: instance
+    builder.wait_for_software_packages = lambda instance_id: 'complete'
+    builder.read_bake_checks = lambda instance_id, progress, status: []
+    builder.wait_for_image = lambda image_id: None
+    order = []
+
+    def stop_instances(InstanceIds):
+        order.append('stop')
+
+    def create_image(instance_id):
+        order.append(('create', builder.no_reboot))
+        return 'ami-new'
+
+    builder.create_image = create_image
+    builder.context.aws().ec2().stop_instances.side_effect = stop_instances
+    states = iter(['running', 'stopped'])
+
+    def describe_instances(InstanceIds):
+        return {'Reservations': [{'Instances': [{'State': {'Name': next(states)}}]}]}
+
+    builder.context.aws().ec2().describe_instances.side_effect = describe_instances
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(images.time, 'sleep', lambda seconds: None)
+    assert builder.build() == 'ami-new'
+    assert order == ['stop', ('create', True)]

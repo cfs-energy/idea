@@ -177,9 +177,27 @@ unit_installed() {
 unit_enabled() {
   systemctl is-enabled --quiet "$1" || { echo "unit $1 is not enabled"; return 1; }
 }
+dcv_runtime_ok() {
+  # %post can fail (exit 127) and rpm -q still succeeds. ldd is what shows the GUI libs never resolved.
+  local out
+  out=$(ldd /usr/bin/dcvserver 2>&1) || { echo "dcvserver: ${out}"; return 1; }
+  if grep -q 'not found' <<<"$out"; then
+    echo "dcvserver: ${out}"
+    return 1
+  fi
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
+  # rpm -q stays green after a failed scriptlet. A missing payload file does not.
+  local missing
+  missing=$(rpm -V nice-dcv-server 2>&1 | grep '^missing' || true)
+  [[ -z "$missing" ]] || { echo "nice-dcv-server payload is incomplete: ${missing}"; return 1; }
+{% else %}
+  # packages_installed required "install ok installed", which is a finished postinst
+{% endif %}
+}
 dcv_ok() {
   packages_installed nice-dcv-server nice-dcv-session-manager-agent &&
-    unit_installed dcvserver.service && unit_installed dcv-session-manager-agent.service
+    unit_installed dcvserver.service && unit_installed dcv-session-manager-agent.service &&
+    dcv_runtime_ok
 }
 ssm_ok() {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
@@ -200,7 +218,7 @@ check lustre 'Configured Lustre module resolves for the running kernel' modprobe
 {% endif %}
 {% if not compute %}
 check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404') else 'gdm' }}.service
-check dcv 'DCV server and session-manager packages and units are installed' dcv_ok
+check dcv 'DCV server is installed, its units are present, and dcvserver libraries resolve' dcv_ok
 {% endif %}
 check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli
 {% if context.config.get_string('scheduler.provider') == 'openpbs' %}

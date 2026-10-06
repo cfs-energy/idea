@@ -9,6 +9,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 * **Image bakes**: a desktop bake gets a 40 GB builder disk and a compute bake gets 20 GB, or more when the base stack, the queue root, or the base image's own root disk is larger. Desktops and jobs still launch at the size you set.
 * **Image customizations**: a bake or host with no userdata customizations script continues and logs that there are none. A script that is present and fails still fails the bake.
+* **Image customizations**: a site hook receives the cluster environment on a bake that does not reboot, so `IDEA_CLUSTER_HOME` is set when the hook runs.
+* **DCV bake check**: the in-bake DCV check fails when `dcvserver` cannot load its libraries or the package payload is incomplete. Units remain disabled, which is how the image ships.
+* **Image snapshot**: the controller stops the builder and creates the image without rebooting it, so cloud-init does not run the bake a second time. A desktop or compute node launched from the image still runs cloud-init.
 
 ## [26.10.1] - 2026-10-05
 

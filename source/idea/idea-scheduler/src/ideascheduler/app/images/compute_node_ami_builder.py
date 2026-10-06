@@ -24,8 +24,10 @@ from ideasdk.aws.image_builds import (
     default_builder_instance_type,
     is_throttle,
     root_ebs_mapping,
+    SNAPSHOT_STOP_TIMEOUT_SECONDS,
     stop_builder,
     unique_build_version,
+    wait_until_stopped,
 )
 from ideasdk.aws.stock_amis import trusted_owners
 
@@ -604,6 +606,16 @@ class ComputeNodeAmiBuilder:
                 )
             time.sleep(10)
 
+    def prepare_snapshot(self, instance_id: str) -> None:
+        """
+        Stop the builder and snapshot it without booting it. The scrub has run cloud-init
+        clean, so CreateImage's reboot would run user-data again. The image keeps that
+        clean cloud-init, and a new compute node still runs it.
+        """
+        self.context.aws().ec2().stop_instances(InstanceIds=[instance_id])
+        wait_until_stopped(self.context, instance_id, SNAPSHOT_STOP_TIMEOUT_SECONDS)
+        self.no_reboot = True
+
     def read_bake_checks(self, instance_id, progress=None, builder_status='complete'):
         """
         Copy the bootstrap's evidence before snapshotting; missing evidence fails.
@@ -703,6 +715,7 @@ class ComputeNodeAmiBuilder:
                     progress({'status': 'checking', 'instance_id': instance_id})
                 status = self.wait_for_software_packages(instance_id=instance_id)
                 self.read_bake_checks(instance_id, progress, status)
+                self.prepare_snapshot(instance_id)
                 image_id = self.create_image(instance_id=instance_id)
                 if progress is not None:
                     progress({'image_id': image_id})

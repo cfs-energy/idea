@@ -225,6 +225,33 @@ def is_throttle(error: BaseException) -> bool:
     return response.get('Error', {}).get('Code') in THROTTLE_CODES
 
 
+# CreateImage reboots a running instance. After cloud-init clean, that reboot runs user-data again.
+SNAPSHOT_STOP_TIMEOUT_SECONDS = 600
+
+
+def wait_until_stopped(context, instance_id: str, timeout_seconds: int) -> None:
+    """block until the instance is stopped, or raise when the deadline passes"""
+    deadline = time.time() + timeout_seconds
+    while True:
+        state = None
+        try:
+            result = context.aws().ec2().describe_instances(InstanceIds=[instance_id])
+            reservations = result.get('Reservations') or []
+            instances = (reservations[0].get('Instances') or []) if reservations else []
+            if instances:
+                state = (instances[0].get('State') or {}).get('Name')
+        except Exception as e:
+            if not is_throttle(e):
+                raise
+        if state == 'stopped':
+            return
+        if time.time() > deadline:
+            raise exceptions.general_exception(
+                f'builder {instance_id} did not stop within {timeout_seconds // 60} minutes'
+            )
+        time.sleep(10)
+
+
 def stop_builder(context, instance_id: str, logger) -> None:
     """stop a builder instance for inspection and stamp it so the sweep can terminate it later"""
     try:
