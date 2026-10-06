@@ -23,6 +23,7 @@ CONFIG = {
     'cluster.network.private_subnets': ['subnet-a', 'subnet-b'],
     'cluster.network.ssh_key_pair': 'idea_test',
     'cluster.cluster_name': 'idea-test',
+    'global-settings.custom_tags': [],
 }
 
 
@@ -82,6 +83,29 @@ def test_defaults_come_from_cluster_config():
     assert builder.ssh_key_pair == 'idea_test'
     assert builder.block_device_name == '/dev/xvda'
     assert builder.ebs_volume_size == 40
+
+
+def _launch_kwargs(base_os: str) -> dict:
+    context = fake_context()
+    captured = {}
+
+    def run_instances(**kwargs):
+        captured.update(kwargs)
+        return {'Instances': [{'InstanceId': 'i-builder'}]}
+
+    context.aws().ec2().run_instances.side_effect = run_instances
+    builder = DcvHostImageBuilder(context=context, base_ami='ami-base', base_os=base_os)
+    builder.build_userdata = lambda: 'userdata'
+    builder.launch_ec2_instance()
+    return captured
+
+
+def test_a_windows_builder_launch_has_no_key():
+    assert 'KeyName' not in _launch_kwargs('windows2022')
+
+
+def test_a_linux_builder_launch_keeps_the_key():
+    assert _launch_kwargs('amazonlinux2023')['KeyName'] == 'idea_test'
 
 
 def test_a_smaller_request_uses_the_root_snapshot_and_the_floor():

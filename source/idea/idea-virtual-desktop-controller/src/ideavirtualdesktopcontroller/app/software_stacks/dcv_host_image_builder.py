@@ -452,7 +452,9 @@ class DcvHostImageBuilder:
                     }
                 ],
                 IamInstanceProfile={'Arn': self.instance_profile_arn},
-                KeyName=self.ssh_key_pair,
+                # EC2 refuses an ED25519 key on a Windows AMI. The bake is SSM
+                # only and never reads the instance password.
+                **({} if is_windows(self.base_os) else {'KeyName': self.ssh_key_pair}),
                 NetworkInterfaces=[
                     {
                         'DeviceIndex': 0,

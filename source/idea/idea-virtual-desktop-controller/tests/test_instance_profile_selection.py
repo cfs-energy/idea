@@ -224,6 +224,27 @@ def test_client_supplied_instance_profile_does_not_reach_run_instances():
     assert CLIENT_INSTANCE_PROFILE_ARN not in str(run_instances_kwargs)
 
 
+def test_a_windows_desktop_launch_omits_the_key():
+    session = build_session(None)
+    session.software_stack.base_os = VirtualDesktopBaseOS.WINDOWS2022
+    session = build_api().complete_create_session_request(
+        session, MockApiInvocationContext()
+    )
+    ec2_client = RecordingEc2Client()
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+    assert ec2_client.run_instances_kwargs is not None
+    assert 'KeyName' not in ec2_client.run_instances_kwargs
+
+
+def test_a_linux_desktop_launch_keeps_the_key():
+    session = build_api().complete_create_session_request(
+        build_session(None), MockApiInvocationContext()
+    )
+    ec2_client = RecordingEc2Client()
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+    assert ec2_client.run_instances_kwargs['KeyName'] == 'idea-test-key-pair'
+
+
 # per-project instance profile
 
 
