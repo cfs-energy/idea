@@ -160,14 +160,43 @@ rpm() {
 systemctl() { [[ "$*" != *LoadState* ]] || echo loaded; }
 modprobe() { [[ "$FAIL" != lustre ]]; }
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
+# like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
+# through the pkglibdir the dcvserver wrapper puts on LD_LIBRARY_PATH
 ldd() {
-  if [[ "$FAIL" == dcv-libs ]]; then
-    echo "  libgtk-3.so.0 => not found"
-    return 0
+  if [[ "$(head -c 3 "$1" 2>/dev/null)" != ELF ]]; then
+    echo "  not a dynamic executable"
+    return 1
   fi
+  if [[ ":${LD_LIBRARY_PATH:-}:" == *"/lib64/dcv:"* ]]; then
+    echo "    libdcv.so => ${LD_LIBRARY_PATH%%:*}/libdcv.so (0x1)"
+  else
+    echo "    libdcv.so => not found"
+  fi
+  [[ "$FAIL" != dcv-libs ]] || echo "    libgtk-3.so.0 => not found"
   echo "    libc.so.6 => /lib64/libc.so.6 (0x1)"
 }
 """
+
+
+def fake_dcvserver(tmp_path):
+    """the RPM layout: /usr/bin/dcvserver is a bash wrapper around libexec/dcv/dcvserver"""
+    root = tmp_path / 'dcvroot'
+    (root / 'libexec' / 'dcv').mkdir(parents=True, exist_ok=True)
+    binary = root / 'libexec' / 'dcv' / 'dcvserver'
+    binary.write_text('ELF')
+    binary.chmod(0o755)
+    wrapper = root / 'dcvserver-wrapper'
+    wrapper.write_text(
+        '#!/bin/bash\n'
+        f'prefix={root}\n'
+        'exec_prefix=${prefix}\n'
+        'pkglibdir=${exec_prefix}/lib64/dcv\n'
+        'programsdir=${exec_prefix}/libexec/dcv\n'
+        'export LD_LIBRARY_PATH="${pkglibdir}:${LD_LIBRARY_PATH}"\n'
+        'exec "${programsdir}/dcvserver" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 def run_checks(
@@ -201,6 +230,7 @@ def run_checks(
         qstat.write_text('#!/bin/bash\n')
         qstat.chmod(0o755)
     script = script.replace('/opt/pbs/bin/qstat', str(qstat))
+    script = script.replace('/usr/bin/dcvserver', str(fake_dcvserver(tmp_path)))
     path = tmp_path / 'checks.sh'
     path.write_text(STUBS + script)
     result = subprocess.run(
@@ -498,6 +528,14 @@ def test_dcv_check_fails_when_a_library_is_missing(tmp_path):
     assert dcv['ok'] is False
     assert 'not found' in dcv['detail']
     assert 'Value=complete' not in _
+
+
+def test_dcv_check_reads_the_binary_behind_the_wrapper(tmp_path):
+    """ldd on the /usr/bin/dcvserver wrapper says 'not a dynamic executable' on every host"""
+    result, report, _ = run_checks(tmp_path)
+    dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
+    assert dcv['ok'] is True, dcv['detail']
+    assert result.returncode == 0
 
 
 def test_a_missing_stage_marker_names_the_stage(tmp_path):

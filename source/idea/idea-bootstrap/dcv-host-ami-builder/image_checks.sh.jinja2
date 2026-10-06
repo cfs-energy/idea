@@ -179,8 +179,16 @@ unit_enabled() {
 }
 dcv_runtime_ok() {
   # %post can fail (exit 127) and rpm -q still succeeds. ldd is what shows the GUI libs never resolved.
-  local out
-  out=$(ldd /usr/bin/dcvserver 2>&1) || { echo "dcvserver: ${out}"; return 1; }
+  # /usr/bin/dcvserver is a bash wrapper: it puts pkglibdir (libdcv.so) on LD_LIBRARY_PATH
+  # and execs programsdir/dcvserver. check the real binary the same way it is launched.
+  local out pkglibdir programsdir
+  # the dir lines can reference each other (exec_prefix, libdir), so evaluate them in order
+  read -r pkglibdir programsdir < <(
+    eval "$(grep -E '^(prefix|exec_prefix|libdir|libexecdir|pkglibdir|programsdir)=' /usr/bin/dcvserver 2>/dev/null)"
+    echo "${pkglibdir:-} ${programsdir:-}"
+  )
+  [[ -n "$pkglibdir" && -x "${programsdir}/dcvserver" ]] || { echo "dcvserver wrapper or binary missing"; return 1; }
+  out=$(LD_LIBRARY_PATH="${pkglibdir}" ldd "${programsdir}/dcvserver" 2>&1) || { echo "dcvserver: ${out}"; return 1; }
   if grep -q 'not found' <<<"$out"; then
     echo "dcvserver: ${out}"
     return 1
