@@ -32,6 +32,7 @@ from ideadatamodel import (
     GetProjectRequest,
     Project,
 )
+from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
 from ideasdk.bootstrap import BootstrapPackageBuilder, BootstrapUserDataBuilder
 from ideasdk.context import BootstrapContext
 from ideasdk.utils import Utils, GroupNameHelper
@@ -1050,6 +1051,14 @@ class VirtualDesktopControllerUtils:
                 message='This cluster has no network configured for virtual desktops. Ask an administrator.',
             )
 
+        # once per launch, including subnet retries: never smaller than the image snapshot
+        root_volume_gb = launch_root_gb(
+            session.server.root_volume_size.int_val(),
+            cached_image_root_gb(self.ec2_client, session.software_stack.ami_id),
+            self._logger,
+            session.software_stack.ami_id,
+        )
+
         # the bootstrap package does not depend on the subnet, so build and upload it once
         # instead of once per retry.
         try:
@@ -1119,7 +1128,7 @@ class VirtualDesktopControllerUtils:
                             ),
                             'Ebs': {
                                 'DeleteOnTermination': True,
-                                'VolumeSize': session.server.root_volume_size.int_val(),
+                                'VolumeSize': root_volume_gb,
                                 'Encrypted': Utils.get_as_bool(
                                     constants.DEFAULT_VOLUME_ENCRYPTION_VDI,
                                     default=True,

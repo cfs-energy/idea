@@ -42,10 +42,8 @@ from pathlib import Path
 import os
 
 DEFAULT_INSTANCE_TYPE = 'm7i.large'
-# builder disk only. the bake runs `yum groupinstall "Server with GUI"`
-# (ubuntu: ubuntu-desktop-minimal) and that transaction does not fit a 10 GB root.
-# launched desktops still use the stack minimum.
-DEFAULT_EBS_VOLUME_SIZE_GB = 40
+# the builder disk is the request or the base AMI root, whichever is larger.
+# the base stack minimum (20 GB) is what leaves room for the GUI group.
 
 # the eVDI base OS set: EL10 has no DCV packages
 BUILD_SUPPORTED_BASE_OS = (
@@ -213,10 +211,8 @@ class DcvHostImageBuilder:
         ami_ebs_volume_size_gb = ami_block_device['Ebs']['VolumeSize']
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
-        # a request smaller than the AMI snapshot or the floor is raised, not refused
-        ebs_volume_size = builder_root_gb(
-            ebs_volume_size, ami_ebs_volume_size_gb, DEFAULT_EBS_VOLUME_SIZE_GB
-        )
+        # a request smaller than the AMI snapshot is raised, not refused
+        ebs_volume_size = builder_root_gb(ebs_volume_size, ami_ebs_volume_size_gb)
 
         if terminate:
             stop = False

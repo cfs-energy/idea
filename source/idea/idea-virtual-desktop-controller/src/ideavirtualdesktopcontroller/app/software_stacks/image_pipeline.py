@@ -73,7 +73,6 @@ from ideavirtualdesktopcontroller.app.sessions.image_validation import (
 )
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (
     AMI_BUILDER_STATUS_COMPLETE,
-    DEFAULT_EBS_VOLUME_SIZE_GB,
     DcvHostImageBuilder,
     BUILD_SUPPORTED_BASE_OS,
     is_windows,
@@ -940,10 +939,7 @@ class DesktopImagePipeline:
         return root_device_volume_gb(image)
 
     def _builder_volume_gb(self, record: ImageBuildRecord) -> int:
-        """
-        builder disk only: max(the row's base-stack minimum, the base AMI root snapshot,
-        the desktop floor). a desktop launched from the image still uses the stack minimum.
-        """
+        """builder disk: max(the row's base-stack minimum, the base AMI root snapshot)."""
         targets = self.targets_for(record.row_key()) or self.targets_for(
             ImageRowKey(
                 base_os=record.base_os,
@@ -953,9 +949,7 @@ class DesktopImagePipeline:
         )
         sizes = [int(s.min_storage.int_val()) for s in targets if s.min_storage]
         stack_gb = max(sizes) if sizes else 0
-        return builder_root_gb(
-            stack_gb, self._ami_root_gb(record.source_ami), DEFAULT_EBS_VOLUME_SIZE_GB
-        )
+        return builder_root_gb(stack_gb, self._ami_root_gb(record.source_ami))
 
     def _test_launch(self, record: ImageBuildRecord):
         targets = self.targets_for(record.row_key())

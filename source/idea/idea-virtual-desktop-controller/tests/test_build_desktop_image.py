@@ -82,7 +82,7 @@ def test_defaults_come_from_cluster_config():
     assert builder.subnet_id == 'subnet-a'
     assert builder.ssh_key_pair == 'idea_test'
     assert builder.block_device_name == '/dev/xvda'
-    assert builder.ebs_volume_size == 40
+    assert builder.ebs_volume_size == 10
 
 
 def _launch_kwargs(base_os: str) -> dict:
@@ -108,7 +108,7 @@ def test_a_linux_builder_launch_keeps_the_key():
     assert _launch_kwargs('amazonlinux2023')['KeyName'] == 'idea_test'
 
 
-def test_a_smaller_request_uses_the_root_snapshot_and_the_floor():
+def test_a_smaller_request_uses_the_root_snapshot():
     context = fake_context()
     context.aws().ec2().describe_images.return_value = {
         'Images': [
@@ -127,7 +127,7 @@ def test_a_smaller_request_uses_the_root_snapshot_and_the_floor():
         context=context, base_ami='ami-base', base_os='rocky8', ebs_volume_size=10
     )
     assert builder.block_device_name == '/dev/sda1'
-    assert builder.ebs_volume_size >= 11
+    assert builder.ebs_volume_size == 11
     kept = DcvHostImageBuilder(
         context=context, base_ami='ami-base', base_os='rocky8', ebs_volume_size=100
     )

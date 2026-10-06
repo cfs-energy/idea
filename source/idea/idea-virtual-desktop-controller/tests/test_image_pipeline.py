@@ -1403,8 +1403,8 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     stack.min_storage = SocaMemory(value=20, unit=SocaMemoryUnit.GB)
     h = Harness(stacks=[stack])
     queue_and_run(h)
-    # 20 GB is under the desktop floor, so the builder disk is 40 GB
-    assert FakeBuilder.made[0]['ebs_volume_size'] == 40
+    # a 20 GB stack bakes at 20. a 40 GB floor made a snapshot desktops cannot launch.
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
     # the page links the bootstrap_<instance id> stream, console-escaped
     assert h.row().log_link.endswith(
         '#logsV2:log-groups/log-group/$252Fidea-test$252Fvdc$252Fami-builder/log-events/bootstrap_i-builder'
@@ -1412,10 +1412,11 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     assert h.row().log_link.startswith('https://us-east-2.console.aws.amazon.com/')
 
 
-def test_a_stack_without_a_size_gets_the_builder_floor():
+def test_a_stack_without_a_size_uses_the_base_ami_root():
     h = Harness()
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(8)
     queue_and_run(h)
-    assert FakeBuilder.made[0]['ebs_volume_size'] == 40
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 8
 
 
 def _stock_image(volume_gb, root='/dev/sda1', extra=None):
@@ -1436,28 +1437,29 @@ def _stock_image(volume_gb, root='/dev/sda1', extra=None):
     }
 
 
-def test_a_10_gb_stack_gets_a_40_gb_builder():
+def test_a_10_gb_base_stack_bakes_at_the_20_gb_floor():
     from ideadatamodel import SocaMemory, SocaMemoryUnit
 
     stack = base_stack('rocky9')
     stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
     h = Harness(stacks=[stack])
     queue_and_run(h)
-    assert FakeBuilder.made[0]['ebs_volume_size'] == 40
+    # the base-stack floor raises 10 to 20. there is no separate 40 GB bake floor.
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
 
 
-def test_an_11_gb_ami_with_a_10_gb_stack_gets_at_least_11_gb():
+def test_an_ami_root_above_the_stack_floor_sets_the_builder():
     from ideadatamodel import SocaMemory, SocaMemoryUnit
 
     stack = base_stack('rocky9')
     stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
     h = Harness(stacks=[stack])
-    # a data disk listed first must not hide the 11 GB root
+    # a data disk listed first must not hide the root. 30 is above the 20 GB floor.
     h.ec2.images['ami-stock-rocky9'] = _stock_image(
-        11, extra=[{'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}}]
+        30, extra=[{'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}}]
     )
     queue_and_run(h)
-    assert FakeBuilder.made[0]['ebs_volume_size'] >= 11
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 30
 
 
 def test_a_100_gb_stack_keeps_100_gb():

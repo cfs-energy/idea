@@ -646,9 +646,41 @@ def root_device_volume_gb(image: Optional[Dict]) -> int:
         return 0
 
 
-def builder_root_gb(requested: Optional[int], ami_root_gb: int, floor_gb: int) -> int:
-    """builder disk only: max(stack or queue minimum, AMI root snapshot, floor)"""
-    return max(int(requested or 0), int(ami_root_gb or 0), int(floor_gb))
+_image_root_gb: Dict[str, int] = {}
+
+
+def builder_root_gb(requested: Optional[int], ami_root_gb: int) -> int:
+    """builder disk: max(requested, the base AMI root snapshot). no baked floor."""
+    return max(int(requested or 0), int(ami_root_gb or 0))
+
+
+def cached_image_root_gb(ec2_client, image_id: Optional[str]) -> int:
+    """root snapshot GiB from DescribeImages, cached by image id. 0 when unknown."""
+    if not image_id:
+        return 0
+    cached = _image_root_gb.get(image_id)
+    if cached is not None:
+        return cached
+    image = describe_images_by_id(ec2_client, [image_id]).get(image_id)
+    size = root_device_volume_gb(image)
+    if image is not None:
+        _image_root_gb[image_id] = size
+    return size
+
+
+def launch_root_gb(
+    requested: int, image_root: int, logger=None, image_id: Optional[str] = None
+) -> int:
+    """launch root: max(requested, image snapshot). never smaller than the request."""
+    requested_gb = int(requested or 0)
+    snapshot_gb = int(image_root or 0)
+    size = max(requested_gb, snapshot_gb)
+    if logger is not None and size > requested_gb:
+        logger.info(
+            f'root volume for {image_id or "the image"} raised from {requested_gb} GB '
+            f'to {size} GB to fit the image snapshot'
+        )
+    return size
 
 
 def describe_images_by_id(ec2_client, image_ids: List[str]) -> Dict[str, Dict]:

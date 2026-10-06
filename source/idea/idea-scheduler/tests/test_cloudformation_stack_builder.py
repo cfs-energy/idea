@@ -13,6 +13,8 @@
 Test Cases for CloudFormationStackBuilder
 """
 
+import logging
+
 import ideascheduler
 from ideascheduler import AppContext
 from ideascheduler.app.provisioning import CloudFormationStackBuilder
@@ -625,3 +627,65 @@ def test_cfn_stack_builder_efa_multi_rail_max_interfaces(context, monkeypatch):
     assert [
         network_interface['DeviceIndex'] for network_interface in network_interfaces
     ] == [0, 1, 1, 1]
+
+
+def _launch_root_gb(result: BuildTemplateResult) -> int:
+    mappings = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.BlockDeviceMappings'
+    )
+    return mappings[0]['Ebs']['VolumeSize']
+
+
+def _describe_root(context: AppContext, image_id: str, gb: int):
+    original = context.aws().ec2().describe_images
+
+    def describe_images(**kwargs):
+        result = original(**kwargs)
+        for image in result.get('Images', []):
+            if image.get('ImageId') == image_id:
+                image['RootDeviceName'] = '/dev/xvda'
+                image['BlockDeviceMappings'] = [
+                    {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': gb}}
+                ]
+        return result
+
+    context.aws().ec2().describe_images = describe_images
+
+
+def _queue_launch(context: AppContext, root_gb: int, image_gb: int) -> int:
+    image_id = 'ami-root12gb'
+    _describe_root(context, image_id, image_gb)
+    result = build_template(
+        context=context,
+        job_name=f'root-{root_gb}',
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'root_storage_size': root_gb,
+            'instance_ami': image_id,
+        },
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+    )
+    return _launch_root_gb(result)
+
+
+def test_a_10_gb_queue_with_a_12_gb_image_launches_at_12(context, caplog):
+    # the ASG and the spot fleet both launch from this template, and the compute
+    # canary submits through the same provisioner
+    with caplog.at_level(logging.INFO):
+        assert _queue_launch(context, 10, 12) == 12
+    raised = [
+        record
+        for record in caplog.records
+        if 'raised from 10 GB to 12 GB' in record.message
+    ]
+    assert len(raised) == 1
+
+
+def test_the_launch_guard_never_lowers_a_queue_root(context):
+    assert _queue_launch(context, 100, 12) == 100

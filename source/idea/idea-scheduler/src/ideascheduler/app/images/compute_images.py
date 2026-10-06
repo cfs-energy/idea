@@ -56,7 +56,6 @@ from ideasdk.aws.image_builds import (
     resume_record,
     terminate_builder,
     build_stamp,
-    builder_root_gb,
     describe_images_by_id,
     image_state,
     root_device_volume_gb,
@@ -73,10 +72,7 @@ from ideasdk.aws.stock_amis import (
     stock_unsupported_reason,
     trusted_owners,
 )
-from ideascheduler.app.images.compute_node_ami_builder import (
-    DEFAULT_EBS_VOLUME_SIZE_GB,
-    ComputeNodeAmiBuilder,
-)
+from ideascheduler.app.images.compute_node_ami_builder import ComputeNodeAmiBuilder
 from ideasdk.utils import Utils
 
 # the base OS set ideactl ami-builder accepts
@@ -236,31 +232,12 @@ class ComputeImageService:
             return []
         return service.list_queue_profiles() or []
 
-    def _queue_root_gb(self) -> int:
-        """largest queue-profile root, the compute equivalent of a desktop stack minimum"""
-        sizes = []
-        for profile in self._queue_profiles():
-            params = getattr(profile, 'default_job_params', None)
-            size = (
-                getattr(params, 'root_storage_size', None)
-                if params is not None
-                else None
-            )
-            if size is None or not hasattr(size, 'int_val'):
-                continue
-            sizes.append(int(size.int_val()))
-        return max(sizes) if sizes else 0
-
     def _builder_volume_gb(self, base_ami: str) -> int:
-        """builder disk only: max(queue root, AMI root snapshot, compute floor)"""
+        """builder disk: the base AMI root. a larger queue grows the filesystem at boot."""
         image = describe_images_by_id(self.context.aws().ec2(), [base_ami]).get(
             base_ami
         )
-        return builder_root_gb(
-            self._queue_root_gb(),
-            root_device_volume_gb(image),
-            DEFAULT_EBS_VOLUME_SIZE_GB,
-        )
+        return root_device_volume_gb(image)
 
     # building
 

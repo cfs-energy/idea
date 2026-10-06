@@ -43,11 +43,8 @@ from pathlib import Path
 import os
 
 DEFAULT_INSTANCE_TYPE = 'c7i.large'
-# builder disk only. the bake installs gcc/gfortran/kernel-devel, builds efs-utils
-# with a rustup toolchain, and compiles OpenPBS plus PostgreSQL. that set and the
-# package cache need more than the 10 GB queue-root default, and there is no desktop
-# group, so 20 GB is enough headroom. jobs still launch at the queue's root size.
-DEFAULT_EBS_VOLUME_SIZE_GB = 20
+# the builder disk is the base AMI root. a larger queue grows the filesystem at
+# boot (cloud-init growpart); the snapshot stays the AMI size.
 
 
 class ComputeNodeAmiBuilder:
@@ -179,10 +176,8 @@ class ComputeNodeAmiBuilder:
 
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
-        # a request smaller than the AMI snapshot or the floor is raised, not refused
-        ebs_volume_size = builder_root_gb(
-            ebs_volume_size, ami_ebs_volume_size_gb, DEFAULT_EBS_VOLUME_SIZE_GB
-        )
+        # a request smaller than the AMI snapshot is raised, not refused
+        ebs_volume_size = builder_root_gb(ebs_volume_size, ami_ebs_volume_size_gb)
 
         # stop/terminate
         if terminate:

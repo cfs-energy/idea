@@ -9,7 +9,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 * **Windows image bakes**: a Windows desktop image builder launches without the cluster SSH key, so an ED25519 key pair no longer stops the bake. Windows desktops already launch without that key.
 * **Base desktop images**: base desktop images require at least 20 GB; existing base stacks below that are raised on upgrade.
-* **Image bakes**: a desktop bake gets a 40 GB builder disk and a compute bake gets 20 GB, or more when the base stack, the queue root, or the base image's own root disk is larger. Desktops and jobs still launch at the size you set.
+* **Image launches**: a desktop bake uses the larger of the base stack minimum and the base image root disk, and a compute bake uses the base image root disk. A desktop or job whose root is smaller than the image snapshot launches at the snapshot size.
 * **Image customizations**: a bake or host with no userdata customizations script continues and logs that there are none. A script that is present and fails still fails the bake.
 * **Image customizations**: a site hook receives the cluster environment on a bake that does not reboot, so `IDEA_CLUSTER_HOME` is set when the hook runs.
 * **DCV bake check**: the in-bake DCV check fails when `dcvserver` cannot load its libraries or the package payload is incomplete. Units remain disabled, which is how the image ships.
