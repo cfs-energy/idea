@@ -53,36 +53,20 @@ import os
 import logging
 
 
-def queue_project_names(
-    projects_client, projects: Optional[List[Project]]
-) -> List[str]:
-    """
-    Queue profile rows store project ids. Membership, like check_acls, is by name,
-    so an id-only row is resolved before it can be compared or shown to the user.
-    """
-    names = []
-    for project in projects or []:
-        name = project.name
-        if Utils.is_empty(name) and Utils.is_not_empty(project.project_id):
-            try:
-                resolved = projects_client.get_project_by_id(project.project_id)
-            except exceptions.SocaException:
-                resolved = None
-            name = resolved.name if resolved is not None else project.project_id
-        if Utils.is_not_empty(name) and name not in names:
-            names.append(name)
-    return names
-
-
 def projects_allowed_on_queue(
-    user_projects: Optional[List[Project]], queue_names: List[str]
+    user_projects: Optional[List[Project]], queue_projects: Optional[List[Project]]
 ) -> List[str]:
-    """Queue order, keeping only projects the user is a member of."""
-    member_names = []
-    for project in user_projects or []:
-        if Utils.is_not_empty(project.name) and project.name not in member_names:
-            member_names.append(project.name)
-    return [name for name in queue_names if name in member_names]
+    """Intersect membership ids in queue order; names come from membership records."""
+    members = {
+        project.project_id: project.name
+        for project in user_projects or []
+        if Utils.is_not_empty(project.project_id) and Utils.is_not_empty(project.name)
+    }
+    return [
+        members[project.project_id]
+        for project in queue_projects or []
+        if project.project_id in members
+    ]
 
 
 def _is_transient_ec2_error(exc: BaseException = None) -> bool:
@@ -958,9 +942,7 @@ class JobProvisioningUtil:
             try:
                 allowed = projects_allowed_on_queue(
                     user_projects,
-                    queue_project_names(
-                        self.context.projects_client, self.queue_profile.projects
-                    ),
+                    self.queue_profile.projects,
                 )
             except exceptions.SocaException:
                 allowed = []

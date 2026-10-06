@@ -210,7 +210,24 @@ describe('script workbench', () => {
 
         expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
         expect(submitJob).toHaveBeenCalledTimes(1);
-        expect(submitJob.mock.calls[0][0].project).toBe("default");
+        expect(submitJob.mock.calls[0][0].project).toBeUndefined();
+    });
+
+    it.each([
+        '#!/bin/bash\n#PBS -P a -P b\necho running\n',
+        '#!/bin/bash\n#PBS -P a\necho running\n#PBS -P b\n',
+    ])('leaves project precedence to qsub for %s', async (script) => {
+        const context = initTestAppContext();
+        const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue(DRY_RUN_ACCEPTED);
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        await setScript(user, script);
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
+        expect(submitJob.mock.calls[0][0].project).toBeUndefined();
+        expect(atob(submitJob.mock.calls[0][0].job_script!)).toBe(script);
     });
 
     it('does not read a priority line as the project', async () => {

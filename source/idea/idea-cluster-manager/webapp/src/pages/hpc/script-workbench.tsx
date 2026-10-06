@@ -178,26 +178,18 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         return AppContext.get().client().projects();
     }
 
-    /** Last `#PBS -P` value. Directives are read at the start of a line only, and qsub
-     * applies the last -P, so the script is scanned from the bottom up. */
-    getScriptProjectName(): string | undefined {
-        const lines = this.state.jobScript.split("\n");
+    /** The project named by the script's own #PBS -P directive, when the user is a member of it.
+     * Directives are read at the start of a line only, and qsub applies the last -P, so the
+     * script is scanned from the bottom up. */
+    getScriptProject(): Project | undefined {
+        const lines = this.state.jobScript.split('\n');
         for (let index = lines.length - 1; index >= 0; index--) {
             const match = lines[index].match(/^#PBS\s+-P\s+(\S+)/);
             if (match !== null) {
-                return match[1].trim();
+                return this.state.projects.find((project) => project.name === match[1]);
             }
         }
         return undefined;
-    }
-
-    /** The project named by the script's own #PBS -P directive, when the user is a member of it. */
-    getScriptProject(): Project | undefined {
-        const name = this.getScriptProjectName();
-        if (name === undefined) {
-            return undefined;
-        }
-        return this.state.projects.find((project) => project.name === name);
     }
 
     buildProjectAiModelsSection() {
@@ -405,10 +397,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
     submitJob(dryRun: boolean = false) {
         return new Promise((resolve, reject) => {
             const base64Script = btoa(this.state.jobScript);
-            // the script file still carries #PBS -P, and qsub reads it. the API project is
-            // what becomes qsub -P, which is the value the scheduler hook reads as the job project.
             this.getSchedulerClient().submitJob({
-                project: this.getScriptProjectName(),
                 job_script_interpreter: "pbs",
                 job_script: base64Script,
                 dry_run: dryRun,

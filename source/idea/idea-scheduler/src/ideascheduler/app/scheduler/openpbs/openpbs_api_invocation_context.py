@@ -42,7 +42,6 @@ import ideascheduler
 from ideascheduler.app.provisioning import JobProvisioningUtil
 from ideascheduler.app.provisioning.job_provisioner.job_provisioning_util import (
     projects_allowed_on_queue,
-    queue_project_names,
 )
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 
@@ -103,7 +102,7 @@ class OpenPBSAPIInvocationContext:
 
             # create temporary job, in case of queue profile not found or disabled errors
             # and correlate with job submission handler
-            self._job = SocaJob(job_uid=job_uid)
+            self._job = SocaJob(job_uid=job_uid, owner=self._owner_username())
 
             # if no queue or project is specified during job submission, default queue name to 'normal'
             if Utils.is_empty(queue_name):
@@ -121,11 +120,11 @@ class OpenPBSAPIInvocationContext:
             # the project is resolved before the builder is created: it decides the
             # instance profile the job's compute nodes run under. an omitted -P used
             # to take projects[0], which is often a project the user is not in.
-            project_note = None
             if Utils.is_empty(project_name):
                 project_name = self._project_when_omitted(queue_profile, queue_name)
-                project_note = f'no project given, using {project_name}'
-                self.app_context.logger().info(project_note)
+                self.app_context.logger().info(
+                    f'no project given, using {project_name}'
+                )
 
             if self.event.job is not None and Utils.is_not_empty(project_name):
                 self.event.job.project = project_name
@@ -145,11 +144,6 @@ class OpenPBSAPIInvocationContext:
             )
             self._job.queue = queue_name
             self._job.project = project_name
-            if project_note is not None:
-                if Utils.is_empty(self._job.comment):
-                    self._job.comment = project_note
-                elif project_note not in self._job.comment:
-                    self._job.comment = f'{self._job.comment} {project_note}'
 
             dry_run = self.dry_run_option()
             if dry_run is not None and dry_run == DryRunOption.DEBUG:
@@ -193,18 +187,25 @@ class OpenPBSAPIInvocationContext:
         """
         First queue project the submitter belongs to. Same membership list check_acls uses.
         """
-        names = queue_project_names(
-            self.app_context.projects_client, queue_profile.projects
-        )
         owner = self._owner_username()
         user_projects = []
         if Utils.is_not_empty(owner):
-            user_projects = self.app_context.projects_client.get_user_projects(
-                username=owner
-            )
-        allowed = projects_allowed_on_queue(user_projects, names)
+            try:
+                user_projects = self.app_context.projects_client.get_user_projects(
+                    username=owner
+                )
+            except Exception as e:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message='Could not read projects for the job owner. Please try again or contact your administrator.',
+                ) from e
+        allowed = projects_allowed_on_queue(user_projects, queue_profile.projects)
         if len(allowed) == 0:
-            listed = ', '.join(names[:10])
+            listed = ', '.join(
+                project.name or project.project_id
+                for project in (queue_profile.projects or [])[:10]
+                if project.name or project.project_id
+            )
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
                 message=(
