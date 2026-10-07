@@ -252,38 +252,59 @@ Renovate's hosted app cannot regenerate this repository's lock files in its sand
 The Build and Push workflow in `.github/workflows/build_push.yaml` publishes the
 control-plane image, and the release executables for the deploy tool.
 
-### Normal path
+### Release candidates
 
-Merging to `main` runs the workflow. It builds every Python module, assumes the OIDC
-role held in the `ECR_ROLE` repository secret, then builds and pushes
-`idea-control-plane` to `public.ecr.aws/s5o2b4m0` on the arm64 runner. OpenPBS is
-compiled in a cached stage of that image. A temporary tag is pushed first; the
-OpenPBS version, `ideactl about`, and `config generate` smoke checks run against its
-digest. After they pass, that exact digest gets three tags: the contents of
-`IDEA_VERSION.txt`, the same value prefixed with `v`, and `latest`. An existing
-release stops publication.
+Every release is published twice: first as a release candidate that is proven on a
+cluster, then unchanged as the release.
+
+1. On the release branch, with the version already bumped, dispatch the workflow as
+   candidate 1:
+
+   ```bash
+   gh workflow run build_push.yaml --ref <release-branch> -f release_candidate=1
+   ```
+
+   It runs the checks and tests, builds and smoke-tests the ideactl executables for
+   every platform (including a synthesis of every module with the packaged executable
+   that must match a build from source), and builds and smoke-tests the control-plane
+   image. It then publishes the GitHub prerelease `v<version>-rc.1` with the
+   executables, their checksums and `candidate.json`, and tags the image digest
+   `<version>-rc.1`. A candidate never receives a release tag.
+2. Prove the candidate on a development cluster with only its files: download the
+   prerelease's ideactl, set `ecs.image` to `<repository>:<version>-rc.1`, and upgrade.
+3. If anything needs fixing, fix it on the branch and dispatch the next number
+   (`release_candidate=2`). A number is never reused.
+4. Merge the release pull request. On `main` the workflow builds nothing: it finds the
+   highest candidate for this version whose `candidate.json` records the exact source
+   tree being merged, tags that candidate's image digest `<version>`, `v<version>` and
+   `latest`, and publishes the release with the candidate's files. If no candidate
+   matches the merged tree, nothing is released; cut a candidate from that source.
+
+A squash merge keeps the source tree identical to the branch, so the candidate built
+from the branch head matches. A merge that changes the tree, such as one picking up a
+newer `main`, needs a new candidate from the updated branch.
+
+A cluster whose `ecs.image` names a candidate of the release being installed, or of an
+earlier one, moves to the release image on its next upgrade.
 
 ### Rerun path
 
-If that run fails after the merge, dispatch the same workflow again rather than
-publishing by hand:
+If the promotion fails after the merge, rerun the failed run from the Actions page.
+It refuses to overwrite a release that already exists.
+
+### Private builds
+
+A dispatch with `control_plane_image_name` builds and smoke-tests a private image in
+that repository and writes no release or candidate tags:
 
 ```bash
-gh workflow run build_push.yaml --ref main
-```
-
-Two inputs change the target. `ecr_repository` selects the registry, and
-`control_plane_image_name` selects the repository within it. From a ref other than
-`main` the workflow stops immediately unless the image name is set, so a branch
-dispatch must explicitly select its target repository:
-
-```bash
-gh workflow run build_push.yaml --ref release-26.09.0 \
+gh workflow run build_push.yaml --ref <branch> \
   -f control_plane_image_name=idea-control-plane-ci-test
 ```
 
-The named repository has to exist already, because ECR Public does not create one
-on push. Delete a throwaway repository once the check is finished.
+`ecr_repository` selects the registry. A dispatch without either input stops
+immediately. The named repository has to exist already, because ECR Public does not
+create one on push. Delete a throwaway repository once the check is finished.
 
 ### Emergency path
 
@@ -293,7 +314,7 @@ itself cannot run, fix the workflow.
 
 ### The publishing role
 
-The role named by `ECR_ROLE` trusts any ref of this repository, so the image-name
-guard above is the only control that stops a branch dispatch from replacing a
-released image. Narrowing the role trust condition to `main` would remove the need
-for that guard.
+The role named by `ECR_ROLE` trusts any ref of this repository, because a release
+candidate is pushed from its branch. The dispatch guards are the only control that
+stops a branch from writing release tags: a dispatch writes only a candidate tag or a
+private repository, and release tags are written only by the promotion on `main`.

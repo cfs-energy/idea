@@ -563,8 +563,9 @@ def test_a_send_error_other_than_a_rebooting_host_is_not_retried():
         real_run_ssm(context, 'i-desk', True, 'x', sleep=clock.sleep, clock=clock.time)
 
 
-def test_a_per_user_windows_share_is_checked_for_reach_not_written():
-    """a %UserName% share only expands at the user's logon; SYSTEM can't open it or write its parent"""
+def test_windows_shares_are_probed_for_reach_and_never_written():
+    """SYSTEM reaches a share with the machine account, which a read-only share
+    such as Apps never lets write; users write with their own logins"""
     from ideavirtualdesktopcontroller.app.sessions.image_validation import (
         windows_host_script,
     )
@@ -573,18 +574,25 @@ def test_a_per_user_windows_share_is_checked_for_reach_not_written():
         'sid-1',
         [
             ('home', '\\\\svm.example\\Users$\\home\\%UserName%'),
-            ('data', '\\\\svm.example\\data'),
+            ('apps', '\\\\svm.example\\Apps'),
         ],
         'cpu',
     )
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
-    assert (
-        "Get-Item -LiteralPath '\\\\svm.example\\Users$\\home' -ErrorAction Stop | Out-Null"
-        in home
+    assert home.startswith(
+        "Probe-Share 'filesystem:home' '\\\\svm.example\\Users$\\home' "
     )
-    assert 'Set-Content' not in home
-    data = next(line for line in script.splitlines() if "'filesystem:data'" in line)
-    assert 'Set-Content' in data
+    apps = next(line for line in script.splitlines() if "'filesystem:apps'" in line)
+    assert apps.startswith("Probe-Share 'filesystem:apps' '\\\\svm.example\\Apps' ")
+    for write in (
+        'Set-Content',
+        'Remove-Item',
+        'New-Item',
+        '[IO.File]',
+        'Out-File',
+        'Add-Content',
+    ):
+        assert write not in script
 
 
 @pytest.mark.parametrize(
@@ -597,35 +605,41 @@ def test_a_per_user_windows_share_is_checked_for_reach_not_written():
 def test_variable_server_or_share_is_not_probed(path):
     script = module.windows_host_script('sid', [('home', path)], 'cpu')
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
-    assert 'Get-Item' not in home
-    assert 'Test-Path' not in home
+    assert 'Probe-Share' not in home
     assert 'Set-Content' not in home
     assert '$true' in home
     assert 'per-user share' in home and 'not probed' in home
 
 
-def test_per_user_parent_distinguishes_denied_missing_and_network_errors():
+def test_a_refused_listing_passes_only_once_the_share_or_folder_is_shown_to_exist():
+    """Windows refuses a missing share and a share SYSTEM may not open with the same
+    Access is denied (checked on 2019, 2022 and 2025 desktops), so a refusal alone
+    must never pass"""
     script = module.windows_host_script(
         'sid', [('home', r'\\svm.example\Users$\home dir\%UserName%\Documents')], 'cpu'
     )
+    probe = next(
+        line for line in script.splitlines() if line.startswith('function Probe-Share')
+    )
+    assert 'Get-ChildItem -LiteralPath $probe -Force -ErrorAction Stop' in probe
+    # anything but a refusal fails with the error it hit
+    assert 'if ($err.CategoryInfo.Category -ne "PermissionDenied") {' in probe
+    assert 'Check $n $false "$label not reachable: $($err.Exception.Message)"' in probe
+    # a refused share root passes only when the server lists that share
+    assert '$parts = $probe.TrimEnd("\\").Split("\\");' in probe
+    assert 'cmd /c "net view \\\\$server /all 2>&1"' in probe
+    assert 'if ($LASTEXITCODE -ne 0) { Check $n $false' in probe
+    assert '[regex]::Escape($share) + "(\\s{2,}|\\s*$)"' in probe
+    assert 'no share named $share on $server' in probe
+    # a refused folder passes only when its parent lists it
+    assert (
+        'Get-ChildItem -LiteralPath $parent -Force -ErrorAction Stop | Where-Object { $_.Name -eq $leaf }'
+        in probe
+    )
+    assert '$leaf does not exist in $parent' in probe
+    assert probe.count('Check $n $true') == 3
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
-    assert (
-        "Get-Item -LiteralPath '\\\\svm.example\\Users$\\home dir' -ErrorAction Stop | Out-Null"
-        in home
+    assert home.startswith(
+        "Probe-Share 'filesystem:home' '\\\\svm.example\\Users$\\home dir' "
     )
-    assert 'catch [System.UnauthorizedAccessException]' in home
-    assert "$true '" in home and 'reachable; access denied to SYSTEM' in home
-    assert "else { Check 'filesystem:home' $false" in home
-    assert (
-        'catch [System.Management.Automation.ItemNotFoundException], [System.IO.IOException]'
-        in home
-    )
-    assert '$_.CategoryInfo.Category -eq "PermissionDenied"' in home
-    assert '$e -is [System.UnauthorizedAccessException]' in home
-    assert '($e.HResult -band 0xFFFF) -eq 5' in home
-    assert '$e = $e.InnerException' in home
-    assert "if ($accessDenied) { Check 'filesystem:home' $true" in home
-    assert home.count('not reachable') == 2
-    assert "catch { Check 'filesystem:home' $false" in home
-    assert 'Test-Path' not in home
-    assert 'Set-Content' not in home
+    assert script.count('function Probe-Share') == 1

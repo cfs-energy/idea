@@ -13,7 +13,12 @@ on:
         default: 'public.ecr.aws/s5o2b4m0'
         type: string
       control_plane_image_name:
-        description: 'Repository name for the control-plane image. Leave empty for the released image. A non-main dispatch must set this input.'
+        description: 'Repository name for the control-plane image. Leave empty for the released image. A non-main dispatch must set this input or release_candidate.'
+        required: false
+        default: ''
+        type: string
+      release_candidate:
+        description: 'Publish this build as release candidate N (v<version>-rc.N prerelease and <version>-rc.N image). A merge to main then releases exactly this build.'
         required: false
         default: ''
         type: string
@@ -31,12 +36,20 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Refuse an existing release
+      - name: Refuse an existing release or candidate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash source/idea/ideactl/scripts/assert-new-release.sh
+          RELEASE_CANDIDATE: ${{ github.event.inputs.release_candidate }}
+        run: |
+          if [ -n "$RELEASE_CANDIDATE" ]; then
+            bash source/idea/ideactl/scripts/assert-new-candidate.sh "$RELEASE_CANDIDATE"
+          else
+            bash source/idea/ideactl/scripts/assert-new-release.sh
+          fi
   build_ideactl_artifacts:
     name: Build ideactl ${{ matrix.target }}
+    # A merge to main releases its candidate's artifacts; only a dispatch builds.
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +103,8 @@ jobs:
           retention-days: 7
   build_ideactl_linux_artifact:
     name: Build ideactl ${{ matrix.target }}
+    # A merge to main releases its candidate's artifacts; only a dispatch builds.
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -176,6 +191,8 @@ jobs:
           retention-days: 7
   build_ideactl_windows_artifact:
     name: Build ideactl Windows x64
+    # A merge to main releases its candidate's artifacts; only a dispatch builds.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     defaults:
       run:
@@ -220,7 +237,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   build_push_ideactl:
+    if: github.event_name == 'workflow_dispatch'
     needs: [release_available, checks, tests, build_ideactl_artifacts, build_ideactl_linux_artifact, build_ideactl_windows_artifact]
+    outputs:
+      image: ${{ steps.image.outputs.image }}
     runs-on: ubuntu-24.04-arm
     permissions:
       id-token: write
@@ -229,9 +249,15 @@ jobs:
       - name: Validate the image name
         env:
           CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name }}
+          RELEASE_CANDIDATE: ${{ github.event.inputs.release_candidate }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "main" ] && [ -z "$CONTROL_PLANE_IMAGE_NAME" ]; then
-            echo "::error::A dispatch from $GITHUB_REF_NAME must set control_plane_image_name, or it would overwrite released images from an unmerged ref."
+          # Released tags come only from promoting a candidate on merge, never from a dispatch.
+          if [ -z "$CONTROL_PLANE_IMAGE_NAME" ] && [ -z "$RELEASE_CANDIDATE" ]; then
+            echo "::error::A dispatch must set release_candidate, or control_plane_image_name for a private build. Released tags come only from merging a proven candidate."
+            exit 1
+          fi
+          if [ -n "$RELEASE_CANDIDATE" ] && [ -n "$CONTROL_PLANE_IMAGE_NAME" ]; then
+            echo "::error::A release candidate is published to the released image repository; leave control_plane_image_name empty."
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -298,10 +324,12 @@ jobs:
               core.exportVariable(name, value);
             }
       - name: Build and test temporary image
+        id: image
         env:
           GH_TOKEN: ${{ github.token }}
           ECR_REGISTRY: ${{ github.event.inputs.ecr_repository }}
           CONTROL_PLANE_IMAGE_NAME: ${{ github.event.inputs.control_plane_image_name || 'idea-control-plane' }}
+          RELEASE_CANDIDATE: ${{ github.event.inputs.release_candidate }}
         run: |
           set -euo pipefail
           bash source/idea/ideactl/scripts/assert-new-release.sh
@@ -345,14 +373,17 @@ jobs:
               --config-dir /tmp/config \
               --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
-          bash source/idea/ideactl/scripts/assert-new-release.sh
           REPOSITORY="${IMAGE%@*}"
-          docker buildx imagetools create \
-            --tag "${REPOSITORY}:v${VERSION}" \
-            --tag "${REPOSITORY}:${VERSION}" \
-            --tag "${REPOSITORY}:latest" "$IMAGE"
-  publish_ideactl_artifacts:
-    if: github.event_name == 'push' && github.ref_name == 'main'
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          if [ -n "$RELEASE_CANDIDATE" ]; then
+            # A candidate never takes a release tag; the merge to main re-tags this digest.
+            bash source/idea/ideactl/scripts/assert-new-candidate.sh "$RELEASE_CANDIDATE"
+            docker buildx imagetools create --tag "${REPOSITORY}:${VERSION}-rc.${RELEASE_CANDIDATE}" "$IMAGE"
+            exit 0
+          fi
+          echo "::notice::Private build ${IMAGE}; no release tags are written by a dispatch."
+  publish_release_candidate:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_candidate != ''
     needs:
       - build_ideactl_artifacts
       - build_ideactl_linux_artifact
@@ -375,15 +406,101 @@ jobs:
           set -euo pipefail
           cat ./*.tar.gz.sha256 ./*.zip.sha256 | LC_ALL=C sort > SHA256SUMS
           sha256sum --check SHA256SUMS
-      - name: Publish source release
+      - name: Publish the release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CANDIDATE: ${{ github.event.inputs.release_candidate }}
+          IMAGE: ${{ needs.build_push_ideactl.outputs.image }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          TAG="v${VERSION}-rc.${RELEASE_CANDIDATE}"
+          bash source/idea/ideactl/scripts/assert-new-candidate.sh "$RELEASE_CANDIDATE"
+          case "$IMAGE" in *@sha256:*) ;; *) echo "::error::The candidate image is not digest-qualified: '${IMAGE}'."; exit 1;; esac
+          jq -n --arg version "$VERSION" --arg candidate "$RELEASE_CANDIDATE" \
+            --arg tree "$(git rev-parse 'HEAD^{tree}')" --arg commit "$GITHUB_SHA" --arg image "$IMAGE" \
+            '{version: $version, candidate: ($candidate | tonumber), tree: $tree, commit: $commit, image: $image}' \
+            > release/candidate.json
+          gh release create "$TAG" \
+            release/*.tar.gz \
+            release/*.tar.gz.sha256 \
+            release/*.zip \
+            release/*.zip.sha256 \
+            release/SHA256SUMS \
+            release/candidate.json \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "IDEA ${VERSION} release candidate ${RELEASE_CANDIDATE}" \
+            --notes "Release candidate. Image: ${IMAGE%@*}:${VERSION}-rc.${RELEASE_CANDIDATE} (${IMAGE#*@}). Merging this exact source to main releases these files and this image digest unchanged."
+  promote_release:
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    needs: [release_available]
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Find the candidate built from this source
+        id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
-          TAG="v${VERSION}"
+          TAG=$(bash source/idea/ideactl/scripts/find-release-candidate.sh)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Releasing ${TAG} unchanged."
+      - name: Download and verify the candidate's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release
+          cd release
+          sha256sum --check SHA256SUMS
+          test "$(jq -er '.tree' candidate.json)" = "$(git rev-parse 'HEAD^{tree}')"
+      - name: Configure AWS Credentials for ECR Push
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          audience: sts.amazonaws.com
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.ECR_ROLE }}
+      - name: Use the registry credential helper
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q amazon-ecr-credential-helper
+          mkdir -p ~/.docker
+          printf '{"credHelpers":{"public.ecr.aws":"ecr-login"}}\n' > ~/.docker/config.json
+      - name: Tag the candidate image as the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           bash source/idea/ideactl/scripts/assert-new-release.sh
-          gh release create "$TAG" \
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          IMAGE=$(jq -er '.image' release/candidate.json)
+          case "$IMAGE" in *@sha256:*) ;; *) echo "::error::Candidate image is not digest-qualified: '${IMAGE}'."; exit 1;; esac
+          REPOSITORY="${IMAGE%@*}"
+          docker buildx imagetools inspect "$IMAGE" >/dev/null
+          docker buildx imagetools create \
+            --tag "${REPOSITORY}:v${VERSION}" \
+            --tag "${REPOSITORY}:${VERSION}" \
+            --tag "${REPOSITORY}:latest" "$IMAGE"
+          for TAG in "v${VERSION}" "${VERSION}" latest; do
+            test "$(docker buildx imagetools inspect "${REPOSITORY}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "${IMAGE#*@}"
+          done
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
+          DIGEST=$(jq -er '.image | split("@")[1]' release/candidate.json)
+          bash source/idea/ideactl/scripts/assert-new-release.sh
+          gh release create "v${VERSION}" \
             release/*.tar.gz \
             release/*.tar.gz.sha256 \
             release/*.zip \
@@ -391,4 +508,4 @@ jobs:
             release/SHA256SUMS \
             --target "$GITHUB_SHA" \
             --title "IDEA ${VERSION}" \
-            --notes "Self-contained ideactl executables for macOS and Linux (arm64 and amd64), and Windows (amd64), with checksums. Windows ideactl.exe is unsigned: SmartScreen may warn. After verifying the checksum, choose More info > Run anyway, or use PowerShell Unblock-File .\\ideactl.exe and run .\\ideactl.exe about."
+            --notes "Released unchanged from ${TAG}: the same ideactl files and control-plane image digest ${DIGEST}. Self-contained ideactl executables for macOS and Linux (arm64 and amd64), and Windows (amd64), with checksums. Windows ideactl.exe is unsigned: SmartScreen may warn. After verifying the checksum, choose More info > Run anyway, or use PowerShell Unblock-File .\\ideactl.exe and run .\\ideactl.exe about."

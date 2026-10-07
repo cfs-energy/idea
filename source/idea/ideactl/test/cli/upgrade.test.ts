@@ -1926,6 +1926,32 @@ test("the image row follows the release only when it names the release repositor
   assert.deepEqual(planEcsImageFollowsRelease([{ key: "ecs.image", value: `${repository}:26.09.3` }], "26.09.4"), [], "no repository row");
 });
 
+test("a release candidate image follows its release and later ones, never an earlier one", () => {
+  const repository = "public.ecr.aws/s5o2b4m0/idea-control-plane";
+  const rows = (image: string) => [
+    { key: "ecs.image_repositories.aws", value: repository },
+    { key: "ecs.image", value: image },
+  ];
+  for (const tag of ["26.10.4-rc.1", "26.10.4-rc.12", "26.10.3-rc.2"]) {
+    assert.deepEqual(
+      planEcsImageFollowsRelease(rows(`${repository}:${tag}`), "26.10.4"),
+      [{ key: "ecs.image", value: `${repository}:26.10.4` }],
+      tag,
+    );
+  }
+  for (const tag of ["26.10.5-rc.1", "26.11.0-rc.1", "26.10.4-rc.0", "26.10.4-rc", "26.10.4-rc.1x", "26.10.4-beta.1"]) {
+    assert.deepEqual(planEcsImageFollowsRelease(rows(`${repository}:${tag}`), "26.10.4"), [], tag);
+  }
+  assert.deepEqual(
+    planEcsImageFollowsRelease(
+      [{ key: "ecs.image_repositories.aws", value: repository }, { key: "ecs.image", value: "private.example/idea-control-plane:26.10.4-rc.1" }],
+      "26.10.4",
+    ),
+    [],
+    "a private registry stays",
+  );
+});
+
 
 function hostReturnDeps(hosts: { minSize: number; instances: string[] }, empties: boolean) {
   const out: string[] = [];

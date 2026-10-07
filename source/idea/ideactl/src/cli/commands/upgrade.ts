@@ -1026,10 +1026,14 @@ export function planMetricsProviderCutover(
 /** A release tag as the release pipeline publishes it: two-digit year, month, patch. */
 const RELEASE_IMAGE_TAG = /^\d{2}\.\d{2}\.\d+$/;
 
+/** A release candidate tag: the release it becomes, then -rc and its number. */
+const CANDIDATE_IMAGE_TAG = /^(\d{2}\.\d{2}\.\d+)-rc\.[1-9]\d*$/;
+
 /**
  * Plan the image row's move to the release being installed. The row is add-only for the sync, so
  * a routine upgrade would otherwise deploy the new templates on the previous image. Only a row
- * that names this partition's release repository at an older release tag moves; a private
+ * that names this partition's release repository at an older release tag, or at a candidate of
+ * this or an earlier release, moves; a private
  * registry, a digest-qualified reference, a build tag or a newer tag is the operator's and stays.
  */
 export function planEcsImageFollowsRelease(
@@ -1043,6 +1047,12 @@ export function planEcsImageFollowsRelease(
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
+  // A candidate of this release or an earlier one is what the release was proven as, so it moves too.
+  const candidate = CANDIDATE_IMAGE_TAG.exec(tag);
+  if (candidate !== null) {
+    if ((compareIdeaRelease(candidate[1], releaseVersion) ?? 1) > 0) return [];
+    return [{ key: "ecs.image", value: `${repository}:${releaseVersion}` }];
+  }
   if (!RELEASE_IMAGE_TAG.test(tag) || (compareIdeaRelease(tag, releaseVersion) ?? 0) >= 0) return [];
   return [{ key: "ecs.image", value: `${repository}:${releaseVersion}` }];
 }
