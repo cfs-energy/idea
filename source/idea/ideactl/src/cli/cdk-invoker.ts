@@ -899,7 +899,7 @@ export class CdkInvoker {
       } catch {
         return false; // no stack: nothing to wait for
       }
-      if (!STACK_STATUS_IN_PROGRESS.test(status)) return announced;
+      if (status === 'REVIEW_IN_PROGRESS' || !STACK_STATUS_IN_PROGRESS.test(status)) return announced;
       if (this.deps.now() - startedAt >= STACK_WAIT_TIMEOUT_MS) {
         throw new ExitWithCode(
           1,

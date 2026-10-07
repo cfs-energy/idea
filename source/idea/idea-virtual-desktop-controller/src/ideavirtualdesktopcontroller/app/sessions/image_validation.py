@@ -340,11 +340,16 @@ def windows_host_script(
             )
             missing = ps(f'{parent} not reachable (per-user share {path})')
             lines.append(
-                f'try {{ if (Test-Path -LiteralPath {ps(parent)} -ErrorAction Stop) {{ Check {check} $true {reachable} }}'
-                f' else {{ Check {check} $false {missing} }} }}'
+                f'try {{ Get-Item -LiteralPath {ps(parent)} -ErrorAction Stop | Out-Null; Check {check} $true {reachable} }}'
                 f' catch [System.UnauthorizedAccessException] {{ Check {check} $true {denied} }}'
-                f' catch [System.IO.IOException] {{ Check {check} $false ({missing} + ": " + $_.Exception.Message) }}'
-                f' catch {{ Check {check} $false ({ps(parent + " probe failed: ")} + $_.Exception.Message) }}'
+                ' catch [System.Management.Automation.ItemNotFoundException], [System.IO.IOException] {'
+                ' $e = $_.Exception; $accessDenied = $_.CategoryInfo.Category -eq "PermissionDenied";'
+                ' while ($null -ne $e) {'
+                ' if ($e -is [System.UnauthorizedAccessException] -or ($e.HResult -band 0xFFFF) -eq 5) { $accessDenied = $true };'
+                ' $e = $e.InnerException };'
+                f' if ($accessDenied) {{ Check {check} $true {denied} }}'
+                f' else {{ Check {check} $false ({missing} + ": " + $_.Exception.Message) }} }}'
+                f' catch {{ Check {check} $false ({missing} + ": " + $_.Exception.Message) }}'
             )
             continue
         lines.append(

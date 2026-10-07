@@ -18,9 +18,11 @@ beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-07T12:00:00Z'));
     sessionStorage.clear();
+    localStorage.clear();
     vi.stubGlobal('window', {
         idea: {app: {sso: true, sso_url: '/sso', sso_auth_status: 'SUCCESS', sso_auth_code: null}},
-        location: {pathname: '/', href: 'https://portal.example/#/soca/active-jobs'}
+        location: {pathname: '/', href: 'https://portal.example/#/soca/active-jobs', reload: vi.fn()},
+        addEventListener: vi.fn()
     });
     client.isLoggedIn.mockReset().mockResolvedValue(false);
     client.getClaims.mockReset().mockResolvedValue(claims);
@@ -33,6 +35,7 @@ afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     sessionStorage.clear();
+    localStorage.clear();
 });
 
 it.each(['/', '/portal', '/portal/'])('recovers a lost worker session through SSO at %s', async path => {
@@ -152,16 +155,45 @@ it('propagates transient errors for the existing route retry without redirecting
 });
 
 
-it.each(['worker', 'sso'])('clears the logout marker when accepting a %s session', async source => {
-    await new AuthService(props).logout();
+it('keeps logout shared across tabs, including when another tab accepts worker claims', async () => {
+    const tabA = new AuthService(props);
+    const tabB = new AuthService(props);
+    await tabA.logout();
+    expect(localStorage.getItem('idea.sso-logged-out')).toBe('true');
+    // Tab B has its own empty sessionStorage, but shares localStorage and the client.
+    vi.stubGlobal('sessionStorage', {getItem: vi.fn().mockReturnValue(null), setItem: vi.fn()});
+    const redirect = vi.spyOn(tabB, 'initiateSso');
+    await expect(tabB.isLoggedIn()).resolves.toBe(false);
     client.isLoggedIn.mockResolvedValue(true);
-    const auth = new AuthService(props);
-    await expect(source === 'worker' ? auth.isLoggedIn() : auth.login_using_sso_auth_code('code')).resolves.toBe(true);
-    expect(sessionStorage.getItem('idea.sso-logged-out')).toBeNull();
+    await expect(tabB.isLoggedIn()).resolves.toBe(true);
+    expect(localStorage.getItem('idea.sso-logged-out')).toBe('true');
     client.isLoggedIn.mockResolvedValue(false);
-    auth.isLoggedIn();
+    await vi.advanceTimersByTimeAsync(60001);
+    await expect(tabB.isLoggedIn()).resolves.toBe(false);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(client.initiateAuth).not.toHaveBeenCalled();
+});
+
+it('clears the logout marker for an SSO callback with a code', async () => {
+    await new AuthService(props).logout();
+    window.idea.app.sso_auth_code = 'fresh-code';
+    await expect(new AuthService(props).isLoggedIn()).resolves.toBe(true);
+    expect(localStorage.getItem('idea.sso-logged-out')).toBeNull();
+    expect(client.initiateAuth).toHaveBeenCalledWith({auth_flow: 'SSO_AUTH', authorization_code: 'fresh-code'});
+});
+
+it('reloads a persisted page restored while the SSO redirect promise is pending', async () => {
+    const auth = new AuthService(props);
+    const pending = auth.isLoggedIn();
     await vi.advanceTimersByTimeAsync(0);
     expect(window.location.href).toBe('/sso');
+    expect(auth.isLoggedIn()).toBe(pending);
+    expect(window.addEventListener).toHaveBeenCalledWith('pageshow', expect.any(Function));
+    const listener = vi.mocked(window.addEventListener).mock.calls[0][1] as EventListener;
+    listener(new PageTransitionEvent('pageshow', {persisted: false}));
+    expect(window.location.reload).not.toHaveBeenCalled();
+    listener(new PageTransitionEvent('pageshow', {persisted: true}));
+    expect(window.location.reload).toHaveBeenCalledOnce();
 });
 
 it('clears the recovery latch on successful password login', async () => {
@@ -171,18 +203,24 @@ it('clears the recovery latch on successful password login', async () => {
     expect(sessionStorage.getItem('idea.sso-last-redirect')).toBeNull();
 });
 
-describe.each(['getter', 'getItem', 'setItem', 'removeItem'] as const)('unavailable sessionStorage: %s', access => {
+describe.each((['localStorage', 'sessionStorage'] as const).flatMap(storage =>
+    (['getter', 'getItem', 'setItem', 'removeItem'] as const).map(access => [storage, access] as const)
+))('unavailable %s: %s', (storage, access) => {
+    let auth: AuthService;
+    let callback: AuthService;
     beforeEach(() => {
+        // Storage becomes unavailable after construction; AppLogger also reads it on startup.
+        auth = new AuthService(props);
+        callback = new AuthService(props);
         const fail = () => { throw new Error('Storage denied'); };
         if (access === 'getter') {
-            vi.spyOn(globalThis, 'sessionStorage', 'get').mockImplementation(fail);
+            vi.spyOn(globalThis, storage, 'get').mockImplementation(fail);
         } else {
-            vi.spyOn(Object.getPrototypeOf(sessionStorage), access).mockImplementation(fail);
+            vi.spyOn(Object.getPrototypeOf(globalThis[storage]), access).mockImplementation(fail);
         }
     });
 
     if (access === 'getter' || access === 'setItem') it('always clears tokens on logout', async () => {
-        const auth = new AuthService(props);
         await expect(auth.logout()).resolves.toBe(true);
         expect(client.logout).toHaveBeenCalledOnce();
         expect(auth.isAccessLoaded()).toBe(false);
@@ -190,7 +228,6 @@ describe.each(['getter', 'getItem', 'setItem', 'removeItem'] as const)('unavaila
 
     if (access === 'getter' || access === 'removeItem') it('allows password login and its hook', async () => {
         window.idea.app.sso = false;
-        const auth = new AuthService(props);
         const login = vi.fn().mockResolvedValue(true);
         auth.setHooks(login, vi.fn());
         await expect(auth.login('user', 'password')).resolves.toBe(true);
@@ -199,8 +236,8 @@ describe.each(['getter', 'getItem', 'setItem', 'removeItem'] as const)('unavaila
     });
 
     it('disables automatic SSO but permits explicit SSO and its callback', async () => {
-        const auth = new AuthService(props);
-        // Exercise marker clearing as well as guard reads/writes before losing the session.
+        if (access === 'setItem') await auth.logout();
+        if (access === 'removeItem') await auth.login('user', 'password');
         client.isLoggedIn.mockResolvedValue(true);
         await expect(auth.isLoggedIn()).resolves.toBe(true);
         client.isLoggedIn.mockResolvedValue(false);
@@ -212,6 +249,6 @@ describe.each(['getter', 'getItem', 'setItem', 'removeItem'] as const)('unavaila
         auth.initiateSso();
         expect(window.location.href).toBe('/sso');
         window.idea.app.sso_auth_code = 'manual-code';
-        await expect(new AuthService(props).isLoggedIn()).resolves.toBe(true);
+        await expect(callback.isLoggedIn()).resolves.toBe(true);
     });
 });

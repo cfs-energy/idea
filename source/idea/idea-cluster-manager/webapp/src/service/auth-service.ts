@@ -73,9 +73,9 @@ class AuthService {
         this.notifyReporting()
     }
 
-    private withSessionStorage<T>(action: (storage: Storage) => T): T | undefined {
+    private withStorage<T>(kind: 'localStorage' | 'sessionStorage', action: (storage: Storage) => T): T | undefined {
         try {
-            return action(sessionStorage)
+            return action(globalThis[kind])
         } catch {
             // Without a durable loop guard an automatic redirect is unsafe.
             this.autoSsoDisabled = true
@@ -86,7 +86,6 @@ class AuthService {
     private async acceptClaims(claims: JwtTokenClaims, session: number): Promise<boolean> {
         if (session !== this.sessionVersion) return false
         this.claims = claims
-        this.withSessionStorage(storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         const identity = JSON.stringify([claims.username, claims.issued_at, claims.expires_at, claims.groups])
         if (identity === this.reportingIdentity) {
             await this.reportingPending
@@ -125,6 +124,9 @@ class AuthService {
         this.logger = new AppLogger({
             name: 'auth-service.ts'
         })
+        window.addEventListener('pageshow', event => {
+            if (event.persisted) window.location.reload()
+        })
     }
 
     setHooks(onLogin: () => Promise<boolean>, onLogout: () => Promise<boolean>) {
@@ -142,6 +144,7 @@ class AuthService {
      * @param password
      */
     login(username: string, password: string): Promise<boolean> {
+        this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         this.clearReporting()
         this.claims = null
         const session = ++this.sessionVersion
@@ -159,7 +162,7 @@ class AuthService {
             } else {
                 return this.props.clients.auth().getClaims().then(async claims => {
                     if (!await this.acceptClaims(claims, session)) return false
-                    this.withSessionStorage(storage => storage.removeItem(KEY_SSO_LAST_REDIRECT))
+                    this.withStorage('sessionStorage', storage => storage.removeItem(KEY_SSO_LAST_REDIRECT))
                     if (this.onLogin) {
                         return this.onLogin()
                     } else {
@@ -183,6 +186,7 @@ class AuthService {
      * @param authorization_code
      */
     login_using_sso_auth_code(authorization_code: string): Promise<boolean> {
+        if (authorization_code) this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         this.clearSession()
         const session = this.sessionVersion
         return this.props.clients.auth().initiateAuth({
@@ -398,8 +402,7 @@ class AuthService {
             }
 
             const authStatus = window.idea.app.sso_auth_status
-            const loggedOut = this.withSessionStorage(storage => storage.getItem(KEY_SSO_LOGGED_OUT))
-            if (authStatus === 'FAIL' || loggedOut) {
+            if (authStatus === 'FAIL') {
                 return false
             }
             if (authStatus === 'SUCCESS' && window.idea.app.sso_auth_code) {
@@ -410,14 +413,16 @@ class AuthService {
                 })
             }
             if (authStatus && authStatus !== 'SUCCESS') return false
+            const loggedOut = this.withStorage('localStorage', storage => storage.getItem(KEY_SSO_LOGGED_OUT))
+            if (loggedOut) return false
 
             // An idle service worker can lose its in-memory tokens after the code was consumed.
             // sessionStorage survives the SSO round trip, bounding retries across page loads.
-            const lastRedirect = this.withSessionStorage(storage => storage.getItem(KEY_SSO_LAST_REDIRECT))
+            const lastRedirect = this.withStorage('sessionStorage', storage => storage.getItem(KEY_SSO_LAST_REDIRECT))
             if (this.autoSsoDisabled || lastRedirect === 'blocked') return false
             if (lastRedirect && Date.now() - Number(lastRedirect) < SSO_REDIRECT_WINDOW_MS) {
                 // Recovery failed again. Stay at login even after the cooldown or a reload.
-                this.withSessionStorage(storage => storage.setItem(KEY_SSO_LAST_REDIRECT, 'blocked'))
+                this.withStorage('sessionStorage', storage => storage.setItem(KEY_SSO_LAST_REDIRECT, 'blocked'))
                 return false
             }
             return this.initiateSso(false)
@@ -436,8 +441,8 @@ class AuthService {
     }
 
     initiateSso(explicit = true): Promise<boolean> {
-        const guardSaved = this.withSessionStorage(storage => {
-            if (explicit) storage.removeItem(KEY_SSO_LOGGED_OUT)
+        if (explicit) this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
+        const guardSaved = this.withStorage('sessionStorage', storage => {
             storage.setItem(KEY_SSO_LAST_REDIRECT, String(Date.now()))
             return true
         })
@@ -457,7 +462,7 @@ class AuthService {
 
     logout(explicit = true) {
         if (explicit && Utils.isSsoEnabled()) {
-            this.withSessionStorage(storage => storage.setItem(KEY_SSO_LOGGED_OUT, 'true'))
+            this.withStorage('localStorage', storage => storage.setItem(KEY_SSO_LOGGED_OUT, 'true'))
             window.idea.app.sso_auth_code = null
         }
         this.clearSession()

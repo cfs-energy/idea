@@ -579,7 +579,7 @@ def test_a_per_user_windows_share_is_checked_for_reach_not_written():
     )
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
     assert (
-        "Test-Path -LiteralPath '\\\\svm.example\\Users$\\home' -ErrorAction Stop)"
+        "Get-Item -LiteralPath '\\\\svm.example\\Users$\\home' -ErrorAction Stop | Out-Null"
         in home
     )
     assert 'Set-Content' not in home
@@ -597,6 +597,7 @@ def test_a_per_user_windows_share_is_checked_for_reach_not_written():
 def test_variable_server_or_share_is_not_probed(path):
     script = module.windows_host_script('sid', [('home', path)], 'cpu')
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
+    assert 'Get-Item' not in home
     assert 'Test-Path' not in home
     assert 'Set-Content' not in home
     assert '$true' in home
@@ -609,14 +610,22 @@ def test_per_user_parent_distinguishes_denied_missing_and_network_errors():
     )
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
     assert (
-        "Test-Path -LiteralPath '\\\\svm.example\\Users$\\home dir' -ErrorAction Stop"
+        "Get-Item -LiteralPath '\\\\svm.example\\Users$\\home dir' -ErrorAction Stop | Out-Null"
         in home
     )
     assert 'catch [System.UnauthorizedAccessException]' in home
     assert "$true '" in home and 'reachable; access denied to SYSTEM' in home
     assert "else { Check 'filesystem:home' $false" in home
-    assert "catch [System.IO.IOException] { Check 'filesystem:home' $false" in home
+    assert (
+        'catch [System.Management.Automation.ItemNotFoundException], [System.IO.IOException]'
+        in home
+    )
+    assert '$_.CategoryInfo.Category -eq "PermissionDenied"' in home
+    assert '$e -is [System.UnauthorizedAccessException]' in home
+    assert '($e.HResult -band 0xFFFF) -eq 5' in home
+    assert '$e = $e.InnerException' in home
+    assert "if ($accessDenied) { Check 'filesystem:home' $true" in home
     assert home.count('not reachable') == 2
     assert "catch { Check 'filesystem:home' $false" in home
-    assert 'probe failed:' in home
+    assert 'Test-Path' not in home
     assert 'Set-Content' not in home
