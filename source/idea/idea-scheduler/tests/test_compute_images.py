@@ -560,3 +560,58 @@ def test_an_x86_64_builder_type_is_refused_for_an_arm64_compute_image():
     with pytest.raises(exceptions.SocaException) as exc_info:
         build_with_base_ami('ami-rocky9armstock01', instance_type='m6i.large')
     assert 'm6i.large is x86_64' in exc_info.value.message
+
+
+@pytest.mark.parametrize('ami_gb,expected', [(8, 10), (11, 11), (50, 50)])
+def test_compute_build_describes_root_only_in_builder(monkeypatch, ami_gb, expected):
+    stock = 'ami-rocky9stock00001'
+    monkeypatch.setitem(
+        IMAGES,
+        stock,
+        {
+            **IMAGES[stock],
+            'BlockDeviceMappings': [
+                {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': ami_gb}},
+            ],
+        },
+    )
+    ec2 = FakeEc2()
+    describe = Mock(wraps=ec2.describe_images)
+    ec2.describe_images = describe
+    service = build_service({**ROCKY9_STOCK_CONFIG, **BUILDER_CONFIG}, ec2)
+    monkeypatch.setattr(service, 'default_base_ami', lambda *a: stock)
+    monkeypatch.setattr(service, 'run_build', lambda builder, **_: builder)
+    builder = service.build(
+        BuildComputeImageRequest(base_os='rocky9', architecture='x86_64'), 'operator'
+    )
+    assert builder.ebs_volume_size == expected
+    describe.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'ami_gb,requested,expected',
+    [(8, None, 10), (8, 8, 10), (11, None, 11), (8, 30, 30)],
+)
+def test_compute_builder_disk_is_at_least_10_gb(
+    monkeypatch, ami_gb, requested, expected
+):
+    """an 8 GB ubuntu 24.04 root filled up mid bake; every compute image baked on 10 GB through 26.10.1"""
+    stock = 'ami-rocky9stock00001'
+    monkeypatch.setitem(
+        IMAGES,
+        stock,
+        {
+            **IMAGES[stock],
+            'BlockDeviceMappings': [
+                {'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': ami_gb}}
+            ],
+        },
+    )
+    service = build_service({**DEFAULT_CONFIG, **BUILDER_CONFIG}, FakeEc2())
+    builder = module.ComputeNodeAmiBuilder(
+        context=service.context,
+        base_os='rocky9',
+        base_ami=stock,
+        ebs_volume_size=requested,
+    )
+    assert builder.ebs_volume_size == expected

@@ -500,6 +500,7 @@ def test_job_builder_ht_support_disabled(context):
 def test_job_builder_ht_support_disabled_invalid_cpus(context):
     """
     when hyper-threading is disabled, requesting more no. of cpus than no. of threads per core should fail
+    and name both fixes: fewer ncpus, or turn hyper-threading on
     """
     result = build_and_validate(
         context=context,
@@ -511,6 +512,10 @@ def test_job_builder_ht_support_disabled_invalid_cpus(context):
         },
     )
     assert result.success is False
+    assert (
+        't3.micro has 1 cores with hyper-threading off; '
+        'use ncpus=1 or -l ht_support=true'
+    ) in get_validation_messages(result)
 
 
 def test_job_builder_basic_invalid_no_of_cpus(context):

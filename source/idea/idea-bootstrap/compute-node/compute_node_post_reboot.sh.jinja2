@@ -2,7 +2,10 @@
 
 set -x
 
+# cloud-init does not export this file; cron's pam_env does. Hooks are child processes.
+set -a
 source /etc/environment
+set +a
 if [[ -f /etc/profile.d/proxy.sh ]]; then
     source /etc/profile.d/proxy.sh
 fi
@@ -47,7 +50,9 @@ else
   {% include 'compute-node/_templates/configure_hyperthreading.jinja2' %}
 
   if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh ]]; then
-    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/userdata_customizations.log 2>&1
+    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/userdata_customizations.log 2>&1 || log_warning "userdata customizations failed; continuing host bootstrap"
+  else
+    log_info "no userdata customizations"
   fi
 
   {% include 'compute-node/_templates/scheduler_start.jinja2' %}

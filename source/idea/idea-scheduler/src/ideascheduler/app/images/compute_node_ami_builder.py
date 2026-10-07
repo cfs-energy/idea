@@ -19,11 +19,15 @@ from ideasdk.aws.image_builds import (
     BUILDER_READY_TIMEOUT_SECONDS,
     IMAGE_BUILD_TAG,
     BuildReporter,
+    builder_root_gb,
     check_builder_type_architecture,
     default_builder_instance_type,
     is_throttle,
+    root_ebs_mapping,
+    SNAPSHOT_STOP_TIMEOUT_SECONDS,
     stop_builder,
     unique_build_version,
+    wait_until_stopped,
 )
 from ideasdk.aws.stock_amis import trusted_owners
 
@@ -39,6 +43,10 @@ from pathlib import Path
 import os
 
 DEFAULT_INSTANCE_TYPE = 'c7i.large'
+# the builder disk is max(10 GB, base AMI root): an 8 GB ubuntu 24.04 root fills up
+# mid bake. 10 GB is what every compute image baked on through 26.10.1 and the
+# smallest queue root seen in the field; a larger queue grows the filesystem at
+# boot (cloud-init growpart) and the launch guard raises a smaller one.
 DEFAULT_EBS_VOLUME_SIZE_GB = 10
 
 
@@ -165,21 +173,17 @@ class ComputeNodeAmiBuilder:
             )
         else:
             check_builder_type_architecture(instance_type, self.architecture)
-        ami_block_device_mappings = image['BlockDeviceMappings']
-        ami_block_device = ami_block_device_mappings[0]
+        ami_block_device = root_ebs_mapping(image)
         ami_block_device_name = ami_block_device['DeviceName']
-        ami_block_ebs = ami_block_device['Ebs']
-        ami_ebs_volume_size_gb = ami_block_ebs['VolumeSize']
+        ami_ebs_volume_size_gb = ami_block_device['Ebs']['VolumeSize']
 
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
-        if Utils.is_empty(ebs_volume_size):
-            ebs_volume_size = max(DEFAULT_EBS_VOLUME_SIZE_GB, ami_ebs_volume_size_gb)
-        else:
-            if ebs_volume_size < ami_ebs_volume_size_gb:
-                raise exceptions.invalid_params(
-                    f'ebs volume size must be greater or equal to base ami ebs volume size: {ami_ebs_volume_size_gb}gb'
-                )
+        # a request smaller than the AMI snapshot is raised, not refused
+        ebs_volume_size = builder_root_gb(
+            max(int(ebs_volume_size or 0), DEFAULT_EBS_VOLUME_SIZE_GB),
+            ami_ebs_volume_size_gb,
+        )
 
         # stop/terminate
         if terminate:
@@ -603,6 +607,16 @@ class ComputeNodeAmiBuilder:
                 )
             time.sleep(10)
 
+    def prepare_snapshot(self, instance_id: str) -> None:
+        """
+        Stop the builder and snapshot it without booting it. The scrub has run cloud-init
+        clean, so CreateImage's reboot would run user-data again. The image keeps that
+        clean cloud-init, and a new compute node still runs it.
+        """
+        self.context.aws().ec2().stop_instances(InstanceIds=[instance_id])
+        wait_until_stopped(self.context, instance_id, SNAPSHOT_STOP_TIMEOUT_SECONDS)
+        self.no_reboot = True
+
     def read_bake_checks(self, instance_id, progress=None, builder_status='complete'):
         """
         Copy the bootstrap's evidence before snapshotting; missing evidence fails.
@@ -702,6 +716,7 @@ class ComputeNodeAmiBuilder:
                     progress({'status': 'checking', 'instance_id': instance_id})
                 status = self.wait_for_software_packages(instance_id=instance_id)
                 self.read_bake_checks(instance_id, progress, status)
+                self.prepare_snapshot(instance_id)
                 image_id = self.create_image(instance_id=instance_id)
                 if progress is not None:
                     progress({'image_id': image_id})

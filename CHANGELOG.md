@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.2] - 2026-10-06
+
+* **Security**: PyJWT 2.15.0, urllib3 2.8.0, Mako 1.4.2 and multidict 6.9.1, for published advisories including a critical PyJWT one.
+* **Job project**: a job submitted without a project runs under the first project on that queue you belong to, recorded in PBS for `qstat -f` and accounting. If project membership cannot be read, submission is rejected. If you belong to none of them, the error lists enabled queue projects or explains that none are configured. A project you cannot use lists the ones you can. Altering an existing job keeps its project and owner.
+* **Job CPUs**: when a job asks for more CPUs than an instance has with hyper-threading off, the error names that instance's cores and says to use that many or turn hyper-threading on.
+* **Windows image bakes**: a Windows desktop image builder launches without the cluster SSH key, so an ED25519 key pair no longer stops the bake. Windows desktops already launch without that key.
+* **Base desktop images**: base desktop images require at least 20 GB; existing base stacks below that are raised on upgrade and retried on later ticks if housekeeping fails. Edits below 20 GB are rejected; valid edits saved while that raise is in progress are kept.
+* **Image launches**: a desktop bake, including a custom build, uses the larger of the base stack minimum (20 GB when no size is given) and the base image root disk, and a compute bake uses the larger of 10 GB and the base image root disk. A desktop or job whose root is smaller than the image snapshot launches at the snapshot size. When the image size cannot be read, the launch fails and names the image.
+* **Image customizations**: a bake or host with no userdata customizations script continues and logs that there are none. A script that is present and fails stops the bake; regular compute nodes and Linux desktops log a warning and continue.
+* **Image customizations**: a site hook receives the cluster environment on a bake that does not reboot, so `IDEA_CLUSTER_HOME` is set when the hook runs.
+* **DCV bake check**: the in-bake DCV check fails when `dcvserver` cannot load its libraries or a regular package payload file is missing; optional config and documentation files may be absent. Units remain disabled, which is how the image ships.
+* **Image snapshot**: the controller stops the builder and creates the image without rebooting it, so cloud-init does not run the bake a second time. A desktop or compute node launched from the image still runs cloud-init.
+* **RHEL 9 desktop bakes**: the nettle source the RHEL 9 x86_64 DCV install builds comes from ftp.gnu.org or one of two mirrors, checked against a pinned SHA-256, so an unreachable ftp.gnu.org no longer fails the bake.
+
 ## [26.10.1] - 2026-10-05
 
 * **Images page**: the admin page is now Images, with a Managed images tab (one row per OS, architecture and GPU variant with status, checks, log link, Refresh and validate all / selected, Force rebake, Rebuild, Roll back, Pin) and a Custom images tab for project images the pipeline never touches

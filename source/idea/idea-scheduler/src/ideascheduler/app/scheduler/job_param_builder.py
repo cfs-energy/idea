@@ -662,6 +662,7 @@ class CpusParamBuilder(BaseParamBuilder):
             enable_ht_support = enable_ht_support_builder.default()
 
         min_cpus = 9999999  # choose some arbitrary max value
+        limiting_instance_type = None
         for instance_type in instance_types:
             try:
                 ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
@@ -677,16 +678,29 @@ class CpusParamBuilder(BaseParamBuilder):
                 instance_type_cpus = ec2_instance_type.vcpu_info_default_vcpus
             else:
                 instance_type_cpus = ec2_instance_type.vcpu_info_default_cores
-            min_cpus = min(min_cpus, instance_type_cpus)
+            if instance_type_cpus is None:
+                continue
+            if instance_type_cpus < min_cpus:
+                min_cpus = instance_type_cpus
+                limiting_instance_type = instance_type
 
         if min_cpus == 9999999:
             return True
 
         if cpus > min_cpus:
+            if not enable_ht_support and limiting_instance_type is not None:
+                message = (
+                    f'{limiting_instance_type} has {min_cpus} cores with hyper-threading off; '
+                    f'use ncpus={min_cpus} or -l ht_support=true'
+                )
+            else:
+                message = (
+                    f'Invalid {constants.JOB_PARAM_CPUS}: ({cpus}). One of the instance types: [{",".join(instance_types)}]'
+                    f' do not have enough CPUs: ({min_cpus}). ht_support={enable_ht_support}'
+                )
             self.add_validation_entry(
                 param=constants.JOB_PARAM_CPUS,
-                message=f'Invalid {constants.JOB_PARAM_CPUS}: ({cpus}). One of the instance types: [{",".join(instance_types)}]'
-                f' do not have enough CPUs: ({min_cpus}). ht_support={enable_ht_support}',
+                message=message,
             )
             return False
 

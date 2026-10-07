@@ -18,7 +18,6 @@ from ideasdk.utils import Utils
 from ideadatamodel import constants
 from ideascheduler.cli import build_cli_context
 from ideascheduler.app.images.compute_node_ami_builder import (  # noqa: F401  re-exported
-    DEFAULT_EBS_VOLUME_SIZE_GB,
     DEFAULT_INSTANCE_TYPE,
     ComputeNodeAmiBuilder,
 )

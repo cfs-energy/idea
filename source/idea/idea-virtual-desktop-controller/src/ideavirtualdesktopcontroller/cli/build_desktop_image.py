@@ -18,7 +18,6 @@ from ideavirtualdesktopcontroller.cli import build_cli_context
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (  # noqa: F401  re-exported
     ARCHITECTURE_TO_STACK_KEY,
     BUILD_SUPPORTED_BASE_OS,
-    DEFAULT_EBS_VOLUME_SIZE_GB,
     DEFAULT_INSTANCE_TYPE,
     DcvHostImageBuilder,
 )

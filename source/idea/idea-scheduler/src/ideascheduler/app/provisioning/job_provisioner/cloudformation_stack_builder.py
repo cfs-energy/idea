@@ -18,6 +18,7 @@ from ideadatamodel import (
     GetProjectRequest,
     GetUserRequest,
 )
+from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
 from ideasdk.utils import Utils
 from ideasdk.context import BootstrapContext
 from ideasdk.bootstrap import (
@@ -613,13 +614,23 @@ class CloudFormationStackBuilder:
         if kms_key_id is None:
             kms_key_id = 'alias/aws/ebs'
 
+        # the ASG and the spot fleet both launch from this template. the compute
+        # canary submits a job through the same provisioner.
+        root_volume_gb = launch_root_gb(
+            self.job.params.root_storage_size.int_val(),
+            cached_image_root_gb(
+                self.context.aws().ec2(), self.job.params.instance_ami
+            ),
+            self.logger,
+            self.job.params.instance_ami,
+        )
         launch_template_data.BlockDeviceMappings = [
             LaunchTemplateBlockDeviceMapping(
                 DeviceName=Utils.get_ec2_block_device_name(
                     base_os=self.job.params.base_os
                 ),
                 Ebs=EBSBlockDevice(
-                    VolumeSize=self.job.params.root_storage_size.int_val(),
+                    VolumeSize=root_volume_gb,
                     VolumeType=constants.DEFAULT_VOLUME_TYPE_COMPUTE,
                     DeleteOnTermination=not self.job.params.keep_ebs_volumes,
                     Encrypted=constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,

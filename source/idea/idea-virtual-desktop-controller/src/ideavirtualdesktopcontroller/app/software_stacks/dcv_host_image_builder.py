@@ -24,13 +24,20 @@ from ideasdk.aws.image_builds import (
     BUILDER_READY_TIMEOUT_SECONDS,
     IMAGE_BUILD_TAG,
     BuildReporter,
+    builder_root_gb,
     check_builder_type_architecture,
     default_builder_instance_type,
     is_throttle,
+    root_ebs_mapping,
+    SNAPSHOT_STOP_TIMEOUT_SECONDS,
     stop_builder,
     unique_build_version,
+    wait_until_stopped,
 )
 from ideasdk.aws.stock_amis import trusted_owners
+from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+    BASE_STACK_MIN_STORAGE_GB,
+)
 from typing import Callable, List, Optional, Dict
 import time
 import os.path
@@ -38,7 +45,8 @@ from pathlib import Path
 import os
 
 DEFAULT_INSTANCE_TYPE = 'm7i.large'
-DEFAULT_EBS_VOLUME_SIZE_GB = 10
+# the builder disk is the request or the base AMI root, whichever is larger.
+# no request uses the base-stack floor, which leaves room for the GUI group.
 
 # the eVDI base OS set: EL10 has no DCV packages
 BUILD_SUPPORTED_BASE_OS = (
@@ -201,17 +209,16 @@ class DcvHostImageBuilder:
             )
         else:
             check_builder_type_architecture(instance_type, self.architecture)
-        ami_block_device = image['BlockDeviceMappings'][0]
+        ami_block_device = root_ebs_mapping(image)
         ami_block_device_name = ami_block_device['DeviceName']
         ami_ebs_volume_size_gb = ami_block_device['Ebs']['VolumeSize']
         if Utils.is_empty(block_device_name):
             block_device_name = ami_block_device_name
-        if Utils.is_empty(ebs_volume_size):
-            ebs_volume_size = max(DEFAULT_EBS_VOLUME_SIZE_GB, ami_ebs_volume_size_gb)
-        elif ebs_volume_size < ami_ebs_volume_size_gb:
-            raise exceptions.invalid_params(
-                f'ebs volume size must be greater or equal to base ami ebs volume size: {ami_ebs_volume_size_gb}gb'
-            )
+        # no size uses the base-stack floor. a request or that floor still cannot
+        # be smaller than the AMI snapshot
+        if ebs_volume_size is None:
+            ebs_volume_size = BASE_STACK_MIN_STORAGE_GB
+        ebs_volume_size = builder_root_gb(ebs_volume_size, ami_ebs_volume_size_gb)
 
         if terminate:
             stop = False
@@ -447,7 +454,9 @@ class DcvHostImageBuilder:
                     }
                 ],
                 IamInstanceProfile={'Arn': self.instance_profile_arn},
-                KeyName=self.ssh_key_pair,
+                # EC2 refuses an ED25519 key on a Windows AMI. The bake is SSM
+                # only and never reads the instance password.
+                **({} if is_windows(self.base_os) else {'KeyName': self.ssh_key_pair}),
                 NetworkInterfaces=[
                     {
                         'DeviceIndex': 0,
@@ -642,6 +651,7 @@ class DcvHostImageBuilder:
             try:
                 status = self.wait_for_software_packages(instance_id=instance_id)
                 self.check_builder_status(instance_id, status)
+                self.prepare_snapshot(instance_id)
                 image_id = self.create_image(instance_id=instance_id)
             except BaseException as e:
                 self.keep_for_inspection(instance_id, e)
@@ -678,6 +688,18 @@ class DcvHostImageBuilder:
                     f'AMI builder ec2 instance: {instance_id} needs to be manually terminated.'
                 )
         return image_id
+
+    def prepare_snapshot(self, instance_id: str) -> None:
+        """
+        Stop a Linux builder and snapshot it without booting it. The scrub has run
+        cloud-init clean, so CreateImage's reboot would run user-data again. The image
+        keeps that clean cloud-init, and a new desktop still runs it. Windows is already
+        stopped by sysprep.
+        """
+        if not is_windows(self.base_os):
+            self.context.aws().ec2().stop_instances(InstanceIds=[instance_id])
+            wait_until_stopped(self.context, instance_id, SNAPSHOT_STOP_TIMEOUT_SECONDS)
+        self.no_reboot = True
 
     def check_builder_status(self, instance_id: str, status: str):
         """

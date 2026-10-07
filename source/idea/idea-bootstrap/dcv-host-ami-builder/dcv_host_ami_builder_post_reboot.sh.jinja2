@@ -1,7 +1,10 @@
 #!/bin/bash
 set -x
 
+# cloud-init does not export this file; cron's pam_env does. Hooks are child processes.
+set -a
 source /etc/environment
+set +a
 if [[ -f /etc/profile.d/proxy.sh ]]; then
     source /etc/profile.d/proxy.sh
 fi
@@ -63,7 +66,9 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
 else
   # user data customizations
   if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
-    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1
+    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1 || exit 1
+  else
+    log_info "no userdata customizations"
   fi
 
   touch /var/lib/idea/bake-dcv.ok

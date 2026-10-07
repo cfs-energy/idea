@@ -144,12 +144,47 @@ class MockControllerUtils:
 class RecordingEc2Client:
     """captures the RunInstances call instead of making it"""
 
-    def __init__(self):
+    def __init__(self, images: Optional[Dict[str, Dict[str, Any]]] = None):
         self.run_instances_kwargs: Optional[Dict[str, Any]] = None
+        self.images = images or {}
+
+    def describe_images(self, ImageIds=None, **kwargs) -> Dict[str, Any]:
+        # a launch has to resolve the snapshot. tests that do not care about the
+        # size still get a 1 GB root, which does not raise a larger request
+        return {
+            'Images': [
+                self.images.get(image_id) or image_with_root(image_id, 1)
+                for image_id in (ImageIds or [])
+            ]
+        }
 
     def run_instances(self, **kwargs) -> Dict[str, Any]:
         self.run_instances_kwargs = kwargs
         return {'Instances': [{'InstanceId': 'i-00000000000000001'}]}
+
+
+def root_volume_gb(run_instances_kwargs: Dict[str, Any]) -> int:
+    return run_instances_kwargs['BlockDeviceMappings'][0]['Ebs']['VolumeSize']
+
+
+def image_with_root(image_id: str, gb: int) -> Dict[str, Any]:
+    return {
+        'ImageId': image_id,
+        'RootDeviceName': '/dev/xvda',
+        'BlockDeviceMappings': [{'DeviceName': '/dev/xvda', 'Ebs': {'VolumeSize': gb}}],
+    }
+
+
+def launch_desktop(root_gb: int, image_gb: int) -> int:
+    image_id = f'ami-root-{image_gb}'
+    session = build_api().complete_create_session_request(
+        build_session(CONFIGURED_INSTANCE_PROFILE_ARN), MockApiInvocationContext()
+    )
+    session.software_stack.ami_id = image_id
+    session.server.root_volume_size = SocaMemory(value=root_gb, unit=SocaMemoryUnit.GB)
+    ec2_client = RecordingEc2Client({image_id: image_with_root(image_id, image_gb)})
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+    return root_volume_gb(ec2_client.run_instances_kwargs)
 
 
 def build_api(projects_client=None) -> VirtualDesktopAPI:
@@ -222,6 +257,27 @@ def test_client_supplied_instance_profile_does_not_reach_run_instances():
         == CONFIGURED_INSTANCE_PROFILE_ARN
     )
     assert CLIENT_INSTANCE_PROFILE_ARN not in str(run_instances_kwargs)
+
+
+def test_a_windows_desktop_launch_omits_the_key():
+    session = build_session(None)
+    session.software_stack.base_os = VirtualDesktopBaseOS.WINDOWS2022
+    session = build_api().complete_create_session_request(
+        session, MockApiInvocationContext()
+    )
+    ec2_client = RecordingEc2Client()
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+    assert ec2_client.run_instances_kwargs is not None
+    assert 'KeyName' not in ec2_client.run_instances_kwargs
+
+
+def test_a_linux_desktop_launch_keeps_the_key():
+    session = build_api().complete_create_session_request(
+        build_session(None), MockApiInvocationContext()
+    )
+    ec2_client = RecordingEc2Client()
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+    assert ec2_client.run_instances_kwargs['KeyName'] == 'idea-test-key-pair'
 
 
 # per-project instance profile
@@ -354,3 +410,15 @@ def test_the_warn_action_leaves_model_access_in_place():
         resolve_with_budget(BEDROCK_BUDGET_STATUS_EXHAUSTED, BEDROCK_BUDGET_ACTION_WARN)
         == PROJECT_INSTANCE_PROFILE_ARN
     )
+
+
+def test_a_desktop_smaller_than_its_image_launches_at_the_snapshot():
+    assert launch_desktop(10, 12) == 12
+
+
+def test_a_desktop_at_20_gb_with_a_20_gb_image_stays_20():
+    assert launch_desktop(20, 20) == 20
+
+
+def test_the_launch_guard_never_lowers_a_desktop_size():
+    assert launch_desktop(50, 20) == 50

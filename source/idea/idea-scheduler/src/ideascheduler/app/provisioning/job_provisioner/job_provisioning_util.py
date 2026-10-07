@@ -20,6 +20,7 @@ from ideadatamodel import (
     SocaJobState,
     SocaScalingMode,
     HpcQueueProfile,
+    Project,
     ProvisioningStatus,
     ProvisioningCapacityInfo,
     CloudFormationStack,
@@ -50,6 +51,22 @@ from typing import Dict, Optional, List
 import arrow
 import os
 import logging
+
+
+def projects_allowed_on_queue(
+    user_projects: Optional[List[Project]], queue_projects: Optional[List[Project]]
+) -> List[str]:
+    """Intersect membership ids in queue order; names come from membership records."""
+    members = {
+        project.project_id: project.name
+        for project in user_projects or []
+        if Utils.is_not_empty(project.project_id) and Utils.is_not_empty(project.name)
+    }
+    return [
+        members[project.project_id]
+        for project in queue_projects or []
+        if project.project_id in members
+    ]
 
 
 def _is_transient_ec2_error(exc: BaseException = None) -> bool:
@@ -920,9 +937,19 @@ class JobProvisioningUtil:
                 break
 
         if current_project is None:
+            # a missing queue profile must not hide the rejection; the list is then empty
+            allowed = []
+            try:
+                allowed = projects_allowed_on_queue(
+                    user_projects,
+                    self.queue_profile.projects,
+                )
+            except exceptions.SocaException:
+                allowed = []
+            allowed_text = ', '.join(allowed) if len(allowed) > 0 else 'none'
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
-                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}.',
+                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}. You can use: {allowed_text}',
             )
 
         return True

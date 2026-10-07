@@ -52,8 +52,10 @@ from ideasdk.aws.image_builds import (
     ImageBuildRecordsDB,
     ImageBuildRunner,
     ImageNotValidated,
+    builder_root_gb,
     describe_images_by_id,
     promote_gate,
+    root_device_volume_gb,
     resume_record,
     terminate_builder,
 )
@@ -74,6 +76,10 @@ from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder imp
     DcvHostImageBuilder,
     BUILD_SUPPORTED_BASE_OS,
     is_windows,
+)
+
+from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+    BASE_STACK_MIN_STORAGE_GB,
 )
 
 PIPELINE_SETTINGS_KEY = 'virtual-desktop-controller.software_stacks.image_pipeline'
@@ -511,6 +517,11 @@ class DesktopImagePipeline:
 
     def tick(self, now: Optional[datetime] = None, blocking: bool = False):
         now = now or now_utc()
+        # Housekeeping is retried next tick; a transient failure must not stop bakes.
+        try:
+            self.raise_base_stack_min_storage()
+        except Exception as e:
+            self._logger.warning(f'Could not raise base stack storage floor: {e}')
         # until this release has settled, nothing promotes before customized stacks are
         # pinned; a failure here stops the tick, and the next tick tries again
         if self.context.config().get_string(BAKED_RELEASE_KEY, default=None) != (
@@ -537,6 +548,25 @@ class DesktopImagePipeline:
         if time.monotonic() - self._last_cleanup > CLEANUP_EVERY_SECONDS:
             self._last_cleanup = time.monotonic()
             self.cleanup()
+
+    def raise_base_stack_min_storage(self) -> List[str]:
+        """
+        ss-base-* stacks under the root floor are upserted to it through the table,
+        the same write the pin migration uses, so the edit API does not pin them.
+        """
+        from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+            apply_base_stack_storage_floor,
+        )
+
+        raised = apply_base_stack_storage_floor(
+            self._all_stacks(),
+            lambda stack: self._stack_db.get(
+                stack_id=stack.stack_id, base_os=stack.base_os
+            ),
+            self._stack_db.raise_min_storage,
+            self._logger,
+        )
+        return [stack.stack_id for stack in raised]
 
     def pin_customized_base_stacks(self) -> List[str]:
         """
@@ -902,12 +932,16 @@ class DesktopImagePipeline:
         record.status = S.TEST_LAUNCHING.value
         self._save(record)
 
-    def _builder_volume_gb(self, record: ImageBuildRecord) -> Optional[int]:
-        """
-        the root size the row's base stacks launch desktops with: the bake needs the same
-        room a desktop has (a GUI does not fit the vendor's default), and a desktop launched
-        from the image needs a root at least as large as the image's
-        """
+    def _ami_root_gb(self, image_id: Optional[str]) -> int:
+        if not image_id:
+            return 0
+        image = describe_images_by_id(self.context.aws().ec2(), [image_id]).get(
+            image_id
+        )
+        return root_device_volume_gb(image)
+
+    def _builder_volume_gb(self, record: ImageBuildRecord) -> int:
+        """builder disk: max(the row's base-stack minimum, the base AMI root snapshot)."""
         targets = self.targets_for(record.row_key()) or self.targets_for(
             ImageRowKey(
                 base_os=record.base_os,
@@ -916,7 +950,8 @@ class DesktopImagePipeline:
             )
         )
         sizes = [int(s.min_storage.int_val()) for s in targets if s.min_storage]
-        return max(sizes) if sizes else None
+        stack_gb = max([BASE_STACK_MIN_STORAGE_GB, *sizes])
+        return builder_root_gb(stack_gb, self._ami_root_gb(record.source_ami))
 
     def _test_launch(self, record: ImageBuildRecord):
         targets = self.targets_for(record.row_key())

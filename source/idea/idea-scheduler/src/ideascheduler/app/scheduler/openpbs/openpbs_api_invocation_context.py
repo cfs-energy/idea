@@ -40,6 +40,9 @@ from ideasdk.api import ApiInvocationContext
 
 import ideascheduler
 from ideascheduler.app.provisioning import JobProvisioningUtil
+from ideascheduler.app.provisioning.job_provisioner.job_provisioning_util import (
+    projects_allowed_on_queue,
+)
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 
 import os
@@ -87,19 +90,22 @@ class OpenPBSAPIInvocationContext:
             if self.event.job_o:
                 old_job_params = self.event.job_o.get_soca_job_params()
                 job_uid = self.event.job_o.get_job_uid()
+                queue_name = self.event.job_o.queue
+                project_name = self.event.job_o.project
 
             if self.event.job:
                 job_params = self.event.job.get_soca_job_params()
-                queue_name = self.event.job.queue
-                job_uid = self.event.job.get_job_uid()
-                project_name = self.event.job.project
+                queue_name = self.event.job.queue or queue_name
+                job_uid = self.event.job.get_job_uid() or job_uid
+                if Utils.is_not_empty(self.event.job.project):
+                    project_name = self.event.job.project
 
             if Utils.is_empty(job_uid):
                 job_uid = Utils.short_uuid()
 
             # create temporary job, in case of queue profile not found or disabled errors
             # and correlate with job submission handler
-            self._job = SocaJob(job_uid=job_uid)
+            self._job = SocaJob(job_uid=job_uid, owner=self._owner_username())
 
             # if no queue or project is specified during job submission, default queue name to 'normal'
             if Utils.is_empty(queue_name):
@@ -115,12 +121,20 @@ class OpenPBSAPIInvocationContext:
                 )
 
             # the project is resolved before the builder is created: it decides the
-            # instance profile the job's compute nodes run under.
-            if Utils.is_empty(project_name):
-                project = self.app_context.projects_client.get_project_by_id(
-                    queue_profile.projects[0].project_id
+            # instance profile the job's compute nodes run under. an omitted -P used
+            # to take projects[0], which is often a project the user is not in.
+            if self.event.type != 'modifyjob' and Utils.is_empty(project_name):
+                project_name = self._project_when_omitted(queue_profile, queue_name)
+                self.app_context.logger().info(
+                    f'no project given, using {project_name}'
                 )
-                project_name = project.name
+
+            if (
+                self.event.type != 'modifyjob'
+                and self.event.job is not None
+                and Utils.is_not_empty(project_name)
+            ):
+                self.event.job.project = project_name
 
             job_params = {**old_job_params, **job_params}
             self._job_builder = SocaJobBuilder(
@@ -134,6 +148,7 @@ class OpenPBSAPIInvocationContext:
                 context=self.app_context,
                 queue_profile=queue_profile,
                 job_builder=self.job_builder,
+                owner=self._owner_username(),
             )
             self._job.queue = queue_name
             self._job.project = project_name
@@ -164,6 +179,76 @@ class OpenPBSAPIInvocationContext:
             self._job_submission_result.job = self.job
             self._job_submission_result.validations = self.job_validation_result
             self._job_submission_result.dry_run = self.dry_run_option()
+
+    def _owner_username(self) -> Optional[str]:
+        owner = None
+        if self.event is not None:
+            for job in (self.event.job_o, self.event.job):
+                if job is not None:
+                    owner = job.Job_Owner or job.euser
+                    if Utils.is_not_empty(owner):
+                        break
+        if Utils.is_empty(owner) and self.event is not None:
+            owner = self.event.requestor
+        if Utils.is_empty(owner):
+            return None
+        return str(owner).split('@')[0]
+
+    def _project_when_omitted(self, queue_profile, queue_name: str) -> str:
+        """
+        First queue project the submitter belongs to. Same membership list check_acls uses.
+        """
+        owner = self._owner_username()
+        user_projects = []
+        if Utils.is_not_empty(owner):
+            try:
+                user_projects = self.app_context.projects_client.get_user_projects(
+                    username=owner
+                )
+            except Exception as e:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.GENERAL_ERROR,
+                    message='Could not read projects for the job owner. Please try again or contact your administrator.',
+                ) from e
+        allowed = projects_allowed_on_queue(user_projects, queue_profile.projects)
+        if len(allowed) == 0:
+            names = []
+            for project in (queue_profile.projects or [])[:10]:
+                if project.enabled is False:
+                    continue
+                project_id = project.project_id
+                if not project.name and project_id:
+                    try:
+                        # ProjectsClient caches these lookups across submissions.
+                        project = (
+                            self.app_context.projects_client.get_project_by_id(
+                                project_id=project_id
+                            )
+                            or project
+                        )
+                    except Exception:
+                        # A display lookup must never replace the admission rejection.
+                        pass
+                if project.enabled is False:
+                    continue
+                name = project.name or project_id
+                if name:
+                    names.append(name)
+            if not names:
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.UNAUTHORIZED_ACCESS,
+                    message=f'Queue {queue_name} has no enabled projects; ask an admin to configure a project for this queue.',
+                )
+            listed = ', '.join(names)
+            raise exceptions.soca_exception(
+                error_code=errorcodes.UNAUTHORIZED_ACCESS,
+                message=(
+                    f'No project given (add `#PBS -P <project>` or `-P <project>`). '
+                    f'Your projects allowed on queue {queue_name}: none; '
+                    f'ask an admin to add you to one of: {listed}'
+                ),
+            )
+        return allowed[0]
 
     @property
     def job_uid(self) -> str:

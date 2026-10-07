@@ -20,6 +20,8 @@ from ideadatamodel import (
     ImageRowKey,
     RefreshImagesRequest,
     SocaListingPayload,
+    SocaMemory,
+    SocaMemoryUnit,
     VirtualDesktopGPU,
     VirtualDesktopSoftwareStack,
     exceptions,
@@ -220,6 +222,26 @@ class FakeStackDb:
         self.stacks[stack.stack_id] = stack
         self.updated.append(stack.stack_id)
         return stack
+
+    def raise_min_storage(self, stack, observed):
+        from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+            BASE_STACK_MIN_STORAGE_GB,
+        )
+
+        stored = self.stacks.get(stack.stack_id)
+        if (
+            stored is None
+            or stored.min_storage is None
+            or observed is None
+            or stored.min_storage.gb() != observed.gb()
+            or stored.min_storage.unit != observed.unit
+        ):
+            return None
+        stored.min_storage = SocaMemory(
+            value=BASE_STACK_MIN_STORAGE_GB, unit=SocaMemoryUnit.GB
+        )
+        self.updated.append(stack.stack_id)
+        return stored
 
     def repoint_image(self, stack, old_ami_id, ami_id, base_ami_id=None):
         stored = self.stacks.get(stack.stack_id)
@@ -1401,7 +1423,7 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     stack.min_storage = SocaMemory(value=20, unit=SocaMemoryUnit.GB)
     h = Harness(stacks=[stack])
     queue_and_run(h)
-    # the bake has the room a desktop launched from it has
+    # a 20 GB stack bakes at 20. a 40 GB floor made a snapshot desktops cannot launch.
     assert FakeBuilder.made[0]['ebs_volume_size'] == 20
     # the page links the bootstrap_<instance id> stream, console-escaped
     assert h.row().log_link.endswith(
@@ -1410,10 +1432,78 @@ def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_str
     assert h.row().log_link.startswith('https://us-east-2.console.aws.amazon.com/')
 
 
-def test_a_stack_without_a_size_leaves_the_builder_default():
+def test_a_stack_without_a_size_uses_the_20_gb_floor():
     h = Harness()
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(8)
     queue_and_run(h)
-    assert FakeBuilder.made[0]['ebs_volume_size'] is None
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
+
+
+def _stock_image(volume_gb, root='/dev/sda1', extra=None):
+    mappings = list(extra or [])
+    mappings.append(
+        {
+            'DeviceName': root,
+            'Ebs': {'VolumeSize': volume_gb, 'SnapshotId': 'snap-root'},
+        }
+    )
+    return {
+        'ImageId': 'ami-stock-rocky9',
+        'Name': 'Rocky-8',
+        'State': 'available',
+        'Architecture': 'x86_64',
+        'RootDeviceName': root,
+        'BlockDeviceMappings': mappings,
+    }
+
+
+def test_a_10_gb_base_stack_bakes_at_the_20_gb_floor():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    queue_and_run(h)
+    # the base-stack floor raises 10 to 20. there is no separate 40 GB bake floor.
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 20
+
+
+def test_an_ami_root_above_the_stack_floor_sets_the_builder():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    # a data disk listed first must not hide the root. 30 is above the 20 GB floor.
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(
+        30, extra=[{'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}}]
+    )
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 30
+
+
+def test_a_100_gb_stack_keeps_100_gb():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=100, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(11)
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 100
+
+
+def test_the_base_ami_root_sets_the_builder_when_it_is_largest():
+    from ideadatamodel import SocaMemory, SocaMemoryUnit
+
+    stack = base_stack('rocky9')
+    stack.min_storage = SocaMemory(value=10, unit=SocaMemoryUnit.GB)
+    h = Harness(stacks=[stack])
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(
+        80, extra=[{'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}}]
+    )
+    queue_and_run(h)
+    assert FakeBuilder.made[0]['ebs_volume_size'] == 80
 
 
 def test_a_failed_in_bake_check_reports_its_detail_and_builder(monkeypatch):
@@ -1466,6 +1556,46 @@ def test_the_stack_table_repoint_is_conditional_on_the_old_image_and_no_pin():
         {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
     )
     assert db.repoint_image(stack, 'ami-old', 'ami-new') is None
+
+
+def test_the_storage_floor_write_sets_only_storage_and_skips_a_lost_race():
+    from unittest.mock import MagicMock
+
+    from botocore.exceptions import ClientError
+    from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+        VirtualDesktopSoftwareStackDB,
+    )
+
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db._table_obj = MagicMock()
+    db.trigger_update_event = MagicMock()
+    db.convert_db_dict_to_software_stack_object = lambda entry: entry
+    stack = base_stack('rocky9', ami='ami-old')
+    stack.min_storage = _gb(10)
+    stack.image_pinned = False
+    db._table_obj.update_item.return_value = {
+        'Attributes': {
+            'ami_id': 'ami-old',
+            'image_pinned': False,
+            'min_storage_value': '20.0',
+        }
+    }
+    assert db.raise_min_storage(stack, _gb(10))['ami_id'] == 'ami-old'
+    call = db._table_obj.update_item.call_args.kwargs
+    written = set(call['ExpressionAttributeNames'].values())
+    assert written == {'base_os', 'min_storage_value', 'min_storage_unit', 'updated_on'}
+    assert 'ami_id' not in written and 'image_pinned' not in written
+    assert 'attribute_exists' in call['ConditionExpression']
+    assert call['ExpressionAttributeValues'][':old_val'] == '10.0'
+    assert call['ExpressionAttributeValues'][':old_unit'] == 'gb'
+    db.trigger_update_event.assert_called_once()
+
+    db._table_obj.update_item.side_effect = ClientError(
+        {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
+    )
+    db.trigger_update_event.reset_mock()
+    assert db.raise_min_storage(stack, _gb(10)) is None
+    db.trigger_update_event.assert_not_called()
 
 
 # once a day
@@ -1541,3 +1671,128 @@ def test_the_release_and_monthly_triggers_skip_a_row_baked_today(monkeypatch):
     monkeypatch.setattr(module, 'now_utc', lambda: tomorrow)
     h.pipeline.tick(now=tomorrow.astimezone(timezone.utc))
     assert h.row().status == 'queued' and h.row().trigger == 'release'
+
+
+# base stack root storage floor
+
+
+def _gb(value):
+    return SocaMemory(value=value, unit=SocaMemoryUnit.GB)
+
+
+def _floor_harness():
+    low = base_stack('rocky9')
+    low.min_storage = _gb(10)
+    low.image_pinned = True
+    windows = base_stack('windows2022')
+    windows.min_storage = _gb(40)
+    custom = VirtualDesktopSoftwareStack(
+        stack_id='custom-1',
+        base_os='rocky9',
+        ami_id='ami-old',
+        min_storage=_gb(10),
+    )
+    return Harness([low, windows, custom])
+
+
+def test_a_10_gb_base_stack_is_raised_to_20_and_40_stays():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    raised = h.stack_db.stacks['ss-base-rocky9-x86-64-base']
+    assert raised.min_storage.gb() == 20
+    # the floor write uses the table layer, so a pin stays a pin
+    assert raised.image_pinned is True
+    assert h.stack_db.stacks['ss-base-windows2022-x86-64-base'].min_storage.gb() == 40
+    assert h.stack_db.updated == ['ss-base-rocky9-x86-64-base']
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()
+
+
+def test_a_custom_10_gb_stack_stays_10():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    # the same tick that raises the base stack leaves the custom one alone
+    assert h.stack_db.stacks['ss-base-rocky9-x86-64-base'].min_storage.gb() == 20
+    assert h.stack_db.stacks['custom-1'].min_storage.gb() == 10
+    assert 'custom-1' not in h.stack_db.updated
+
+
+def test_raising_the_storage_floor_twice_does_not_write_again():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    h.stack_db.updated.clear()
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.reset_mock()
+    h.pipeline.tick(now=T0)
+    assert h.stack_db.stacks['ss-base-rocky9-x86-64-base'].min_storage.gb() == 20
+    assert h.stack_db.updated == []
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()
+
+
+def test_a_base_stack_lowered_to_10_gb_is_raised_on_the_next_tick():
+    h = _floor_harness()
+    h.pipeline.tick(now=T0)
+    stack_id = 'ss-base-rocky9-x86-64-base'
+    h.stack_db.stacks[stack_id].min_storage = _gb(10)
+    h.stack_db.updated.clear()
+    h.pipeline.tick(now=T0)
+    assert h.stack_db.stacks[stack_id].min_storage.gb() == 20
+    assert h.stack_db.updated == [stack_id]
+
+
+def test_an_admin_edit_during_the_floor_raise_survives():
+    h = _floor_harness()
+    stack_id = 'ss-base-rocky9-x86-64-base'
+    h.stack_db.stacks[stack_id].image_pinned = False
+    original_get = h.stack_db.get
+
+    def get_then_edit(stack_id, base_os):
+        fresh = original_get(stack_id, base_os)
+        if stack_id == 'ss-base-rocky9-x86-64-base':
+            stored = h.stack_db.stacks[stack_id]
+            stored.min_storage = _gb(100)
+            stored.ami_id = 'ami-admin'
+            stored.image_pinned = True
+        return fresh
+
+    h.stack_db.get = get_then_edit
+    h.pipeline.tick(now=T0)
+    kept = h.stack_db.stacks[stack_id]
+    assert kept.min_storage.gb() == 100
+    assert kept.ami_id == 'ami-admin'
+    assert kept.image_pinned is True
+    assert stack_id not in h.stack_db.updated
+    h.pipeline._stack_utils.update_software_stack_entry_to_opensearch.assert_not_called()
+
+
+@pytest.mark.parametrize('upgrade', [False, True])
+def test_storage_floor_failure_does_not_stop_tick(monkeypatch, upgrade):
+    h = Harness(
+        config={'vdc.software_stacks.images_baked_release': 'old'} if upgrade else None
+    )
+    h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')
+    floor = Mock(side_effect=RuntimeError('throttled'))
+    monkeypatch.setattr(h.pipeline, 'raise_base_stack_min_storage', floor)
+    adopt = Mock()
+    monkeypatch.setattr(h.pipeline, '_adopt', adopt)
+    monkeypatch.setattr(h.pipeline, '_start', Mock(return_value=True))
+    h.pipeline.tick(now=T0)
+    floor.assert_called_once()
+    assert adopt.called
+    assert 'throttled' in str(h.pipeline._logger.warning.call_args_list)
+
+
+def test_upgrade_runs_storage_floor_once(monkeypatch):
+    h = Harness(config={'vdc.software_stacks.images_baked_release': 'old'})
+    floor = Mock()
+    monkeypatch.setattr(h.pipeline, 'raise_base_stack_min_storage', floor)
+    monkeypatch.setattr(h.pipeline, '_start', Mock(return_value=True))
+    h.pipeline.tick(now=T0)
+    floor.assert_called_once()
+
+
+def test_no_matching_base_stack_keeps_builder_floor():
+    h = Harness(stacks=[])
+    h.ec2.images['ami-stock-rocky9'] = _stock_image(8)
+    record = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', source_ami='ami-stock-rocky9'
+    )
+    assert h.pipeline._builder_volume_gb(record) == 20

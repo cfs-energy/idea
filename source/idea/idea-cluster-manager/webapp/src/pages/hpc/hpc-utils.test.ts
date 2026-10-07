@@ -4,11 +4,20 @@ import {
     formatProvisioningAttempt,
     getJobWaitingSignals,
     JobUtils,
+    ncpusExceedsCoresMessage,
     parseWalltimeSeconds
 } from './hpc-utils';
 import {SocaJob} from '../../client/data-model';
 
 const NOW = new Date('2026-08-19T12:00:00Z');
+
+describe('ncpusExceedsCoresMessage', () => {
+    it('names the instance cores and form controls', () => {
+        expect(ncpusExceedsCoresMessage('c7i.4xlarge', 8)).toBe(
+            'c7i.4xlarge has 8 cores with hyper-threading off; set CPUs per instance to 8 or enable hyper-threading'
+        );
+    });
+});
 
 describe('parseWalltimeSeconds', () => {
     it('parses HH:MM:SS', () => {

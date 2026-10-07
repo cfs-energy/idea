@@ -147,6 +147,44 @@ describe('submit job page', () => {
         await waitFor(() => expect(submitJob).toHaveBeenCalledTimes(1));
     });
 
+    it('says to lower ncpus or turn hyper-threading on when ncpus exceeds cores', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({
+            applications: [{
+                ...APPLICATION,
+                form_template: {
+                    sections: [{
+                        name: 'job-params',
+                        params: [
+                            { name: 'job_name', title: 'Job Name', param_type: 'text', data_type: 'str', default: 'test-job' },
+                            { name: 'instance_type', title: 'Instance Type', param_type: 'text', data_type: 'str', default: 'c7i.4xlarge' },
+                            { name: 'ht_support', title: 'HT', param_type: 'text', data_type: 'str', default: 'false' },
+                            { name: 'cpus', title: 'CPUs', param_type: 'text', data_type: 'int', default: 16 }
+                        ]
+                    }]
+                }
+            }]
+        } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue({
+            instance_types: [{ name: 'c7i.4xlarge', default_core_count: 8, threads_per_core: 2 }]
+        } as any);
+        const submitJob = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({ accepted: true } as any);
+
+        const user = userEvent.setup();
+        renderSubmitJob();
+
+        await screen.findByText('Job Name');
+        const dryRun = await screen.findByRole('button', { name: /Dry Run/i });
+        await waitFor(() => expect(dryRun).not.toBeDisabled());
+        await user.click(dryRun);
+
+        expect(await screen.findByText(
+            'c7i.4xlarge has 8 cores with hyper-threading off; set CPUs per instance to 8 or enable hyper-threading'
+        )).toBeInTheDocument();
+        expect(submitJob).not.toHaveBeenCalled();
+    });
+
     it('shows an architecture validation rejection before a job is queued', async () => {
         const context = initTestAppContext();
         const scheduler = context.client().scheduler();

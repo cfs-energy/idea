@@ -23,6 +23,7 @@ def render(
     lustre=True,
     drivers=(),
     config=None,
+    variables=None,
 ):
     context = BootstrapContext(
         config=config or Config(),
@@ -38,6 +39,8 @@ def render(
     context.vars.bedrock_env = {}
     context.vars.bedrock_model_messages = []
     context.vars.enabled_drivers = drivers
+    for key, value in (variables or {}).items():
+        setattr(context.vars, key, value)
     if lustre:
         context.has_storage_provider = lambda provider: provider == 'fsx_lustre'
     else:
@@ -80,6 +83,7 @@ def test_linux_bake_checks_and_host_release_guards(base_os, instance_type):
     assert '/configure_dcv_host.sh' in setup
     scrub = render('dcv-host-ami-builder/image_scrub.sh.jinja2', base_os, instance_type)
     assert 'cloud-init clean --logs --seed' in scrub
+    assert 'cloud-init.disabled' not in scrub
     assert 'rm -rf /root/bootstrap/logs' in scrub
 
 
@@ -149,6 +153,7 @@ aws() { printf '%s\n' "$*" >> "$CALLS"; }
 uname() { echo test-kernel; }
 grubby() { [[ "$FAIL" != kernel ]] && echo /boot/vmlinuz-test-kernel || echo /boot/vmlinuz-other; }
 rpm() {
+  if [[ "$1" == -V && -n "${RPM_MISSING:-}" ]]; then echo "$RPM_MISSING"; return 1; fi
   [[ "$FAIL" != directory || "$*" != *adcli* ]] &&
   [[ "$FAIL" != dcv || "$*" != *nice-dcv-server* ]] &&
   [[ "$FAIL" != ssm || "$*" != *amazon-ssm-agent* ]]
@@ -156,7 +161,43 @@ rpm() {
 systemctl() { [[ "$*" != *LoadState* ]] || echo loaded; }
 modprobe() { [[ "$FAIL" != lustre ]]; }
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
+# like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
+# through the pkglibdir the dcvserver wrapper puts on LD_LIBRARY_PATH
+ldd() {
+  if [[ "$(head -c 3 "$1" 2>/dev/null)" != ELF ]]; then
+    echo "  not a dynamic executable"
+    return 1
+  fi
+  if [[ ":${LD_LIBRARY_PATH:-}:" == *"/lib64/dcv:"* ]]; then
+    echo "    libdcv.so => ${LD_LIBRARY_PATH%%:*}/libdcv.so (0x1)"
+  else
+    echo "    libdcv.so => not found"
+  fi
+  [[ "$FAIL" != dcv-libs ]] || echo "    libgtk-3.so.0 => not found"
+  echo "    libc.so.6 => /lib64/libc.so.6 (0x1)"
+}
 """
+
+
+def fake_dcvserver(tmp_path):
+    """the RPM layout: /usr/bin/dcvserver is a bash wrapper around libexec/dcv/dcvserver"""
+    root = tmp_path / 'dcvroot'
+    (root / 'libexec' / 'dcv').mkdir(parents=True, exist_ok=True)
+    binary = root / 'libexec' / 'dcv' / 'dcvserver'
+    binary.write_text('ELF')
+    binary.chmod(0o755)
+    wrapper = root / 'dcvserver-wrapper'
+    wrapper.write_text(
+        '#!/bin/bash\n'
+        f'prefix={root}\n'
+        'exec_prefix=${prefix}\n'
+        'pkglibdir=${exec_prefix}/lib64/dcv\n'
+        'programsdir=${exec_prefix}/libexec/dcv\n'
+        'export LD_LIBRARY_PATH="${pkglibdir}:${LD_LIBRARY_PATH}"\n'
+        'exec "${programsdir}/dcvserver" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 def run_checks(
@@ -190,6 +231,7 @@ def run_checks(
         qstat.write_text('#!/bin/bash\n')
         qstat.chmod(0o755)
     script = script.replace('/opt/pbs/bin/qstat', str(qstat))
+    script = script.replace('/usr/bin/dcvserver', str(fake_dcvserver(tmp_path)))
     path = tmp_path / 'checks.sh'
     path.write_text(STUBS + script)
     result = subprocess.run(
@@ -477,6 +519,24 @@ def test_a_failed_check_reports_what_it_found(tmp_path, failed, detail):
     assert {c['name']: c['detail'] for c in report['checks']}['desktop'] == (
         'GNOME display manager is installed'
     )
+
+
+def test_dcv_check_fails_when_a_library_is_missing(tmp_path):
+    """package presence is not enough: a %post 127 left libgtk unresolved and the check said ok"""
+    result, report, _ = run_checks(tmp_path, 'dcv-libs')
+    assert result.returncode == 1
+    dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
+    assert dcv['ok'] is False
+    assert 'not found' in dcv['detail']
+    assert 'Value=complete' not in _
+
+
+def test_dcv_check_reads_the_binary_behind_the_wrapper(tmp_path):
+    """ldd on the /usr/bin/dcvserver wrapper says 'not a dynamic executable' on every host"""
+    result, report, _ = run_checks(tmp_path)
+    dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
+    assert dcv['ok'] is True, dcv['detail']
+    assert result.returncode == 0
 
 
 def test_a_missing_stage_marker_names_the_stage(tmp_path):
@@ -938,3 +998,206 @@ def test_windows_repeat_run_marker_waits_for_a_successful_domain_join(
     joined = text[text.rindex('$Joined =', 0, guard) : guard]
     assert 'PartOfDomain' in joined and '$global:IdeaDomainJoined' in joined
     assert '$global:IdeaDomainJoined = $joined' in text
+
+
+USERDATA_HOOKS = (
+    'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+    'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+    'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+    'compute-node/compute_node_post_reboot.sh.jinja2',
+)
+
+
+def _hook_variables(name):
+    if name.startswith('compute-node/'):
+        from test_bootstrap_shell_syntax import job
+
+        return {'job': job()}
+    return None
+
+
+def test_optional_userdata_hooks_are_guarded():
+    for name in USERDATA_HOOKS:
+        text = render(name, 'rocky9', variables=_hook_variables(name))
+        assert 'no userdata customizations' in text, name
+        assert ('|| exit' in _hook_block(text)) == ('ami-builder/' in name), name
+
+
+def _hook_block(text):
+    start = text.index('userdata_customizations.sh')
+    start = text.rindex('if [[ -f', 0, start)
+    end = text.index('fi', start)
+    return text[start : text.index('\n', end)]
+
+
+@pytest.mark.parametrize('case', ['absent', 'fail', 'pass'])
+def test_userdata_customization_hook(tmp_path, case):
+    """a missing hook is skipped; one that exists and fails stops the bake; one that passes runs"""
+    text = render(
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2', 'rocky9'
+    )
+    home = tmp_path / 'cluster'
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    hook = home / 'vdc' / 'ami_builder' / 'userdata_customizations.sh'
+    if case != 'absent':
+        hook.parent.mkdir(parents=True)
+        body = 'echo ran-hook\n' if case == 'pass' else 'echo hook-failed >&2\nexit 1\n'
+        hook.write_text('#!/bin/bash\n' + body)
+        hook.chmod(0o755)
+    script = 'log_info() { echo "$*"; }\n' + _hook_block(text) + '\necho continued\n'
+    result = subprocess.run(
+        ['bash', '-c', script],
+        capture_output=True,
+        text=True,
+        env={
+            'IDEA_CLUSTER_HOME': str(home),
+            'IDEA_MODULE_ID': 'vdc',
+            'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR': str(logs),
+            'PATH': os.environ['PATH'],
+        },
+    )
+    if case == 'absent':
+        assert result.returncode == 0, result.stderr
+        assert 'no userdata customizations' in result.stdout
+        assert 'continued' in result.stdout
+    elif case == 'fail':
+        assert result.returncode != 0
+        assert 'continued' not in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert 'ran-hook' in (logs / 'userdata_customizations.log').read_text()
+        assert 'continued' in result.stdout
+
+
+def _environment_loader(text):
+    source_at = text.index('source /etc/environment')
+    line_start = text.rfind('\n', 0, source_at) + 1
+    previous = text.rfind('\n', 0, line_start - 1) + 1
+    if text.startswith('set -a', previous):
+        line_start = previous
+    line_end = text.find('\n', source_at)
+    line_end = len(text) if line_end == -1 else line_end + 1
+    if text.startswith('set +a', line_end):
+        next_end = text.find('\n', line_end)
+        line_end = len(text) if next_end == -1 else next_end + 1
+    return text[line_start:line_end]
+
+
+@pytest.mark.parametrize(
+    'name,hook_rel',
+    [
+        (
+            'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+            'vdc/ami_builder/userdata_customizations.sh',
+        ),
+        (
+            'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+            'vdc/ami_builder/userdata_customizations.sh',
+        ),
+        (
+            'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+            'dcv_host/userdata_customizations.sh',
+        ),
+        (
+            'compute-node/compute_node_post_reboot.sh.jinja2',
+            'vdc/compute_node/userdata_customizations.sh',
+        ),
+    ],
+)
+@pytest.mark.parametrize('preexported', [False, True])
+def test_site_hook_sees_cluster_home(tmp_path, name, hook_rel, preexported):
+    """
+    preexported is the reboot path (cron pam_env already exported /etc/environment).
+    the other path is cloud-init, which only sources the file.
+    """
+    text = render(name, 'amazonlinux2023', variables=_hook_variables(name))
+    home = tmp_path / 'cluster'
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    hook = home / hook_rel
+    hook.parent.mkdir(parents=True)
+    hook.write_text('#!/bin/bash\nprintf "%s\\n" "$IDEA_CLUSTER_HOME"\n')
+    envfile = tmp_path / 'environment'
+    envfile.write_text(
+        f'IDEA_CLUSTER_HOME={home}\n'
+        'IDEA_MODULE_ID=vdc\n'
+        f'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR={logs}\n'
+        f'IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR={logs}\n'
+        f'IDEA_COMPUTE_NODE_LOGS_DIR={logs}\n'
+        f'BOOTSTRAP_DIR={tmp_path}\n'
+    )
+    loader = _environment_loader(text).replace(
+        'source /etc/environment', f'source "{envfile}"'
+    )
+    script = 'log_info() { echo "$*"; }\n' + loader + '\n' + _hook_block(text) + '\n'
+    parent = {'PATH': os.environ['PATH']}
+    if preexported:
+        parent.update(
+            {
+                'IDEA_CLUSTER_HOME': str(home),
+                'IDEA_MODULE_ID': 'vdc',
+                'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR': str(logs),
+                'IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR': str(logs),
+                'IDEA_COMPUTE_NODE_LOGS_DIR': str(logs),
+                'BOOTSTRAP_DIR': str(tmp_path),
+            }
+        )
+    result = subprocess.run(
+        ['bash', '-c', script], capture_output=True, text=True, env=parent
+    )
+    assert result.returncode == 0, result.stderr
+    assert (logs / 'userdata_customizations.log').read_text().strip() == str(home)
+
+
+@pytest.mark.parametrize(
+    'name,hook_rel',
+    [
+        (USERDATA_HOOKS[0], 'vdc/ami_builder/userdata_customizations.sh'),
+        (USERDATA_HOOKS[1], 'vdc/ami_builder/userdata_customizations.sh'),
+        (USERDATA_HOOKS[2], 'dcv_host/userdata_customizations.sh'),
+        (USERDATA_HOOKS[3], 'vdc/compute_node/userdata_customizations.sh'),
+    ],
+)
+def test_failed_site_hook_only_stops_bakes(tmp_path, name, hook_rel):
+    text = render(name, 'rocky9', variables=_hook_variables(name))
+    hook = tmp_path / hook_rel
+    hook.parent.mkdir(parents=True)
+    hook.write_text('exit 1\n')
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    script = (
+        'log_warning() { echo "warning: $*"; }\n'
+        + _hook_block(text)
+        + '\necho continued\n'
+    )
+    result = subprocess.run(
+        ['bash', '-c', script],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            'IDEA_CLUSTER_HOME': str(tmp_path),
+            'IDEA_MODULE_ID': 'vdc',
+            'BOOTSTRAP_DIR': str(tmp_path),
+            'IDEA_COMPUTE_NODE_LOGS_DIR': str(logs),
+            'IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR': str(logs),
+            'IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR': str(logs),
+        },
+    )
+    bake = 'ami-builder/' in name
+    assert (result.returncode != 0) == bake, result.stderr
+    assert ('continued' in result.stdout) != bake
+    if not bake:
+        assert 'warning:' in result.stdout
+
+
+@pytest.mark.parametrize('marker,ok', [('c', True), ('d', True), ('', False)])
+def test_dcv_missing_config_and_docs_are_optional(tmp_path, monkeypatch, marker, ok):
+    monkeypatch.setitem(
+        os.environ, 'RPM_MISSING', f'missing   {marker} /usr/share/dcv/file'
+    )
+    result, report, _ = run_checks(tmp_path)
+    dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
+    assert dcv['ok'] is ok, dcv['detail']
+    assert result.returncode == (0 if ok else 1)

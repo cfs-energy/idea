@@ -630,6 +630,7 @@ class OpenPBSEvent(SocaBaseModel):
         context: ideascheduler.AppContext,
         queue_profile: HpcQueueProfile = None,
         job_builder: Optional[SocaJobBuilder] = None,
+        owner: Optional[str] = None,
     ) -> SocaJob:
         job = self.job
         if job is None:
@@ -639,12 +640,13 @@ class OpenPBSEvent(SocaBaseModel):
         if job.id is None:
             job.id = 'TBD'
 
-        if job.Job_Owner is None:
-            job.Job_Owner = self.requestor
-
-        return job.as_soca_job(
+        soca_job = job.as_soca_job(
             context=context,
             event=self,
             queue_profile=queue_profile,
             job_builder=job_builder,
         )
+        # Resolve ownership locally; Job_Owner is read-only on a modifyjob event.
+        owner = owner or soca_job.owner or self.requestor
+        soca_job.owner = owner.split('@')[0] if owner else None
+        return soca_job

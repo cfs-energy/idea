@@ -225,6 +225,33 @@ def is_throttle(error: BaseException) -> bool:
     return response.get('Error', {}).get('Code') in THROTTLE_CODES
 
 
+# CreateImage reboots a running instance. After cloud-init clean, that reboot runs user-data again.
+SNAPSHOT_STOP_TIMEOUT_SECONDS = 600
+
+
+def wait_until_stopped(context, instance_id: str, timeout_seconds: int) -> None:
+    """block until the instance is stopped, or raise when the deadline passes"""
+    deadline = time.time() + timeout_seconds
+    while True:
+        state = None
+        try:
+            result = context.aws().ec2().describe_instances(InstanceIds=[instance_id])
+            reservations = result.get('Reservations') or []
+            instances = (reservations[0].get('Instances') or []) if reservations else []
+            if instances:
+                state = (instances[0].get('State') or {}).get('Name')
+        except Exception as e:
+            if not is_throttle(e):
+                raise
+        if state == 'stopped':
+            return
+        if time.time() > deadline:
+            raise exceptions.general_exception(
+                f'builder {instance_id} did not stop within {timeout_seconds // 60} minutes'
+            )
+        time.sleep(10)
+
+
 def stop_builder(context, instance_id: str, logger) -> None:
     """stop a builder instance for inspection and stamp it so the sweep can terminate it later"""
     try:
@@ -595,6 +622,93 @@ def is_built_image(ec2_client, image_id: Optional[str]) -> bool:
     except Exception:
         return False
     return len(result.get('Images', [])) > 0
+
+
+def root_ebs_mapping(image: Dict) -> Dict:
+    """the root device mapping from a DescribeImages image, else the first mapping"""
+    mappings = image['BlockDeviceMappings']
+    root = image.get('RootDeviceName')
+    if root:
+        for mapping in mappings:
+            ebs = mapping.get('Ebs')
+            if mapping.get('DeviceName') == root and isinstance(ebs, dict):
+                return mapping
+    return mappings[0]
+
+
+def root_device_volume_gb(image: Optional[Dict]) -> int:
+    """VolumeSize of the root device mapping. 0 when the image has no EBS root."""
+    if not isinstance(image, dict) or not image.get('BlockDeviceMappings'):
+        return 0
+    try:
+        return int(root_ebs_mapping(image)['Ebs']['VolumeSize'])
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
+_image_root_gb: Dict[str, int] = {}
+
+
+def builder_root_gb(requested: Optional[int], ami_root_gb: int) -> int:
+    """builder disk: max(requested, the base AMI root snapshot). no baked floor."""
+    return max(int(requested or 0), int(ami_root_gb or 0))
+
+
+def cached_image_root_gb(ec2_client, image_id: Optional[str]) -> int:
+    """
+    root snapshot GiB for one image. a throttle is retried once. a miss, a lookup
+    error, or an image with no root raises, naming the image. only a resolved
+    size is cached. 0 only when no image id was given.
+    """
+    if not image_id:
+        return 0
+    cached = _image_root_gb.get(image_id)
+    if cached is not None:
+        return cached
+    image = None
+    error = None
+    for attempt in range(2):
+        try:
+            image = describe_image_or_none(ec2_client, image_id)
+            error = None
+            break
+        except Exception as caught:
+            error = caught
+            if attempt == 0 and is_throttle(caught):
+                time.sleep(1)
+                continue
+            break
+    if error is not None:
+        raise exceptions.general_exception(
+            f'could not read the root disk size of image {image_id}: '
+            f'{sanitize_aws_message(str(error))}'
+        )
+    if image is None:
+        raise exceptions.general_exception(
+            f'could not read the root disk size of image {image_id}: the image was not found'
+        )
+    size = root_device_volume_gb(image)
+    if size <= 0:
+        raise exceptions.general_exception(
+            f'could not read the root disk size of image {image_id}'
+        )
+    _image_root_gb[image_id] = size
+    return size
+
+
+def launch_root_gb(
+    requested: int, image_root: int, logger=None, image_id: Optional[str] = None
+) -> int:
+    """launch root: max(requested, image snapshot). never smaller than the request."""
+    requested_gb = int(requested or 0)
+    snapshot_gb = int(image_root or 0)
+    size = max(requested_gb, snapshot_gb)
+    if logger is not None and size > requested_gb:
+        logger.info(
+            f'root volume for {image_id or "the image"} raised from {requested_gb} GB '
+            f'to {size} GB to fit the image snapshot'
+        )
+    return size
 
 
 def describe_images_by_id(ec2_client, image_ids: List[str]) -> Dict[str, Dict]:

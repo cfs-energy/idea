@@ -203,3 +203,35 @@ def test_only_an_administrator_can_force_a_rebake(monkeypatch, administrator):
     context.is_administrator.return_value = False
     api.refresh_images(context)
     assert pipeline.refresh.called
+
+
+@pytest.mark.parametrize(
+    'stack_id,gb,valid',
+    [('ss-base-rocky9', 10, False), ('ss-base-rocky9', 20, True), ('custom', 10, True)],
+)
+def test_stack_update_rejects_base_storage_below_20_gb(stack_id, gb, valid):
+    from ideadatamodel import (
+        Project,
+        SocaMemory,
+        SocaMemoryUnit,
+        VirtualDesktopSoftwareStack,
+        UpdateSoftwareStackRequest,
+    )
+
+    api, _ = make_api()
+    api.software_stack_db = Mock()
+    stack = VirtualDesktopSoftwareStack(
+        stack_id=stack_id,
+        name='base',
+        description='base image',
+        base_os='rocky9',
+        projects=[Project(project_id='project')],
+        min_storage=SocaMemory(value=gb, unit=SocaMemoryUnit.GB),
+    )
+    assert api._validate_update_software_stack_request(stack)[1] is valid
+    if not valid:
+        context = invocation(UpdateSoftwareStackRequest(software_stack=stack))
+        api.update_software_stack(context)
+        context.fail.assert_called_once()
+        assert 'at least 20 GB' in context.fail.call_args.kwargs['message']
+        api.software_stack_db.update.assert_not_called()

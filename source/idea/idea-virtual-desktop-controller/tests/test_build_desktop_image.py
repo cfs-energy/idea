@@ -23,6 +23,7 @@ CONFIG = {
     'cluster.network.private_subnets': ['subnet-a', 'subnet-b'],
     'cluster.network.ssh_key_pair': 'idea_test',
     'cluster.cluster_name': 'idea-test',
+    'global-settings.custom_tags': [],
 }
 
 
@@ -81,7 +82,87 @@ def test_defaults_come_from_cluster_config():
     assert builder.subnet_id == 'subnet-a'
     assert builder.ssh_key_pair == 'idea_test'
     assert builder.block_device_name == '/dev/xvda'
-    assert builder.ebs_volume_size == 10
+    assert builder.ebs_volume_size == 20
+
+
+def _launch_kwargs(base_os: str) -> dict:
+    context = fake_context()
+    captured = {}
+
+    def run_instances(**kwargs):
+        captured.update(kwargs)
+        return {'Instances': [{'InstanceId': 'i-builder'}]}
+
+    context.aws().ec2().run_instances.side_effect = run_instances
+    builder = DcvHostImageBuilder(context=context, base_ami='ami-base', base_os=base_os)
+    builder.build_userdata = lambda: 'userdata'
+    builder.launch_ec2_instance()
+    return captured
+
+
+def test_a_windows_builder_launch_has_no_key():
+    assert 'KeyName' not in _launch_kwargs('windows2022')
+
+
+def test_a_linux_builder_launch_keeps_the_key():
+    assert _launch_kwargs('amazonlinux2023')['KeyName'] == 'idea_test'
+
+
+def _builder_for_root(volume_gb, ebs_volume_size=None):
+    context = fake_context()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [
+            {
+                'ImageId': 'ami-base',
+                'Architecture': 'x86_64',
+                'RootDeviceName': '/dev/sda1',
+                'BlockDeviceMappings': [
+                    {'DeviceName': '/dev/sda1', 'Ebs': {'VolumeSize': volume_gb}},
+                ],
+            }
+        ]
+    }
+    return DcvHostImageBuilder(
+        context=context,
+        base_ami='ami-base',
+        base_os='rocky8',
+        ebs_volume_size=ebs_volume_size,
+    )
+
+
+def test_a_20_gb_request_on_an_8_gb_source_bakes_at_20():
+    assert _builder_for_root(8, 20).ebs_volume_size == 20
+
+
+def test_no_size_uses_20_unless_the_source_root_is_larger():
+    assert _builder_for_root(8).ebs_volume_size == 20
+    assert _builder_for_root(30).ebs_volume_size == 30
+
+
+def test_a_smaller_request_uses_the_root_snapshot():
+    context = fake_context()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [
+            {
+                'ImageId': 'ami-base',
+                'Architecture': 'x86_64',
+                'RootDeviceName': '/dev/sda1',
+                'BlockDeviceMappings': [
+                    {'DeviceName': '/dev/sdb', 'Ebs': {'VolumeSize': 8}},
+                    {'DeviceName': '/dev/sda1', 'Ebs': {'VolumeSize': 11}},
+                ],
+            }
+        ]
+    }
+    builder = DcvHostImageBuilder(
+        context=context, base_ami='ami-base', base_os='rocky8', ebs_volume_size=10
+    )
+    assert builder.block_device_name == '/dev/sda1'
+    assert builder.ebs_volume_size == 11
+    kept = DcvHostImageBuilder(
+        context=context, base_ami='ami-base', base_os='rocky8', ebs_volume_size=100
+    )
+    assert kept.ebs_volume_size == 100
 
 
 def test_vdi_subnets_win_over_cluster_subnets():
@@ -337,3 +418,64 @@ def test_an_x86_64_builder_type_is_refused_for_an_arm64_image():
             instance_type='m6i.large',
         )
     assert 'm6i.large is x86_64' in exc_info.value.message
+
+
+def _build_ready(monkeypatch, base_os):
+    """a builder that has already launched and reported complete, with AWS calls recorded"""
+    from unittest.mock import MagicMock
+
+    from ideavirtualdesktopcontroller.app.software_stacks import (
+        dcv_host_image_builder as builder_module,
+    )
+    from ideasdk.aws import image_builds as images
+
+    builder = DcvHostImageBuilder.__new__(DcvHostImageBuilder)
+    builder.context = MagicMock()
+    builder.base_os = base_os
+    builder.no_reboot = False
+    builder.stop = False
+    builder.terminate = True
+    builder.progress = None
+    builder.get_image_by_name = lambda: None
+    builder.get_ami_full_name = lambda: 'sample-image'
+    builder.get_ami_dir = lambda: '/tmp/ami'
+    instance = Mock(instance_id='i-builder', private_ip_address='10.0.0.5')
+    builder.launch_ec2_instance = lambda: instance
+    builder.wait_for_software_packages = lambda instance_id: 'complete'
+    builder.check_builder_status = lambda instance_id, status: None
+    builder.wait_for_image = lambda image_id: None
+    order = []
+
+    def stop_instances(InstanceIds):
+        order.append('stop')
+
+    def create_image(instance_id):
+        order.append(('create', builder.no_reboot))
+        return 'ami-new'
+
+    builder.create_image = create_image
+    builder.context.aws().ec2().stop_instances.side_effect = stop_instances
+    states = iter(['running', 'stopped'])
+
+    def describe_instances(InstanceIds):
+        return {'Reservations': [{'Instances': [{'State': {'Name': next(states)}}]}]}
+
+    builder.context.aws().ec2().describe_instances.side_effect = describe_instances
+    monkeypatch.setattr(builder_module.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(images.time, 'sleep', lambda seconds: None)
+    return builder, order
+
+
+@pytest.mark.parametrize(
+    'base_os', ['ubuntu2204', 'amazonlinux2023', 'rhel9', 'rocky8']
+)
+def test_linux_snapshot_stops_the_builder_and_does_not_reboot(monkeypatch, base_os):
+    builder, order = _build_ready(monkeypatch, base_os)
+    assert builder.build() == 'ami-new'
+    assert order == ['stop', ('create', True)]
+
+
+def test_windows_snapshot_does_not_reboot_a_stopped_builder(monkeypatch):
+    builder, order = _build_ready(monkeypatch, 'windows2022')
+    assert builder.build() == 'ami-new'
+    assert order == [('create', True)]

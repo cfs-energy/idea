@@ -84,6 +84,9 @@ from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
 from datetime import datetime
+from ideavirtualdesktopcontroller.app.software_stacks.constants import (
+    BASE_STACK_MIN_STORAGE_GB,
+)
 
 # the monthly vendor check; the scheduler reads the same key for compute rows
 IMAGE_REFRESH_SCHEDULE_KEY = (
@@ -246,6 +249,14 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
         if Utils.is_empty(software_stack.projects):
             software_stack.failure_reason = 'software_stack.projects missing'
+            return software_stack, False
+
+        if (
+            (software_stack.stack_id or '').startswith('ss-base-')
+            and software_stack.min_storage is not None
+            and software_stack.min_storage.gb() < BASE_STACK_MIN_STORAGE_GB
+        ):
+            software_stack.failure_reason = f'Base software stacks require at least {BASE_STACK_MIN_STORAGE_GB} GB of storage'
             return software_stack, False
 
         if Utils.is_empty(software_stack.pool_enabled):
