@@ -47,11 +47,7 @@ class AuthLayout extends Component<AuthLayoutProps, AuthLayoutState> {
         this.logger.debug('AuthLayout component mounted. Checking login status.');
         AppContext.get().auth().isLoggedIn().then((status) => {
             this.logger.debug(`Login status received: ${status}`);
-            // show loading animation spinner until the initial sso redirect is not complete
-            if (!status && Utils.isSsoEnabled() && typeof window.idea.app.sso_auth_status === 'undefined') {
-                this.logger.debug('SSO is enabled and auth status is undefined. Waiting for SSO redirect completion.');
-                return;
-            }
+            // Pending SSO redirects do not settle; false means the login page should be shown.
             this.logger.debug('Setting state to ready.');
             this.setState({
                 ready: true

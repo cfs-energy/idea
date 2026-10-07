@@ -322,6 +322,31 @@ def windows_host_script(
         ' catch { Check "directory_user" $false "Test-ComputerSecureChannel failed: $($_.Exception.Message)" }',
     ]
     for name, path in mounts:
+        if '%' in path:
+            # SYSTEM cannot expand per-user paths or prove user access. Only probe a
+            # literal UNC parent that includes both a server and a share.
+            parts = path.split('\\')
+            variable_index = next(i for i, part in enumerate(parts) if '%' in part)
+            check = ps('filesystem:' + name)
+            if variable_index < 4:
+                lines.append(
+                    f'Check {check} $true {ps(f"per-user share {path}; not probed (server or share is variable)")}'
+                )
+                continue
+            parent = '\\'.join(parts[:variable_index])
+            reachable = ps(f'{parent} reachable (per-user share {path})')
+            denied = ps(
+                f'{parent} reachable; access denied to SYSTEM (per-user share {path})'
+            )
+            missing = ps(f'{parent} not reachable (per-user share {path})')
+            lines.append(
+                f'try {{ if (Test-Path -LiteralPath {ps(parent)} -ErrorAction Stop) {{ Check {check} $true {reachable} }}'
+                f' else {{ Check {check} $false {missing} }} }}'
+                f' catch [System.UnauthorizedAccessException] {{ Check {check} $true {denied} }}'
+                f' catch [System.IO.IOException] {{ Check {check} $false ({missing} + ": " + $_.Exception.Message) }}'
+                f' catch {{ Check {check} $false ({ps(parent + " probe failed: ")} + $_.Exception.Message) }}'
+            )
+            continue
         lines.append(
             f'try {{ $p = Join-Path {ps(path)} (".idea-image-probe-" + $env:COMPUTERNAME);'
             ' Set-Content -Path $p -Value "probe"; $fs = [IO.File]::Open($p, "Open"); $fs.Flush($true); $fs.Close();'

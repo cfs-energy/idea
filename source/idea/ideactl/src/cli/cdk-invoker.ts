@@ -802,7 +802,13 @@ export class CdkInvoker {
    * identity store; the documentation around it is the explanation, this is the enforcement.
    */
   async deployThroughChangeSet(contextParams: Record<string, string> = {}): Promise<ChangeSetVerdict> {
-    await this.execCdk(this.getDeployArgv(contextParams));
+    try {
+      await this.execCdk(this.getDeployArgv(contextParams));
+    } catch (error) {
+      // a killed earlier run leaves the stack updating on its own, and creating a change set then fails
+      if (!(await this.waitUntilSettled())) throw error;
+      await this.execCdk(this.getDeployArgv(contextParams));
+    }
 
     const description = await this.describeChangeSetFully();
     const removes = (description.Changes ?? []).some((change) => change.ResourceChange?.Action === 'Remove');
@@ -874,6 +880,37 @@ export class CdkInvoker {
       } catch (error) {
         this.deps.out(`warning: could not clear termination protection on ${name}: ${(error as Error).message}. CloudFormation will leave it running after the replacement.`);
       }
+    }
+  }
+
+  /**
+   * A run killed mid-deploy leaves CloudFormation updating the stack on its own, and a re-run that
+   * creates a change set meanwhile fails ("is in UPDATE_IN_PROGRESS state and can not be updated").
+   * Wait for that update to finish; whatever state it ends in, the change set decides next.
+   * Returns false when the stack was not busy (so the original failure stands).
+   */
+  private async waitUntilSettled(): Promise<boolean> {
+    const startedAt = this.deps.now();
+    let announced = false;
+    for (;;) {
+      let status: string;
+      try {
+        status = (await this.deps.cfn.describeStack(this.stackName)).StackStatus ?? '';
+      } catch {
+        return false; // no stack: nothing to wait for
+      }
+      if (!STACK_STATUS_IN_PROGRESS.test(status)) return announced;
+      if (this.deps.now() - startedAt >= STACK_WAIT_TIMEOUT_MS) {
+        throw new ExitWithCode(
+          1,
+          `Stack ${this.stackName} is still ${status} from an earlier run after ${STACK_WAIT_TIMEOUT_MS / 60_000} minutes. Open its events in CloudFormation, then re-run the same command.`,
+        );
+      }
+      if (!announced) {
+        this.deps.out(`${this.stackName}: ${status} from an earlier run, waiting for it to finish before deploying`);
+        announced = true;
+      }
+      await this.deps.sleep(this.pollIntervalMs);
     }
   }
 

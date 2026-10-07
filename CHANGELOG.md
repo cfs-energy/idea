@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.3] - 2026-10-07
+
+* **Windows image validation**: a Windows share whose path is per user (`%UserName%`) is checked for reachability during the test launch instead of being written to. It previously failed every Windows bake on clusters with per-user home shares. Access denied counts as reachable; a missing path or network failure still fails.
+* **Portal sessions**: returning to an idle portal tab no longer leaves it on "Destination unavailable" until a manual refresh. A lost single sign-on session signs in again through SSO automatically, which can discard a form or upload in progress. A temporary renewal failure is retried with the page kept as it was. If the session is lost again within a minute, the portal stops at the sign-in page instead of looping. An explicit sign-out stays signed out.
+* **Upgrade re-runs**: re-running an upgrade after the previous run was interrupted waits for any stack CloudFormation is still updating, then continues, instead of failing with "can not be updated".
+* **Docs**: Images now explains adding site software with bake hooks and how queues follow the managed image.
+
 ## [26.10.2] - 2026-10-06
 
 * **Security**: PyJWT 2.15.0, urllib3 2.8.0, Mako 1.4.2 and multidict 6.9.1, for published advisories including a critical PyJWT one.

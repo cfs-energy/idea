@@ -30,8 +30,11 @@ class WebPortal:
         self.logger = context.logger('web-portal')
         self.module_metadata_helper = ModuleMetadataHelper()
         self.web_app_dir = self.get_web_app_dir()
-        self.web_resources_context_path = self.context.config().get_string(
-            'cluster-manager.web_resources_context_path', '/'
+        self.web_resources_context_path = (
+            self.context.config()
+            .get_string('cluster-manager.web_resources_context_path', '/')
+            .rstrip('/')
+            or '/'
         )
         self.web_template_env = Jinja2Utils.env_using_file_system_loader(
             search_path=self.web_app_dir, auto_escape=True
@@ -122,6 +125,7 @@ class WebPortal:
         app_init_data = {
             'version': ideaclustermanager.__version__,
             'sso': sso_enabled,
+            'sso_url': self.make_route_path('/sso'),
             'cluster_name': self.context.cluster_name(),
             'aws_region': self.context.aws().aws_region(),
             'title': self.context.config().get_string(
@@ -337,10 +341,7 @@ class WebPortal:
         if not path.startswith('/'):
             path = f'/{path}'
 
-        if self.web_resources_context_path == '/':
-            return path
-        else:
-            return f'{self.web_resources_context_path}{path}'
+        return f'{self.web_resources_context_path.rstrip("/")}{path}'
 
     def initialize(self):
         # index route

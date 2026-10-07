@@ -84,11 +84,7 @@ if (window.idea.app.logo) {
  * Remove all query params (excluding hash) provided by server or user on initial page load.
  */
 const currentUrl = new URL(window.location.href)
-if (Utils.isNotEmpty(currentUrl.hash)) {
-    window.history.replaceState({}, '', `${currentUrl.origin}${currentUrl.hash}`)
-} else {
-    window.history.replaceState({}, '', currentUrl.origin)
-}
+window.history.replaceState({}, '', `${currentUrl.origin}${currentUrl.pathname}${currentUrl.hash}`)
 
 /***
  * Lazy App Initialization after Service Worker is initialized.
