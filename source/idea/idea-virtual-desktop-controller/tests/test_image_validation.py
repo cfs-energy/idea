@@ -561,3 +561,71 @@ def test_a_send_error_other_than_a_rebooting_host_is_not_retried():
     context = ssm_context([denied], ['Online'])
     with pytest.raises(ClientError):
         real_run_ssm(context, 'i-desk', True, 'x', sleep=clock.sleep, clock=clock.time)
+
+
+def test_a_per_user_windows_share_is_checked_for_reach_not_written():
+    """a %UserName% share only expands at the user's logon; SYSTEM can't open it or write its parent"""
+    from ideavirtualdesktopcontroller.app.sessions.image_validation import (
+        windows_host_script,
+    )
+
+    script = windows_host_script(
+        'sid-1',
+        [
+            ('home', '\\\\svm.example\\Users$\\home\\%UserName%'),
+            ('data', '\\\\svm.example\\data'),
+        ],
+        'cpu',
+    )
+    home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
+    assert (
+        "Get-Item -LiteralPath '\\\\svm.example\\Users$\\home' -ErrorAction Stop | Out-Null"
+        in home
+    )
+    assert 'Set-Content' not in home
+    data = next(line for line in script.splitlines() if "'filesystem:data'" in line)
+    assert 'Set-Content' in data
+
+
+@pytest.mark.parametrize(
+    'path',
+    [
+        r'\\%Server%\Users$\home',
+        r'\\svm.example\%UserName%$\Documents',
+    ],
+)
+def test_variable_server_or_share_is_not_probed(path):
+    script = module.windows_host_script('sid', [('home', path)], 'cpu')
+    home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
+    assert 'Get-Item' not in home
+    assert 'Test-Path' not in home
+    assert 'Set-Content' not in home
+    assert '$true' in home
+    assert 'per-user share' in home and 'not probed' in home
+
+
+def test_per_user_parent_distinguishes_denied_missing_and_network_errors():
+    script = module.windows_host_script(
+        'sid', [('home', r'\\svm.example\Users$\home dir\%UserName%\Documents')], 'cpu'
+    )
+    home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
+    assert (
+        "Get-Item -LiteralPath '\\\\svm.example\\Users$\\home dir' -ErrorAction Stop | Out-Null"
+        in home
+    )
+    assert 'catch [System.UnauthorizedAccessException]' in home
+    assert "$true '" in home and 'reachable; access denied to SYSTEM' in home
+    assert "else { Check 'filesystem:home' $false" in home
+    assert (
+        'catch [System.Management.Automation.ItemNotFoundException], [System.IO.IOException]'
+        in home
+    )
+    assert '$_.CategoryInfo.Category -eq "PermissionDenied"' in home
+    assert '$e -is [System.UnauthorizedAccessException]' in home
+    assert '($e.HResult -band 0xFFFF) -eq 5' in home
+    assert '$e = $e.InnerException' in home
+    assert "if ($accessDenied) { Check 'filesystem:home' $true" in home
+    assert home.count('not reachable') == 2
+    assert "catch { Check 'filesystem:home' $false" in home
+    assert 'Test-Path' not in home
+    assert 'Set-Content' not in home

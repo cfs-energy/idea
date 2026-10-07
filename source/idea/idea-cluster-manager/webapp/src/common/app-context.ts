@@ -164,7 +164,7 @@ class AppContext {
                 this.logger.debug(`User logged in status: ${status}`)
                 if (this.isLoggedIn && !status) {
                     this.logger.debug('User was logged in but now is not. Initiating logout process.')
-                    this.authService.logout().finally(() => {
+                    this.authService.logout(false).finally(() => {
                         this.logger.debug('Logout process completed.')
                     })
                 }
@@ -267,7 +267,7 @@ class AppContext {
                             this.logger.debug(`User logged in status: ${status}`);
                             if (this.isLoggedIn && !status) {
                                 this.logger.debug('User was logged in but now is not. Initiating logout process.');
-                                this.authService.logout();
+                                this.authService.logout(false);
                             }
                             this.isLoggedIn = status;
                         }).catch(error => {

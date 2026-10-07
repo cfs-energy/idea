@@ -159,6 +159,27 @@ Desktop and compute builder images made before 26.10.1 carry no cluster tag, so 
 
 New launches stay on the current image while a row is failed, so a failed row does not need urgent action.
 
+## Add your own software to managed images
+
+Put site software in a bake hook, not in a hand-built image. The pipeline runs the hook in every bake (each upgrade, the monthly check, **Rebuild** and **Refresh and validate**), validates the result, and moves queues and desktops to it like any other managed image. Your software stays current with no image to maintain.
+
+Hooks are plain bash scripts on the cluster's shared `/apps` file system and apply to Linux images; Windows images don't run them. Edit them from any host that mounts `/apps`, such as the bastion. A missing file is skipped.
+
+| Hook | Runs | Use it for |
+|---|---|---|
+| `/apps/<cluster>/scheduler/ami_builder/userdata_customizations.sh` | while each compute image bakes | software every job needs |
+| `/apps/<cluster>/vdc/ami_builder/userdata_customizations.sh` | while each desktop image bakes | software every desktop needs |
+| `/apps/<cluster>/scheduler/compute_node/userdata_customizations.sh` | on every compute node boot | per-node setup that must not be baked in |
+| `/apps/<cluster>/dcv_host/userdata_customizations.sh` | on every desktop boot | per-desktop setup that must not be baked in |
+
+* Hooks run as root with the cluster environment (`IDEA_CLUSTER_HOME`, `IDEA_BASE_OS`, …) and run for every Linux OS, so check `IDEA_BASE_OS` when a step only applies to one.
+* A bake hook that exits non-zero fails that bake. The row stays on its last good image, and the error links to the hook's log. A boot hook that fails logs a warning and the node or desktop still starts.
+* After editing a bake hook, select the rows it affects and choose **Force rebake** (or wait for the next refresh) to bake it in.
+
+### Queues follow the managed image
+
+A queue profile or the cluster default compute image moves to each new compute image only when it already points at a managed image or a stock vendor image. A queue on an image IDEA didn't build in the pipeline, such as an older hand-built image, stays where it is. Point it at the row's current image once (edit the queue profile), and it follows from then on. To keep a queue on a fixed image on purpose, pin it (see [Roll back and pin](#roll-back-and-pin)).
+
 ## Custom images tab
 
 Use this tab for images outside the managed pipeline. A custom build is not validated, and the managed refresh never moves or replaces it.

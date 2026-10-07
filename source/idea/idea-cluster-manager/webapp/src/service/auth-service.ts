@@ -31,10 +31,14 @@ const KEY_CHALLENGE_NAME = 'challenge-name'
 const KEY_CHALLENGE_SESSION = 'challenge-session'
 const KEY_CHALLENGE_PARAMS = 'challenge-params'
 const KEY_FORGOT_PASSWORD_USERNAME = 'forgot-password-username'
+const KEY_SSO_LOGGED_OUT = 'idea.sso-logged-out'
+const KEY_SSO_LAST_REDIRECT = 'idea.sso-last-redirect'
+const SSO_REDIRECT_WINDOW_MS = 60_000
 
 class AuthService {
     private readonly props: AuthServiceProps
     private claims: JwtTokenClaims | null
+    private autoSsoDisabled = false
     private sessionVersion = 0
     private reportingVersion = 0
     private reportingAllowed = false
@@ -67,6 +71,16 @@ class AuthService {
         this.reportingIdentity = ''
         this.reportingPending = undefined
         this.notifyReporting()
+    }
+
+    private withStorage<T>(kind: 'localStorage' | 'sessionStorage', action: (storage: Storage) => T): T | undefined {
+        try {
+            return action(globalThis[kind])
+        } catch {
+            // Without a durable loop guard an automatic redirect is unsafe.
+            this.autoSsoDisabled = true
+            return undefined
+        }
     }
 
     private async acceptClaims(claims: JwtTokenClaims, session: number): Promise<boolean> {
@@ -110,6 +124,9 @@ class AuthService {
         this.logger = new AppLogger({
             name: 'auth-service.ts'
         })
+        window.addEventListener('pageshow', event => {
+            if (event.persisted) window.location.reload()
+        })
     }
 
     setHooks(onLogin: () => Promise<boolean>, onLogout: () => Promise<boolean>) {
@@ -127,6 +144,7 @@ class AuthService {
      * @param password
      */
     login(username: string, password: string): Promise<boolean> {
+        this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         this.clearReporting()
         this.claims = null
         const session = ++this.sessionVersion
@@ -144,6 +162,7 @@ class AuthService {
             } else {
                 return this.props.clients.auth().getClaims().then(async claims => {
                     if (!await this.acceptClaims(claims, session)) return false
+                    this.withStorage('sessionStorage', storage => storage.removeItem(KEY_SSO_LAST_REDIRECT))
                     if (this.onLogin) {
                         return this.onLogin()
                     } else {
@@ -167,6 +186,7 @@ class AuthService {
      * @param authorization_code
      */
     login_using_sso_auth_code(authorization_code: string): Promise<boolean> {
+        if (authorization_code) this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         this.clearSession()
         const session = this.sessionVersion
         return this.props.clients.auth().initiateAuth({
@@ -271,6 +291,10 @@ class AuthService {
         return expiresIn
     }
 
+    isAccessLoaded(): boolean {
+        return this.claims !== null
+    }
+
     getGroups(): string[] {
         if (this.claims == null) {
             return []
@@ -372,38 +396,36 @@ class AuthService {
 
             this.claims = null
             this.clearReporting()
-            if (typeof window.idea.app.sso === 'undefined' || !window.idea.app.sso) {
+            if (!Utils.isSsoEnabled()) {
                 this.logger.debug('SSO is not defined or not enabled.')
                 return false
             }
 
-            // if SSO is enabled, check for SSO auth
-            if (Utils.isSsoEnabled()) {
-                this.logger.debug('SSO is enabled. Checking SSO auth status.')
-                let authStatus = window.idea.app.sso_auth_status
-                this.logger.debug(`SSO auth status: ${authStatus}`)
-                if (authStatus) {
-                    if (authStatus === 'SUCCESS' && window.idea.app.sso_auth_code) {
-                        this.logger.debug('SSO auth was successful. Using SSO auth code for login.')
-                        return this.login_using_sso_auth_code(window.idea.app.sso_auth_code).then(status => {
-                            // discard the sso_auth_code after use as auth code is one time use only.
-                            // this also prevents re-triggering SSO auth flow after the user has logged out manually.
-                            window.idea.app.sso_auth_code = null
-                            this.logger.debug(`Login using SSO auth code was ${status ? 'successful' : 'unsuccessful'}.`)
-                            return status
-                        })
-                    } else {
-                        this.logger.debug('SSO auth status is not SUCCESS or no SSO auth code is available. Redirecting to login page.')
-                        // redirect to login page
-                        return false
-                    }
-                } else {
-                    this.logger.debug('SSO auth status is null. Redirecting to SSO.')
-                    window.location.href = '/sso'
-                }
+            const authStatus = window.idea.app.sso_auth_status
+            if (authStatus === 'FAIL') {
+                return false
             }
-            this.logger.debug('SSO is not enabled.')
-            return false
+            if (authStatus === 'SUCCESS' && window.idea.app.sso_auth_code) {
+                return this.login_using_sso_auth_code(window.idea.app.sso_auth_code).then(status => {
+                    // Authorization codes are single use; keep the redirect guard across callbacks.
+                    window.idea.app.sso_auth_code = null
+                    return status
+                })
+            }
+            if (authStatus && authStatus !== 'SUCCESS') return false
+            const loggedOut = this.withStorage('localStorage', storage => storage.getItem(KEY_SSO_LOGGED_OUT))
+            if (loggedOut) return false
+
+            // An idle service worker can lose its in-memory tokens after the code was consumed.
+            // sessionStorage survives the SSO round trip, bounding retries across page loads.
+            const lastRedirect = this.withStorage('sessionStorage', storage => storage.getItem(KEY_SSO_LAST_REDIRECT))
+            if (this.autoSsoDisabled || lastRedirect === 'blocked') return false
+            if (lastRedirect && Date.now() - Number(lastRedirect) < SSO_REDIRECT_WINDOW_MS) {
+                // Recovery failed again. Stay at login even after the cooldown or a reload.
+                this.withStorage('sessionStorage', storage => storage.setItem(KEY_SSO_LAST_REDIRECT, 'blocked'))
+                return false
+            }
+            return this.initiateSso(false)
         }).catch(error => {
             if (session === this.sessionVersion) {
                 this.claims = null
@@ -418,6 +440,18 @@ class AuthService {
         return this.activeIsLoggedInPromise
     }
 
+    initiateSso(explicit = true): Promise<boolean> {
+        if (explicit) this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
+        const guardSaved = this.withStorage('sessionStorage', storage => {
+            storage.setItem(KEY_SSO_LAST_REDIRECT, String(Date.now()))
+            return true
+        })
+        if (!explicit && (!guardSaved || this.autoSsoDisabled)) return Promise.resolve(false)
+        window.location.href = window.idea.app.sso_url
+        // Navigation replaces this page; do not trigger callers' logout/login routing meanwhile.
+        return new Promise<boolean>(() => {})
+    }
+
 
     clearSession() {
         this.sessionVersion++
@@ -426,7 +460,11 @@ class AuthService {
         this.clearReporting()
     }
 
-    logout() {
+    logout(explicit = true) {
+        if (explicit && Utils.isSsoEnabled()) {
+            this.withStorage('localStorage', storage => storage.setItem(KEY_SSO_LOGGED_OUT, 'true'))
+            window.idea.app.sso_auth_code = null
+        }
         this.clearSession()
         const session = this.sessionVersion
         return this.props.clients.auth()

@@ -535,6 +535,26 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
     await assert.rejects(() => invoker.deployThroughChangeSet(), /UPDATE_ROLLBACK_COMPLETE/);
   });
 
+  it('re-runs after waiting out an earlier run that left the stack updating', async () => {
+    const { deps, invoker } = invokerFor({ changeSet: BENIGN_CHANGE_SET, spawnExitCodes: [1, 0] });
+    const statuses = ['UPDATE_IN_PROGRESS', 'UPDATE_COMPLETE'];
+    deps.cfn.describeStack = async () => ({ StackStatus: statuses.shift() ?? 'UPDATE_COMPLETE' });
+    await invoker.deployThroughChangeSet();
+    assert.equal(deps.executed.length, 1);
+    assert.ok(deps.stdout.some((line) => line.includes('UPDATE_IN_PROGRESS from an earlier run')));
+  });
+
+  for (const status of ['UPDATE_COMPLETE', 'REVIEW_IN_PROGRESS']) {
+    it(`keeps the original failure without waiting when the stack is ${status}`, async () => {
+      const { deps, invoker } = invokerFor({ changeSet: BENIGN_CHANGE_SET, spawnExitCodes: [1] });
+      deps.cfn.describeStack = async () => ({ StackStatus: status });
+      await assert.rejects(() => invoker.deployThroughChangeSet());
+      assert.deepEqual(deps.executed, []);
+      assert.deepEqual(deps.sleeps, []);
+      assert.equal(deps.spawns.length, 1);
+    });
+  }
+
   it('waits through update cleanup until the stack completes', async () => {
     const { deps, invoker } = invokerFor({ changeSet: BENIGN_CHANGE_SET });
     const statuses = ['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_COMPLETE'];

@@ -48,6 +48,7 @@ let context: ReturnType<typeof initTestAppContext>;
 beforeEach(() => {
     context = initTestAppContext();
     vi.spyOn(context.auth(), 'isLoggedIn').mockResolvedValue(true);
+    vi.spyOn(context.auth(), 'isAccessLoaded').mockReturnValue(true);
     vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
     vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
     const service = context.getClusterSettingsService();

@@ -85,10 +85,6 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
 
         const isSsoEnabled = Utils.isSsoEnabled();
 
-        const refreshPage = () => {
-            window.location.reload();
-        }
-
         return <AuthLayout
             content={
                 <ColumnLayout columns={1} className="auth-content">
@@ -124,7 +120,7 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
                 {isSsoEnabled && (
 
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                    <Button variant="primary" onClick={refreshPage}>
+                    <Button variant="primary" onClick={() => { AppContext.get().auth().initiateSso(); }}>
                         Login with SSO
                     </Button>
                     </div>
