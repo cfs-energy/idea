@@ -584,6 +584,8 @@ def test_windows_shares_are_probed_for_reach_and_never_written():
     )
     apps = next(line for line in script.splitlines() if "'filesystem:apps'" in line)
     assert apps.startswith("Probe-Share 'filesystem:apps' '\\\\svm.example\\Apps' ")
+    assert home.endswith('$true')
+    assert apps.endswith('$false')
     for write in (
         'Set-Content',
         'Remove-Item',
@@ -611,35 +613,38 @@ def test_variable_server_or_share_is_not_probed(path):
     assert 'per-user share' in home and 'not probed' in home
 
 
-def test_a_refused_listing_passes_only_once_the_share_or_folder_is_shown_to_exist():
+def test_refused_listing_requires_existence_except_for_unprovable_per_user_paths():
     """Windows refuses a missing share and a share SYSTEM may not open with the same
     Access is denied (checked on 2019, 2022 and 2025 desktops), so a refusal alone
-    must never pass"""
+    passes unproven only for per-user paths"""
     script = module.windows_host_script(
         'sid', [('home', r'\\svm.example\Users$\home dir\%UserName%\Documents')], 'cpu'
     )
-    probe = next(
-        line for line in script.splitlines() if line.startswith('function Probe-Share')
-    )
+    probe = module.windows_share_probe()
+    assert probe in script
+    assert '[bool]$perUser = $false' in probe
     assert 'Get-ChildItem -LiteralPath $probe -Force -ErrorAction Stop' in probe
     # anything but a refusal fails with the error it hit
     assert 'if ($err.CategoryInfo.Category -ne "PermissionDenied") {' in probe
     assert 'Check $n $false "$label not reachable: $($err.Exception.Message)"' in probe
-    # a refused share root passes only when the server lists that share
+    # A non-per-user share root still requires proof from the server.
     assert '$parts = $probe.TrimEnd("\\").Split("\\");' in probe
     assert 'cmd /c "net view \\\\$server /all 2>&1"' in probe
-    assert 'if ($LASTEXITCODE -ne 0) { Check $n $false' in probe
+    assert 'if ($LASTEXITCODE -ne 0) { if ($perUser) { Check $n $true' in probe
     assert '[regex]::Escape($share) + "(\\s{2,}|\\s*$)"' in probe
     assert 'no share named $share on $server' in probe
-    # a refused folder passes only when its parent lists it
+    # A non-per-user folder still requires proof from its parent.
     assert (
         'Get-ChildItem -LiteralPath $parent -Force -ErrorAction Stop | Where-Object { $_.Name -eq $leaf }'
         in probe
     )
     assert '$leaf does not exist in $parent' in probe
-    assert probe.count('Check $n $true') == 3
+    assert probe.count('Check $n $true') == 5
+    assert probe.count('not probed (refused to SYSTEM)') == 2
+    assert 'if ($perUser -and $_.CategoryInfo.Category -eq "PermissionDenied")' in probe
     home = next(line for line in script.splitlines() if "'filesystem:home'" in line)
     assert home.startswith(
         "Probe-Share 'filesystem:home' '\\\\svm.example\\Users$\\home dir' "
     )
+    assert home.endswith('$true')
     assert script.count('function Probe-Share') == 1

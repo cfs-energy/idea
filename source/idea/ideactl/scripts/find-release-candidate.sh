@@ -11,6 +11,10 @@ CANDIDATES=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagN
   --jq ".[] | select(.isPrerelease) | .tagName | select(test(\"^v${VERSION//./\\\\.}-rc\\\\.[1-9][0-9]*$\"))" \
   | sort -t. -k4,4nr)
 for TAG in $CANDIDATES; do
+  if ! AUTHOR=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login') || [[ "$AUTHOR" != 'github-actions[bot]' ]]; then
+    echo "::warning::${TAG} was not published by github-actions[bot]; skipped." >&2
+    continue
+  fi
   rm -f "$WORK/candidate.json"
   if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern candidate.json --dir "$WORK" 2>/dev/null; then
     echo "::warning::${TAG} has no candidate.json; skipped." >&2

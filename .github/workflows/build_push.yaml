@@ -421,6 +421,7 @@ jobs:
             --arg tree "$(git rev-parse 'HEAD^{tree}')" --arg commit "$GITHUB_SHA" --arg image "$IMAGE" \
             '{version: $version, candidate: ($candidate | tonumber), tree: $tree, commit: $commit, image: $image}' \
             > release/candidate.json
+          (cd release && sha256sum candidate.json >> SHA256SUMS)
           gh release create "$TAG" \
             release/*.tar.gz \
             release/*.tar.gz.sha256 \
@@ -461,6 +462,8 @@ jobs:
           mkdir release
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release
           cd release
+          # Require the manifest itself in the checksum list, including for older candidates.
+          grep -E '^[0-9a-f]{64}  candidate\.json$' SHA256SUMS | sha256sum --check -
           sha256sum --check SHA256SUMS
           test "$(jq -er '.tree' candidate.json)" = "$(git rev-parse 'HEAD^{tree}')"
       - name: Configure AWS Credentials for ECR Push
@@ -478,14 +481,19 @@ jobs:
       - name: Tag the candidate image as the release
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.tag }}
         run: |
           set -euo pipefail
           bash source/idea/ideactl/scripts/assert-new-release.sh
           VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
           IMAGE=$(jq -er '.image' release/candidate.json)
           case "$IMAGE" in *@sha256:*) ;; *) echo "::error::Candidate image is not digest-qualified: '${IMAGE}'."; exit 1;; esac
-          REPOSITORY="${IMAGE%@*}"
+          REGISTRY=$(sed -nE 's|^IDEA_DOCKER_REPO_DEFAULT="([^/]+/[^/]+)/.*"$|\1|p' idea-admin.sh)
+          test -n "$REGISTRY"
+          REPOSITORY="${REGISTRY}/idea-control-plane"
+          test "${IMAGE%@*}" = "$REPOSITORY"
           docker buildx imagetools inspect "$IMAGE" >/dev/null
+          test "$(docker buildx imagetools inspect "${REPOSITORY}:${CANDIDATE_TAG#v}" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "${IMAGE#*@}"
           docker buildx imagetools create \
             --tag "${REPOSITORY}:v${VERSION}" \
             --tag "${REPOSITORY}:${VERSION}" \
@@ -508,6 +516,7 @@ jobs:
             release/*.zip \
             release/*.zip.sha256 \
             release/SHA256SUMS \
+            release/candidate.json \
             --target "$GITHUB_SHA" \
             --title "IDEA ${VERSION}" \
             --notes "Released unchanged from ${TAG}: the same ideactl files and control-plane image digest ${DIGEST}. Self-contained ideactl executables for macOS and Linux (arm64 and amd64), and Windows (amd64), with checksums. Windows ideactl.exe is unsigned: SmartScreen may warn. After verifying the checksum, choose More info > Run anyway, or use PowerShell Unblock-File .\\ideactl.exe and run .\\ideactl.exe about."

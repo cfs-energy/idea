@@ -8,6 +8,7 @@
  */
 
 import { build, transformSync } from "esbuild";
+import { parse } from "acorn";
 import { spawnSync } from "node:child_process";
 import { builtinModules } from "node:module";
 import {
@@ -49,7 +50,6 @@ export const BUNDLE_BANNER = [
 /** Package files a run never reads: type declarations, source maps, documentation, jsii manifests. */
 const UNSHIPPED_PACKAGE_FILE = /(?:\.d\.[cm]?ts|\.map|\.md|^\.jsii(?:\.gz)?)$/;
 const MODULE_PATH_IDENTIFIER = /\b__(?:dirname|filename)\b/;
-const MODULE_PATH_DECLARATION = /\b(?:const|let|class|function)\s+__(?:dirname|filename)\b/;
 const MODULE_META_PATH = /\bimport\.meta\.(?:url|dirname|filename)\b/;
 
 /**
@@ -338,6 +338,47 @@ export function executableText(source) {
   }
 }
 
+/** Reject bindings in every scope before adding the module's relocated path bindings. */
+function hasModulePathBinding(source) {
+  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module", allowReturnOutsideFunction: true });
+  const binding = (node) => {
+    if (!node) return false;
+    switch (node.type) {
+      case "Identifier": return node.name === "__dirname" || node.name === "__filename";
+      case "RestElement": return binding(node.argument);
+      case "AssignmentPattern": return binding(node.left);
+      case "ArrayPattern": return node.elements.some(binding);
+      case "ObjectPattern": return node.properties.some((property) => binding(property.type === "RestElement" ? property.argument : property.value));
+      default: return false;
+    }
+  };
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return false;
+    switch (node.type) {
+      case "VariableDeclarator":
+      case "ClassDeclaration":
+      case "ClassExpression":
+        if (binding(node.id)) return true;
+        break;
+      case "FunctionDeclaration":
+      case "FunctionExpression":
+      case "ArrowFunctionExpression":
+        if (binding(node.id) || node.params.some(binding)) return true;
+        break;
+      case "CatchClause":
+        if (binding(node.param)) return true;
+        break;
+      case "ImportSpecifier":
+      case "ImportDefaultSpecifier":
+      case "ImportNamespaceSpecifier":
+        if (binding(node.local)) return true;
+        break;
+    }
+    return Object.values(node).some((child) => Array.isArray(child) ? child.some(visit) : visit(child));
+  };
+  return visit(ast);
+}
+
 /**
  * Bundling moves every dependency file into one output file, so `__dirname` and `__filename`
  * in a dependency would name the bundle instead of the dependency. CDK and cdk-nag read files
@@ -360,7 +401,7 @@ export function modulePathPlugin(rewritten, nodeModules = NODE_MODULES) {
         if (!MODULE_PATH_IDENTIFIER.test(source)) return undefined;
         const code = executableText(source);
         if (!MODULE_PATH_IDENTIFIER.test(code)) return undefined;
-        if (MODULE_PATH_DECLARATION.test(code)) {
+        if (hasModulePathBinding(source)) {
           throw new Error(`${location.file} declares its own __dirname or __filename, which the bundle cannot relocate`);
         }
         rewritten.set(location.file, { ...location, code });

@@ -44,7 +44,7 @@ const promotePublish = step('promote_release', 'Publish the release');
 const DISPATCH_ONLY = "github.event_name == 'workflow_dispatch'";
 const BUILD_JOBS = ['build_ideactl_artifacts', 'build_ideactl_linux_artifact', 'build_ideactl_windows_artifact'];
 const TREE = 'tree-under-release';
-const REPOSITORY = 'registry.example.invalid/control';
+const REPOSITORY = 'registry.example.invalid/idea/idea-control-plane';
 const CANDIDATE_IMAGE = `${REPOSITORY}@sha256:candidate`;
 
 test('publication requires both validation workflows and extracted artifact smoke tests', () => {
@@ -155,6 +155,10 @@ if (name === 'gh') {
     const result = spawnSync(process.env.REAL_JQ, ['-r', filter, path.join(releases, 'list.json')], { encoding: 'utf8' });
     process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status);
   }
+  if (args[0] === 'release' && args[1] === 'view') {
+    console.log(mode === 'foreign-author' ? 'someone-else' : 'github-actions[bot]');
+    process.exit(0);
+  }
   if (args[0] === 'release' && args[1] === 'download') {
     const source = path.join(releases, args[2]);
     const destination = args[args.indexOf('--dir') + 1];
@@ -180,7 +184,7 @@ if (name === 'docker') {
   if (args[0] === 'buildx' && args[1] === 'build' && mode === 'build-failure') process.exit(1);
   if (args[0] === 'buildx' && args[1] === 'imagetools' && args[2] === 'inspect') {
     if (mode === 'missing-image') process.exit(1);
-    if (args.includes('--format')) console.log(JSON.stringify(mode === 'digest-mismatch' ? 'sha256:other' : process.env.TAGGED_DIGEST));
+    if (args.includes('--format')) console.log(JSON.stringify(((mode === 'digest-mismatch' && !args[3].includes('-rc.')) || (mode === 'rc-digest-mismatch' && args[3].includes('-rc.'))) ? 'sha256:other' : process.env.TAGGED_DIGEST));
     process.exit(0);
   }
   if (args[0] === 'run') {
@@ -221,6 +225,7 @@ class Harness {
       cpSync(join(scripts, name), join(this.directory, 'source/idea/ideactl/scripts', name));
     }
     writeFileSync(join(this.directory, 'IDEA_VERSION.txt'), '1.2.3\n');
+    writeFileSync(join(this.directory, 'idea-admin.sh'), 'IDEA_DOCKER_REPO_DEFAULT="registry.example.invalid/idea/idea-control-plane"\n');
     writeFileSync(join(this.directory, 'dist/all-1.2.3.tar.gz'), 'archive');
     writeFileSync(join(this.directory, 'dist/idea-dcv-connection-gateway-1.2.3.tar.gz'), 'archive');
     if (!options.missingFixture) writeFileSync(join(this.directory, 'source/idea/ideactl/test/cli/shell-path-values.yml'), 'fixture');
@@ -242,7 +247,7 @@ class Harness {
         ...process.env, PATH: `${join(this.directory, '.bin')}:${process.env.PATH}`, COMMAND_LOG: this.log, RELEASE_TEST_MODE: this.mode,
         REAL_JQ, RELEASES_DIR: this.releases, TREE, TAGGED_DIGEST: 'sha256:candidate', GITHUB_OUTPUT: this.output,
         GITHUB_REPOSITORY: 'example/project', GITHUB_SHA: 'test-commit', GITHUB_RUN_ID: '5', GITHUB_RUN_ATTEMPT: '2',
-        ECR_REGISTRY: 'registry.example.invalid', CONTROL_PLANE_IMAGE_NAME: 'control', RELEASE_CANDIDATE: '', ...env,
+        ECR_REGISTRY: 'registry.example.invalid/idea', CONTROL_PLANE_IMAGE_NAME: 'idea-control-plane', RELEASE_CANDIDATE: '', ...env,
       },
     });
     return { status: result.status, stdout: result.stdout, output: result.stdout + result.stderr };
@@ -449,10 +454,12 @@ test('a candidate is published as a prerelease with its tree, commit and image d
     for (const file of ['release/ideactl-v1.2.3-windows-amd64.zip', 'release/ideactl-v1.2.3-windows-amd64.zip.sha256', 'release/SHA256SUMS', 'release/candidate.json']) {
       assert.ok(create.includes(file), file);
     }
+    assert.equal(h.run('cd release && sha256sum --check SHA256SUMS').status, 0);
+    assert.match(readFileSync(join(h.directory, 'release/SHA256SUMS'), 'utf8'), /[a-f0-9]{64}  candidate\.json/);
     assert.deepEqual(JSON.parse(readFileSync(join(h.directory, 'release/candidate.json'), 'utf8')), {
       version: '1.2.3', candidate: 4, tree: TREE, commit: 'test-commit', image: `${REPOSITORY}@sha256:control`,
     });
-    assert.match(create[create.indexOf('--notes') + 1] ?? '', /control:1\.2\.3-rc\.4 \(sha256:control\)/);
+    assert.match(create[create.indexOf('--notes') + 1] ?? '', /idea-control-plane:1\.2\.3-rc\.4 \(sha256:control\)/);
   });
   for (const [label, mode, env] of [
     ['candidate exists', 'absent', { RC_MODE: 'existing' }],
@@ -484,7 +491,9 @@ test('a candidate is published as a prerelease with its tree, commit and image d
 /** Prerelease fixtures: the version, its tree and its digest per tag. */
 function candidate(tag: string, version: string, tree: string, assets = releaseFiles()): Release {
   const number = Number(tag.split('-rc.')[1]);
-  return { tag, prerelease: true, assets, candidate: { version, candidate: number, tree, commit: `commit-${tag}`, image: CANDIDATE_IMAGE } };
+  const manifest = { version, candidate: number, tree, commit: `commit-${tag}`, image: CANDIDATE_IMAGE };
+  assets['SHA256SUMS'] += `${createHash('sha256').update(JSON.stringify(manifest)).digest('hex')}  candidate.json\n`;
+  return { tag, prerelease: true, assets, candidate: manifest };
 }
 
 test('promotion finds the highest candidate built from exactly this tree and version', () => {
@@ -545,7 +554,7 @@ function promote(h: Harness): Run {
   const tag = /^tag=(.*)$/m.exec(readFileSync(h.output, 'utf8'))?.[1] ?? '';
   return h.steps([
     { script: promoteDownload, env: { TAG: tag } },
-    { script: promoteTag },
+    { script: promoteTag, env: { CANDIDATE_TAG: tag } },
     { script: promotePublish, env: { TAG: tag } },
   ]);
 }
@@ -573,12 +582,12 @@ test('promotion re-tags the candidate digest and republishes its files unchanged
     for (const file of ['release/ideactl-v1.2.3-windows-amd64.zip', 'release/ideactl-v1.2.3-windows-amd64.zip.sha256', 'release/SHA256SUMS']) {
       assert.ok(create.includes(file), file);
     }
-    assert.ok(!create.includes('release/candidate.json'));
+    assert.ok(create.includes('release/candidate.json'));
     const notes = create[create.indexOf('--notes') + 1] ?? '';
     assert.match(notes, /Released unchanged from v1\.2\.3-rc\.3: .*digest sha256:candidate\./);
     assert.match(notes, /unsigned.*SmartScreen.*Run anyway/);
     // The released files are the candidate's bytes.
-    for (const [name, body] of Object.entries(releaseFiles())) assert.equal(readFileSync(join(h.directory, 'release', name), 'utf8'), body, name);
+    for (const [name, body] of Object.entries(candidate('v1.2.3-rc.3', '1.2.3', TREE).assets!)) assert.equal(readFileSync(join(h.directory, 'release', name), 'utf8'), body, name);
   }, { releases: [candidate('v1.2.3-rc.3', '1.2.3', TREE)] });
 });
 
@@ -589,7 +598,22 @@ test('promotion stops before any tag or release on a missing, altered or unverif
   undigested.candidate!.image = `${REPOSITORY}:1.2.3-rc.3`;
   const unnamed = candidate('v1.2.3-rc.3', '1.2.3', TREE);
   unnamed.candidate!.image = '';
+  const wrongRepository = candidate('v1.2.3-rc.3', '1.2.3', TREE);
+  wrongRepository.candidate!.image = 'foreign.invalid/repository@sha256:candidate';
+  for (const release of [undigested, unnamed, wrongRepository]) {
+    release.assets!['SHA256SUMS'] = releaseFiles()['SHA256SUMS']! +
+      `${createHash('sha256').update(JSON.stringify(release.candidate)).digest('hex')}  candidate.json\n`;
+  }
+  const tamperedManifest = candidate('v1.2.3-rc.3', '1.2.3', TREE);
+  tamperedManifest.candidate!.commit = 'altered';
+  const missingManifestChecksum = candidate('v1.2.3-rc.3', '1.2.3', TREE);
+  missingManifestChecksum.assets!['SHA256SUMS'] = releaseFiles()['SHA256SUMS']!;
   const cases: [string, string, Release[], { tags: number }][] = [
+    ['foreign release author', 'foreign-author', [candidate('v1.2.3-rc.3', '1.2.3', TREE)], { tags: 0 }],
+    ['tampered candidate manifest', 'absent', [tamperedManifest], { tags: 0 }],
+    ['manifest checksum missing', 'absent', [missingManifestChecksum], { tags: 0 }],
+    ['wrong repository', 'absent', [wrongRepository], { tags: 0 }],
+    ['rc tag digest mismatch', 'rc-digest-mismatch', [candidate('v1.2.3-rc.3', '1.2.3', TREE)], { tags: 0 }],
     ['no candidate', 'absent', [], { tags: 0 }],
     ['candidate from another tree', 'absent', [candidate('v1.2.3-rc.3', '1.2.3', 'other-tree')], { tags: 0 }],
     ['file altered after the candidate was proven', 'absent', [candidate('v1.2.3-rc.3', '1.2.3', TREE, tampered)], { tags: 0 }],

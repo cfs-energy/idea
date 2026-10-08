@@ -57,6 +57,7 @@
     "@types/js-yaml": "4.0.9",
     "@types/node": "26.6.1",
     "@types/nunjucks": "3.2.6",
+    "acorn": "8.19.0",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },

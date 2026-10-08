@@ -40,34 +40,42 @@ function package_transaction() {
   output=$(mktemp) || return $?
   # RHUI/mirrors can publish AppStream before its matching BaseOS dependencies.
   for delay in 15 30 60 0; do
-    # Keep output live and capture the manager's status, regardless of pipefail.
-    if LC_ALL=C "$manager" "$@" 2>&1 | tee "$output"; then
-      status=${PIPESTATUS[0]}
+    # Only final attempts may leave fatal-looking lines in the bake logs.
+    if LC_ALL=C "$manager" "$@" > "$output" 2>&1; then
+      status=0
     else
-      status=${PIPESTATUS[0]}
+      status=$?
     fi
     if [[ $status -eq 0 ]]; then
+      cat "$output"
       rm -f "$output"
       return 0
     fi
     # A package no repository carries is not transient; callers rely on that failing at once.
     if grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides' "$output"; then
+      cat "$output"
+      log_error "$manager transaction failed (exit $status)"
       rm -f "$output"
       return "$status"
     fi
     [[ $delay -ne 0 ]] || break
+    sed 's/^/[retried] /' "$output"
     log_warning "$manager transaction failed (exit $status); refreshing metadata and retrying in ${delay}s"
-    "$manager" clean packages metadata || true
+    "$manager" clean packages metadata 2>&1 | sed 's/^/[retried] /' || true
     sleep "$delay"
   done
   if grep -Eqi 'best candidate|nothing provides' "$output"; then
+    sed 's/^/[retried] /' "$output"
     log_warning "$manager dependency resolution failed after retries; retrying once with --nobest"
-    if LC_ALL=C "$manager" --nobest "$@"; then
+    if LC_ALL=C "$manager" --nobest "$@" > "$output" 2>&1; then
       status=0
     else
       status=$?
     fi
   fi
+  cat "$output"
+  # Even a silent manager failure must be visible to the compute bake's log scan.
+  [[ $status -eq 0 ]] || log_error "$manager transaction failed (exit $status)"
   rm -f "$output"
   return "$status"
 }

@@ -126,3 +126,44 @@ test('release entry points execute through a symlinked checkout', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const declaration of [
+  'var __dirname = "elsewhere";',
+  'console.log(__dirname); var __dirname;',
+  'const a = 1, __dirname = "elsewhere";',
+  'function nested(__dirname) { return __dirname; }',
+  'const nested = (__filename) => __filename;',
+  'const { path: __dirname } = { path: "elsewhere" };',
+  'try {} catch (__filename) {}',
+  'function __dirname() {}',
+  'class __filename {}',
+  'const nested = function __dirname() {};',
+  'const [__filename] = [];',
+  'const nested = ({ path: __dirname = "elsewhere" }) => __dirname;',
+  'import { path as __dirname } from "node:path";',
+]) {
+  test(`the rewrite rejects a module-owned path binding: ${declaration}`, async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.nodeModules, 'fixture-pkg/lib/index.js'),
+        `console.log(__filename); ${declaration} module.exports = () => __dirname;`);
+      await assert.rejects(bundle(paths, [modulePathPlugin(new Map(), paths.nodeModules)]),
+        /declares its own __dirname or __filename/);
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('path-named properties and strings are not bindings', async () => {
+  const paths = fixture();
+  try {
+    writeFileSync(join(paths.nodeModules, 'fixture-pkg/lib/index.js'),
+      'const value = { __dirname: "__filename" }; module.exports = () => __dirname + value.__dirname;');
+    const rewritten: Rewritten = new Map();
+    await bundle(paths, [modulePathPlugin(rewritten, paths.nodeModules)]);
+    assert.equal(rewritten.size, 1);
+  } finally {
+    rmSync(paths.root, { recursive: true, force: true });
+  }
+});
