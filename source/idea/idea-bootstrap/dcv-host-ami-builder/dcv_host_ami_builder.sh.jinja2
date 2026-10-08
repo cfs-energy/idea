@@ -38,7 +38,7 @@ source "${SCRIPT_DIR}/image_bake_stage.sh"
 if [[ ! -f /var/lib/idea/bake-packages.ok ]]; then
   {% if context.base_os in ('rhel8', 'rocky8') %}
   #drpm isn't available in rhel9 or rocky9
-  yum install -y drpm
+  package_transaction yum install -y drpm
   {% endif %}
   {% include '_templates/linux/universe.jinja2' %}
   {% include '_templates/linux/system_packages.jinja2' %}

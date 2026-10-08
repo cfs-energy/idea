@@ -35,9 +35,9 @@ EXCLUDE=()
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   {% if context.base_os in ('amazonlinux2023',) %}
-    yum install --skip-broken -y $DEFAULT_PACKAGES_FOR_RPM $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]})
+    package_transaction yum install --skip-broken -y $DEFAULT_PACKAGES_FOR_RPM $(echo ${SYSTEM_PKGS_7[*]} ${APPLICATION_PKGS_7[*]} ${SSSD_PKGS_7[*]})
   {% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
-    dnf install -y dnf-plugins-core
+    package_transaction dnf install -y dnf-plugins-core
 
     {% if context.base_os == 'rhel8' %}
       dnf config-manager --set-enabled codeready-builder-for-rhel-8-rhui-rpms
@@ -79,22 +79,7 @@ EXCLUDE=()
     printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
     # strict=0: --skip-broken alone only covers broken deps, not missing package names, and
     # EL10 dropped pcre/http-parser/ec2-hibinit-agent, which would otherwise fail the whole transaction
-    command="dnf --exclude=${EXCLUDE_JOINED%,} install -y --skip-broken --setopt=strict=0 $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL"
-    MAX_ATTEMPT=10
-    CURRENT_ATTEMPT=0
-    SLEEP_INTERVAL=5
-    while ! ($command); do
-      ((CURRENT_ATTEMPT=CURRENT_ATTEMPT+1))
-      if [[ $CURRENT_ATTEMPT -ge $MAX_ATTEMPT ]]; then
-        echo "Error: unable to execute dnf install command: $command"
-        break
-      fi
-      # a failed attempt can leave a poisoned CDN cache (metadata vs package bytes mismatched,
-      # seen on RHUI during a Red Hat republish); never re-verify it, clean and re-fetch instead
-      dnf clean packages metadata >/dev/null 2>&1 || true
-      SLEEP_INTERVAL=30
-      sleep $SLEEP_INTERVAL
-    done
+    package_transaction dnf --exclude=${EXCLUDE_JOINED%,} install -y --skip-broken --setopt=strict=0 $DEFAULT_PACKAGES_FOR_RPM $ADDITIONAL_PKGS_TO_INSTALL
     # ec2-hibinit-agent is not packaged for EL10, so the unit is absent there
     if systemctl list-unit-files hibinit-agent.service --no-legend 2>/dev/null | grep -q .; then
       systemctl enable hibinit-agent

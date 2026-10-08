@@ -61,12 +61,12 @@ if [[ -z "$(rpm -qa gnome-terminal)" ]]; then
 if [[ -z "$(dpkg -l gnome-terminal | grep ^ii)" ]]; then
 {% endif %}
 {% if context.base_os in ('amazonlinux2023',) %}
-  dnf groupinstall "Desktop" -y
-  dnf install -y xsetroot
+  package_transaction dnf groupinstall "Desktop" -y
+  package_transaction dnf install -y xsetroot
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   EXCLUDE=()
   printf -v EXCLUDE_JOINED '%s,' "${EXCLUDE[@]}"
-  yum --exclude=${EXCLUDE_JOINED%,} groupinstall "Server with GUI" -y --skip-broken --disablerepo=epel-cisco-openh264
+  package_transaction yum --exclude=${EXCLUDE_JOINED%,} groupinstall "Server with GUI" -y --skip-broken --disablerepo=epel-cisco-openh264
 
   sed -i 's/#WaylandEnable=false/WaylandEnable=false/' ${GDM_CONFIG_RHEL_PATH}
   systemctl set-default graphical.target
@@ -155,7 +155,7 @@ if [[ -z "$(dpkg -l nice-dcv-server | grep ^ii)" ]]; then
 {% if context.base_os in ('rhel9',) %}
 if [[ $machine == "x86_64" ]]; then
   # Install build dependencies
-  dnf install -y gcc make gmp-devel
+  package_transaction dnf install -y gcc make gmp-devel
 
   # Download the specific Nettle version (3.4)
   # ftp.gnu.org and its redirector go unreachable for hours (two bakes failed on exit 4).
