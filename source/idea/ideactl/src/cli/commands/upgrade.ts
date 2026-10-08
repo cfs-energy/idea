@@ -294,6 +294,8 @@ export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   historicalIam?: (roleName: string, policyName: string, options: UpgradeCommandOptions, ownsPolicy?: boolean) => Promise<{ attached: string[]; inline: string[]; collision: boolean; available: number }>;
   deploy(options: UpgradeDeploymentOptions): Promise<void>;
   regionAmiConfig?: () => RegionsConfig;
+  /** Whether the registry serves this tagged image; throws when the registry cannot say. */
+  releaseImageExists?: (image: string) => Promise<boolean>;
 }
 
 export interface UpgradeCommandOptions {
@@ -992,8 +994,74 @@ export async function planUpgradePhase3Entries(
     })),
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
-    ...planEcsImageFollowsRelease(settings, releaseVersion),
+    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings),
   ];
+}
+
+/**
+ * Keep an image move only when the registry serves the release image. The executable cannot tell
+ * whether it is a release or the candidate it was promoted from (the files are identical), and a
+ * candidate's release tag does not exist until the candidate is promoted. A missing or unknown
+ * release image stops the upgrade before anything is written, rather than rolling every task onto
+ * an image that cannot be pulled.
+ */
+export async function verifyReleaseImage(
+  deps: Pick<UpgradeDeps, "releaseImageExists">,
+  entries: ConfigEntry[],
+  settings: readonly CurrentConfigRow[],
+): Promise<ConfigEntry[]> {
+  const move = entries.find((entry) => entry.key === "ecs.image");
+  if (move === undefined) return entries;
+  const target = String(move.value);
+  const current = String(settings.find((row) => row.key === "ecs.image")?.value ?? "(unset)");
+  const lookup = deps.releaseImageExists ?? publicRegistryImageExists;
+  let exists: boolean;
+  try {
+    exists = await lookup(target);
+  } catch (error) {
+    throw new Error(
+      `Could not confirm that the release image ${target} exists, so ecs.image stays ${current} and nothing was changed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!exists) {
+    throw new Error(
+      `The release image ${target} does not exist yet, so ecs.image stays ${current} and nothing was changed. ` +
+        `To prove a release candidate, set ecs.image to its candidate image (${target}-rc.<N>) and run the upgrade again.`,
+    );
+  }
+  return entries;
+}
+
+const MANIFEST_TYPES = [
+  "application/vnd.oci.image.index.v1+json",
+  "application/vnd.docker.distribution.manifest.list.v2+json",
+  "application/vnd.oci.image.manifest.v1+json",
+  "application/vnd.docker.distribution.manifest.v2+json",
+].join(", ");
+
+/** Ask ECR Public, anonymously, whether a tagged image exists. Any other answer throws. */
+export async function publicRegistryImageExists(
+  image: string,
+  fetcher: typeof fetch = fetch,
+): Promise<boolean> {
+  const match = /^public\.ecr\.aws\/([^:@]+):([^:@/]+)$/.exec(image);
+  if (match === null) throw new Error(`${image} is not a tagged ECR Public image`);
+  const [, path, tag] = match;
+  const tokenResponse = await fetcher(
+    `https://public.ecr.aws/token/?scope=repository:${path}:pull`,
+    { signal: AbortSignal.timeout(15_000) },
+  );
+  if (!tokenResponse.ok) throw new Error(`ECR Public token request returned HTTP ${tokenResponse.status}`);
+  const token = ((await tokenResponse.json()) as { token?: unknown }).token;
+  if (typeof token !== "string" || token === "") throw new Error("ECR Public returned no pull token");
+  const manifest = await fetcher(`https://public.ecr.aws/v2/${path}/manifests/${tag}`, {
+    method: "HEAD",
+    headers: { Authorization: `Bearer ${token}`, Accept: MANIFEST_TYPES },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (manifest.status === 200) return true;
+  if (manifest.status === 404) return false;
+  throw new Error(`ECR Public manifest request returned HTTP ${manifest.status}`);
 }
 
 /** The rows the add-only sync leaves on the previous provider when values move metrics to the daemon. */
@@ -1033,7 +1101,7 @@ const CANDIDATE_IMAGE_TAG = /^(\d{2}\.\d{2}\.\d+)-rc\.[1-9]\d*$/;
  * Plan the image row's move to the release being installed. The row is add-only for the sync, so
  * a routine upgrade would otherwise deploy the new templates on the previous image. Only a row
  * that names this partition's release repository at an older release tag, or at a candidate of
- * this or an earlier release, moves; a private
+ * an earlier release, moves; a private
  * registry, a digest-qualified reference, a build tag or a newer tag is the operator's and stays.
  */
 export function planEcsImageFollowsRelease(
@@ -1047,10 +1115,10 @@ export function planEcsImageFollowsRelease(
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
-  // A candidate of this release or an earlier one is what the release was proven as, so it moves too.
   const candidate = CANDIDATE_IMAGE_TAG.exec(tag);
   if (candidate !== null) {
-    if ((compareIdeaRelease(candidate[1], releaseVersion) ?? 1) > 0) return [];
+    // A candidate of this release is the build being proven; only an earlier release's moves.
+    if ((compareIdeaRelease(candidate[1], releaseVersion) ?? 0) >= 0) return [];
     return [{ key: "ecs.image", value: `${repository}:${releaseVersion}` }];
   }
   if (!RELEASE_IMAGE_TAG.test(tag) || (compareIdeaRelease(tag, releaseVersion) ?? 0) >= 0) return [];

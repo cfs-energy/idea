@@ -284,8 +284,11 @@ A squash merge keeps the source tree identical to the branch, so the candidate b
 from the branch head matches. A merge that changes the tree, such as one picking up a
 newer `main`, needs a new candidate from the updated branch.
 
-A cluster whose `ecs.image` names a candidate of the release being installed, or of an
-earlier one, moves to the release image on its next upgrade.
+An upgrade moves `ecs.image` to the release image only after the registry confirms that
+image exists; if it does not exist or the registry cannot be reached, the upgrade stops
+before writing anything. A cluster on a candidate of the release being installed keeps
+its candidate image, since that is the build being proven, and a candidate of an earlier
+release moves to the release.
 
 ### Rerun path
 

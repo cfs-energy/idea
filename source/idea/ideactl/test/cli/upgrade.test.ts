@@ -23,6 +23,7 @@ import {
   type UpgradeDeps,
   upgradeCluster,
   planEcsImageFollowsRelease,
+  publicRegistryImageExists,
   returnBorrowedHosts,
 } from "../../src/cli/commands/upgrade.ts";
 import { change } from "../support/deploy-harness.ts";
@@ -236,6 +237,9 @@ function replay(): Replay {
           row["version"] = ideaVersion();
         }
       }
+    },
+    async releaseImageExists() {
+      return true;
     },
     regionAmiConfig() {
       return { "us-east-2": { amazonlinux2023: "ami-release" } };
@@ -1926,20 +1930,21 @@ test("the image row follows the release only when it names the release repositor
   assert.deepEqual(planEcsImageFollowsRelease([{ key: "ecs.image", value: `${repository}:26.09.3` }], "26.09.4"), [], "no repository row");
 });
 
-test("a release candidate image follows its release and later ones, never an earlier one", () => {
+test("an earlier release's candidate image follows the release; this release's candidate stays", () => {
   const repository = "public.ecr.aws/s5o2b4m0/idea-control-plane";
   const rows = (image: string) => [
     { key: "ecs.image_repositories.aws", value: repository },
     { key: "ecs.image", value: image },
   ];
-  for (const tag of ["26.10.4-rc.1", "26.10.4-rc.12", "26.10.3-rc.2"]) {
+  for (const tag of ["26.10.3-rc.2", "26.09.1-rc.9"]) {
     assert.deepEqual(
       planEcsImageFollowsRelease(rows(`${repository}:${tag}`), "26.10.4"),
       [{ key: "ecs.image", value: `${repository}:26.10.4` }],
       tag,
     );
   }
-  for (const tag of ["26.10.5-rc.1", "26.11.0-rc.1", "26.10.4-rc.0", "26.10.4-rc", "26.10.4-rc.1x", "26.10.4-beta.1"]) {
+  // this release's own candidate is the build being proven, so it stays
+  for (const tag of ["26.10.4-rc.1", "26.10.4-rc.12", "26.10.5-rc.1", "26.11.0-rc.1", "26.10.4-rc.0", "26.10.4-rc", "26.10.4-rc.1x", "26.10.4-beta.1"]) {
     assert.deepEqual(planEcsImageFollowsRelease(rows(`${repository}:${tag}`), "26.10.4"), [], tag);
   }
   assert.deepEqual(
@@ -2075,6 +2080,79 @@ test("template defaults update silently, operator rows keep their values, legacy
   }
 });
 
+
+test("an unpublished release image stops the upgrade before anything is written", async () => {
+  for (const answer of ["missing", "unknown"] as const) {
+    await withFixture(async (state) => {
+      const generated = await routineReleaseFixture(state);
+      const { deps, rows, events } = state;
+      const repository = generated.get("ecs.image_repositories.aws");
+      const image = `${repository}:26.09.0`;
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting("ecs.image_repositories.aws", repository),
+        { ...setting("ecs.image", image), source: "stack" },
+      );
+      const asked: string[] = [];
+      deps.releaseImageExists = async (target: string) => {
+        asked.push(target);
+        if (answer === "unknown") throw new Error("registry unreachable");
+        return false;
+      };
+      await assert.rejects(
+        upgradeCluster(deps, { ...containerOptions, acceptConfigDrift: false }),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message.includes(`${repository}:${ideaVersion()}`) &&
+          error.message.includes(`ecs.image stays ${image}`) &&
+          (answer === "missing" ? error.message.includes(`${repository}:${ideaVersion()}-rc.<N>`) : error.message.includes("registry unreachable")),
+      );
+      assert.deepEqual(asked, [`${repository}:${ideaVersion()}`]);
+      assert.ok(!events.includes("deploy"));
+      assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "ecs.image")?.["value"], image);
+    });
+  }
+});
+
+test("a cluster proving this release's candidate keeps its image and never asks the registry", async () => {
+  await withFixture(async (state) => {
+    const generated = await routineReleaseFixture(state);
+    const { deps, rows, events } = state;
+    const repository = generated.get("ecs.image_repositories.aws");
+    const image = `${repository}:${ideaVersion()}-rc.3`;
+    rows[`${clusterName}.cluster-settings`]!.push(
+      setting("ecs.image_repositories.aws", repository),
+      { ...setting("ecs.image", image), source: "cli" },
+    );
+    deps.releaseImageExists = async () => assert.fail("a candidate of this release must not be looked up");
+    await upgradeCluster(deps, containerOptions);
+    assert.ok(events.includes("deploy"));
+    assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "ecs.image")?.["value"], image);
+  });
+});
+
+test("the ECR Public lookup reads a manifest anonymously and refuses to guess", async () => {
+  const calls: { url: string; init?: RequestInit }[] = [];
+  const fetcher = (status: number, tokenStatus = 200, token: unknown = "t0k") =>
+    (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      if (String(url).includes("/token/")) return new Response(JSON.stringify({ token }), { status: tokenStatus });
+      return new Response(null, { status });
+    }) as typeof fetch;
+  const image = "public.ecr.aws/s5o2b4m0/idea-control-plane:26.10.4";
+  assert.equal(await publicRegistryImageExists(image, fetcher(200)), true);
+  assert.equal(calls[0]!.url, "https://public.ecr.aws/token/?scope=repository:s5o2b4m0/idea-control-plane:pull");
+  assert.equal(calls[1]!.url, "https://public.ecr.aws/v2/s5o2b4m0/idea-control-plane/manifests/26.10.4");
+  assert.equal(calls[1]!.init?.method, "HEAD");
+  assert.equal((calls[1]!.init?.headers as Record<string, string>)["Authorization"], "Bearer t0k");
+  assert.match((calls[1]!.init?.headers as Record<string, string>)["Accept"]!, /oci\.image\.index/);
+  assert.equal(await publicRegistryImageExists(image, fetcher(404)), false);
+  await assert.rejects(publicRegistryImageExists(image, fetcher(500)), /HTTP 500/);
+  await assert.rejects(publicRegistryImageExists(image, fetcher(200, 403)), /token request returned HTTP 403/);
+  await assert.rejects(publicRegistryImageExists(image, fetcher(200, 200, "")), /no pull token/);
+  for (const other of ["private.example/x:1", "public.ecr.aws/a/b@sha256:abc", "public.ecr.aws/a/b"]) {
+    await assert.rejects(publicRegistryImageExists(other, fetcher(200)), /not a tagged ECR Public image/);
+  }
+});
 
 test("release image planning uses the cluster partition's repository", () => {
   const repository = "registry.example/control-plane";
