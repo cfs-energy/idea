@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import type { Command } from "commander";
+import { EnvHttpProxyAgent, fetch as registryFetch, type Dispatcher, type RequestInit as RegistryRequestInit } from "undici";
 
 import { ideaVersion } from "../../version.ts";
 import { ClusterConfigError, GeneralException, type ModuleInfo } from "../../config/cluster-config.ts";
@@ -314,6 +315,7 @@ export interface UpgradeCommandOptions {
   force?: boolean;
   acceptConfigDrift?: boolean;
   skipGlobalSettingsUpdate?: boolean;
+  skipReleaseImageCheck?: boolean;
   disableEolStacksInUse?: boolean;
   /** Close job submission and wait for the host scheduler to empty before the container cutover. */
   drain?: boolean;
@@ -979,12 +981,13 @@ async function planOpenSearchDataNodeInstanceType(
 /** Resolve every Phase 3 write before the upgrade asks for approval. */
 export async function planUpgradePhase3Entries(
   deps: UpgradeDeps,
-  options: Pick<UpgradeCommandOptions, "awsRegion">,
+  options: Pick<UpgradeCommandOptions, "awsRegion" | "skipReleaseImageCheck">,
   modules: ModuleInfo[],
   settings: readonly CurrentConfigRow[],
   amiId: string,
   baseOs: string,
   releaseVersion: string = ideaVersion(),
+  onReleaseImageFailure?: (message: string) => void,
 ): Promise<ConfigEntry[]> {
   const keepKeys = await computeAmiKeepKeys(deps, options, modules, settings);
   return [
@@ -994,37 +997,50 @@ export async function planUpgradePhase3Entries(
     })),
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
-    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings),
+    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
   ];
 }
 
 /**
- * Keep an image move only when the registry serves the release image. The executable cannot tell
+ * Unless explicitly skipped, keep an image move only when the registry serves the release image.
+ * Preview records the same refusal through onFailure and continues planning other changes.
+ * The executable cannot tell
  * whether it is a release or the candidate it was promoted from (the files are identical), and a
  * candidate's release tag does not exist until the candidate is promoted. A missing or unknown
  * release image stops the upgrade before anything is written, rather than rolling every task onto
  * an image that cannot be pulled.
  */
 export async function verifyReleaseImage(
-  deps: Pick<UpgradeDeps, "releaseImageExists">,
+  deps: Pick<UpgradeDeps, "releaseImageExists" | "out">,
   entries: ConfigEntry[],
   settings: readonly CurrentConfigRow[],
+  skipReleaseImageCheck = false,
+  onFailure?: (message: string) => void,
 ): Promise<ConfigEntry[]> {
   const move = entries.find((entry) => entry.key === "ecs.image");
   if (move === undefined) return entries;
   const target = String(move.value);
+  if (skipReleaseImageCheck) {
+    deps.out(`Release image ${target} was not verified (--skip-release-image-check).`);
+    return entries;
+  }
+  const refuse = (message: string): ConfigEntry[] => {
+    if (onFailure === undefined) throw new Error(message);
+    onFailure(message);
+    return entries.filter((entry) => entry !== move);
+  };
   const current = String(settings.find((row) => row.key === "ecs.image")?.value ?? "(unset)");
   const lookup = deps.releaseImageExists ?? publicRegistryImageExists;
   let exists: boolean;
   try {
     exists = await lookup(target);
   } catch (error) {
-    throw new Error(
+    return refuse(
       `Could not confirm that the release image ${target} exists, so ecs.image stays ${current} and nothing was changed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (!exists) {
-    throw new Error(
+    return refuse(
       `The release image ${target} does not exist yet, so ecs.image stays ${current} and nothing was changed. ` +
         `To prove a release candidate, set ecs.image to its candidate image (${target}-rc.<N>) and run the upgrade again.`,
     );
@@ -1042,26 +1058,33 @@ const MANIFEST_TYPES = [
 /** Ask ECR Public, anonymously, whether a tagged image exists. Any other answer throws. */
 export async function publicRegistryImageExists(
   image: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: (url: string, init: RegistryRequestInit & { dispatcher: Dispatcher }) => Promise<Pick<Response, "ok" | "status" | "json">> = registryFetch,
+  createDispatcher: () => Dispatcher = () => new EnvHttpProxyAgent(),
 ): Promise<boolean> {
   const match = /^public\.ecr\.aws\/([^:@]+):([^:@/]+)$/.exec(image);
   if (match === null) throw new Error(`${image} is not a tagged ECR Public image`);
   const [, path, tag] = match;
-  const tokenResponse = await fetcher(
-    `https://public.ecr.aws/token/?scope=repository:${path}:pull`,
-    { signal: AbortSignal.timeout(15_000) },
-  );
-  if (!tokenResponse.ok) throw new Error(`ECR Public token request returned HTTP ${tokenResponse.status}`);
-  const token = ((await tokenResponse.json()) as { token?: unknown }).token;
-  if (typeof token !== "string" || token === "") throw new Error("ECR Public returned no pull token");
-  const manifest = await fetcher(`https://public.ecr.aws/v2/${path}/manifests/${tag}`, {
-    method: "HEAD",
-    headers: { Authorization: `Bearer ${token}`, Accept: MANIFEST_TYPES },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (manifest.status === 200) return true;
-  if (manifest.status === 404) return false;
-  throw new Error(`ECR Public manifest request returned HTTP ${manifest.status}`);
+  const dispatcher = createDispatcher();
+  try {
+    const tokenResponse = await fetcher(
+      `https://public.ecr.aws/token/?scope=repository:${path}:pull`,
+      { dispatcher, signal: AbortSignal.timeout(15_000) },
+    );
+    if (!tokenResponse.ok) throw new Error(`ECR Public token request returned HTTP ${tokenResponse.status}`);
+    const token = ((await tokenResponse.json()) as { token?: unknown }).token;
+    if (typeof token !== "string" || token === "") throw new Error("ECR Public returned no pull token");
+    const manifest = await fetcher(`https://public.ecr.aws/v2/${path}/manifests/${tag}`, {
+      dispatcher,
+      method: "HEAD",
+      headers: { Authorization: `Bearer ${token}`, Accept: MANIFEST_TYPES },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (manifest.status === 200) return true;
+    if (manifest.status === 404) return false;
+    throw new Error(`ECR Public manifest request returned HTTP ${manifest.status}`);
+  } finally {
+    await dispatcher.close();
+  }
 }
 
 /** The rows the add-only sync leaves on the previous provider when values move metrics to the daemon. */
@@ -1245,6 +1268,7 @@ function inferredStackPlans(
 export async function prepareUpgradeDriftInput(
   deps: UpgradeDeps,
   options: ConfigUpgradePreviewOptions,
+  preview = false,
 ): Promise<UpgradeDriftInput> {
   if (deps.loadUpgradeDriftInput !== undefined) return deps.loadUpgradeDriftInput(options);
 
@@ -1257,12 +1281,17 @@ export async function prepareUpgradeDriftInput(
     baseOs,
   );
   const generated = await generatedPreviewEntries(deps, options, baseOs, current);
-  const phase3 = await planUpgradePhase3Entries(deps, options, modules, current, amiId, baseOs);
+  const blockingFindings: string[] = [];
+  const phase3 = await planUpgradePhase3Entries(
+    deps, options, modules, current, amiId, baseOs, ideaVersion(),
+    preview ? (message) => blockingFindings.push(message) : undefined,
+  );
 
   return {
     current,
     generated,
     phase3,
+    blockingFindings,
     providerCutover: planMetricsProviderCutover(generated, current),
     stacks: inferredStackPlans(current, modules, options.modules),
     replaceGlobalSettings: options.skipGlobalSettingsUpdate !== true,
@@ -2014,6 +2043,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
       "Accept a change-set entry the deploy guard would refuse, by logical ID. Repeatable.",
       (value: string, previous: string[] = []) => [...previous, value],
     )
+    .option("--skip-release-image-check", "Skip the registry lookup and move to the release image without verifying it exists.")
     .option("--skip-global-settings-update", "Skip updating global settings.")
     .option("--disable-eol-stacks-in-use", "Disable end-of-life eVDI software stacks that are in use.")
     .option("--drain", "Before the host-to-container scheduler cutover, close job submission and wait for the host scheduler to empty.")

@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -105,5 +105,24 @@ test('the build fails when a dependency uses __dirname without the rewrite', asy
     assert.match(run.stderr, /ENOENT/);
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
+  }
+});
+
+
+test('release entry points execute through a symlinked checkout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ideactl entry points-'));
+  try {
+    const checkout = join(root, 'checkout');
+    symlinkSync(join(import.meta.dirname, '../..'), checkout, 'junction');
+    for (const [script, args, message] of [
+      ['scripts/build-shell-bundle.mjs', ['--invalid-argument'], /unknown argument: --invalid-argument/],
+      ['test/support/release-smoke.ts', [], /release executable path is required/],
+    ] as const) {
+      const result = spawnSync(process.execPath, [join(checkout, script), ...args], { encoding: 'utf8' });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, message, 'the main-module guard must reach argument validation');
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

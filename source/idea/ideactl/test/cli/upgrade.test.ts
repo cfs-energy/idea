@@ -8,6 +8,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { Command } from "commander";
+import { Agent, EnvHttpProxyAgent, type RequestInit as RegistryRequestInit } from "undici";
+import { configUpgradePreview, registerConfigCommands } from "../../src/cli/commands/config.ts";
+import { ExitWithCode } from "../../src/cli/cdk-invoker.ts";
 import { CreateTagsCommand, DeleteTagsCommand, DescribeInstancesCommand, EC2Client } from "@aws-sdk/client-ec2";
 import { DescribeDomainCommand, OpenSearchClient } from "@aws-sdk/client-opensearch";
 import { ideaVersion } from "../../src/version.ts";
@@ -285,6 +288,7 @@ test("registers the upgrade-cluster command surface", () => {
     "--force",
     "--accept-config-drift",
     "--skip-global-settings-update",
+    "--skip-release-image-check",
     "--disable-eol-stacks-in-use",
   ]) {
     assert.ok(help.includes(option));
@@ -2113,6 +2117,111 @@ test("an unpublished release image stops the upgrade before anything is written"
   }
 });
 
+test("preview reports release image blockers, completes the report, and exits non-zero at the command boundary", async () => {
+  for (const answer of ["missing", "unknown"] as const) {
+    await withFixture(async (state) => {
+      const generated = await routineReleaseFixture(state);
+      const { deps, rows, events } = state;
+      const repository = generated.get("ecs.image_repositories.aws");
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting("ecs.image_repositories.aws", repository),
+        { ...setting("ecs.image", `${repository}:26.09.0`), source: "stack" },
+      );
+      deps.releaseImageExists = async () => {
+        if (answer === "unknown") throw new Error("registry unreachable");
+        return false;
+      };
+      let refusal = "";
+      await assert.rejects(upgradeCluster(deps, containerOptions), (error: Error) => {
+        refusal = error.message;
+        return true;
+      });
+      // Keep the real input builder while injecting the replay's read adapters.
+      const previewDeps = Object.create(deps) as UpgradeDeps;
+      previewDeps.loadUpgradeDriftInput = (options) => prepareUpgradeDriftInput(deps, options, true);
+      const report = await configUpgradePreview(previewDeps, containerOptions);
+      assert.deepEqual(report.blockingFindings, [refusal]);
+      assert.ok(report.findings.length > 0, "remaining preview is complete");
+      assert.ok(events.some((event) => event.includes(`BLOCKING: ${refusal}`)));
+      const program = new Command("ideactl");
+      registerConfigCommands(program, previewDeps);
+      await assert.rejects(program.parseAsync([
+        "config", "preview-upgrade", "--cluster-name", clusterName, "--aws-region", awsRegion,
+      ], { from: "user" }), (error: unknown) => error instanceof ExitWithCode && error.code === 1);
+      assert.ok(!events.some((event) => event === "deploy" || event.startsWith("set:") || event.startsWith("sync:")));
+    });
+  }
+});
+
+test("both command flags skip the registry lookup and keep the release image move", async () => {
+  for (const preview of [false, true]) {
+    await withFixture(async (state) => {
+      const generated = await routineReleaseFixture(state);
+      const { deps, rows, events } = state;
+      const repository = generated.get("ecs.image_repositories.aws");
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting("ecs.image_repositories.aws", repository),
+        { ...setting("ecs.image", `${repository}:26.09.0`), source: "stack" },
+      );
+      deps.releaseImageExists = async () => assert.fail("skipped lookup must not run");
+      const program = new Command("ideactl");
+      if (preview) {
+        const previewDeps = Object.create(deps) as UpgradeDeps;
+        previewDeps.loadUpgradeDriftInput = async (options) => {
+          const input = await prepareUpgradeDriftInput(deps, options, true);
+          assert.deepEqual(input.blockingFindings, []);
+          assert.ok(input.phase3?.some((entry) => entry.key === "ecs.image" && entry.value === `${repository}:${ideaVersion()}`));
+          return input;
+        };
+        registerConfigCommands(program, previewDeps);
+      } else registerUpgradeCommands(program, deps);
+      await program.parseAsync([
+        ...(preview ? ["config", "preview-upgrade"] : ["upgrade-cluster", "--force", "--accept-config-drift"]),
+        "--cluster-name", clusterName, "--aws-region", awsRegion, "--skip-release-image-check",
+      ], { from: "user" });
+      assert.equal(events.filter((event) => event.includes("was not verified (--skip-release-image-check)")).length, 1);
+      if (!preview) {
+        assert.ok(events.includes("deploy"));
+        assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "ecs.image")?.["value"], `${repository}:${ideaVersion()}`);
+      }
+    });
+  }
+});
+
+test("ECR token and manifest requests honor proxy environment and NO_PROXY without network", async () => {
+  const savedEnv = process.env;
+  try {
+    for (const env of [
+      { HTTPS_PROXY: "http://upper.invalid:8080" },
+      { HTTPS_PROXY: "http://upper.invalid:8080", https_proxy: "http://lower.invalid:8080" },
+      { HTTPS_PROXY: "http://upper.invalid:8080", NO_PROXY: "public.ecr.aws" },
+      { https_proxy: "http://lower.invalid:8080", no_proxy: ".ecr.aws" },
+    ]) {
+      process.env = { ...savedEnv };
+      for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"]) delete process.env[key];
+      Object.assign(process.env, env);
+      const routes: string[] = [];
+      const dispatcher = new EnvHttpProxyAgent({
+        connect: (_options, callback) => { routes.push("direct"); callback(new Error("route probe"), null); },
+        clientFactory: (origin) => new Agent({
+          connect: (_options, callback) => { routes.push(origin.origin); callback(new Error("route probe"), null); },
+        }),
+      });
+      assert.equal(await publicRegistryImageExists("public.ecr.aws/example/control:26.10.4", async (url, init) => {
+        assert.equal(init.dispatcher, dispatcher);
+        const target = new URL(url);
+        await assert.rejects(init.dispatcher.request({ origin: target.origin, path: target.pathname, method: "GET" }), /route probe/);
+        return target.pathname === "/token/" ? new Response(JSON.stringify({ token: "test" })) : new Response(null);
+      }, () => dispatcher), true);
+      const expected = env.NO_PROXY || env.no_proxy ? "direct" : env.https_proxy || env.HTTPS_PROXY;
+      assert.deepEqual(routes, [expected, expected]);
+      await assert.rejects(dispatcher.request({ origin: "https://public.ecr.aws", path: "/", method: "GET" }), /destroyed|closed/i);
+    }
+  } finally {
+    process.env = savedEnv;
+  }
+});
+
 test("a cluster proving this release's candidate keeps its image and never asks the registry", async () => {
   await withFixture(async (state) => {
     const generated = await routineReleaseFixture(state);
@@ -2131,13 +2240,13 @@ test("a cluster proving this release's candidate keeps its image and never asks 
 });
 
 test("the ECR Public lookup reads a manifest anonymously and refuses to guess", async () => {
-  const calls: { url: string; init?: RequestInit }[] = [];
+  const calls: { url: string; init?: RegistryRequestInit }[] = [];
   const fetcher = (status: number, tokenStatus = 200, token: unknown = "t0k") =>
-    (async (url: string | URL | Request, init?: RequestInit) => {
+    (async (url: string, init?: RegistryRequestInit) => {
       calls.push({ url: String(url), init });
       if (String(url).includes("/token/")) return new Response(JSON.stringify({ token }), { status: tokenStatus });
       return new Response(null, { status });
-    }) as typeof fetch;
+    });
   const image = "public.ecr.aws/s5o2b4m0/idea-control-plane:26.10.4";
   assert.equal(await publicRegistryImageExists(image, fetcher(200)), true);
   assert.equal(calls[0]!.url, "https://public.ecr.aws/token/?scope=repository:s5o2b4m0/idea-control-plane:pull");

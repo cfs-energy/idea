@@ -16,11 +16,16 @@ for TAG in $CANDIDATES; do
     echo "::warning::${TAG} has no candidate.json; skipped." >&2
     continue
   fi
-  if [ "$(jq -er '.version' "$WORK/candidate.json")" = "$VERSION" ] && [ "$(jq -er '.tree' "$WORK/candidate.json")" = "$TREE" ]; then
+  if ! MANIFEST=$(jq -er 'select(type == "object") | [.version, .tree] | select(all(.[]; type == "string" and length > 0)) | @tsv' "$WORK/candidate.json" 2>/dev/null); then
+    echo "::warning::${TAG} has invalid or incomplete candidate.json; skipped." >&2
+    continue
+  fi
+  IFS=$'\t' read -r CANDIDATE_VERSION CANDIDATE_TREE <<< "$MANIFEST"
+  if [ "$CANDIDATE_VERSION" = "$VERSION" ] && [ "$CANDIDATE_TREE" = "$TREE" ]; then
     echo "$TAG"
     exit 0
   fi
-  echo "${TAG} was built from tree $(jq -r '.tree' "$WORK/candidate.json"), not ${TREE}." >&2
+  echo "${TAG} was built from tree ${CANDIDATE_TREE}, not ${TREE}." >&2
 done
 echo "::error::No release candidate for v${VERSION} was built from tree ${TREE}. Cut one from this exact source with the Build and Push dispatch (release_candidate), prove it, then merge." >&2
 exit 1

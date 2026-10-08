@@ -434,6 +434,8 @@ jobs:
             --notes "Release candidate. Image: ${IMAGE%@*}:${VERSION}-rc.${RELEASE_CANDIDATE} (${IMAGE#*@}). Merging this exact source to main releases these files and this image digest unchanged."
   promote_release:
     if: github.event_name == 'push' && github.ref_name == 'main'
+    # The merged tree is verified identical to a candidate whose run passed checks and tests.
+    # Promotion builds nothing, so only release availability must be checked again.
     needs: [release_available]
     runs-on: ubuntu-24.04
     permissions:

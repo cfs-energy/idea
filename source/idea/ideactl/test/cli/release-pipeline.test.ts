@@ -522,6 +522,22 @@ test('promotion finds the highest candidate built from exactly this tree and ver
   }
 });
 
+test('promotion warns and skips malformed or incomplete candidate manifests', () => {
+  for (const manifest of ['{bad json', '{}', '{"version":"1.2.3"}', '{"tree":"tree-under-release"}',
+    '{"version":"1.2.3","tree":null}', '{"version":"1.2.3","tree":""}', '{"version":123,"tree":"tree-under-release"}']) {
+    const malformed = { tag: 'v1.2.3-rc.2', prerelease: true, assets: { 'candidate.json': manifest } };
+    for (const valid of [true, false]) {
+      harness('absent', (h) => {
+        const result = h.run('bash source/idea/ideactl/scripts/find-release-candidate.sh');
+        assert.equal(result.status, valid ? 0 : 1, result.output);
+        assert.match(result.output, /::warning::v1\.2\.3-rc\.2 has invalid or incomplete candidate\.json; skipped\./);
+        assert.equal(result.stdout, valid ? 'v1.2.3-rc.1\n' : '');
+        if (!valid) assert.match(result.output, /::error::No release candidate/);
+      }, { releases: [malformed, ...(valid ? [candidate('v1.2.3-rc.1', '1.2.3', TREE)] : [])] });
+    }
+  }
+});
+
 /** The promote job's steps in order, with the candidate tag passed on as the workflow does. */
 function promote(h: Harness): Run {
   const found = h.run(promoteFind);
