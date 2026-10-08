@@ -42,7 +42,7 @@ fi
 # microphone redirect: same guarded install the session bootstrap performs
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
-  yum install -y pulseaudio-utils
+  package_transaction yum install -y pulseaudio-utils
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
   apt install -y pulseaudio-utils

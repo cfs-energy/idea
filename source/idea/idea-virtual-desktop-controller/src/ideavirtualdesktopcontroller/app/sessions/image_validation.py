@@ -307,6 +307,35 @@ def linux_host_script(
     return '\n'.join(lines)
 
 
+def windows_share_probe() -> str:
+    """Standalone PowerShell function; supply Check($name, $ok, $detail) to collect results.
+
+    Probe-Share name UNC label [perUser] defaults to strict non-per-user checks.
+    """
+    return '\n'.join(
+        [
+            r'function Probe-Share($n, $probe, $label, [bool]$perUser = $false) {',
+            r'try { Get-ChildItem -LiteralPath $probe -Force -ErrorAction Stop | Select-Object -First 1 | Out-Null;',
+            r'Check $n $true "$label reachable"; return } catch { $err = $_ };',
+            r'if ($err.CategoryInfo.Category -ne "PermissionDenied") {',
+            r'Check $n $false "$label not reachable: $($err.Exception.Message)"; return };',
+            r'$parts = $probe.TrimEnd("\").Split("\");',
+            r'if ($parts.Count -eq 4) {',
+            r'$server = $parts[2]; $share = $parts[3];',
+            r'$shares = (cmd /c "net view \\$server /all 2>&1");',
+            r'if ($LASTEXITCODE -ne 0) { if ($perUser) { Check $n $true "$label not probed (refused to SYSTEM)"; return }; Check $n $false "$label refused to SYSTEM, and the shares on $server could not be listed to show it exists: $(($shares | Out-String).Trim())"; return };',
+            r'$found = $shares | Where-Object { $_ -match ("^" + [regex]::Escape($share) + "(\s{2,}|\s*$)") };',
+            r'if ($found) { Check $n $true "$label reachable; the share exists, listing refused to SYSTEM" }',
+            r'else { Check $n $false "$label not reachable: no share named $share on $server" }; return };',
+            r'$parent = $parts[0..($parts.Count - 2)] -join "\"; $leaf = $parts[-1];',
+            r'try { $hit = @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction Stop | Where-Object { $_.Name -eq $leaf }) }',
+            r'catch { if ($perUser -and $_.CategoryInfo.Category -eq "PermissionDenied") { Check $n $true "$label not probed (refused to SYSTEM)"; return }; Check $n $false "$label refused to SYSTEM, and $parent could not be listed to show it exists: $($_.Exception.Message)"; return };',
+            r'if ($hit.Count -gt 0) { Check $n $true "$label reachable; the folder exists, listing refused to SYSTEM" }',
+            r'else { Check $n $false "$label not reachable: $leaf does not exist in $parent" } }',
+        ]
+    )
+
+
 def windows_host_script(
     dcv_session_id: str, mounts: List[Tuple[str, str]], variant: str
 ) -> str:
@@ -321,44 +350,24 @@ def windows_host_script(
         'try { $sc = Test-ComputerSecureChannel; Check "directory_user" $sc "domain secure channel: $sc" }'
         ' catch { Check "directory_user" $false "Test-ComputerSecureChannel failed: $($_.Exception.Message)" }',
     ]
+    lines.append(windows_share_probe())
     for name, path in mounts:
+        check = ps('filesystem:' + name)
+        probe, label = path, path
         if '%' in path:
             # SYSTEM cannot expand per-user paths or prove user access. Only probe a
             # literal UNC parent that includes both a server and a share.
             parts = path.split('\\')
             variable_index = next(i for i, part in enumerate(parts) if '%' in part)
-            check = ps('filesystem:' + name)
             if variable_index < 4:
                 lines.append(
                     f'Check {check} $true {ps(f"per-user share {path}; not probed (server or share is variable)")}'
                 )
                 continue
-            parent = '\\'.join(parts[:variable_index])
-            reachable = ps(f'{parent} reachable (per-user share {path})')
-            denied = ps(
-                f'{parent} reachable; access denied to SYSTEM (per-user share {path})'
-            )
-            missing = ps(f'{parent} not reachable (per-user share {path})')
-            lines.append(
-                f'try {{ Get-Item -LiteralPath {ps(parent)} -ErrorAction Stop | Out-Null; Check {check} $true {reachable} }}'
-                f' catch [System.UnauthorizedAccessException] {{ Check {check} $true {denied} }}'
-                ' catch [System.Management.Automation.ItemNotFoundException], [System.IO.IOException] {'
-                ' $e = $_.Exception; $accessDenied = $_.CategoryInfo.Category -eq "PermissionDenied";'
-                ' while ($null -ne $e) {'
-                ' if ($e -is [System.UnauthorizedAccessException] -or ($e.HResult -band 0xFFFF) -eq 5) { $accessDenied = $true };'
-                ' $e = $e.InnerException };'
-                f' if ($accessDenied) {{ Check {check} $true {denied} }}'
-                f' else {{ Check {check} $false ({missing} + ": " + $_.Exception.Message) }} }}'
-                f' catch {{ Check {check} $false ({missing} + ": " + $_.Exception.Message) }}'
-            )
-            continue
-        lines.append(
-            f'try {{ $p = Join-Path {ps(path)} (".idea-image-probe-" + $env:COMPUTERNAME);'
-            ' Set-Content -Path $p -Value "probe"; $fs = [IO.File]::Open($p, "Open"); $fs.Flush($true); $fs.Close();'
-            ' Get-Content $p | Out-Null; Remove-Item $p;'
-            f' Check {ps("filesystem:" + name)} $true "{path} write, flush, read and delete worked" }}'
-            f' catch {{ Check {ps("filesystem:" + name)} $false "{path}: $($_.Exception.Message)" }}'
-        )
+            probe = '\\'.join(parts[:variable_index])
+            label = f'{probe} (per-user share {path})'
+        per_user = '$true' if '%' in path else '$false'
+        lines.append(f'Probe-Share {check} {ps(probe)} {ps(label)} {per_user}')
     if variant == ImageVariant.NVIDIA.value:
         lines.append(
             '$g = (& "$env:SystemRoot\\System32\\nvidia-smi.exe" -L 2>&1 | Out-String);'

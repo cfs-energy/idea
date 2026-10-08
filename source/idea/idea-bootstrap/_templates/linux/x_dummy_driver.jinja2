@@ -7,7 +7,7 @@ function install_x_dummy_driver() {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   apt-get install -y xserver-xorg-video-dummy
 {% else %}
-  yum install -y xorg-x11-drv-dummy
+  package_transaction yum install -y xorg-x11-drv-dummy
 {% endif %}
   tee /etc/X11/xorg.conf > /dev/null << EOF
 Section "Device"

@@ -11,13 +11,13 @@ function install_efs_mount_helper () {
     if ! command -v amazon-efs-mount-watchdog > /dev/null 2>&1; then
       log_info "Installing Amazon EFS Mount Helper for {{ context.base_os }}"
       {% if context.base_os in ('amazonlinux2023',) %}
-        yum install -y amazon-efs-utils
+        package_transaction yum install -y amazon-efs-utils
       {% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
         log_info "Installing Amazon EFS Mount Helper from Github"
         {% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
         # cmake, a C++ compiler and Go are what the efs-proxy FIPS crypto build needs; the distro
         # cargo and rust only satisfy the spec's BuildRequires, the rustup toolchain below does the build
-        yum -y install git make rpm-build cargo rust openssl-devel cmake gcc gcc-c++ golang
+        package_transaction yum -y install git make rpm-build cargo rust openssl-devel cmake gcc gcc-c++ golang
         {% endif %}
         # the distro rust lags the MSRV of the AWS SDK crates efs-utils pins (RHEL 10.2 ships
         # 1.92, the crates need 1.94), and the spec sources ~/.cargo/env itself, so build with
@@ -27,7 +27,7 @@ function install_efs_mount_helper () {
         git clone --branch "{{ context.config.get_string('global-settings.package_config.efs_utils.version', default='v3.3.0') }}" --depth 1 https://github.com/aws/efs-utils
         cd efs-utils
         make rpm
-        yum -y install build/amazon-efs-utils*rpm
+        package_transaction yum -y install build/amazon-efs-utils*rpm
       {% endif %}
   else
     log_info "Found existing Amazon EFS Mount Helper on system"

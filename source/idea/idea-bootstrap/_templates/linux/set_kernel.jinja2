@@ -83,7 +83,7 @@ function apply_kernel_holds() {
   # Install dnf-plugin-versionlock if not already present
   if ! dnf list installed dnf-plugin-versionlock >/dev/null 2>&1; then
     log_info "Installing dnf-plugin-versionlock for kernel version management"
-    dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
+    package_transaction dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
   fi
   # Lock the running kernel under its own package family (kernel, kernel6.12, ...)
   local kernel_package
@@ -94,7 +94,7 @@ function apply_kernel_holds() {
   # Install dnf-plugin-versionlock if not already present
   if ! dnf list installed dnf-plugin-versionlock >/dev/null 2>&1; then
     log_info "Installing dnf-plugin-versionlock for kernel version management"
-    dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
+    package_transaction dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
   fi
   # Lock the specific current kernel version
   dnf versionlock kernel-${current_kernel} kernel-core-${current_kernel} kernel-devel-${current_kernel} kernel-headers-${current_kernel} >/dev/null 2>&1 || true
@@ -170,7 +170,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel8', 'rocky8') %}
   # RHEL8/Rocky8 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
-  if dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
+  if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
     log_error "Failed to install latest kernel in ${target_version} series"
@@ -180,7 +180,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel9', 'rocky9') %}
   # RHEL9/Rocky9 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
-  if dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
+  if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
     log_error "Failed to install latest kernel in ${target_version} series"

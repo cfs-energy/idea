@@ -355,7 +355,15 @@ STALE_KERNEL = '6.1.158-178.288.amzn2023.x86_64'
 
 # dnf/rpm/crontab/reboot are shimmed as functions so they take precedence over anything on PATH:
 # this block reboots the host on the alignment path.
+# The real include provides package_transaction; it is sourced before HARNESS so the stubs there
+# (instance_id, aws, logging) win over its real metadata lookups.
+KERNEL_INCLUDE = (
+    'SAVED_BOOTSTRAP_DIR="$BOOTSTRAP_DIR"\n'
+    f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
+    'BOOTSTRAP_DIR="${SAVED_BOOTSTRAP_DIR}"\n'
+)
 KERNEL_HARNESS = """
+function sleep () { :; }
 function set_reboot_required () { echo -n "yes" > "${BOOTSTRAP_DIR}/reboot_required.txt"; }
 function check_reboot_loop () { echo "[INFO] check_reboot_loop: ${1}"; }
 function reboot () { echo "reboot" >> "${BOOTSTRAP_DIR}/reboot.log"; }
@@ -419,7 +427,9 @@ def run_kernel_header_prep(
     block = rendered.split('function install_nvidia_grid_drivers')[0]
     script = os.path.join(base_dir, 'configure_dcv_host.sh')
     with open(script, 'w') as f:
-        f.write(f'#!/bin/bash\n{HARNESS}\n{KERNEL_HARNESS}\n{block}\n')
+        f.write(
+            f'#!/bin/bash\n{KERNEL_INCLUDE}\n{HARNESS}\n{KERNEL_HARNESS}\n{block}\n'
+        )
 
     env = dict(os.environ)
     env.update(
@@ -566,7 +576,9 @@ def test_kernel_header_prep_skipped_without_nvidia_hardware(context, tmp_path):
     block = rendered.split('function install_nvidia_grid_drivers')[0]
     script = os.path.join(base_dir, 'configure_dcv_host.sh')
     with open(script, 'w') as f:
-        f.write(f'#!/bin/bash\n{HARNESS}\n{KERNEL_HARNESS}\n{block}\n')
+        f.write(
+            f'#!/bin/bash\n{KERNEL_INCLUDE}\n{HARNESS}\n{KERNEL_HARNESS}\n{block}\n'
+        )
     env = dict(os.environ)
     env.update(
         {

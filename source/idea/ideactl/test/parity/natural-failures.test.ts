@@ -585,6 +585,9 @@ function upgradeReplay(input: {
       if (input.deployFails === true) throw new Error("Stack sample-cluster-scheduler ended UPDATE_ROLLBACK_COMPLETE.");
       for (const row of rows[`${CLUSTER}.modules`]!) row["version"] = ideaVersion();
     },
+    async releaseImageExists() {
+      return true;
+    },
     regionAmiConfig() {
       return { [REGION]: { amazonlinux2023: "ami-release" } };
     },

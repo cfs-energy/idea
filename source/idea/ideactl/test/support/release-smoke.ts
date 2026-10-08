@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+
+import { gateReleaseSynthesis } from './release-synth-gate.ts';
 
 // The identity provider needs no compute instances or live service reads for a new pool.
 // Its claim handler exercises prebuilt Lambda assets through the real application entry point.
@@ -78,7 +80,9 @@ export function smokeRelease(executable: string, runtimePath?: string): void {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   assert.ok(process.argv[2], 'release executable path is required');
   smokeRelease(resolve(process.argv[2]));
+  // Every module stack, synthesized by the executable and compared with source, before upload.
+  await gateReleaseSynthesis(resolve(process.argv[2]));
 }

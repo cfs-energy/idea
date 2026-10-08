@@ -13,9 +13,9 @@ fi
 if ! systemctl status amazon-ssm-agent; then
   machine=$(uname -m)
   if [[ $machine == "x86_64" ]]; then
-    yum install -y {{ context.config.get_string('global-settings.package_config.aws_ssm.x86_64', required=True) }}
+    package_transaction yum install -y {{ context.config.get_string('global-settings.package_config.aws_ssm.x86_64', required=True) }}
   elif [[ $machine == "aarch64" ]]; then
-    yum install -y {{ context.config.get_string('global-settings.package_config.aws_ssm.aarch64', required=True) }}
+    package_transaction yum install -y {{ context.config.get_string('global-settings.package_config.aws_ssm.aarch64', required=True) }}
   fi
   systemctl enable amazon-ssm-agent || true
   systemctl restart amazon-ssm-agent
