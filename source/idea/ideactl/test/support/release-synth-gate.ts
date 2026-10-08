@@ -73,13 +73,14 @@ export function differences(left: unknown, right: unknown, path = ''): Differenc
 }
 
 /**
- * What the executable got wrong: differences from the first source run, except values the two
- * source runs disagree on, which must still keep their type and length.
+ * What the executable got wrong: differences from the first source run, except values some source
+ * run disagrees on, which must still keep their type and length.
  */
-export function unexpectedDifferences(sourceA: unknown, sourceB: unknown, executable: unknown): string[] {
-  const volatile = new Set(differences(sourceA, sourceB).map((difference) => difference.path));
+export function unexpectedDifferences(sources: unknown[], executable: unknown): string[] {
+  const [first, ...others] = sources;
+  const volatile = new Set(others.flatMap((other) => differences(first, other).map((difference) => difference.path)));
   const problems: string[] = [];
-  for (const { path, left, right } of differences(sourceA, executable)) {
+  for (const { path, left, right } of differences(first, executable)) {
     if (!volatile.has(path)) {
       problems.push(`${path}: source ${JSON.stringify(left)?.slice(0, 160)}, executable ${JSON.stringify(right)?.slice(0, 160)}`);
       continue;
@@ -88,6 +89,34 @@ export function unexpectedDifferences(sourceA: unknown, sourceB: unknown, execut
     if (!sameShape) problems.push(`${path}: changes on every synthesis, but the executable's value has a different shape`);
   }
   return problems;
+}
+
+/**
+ * Extra source syntheses allowed before a difference is reported. Some values carry only a few
+ * random characters (a 32-character name ends in about two hex digits of a UUID), so two source
+ * runs can agree on one by chance. A value the executable gets "wrong" is reported only if every
+ * source run agrees on it: for 8 random bits and 8 extra runs, ten runs agreeing by chance is 2^-72.
+ */
+export const CONFIRMING_SOURCE_RUNS = 8;
+
+/**
+ * Problems that survive confirmation: while the executable differs from source somewhere, another
+ * source synthesis is added (up to `limit`) and the comparison is made again against all of them.
+ */
+export async function confirmedProblems<T>(
+  sources: T[],
+  executable: T,
+  problemsOf: (sources: T[], executable: T) => string[],
+  anotherSource: () => Promise<T>,
+  limit = CONFIRMING_SOURCE_RUNS,
+): Promise<{ problems: string[]; sourceRuns: number }> {
+  const runs = [...sources];
+  let problems = problemsOf(runs, executable);
+  for (let extra = 0; problems.length > 0 && extra < limit; extra += 1) {
+    runs.push(await anotherSource());
+    problems = problemsOf(runs, executable);
+  }
+  return { problems, sourceRuns: runs.length };
 }
 
 /**
@@ -275,14 +304,24 @@ export async function gateReleaseSynthesis(executable: string, options: { keep?:
         throw new Error(failed.map((reason) => (reason instanceof Error ? reason.message : String(reason))).join('\n'));
       }
       const [sourceA, sourceB, packaged] = settled.map((result) => (result as PromiseFulfilledResult<SynthOutput>).value);
-      const problems = [
-        ...unexpectedDifferences(sourceA.template, sourceB.template, packaged.template).map((problem) => `template ${problem}`),
-        ...unexpectedDifferences(sourceA.validationReport, sourceB.validationReport, packaged.validationReport)
-          .map((problem) => `validation report ${problem}`),
-      ];
+      let extraRun = 0;
+      const { problems, sourceRuns } = await confirmedProblems(
+        [sourceA, sourceB],
+        packaged,
+        (sources, executableOutput) => [
+          ...unexpectedDifferences(sources.map((source) => source.template), executableOutput.template)
+            .map((problem) => `template ${problem}`),
+          ...unexpectedDifferences(sources.map((source) => source.validationReport), executableOutput.validationReport)
+            .map((problem) => `validation report ${problem}`),
+        ],
+        () => synthesize(process.execPath, [SOURCE_ENTRY], synthCase, root, join(out, `source-extra-${String(++extraRun)}`)),
+      );
       if (problems.length > 0) {
-        throw new Error(`${synthCase.label}: the executable's synthesis differs from source\n  ${problems.slice(0, 25).join('\n  ')}`);
+        throw new Error(
+          `${synthCase.label}: the executable's synthesis differs from all ${String(sourceRuns)} source syntheses\n  ${problems.slice(0, 25).join('\n  ')}`,
+        );
       }
+      if (sourceRuns > 2) console.log(`confirmed changing values with ${String(sourceRuns)} source syntheses: ${synthCase.label}`);
       console.log(`PASS executable synthesis matches source: ${synthCase.label}`);
     });
     console.log(`PASS extracted release: all ${String(cases.length)} module syntheses match source`);
