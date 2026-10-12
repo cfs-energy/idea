@@ -89,11 +89,11 @@ bootstrap_ok() {
   for stage in setup packages {{ 'drivers' if compute else 'dcv' }}; do
     [[ -f "$STATE/bake-$stage.ok" ]] || { echo "stage $stage did not finish"; return 1; }
   done
-  # Ignore xtrace source lines, which can contain unexecuted error-message literals.
+  # Ignore xtrace literals and failed attempts that were retried.
   for log in "${BOOTSTRAP_DIR}"/logs/*.log "${IDEA_{{ 'COMPUTE_NODE' if compute else 'DCV_HOST' }}_AMI_BUILDER_LOGS_DIR}"/*.log; do
     [[ -f "$log" ]] || continue
     found=yes
-    hit=$(grep -En "$FATAL_LINE" "$log" | grep -v '^[0-9]*:+' | head -1)
+    hit=$(grep -En "$FATAL_LINE" "$log" | grep -Ev '^[0-9]+:(\+|\[retried\] )' | head -1)
     [[ -z "$hit" ]] || { echo "${log##*/}:${hit}"; return 1; }
   done
   [[ $found == yes ]] || { echo "no bootstrap log was written"; return 1; }

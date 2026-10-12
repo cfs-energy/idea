@@ -2,7 +2,7 @@
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 if ! command -v jq > /dev/null 2>&1; then
   log_info "installing jq"
-  yum install -y jq
+  package_transaction yum install -y jq
 fi
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 if ! command -v jq > /dev/null 2>&1; then

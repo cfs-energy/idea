@@ -231,7 +231,7 @@ Compare local `config/` files to the settings table as MODIFIED, DELETED, or ADD
 
 ## `config preview-upgrade`
 
-Print the configuration drift an upgrade would apply, without writing it.
+Print the configuration drift an upgrade would apply, without writing it. Missing or unverifiable release images appear as blocking findings; the complete preview is printed before exiting with code 1. `--skip-release-image-check` skips the registry lookup, logs that the image was not verified, and keeps the proposed image move.
 
 **Usage:** `ideactl config preview-upgrade [options] [modules...]`
 
@@ -246,6 +246,7 @@ Print the configuration drift an upgrade would apply, without writing it.
 | `--aws-region <aws-region>` | yes | none | yes |
 | `--base-os <base-os>` | yes | none | no |
 | `--values-file <values-file>` | yes | cluster `values.yml` | no |
+| `--skip-release-image-check` | no | none | no |
 | `--skip-global-settings-update` | no | none | no |
 
 **Reads:** cluster tables, local or supplied `values.yml`, AMI maps. **Changes:** nothing. **Example:** `ideactl config preview-upgrade --cluster-name sample-cluster --aws-region us-east-2 --base-os amazonlinux2023`
@@ -537,11 +538,14 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--force` | no | none | no |
 | `--accept-config-drift` | no | none | no |
 | `--allow-replacement <logical-id>` | yes, repeatable | none | no |
+| `--skip-release-image-check` | no | none | no |
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
 | `--drain` | no | none | no |
 | `--drain-timeout-minutes <minutes>` | yes | 240 minutes (effective) | no |
 | `--skip-drain-check` | no | none | no |
+
+Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move.
 
 With `enable_ecs: true`, the bastion moves into a service in its existing module stack. Its address and SSH fingerprint change once, then persist across task replacements. The cutover and later task revisions need no bastion replacement override.
 

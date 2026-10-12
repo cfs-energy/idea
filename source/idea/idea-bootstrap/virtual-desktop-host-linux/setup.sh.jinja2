@@ -49,9 +49,12 @@ PATH={{ path }}
 
 source /etc/environment
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
 {% if context.base_os == 'amazonlinux2023' %}
 # a baked image has cronie; dnf would still load repository metadata on the way to READY
-rpm -q cronie >/dev/null 2>&1 || dnf -y install cronie
+rpm -q cronie >/dev/null 2>&1 || package_transaction dnf -y install cronie
 systemctl enable crond
 systemctl start crond
 {% endif %}
@@ -63,9 +66,6 @@ if [[ "${SOURCE}" == "crontab" ]]; then
 fi
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
-
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/dnf_mirror_speed.jinja2' %}
 
@@ -100,7 +100,7 @@ if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION
   PACKAGES_INSTALLED=yes
   {% if context.base_os in ('rhel8', 'rocky8') %}
   #drpm isn't available in rhel9 or rocky9
-  yum install -y drpm
+  package_transaction yum install -y drpm
   {% endif %}
 
   {% include '_templates/linux/epel_repo.jinja2' %}

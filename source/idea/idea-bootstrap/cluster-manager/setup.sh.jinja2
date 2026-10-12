@@ -41,8 +41,11 @@ PATH={{ path }}
 
 source /etc/environment
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
 {% if context.base_os == 'amazonlinux2023' %}
-dnf -y install cronie
+package_transaction dnf -y install cronie
 systemctl enable crond
 systemctl start crond
 {% endif %}
@@ -53,9 +56,6 @@ if [[ "${SOURCE}" == "crontab" ]]; then
   crontab -l | grep -v 'setup.sh' | crontab -
 fi
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
-
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/idea_proxy.jinja2' %}
 
@@ -108,7 +108,7 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 {% if rpm_based %}
 log_info "Installing LDAP packages ..."
 OPENLDAP_SERVER_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server', required=True)) }})
-yum install --skip-broken -y ${OPENLDAP_SERVER_PKGS[*]}
+package_transaction yum install --skip-broken -y ${OPENLDAP_SERVER_PKGS[*]}
 {% endif %}
 
 {% if context.base_os == 'amazonlinux2023' %}
@@ -116,7 +116,7 @@ yum install --skip-broken -y ${OPENLDAP_SERVER_PKGS[*]}
 {% elif rpm_based %}
 log_info "Installing Putty packages ..."
 PUTTY_PKGS=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.putty', required=True)) }})
-yum install --skip-broken -y ${PUTTY_PKGS[*]}
+package_transaction yum install --skip-broken -y ${PUTTY_PKGS[*]}
 {% else %}
 log_warning "No puttygen package configured for {{ context.base_os }}: .pem to .ppk conversion is unavailable"
 {% endif %}

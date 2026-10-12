@@ -7,9 +7,11 @@ pwsh is installed.
 """
 
 import os
+import pathlib
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
@@ -218,6 +220,19 @@ def packages(base_os: str):
                 dict(ami_vars, enabled_drivers=('efa', 'fsx_lustre')),
             )
         )
+    if base_os == 'amazonlinux2023':
+        result += [
+            (component, component, {})
+            for component in (
+                'bastion-host',
+                'cluster-manager',
+                'dcv-broker',
+                'dcv-connection-gateway',
+                'openldap-server',
+                'scheduler',
+                'virtual-desktop-controller',
+            )
+        ]
     return result
 
 
@@ -256,6 +271,59 @@ def run(command) -> str:
     return '' if result.returncode == 0 else (result.stdout + result.stderr).strip()
 
 
+BOOTSTRAP_COMMON = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / 'idea-bootstrap'
+    / 'common'
+    / 'bootstrap_common.sh'
+)
+
+PACKAGE_TRANSACTION = re.compile(
+    r'\b(?:dnf|yum)\s+(?:--?[^\s;|&]+\s+)*'
+    r'(?:install|upgrade|update|groupinstall|localinstall|group\s+install)\b'
+)
+
+
+def assert_package_transactions_wrapped(content):
+    for line in content.replace('\\\n', ' ').splitlines():
+        if line.lstrip().startswith(('#', 'log_', 'echo ')):
+            continue
+        for call in PACKAGE_TRANSACTION.finditer(line):
+            assert line[: call.start()].rstrip().endswith('package_transaction'), line
+    # --skip-broken and strict=0 stay where a caller already used them for packages a distribution
+    # does not ship; the helper only retries and falls back to --nobest, it never skips packages.
+    helper = (
+        open(BOOTSTRAP_COMMON)
+        .read()
+        .split('function package_transaction()', 1)[1]
+        .split('\n}\n', 1)[0]
+    )
+    assert '--skip-broken' not in helper and 'strict=0' not in helper
+
+
+@pytest.mark.parametrize(
+    'command',
+    [
+        'dnf -y install git',
+        'if yum install -y git; then',
+        'sudo yum --exclude=foo groupinstall "Server with GUI" -y',
+        'rpm -q git || dnf install git',
+        'dnf upgrade -y',
+        'command="dnf install git"',
+        'dnf -y \\\ninstall git',
+    ],
+)
+def test_direct_package_transactions_are_rejected(command):
+    with pytest.raises(AssertionError):
+        assert_package_transactions_wrapped(command)
+
+
+def test_all_templates_wrap_package_transactions():
+    # Also cover dormant OS branches and controller templates outside the host matrix.
+    for template in Path(IDEA_BOOTSTRAP_DIR).rglob('*.jinja2'):
+        assert_package_transactions_wrapped(template.read_text())
+
+
 @pytest.mark.parametrize('instance_type', INSTANCE_TYPES)
 @pytest.mark.parametrize('base_os', LINUX_BASE_OS)
 def test_linux_bootstrap_packages_parse(tmp_path, base_os, instance_type):
@@ -277,6 +345,13 @@ def test_linux_bootstrap_packages_parse(tmp_path, base_os, instance_type):
         for script in scripts:
             with open(script) as f:
                 content = f.read()
+            assert_package_transactions_wrapped(content)
+            if re.search(
+                r'^\s*(?:if |.*\|\| )?package_transaction ', content, re.MULTILINE
+            ):
+                assert content.index(
+                    'source "${SCRIPT_DIR}/../common/bootstrap_common.sh"'
+                ) < content.index('package_transaction '), script
             if content not in SHELLCHECKED:
                 SHELLCHECKED.add(content)
                 unchecked.append(script)
@@ -326,7 +401,9 @@ def test_windows_bootstrap_package_parses(tmp_path, base_os, instance_type):
 
 # rocky installs from the public mirrorlist: dnf is told to download in parallel from the
 # fastest mirror before its first call. rhel uses in-region rhui and is left alone.
-FIRST_PACKAGE_MANAGER_CALL = re.compile(r'^\s*(dnf|yum)\s', re.MULTILINE)
+FIRST_PACKAGE_MANAGER_CALL = re.compile(
+    r'^\s*(?:package_transaction )?(dnf|yum)\s', re.MULTILINE
+)
 
 
 @pytest.mark.parametrize('base_os', ('rocky8', 'rocky9', 'rhel9'))

@@ -280,6 +280,9 @@ function upgradeHarness(answer: boolean): UpgradeHarness {
     async deploy() {
       events.push("deploy");
     },
+    async releaseImageExists() {
+      return true;
+    },
     regionAmiConfig() {
       return { [REGION]: { amazonlinux2023: "ami-release" } };
     },

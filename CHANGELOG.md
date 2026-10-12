@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.4] - 2026-10-08
+
+* **Windows image validation**: Windows bakes no longer fail on a read-only share such as Apps. The check runs as the desktop's machine account, which users never write as, so each share is now listed instead of written to. For a per-user path, a parent whose listing and existence checks are refused to SYSTEM passes as "not probed (refused to SYSTEM)"; a missing parent still fails. For other paths, a refused listing passes only when the server's share list or the parent folder shows the share or folder exists, because Windows refuses a missing share with the same error. Errors are no longer hidden behind a misleading "Could not find file".
+* **ideactl release files**: the downloadable ideactl executables deploy every module. Bundled CDK assets ship at the paths CDK reads them from; the v26.10.3 executables stopped at the analytics stack with "Cannot find asset". Each release now synthesizes every module with the packaged executable on every platform and requires the result to match a build from source before publishing.
+* **Image bakes and host setup**: package installs on RHEL, Rocky and Amazon Linux retry with a metadata refresh and backoff, then fall back to the newest consistent package set (`--nobest`) when a mirror publishes a package before its dependency. A package no repository carries still fails at once, existing per-distribution tolerances are unchanged, recovered attempts no longer fail the log checks, and a final failure stops desktop stages immediately or fails compute image checks before publication.
+* **Release candidates**: a release is first published as a release candidate (`v<version>-rc.N`, image tag `<version>-rc.N`) and proven from those exact files. Merging to main releases the candidate's executables and image digest unchanged; with no candidate built from the merged source, nothing is released. An upgrade moves the control-plane image to the release image only after the registry confirms it exists, and otherwise stops before changing anything; a cluster running this release's candidate keeps it.
+
 ## [26.10.3] - 2026-10-07
 
 * **Windows image validation**: a Windows share whose path is per user (`%UserName%`) is checked for reachability during the test launch instead of being written to. It previously failed every Windows bake on clusters with per-user home shares. Access denied counts as reachable; a missing path or network failure still fails.

@@ -55,6 +55,7 @@ export interface StackSettingsPlan {
 
 /** Complete, read-only input needed to model an upgrade. */
 export interface UpgradeDriftInput {
+  blockingFindings?: readonly string[];
   current: readonly CurrentConfigRow[];
   generated: readonly ConfigEntry[];
   phase3?: readonly ConfigEntry[];
@@ -83,6 +84,7 @@ export interface UpgradeDriftFinding {
 
 /** Findings are sorted by action and then key for deterministic terminal output. */
 export interface UpgradeDriftReport {
+  blockingFindings?: readonly string[];
   findings: UpgradeDriftFinding[];
   totals: Readonly<Record<UpgradeDriftEffect, number>>;
   changedRowsDifferingFromGenerated: string[];
@@ -376,6 +378,7 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
 
   return {
     findings: sorted,
+    blockingFindings: input.blockingFindings,
     totals,
     changedRowsDifferingFromGenerated: sorted
       .filter((row) => row.effect === "CHANGE" && row.differsFromGenerated && row.routineUpdate === undefined)
@@ -389,6 +392,8 @@ export function renderUpgradeDrift(report: UpgradeDriftReport): string {
     "Configuration preview",
     `  Rows: ${report.totals.ADD} added, ${report.totals.CHANGE} changed, ${report.totals.DELETE} deleted, ${report.totals.PRESERVE} preserved`,
   ];
+
+  for (const message of report.blockingFindings ?? []) lines.push(`  BLOCKING: ${message}`);
 
   for (const action of UPGRADE_DRIFT_ACTIONS) {
     const rows = report.findings.filter((row) => row.action === action);

@@ -48,8 +48,11 @@ PATH={{ path }}
 
 source /etc/environment
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
 {% if context.base_os == 'amazonlinux2023' %}
-dnf -y install cronie
+package_transaction dnf -y install cronie
 systemctl enable crond
 systemctl start crond
 {% endif %}
@@ -69,9 +72,6 @@ if [[ ! -f ${BOOTSTRAP_DIR}/ptrace_disabled ]]; then
 fi
 
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
-
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/dnf_mirror_speed.jinja2' %}
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}

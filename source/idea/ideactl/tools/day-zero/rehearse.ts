@@ -7,7 +7,7 @@
  * do not exist until deployment completes.
  */
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,8 @@ import { certificateHooks, deploymentOrder } from "../../src/cli/deployment-help
 import { ConfigKeyNotFound, ClusterConfig, type ModuleInfo } from "../../src/config/cluster-config.ts";
 import { convertConfigToKeyValuePairs, generateConfig, type ConfigEntry, type ModuleEntry } from "../../src/config/generator.ts";
 import { loadValuesFile, type UserValues } from "../../src/config/values.ts";
-import { CALLER_IDENTITY_KEY } from "../../src/cdk/synth-reads.ts";
+import { CALLER_IDENTITY_KEY, listRolesKey } from "../../src/cdk/synth-reads.ts";
+import { serviceLinkedRolePathPrefixes } from "../../src/cdk/stacks/analytics.ts";
 
 const DEPLOYMENT_ID = "00000000-0000-4000-8000-000000000000";
 /** Rows the deploy tool writes before a module's stack runs, so no stack produces them. */
@@ -55,6 +56,26 @@ export interface RehearseOptions {
   valuesFile: string;
   workDir?: string;
   keepWorkDir?: boolean;
+  /**
+   * Answers the fresh-account reads (no OpenSearch service-linked role yet) instead of leaving
+   * them unanswered, so every stack synthesizes.
+   */
+  completeReads?: boolean;
+  /**
+   * Writes each synthesized stack's exact inputs (settings, replayed reads, CDK context) under
+   * `<emitInputs>/<module id>/` and the run order to `<emitInputs>/modules.json`, so another
+   * build of the CDK app can synthesize the same stacks from the same inputs.
+   */
+  emitInputs?: string;
+}
+
+/** One emitted stack: what `cdk cdk-app` needs to synthesize it again from files. */
+export interface EmittedStack {
+  moduleId: string;
+  moduleName: string;
+  clusterName: string;
+  awsRegion: string;
+  deploymentId: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -330,16 +351,18 @@ function isOfflineReadBlock(problem: string): boolean {
   return problem.startsWith("live read required:") || problem.startsWith("CDK context lookup required:");
 }
 
-function writeReplay(file: string, accountId: string): void {
-  writeFileSync(
-    file,
-    JSON.stringify({
-      [CALLER_IDENTITY_KEY]: {
-        account: accountId,
-        arn: `arn:aws:iam::${accountId}:root`,
-      },
-    }),
-  );
+function writeReplay(file: string, accountId: string, dnsSuffix: string | undefined): void {
+  const reads: Record<string, unknown> = {
+    [CALLER_IDENTITY_KEY]: {
+      account: accountId,
+      arn: `arn:aws:iam::${accountId}:root`,
+    },
+  };
+  // A fresh account has no OpenSearch service-linked role yet.
+  if (dnsSuffix !== undefined) {
+    for (const prefix of serviceLinkedRolePathPrefixes(dnsSuffix)) reads[listRolesKey(prefix)] = [];
+  }
+  writeFileSync(file, JSON.stringify(reads));
 }
 
 function withRehearsalEnvironment<T>(workDir: string, action: () => Promise<T>): Promise<T> {
@@ -393,6 +416,7 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
   const problems = generatedStateProblems.map((problem) => `generated state: ${problem}`);
   const orderingProblems = [...problems];
   const offlineReadBlocks: string[] = [];
+  const emitted: EmittedStack[] = [];
 
   try {
     if (generatedStateProblems.length > 0) {
@@ -412,7 +436,8 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
 
     await withRehearsalEnvironment(root, async () => {
       writeFileSync(join(root, "cdk.context.json"), "{}\n");
-      writeReplay(synthReadsFile, accountId);
+      const dnsSuffix = typeof values.aws_dns_suffix === "string" ? values.aws_dns_suffix : "amazonaws.com";
+      writeReplay(synthReadsFile, accountId, options.completeReads === true ? dnsSuffix : undefined);
       for (const moduleId of orderedModules) {
         const module = modulesById.get(moduleId);
         if (module === undefined) {
@@ -450,6 +475,14 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
           });
           const assembly = app.synth();
           const template = assembly.getStackArtifact(`${clusterName}-${module.id}`).template;
+          if (options.emitInputs !== undefined) {
+            const inputs = join(options.emitInputs, module.id);
+            mkdirSync(inputs, { recursive: true });
+            copyFileSync(configFile, join(inputs, "cluster-settings.json"));
+            copyFileSync(synthReadsFile, join(inputs, "synth-reads.json"));
+            copyFileSync(join(root, "cdk.context.json"), join(inputs, "cdk.context.json"));
+            emitted.push({ moduleId: module.id, moduleName: module.name, clusterName, awsRegion, deploymentId: DEPLOYMENT_ID });
+          }
           const checks = freshResourceChecks(module.name, template, settings);
           const publishedSettings = appendPublishedSettings(template, settings, origins, accountId, module.name);
           const stackProblems = checks.filter((check) => check.startsWith("PROBLEM:"));
@@ -486,6 +519,9 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
         }
       }
     });
+    if (options.emitInputs !== undefined) {
+      writeFileSync(join(options.emitInputs, "modules.json"), `${JSON.stringify(emitted, null, 2)}\n`);
+    }
     const dependencyProblems = validateDeploymentDependencies({
       deploymentOrder: orderedModules,
       stacks,
@@ -545,9 +581,18 @@ export function renderRehearsal(report: DayZeroRehearsal): string {
 function parseArgs(argv: string[]): RehearseOptions {
   let valuesFile: string | undefined;
   let keepWorkDir = false;
+  let completeReads = false;
+  let emitInputs: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === "--values-file") {
+    if (value === "--complete-reads") {
+      completeReads = true;
+    } else if (value === "--emit-inputs") {
+      const next = argv[index + 1];
+      if (next === undefined || next.startsWith("--")) throw new Error("--emit-inputs requires a directory");
+      emitInputs = resolve(next);
+      index += 1;
+    } else if (value === "--values-file") {
       const next = argv[index + 1];
       if (next === undefined || next.startsWith("--")) throw new Error("--values-file requires a path");
       valuesFile = resolve(next);
@@ -559,7 +604,7 @@ function parseArgs(argv: string[]): RehearseOptions {
     }
   }
   if (valuesFile === undefined) throw new Error("--values-file requires a path");
-  return { valuesFile, keepWorkDir };
+  return { valuesFile, keepWorkDir, completeReads, emitInputs };
 }
 
 async function main(argv: string[]): Promise<number> {

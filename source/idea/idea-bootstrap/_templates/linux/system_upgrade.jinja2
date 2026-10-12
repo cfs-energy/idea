@@ -16,7 +16,7 @@ fi
    default=False rather than depending on a vdc key being present. #}
 {% elif context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') and context.config.get_bool('virtual-desktop-controller.dcv_session.first_boot_dnf_update', default=False) %}
 # System upgrade with error handling to prevent infinite loops
-if dnf -y update; then
+if package_transaction dnf -y update; then
   log_info "System packages upgraded successfully"
   # Only set reboot required if upgrade actually succeeded
   set_reboot_required "Packages Upgraded"

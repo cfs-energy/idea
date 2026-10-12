@@ -1,6 +1,6 @@
 {
   "name": "ideactl",
-  "version": "26.10.3",
+  "version": "26.10.4",
   "private": true,
   "type": "module",
   "description": "IDEA administrator: TypeScript CDK app and cluster CLI, shipped inside the idea image",
@@ -50,12 +50,14 @@
     "commander": "15.0.0",
     "constructs": "10.8.1",
     "js-yaml": "5.4.2",
-    "nunjucks": "3.2.4"
+    "nunjucks": "3.2.4",
+    "undici": "7.30.0"
   },
   "devDependencies": {
     "@types/js-yaml": "4.0.9",
     "@types/node": "26.6.1",
     "@types/nunjucks": "3.2.6",
+    "acorn": "8.19.0",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },

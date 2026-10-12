@@ -7,9 +7,10 @@
  * installation tree and does not require a compiler or package manager.
  */
 
-import { buildSync } from "esbuild";
+import { build, transformSync } from "esbuild";
+import { parse } from "acorn";
 import { spawnSync } from "node:child_process";
-import { builtinModules, createRequire } from "node:module";
+import { builtinModules } from "node:module";
 import {
   chmodSync,
   copyFileSync,
@@ -19,18 +20,37 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_JSON = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"));
 const DEFAULT_OUTPUT = join(PACKAGE_ROOT, "dist", "ideactl-shell");
 const DEFAULT_ARCHIVE = join(PACKAGE_ROOT, "dist", `ideactl-shell-${PACKAGE_JSON.version}.tar.gz`);
+const NODE_MODULES = join(PACKAGE_ROOT, "node_modules");
+/**
+ * Runs before the bundled code. CommonJS dependencies get `require`; `__ideactlPackagePath` maps a
+ * dependency file's path under node_modules to its shipped copy. The bundle is
+ * dist/src/cli/main.js and shipped packages are under dist/node_modules.
+ */
+export const BUNDLE_BANNER = [
+  'import { createRequire as __ideactlCreateRequire } from "node:module";',
+  'import { join as __ideactlJoinPath } from "node:path";',
+  "const require = __ideactlCreateRequire(import.meta.url);",
+  "const __filename = import.meta.filename;",
+  "const __dirname = import.meta.dirname;",
+  'const __ideactlPackagePath = (path) => __ideactlJoinPath(import.meta.dirname, "..", "..", "node_modules", path);',
+].join(" ");
+/** Package files a run never reads: type declarations, source maps, documentation, jsii manifests. */
+const UNSHIPPED_PACKAGE_FILE = /(?:\.d\.[cm]?ts|\.map|\.md|^\.jsii(?:\.gz)?)$/;
+const MODULE_PATH_IDENTIFIER = /\b__(?:dirname|filename)\b/;
+const MODULE_META_PATH = /\bimport\.meta\.(?:url|dirname|filename)\b/;
 
 /**
  * Parses the two output controls accepted by the release task.
@@ -277,6 +297,206 @@ function copyRuntimeResources(destination, lambdaAssets) {
 }
 
 /**
+ * Locates a file inside the package's node_modules: the package it belongs to and its path
+ * there with forward slashes. Returns undefined for files outside node_modules.
+ *
+ * @param {string} file absolute file path
+ * @param {string} [nodeModules] node_modules directory the bundle resolves from
+ * @returns {{ packageName: string, file: string } | undefined}
+ */
+export function nodeModulesLocation(file, nodeModules = NODE_MODULES) {
+  // esbuild reports real paths; compare real paths, so a symlinked checkout or temporary
+  // directory still matches.
+  const real = (path) => {
+    try {
+      return realpathSync.native(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  const path = relative(real(nodeModules), real(file));
+  if (path === "" || path.startsWith("..") || /^[A-Za-z]:/.test(path)) return undefined;
+  const posix = path.split(sep).join("/");
+  const parts = posix.split("/");
+  const packageName = parts[0].startsWith("@") ? `${parts[0]}/${parts[1]}` : parts[0];
+  return { packageName, file: posix };
+}
+
+/**
+ * Returns the code with comments removed, so a path named only in documentation is not taken
+ * for a use. Code esbuild cannot parse on its own is returned unchanged, which errs toward a match.
+ *
+ * @param {string} source module source
+ * @returns {string}
+ */
+export function executableText(source) {
+  try {
+    // Whitespace minification is what drops every comment, documentation blocks included.
+    return transformSync(source, { loader: "js", legalComments: "none", minifyWhitespace: true, logLevel: "silent" }).code;
+  } catch {
+    return source;
+  }
+}
+
+/** Reject bindings in every scope before adding the module's relocated path bindings. */
+function hasModulePathBinding(source) {
+  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module", allowReturnOutsideFunction: true });
+  const binding = (node) => {
+    if (!node) return false;
+    switch (node.type) {
+      case "Identifier": return node.name === "__dirname" || node.name === "__filename";
+      case "RestElement": return binding(node.argument);
+      case "AssignmentPattern": return binding(node.left);
+      case "ArrayPattern": return node.elements.some(binding);
+      case "ObjectPattern": return node.properties.some((property) => binding(property.type === "RestElement" ? property.argument : property.value));
+      default: return false;
+    }
+  };
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return false;
+    switch (node.type) {
+      case "VariableDeclarator":
+      case "ClassDeclaration":
+      case "ClassExpression":
+        if (binding(node.id)) return true;
+        break;
+      case "FunctionDeclaration":
+      case "FunctionExpression":
+      case "ArrowFunctionExpression":
+        if (binding(node.id) || node.params.some(binding)) return true;
+        break;
+      case "CatchClause":
+        if (binding(node.param)) return true;
+        break;
+      case "ImportSpecifier":
+      case "ImportDefaultSpecifier":
+      case "ImportNamespaceSpecifier":
+        if (binding(node.local)) return true;
+        break;
+    }
+    return Object.values(node).some((child) => Array.isArray(child) ? child.some(visit) : visit(child));
+  };
+  return visit(ast);
+}
+
+/**
+ * Bundling moves every dependency file into one output file, so `__dirname` and `__filename`
+ * in a dependency would name the bundle instead of the dependency. CDK and cdk-nag read files
+ * beside their own modules (Lambda handlers, rule names), so each such file gets its own
+ * `__dirname` and `__filename` again, pointing at the same file in a shipped copy of its
+ * package under `dist/node_modules`.
+ *
+ * @param {Map<string, { packageName: string, file: string, code: string }>} rewritten filled with every rewritten file, by its path under node_modules
+ * @param {string} [nodeModules] node_modules directory the bundle resolves from
+ * @returns {import("esbuild").Plugin}
+ */
+export function modulePathPlugin(rewritten, nodeModules = NODE_MODULES) {
+  return {
+    name: "module-paths",
+    setup(pluginBuild) {
+      pluginBuild.onLoad({ filter: /\.[cm]?js$/ }, (args) => {
+        const location = nodeModulesLocation(args.path, nodeModules);
+        if (location === undefined) return undefined;
+        const source = readFileSync(args.path, "utf8");
+        if (!MODULE_PATH_IDENTIFIER.test(source)) return undefined;
+        const code = executableText(source);
+        if (!MODULE_PATH_IDENTIFIER.test(code)) return undefined;
+        if (hasModulePathBinding(source)) {
+          throw new Error(`${location.file} declares its own __dirname or __filename, which the bundle cannot relocate`);
+        }
+        rewritten.set(location.file, { ...location, code });
+        const directory = location.file.slice(0, location.file.lastIndexOf("/"));
+        const declarations =
+          `var __dirname = __ideactlPackagePath(${JSON.stringify(directory)}),` +
+          ` __filename = __ideactlPackagePath(${JSON.stringify(location.file)});`;
+        // A "use strict" directive only counts as the first statement, so the declarations follow it.
+        const prologue = /^(?:#![^\n]*\n)?(?:\s*(["'])use strict\1;?)?/.exec(source)?.[0] ?? "";
+        return {
+          contents: `${prologue}\n${declarations}\n${source.slice(prologue.length)}`,
+          loader: "js",
+          resolveDir: dirname(args.path),
+        };
+      });
+    },
+  };
+}
+
+/**
+ * Copies a package for run-time file reads, without the files a run never opens.
+ *
+ * @param {string} packageName package directory name under node_modules
+ * @param {string} destination output node_modules directory
+ * @param {string} [nodeModules] node_modules directory the package is copied from
+ */
+export function shipPackage(packageName, destination, nodeModules = NODE_MODULES) {
+  const source = join(nodeModules, packageName);
+  cpSync(source, join(destination, packageName), {
+    recursive: true,
+    // .bin holds npm's command shims (symbolic links); nothing in a run reads them.
+    filter: (path) => basename(path) !== ".bin" && !UNSHIPPED_PACKAGE_FILE.test(basename(path)),
+  });
+}
+
+/**
+ * Fails the build unless every dependency path the bundle can resolve at run time exists.
+ *
+ * Every dependency input that still uses `__dirname`, `__filename`, or `import.meta` paths after
+ * comments are removed must have been rewritten; a rewritten module must be CommonJS (the
+ * declarations are module-scoped only there); and every path built from `__dirname` with literal
+ * arguments must exist in the shipped package tree. Paths with computed parts cannot be checked
+ * here; they are reported with counts, and the release synthesis gate exercises the ones IDEA's
+ * stacks reach.
+ *
+ * @param {import("esbuild").Metafile} metafile bundle metadata
+ * @param {Map<string, { packageName: string, file: string, code: string }>} rewritten rewritten modules
+ * @param {string} shippedRoot output node_modules directory
+ * @param {{ workingDirectory?: string, nodeModules?: string }} [roots] build working directory and node_modules
+ * @returns {{ checked: number, computed: Record<string, number> }}
+ */
+export function verifyModulePaths(metafile, rewritten, shippedRoot, roots = {}) {
+  const workingDirectory = roots.workingDirectory ?? PACKAGE_ROOT;
+  const nodeModules = roots.nodeModules ?? NODE_MODULES;
+  const problems = [];
+  for (const [input, meta] of Object.entries(metafile.inputs)) {
+    const file = resolve(workingDirectory, input);
+    const location = nodeModulesLocation(file, nodeModules);
+    if (location === undefined) continue;
+    const entry = rewritten.get(location.file);
+    if (entry === undefined) {
+      if (!existsSync(file)) continue;
+      const code = executableText(readFileSync(file, "utf8"));
+      if (MODULE_PATH_IDENTIFIER.test(code)) problems.push(`${location.file} uses __dirname or __filename without a rewrite`);
+      if (MODULE_META_PATH.test(code)) problems.push(`${location.file} reads its location from import.meta, which names the bundle`);
+      continue;
+    }
+    if (meta.format === "esm") problems.push(`${location.file} is an ES module; its __dirname rewrite is not module-scoped`);
+    if (MODULE_META_PATH.test(entry.code)) problems.push(`${location.file} reads its location from import.meta, which names the bundle`);
+  }
+
+  let checked = 0;
+  const computed = {};
+  const literalJoin = /\b(?:join|resolve)\)?\(\s*__dirname((?:\s*,\s*(?:"[^"\\]*"|'[^'\\]*'))*)\s*\)/g;
+  for (const entry of rewritten.values()) {
+    const directory = entry.file.slice(0, entry.file.lastIndexOf("/"));
+    if (!existsSync(join(shippedRoot, ...entry.file.split("/")))) problems.push(`${entry.file} is not in the shipped package tree`);
+    let literalUses = 0;
+    for (const match of entry.code.matchAll(literalJoin)) {
+      literalUses += 1;
+      const parts = [...match[1].matchAll(/"([^"\\]*)"|'([^'\\]*)'/g)].map((part) => part[1] ?? part[2]);
+      const target = join(shippedRoot, ...directory.split("/"), ...parts);
+      checked += 1;
+      if (!existsSync(target)) problems.push(`${entry.file}: ${match[0]} resolves to ${target}, which is not shipped`);
+    }
+    const uses = (entry.code.match(/\b__dirname\b/g) ?? []).length;
+    if (uses > literalUses) computed[entry.file] = uses - literalUses;
+  }
+  if (problems.length > 0) {
+    throw new Error(`bundled dependency paths would not resolve at run time:\n  ${problems.join("\n  ")}`);
+  }
+  return { checked, computed };
+}
+
+/**
  * Writes the executable entry file. It imports the application bundle and
  * mirrors the bundle's error-to-exit-code handling using only the runtime.
  *
@@ -307,7 +527,7 @@ run().then(
  * Builds, validates, measures, and optionally archives the direct-runtime
  * distribution.
  */
-function main() {
+async function main() {
   const { output, archive } = parseArguments(process.argv.slice(2));
   const temporary = mkdtempSync(join(tmpdir(), "ideactl-shell-build-"));
   const copiedSource = join(temporary, "src");
@@ -333,7 +553,8 @@ module.exports = {
     );
 
     // The API avoids platform-specific package-manager launchers.
-    const bundleResult = buildSync({
+    const rewritten = new Map();
+    const bundleResult = await build({
       entryPoints: [join(copiedSource, "cli", "main.ts")],
       bundle: true,
       platform: "node",
@@ -341,33 +562,35 @@ module.exports = {
       target: "node22",
       legalComments: "external",
       alias: { chokidar: optionalWatcherShim },
-      banner: { js: 'import { createRequire as __ideactlCreateRequire } from "node:module"; const require = __ideactlCreateRequire(import.meta.url); const __filename = import.meta.filename; const __dirname = import.meta.dirname;' },
+      banner: { js: BUNDLE_BANNER },
+      plugins: [modulePathPlugin(rewritten)],
+      absWorkingDir: PACKAGE_ROOT,
+      logLevel: "warning",
       metafile: true,
       outfile: bundleFile,
-      nodePaths: [join(PACKAGE_ROOT, "node_modules")],
+      nodePaths: [NODE_MODULES],
     });
     writeFileSync(metadataFile, JSON.stringify(bundleResult.metafile));
     chmodSync(bundleFile, 0o755);
 
-    // CDK resolves these non-JavaScript inputs relative to its bundled module location.
-    // Keep them beside the application so synthesis also works after archive extraction.
-    const cdkRequire = createRequire(join(PACKAGE_ROOT, "node_modules", "aws-cdk-lib", "package.json"));
-    copyFileSync(
-      join(dirname(cdkRequire.resolve("@aws/cloudformation-validate")), "bindings_wasm_bg.wasm"),
-      join(dirname(bundleFile), "bindings_wasm_bg.wasm"),
-    );
-    cpSync(
-      join(PACKAGE_ROOT, "node_modules", "aws-cdk-lib", "custom-resource-handlers"),
-      join(output, "dist", "custom-resource-handlers"),
-      { recursive: true },
-    );
+    // Dependencies that read files beside their own modules get the whole package, minus files
+    // a run never opens, at the path their rewritten __dirname names.
+    const shippedRoot = join(output, "dist", "node_modules");
+    const shippedPackages = [...new Set([...rewritten.values()].map((entry) => entry.packageName))].sort();
+    for (const packageName of shippedPackages) shipPackage(packageName, shippedRoot);
+    const modulePaths = verifyModulePaths(bundleResult.metafile, rewritten, shippedRoot);
+    console.log(`relocated dependency modules: ${String(rewritten.size)} in ${shippedPackages.join(", ")}`);
+    console.log(`checked literal dependency paths: ${String(modulePaths.checked)}`);
+    for (const [file, count] of Object.entries(modulePaths.computed).sort()) {
+      console.log(`computed dependency path, shipped with its package but not checked here: ${file} (${String(count)})`);
+    }
 
     run(process.execPath, [join(PACKAGE_ROOT, "scripts", "build-lambda-bundles.mjs"), lambdaAssets]);
     const resources = copyRuntimeResources(
       join(output, "dist", "resources"),
       lambdaAssets,
     );
-    mkdirSync(join(output, "dist", "node_modules"), { recursive: true });
+    mkdirSync(shippedRoot, { recursive: true });
     cpSync(
       firstExisting(
         [
@@ -401,12 +624,14 @@ module.exports = {
     rmSync(metadataFile);
     const bundle = measureTree(bundleFile);
     const deploymentCli = measureTree(join(output, "dist", "node_modules", "aws-cdk"));
+    const shippedPackageTree = shippedPackages.map((name) => measureTree(join(shippedRoot, name)));
     const resourceTree = measureTree(join(output, "dist", "resources"));
     const artifactBeforeManifest = measureTree(output);
     const nativeModules = [
       ...bundle.nativeModules,
       ...deploymentCli.nativeModules,
       ...resourceTree.nativeModules,
+      ...shippedPackageTree.flatMap((tree) => tree.nativeModules),
     ];
     if (nativeModules.length > 0) {
       throw new Error(`native modules found in artifact: ${nativeModules.join(", ")}`);
@@ -425,11 +650,14 @@ module.exports = {
       contentBytes: {
         applicationBundle: bundle.bytes,
         deploymentCli: deploymentCli.bytes,
+        shippedPackages: shippedPackageTree.reduce((total, tree) => total + tree.bytes, 0),
         resources: resourceTree.bytes,
         artifactBeforeManifest: artifactBeforeManifest.bytes,
       },
       resourceSourceBytes: resources,
       bundledPackages: packages,
+      shippedPackages,
+      relocatedModules: rewritten.size,
       resourceReads: [
         "resources/bootstrap",
         "resources/cdk",
@@ -467,4 +695,6 @@ module.exports = {
   }
 }
 
-main();
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+  await main();
+}

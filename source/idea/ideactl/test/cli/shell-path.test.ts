@@ -31,6 +31,8 @@ interface ShellManifest {
     resources: number;
   };
   bundledPackages: string[];
+  shippedPackages: string[];
+  relocatedModules: number;
 }
 
 const PACKAGE_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -149,7 +151,16 @@ test("bundle has no run-time package or native-module resolution", () => {
   assert.ok(manifest.contentBytes.deploymentCli > 0);
   assert.ok(manifest.contentBytes.resources > 0);
   assert.ok(manifest.bundledPackages.includes("commander"));
-  assert.deepEqual(readdirSync(join(ARTIFACT, "dist", "node_modules")), ["aws-cdk"]);
+  // The deployment CLI, plus the dependency packages bundled code reads files from at run time
+  // (CDK's Lambda handlers, cdk-nag's rule modules), at the paths the bundle resolves them to.
+  assert.ok(manifest.shippedPackages.includes("aws-cdk-lib"));
+  assert.ok(manifest.shippedPackages.includes("cdk-nag"));
+  assert.ok(manifest.relocatedModules > 0);
+  const topLevel = (name: string) => name.split("/")[0];
+  assert.deepEqual(
+    readdirSync(join(ARTIFACT, "dist", "node_modules")).sort(),
+    [...new Set(["aws-cdk", ...manifest.shippedPackages].map(topLevel))].sort(),
+  );
   assert.deepEqual(
     filesUnder(ARTIFACT).filter((file) => file.endsWith(".node")),
     [],

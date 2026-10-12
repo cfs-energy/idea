@@ -42,8 +42,11 @@ PATH={{ path }}
 
 source /etc/environment
 
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
+
 {% if context.base_os == 'amazonlinux2023' %}
-dnf -y install cronie
+package_transaction dnf -y install cronie
 systemctl enable crond
 systemctl start crond
 {% endif %}
@@ -54,9 +57,6 @@ if [[ "${SOURCE}" == "crontab" ]]; then
   crontab -l | grep -v 'setup.sh' | crontab -
 fi
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
-
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/idea_proxy.jinja2' %}
 

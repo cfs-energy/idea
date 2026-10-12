@@ -68,7 +68,7 @@ function install_dcv_broker_package() {
     echo -e "FATAL ERROR: Checksum for DCV Broker failed. File may be compromised." > /etc/motd
     exit 1
   fi
-  yum install -y ${PACKAGE_NAME}
+  package_transaction yum install -y ${PACKAGE_NAME}
   rm -rf ${PACKAGE_NAME} ${CHECKSUM_FILE}
   popd
   log_info "dcv session manager broker package installation complete."

@@ -691,7 +691,12 @@ def test_openpbs_dependencies_install_only_with_openpbs(tmp_path, installed, bas
         f'log_info() {{ echo "log_info $*" >> {calls}; return 1; }}',
         'log_info() { :; }',
     )
-    subprocess.run(['bash', '-c', stubs + script], capture_output=True, text=True)
+    common = (
+        f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\nsleep() {{ :; }}\n'
+    )
+    subprocess.run(
+        ['bash', '-c', common + stubs + script], capture_output=True, text=True
+    )
     called = calls.read_text().split('\n') if calls.exists() else []
     assert any(c.startswith('yum ') for c in called) is (not installed), called
 
@@ -843,7 +848,10 @@ def test_desktop_host_keeps_the_baked_usb_module_and_cronie():
         text = render(name)
         assert 'modinfo eveusb' in text and 'lsmod | grep eveusb' not in text
     setup = render('virtual-desktop-host-linux/setup.sh.jinja2', 'amazonlinux2023')
-    assert 'rpm -q cronie >/dev/null 2>&1 || dnf -y install cronie' in setup
+    assert (
+        'rpm -q cronie >/dev/null 2>&1 || package_transaction dnf -y install cronie'
+        in setup
+    )
 
 
 def test_windows_join_renames_first_so_the_preset_account_matches():

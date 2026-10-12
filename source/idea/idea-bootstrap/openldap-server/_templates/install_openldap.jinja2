@@ -22,13 +22,13 @@ OPENLDAP_SERVER_PKGS_9=({{ ' '.join(context.config.get_list('global-settings.pac
 OPENLDAP_SERVER_PKGS_10=({{ ' '.join(context.config.get_list('global-settings.package_config.linux_packages.openldap_server_10', default=[])) }})
 
 {% if context.base_os in ('amazonlinux2023',) %}
-  yum install -y --skip-broken $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_7[*]})
+  package_transaction yum install -y --skip-broken $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_7[*]})
 {% elif context.base_os in ('rhel8', 'rocky8') %}
-  dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_8[*]})
+  package_transaction dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_8[*]})
 {% elif context.base_os in ('rhel9', 'rocky9') %}
-  dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_9[*]})
+  package_transaction dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_9[*]})
 {% elif context.base_os in ('rhel10', 'rocky10') %}
-  dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_10[*]})
+  package_transaction dnf install -y $(echo ${OPENLDAP_SERVER_PKGS[*]} ${OPENLDAP_SERVER_PKGS_10[*]})
 {% endif %}
 
 

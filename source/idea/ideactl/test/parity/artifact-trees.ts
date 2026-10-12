@@ -194,8 +194,9 @@ export function assembleCopyResources(destination: string): void {
  */
 export function assembleShellResources(destination: string): void {
   const source = readFileSync(join(PACKAGE_ROOT, "scripts", "build-shell-bundle.mjs"), "utf8");
-  if (!source.trimEnd().endsWith("main();")) {
-    throw new Error("shell assembler no longer ends with main(); cannot extract the copy step");
+  const entry = /if \(process\.argv\[1\][^\n]*\{\n\s*await main\(\);\n\}\s*$/u;
+  if (!entry.test(source)) {
+    throw new Error("shell assembler no longer ends with its main() entry block; cannot extract the copy step");
   }
   const pinned = source
     .replace(
@@ -203,7 +204,7 @@ export function assembleShellResources(destination: string): void {
       `const PACKAGE_ROOT = ${JSON.stringify(PACKAGE_ROOT)};`,
     )
     .replace(
-      /main\(\);\s*$/u,
+      entry,
       [
         "const destination = process.argv[2];",
         "const lambdaAssets = process.argv[3];",

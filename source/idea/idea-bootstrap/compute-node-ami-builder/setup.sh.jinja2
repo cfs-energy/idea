@@ -56,7 +56,7 @@ source /etc/environment
 {% include '_templates/linux/dnf_mirror_speed.jinja2' %}
 
 {% if context.base_os == 'amazonlinux2023' %}
-dnf -y install cronie
+package_transaction dnf -y install cronie
 systemctl enable crond
 systemctl start crond
 {% endif %}

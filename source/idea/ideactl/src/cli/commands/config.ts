@@ -549,6 +549,7 @@ export interface ConfigUpgradePreviewOptions {
   baseOs?: string;
   valuesFile?: string;
   skipGlobalSettingsUpdate?: boolean;
+  skipReleaseImageCheck?: boolean;
   modules?: readonly string[];
 }
 
@@ -572,7 +573,7 @@ export async function configUpgradePreview(
     deps.loadUpgradeDriftInput === undefined
       ? await (async () => {
           const { createLiveUpgradeDeps, prepareUpgradeDriftInput } = await import("./upgrade.ts");
-          return prepareUpgradeDriftInput(createLiveUpgradeDeps(deps), options);
+          return prepareUpgradeDriftInput(createLiveUpgradeDeps(deps), options, true);
         })()
       : await deps.loadUpgradeDriftInput(options);
   const report = compareUpgradeDrift(input);
@@ -692,10 +693,12 @@ export function registerConfigCommands(program: Command, deps: Deps): Command {
     .description("preview configuration changes made by an upgrade")
     .option("--base-os <base-os>", "Base OS to upgrade to.")
     .option("--values-file <values-file>", "Path to values.yml. Uses the cluster copy by default.")
+    .option("--skip-release-image-check", "Skip the registry lookup and preview the release image move without verifying it exists.")
     .option("--skip-global-settings-update", "Skip updating global settings.")
     .argument("[modules...]", "module ids")
     .action(async (modules: string[], options: ConfigUpgradePreviewOptions) => {
-      await configUpgradePreview(deps, { ...options, modules });
+      const report = await configUpgradePreview(deps, { ...options, modules });
+      if (report.blockingFindings?.length) throw new ExitWithCode(1);
     });
 
   clusterOptions(config.command('save-values'))

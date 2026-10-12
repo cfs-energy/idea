@@ -148,7 +148,12 @@ def run_set_kernel(
     calls = tmp_path / 'calls'
     calls.write_text('')
     script = tmp_path / 'set_kernel.sh'
-    script.write_text(KERNEL_STUBS + rendered)
+    script.write_text(
+        f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
+        + 'sleep() { :; }\n'
+        + KERNEL_STUBS
+        + rendered
+    )
     result = subprocess.run(
         ['bash', str(script)],
         env={

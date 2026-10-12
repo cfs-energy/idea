@@ -314,14 +314,22 @@ function stageRuntime(shellArtifact, runtimeRoot) {
     join(shellDist, "resources"),
     join(runtimeRoot, "dist", "resources"),
   );
+  // The pinned deployment CLI and every dependency package the bundle reads files from at run
+  // time, at the paths the bundle resolves them to.
   copyRequired(
     join(shellDist, "node_modules", "aws-cdk"),
     join(runtimeRoot, "dist", "node_modules", "aws-cdk"),
   );
-  copyRequired(
-    join(shellDist, "custom-resource-handlers"),
-    join(runtimeRoot, "dist", "custom-resource-handlers"),
-  );
+  const shellManifest = JSON.parse(readFileSync(join(shellArtifact, "manifest.json"), "utf8"));
+  if (!Array.isArray(shellManifest.shippedPackages)) {
+    throw new Error("the application bundle manifest does not list its shipped packages");
+  }
+  for (const packageName of shellManifest.shippedPackages) {
+    copyRequired(
+      join(shellDist, "node_modules", requireNonemptyString(packageName, "shipped package")),
+      join(runtimeRoot, "dist", "node_modules", packageName),
+    );
+  }
   copyRequired(join(shellDist, "cdk.json"), join(runtimeRoot, "dist", "cdk.json"));
 
   writeFileSync(

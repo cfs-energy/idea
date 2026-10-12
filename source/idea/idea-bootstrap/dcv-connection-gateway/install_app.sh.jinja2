@@ -98,8 +98,8 @@ DCV_WEB_VIEWER_INSTALL_LOCATION="/usr/share/dcv/www"
 timestamp=$(date +%s)
 
 function setup_nginx() {
-  yum install nginx1 -y
-  yum install nginx -y
+  package_transaction yum install nginx1 -y
+  package_transaction yum install nginx -y
 echo """
 server {
   listen 80;
@@ -112,7 +112,7 @@ server {
 }
 
 function install_dcv_connection_gateway() {
-  yum install -y nc
+  package_transaction yum install -y nc
   rpm --import ${DCV_GPG_KEY}
   wget ${DCV_CONNECTION_GATEWAY_URL}
   wget ${DCV_CONNECTION_GATEWAY_SHA256_HASH}
@@ -123,7 +123,7 @@ function install_dcv_connection_gateway() {
     echo -e "FATAL ERROR: Checksum for DCV Connection Gateway failed. File may be compromised." > /etc/motd
     exit 1
   fi
-  yum install -y ${PACKAGE_NAME}
+  package_transaction yum install -y ${PACKAGE_NAME}
   rm -rf ${PACKAGE_NAME} ${CHECKSUM_FILE}
 }
 

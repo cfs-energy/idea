@@ -96,8 +96,8 @@ function verify_gpu_drivers () {
 
 {% if context.base_os in ('amazonlinux2023',) %}
   dnf check-release-update
-  dnf update -y
-  dnf install -y dkms
+  package_transaction dnf update -y
+  package_transaction dnf install -y dkms
   systemctl enable --now dkms
 
   KERNEL_SRC_DIR="${KERNEL_SRC_DIR:-/usr/src/kernels}"
@@ -138,7 +138,7 @@ function install_kernel_modules_extra () {
 
   local FAMILY
   for FAMILY in $(kernel_package_families "${KERNEL}"); do
-    if dnf install -y "${FAMILY}-modules-extra-${KERNEL}"; then
+    if package_transaction dnf install -y "${FAMILY}-modules-extra-${KERNEL}"; then
       log_info "Installed ${FAMILY}-modules-extra-${KERNEL}"
       return 0
     fi
@@ -160,7 +160,7 @@ function install_kernel_devel () {
 
   local FAMILY
   for FAMILY in $(kernel_package_families "${KERNEL}"); do
-    if dnf install -y "${FAMILY}-devel-${KERNEL}" && kernel_build_tree_present "${KERNEL}"; then
+    if package_transaction dnf install -y "${FAMILY}-devel-${KERNEL}" && kernel_build_tree_present "${KERNEL}"; then
       log_info "Installed ${FAMILY}-devel-${KERNEL}"
       return 0
     fi
@@ -185,7 +185,7 @@ function boot_kernel_with_headers () {
   for FAMILY in $(kernel_package_families "${KERNEL}"); do
     # set_kernel.jinja2 versionlocks the running kernel, and that pin is part of what strands it
     # without headers, so this install has to bypass the lock.
-    dnf install -y --disableplugin=versionlock "${FAMILY}" "${FAMILY}-devel" "${FAMILY}-modules-extra" && break
+    package_transaction dnf install -y --disableplugin=versionlock "${FAMILY}" "${FAMILY}-devel" "${FAMILY}-modules-extra" && break
   done
 
   local TARGET_KERNEL=""
@@ -383,7 +383,7 @@ function install_amd_gpu_drivers() {
     if ! command -v wget &> /dev/null; then
       log_info "Installing wget"
       {% if context.base_os in ('rocky8', 'rocky9') %}
-      yum install -y wget
+      package_transaction yum install -y wget
       {% endif %}
     fi
 
@@ -393,10 +393,10 @@ function install_amd_gpu_drivers() {
     # Find RPM and install it
     local AMD_GPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}amdgpu-install-*.noarch.rpm")
     log_info "Installing RPM ${AMD_GPU_RPM}"
-    yum localinstall -y $(ls ${AMD_GPU_RPM})
+    package_transaction yum localinstall -y $(ls ${AMD_GPU_RPM})
 
     # Install vulkan packages
-    yum install -y --skip-broken vulkan vulkan-amdgpu vulkan-headers vulkan-loader-devel vulkan-tools vulkan-validation-layers
+    package_transaction yum install -y --skip-broken vulkan vulkan-amdgpu vulkan-headers vulkan-loader-devel vulkan-tools vulkan-validation-layers
 
     # Install additional AMD GPU RPMs
     log_info "Downloading additional AMD GPU RPMs"
@@ -410,9 +410,9 @@ function install_amd_gpu_drivers() {
     local XORG_AMDGPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}xorg-x11-amdgpu-drv-amdgpu-*.rpm")
 
     log_info "Installing additional AMD GPU RPMs"
-    yum localinstall -y $(ls ${LIBDRM_AMDGPU_COMMON_RPM})
-    yum localinstall -y $(ls ${LIBDRM_AMDGPU_RPM})
-    yum localinstall -y $(ls ${XORG_AMDGPU_RPM})
+    package_transaction yum localinstall -y $(ls ${LIBDRM_AMDGPU_COMMON_RPM})
+    package_transaction yum localinstall -y $(ls ${LIBDRM_AMDGPU_RPM})
+    package_transaction yum localinstall -y $(ls ${XORG_AMDGPU_RPM})
 
     log_info "Running amdgpu-install"
     /bin/amdgpu-install --usecase=workstation --accept-eula -y
