@@ -49,7 +49,7 @@ systemctl start crond
 SOURCE="${1}"
 if [[ "${SOURCE}" == "crontab" ]]; then
   # clean crontab, remove current file from reboot commands
-  crontab -l | grep -v 'setup.sh' | crontab -
+  (crontab -l 2>/dev/null | grep -v 'setup.sh' || true) | crontab -
 fi
 
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt

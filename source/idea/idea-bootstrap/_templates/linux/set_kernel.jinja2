@@ -275,7 +275,7 @@ function set_kernel_version() {
 {% endif %}
 
       # Set up crontab to continue bootstrap after reboot
-      (crontab -l 2>/dev/null | grep -v 'setup.sh'; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+      (crontab -l 2>/dev/null | grep -v 'setup.sh' || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
 
       check_reboot_loop "Kernel installation reboot"
       reboot

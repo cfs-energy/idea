@@ -212,7 +212,7 @@ function boot_kernel_with_headers () {
   # this template is rendered into the calling bootstrap script: re-enter that script after the
   # reboot, so the driver install runs again on a kernel whose headers are installed.
   local RESUME_SCRIPT=$(basename "${BASH_SOURCE[0]}")
-  (crontab -l 2>/dev/null | grep -v "${RESUME_SCRIPT}"; echo "@reboot /bin/bash ${SCRIPT_DIR}/${RESUME_SCRIPT} crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+  (crontab -l 2>/dev/null | grep -v "${RESUME_SCRIPT}" || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/${RESUME_SCRIPT} crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
   check_reboot_loop "Kernel ${TARGET_KERNEL} for NVIDIA driver build"
   reboot
   exit 0

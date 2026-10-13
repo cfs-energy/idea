@@ -311,6 +311,48 @@ def test_stage_error_survives_later_success_and_subshell(tmp_path):
     assert 'Value=failed:bootstrap' in calls
 
 
+# every crontab edit a bake stage can reach, including the Lustre and kernel reboot paths
+BAKE_CRONTAB_SOURCES = [
+    'dcv-host-ami-builder/setup.sh.jinja2',
+    'dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2',
+    '_templates/linux/mount_shared_storage.jinja2',
+    '_templates/linux/set_kernel.jinja2',
+    '_templates/linux/gpu_drivers.jinja2',
+]
+
+
+@pytest.mark.parametrize('name', BAKE_CRONTAB_SOURCES)
+def test_crontab_edits_survive_an_empty_crontab(tmp_path, name):
+    # root has no crontab before the first bake reboot: crontab -l exits 1
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    fake = bin_dir / 'crontab'
+    fake.write_text(
+        '#!/bin/sh\n[ "$1" = -l ] && { echo "no crontab for root" >&2; exit 1; }\ncat >/dev/null\n'
+    )
+    fake.chmod(0o755)
+    lines = [
+        line.strip()
+        for line in Path(IDEA_BOOTSTRAP_DIR, name).read_text().splitlines()
+        if 'crontab -l' in line
+    ]
+    assert lines
+    source = Path(
+        IDEA_BOOTSTRAP_DIR, 'dcv-host-ami-builder/image_bake_stage.sh'
+    ).read_text()
+    source = source.replace('/var/lib/idea', str(tmp_path))
+    result = subprocess.run(
+        ['bash', '-c', source + '\nBAKE_STAGE=setup\n' + '\n'.join(lines)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'bake-failed').exists(), (
+        tmp_path / 'bake-failed'
+    ).read_text()
+
+
 def test_parent_stage_preserves_the_reported_failure(tmp_path):
     report = tmp_path / 'image-checks.json'
     report.write_text(json.dumps({'checks': [{'name': 'kernel', 'ok': False}]}))
