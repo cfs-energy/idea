@@ -1,10 +1,6 @@
 """Keep PBS chunks separate from the '+' in instance_type alternatives."""
 
-import re
-
-
-def select_chunks(select):
-    return re.split(r'\+(?=\d+(?=:|$)|[A-Za-z_]\w*=)', select)
+from ideadatamodel.pbs_select import select_chunks  # noqa: F401  (shared with reporting)
 
 
 def chunk_resources(chunk):
