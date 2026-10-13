@@ -482,3 +482,12 @@ def test_index_marker_tracks_completed_record_identity(job_cache, job_uid, mark_
     assert [j.job_uid for j in job_cache.list_pending_index_jobs()] == [
         second.job_uid if mark_first else first.job_uid
     ]
+
+
+def test_a_new_job_cache_reports_ready_only_after_set_ready(tmp_path):
+    # every PBS hook call asks is_ready(); a JobCache without _is_ready fails them all
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+    assert cache.is_ready() is False
+    cache.set_ready()
+    assert cache.is_ready() is True
+    cache.stop()

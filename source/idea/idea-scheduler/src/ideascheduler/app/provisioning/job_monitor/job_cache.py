@@ -801,10 +801,10 @@ class JobCache(JobCacheProtocol):
         self._context = context
         self._logger = context.logger()
         self._jobs_db = JobsDB(context=self._context)
+        self._is_ready = Event()
 
     def stop(self):
         self._jobs_db.stop()
-        self._is_ready = Event()
 
     def sync(self, jobs: List[SocaJob]):
         self._jobs_db.add_many(jobs=jobs)
