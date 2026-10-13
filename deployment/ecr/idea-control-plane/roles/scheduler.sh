@@ -232,7 +232,7 @@ mkdir -p "${HOOK_STATE}"
 # Listing all hooks distinguishes an absent hook from a failed server connection.
 EXISTING_HOOKS="$(/opt/pbs/bin/qmgr -c 'list hook')"
 install_hook() {
-  local name="$1" events="$2" file="$3" order="${4:-}" digest recorded=""
+  local name="$1" events="$2" file="$3" digest recorded=""
   digest="$(sha256sum "${HOOKS}/${file}" | cut -d' ' -f1)"
   [[ ! -f "${HOOK_STATE}/${name}.sha256" ]] || recorded="$(cat "${HOOK_STATE}/${name}.sha256")"
   if grep -Eq "^Hook[[:space:]]+${name}([[:space:]]|$)" <<< "${EXISTING_HOOKS}"; then
@@ -247,12 +247,17 @@ install_hook() {
   /opt/pbs/bin/qmgr -c "set hook ${name} event='${events}'"
   /opt/pbs/bin/qmgr -c "import hook ${name} application/x-python default ${HOOKS}/${file}"
   /opt/pbs/bin/qmgr -c "set hook ${name} enabled=true"
-  [[ -z "${order}" ]] || /opt/pbs/bin/qmgr -c "set hook ${name} order=${order}"
   printf '%s\n' "${digest}" > "${HOOK_STATE}/${name}.sha256"
 }
 install_hook validate_job 'queuejob,modifyjob,movejob' openpbs_hook_handler.py
 install_hook job_status 'runjob,execjob_begin,execjob_end' openpbs_hook_handler.py
-install_hook calculate_ncpus queuejob calculate_ncpus_hook.py 2
+# an earlier release's hook rewrote ncpus at queuejob; the scheduler app sizes ncpus now, and
+# the copy of the hook body PBS keeps would go on running until deleted
+if grep -Eq '^Hook[[:space:]]+calculate_ncpus([[:space:]]|$)' <<< "${EXISTING_HOOKS}"; then
+  log "deleting the retired hook calculate_ncpus"
+  /opt/pbs/bin/qmgr -c "delete hook calculate_ncpus"
+  rm -f "${HOOK_STATE}/calculate_ncpus.sha256"
+fi
 
 # The NLB name is not a host PBS can match, and a container bastion's address is per task.
 # A container bastion gets no grant: an administrator runs qmgr from inside the scheduler

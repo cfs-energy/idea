@@ -198,7 +198,7 @@ qmgr() {
     return result, log.read_text().splitlines()
 
 
-ALL_HOOKS = 'Hook validate_job\nHook job_status\nHook calculate_ncpus\n'
+ALL_HOOKS = 'Hook validate_job\nHook job_status\n'
 
 
 @pytest.mark.parametrize('existing', ['', ALL_HOOKS])
@@ -206,15 +206,15 @@ def test_hooks_are_created_when_absent_and_imported_when_unrecorded(tmp_path, ex
     result, calls = hook_harness(tmp_path, existing)
     assert result.returncode == 0, result.stderr
     assert sum(command.startswith('create hook') for command in calls) == (
-        0 if existing else 3
+        0 if existing else 2
     )
-    assert sum(command.startswith('import hook') for command in calls) == 3
+    assert sum(command.startswith('import hook') for command in calls) == 2
     assert "set hook validate_job event='queuejob,modifyjob,movejob'" in calls
     assert "set hook job_status event='runjob,execjob_begin,execjob_end'" in calls
-    assert 'set hook calculate_ncpus enabled=true' in calls
-    assert 'set hook calculate_ncpus order=2' in calls
+    assert 'set hook job_status enabled=true' in calls
+    assert not any('calculate_ncpus' in command for command in calls)
     recorded = sorted(p.name for p in (tmp_path / 'pbs/.idea-hooks').iterdir())
-    assert recorded == ['calculate_ncpus.sha256', 'job_status.sha256', 'validate_job.sha256']
+    assert recorded == ['job_status.sha256', 'validate_job.sha256']
 
 
 def test_an_unchanged_hook_is_left_as_the_operator_configured_it(tmp_path):
@@ -228,14 +228,28 @@ def test_an_unchanged_hook_is_left_as_the_operator_configured_it(tmp_path):
     image.mkdir()
     for file in HOOKS_DIR.iterdir():
         (image / file.name).write_bytes(file.read_bytes())
-    (image / 'calculate_ncpus_hook.py').write_text('# a new hook\n')
+    (image / 'openpbs_hook_handler.py').write_text('# a new hook\n')
     result, calls = hook_harness(tmp_path, ALL_HOOKS, hooks_dir=image)
     assert result.returncode == 0, result.stderr
     assert [c for c in calls if c.startswith('import hook')] == [
-        f'import hook calculate_ncpus application/x-python default {image}/calculate_ncpus_hook.py'
+        f'import hook {name} application/x-python default {image}/openpbs_hook_handler.py'
+        for name in ('validate_job', 'job_status')
     ]
-    assert 'set hook calculate_ncpus enabled=true' in calls
-    assert 'set hook validate_job enabled=true' not in calls
+    assert 'set hook validate_job enabled=true' in calls
+    assert not any(c.startswith('create hook') for c in calls)
+
+
+def test_the_retired_ncpus_hook_is_deleted_when_present(tmp_path):
+    # the hook body PBS keeps from an earlier release would go on rewriting ncpus
+    (tmp_path / 'pbs/.idea-hooks').mkdir(parents=True)
+    (tmp_path / 'pbs/.idea-hooks/calculate_ncpus.sha256').write_text('old\n')
+    result, calls = hook_harness(tmp_path, ALL_HOOKS + 'Hook calculate_ncpus\n')
+    assert result.returncode == 0, result.stderr
+    assert 'delete hook calculate_ncpus' in calls
+    assert not any(c.startswith(('import hook calculate', 'create hook calculate')) for c in calls)
+    assert not (tmp_path / 'pbs/.idea-hooks/calculate_ncpus.sha256').exists()
+    result, calls = hook_harness(tmp_path, ALL_HOOKS)
+    assert calls == ['list hook']
 
 
 @pytest.mark.parametrize(
@@ -268,9 +282,9 @@ def test_reconciliation_is_outside_first_create_guard_and_before_scheduler():
     assert source.index('pbs server is answering') < source.index(
         '# Reconcile image-owned hooks'
     )
-    assert source.index(
-        'install_hook calculate_ncpus queuejob calculate_ncpus_hook.py 2'
-    ) < source.index('log "starting pbs_sched"')
+    assert source.index('delete hook calculate_ncpus') < source.index(
+        'log "starting pbs_sched"'
+    )
     assert 'wait -n "${IDEA_PID}" "${ARCHIVE_PID}" "${SYNC_PID}"' in source
 
 
