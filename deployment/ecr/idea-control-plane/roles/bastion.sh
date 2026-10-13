@@ -64,12 +64,19 @@ EOF
   echo 'export PATH=/opt/pbs/bin:/opt/pbs/sbin:$PATH' > /etc/profile.d/pbs.sh
 fi
 # Site customizations, as compute nodes and desktops run theirs from the shared /apps file
-# system: tools users expect on the login node. Output goes to the task log; a failing hook
-# is logged and the start goes on.
+# system: tools users expect on the login node. It runs as root, so only a file root owns and
+# no one else can write (a desktop user with sudo can write to /apps); it gets two minutes,
+# its output goes to the task log, and sshd starts whatever it did.
 SITE_HOOK="${IDEA_CLUSTER_HOME:-}/${IDEA_MODULE_ID:-bastion-host}/userdata_customizations.sh"
 if [[ -n "${IDEA_CLUSTER_HOME:-}" && -f "${SITE_HOOK}" ]]; then
-  echo "running site hook ${SITE_HOOK}"
-  /bin/bash "${SITE_HOOK}" || echo "site hook failed with status $?; continuing"
+  # stat -L: the file the hook path leads to is the one that runs
+  read -r HOOK_UID HOOK_MODE < <(stat -L -c '%u %a' "${SITE_HOOK}") || HOOK_UID=
+  if [[ "${HOOK_UID}" != 0 ]] || (( 8#${HOOK_MODE:-777} & 8#022 )); then
+    echo "skipping site hook ${SITE_HOOK}: it must be owned by root and writable by no one else (owner ${HOOK_UID:-unknown}, mode ${HOOK_MODE:-unknown})"
+  else
+    echo "running site hook ${SITE_HOOK}"
+    timeout 120 /bin/bash "${SITE_HOOK}" || echo "site hook failed with status $?; continuing"
+  fi
 fi
 /usr/sbin/sshd -t
 /usr/sbin/sssd -i --logger=stderr &
