@@ -331,6 +331,11 @@ class VirtualDesktopSessionPermissionDB(VirtualDesktopNotifiableDB, OpenSearchab
             ReturnValues='ALL_OLD',
         )
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
+        if not old_db_entry:
+            self._logger.info(
+                f'permission of {session_permission.actor_name} on {session_permission.idea_session_id} was already deleted'
+            )
+            return
         self.trigger_delete_event(
             old_db_entry[session_permissions_constants.SESSION_PERMISSIONS_DB_HASH_KEY],
             old_db_entry[
