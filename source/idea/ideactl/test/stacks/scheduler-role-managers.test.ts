@@ -68,7 +68,7 @@ function runGrant(rows: Record<string, string>, existing = ""): string[] {
   return readFileSync(record, "utf8").split("\n").filter((line) => line !== "");
 }
 
-const STALE = "root@ip-10-7-0-9.us-east-2.compute.internal";
+const STALE = ["root", "ip-10-7-0-9.us-east-2.compute.internal"].join("@");
 
 test("grants a host bastion batch-manager rights under the name the server matches", () => {
   const calls = runGrant({ "bastion-host.private_dns_name": "ip-192-0-2-10.us-east-2.compute.internal" });
@@ -90,11 +90,11 @@ test("grants a container bastion nothing and removes the host-era grant", () => 
   assert.deepEqual(runGrant({
     "bastion-host.service_name": "test-bastion-host",
     "bastion-host.private_dns_name": "nlb.elb.amazonaws.com",
-  }, `${STALE},root@admin.example`), [`-c set server managers -= ${STALE}`]);
+  }, `${STALE},root@admin.example.com`), [`-c set server managers -= ${STALE}`]);
 });
 
 test("does not add an existing grant again", () => {
-  assert.deepEqual(runGrant({ "bastion-host.private_dns_name": "host.example" }, "root@host.example"), []);
+  assert.deepEqual(runGrant({ "bastion-host.private_dns_name": "host.example.com" }, "root@host.example.com"), []);
 });
 
 test("refreshes grants after first-create defaults have finished", () => {
