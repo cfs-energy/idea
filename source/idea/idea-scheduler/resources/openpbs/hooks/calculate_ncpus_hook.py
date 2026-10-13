@@ -1,44 +1,37 @@
-#!/usr/bin/env python
 """
-OpenPBS Hook: calculate_ncpus_hook
+Calculate ncpus hook for OpenPBS (queuejob)
 
-This hook calculates the proper number of ncpus for a job based on the instance type
-and hyper-threading settings before the job is submitted to PBS. This ensures that
-jobs submitted via API or directly via qsub both get the same treatment.
+Fills in the CPU count of a job's select when it has none, from what the scheduler app
+knows about the instance type: the app answers OpenPBSHook.InstanceTypeInfo over the unix
+socket the validate_job hook already uses, out of its instance type cache. Nothing runs
+through a shell from inside pbs_server. An ncpus the user, or validate_job, already put
+in the select is kept as it is. When the count cannot be learned the job is rejected with
+a clear message rather than queued with ncpus=1 on a paid node.
 
-To install this hook:
+Install:
 > qmgr -c "create hook calculate_ncpus event='queuejob'"
 > qmgr -c "import hook calculate_ncpus application/x-python default ${IDEA_APP_DEPLOY_DIR}/scheduler/resources/openpbs/hooks/calculate_ncpus_hook.py"
+> qmgr -c "set hook calculate_ncpus order=2"
 """
 
 import pbs  # type: ignore[import-unresolved]
 import sys
 import os
 import json
-import urllib.request
+import socket
+import uuid
 
 # Initialize constants
 DEFAULT_ENCODING = 'utf-8'
 DEBUG_MODE = True
-
-# EC2 Instance Metadata endpoints
-EC2_INSTANCE_METADATA_LATEST = 'http://169.254.169.254/latest'
-EC2_INSTANCE_METADATA_URL_PREFIX = f'{EC2_INSTANCE_METADATA_LATEST}/meta-data'
-EC2_INSTANCE_METADATA_API_URL = f'{EC2_INSTANCE_METADATA_LATEST}/api'
-EC2_INSTANCE_METADATA_TOKEN_REQUEST_HEADER = 'X-aws-ec2-metadata-token-ttl-seconds'
-EC2_INSTANCE_METADATA_TOKEN_HEADER = 'X-aws-ec2-metadata-token'
-EC2_INSTANCE_METADATA_TOKEN_REQUEST_TTL = '900'  # Value in seconds
-
-# AWS API endpoints
-AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
-EC2_API_ENDPOINT = f'https://ec2.{AWS_REGION}.amazonaws.com'
-EC2_API_VERSION = '2016-11-15'
+SOCKET_TIMEOUT_SECS = 10
+SOCKET_RECV_BUFFER_SIZE = 1024
 
 # Cache for EC2 instance type information
 # Format: {'instance_type': {'vcpus': X, 'cores': Y, 'threads_per_core': Z}}
 INSTANCE_TYPE_CACHE = {}
 
-# Queue names that should be skipped for ncpus calculation
+# Queues that pack jobs onto a node keep the select the job asked for
 SKIP_NCPUS_CALCULATION_QUEUES = ['job-shared']
 
 
@@ -65,167 +58,110 @@ def log_error(message: str):
     _log(level=pbs.LOG_ERROR, message=message)
 
 
-def get_imds_auth_token() -> str:
+def get_socket_address() -> str:
+    address = os.environ.get('IDEA_SCHEDULER_UNIX_SOCKET', '').strip() or '/run/idea.sock'
+    if not os.path.exists(address):
+        raise SocaException(f'idea-scheduler is not running (no socket at {address})')
+    return address
+
+
+def ask_scheduler(namespace: str, payload: dict) -> dict:
     """
-    Generate an IMDSv2 authentication token
-    :returns: str - A suitable value for follow-up authenticated requests.
+    raw HTTP over the unix socket, as the validate_job hook does it: pbs python carries no
+    external modules, and nothing is shelled out from inside pbs_server
     """
+    address = get_socket_address()
+    request = json.dumps(
+        {
+            'header': {'namespace': namespace, 'request_id': str(uuid.uuid4())},
+            'payload': payload,
+        }
+    ).encode(DEFAULT_ENCODING)
+    http_header = (
+        'POST /scheduler/api/v1 HTTP/1.1\r\n'
+        'Content-Type: application/json\r\n'
+        'Accept-Charset: utf-8\r\n'
+        'Connection: close\r\n'
+        f'Content-Length: {len(request)}\r\n\r\n'
+    ).encode(DEFAULT_ENCODING)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        req = urllib.request.Request(
-            url=f'{EC2_INSTANCE_METADATA_API_URL}/token', data=b'', method='PUT'
+        client.settimeout(SOCKET_TIMEOUT_SECS)
+        client.connect(address)
+        client.sendall(http_header + request)
+        buffer = bytearray()
+        while True:
+            data = client.recv(SOCKET_RECV_BUFFER_SIZE)
+            if not data:
+                break
+            buffer += data
+    except socket.timeout:
+        raise SocaException(
+            f'idea-scheduler did not answer within {SOCKET_TIMEOUT_SECS} seconds'
         )
-        req.add_header(
-            EC2_INSTANCE_METADATA_TOKEN_REQUEST_HEADER,
-            EC2_INSTANCE_METADATA_TOKEN_REQUEST_TTL,
-        )
-
-        with urllib.request.urlopen(req, timeout=2) as conn:
-            content = conn.read()
-            if not content:
-                raise SocaException(
-                    message=f'Failed to retrieve EC2 instance IMDSv2 authentication token. Empty Reply. Statuscode: ({conn.status})'
-                )
-            else:
-                if conn.status != 200:
-                    raise SocaException(
-                        message=f'Failed to retrieve EC2 instance IMDSv2 authentication token. Statuscode: ({conn.status})'
-                    )
-                else:
-                    return content.decode(DEFAULT_ENCODING)
-    except Exception as e:
-        log_error(f'Error getting IMDSv2 token: {str(e)}')
-        return ''
-
-
-def get_ec2_instance_type_info_from_aws(instance_type: str) -> dict:
-    """
-    Attempt to get instance type information from AWS EC2 API
-    :param instance_type: The EC2 instance type name (e.g., 'c5.4xlarge')
-    :returns: Dictionary with vcpus, cores, and threads_per_core or None if failed
-    """
+    except OSError as exc:
+        raise SocaException(f'could not reach idea-scheduler at {address}: {exc}')
+    finally:
+        client.close()
+    # the body is the last line of the response, after the headers
+    lines = [line for line in buffer.decode(DEFAULT_ENCODING).splitlines() if line.strip()]
+    if not lines:
+        raise SocaException('idea-scheduler sent an empty response')
     try:
-        # Try to use the AWS CLI command to get instance type information
-        command = f"aws ec2 describe-instance-types --instance-types {instance_type} --query 'InstanceTypes[0]' --output json"
-        log_debug(f'Executing AWS CLI command: {command}')
-
-        # Use os.popen to execute the command and get the output
-        import subprocess
-
-        process = subprocess.Popen(
-            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        stdout, stderr = process.communicate()
-
-        if process.returncode != 0:
-            log_error(
-                f'Error executing AWS CLI command: {stderr.decode(DEFAULT_ENCODING)}'
-            )
-            return None
-
-        # Parse the output as JSON
-        instance_data = json.loads(stdout.decode(DEFAULT_ENCODING))
-
-        # Extract relevant information
-        vcpu_info = instance_data.get('VCpuInfo', {})
-        default_vcpus = vcpu_info.get('DefaultVCpus')
-        default_cores = vcpu_info.get('DefaultCores')
-        default_threads_per_core = vcpu_info.get('DefaultThreadsPerCore')
-
-        if default_vcpus and default_cores and default_threads_per_core:
-            result = {
-                'vcpus': default_vcpus,
-                'cores': default_cores,
-                'threads_per_core': default_threads_per_core,
-            }
-            # Update cache
-            INSTANCE_TYPE_CACHE[instance_type] = result
-            log_debug(
-                f'Successfully retrieved instance type info from AWS API: {result}'
-            )
-            return result
-
-        log_error(
-            f'Failed to extract instance type information from AWS API response: {instance_data}'
-        )
-        return None
-
-    except Exception as e:
-        log_error(f'Error getting instance type information from AWS API: {str(e)}')
-        return None
+        return json.loads(lines[-1])
+    except ValueError:
+        raise SocaException('idea-scheduler sent a response that is not JSON')
 
 
 def get_instance_type_info(instance_type: str) -> dict:
     """
-    Get instance type information with CPU details
-    :param instance_type: The EC2 instance type name (e.g., 'c5.4xlarge')
-    :returns: Dictionary with vcpus, cores, and threads_per_core
+    :returns: {'vcpus': X, 'cores': Y, 'threads_per_core': Z} for the instance type
+    :raises SocaException: when the scheduler app cannot say
     """
-    # Check the cache first
     if instance_type in INSTANCE_TYPE_CACHE:
-        log_debug(f'Using cached instance type info for {instance_type}')
         return INSTANCE_TYPE_CACHE[instance_type]
-
-    # Try to get from AWS API
-    aws_info = get_ec2_instance_type_info_from_aws(instance_type)
-    if aws_info:
-        return aws_info
-
-    # If AWS API fails, use simple default value
-    log_debug(f'Using default value for instance type {instance_type}')
-    default_info = {'vcpus': 1, 'cores': 1, 'threads_per_core': 1}
-
-    # Update the cache with the default
-    INSTANCE_TYPE_CACHE[instance_type] = default_info
-    return default_info
-
-
-def calculate_ncpus(job):
-    """
-    Calculate the proper ncpus value based on instance type and HT settings
-    :param job: The PBS job object
-    :returns: The appropriate ncpus value
-    """
-    # Get job resource list
-    resources = job.Resource_List
-    if not resources:
-        log_debug('No Resource_List found in job')
-        return None
-
-    # Get instance type
-    instance_type = None
-    if 'instance_type' in resources:
-        instance_type = str(resources['instance_type'])
-
-    if not instance_type:
-        log_debug('No instance_type specified in job resources')
-        return None
-
-    # Check if multiple instance types are specified
-    if '+' in instance_type:
-        # When multiple instance types are specified, use the first one for calculation
-        instance_type = instance_type.split('+')[0]
-        log_debug(
-            f'Multiple instance types specified, using the first one: {instance_type}'
+    response = ask_scheduler(
+        'OpenPBSHook.InstanceTypeInfo', {'instance_type': instance_type}
+    )
+    if not response.get('success'):
+        raise SocaException(
+            response.get('message')
+            or response.get('error_code')
+            or f'instance type lookup failed for {instance_type}'
         )
+    payload = response.get('payload') or {}
+    try:
+        info = {key: int(payload[key]) for key in ('vcpus', 'cores', 'threads_per_core')}
+    except (KeyError, TypeError, ValueError):
+        raise SocaException(f'idea-scheduler has no CPU information for {instance_type}')
+    INSTANCE_TYPE_CACHE[instance_type] = info
+    log_debug(f'instance type {instance_type}: {info}')
+    return info
 
-    # Check if hyper-threading is enabled
+
+def calculate_ncpus(job) -> int:
+    """
+    The CPUs a whole node brings: vCPUs, or cores with hyper-threading off, the smallest
+    across the job's instance types
+    :raises SocaException: when the job names no instance type or the count is unknown
+    """
+    resources = job.Resource_List
+    instance_types = (
+        str(resources['instance_type']) if resources and 'instance_type' in resources else ''
+    )
+    if not instance_types:
+        raise SocaException('the job names no instance_type')
+
     ht_support = True  # Default is True
     if 'ht_support' in resources:
-        ht_support_value = str(resources['ht_support']).lower()
-        ht_support = ht_support_value in ['true', 'yes', '1']
+        ht_support = str(resources['ht_support']).lower() in ['true', 'yes', '1']
 
-    # Get instance type info
-    instance_info = get_instance_type_info(instance_type)
-
-    # Calculate ncpus based on hyper-threading settings
-    if ht_support:
-        ncpus = instance_info['vcpus']  # With HT enabled, use vCPUs
-    else:
-        ncpus = instance_info['cores']  # With HT disabled, use physical cores
-
-    log_debug(
-        f'Calculated ncpus for {instance_type} with ht_support={ht_support}: {ncpus}'
-    )
+    counts = []
+    for instance_type in instance_types.split('+'):
+        info = get_instance_type_info(instance_type.strip())
+        counts.append(info['vcpus'] if ht_support else info['cores'])
+    ncpus = min(counts)
+    log_debug(f'Calculated ncpus for {instance_types} with ht_support={ht_support}: {ncpus}')
     return ncpus
 
 
@@ -260,9 +196,22 @@ def parse_select(select_str: str):
     return parsed, count
 
 
+def requested_ncpus(job):
+    """the ncpus the job's select already names, or None"""
+    resources = job.Resource_List
+    if not resources or 'select' not in resources:
+        return None
+    parsed, _ = parse_select(str(resources['select']))
+    value = (parsed or {}).get('ncpus')
+    try:
+        return int(value) if value else None
+    except ValueError:
+        return None
+
+
 def update_select_statement(job, ncpus):
     """
-    Update the select statement with the calculated ncpus
+    Put ncpus into a select that has none
     :param job: The PBS job object
     :param ncpus: The calculated ncpus value
     """
@@ -279,30 +228,17 @@ def update_select_statement(job, ncpus):
         log_debug(f'Created select statement: {nodes}:ncpus={ncpus}')
         return
 
-    # Get current select statement
     select = str(resources['select'])
-
-    # Parse select statement
     parsed, count = parse_select(select)
-    if not parsed:
+    if parsed is None:
         log_error('Could not parse select statement')
         return
-
-    # Update ncpus in the parsed select statement
     parsed['ncpus'] = str(ncpus)
 
-    # Reconstruct select statement
     new_select = f'{count}'
     for key, value in parsed.items():
         new_select += f':{key}={value}'
 
-    # If there's compute_node in the original select, preserve it
-    if 'compute_node' in select:
-        compute_node = select.split('compute_node=')[1].split(':')[0]
-        if 'compute_node' not in parsed:
-            new_select += f':compute_node={compute_node}'
-
-    # Update job's select statement
     job.Resource_List['select'] = pbs.select(new_select)
     log_debug(f'Updated select statement: {new_select}')
 
@@ -313,7 +249,6 @@ def should_skip_ncpus_calculation(job):
     :param job: The PBS job object
     :returns: True if calculation should be skipped, False otherwise
     """
-    # Get the queue name
     queue_name = None
     if hasattr(job, 'queue') and job.queue:
         queue_name = str(job.queue)
@@ -339,30 +274,34 @@ try:
         f'Processing job {job.id if hasattr(job, "id") else "new"} for ncpus calculation'
     )
 
-    # Check if we should skip ncpus calculation for this job's queue
     if should_skip_ncpus_calculation(job):
-        log_debug('Skipping ncpus calculation due to job queue')
         e.accept()
         sys.exit(0)
 
-    # Calculate ncpus
-    ncpus = calculate_ncpus(job)
+    requested = requested_ncpus(job)
+    if requested:
+        # the user's, or validate_job's, count stands: never rewritten down
+        log_debug(f'select already names ncpus={requested}: left as requested')
+        e.accept()
+        sys.exit(0)
 
-    if ncpus:
-        # Don't set standalone ncpus resource as it conflicts with select statement
-        # job.Resource_List['ncpus'] = ncpus  # Remove this line
+    try:
+        ncpus = calculate_ncpus(job)
+    except Exception as ex:
+        reason = ex.message if isinstance(ex, SocaException) else str(ex)
+        log_error(f'ncpus not set for job: {reason}')
+        e.reject(
+            f'IDEA could not determine the CPU count for this job: {reason}. '
+            f'Retry in a minute, or request the CPUs explicitly with -l select=N:ncpus=M.'
+        )
+        sys.exit(0)
 
-        # Update select statement if present
-        update_select_statement(job, ncpus)
-
-        log_debug(f'Set ncpus in select statement to {ncpus}')
-    else:
-        log_debug('Could not calculate ncpus, using default values')
-
-    # Accept the job
+    update_select_statement(job, ncpus)
     e.accept()
 
+except SystemExit:
+    raise
 except Exception as ex:
     log_error(f'Error in calculate_ncpus_hook: {str(ex)}')
-    # Don't reject the job on error, just continue with the existing settings
+    # Don't reject the job on a hook error, just continue with the existing settings
     e.accept()
