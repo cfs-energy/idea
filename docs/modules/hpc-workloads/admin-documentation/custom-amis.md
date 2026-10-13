@@ -171,7 +171,7 @@ Hooks are plain bash scripts on the cluster's shared `/apps` file system and app
 | `/apps/<cluster>/vdc/ami_builder/userdata_customizations.sh` | while each desktop image bakes | software every desktop needs |
 | `/apps/<cluster>/scheduler/compute_node/userdata_customizations.sh` | on every compute node boot | per-node setup that must not be baked in |
 | `/apps/<cluster>/dcv_host/userdata_customizations.sh` | on every desktop boot | per-desktop setup that must not be baked in |
-| `/apps/<cluster>/bastion-host/userdata_customizations.sh` | at every start of the login node (bastion) container | tools users expect on the login node; it is arm64 Amazon Linux 2023 |
+| `/apps/<cluster>/bastion-host/userdata_customizations.sh` | at every start of the login node (bastion) container, only when owned by root and writable by no one else, for at most two minutes | tools users expect on the login node; it is arm64 Amazon Linux 2023 |
 
 * Hooks run as root with the cluster environment (`IDEA_CLUSTER_HOME`, `IDEA_BASE_OS`, …) and run for every Linux OS, so check `IDEA_BASE_OS` when a step only applies to one.
 * A bake hook that exits non-zero fails that bake. The row stays on its last good image, and the error links to the hook's log. A boot hook that fails logs a warning and the node, desktop or login node still starts.
