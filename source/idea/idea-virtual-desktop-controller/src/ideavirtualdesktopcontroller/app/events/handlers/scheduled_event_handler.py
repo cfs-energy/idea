@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+from datetime import timedelta
 from typing import Optional
 
 import ideavirtualdesktopcontroller
@@ -20,6 +21,7 @@ from ideavirtualdesktopcontroller.app.clients.events_client.events_client import
 from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import (
     BaseVirtualDesktopControllerEventHandler,
 )
+from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
 
 
 class ScheduledEventHandler(BaseVirtualDesktopControllerEventHandler):
@@ -63,6 +65,37 @@ class ScheduledEventHandler(BaseVirtualDesktopControllerEventHandler):
             day_of_week
         )
         for schedule_db_entry in schedule_db_entries:
+            # Confirm absence from the primary table before removing a stale schedule.
+            try:
+                session = (
+                    self.context.aws()
+                    .dynamodb_table()
+                    .Table(self.session_db.table_name)
+                    .get_item(
+                        Key={
+                            sessions_constants.USER_SESSION_DB_HASH_KEY: schedule_db_entry.idea_session_owner,
+                            sessions_constants.USER_SESSION_DB_RANGE_KEY: schedule_db_entry.idea_session_id,
+                        },
+                        ConsistentRead=True,
+                        ProjectionExpression=sessions_constants.USER_SESSION_DB_RANGE_KEY,
+                    )
+                )
+            except Exception as e:
+                self.log_exception(message_id=message_id, exception=e)
+                continue
+            if not session.get('Item'):
+                # Schedules are written before the session; let creation finish first.
+                if schedule_db_entry.updated_on is not None and (
+                    DateTimeUtils.current_datetime() - schedule_db_entry.updated_on
+                    < timedelta(minutes=10)
+                ):
+                    continue
+                self.schedule_db.delete(schedule_db_entry)
+                self.log_debug(
+                    message_id=message_id,
+                    message=f'Removed stale schedule {schedule_db_entry.schedule_id} for deleted session {schedule_db_entry.idea_session_id}',
+                )
+                continue
             self.log_info(
                 message_id=message_id,
                 message=f'Triggering schedule {schedule_db_entry.schedule_id}',

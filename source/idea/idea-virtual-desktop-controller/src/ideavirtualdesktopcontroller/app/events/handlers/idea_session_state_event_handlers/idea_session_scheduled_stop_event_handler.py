@@ -40,20 +40,20 @@ class IDEASessionScheduledStopEventHandler(BaseVirtualDesktopControllerEventHand
         )
         force = Utils.get_value_as_bool('force', event.detail, False)
 
-        self.log_info(
-            message_id=message_id,
-            message=f'handle stop idea_session: {idea_session_id} for owner: {idea_session_owner} Force: {force}',
-        )
-
         session = self.session_db.get_from_db(
             idea_session_id=idea_session_id, idea_session_owner=idea_session_owner
         )
         if Utils.is_empty(session):
-            self.log_error(
+            self.log_debug(
                 message_id=message_id,
                 message=f'Trying to stop Invalid idea_session_id: {idea_session_id} and owner: {idea_session_owner}. No OP. Returning.',
             )
             return
+
+        self.log_info(
+            message_id=message_id,
+            message=f'handle stop idea_session: {idea_session_id} for owner: {idea_session_owner} Force: {force}',
+        )
 
         if session.state not in {
             VirtualDesktopSessionState.READY,

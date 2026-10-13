@@ -541,6 +541,7 @@ export class EcsStack extends IdeaBaseStack {
   private buildDatadogService(): void {
     if (!this.context.config.getBool("ecs.datadog.enabled", false)) return;
 
+    const logsEnabled = this.context.config.getBool("ecs.datadog.logs_enabled", true);
     const scope = this.containerScope;
     const executionRole = buildExecutionRole(scope, "datadog-task-execution-role");
     // The agent needs no API calls of its own, so this role carries no policies. It exists because
@@ -574,6 +575,13 @@ export class EcsStack extends IdeaBaseStack {
         DD_DOGSTATSD_ORIGIN_DETECTION: "true",
         DD_DOGSTATSD_SOCKET: DOGSTATSD_SOCKET,
         DD_TAGS: `idea_cluster:${this.clusterName}`,
+        ...(logsEnabled ? {
+          DD_LOGS_ENABLED: "true",
+          DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "false",
+          // awslogs uses Docker's local cache; it does not write json-file logs.
+          DD_LOGS_CONFIG_DOCKER_CONTAINER_USE_FILE: "false",
+          DD_CONTAINER_EXCLUDE_LOGS: "name:datadog-container",
+        } : {}),
       },
       image: ecs.ContainerImage.fromRegistry(this.datadogImage()),
       logging: this.adoptedLogDriver("datadog-logs", datadogLogGroupName, STREAM_PREFIX_DATADOG),
@@ -592,6 +600,7 @@ export class EcsStack extends IdeaBaseStack {
       { name: "cgroup", path: "/sys/fs/cgroup", readOnly: true },
       { name: "datadog", path: "/var/run/datadog", readOnly: false },
     ];
+    if (logsEnabled) mounts.push({ name: "container-logs", path: "/var/lib/docker/containers", readOnly: true });
     for (const mount of mounts) {
       taskDefinition.addVolume({ host: { sourcePath: mount.path }, name: mount.name });
       container.addMountPoints({

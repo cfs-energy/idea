@@ -14,12 +14,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { App, Aws, Fn } from "aws-cdk-lib";
+import { App, Aws, Fn, Stack } from "aws-cdk-lib";
 
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
 import { checkAwsvpcTrunking } from "../../src/cli/commands/upgrade.ts";
 import { makeContext } from "../../src/cdk/constructs/base.ts";
-import { storageMounts } from "../../src/cdk/constructs/container.ts";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecs from "aws-cdk-lib/aws-ecs";
+import { Template } from "aws-cdk-lib/assertions";
+
+import { dockerLabels, addLogTailContainer, STREAM_PREFIX_APPLICATION, STREAM_PREFIX_OPENPBS, type ContainerScope, storageMounts } from "../../src/cdk/constructs/container.ts";
 import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
 import { ideaVersion } from "../../src/version.ts";
@@ -689,3 +693,100 @@ test("AD hosts can send to a queue encrypted with a configured customer key", ()
   assert.match(body, /key\/synthetic-key/);
   assert.match(body, /kms:ViaService/);
 });
+
+
+for (const logsEnabled of [true, false]) {
+  test(`Datadog logs ${logsEnabled ? "on" : "off"}: daemon environment and mounts`, () => {
+    const resources = resourcesOf(synth(true, logsEnabled ? {} : { "ecs.datadog.logs_enabled": false }));
+    const task = record(byType(resources, "AWS::ECS::TaskDefinition")[0]![1]["Properties"], "task");
+    const container = (task["ContainerDefinitions"] as Json[])[0]!;
+    const environment = Object.fromEntries((container["Environment"] as Json[]).map(row => [row["Name"], row["Value"]]));
+    assert.equal(environment["DD_LOGS_ENABLED"], logsEnabled ? "true" : undefined);
+    assert.equal(environment["DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL"], logsEnabled ? "false" : undefined);
+    assert.equal(environment["DD_LOGS_CONFIG_DOCKER_CONTAINER_USE_FILE"], logsEnabled ? "false" : undefined);
+    assert.equal(environment["DD_CONTAINER_EXCLUDE_LOGS"], logsEnabled ? "name:datadog-container" : undefined);
+    assert.equal(environment["DD_CONTAINER_EXCLUDE"], undefined);
+    assert.equal(environment["DD_DOGSTATSD_ORIGIN_DETECTION"], "true");
+    assert.equal(environment["DD_TAGS"], `idea_cluster:${CLUSTER}`);
+    const mounts = container["MountPoints"] as Json[];
+    assert.ok(mounts.some(m => m["ContainerPath"] === "/var/run/docker.sock"));
+    assert.equal(mounts.some(m => m["ContainerPath"] === "/var/lib/docker/containers"), logsEnabled);
+    if (logsEnabled) {
+      assert.deepEqual(mounts.find(m => m["ContainerPath"] === "/var/lib/docker/containers"), {
+        ContainerPath: "/var/lib/docker/containers", ReadOnly: true, SourceVolume: "container-logs",
+      });
+      assert.ok((task["Volumes"] as Json[]).some(v => v["Name"] === "container-logs"
+        && record(v["Host"], "host")["SourcePath"] === "/var/lib/docker/containers"));
+    }
+    assert.equal(record(container["LogConfiguration"], "CloudWatch")["LogDriver"], "awslogs");
+  });
+}
+
+test("Datadog disabled leaves the capacity template unchanged when logs_enabled changes", () => {
+  assert.deepEqual(synth(false), synth(false, { "ecs.datadog.logs_enabled": false }));
+});
+
+for (const [enabled, logsEnabled] of [[true, true], [true, false], [false, true]] as const) {
+  test(`IDEA log labels: agent=${enabled}, logs=${logsEnabled}, all six roles and file tails`, () => {
+    const app = new App();
+    const stack = new Stack(app, "labels", { env: { account: ACCOUNT, region: REGION } });
+    const config = settings(enabled, { "ecs.datadog.logs_enabled": logsEnabled });
+    const scope: ContainerScope = {
+      ctx: makeContext({ awsRegion: REGION, config, moduleId: "cluster-manager", releaseVersion: ideaVersion(), synthReads: SYNTH_READS }),
+      stack, vpc: new ec2.Vpc(stack, "vpc"), privateSubnets: [],
+    };
+    for (const role of ["cluster-manager", "scheduler", "vdc", "dcv-broker", "dcv-gateway", "bastion-host"]) {
+      const task = new ecs.Ec2TaskDefinition(stack, role);
+      task.addContainer(role, {
+        image: ecs.ContainerImage.fromRegistry("example.invalid/idea:1"),
+        dockerLabels: dockerLabels(scope, role),
+        logging: ecs.LogDrivers.awsLogs({ streamPrefix: "application" }),
+        memoryReservationMiB: 128,
+      });
+      task.addVolume({ name: "files" });
+      addLogTailContainer(scope, task, {
+        containerId: "files", directories: ["/logs"], logGroupName: "/idea/application",
+        logGroupConstructId: `${role}-file-group`, streamPrefix: STREAM_PREFIX_APPLICATION,
+        sourceVolume: "files", containerPath: "/logs", readOnly: true,
+      });
+      if (role === "scheduler") {
+        addLogTailContainer({ ...scope, ctx: { ...scope.ctx, moduleId: "scheduler" } }, task, {
+          containerId: "openpbs-files", directories: ["/pbs"], logGroupName: "/idea/openpbs",
+          logGroupConstructId: "openpbs-file-group", streamPrefix: STREAM_PREFIX_OPENPBS,
+          sourceVolume: "files", containerPath: "/pbs", readOnly: true,
+        });
+      }
+    }
+    const resources = Template.fromStack(stack).findResources("AWS::ECS::TaskDefinition");
+    assert.equal(Object.keys(resources).length, 6);
+    for (const resource of Object.values(resources)) {
+      const containers = resource.Properties.ContainerDefinitions;
+      for (const container of containers) {
+        const label = container.DockerLabels?.["com.datadoghq.ad.logs"];
+        assert.equal(label !== undefined, enabled && logsEnabled);
+        if (label !== undefined) {
+          const module = container.Name === "openpbs-files" ? "scheduler" : container.Name === "files" ? "cluster-manager"
+            : container.Name === "vdc" ? "virtual-desktop-controller" : container.Name;
+          const source = container.Name === "openpbs-files" ? "openpbs"
+            : container.Name === "bastion-host" ? "sshd" : container.Name === "dcv-broker" ? "java"
+            : container.Name === "dcv-gateway" ? "nginx" : "python";
+          const [log] = JSON.parse(label);
+          assert.equal(log.service, container.DockerLabels["com.datadoghq.tags.service"]);
+          assert.equal(log.service, module === "virtual-desktop-controller" ? "vdc" : module);
+          assert.equal(log.source, source);
+          assert.deepEqual(log.tags, [`idea_cluster:${CLUSTER}`, `idea_module:${module}`]);
+          if (source === "python") {
+            assert.deepEqual(log.log_processing_rules, [{ type: "multi_line", name: "python_event_start", pattern: "^\\[\\d{4}-\\d{2}-\\d{2} " }]);
+            const eventStart = new RegExp(log.log_processing_rules[0].pattern);
+            assert.ok(eventStart.test("[2026-10-13 12:34:56,123] [ERROR] [app] failed"));
+            assert.ok(!eventStart.test("Traceback (most recent call last):"));
+            assert.ok(!eventStart.test('  File "app.py", line 10'));
+          } else {
+            assert.equal(log.log_processing_rules, undefined);
+          }
+        }
+        assert.equal(container.LogConfiguration.LogDriver, "awslogs");
+      }
+    }
+  });
+}

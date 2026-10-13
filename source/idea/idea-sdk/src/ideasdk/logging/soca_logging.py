@@ -65,6 +65,45 @@ class SocaLogging(SocaLoggingProtocol):
         if default_logging_profile is None:
             default_logging_profile = 'default'
 
+        # Resolve once from the supplied settings, even if the module has no profile.
+        level_config = config or SocaConfig({})
+        module_name = (getattr(level_config, 'module_info', None) or {}).get(
+            'name', module_id
+        )
+        level = None
+        for level_key in (
+            f'{module_id}.logging.default_log_level',
+            f'{module_name}.logging.default_log_level',
+            'cluster.logging.default_log_level',
+            'logging.default_log_level',  # Legacy cluster key for one release.
+        ):
+            # Read stored keys: ClusterConfig otherwise remaps the name back to the id.
+            level = SocaConfig.get(level_config, level_key)
+            if level is not None:
+                break
+        if level is None:
+            level = 'INFO'
+        self._invalid_levels = []
+        self._default_log_level = self._resolve_level(level_key, level)
+        portal_key = 'cluster-manager.web_portal.default_log_level'
+        portal_level = level_config.get(portal_key)
+        self._portal_log_level = None
+        if portal_level is not None:
+            # Preserve the portal's existing OFF/ERROR/WARN/INFO/DEBUG/TRACE numbers.
+            portal_levels = {
+                0: logging.CRITICAL + 1,
+                1: logging.ERROR,
+                2: logging.WARNING,
+                3: logging.INFO,
+                4: logging.DEBUG,
+                5: logging.DEBUG,
+            }
+            self._portal_log_level = (
+                portal_levels.get(portal_level) if type(portal_level) is int else None
+            )
+            if self._portal_log_level is None:
+                self._portal_log_level = self._resolve_level(portal_key, portal_level)
+
         if config is None:
             self.module_id = 'default'
             self._config = SocaConfig(
@@ -82,7 +121,29 @@ class SocaLogging(SocaLoggingProtocol):
                 )
         self._file_handlers = {}
         self._initialize_root_logger()
+        if self._invalid_levels:
+            logger = self.get_logger('logging')
+            level = logger.level
+            logger.setLevel(logging.WARNING)
+            for key in self._invalid_levels:
+                logger.warning('Invalid log level for %s; falling back to INFO', key)
+            logger.setLevel(level)
         logging.captureWarnings(True)
+
+    def _resolve_level(self, key, value):
+        levels = {
+            'DEBUG': logging.DEBUG,
+            'INFO': logging.INFO,
+            'WARNING': logging.WARNING,
+            'WARN': logging.WARNING,
+            'ERROR': logging.ERROR,
+            'CRITICAL': logging.CRITICAL,
+        }
+        level = levels.get(value.strip().upper()) if isinstance(value, str) else None
+        if level is None:
+            self._invalid_levels.append(key)
+            return logging.INFO
+        return level
 
     def _initialize_root_logger(self):
         root = logging.getLogger()
@@ -166,6 +227,14 @@ class SocaLogging(SocaLoggingProtocol):
             profile = self._get_profile()
         return self._config.get(f'cluster.logging.profiles.{profile}')
 
+    def _get_app_log_level(self, logger_name):
+        if logger_name == 'web-portal' and self._portal_log_level is not None:
+            return self._portal_log_level
+        for prefix in self._get_enable_debug_logging() or []:
+            if logger_name.startswith(prefix):
+                return logging.DEBUG
+        return self._default_log_level
+
     @staticmethod
     def _reset_logger(logger: logging.Logger):
         for handler in logger.handlers:
@@ -205,19 +274,16 @@ class SocaLogging(SocaLoggingProtocol):
         settings = self._get_profile_settings()
 
         if settings is None:
-            return self._build_default_logger(
-                logger_template=logger_template, logger=logger
-            )
+            self._build_default_logger(logger_template=logger_template, logger=logger)
+            if logger_template == constants.LOGGER_TEMPLATE_APP:
+                logger.setLevel(self._get_app_log_level(logger_name))
+                for handler in logger.handlers:
+                    handler.setLevel(logging.NOTSET)
+            return logger
 
         level = settings[f'loggers.{logger_template}.level']
-
-        # if root logger, skip debug overrides
-        if logger_name is not None:
-            debug_logging = self._get_enable_debug_logging()
-            if debug_logging and len(debug_logging) > 0:
-                for debug_log in debug_logging:
-                    if logger_name.startswith(debug_log):
-                        level = logging.DEBUG
+        if logger_template == constants.LOGGER_TEMPLATE_APP:
+            level = self._get_app_log_level(logger_name)
 
         logger.setLevel(level)
 
@@ -225,7 +291,8 @@ class SocaLogging(SocaLoggingProtocol):
             handler = self._build_handler(
                 handler_name=handler_name, logger_name=logger_name
             )
-            handler.setLevel(level)
+            # File handlers are shared: a portal override must not filter other loggers.
+            handler.setLevel(logging.NOTSET)
             handler.setFormatter(self._build_formatter(name=settings['formatter']))
             logger.addHandler(handler)
 

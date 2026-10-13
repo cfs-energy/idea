@@ -251,10 +251,25 @@ export function commonEnvironment(
 }
 
 /** Labels consumed by the observability agent. */
-export function dockerLabels(scope: ContainerScope, role: ContainerRole): Record<string, string> {
+export function dockerLabels(scope: ContainerScope, role: string, logSource?: string): Record<string, string> {
+  const module = role === "vdc" ? "virtual-desktop-controller" : role;
+  const collectLogs = scope.ctx.config.getBool("ecs.datadog.enabled", false)
+    && scope.ctx.config.getBool("ecs.datadog.logs_enabled", true);
+  const pythonApp = ["cluster-manager", "scheduler", "vdc", "virtual-desktop-controller"].includes(role);
+  const source = logSource ?? (pythonApp ? "python" : role === "bastion-host" ? "sshd"
+    : role === "dcv-broker" ? "java" : "nginx");
   return {
     "com.datadoghq.tags.env": scope.ctx.clusterName,
     "com.datadoghq.tags.service": role,
+    ...(collectLogs ? {
+      "com.datadoghq.ad.logs": JSON.stringify([{
+        source, service: role,
+        tags: [`idea_cluster:${scope.ctx.clusterName}`, `idea_module:${module}`],
+        ...(source === "python" ? { log_processing_rules: [{
+          type: "multi_line", name: "python_event_start", pattern: "^\\[\\d{4}-\\d{2}-\\d{2} ",
+        }] } : {}),
+      }]),
+    } : {}),
   };
 }
 
@@ -397,6 +412,13 @@ export function addLogTailContainer(
     image: containerImage(scope),
     logging: adoptedLogDriver(scope, input.logGroupConstructId, input.logGroupName, input.streamPrefix),
     memoryReservationMiB: 32,
+    dockerLabels: scope.ctx.config.getBool("ecs.datadog.enabled", false)
+      && scope.ctx.config.getBool("ecs.datadog.logs_enabled", true)
+      ? dockerLabels(scope, input.streamPrefix === STREAM_PREFIX_BROKER ? "dcv-broker"
+        : input.streamPrefix === STREAM_PREFIX_GATEWAY ? "dcv-gateway"
+        : scope.ctx.config.moduleInfo?.name ?? scope.ctx.moduleId,
+        input.streamPrefix === STREAM_PREFIX_OPENPBS ? "openpbs" : undefined)
+      : undefined,
   });
   container.addMountPoints({
     containerPath: input.containerPath,
