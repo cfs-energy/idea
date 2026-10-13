@@ -203,6 +203,8 @@ class SchedulerApp(ideasdk.app.SocaApp):
             self.context.job_monitor.stop()
         if self.context.node_monitor is not None:
             self.context.node_monitor.stop()
+        if getattr(self.context, 'job_cache', None) is not None:
+            self.context.job_cache.stop()
         if self.context.queue_profiles is not None:
             self.context.queue_profiles.stop()
         if self.context.accounts_client is not None:
