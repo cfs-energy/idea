@@ -217,6 +217,25 @@ def test_compatibility_instance_type_endpoint(context):
     assert exc.value.error_code == errorcodes.INVALID_EC2_INSTANCE_TYPE
 
 
+@pytest.mark.parametrize(
+    'resources,expected',
+    [
+        ({'select': '1:mem=8gb', 'enable_ht_support': 'true'}, '1:mem=8gb:ncpus=72:compute_node=tbd'),
+        ({'select': '1:mem=8gb', 'enable_ht_support': 'false', 'ht_support': 'true'}, '1:mem=8gb:ncpus=72:compute_node=tbd'),
+        (
+            {'select': '1:enable_ht_support=true+2:mem=8gb'},
+            '1:enable_ht_support=true:ncpus=72:compute_node=tbd+2:mem=8gb:ncpus=36:compute_node=tbd',
+        ),
+    ],
+)
+def test_enable_ht_support_sizes_like_ht_support(submit, resources, expected):
+    # the parameter builder accepts both names and provisions the node with HT on either;
+    # sizing by one name only would give such a job half the node
+    result, _ = submit(resources)
+    assert result.accept is True, result.formatted_user_message
+    assert result.resources_updated['select'] == expected
+
+
 def test_chunk_ht_does_not_leak_into_other_chunks(submit):
     result, _ = submit({'select': '1:ht_support=true+2:mem=8gb'})
     assert result.accept is True, result.formatted_user_message

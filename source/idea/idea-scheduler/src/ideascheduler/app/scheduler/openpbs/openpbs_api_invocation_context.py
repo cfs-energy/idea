@@ -205,13 +205,22 @@ class OpenPBSAPIInvocationContext:
             select = self.size_select_cpus(select, resources)
         return select_compute_node(select, compute_node)
 
+    @staticmethod
+    def _ht_support(values: dict, default: bool) -> bool:
+        # the two names EnableHtSupportParamBuilder accepts; the node is provisioned by
+        # either, so the chunk must be sized by either
+        ht_support = Utils.get_value_as_bool('ht_support', values)
+        if ht_support is None:
+            ht_support = Utils.get_value_as_bool('enable_ht_support', values)
+        return default if ht_support is None else ht_support
+
     def size_select_cpus(self, select: str, resources: dict) -> str:
         """Leave the entire select unchanged if any missing CPU count is unresolved."""
         defaults = self._queue_profile.default_job_params
         default_ht = constants.DEFAULT_ENABLE_HT_SUPPORT
         if defaults and defaults.enable_ht_support is not None:
             default_ht = defaults.enable_ht_support
-        default_ht = Utils.get_value_as_bool('ht_support', resources, default_ht)
+        default_ht = self._ht_support(resources, default_ht)
         sized = []
         try:
             for chunk in select_chunks(select):
@@ -228,7 +237,7 @@ class OpenPBSAPIInvocationContext:
                     instance_types = defaults.instance_types if defaults else None
                 if not instance_types:
                     raise ValueError('no instance_type resolved')
-                ht_support = Utils.get_value_as_bool('ht_support', params, default_ht)
+                ht_support = self._ht_support(params, default_ht)
                 counts = []
                 for instance_type in instance_types:
                     info = self.app_context.aws_util().get_ec2_instance_type(
