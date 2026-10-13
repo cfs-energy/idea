@@ -393,10 +393,12 @@ convert_from_dynamodb_object
 # mount -a's status says nothing useful: util-linux returns 32 for "already mounted" and for
 # every real failure alike. The check is that each shared filesystem the bootstrap put in fstab
 # (its helpers write the mount point with a trailing slash) is a mount point afterwards.
+# Arguments go to mount -a (an Ubuntu bake passes -t nolustre until it boots a kernel with
+# the Lustre module; the Lustre entry is not in fstab yet, so it is not expected either).
 function mount_shared_filesystems () {
   local mount_dir
   local not_mounted=()
-  mount -a || true
+  mount -a "$@" || true
   while read -r mount_dir; do
     mountpoint -q "${mount_dir}" || not_mounted+=("${mount_dir}")
   done < <(awk '$1 !~ /^#/ && $2 ~ /.\/$/ {print $2}' /etc/fstab)
