@@ -32,6 +32,10 @@ import dataset
 import os
 import logging
 import re
+import sqlite3
+import tempfile
+from contextlib import closing
+from pathlib import Path
 from threading import Event, RLock
 
 
@@ -79,8 +83,18 @@ class JobsDB:
         self._context = context
         self._logger = context.logger()
 
-        db_dir = f'{self._context.get_scheduler_app_deploy_dir()}/db'
-        db_file = f'{db_dir}/job-cache-v3.db'
+        old_db_dir = os.path.join(context.get_scheduler_app_deploy_dir(), 'db')
+        self._is_container = context.config().get_bool('ecs.enabled', default=False)
+        default_db_dir = (
+            os.path.join(os.environ.get('PBS_HOME', '/var/spool/pbs'), 'idea', 'db')
+            if self._is_container
+            else old_db_dir
+        )
+        db_dir = context.config().get_string(
+            'scheduler.job_cache.db_dir', default=default_db_dir
+        )
+        db_file = os.path.join(db_dir, 'job-cache-v3.db')
+        old_db_file = os.path.join(old_db_dir, 'job-cache-v3.db')
 
         # Make sure directory exists with proper permissions
         try:
@@ -95,18 +109,36 @@ class JobsDB:
             self._logger.error(f'Failed to create database directory: {str(e)}')
             raise
 
+        if not os.path.exists(db_file) and os.path.isfile(old_db_file):
+            # SQLite backup includes committed WAL records; publish only a complete copy.
+            self._logger.info(f'migrating job cache from {old_db_file} to {db_file}')
+            fd, temporary_file = tempfile.mkstemp(prefix='.job-cache-', dir=db_dir)
+            os.close(fd)
+            try:
+                with (
+                    closing(
+                        sqlite3.connect(
+                            Path(old_db_file).resolve().as_uri() + '?mode=ro', uri=True
+                        )
+                    ) as source,
+                    closing(sqlite3.connect(temporary_file)) as destination,
+                ):
+                    source.backup(destination)
+                    destination.execute('PRAGMA journal_mode=DELETE')
+                os.replace(temporary_file, db_file)
+            finally:
+                if os.path.exists(temporary_file):
+                    os.remove(temporary_file)
+
         self.connection_string = f'sqlite:///{db_file}'
         self._is_ready = Event()
         self.db = None
         self._db_lock = RLock()  # Keep the RLock for database operations
         self.init_db()
 
-    # SQLite serialises writers; with the default rollback journal a writer also blocks
-    # every reader, and the API's job listings share this file with the job monitor's
-    # writes. WAL lets readers run beside the writer, the busy timeout keeps a writer
-    # waiting instead of failing, and the pool covers the API's worker threads plus the
-    # monitors. Measured: at 7 listings a second the defaults starved the pool the
-    # moment a job finished, and every listing then waited out the 30 s pool timeout.
+    # Keep the pool and busy timeout for API workers and monitors. Hosts use WAL so
+    # listings can run beside writes; containers use a rollback journal on single-writer
+    # PBS_HOME because WAL's shared-memory locking is unsuitable for EFS/NFS.
     ENGINE_KWARGS = {
         'pool_size': 20,
         'max_overflow': 20,
@@ -115,10 +147,15 @@ class JobsDB:
     }
 
     def _connect(self):
-        db = dataset.connect(self.connection_string, engine_kwargs=self.ENGINE_KWARGS)
-        db.query('PRAGMA journal_mode=WAL')
-        db.query('PRAGMA synchronous=NORMAL')
-        return db
+        return dataset.connect(
+            self.connection_string,
+            engine_kwargs=self.ENGINE_KWARGS,
+            sqlite_wal_mode=False,
+            on_connect_statements=[
+                f'PRAGMA journal_mode={"DELETE" if self._is_container else "WAL"}',
+                f'PRAGMA synchronous={"FULL" if self._is_container else "NORMAL"}',
+            ],
+        )
 
     def init_db(self):
         self._logger.info(f'initializing job cache db file: {self.connection_string}')
