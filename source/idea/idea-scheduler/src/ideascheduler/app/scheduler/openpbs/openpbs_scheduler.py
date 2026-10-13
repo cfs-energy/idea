@@ -11,6 +11,7 @@
 
 import ideascheduler
 
+from ideascheduler.app.scheduler.pbs_select import select_compute_node
 from ideadatamodel import exceptions, errorcodes
 from ideadatamodel.scheduler import (
     SocaJob,
@@ -601,8 +602,9 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
 
     def provision_job(self, job: SocaJob, stack_id: str) -> int:
         try:
-            select = job.params.custom_params['select'].split(':compute_node')[0]
-            select += f':compute_node={job.get_compute_stack()}'
+            select = select_compute_node(
+                job.params.custom_params['select'], job.get_compute_stack()
+            )
             provisioning_time = Utils.current_time_ms()
             self.set_job_attributes(
                 job_id=job.job_id,
@@ -633,8 +635,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
     def reset_job(self, job_id: str) -> bool:
         try:
             job = self.get_job(job_id=job_id)
-            select = job.params.custom_params['select'].split(':compute_node')[0]
-            select += ':compute_node=tbd'
+            select = select_compute_node(job.params.custom_params['select'], 'tbd')
 
             # do not delete job group
             return self.set_job_attributes(

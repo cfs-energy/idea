@@ -28,6 +28,8 @@ from ideasdk.utils import Utils
 
 from ideascheduler.app.scheduler import SocaJobBuilder
 
+from ideascheduler.app.scheduler.pbs_select import select_chunks, chunk_resources
+
 from typing import Optional, Union, Dict, List
 import arrow
 from datetime import datetime
@@ -161,19 +163,26 @@ class OpenPBSJob(SocaBaseModel):
 
     @staticmethod
     def _parse_select(select: str) -> Dict[str, str]:
-        tokens = select.split(':')
+        chunks = select_chunks(select)
         params = {}
-        for token in tokens:
-            kv = token.split('=')
-            if len(kv) == 1:
-                key = kv[0]
-                if Utils.is_int(key):
-                    params['nodes'] = key
-                    continue
-            elif len(kv) == 2:
-                key = kv[0]
-                value = kv[1]
-                params[key] = value
+        nodes = 0
+        cpus = []
+        instance_types = []
+        for chunk in chunks:
+            resources = chunk_resources(chunk)
+            params.update(resources)
+            count = chunk.split(':', 1)[0]
+            nodes += int(count) if count.isdigit() else 1
+            if 'ncpus' in resources:
+                cpus.append(int(resources['ncpus']))
+            for instance_type in resources.get('instance_type', '').split('+'):
+                if instance_type and instance_type not in instance_types:
+                    instance_types.append(instance_type)
+        params['nodes'] = str(nodes)
+        if cpus:
+            params['ncpus'] = str(max(cpus))
+        if instance_types:
+            params['instance_type'] = '+'.join(instance_types)
         return params
 
     @staticmethod
@@ -232,6 +241,15 @@ class OpenPBSJob(SocaBaseModel):
             )
 
         self._build_soca_job_params(soca_params=job_params, pbs_params=resources)
+
+        if resources.get('select'):
+            # CPU limits apply per chunk, not to the flattened job summary.
+            job_params['select_chunks'] = []
+            for chunk in select_chunks(resources['select']):
+                params = {}
+                self._build_soca_job_params(params, resources)
+                self._build_soca_job_params(params, chunk_resources(chunk))
+                job_params['select_chunks'].append(params)
 
         return job_params
 

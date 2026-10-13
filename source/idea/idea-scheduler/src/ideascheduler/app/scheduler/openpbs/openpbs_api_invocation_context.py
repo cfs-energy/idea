@@ -11,6 +11,7 @@
 
 from ideadatamodel import (
     exceptions,
+    constants,
     errorcodes,
     GetHpcLicenseResourceRequest,
     SocaMemory,
@@ -35,6 +36,11 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api import (
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
 from ideascheduler.app.scheduler import SocaJobBuilder
+from ideascheduler.app.scheduler.pbs_select import (
+    select_chunks,
+    chunk_resources,
+    select_compute_node,
+)
 from ideasdk.utils import Utils
 from ideasdk.api import ApiInvocationContext
 
@@ -64,6 +70,7 @@ class OpenPBSAPIInvocationContext:
         self.event: Optional[OpenPBSEvent] = self.request.event
 
         self._job_builder: Optional[SocaJobBuilder] = None
+        self._queue_profile = None
 
         self._job_validation_result: Optional[JobValidationResult] = None
         self._incidentals_validation_result: Optional[JobValidationResult] = None
@@ -114,6 +121,7 @@ class OpenPBSAPIInvocationContext:
             queue_profile = self.app_context.queue_profiles.get_queue_profile(
                 queue_name=queue_name
             )
+            self._queue_profile = queue_profile
             if not queue_profile.is_enabled():
                 raise exceptions.soca_exception(
                     error_code=errorcodes.SCHEDULER_QUEUE_PROFILE_DISABLED,
@@ -179,6 +187,66 @@ class OpenPBSAPIInvocationContext:
             self._job_submission_result.job = self.job
             self._job_submission_result.validations = self.job_validation_result
             self._job_submission_result.dry_run = self.dry_run_option()
+
+    def job_select(self, compute_node: str) -> str:
+        """Size omitted CPUs after queue defaults resolve, only at submission."""
+        job = self.job
+        resources = self.event.job.Resource_List or {}
+        select = Utils.get_value_as_string('select', job.params.custom_params, '')
+        shared = job.queue == 'job-shared' or job.is_shared_capacity()
+        if not select:
+            select = str(job.desired_nodes())
+            if resources.get('ncpus') is not None:
+                select += f':ncpus={resources["ncpus"]}'
+            elif shared:
+                select += f':ncpus={job.params.cpus}'
+
+        if self.event.type == 'queuejob' and not shared:
+            select = self.size_select_cpus(select, resources)
+        return select_compute_node(select, compute_node)
+
+    def size_select_cpus(self, select: str, resources: dict) -> str:
+        """Leave the entire select unchanged if any missing CPU count is unresolved."""
+        defaults = self._queue_profile.default_job_params
+        default_ht = constants.DEFAULT_ENABLE_HT_SUPPORT
+        if defaults and defaults.enable_ht_support is not None:
+            default_ht = defaults.enable_ht_support
+        default_ht = Utils.get_value_as_bool('ht_support', resources, default_ht)
+        sized = []
+        try:
+            for chunk in select_chunks(select):
+                params = chunk_resources(chunk)
+                if 'ncpus' in params:
+                    sized.append(chunk)
+                    continue
+                instance_types = params.get('instance_type') or resources.get(
+                    'instance_type'
+                )
+                if instance_types:
+                    instance_types = instance_types.split('+')
+                else:
+                    instance_types = defaults.instance_types if defaults else None
+                if not instance_types:
+                    raise ValueError('no instance_type resolved')
+                ht_support = Utils.get_value_as_bool('ht_support', params, default_ht)
+                counts = []
+                for instance_type in instance_types:
+                    info = self.app_context.aws_util().get_ec2_instance_type(
+                        instance_type
+                    )
+                    count = (
+                        info.vcpu_info_default_vcpus
+                        if ht_support
+                        else info.vcpu_info_default_cores
+                    )
+                    if count is None or count <= 0:
+                        raise ValueError(f'no CPU count for {instance_type}')
+                    counts.append(count)
+                sized.append(f'{chunk}:ncpus={min(counts)}')
+        except Exception as e:
+            self.app_context.logger().warning(f'select CPU sizing skipped: {e}')
+            return select
+        return '+'.join(sized)
 
     def _owner_username(self) -> Optional[str]:
         owner = None

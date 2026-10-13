@@ -43,42 +43,6 @@ class OpenPBSAPI(BaseAPI):
                 message=f'openpbs is not supported. Current scheduler is: ({current_scheduler})',
             )
 
-    def whole_node_ncpus(self, job) -> int:
-        """
-        the CPUs a job gets on a dedicated node: the instance type's vCPUs, or its cores
-        with hyper-threading off; the smallest when several types may serve. A shared
-        queue keeps the CPUs the job asked for. Computed here, where the instance type
-        cache lives, rather than by a hook shelling out from inside pbs_server.
-        """
-        if job.is_shared_capacity():
-            return max(Utils.get_as_int(job.params.cpus, 1), 1)
-        counts = []
-        for instance_type in job.params.instance_types or []:
-            try:
-                ec2_instance_type = self.context.aws_util().get_ec2_instance_type(
-                    instance_type
-                )
-            except exceptions.SocaException as e:
-                self.logger.warning(f'cpu count skipped for {instance_type}: {e}')
-                continue
-            count = (
-                ec2_instance_type.vcpu_info_default_vcpus
-                if Utils.is_true(job.params.enable_ht_support)
-                else ec2_instance_type.vcpu_info_default_cores
-            )
-            if count:
-                counts.append(count)
-        if not counts:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.INVALID_PARAMS,
-                message=(
-                    f'IDEA could not determine the CPU count of instance type(s) '
-                    f'{",".join(job.params.instance_types or [])}. Retry in a minute, '
-                    f'or request the CPUs explicitly with -l select=N:ncpus=M.'
-                ),
-            )
-        return min(counts)
-
     def hook_validate_job(self, pbs_context: OpenPBSAPIInvocationContext):
         try:
             if not self.context.is_ready():
@@ -127,14 +91,7 @@ class OpenPBSAPI(BaseAPI):
             job = pbs_context.job
 
             if Utils.is_true(job.provisioning_options.keep_forever):
-                select = Utils.get_value_as_string(
-                    'select', job.params.custom_params, ''
-                )
-                select = select.split(':compute_node')[0]
-                if Utils.is_not_empty(select):
-                    select += f':compute_node={job.get_compute_stack()}'
-                else:
-                    select = f'{job.desired_nodes()}:ncpus={self.whole_node_ncpus(job)}:compute_node={job.get_compute_stack()}'
+                select = pbs_context.job_select(job.get_compute_stack())
 
                 self.context.job_monitor.job_queued(job=job)
 
@@ -164,14 +121,7 @@ class OpenPBSAPI(BaseAPI):
                 else:
                     job = pbs_context.job
 
-                    select = Utils.get_value_as_string(
-                        'select', job.params.custom_params, ''
-                    )
-                    select = select.split(':compute_node')[0]
-                    if Utils.is_not_empty(select):
-                        select += ':compute_node=tbd'
-                    else:
-                        select = f'{job.desired_nodes()}:ncpus={self.whole_node_ncpus(job)}:compute_node=tbd'
+                    select = pbs_context.job_select('tbd')
 
                     pbs_context.get_bom_cost()
                     pbs_context.get_budget_usage()
@@ -243,8 +193,7 @@ class OpenPBSAPI(BaseAPI):
 
     def instance_type_info(self, context: ApiInvocationContext):
         """
-        the calculate_ncpus hook asks here for an instance type's CPUs instead of running
-        the AWS CLI from inside pbs_server; the answer comes from the instance type cache
+        Compatibility endpoint for older installed hooks; reads the instance type cache.
         """
         payload = Utils.get_value_as_dict('payload', context.get_request(), {})
         instance_type = Utils.get_value_as_string('instance_type', payload)
