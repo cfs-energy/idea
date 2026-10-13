@@ -203,11 +203,12 @@ class TaskIdentity(unittest.TestCase):
         }
         task.update(changes)
         config = Mock()
+        # a key the cluster has no value for reads as None, as it does from the real configuration
         config.get_string.side_effect = lambda key, **kwargs: {
             'bastion-host.task_role_id': 'ROLE',
             'ecs.cluster_name': 'cluster',
             'bastion-host.service_name': 'cluster-bastion',
-        }[key]
+        }.get(key)
         context = Mock()
         context.config.return_value = config
         context.aws.return_value.get_client.return_value.describe_tasks.return_value = {
