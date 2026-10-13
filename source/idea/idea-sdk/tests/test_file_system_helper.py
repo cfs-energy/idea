@@ -458,7 +458,9 @@ def test_rename_needs_the_folder_not_the_file(numeric_tree):
     assert os.path.exists(kept)
 
 
-def test_upload_folder_swapped_for_a_link_after_the_check_is_refused(numeric_tree, tmp_path):
+def test_upload_folder_swapped_for_a_link_after_the_check_is_refused(
+    numeric_tree, tmp_path
+):
     # the check passes on the real folder; a link swapped in before the open is not followed
     from ideasdk.server.soca_server import SocaServer
 
@@ -492,7 +494,9 @@ def test_upload_into_a_folder_reached_through_the_users_own_link(numeric_tree):
         pytest.skip('needs root: the server creates the file')
     path, helper = numeric_tree
     real = os.path.join(path, 'real')
-    helper.run_as_user(lambda: (os.mkdir(real), os.symlink(real, os.path.join(path, 'link'))))
+    helper.run_as_user(
+        lambda: (os.mkdir(real), os.symlink(real, os.path.join(path, 'link')))
+    )
     server = object.__new__(SocaServer)
     server._logger = Mock()
     fd, file_path, renamed = server._create_upload(

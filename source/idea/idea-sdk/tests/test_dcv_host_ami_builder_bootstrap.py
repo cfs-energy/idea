@@ -543,8 +543,14 @@ def test_ubuntu_runtime_holds_the_running_kernel_without_selecting_one(
     )[0]
     for unexpected in ('GRUB', 'apt install', 'pkgnames', 'BAKE_STAGE'):
         assert unexpected not in kernel
-    assert 'apt-mark hold linux-image-${current_kernel} linux-headers-${current_kernel}' in kernel
-    assert 'apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-tools-aws' in kernel
+    assert (
+        'apt-mark hold linux-image-${current_kernel} linux-headers-${current_kernel}'
+        in kernel
+    )
+    assert (
+        'apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-tools-aws'
+        in kernel
+    )
     assert ('lustre-client-modules-${TARGET_KERNEL_ABI}' in kernel) == lustre
     assert ('fsx-lustre-client-repo' in kernel) == lustre
     running = '6.8.0-1040-aws'
@@ -555,7 +561,10 @@ def test_ubuntu_runtime_holds_the_running_kernel_without_selecting_one(
         f'linux-modules-{running} linux-modules-extra-{running}'
     ) in calls
     # the stubbed host has no linux-aws pointing at the running series: the metapackages go
-    assert 'apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws' in calls
+    assert (
+        'apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws'
+        in calls
+    )
     for unexpected in ('apt install', 'grub', 'reboot'):
         assert unexpected not in calls
 

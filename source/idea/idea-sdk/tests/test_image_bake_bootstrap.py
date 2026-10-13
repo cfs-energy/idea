@@ -423,7 +423,9 @@ def test_shared_mounts_are_checked_not_trusted_from_mount_status(tmp_path, mount
     'cluster_dirs,failed',
     [('"/data"', False), ('"/data" "/apps"', True), (None, True)],
 )
-def test_only_this_clusters_shared_storage_must_be_mounted(tmp_path, cluster_dirs, failed):
+def test_only_this_clusters_shared_storage_must_be_mounted(
+    tmp_path, cluster_dirs, failed
+):
     # /apps/ is in fstab but not mounted: a leftover entry is warned about and ignored, the
     # cluster's own entry fails the check; without the rendered list every entry counts
     bin_dir, source = _mount_stubs(tmp_path, ['/data/'])
@@ -435,15 +437,20 @@ def test_only_this_clusters_shared_storage_must_be_mounted(tmp_path, cluster_dir
         env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
     )
     assert (result.returncode != 0) == failed, result.stdout + result.stderr
-    assert ('Ignoring fstab entry /apps/' in result.stdout) == (cluster_dirs == '"/data"')
+    assert ('Ignoring fstab entry /apps/' in result.stdout) == (
+        cluster_dirs == '"/data"'
+    )
 
 
 @pytest.mark.parametrize('name', MOUNT_CALLERS)
 def test_every_mount_check_knows_the_clusters_mount_points(name):
     text = render(name, 'rocky9', lustre=False)
-    line = next(l for l in text.splitlines() if 'IDEA_SHARED_MOUNT_DIRS=(' in l)
-    assert '/apps"' in line and '/data"' in line
-    assert text.index('IDEA_SHARED_MOUNT_DIRS=(') < text.rindex('mount_shared_filesystems')
+    start = text.index('IDEA_SHARED_MOUNT_DIRS=(')
+    dirs = text[start : text.index(')', start)]
+    assert '/apps"' in dirs and '/data"' in dirs
+    assert text.index('IDEA_SHARED_MOUNT_DIRS=(') < text.rindex(
+        'mount_shared_filesystems'
+    )
 
 
 def test_the_mount_retry_loop_gives_up_loudly(tmp_path):

@@ -54,7 +54,10 @@ def test_ppk_conversion_runs_without_su_and_owns_the_result(monkeypatch, tmp_pat
     def convert(args, **kwargs):
         # puttygen works on a private copy, never in the user's directory
         assert args[0] == str(puttygen) and args[2] == '-o'
-        assert not args[1].startswith(str(tmp_path)) and open(args[1]).read() == 'PRIVATE KEY\n'
+        assert (
+            not args[1].startswith(str(tmp_path))
+            and open(args[1]).read() == 'PRIVATE KEY\n'
+        )
         with open(args[3], 'w') as f:
             f.write('converted key\n')
         return Mock(returncode=0)
@@ -266,14 +269,14 @@ def test_tree_read_failures_are_counted(monkeypatch, tmp_path, operation):
     assert owners[str(tmp_path / 'home/nested/data')] == (11001, 11002)
 
 
-
 def _key_home(monkeypatch, tmp_path):
     import os
 
     home = tmp_path / 'home'
     (home / '.ssh').mkdir(parents=True)
     helper = UserHomeDirectory(
-        Mock(), User(username='user', uid=os.getuid(), gid=os.getgid(), home_dir=str(home))
+        Mock(),
+        User(username='user', uid=os.getuid(), gid=os.getgid(), home_dir=str(home)),
     )
     helper._shell = Mock()
     helper._shell.invoke.return_value = Mock(returncode=1, stdout='')
@@ -305,7 +308,9 @@ def test_a_planted_ppk_link_is_never_written_through(monkeypatch, tmp_path, live
     assert (home / '.ssh/id_rsa.ppk').is_symlink()
 
 
-def test_a_ppk_is_written_for_the_user_and_an_id_rsa_link_is_not_read(monkeypatch, tmp_path):
+def test_a_ppk_is_written_for_the_user_and_an_id_rsa_link_is_not_read(
+    monkeypatch, tmp_path
+):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -323,7 +328,7 @@ def test_a_ppk_is_written_for_the_user_and_an_id_rsa_link_is_not_read(monkeypatc
     assert [p.name for p in (home / '.ssh').iterdir() if p.name.startswith('.')] == []
     # the key download reads as root: a link to another file is refused, not returned
     secret = tmp_path / 'secret'
-    secret.write_text('not the user\'s')
+    secret.write_text("not the user's")
     (home / '.ssh/id_rsa').unlink()
     (home / '.ssh/id_rsa').symlink_to(secret)
     with pytest.raises(Exception, match='cannot be read'):

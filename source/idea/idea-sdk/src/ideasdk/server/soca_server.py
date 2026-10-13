@@ -1201,7 +1201,9 @@ class SocaServer(SocaService):
         Returns (fd, file_path, was_renamed).
         """
         resolved = os.path.realpath(directory)
-        helper.check_access(resolved, check_dir=True, check_read=False, check_write=True)
+        helper.check_access(
+            resolved, check_dir=True, check_read=False, check_write=True
+        )
         dir_fd = self._open_directory_nofollow(resolved)
         try:
             for file_path, was_renamed in self._candidate_upload_paths(
@@ -1211,7 +1213,11 @@ class SocaServer(SocaService):
                 try:
                     fd = os.open(
                         name,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        os.O_WRONLY
+                        | os.O_CREAT
+                        | os.O_EXCL
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
                         0o644,
                         dir_fd=dir_fd,
                     )

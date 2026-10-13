@@ -176,6 +176,7 @@ def test_puttygen_is_used_where_present_and_the_key_written_in_process_elsewhere
     )
     ppk_file = tmp_path / 'id_rsa.ppk'
     runs = []
+
     def run(args, **_):
         runs.append(args)
         with open(args[3], 'w') as f:

@@ -65,7 +65,10 @@ def configure_licenses(table, pbs_home):
     try:
         licenses = _license_rows(table)
     except Exception as error:
-        LOGGER.error('License table could not be read, PBS license resources left as they are: %s', error)
+        LOGGER.error(
+            'License table could not be read, PBS license resources left as they are: %s',
+            error,
+        )
         return
     if licenses is None:
         return

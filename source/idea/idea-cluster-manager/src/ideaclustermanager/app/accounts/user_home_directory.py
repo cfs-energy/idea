@@ -64,7 +64,9 @@ class UserHomeDirectory:
                 os.chmod(putty_gen_bin, 0o700)
             with tempfile.TemporaryDirectory(prefix='idea-ppk-') as work:
                 key_file = os.path.join(work, 'id_rsa')
-                with open(os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as f:
+                with open(
+                    os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb'
+                ) as f:
                     f.write(private_key)
                 out_file = os.path.join(work, 'id_rsa.ppk')
                 result = subprocess.run(

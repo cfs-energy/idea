@@ -300,7 +300,6 @@ class SiteHook(unittest.TestCase):
     """the login node runs the site's hook before sshd accepts; a failure never stops the start"""
 
     def run_block(self, cluster_home, owner_uid=0):
-        import os
         import subprocess
 
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
@@ -352,10 +351,12 @@ class SiteHook(unittest.TestCase):
             ['partial', 'site hook failed with status 3; continuing', 'reached-sshd'],
         )
 
-
     def test_a_hook_others_could_write_is_skipped(self):
         for owner, mode in ((1000, 0o755), (0, 0o775), (0, 0o757)):
-            with self.subTest(owner=owner, mode=oct(mode)), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(owner=owner, mode=oct(mode)),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 self.write_hook(tmp, 'echo ran\n', mode)
                 result = self.run_block(tmp, owner_uid=owner)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -367,7 +368,9 @@ class SiteHook(unittest.TestCase):
     def test_the_hook_runs_under_a_time_limit(self):
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
         self.assertIn('timeout 120 /bin/bash "${SITE_HOOK}"', text)
-        self.assertLess(text.index('timeout 120 /bin/bash'), text.index('/usr/sbin/sshd -t'))
+        self.assertLess(
+            text.index('timeout 120 /bin/bash'), text.index('/usr/sbin/sshd -t')
+        )
 
 
 if __name__ == '__main__':
