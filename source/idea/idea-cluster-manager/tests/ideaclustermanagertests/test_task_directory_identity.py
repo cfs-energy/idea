@@ -144,7 +144,9 @@ def _delete_helper(monkeypatch, preset_error):
     helper.ldap_client = Mock()
     helper.ad_automation_dao = Mock()
     helper.sender_id = 'AIDAIMTEBMVXFWRSXIKCK'
-    helper.request = {'payload': {'instance_id': 'i-00de1e62d106952d8'}}
+    helper.request = {
+        'payload': {'instance_id': 'i-00de1e62d106952d8', 'computer_name': 'C-TARGET'}
+    }
 
     def preset(**_kwargs):
         raise preset_error

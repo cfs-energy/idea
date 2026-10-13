@@ -22,6 +22,8 @@ from ideaclustermanager.app.accounts.db.ad_automation_dao import ADAutomationDAO
 from typing import Dict, List, Optional
 import botocore.exceptions
 import secrets
+import re
+import ldap.filter
 import string
 import copy
 from types import SimpleNamespace
@@ -49,6 +51,8 @@ class PresetComputeHelper:
         ad_automation_dao: ADAutomationDAO,
         sender_id: str,
         request: Dict,
+        target_computer: Optional[str] = None,
+        terminated_instance_id: Optional[str] = None,
     ):
         """
         :param context:
@@ -109,18 +113,44 @@ class PresetComputeHelper:
         # when sent from an EC2 Instance with an IAM Role attached, SenderId is of below format (IAM role ID):
         # AROAZKN2GIY65I74VE5YH:i-035b89c7f49714a3e
         sender_id_tokens = sender_id.split(':')
-        if len(sender_id_tokens) != 2:
+        if not terminated_instance_id and len(sender_id_tokens) != 2:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
                 message='Unable to verify cluster node identity: Invalid SenderId',
             )
 
-        task_arn = Utils.get_value_as_string('task_arn', payload)
+        task_arn = (
+            None
+            if terminated_instance_id
+            else Utils.get_value_as_string('task_arn', payload)
+        )
+        # 26.10.4 task senders omitted the ARN; reconstruct it only for deletion.
+        if (
+            target_computer
+            and not terminated_instance_id
+            and not task_arn
+            and re.fullmatch(r'[0-9a-f]{32}', sender_id_tokens[1])
+        ):
+            cluster = self.context.config().get_string(
+                'ecs.cluster_name', required=True
+            )
+            partition = self.context.aws().aws_partition()
+            task_arn = f'arn:{partition}:ecs:{self.aws_region}:{self.aws_account}:task/{cluster}/{sender_id_tokens[1]}'
         if task_arn:
             # an ECS task (the bastion joining, the desktop controller or the scheduler
             # retiring a node) is verified through ECS, as an instance is through EC2
             try:
-                module = verify_cluster_task(self.context, sender_id, task_arn)
+                module = verify_cluster_task(
+                    self.context,
+                    sender_id,
+                    task_arn,
+                    allow_stopped=bool(target_computer),
+                )
+                if target_computer and module not in (
+                    'virtual-desktop-controller',
+                    'scheduler',
+                ):
+                    raise ValueError('Task module is not authorized for DeleteComputer')
             except ValueError as error:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
@@ -133,12 +163,17 @@ class PresetComputeHelper:
                 idea_module_id=self.context.config().get_module_id(module),
             )
         else:
-            instance_id = sender_id_tokens[1]
+            instance_id = terminated_instance_id or sender_id_tokens[1]
             try:
                 ec2_instances = self.context.aws_util().ec2_describe_instances(
                     filters=[
                         {'Name': 'instance-id', 'Values': [instance_id]},
-                        {'Name': 'instance-state-name', 'Values': ['running']},
+                        {
+                            'Name': 'instance-state-name',
+                            'Values': ['shutting-down', 'terminated']
+                            if terminated_instance_id
+                            else ['running'],
+                        },
                     ]
                 )
             except botocore.exceptions.ClientError as e:
@@ -161,39 +196,50 @@ class PresetComputeHelper:
             self.instance_id = instance_id
 
             self.ec2_instance = ec2_instances[0]
+            if terminated_instance_id and (
+                self.ec2_instance.instance_id != terminated_instance_id
+                or self.ec2_instance.soca_cluster_name != self.cluster_name
+                or self.ec2_instance.idea_module_id
+                != self.context.config().get_module_id('ecs')
+                or self.ec2_instance.state not in ('shutting-down', 'terminated')
+            ):
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
+                    message='DeleteComputer target is not a terminated ECS host in this cluster',
+                )
 
         # for Windows instances, there is no way to fetch the hostname from describe instances API.
         # request payload from windows instances will contain hostname. e.g. EC2AMAZ-6S29U5P
-        hostname = None if task_arn else Utils.get_value_as_string('hostname', payload)
+        hostname = target_computer or (
+            None if task_arn else Utils.get_value_as_string('hostname', payload)
+        )
         if Utils.is_empty(hostname):
-            # Generate and make use of an IDEA hostname
-            hostname_data = f'{self.aws_region}|{self.aws_account}|{self.cluster_name}|{self.instance_id}'
-            hostname_prefix = self.context.config().get_string(
-                'directoryservice.ad_automation.hostname_prefix', default='IDEA-'
-            )
-
-            # todo - move to constants
-            # todo - change this to produce the shake output and take this many chars vs. bytes (hex)
-            # check the configured hostname_prefix length and how much it leaves us for generating the random portion.
-            avail_chars = 15 - len(hostname_prefix)
-            if avail_chars < 4:
-                raise exceptions.soca_exception(
-                    error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                    message=f'{self.log_tag}configured hostname_prefix is too large. Required at least 4 char of random data. Decrease the size of directoryservice.ad_automation.hostname_prefix: {len(hostname_prefix)}',
-                )
-
-            self.logger.info(
-                f'Using hostname information {hostname_data} (configured hostname prefix: [{hostname_prefix}] / len {len(hostname_prefix)} / {avail_chars} chars available for random portion)'
-            )
-            # Take the last n-chars from the resulting shake256 bucket of 256
-            shake_value = Utils.shake_256(hostname_data, 256)[(avail_chars * -1) :]
-            hostname = f'{hostname_prefix}{shake_value}'.upper()
-            self.logger.info(
-                f'Generated IDEA hostname / AD hostname of: {hostname} / len {len(hostname)}'
-            )
+            hostname = self.generate_hostname(self.instance_id)
 
         self.hostname = hostname
         self.logger.info(f'Using hostname for AD operation: {self.hostname}')
+
+        # DeleteComputer uses the verified identity and OU, then deletes an exact LDAP DN.
+        if target_computer:
+            if not task_arn and not terminated_instance_id:
+                infra_sender = (
+                    self.ec2_instance.soca_node_type == 'infra'
+                    and self.ec2_instance.idea_module_id
+                    in (
+                        self.context.config().get_module_id(
+                            'virtual-desktop-controller'
+                        ),
+                        self.context.config().get_module_id('scheduler'),
+                    )
+                )
+                if not infra_sender and not self.is_instance_computer(
+                    self.instance_id, target_computer
+                ):
+                    raise exceptions.soca_exception(
+                        error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
+                        message='EC2 sender may only delete its own computer',
+                    )
+            return
 
         self._shell = ShellInvoker(logger=self.logger)
 
@@ -209,6 +255,45 @@ class PresetComputeHelper:
         # initialize domain controller IP addresses
         self._domain_controller_ips = self.get_domain_controller_ip_addresses()
 
+    def generate_hostname(self, instance_id: str) -> str:
+        # Generate and make use of an IDEA hostname
+        hostname_data = (
+            f'{self.aws_region}|{self.aws_account}|{self.cluster_name}|{instance_id}'
+        )
+        hostname_prefix = self.context.config().get_string(
+            'directoryservice.ad_automation.hostname_prefix', default='IDEA-'
+        )
+
+        # todo - move to constants
+        # todo - change this to produce the shake output and take this many chars vs. bytes (hex)
+        # check the configured hostname_prefix length and how much it leaves us for generating the random portion.
+        avail_chars = 15 - len(hostname_prefix)
+        if avail_chars < 4:
+            raise exceptions.soca_exception(
+                error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
+                message=f'{self.log_tag}configured hostname_prefix is too large. Required at least 4 char of random data. Decrease the size of directoryservice.ad_automation.hostname_prefix: {len(hostname_prefix)}',
+            )
+
+        self.logger.info(
+            f'Using hostname information {hostname_data} (configured hostname prefix: [{hostname_prefix}] / len {len(hostname_prefix)} / {avail_chars} chars available for random portion)'
+        )
+        # Take the last n-chars from the resulting shake256 bucket of 256
+        shake_value = Utils.shake_256(hostname_data, 256)[(avail_chars * -1) :]
+        hostname = f'{hostname_prefix}{shake_value}'.upper()
+        self.logger.info(
+            f'Generated IDEA hostname / AD hostname of: {hostname} / len {len(hostname)}'
+        )
+        return hostname
+
+    def is_instance_computer(self, instance_id: str, computer_name: str) -> bool:
+        if self.generate_hostname(instance_id).casefold() == computer_name.casefold():
+            return True
+        return any(
+            entry.get('status') == 'success'
+            and (entry.get('hostname') or '').casefold() == computer_name.casefold()
+            for entry in self.ad_automation_dao.list_entries_by_instance_id(instance_id)
+        )
+
     @property
     def log_tag(self) -> str:
         return f'(Host: {self.hostname}, InstanceId: {self.instance_id}, Nonce: {self.nonce})'
@@ -223,7 +308,9 @@ class PresetComputeHelper:
 
     @staticmethod
     def get_ldap_computer_filterstr(hostname: str) -> str:
-        return f'(&(objectClass=computer)(cn={hostname}))'
+        return (
+            f'(&(objectClass=computer)(cn={ldap.filter.escape_filter_chars(hostname)}))'
+        )
 
     def is_existing_computer_account(self, trace=False) -> bool:
         search_result = self.ldap_client.search_s(

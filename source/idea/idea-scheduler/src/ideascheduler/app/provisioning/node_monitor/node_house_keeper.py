@@ -922,7 +922,13 @@ class NodeHouseKeepingSession:
                     },
                 }
                 # from a container, the task ARN is what the agent verifies the sender by
-                task_arn = current_task_arn()
+                try:
+                    task_arn = current_task_arn()
+                except RuntimeError:
+                    self._logger.warning(
+                        'ECS metadata unavailable after retries; sending AD delete with legacy task verification'
+                    )
+                    task_arn = None
                 if task_arn:
                     request['payload']['task_arn'] = task_arn
 

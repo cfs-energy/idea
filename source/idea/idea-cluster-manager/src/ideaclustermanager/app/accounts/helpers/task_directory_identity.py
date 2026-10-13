@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
+
+
 # the modules whose ECS tasks send AD automation messages; each stack publishes the task
 # role id and service name the verification reads
 TASK_SENDER_MODULES = ('bastion-host', 'virtual-desktop-controller', 'scheduler')
 
 
-def verify_cluster_task(context, sender_id, task_arn) -> str:
+def verify_cluster_task(context, sender_id, task_arn, allow_stopped=False) -> str:
     """
     A message from an ECS task carries the task's ARN. The sender is a cluster component
     when the SQS SenderId names one of the cluster's task roles with that task's id as its
@@ -44,10 +47,23 @@ def verify_cluster_task(context, sender_id, task_arn) -> str:
     # still wants running is a member; one being stopped, or not yet started, is not.
     started = task.get('lastStatus') in ('ACTIVATING', 'RUNNING')
     wanted = task.get('desiredStatus', 'RUNNING') == 'RUNNING'
+    # A rollout can retire the sender before its queued delete is processed.
+    retiring = False
+    if allow_stopped:
+        status = task.get('lastStatus')
+        if status in ('ACTIVATING', 'RUNNING'):
+            retiring = task.get('desiredStatus') in ('STOPPING', 'STOPPED')
+        elif status in ('DEACTIVATING', 'STOPPING', 'DEPROVISIONING', 'STOPPED'):
+            stopped_at = task.get('stoppedAt' if status == 'STOPPED' else 'stoppingAt')
+            if isinstance(stopped_at, datetime) and stopped_at.tzinfo is not None:
+                retiring = (
+                    0
+                    <= (datetime.now(timezone.utc) - stopped_at).total_seconds()
+                    <= 3600
+                )
     if (
         task.get('taskArn') != task_arn
-        or not started
-        or not wanted
+        or not ((started and wanted) or retiring)
         or task.get('group') != f'service:{service}'
     ):
         raise ValueError(f'Task is not a running member of the {module} service')
