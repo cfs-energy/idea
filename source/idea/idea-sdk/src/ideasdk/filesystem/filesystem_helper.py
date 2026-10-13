@@ -125,6 +125,15 @@ class FileSystemHelper:
             self._identity = UserIdentity(self.context.accounts, self.username)
         return self._identity.run(operation)
 
+    def own(self, path: str):
+        """
+        gives a file the server wrote on the user's behalf to the user, by id: the server
+        runs in a container that cannot look the user's name up
+        """
+        if self._identity is None:
+            self._identity = UserIdentity(self.context.accounts, self.username)
+        os.chown(path, self._identity.uid, self._identity.gid)
+
     def get_user_home(self) -> str:
         user_home = self.context.config().get_string(
             'shared-storage.data.mount_dir', default='/data'
@@ -782,7 +791,15 @@ class FileSystemHelper:
 
         for file in files:
             try:
-                self.check_access(file, check_read=False, check_write=True)
+                # unlink needs write on the folder, not on the file: a read-only file, or one
+                # the server wrote and never handed over, is still the user's to delete
+                self.check_access(file, check_read=False, check_write=False)
+                self.check_access(
+                    os.path.dirname(file.rstrip('/')) or '/',
+                    check_dir=True,
+                    check_read=False,
+                    check_write=True,
+                )
 
                 # Check file type and delete immediately to minimize race conditions
                 if os.path.islink(file):

@@ -975,7 +975,6 @@ class SocaServer(SocaService):
         """
         import re
         import aiofiles
-        import shutil
         import os
 
         # Get Content-Type header to extract boundary
@@ -1113,11 +1112,12 @@ class SocaServer(SocaService):
                             await current_file_handle.close()
                             current_file_handle = None
 
-                            # Set file ownership
-                            group_name = helper.group_name_helper.get_user_group(
-                                username
-                            )
-                            shutil.chown(current_file, user=username, group=group_name)
+                            # the server wrote the file; hand it to the user, or leave nothing
+                            try:
+                                helper.own(current_file)
+                            except Exception:
+                                os.remove(current_file)
+                                raise
 
                             files_uploaded.append(current_file)
 

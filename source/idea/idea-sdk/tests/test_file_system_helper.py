@@ -15,7 +15,13 @@ Test Cases for FileSystemHelper
 
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions, errorcodes, ListFilesRequest, ReadFileRequest
+from ideadatamodel import (
+    exceptions,
+    errorcodes,
+    DeleteFilesRequest,
+    ListFilesRequest,
+    ReadFileRequest,
+)
 
 import pytest
 import os
@@ -311,3 +317,59 @@ def test_supplementary_gids_come_from_accounts():
     accounts.get_user.assert_called_once_with('no-passwd-entry')
     accounts.get_group.assert_any_call('project')
     accounts.get_group.assert_any_call('shared')
+
+
+def test_delete_removes_read_only_and_server_written_files(numeric_tree):
+    # an upload the server wrote and never handed over is root's: unlink needs the folder, not the file
+    if os.geteuid() != 0:
+        pytest.skip('needs root to create files the user does not own')
+    path, helper = numeric_tree
+    folder = os.path.join(path, 'uploads')
+    helper.run_as_user(lambda: os.mkdir(folder))
+    server_written = os.path.join(folder, 'server.dat')
+    with open(server_written, 'w') as f:
+        f.write('x')
+    read_only = os.path.join(folder, 'readonly.dat')
+    helper.run_as_user(
+        lambda: (open(read_only, 'w').close(), os.chmod(read_only, 0o444))
+    )
+    locked = os.path.join(path, 'locked')
+    os.mkdir(locked, 0o755)  # root's folder: the user may not delete from it
+    kept = os.path.join(locked, 'kept.dat')
+    open(kept, 'w').close()
+    helper.delete_files(DeleteFilesRequest(files=[server_written, read_only, kept]))
+    assert not os.path.exists(server_written)
+    assert not os.path.exists(read_only)
+    assert os.path.exists(kept)
+
+
+def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
+    import asyncio
+    from ideasdk.server.soca_server import SocaServer
+
+    path, helper = numeric_tree
+    body = (
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="data.dat"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\nhello\r\n--b--\r\n'
+    )
+    chunks = iter([body, None])
+
+    class Stream:
+        async def read(self):
+            return next(chunks)
+
+    request = SimpleNamespace(
+        headers={'content-type': 'multipart/form-data; boundary=b'}, stream=Stream()
+    )
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    result = asyncio.run(
+        server._process_streaming_upload(request, helper, path, 'no-passwd-entry')
+    )
+    uploaded = os.path.join(path, 'data.dat')
+    assert result['payload']['files_uploaded'] == [uploaded]
+    assert open(uploaded).read() == 'hello'
+    assert os.stat(uploaded).st_uid == helper._identity.uid
+    # and the user can delete what the server wrote for them
+    helper.delete_files(DeleteFilesRequest(files=[uploaded]))
+    assert not os.path.exists(uploaded)
