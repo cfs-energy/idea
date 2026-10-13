@@ -90,11 +90,11 @@ test("grants a container bastion nothing and removes the host-era grant", () => 
   assert.deepEqual(runGrant({
     "bastion-host.service_name": "test-bastion-host",
     "bastion-host.private_dns_name": "nlb.elb.amazonaws.com",
-  }, `${STALE},root@admin.example.invalid`), [`-c set server managers -= ${STALE}`]);
+  }, `${STALE},root@example.invalid`), [`-c set server managers -= ${STALE}`]);
 });
 
 test("does not add an existing grant again", () => {
-  assert.deepEqual(runGrant({ "bastion-host.private_dns_name": "host.example.invalid" }, "root@host.example.invalid"), []);
+  assert.deepEqual(runGrant({ "bastion-host.private_dns_name": "example.invalid" }, "root@example.invalid"), []);
 });
 
 test("refreshes grants after first-create defaults have finished", () => {
