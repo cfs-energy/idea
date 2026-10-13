@@ -343,8 +343,21 @@ def test_delete_removes_read_only_and_server_written_files(numeric_tree):
     assert os.path.exists(kept)
 
 
-def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
+def run_upload(server, request, helper, path):
+    # a private loop, not asyncio.run: that unsets the thread's event loop on exit, and the
+    # session's server fixture asks for the main thread's loop when it stops
     import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            server._process_streaming_upload(request, helper, path, 'no-passwd-entry')
+        )
+    finally:
+        loop.close()
+
+
+def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
     from ideasdk.server.soca_server import SocaServer
 
     path, helper = numeric_tree
@@ -363,9 +376,7 @@ def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
     )
     server = object.__new__(SocaServer)
     server._logger = Mock()
-    result = asyncio.run(
-        server._process_streaming_upload(request, helper, path, 'no-passwd-entry')
-    )
+    result = run_upload(server, request, helper, path)
     uploaded = os.path.join(path, 'data.dat')
     assert result['payload']['files_uploaded'] == [uploaded]
     assert open(uploaded).read() == 'hello'
@@ -377,7 +388,6 @@ def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
 
 def test_upload_never_follows_a_planted_link(numeric_tree, tmp_path):
     # a link at the upload's name, dangling or live, is not opened: the next free name is taken
-    import asyncio
     from ideasdk.server.soca_server import SocaServer
 
     if os.geteuid() != 0:
@@ -407,9 +417,7 @@ def test_upload_never_follows_a_planted_link(numeric_tree, tmp_path):
     )
     server = object.__new__(SocaServer)
     server._logger = Mock()
-    result = asyncio.run(
-        server._process_streaming_upload(request, helper, path, 'no-passwd-entry')
-    )
+    result = run_upload(server, request, helper, path)
     renamed = [os.path.join(path, 'data(1).dat'), os.path.join(path, 'live(1).dat')]
     assert result['payload']['files_uploaded'] == renamed
     assert [f['final_name'] for f in result['payload']['files_renamed']] == [
