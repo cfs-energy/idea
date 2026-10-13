@@ -383,6 +383,7 @@ export interface VirtualDesktopSchedule {
   start_up_time?: string;
   shut_down_time?: string;
   schedule_type?: VirtualDesktopScheduleType;
+  updated_on?: string;
 }
 export interface BatchCreateSessionResponse {
   failed?: VirtualDesktopSession[];
