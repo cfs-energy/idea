@@ -29,25 +29,32 @@ BOOTSTRAP_REFRESH_TEMPLATES = (
 )
 
 
-def bootstrap_refresh_variables(config) -> dict:
+def bootstrap_refresh_variables(config, logger=None) -> dict:
     """
-    the scheduler name a PBS client talks to and the zone it resolves it through, derived
-    exactly as openpbs_client.jinja2 does at first bootstrap: a desktop from before a
-    scheduler move picks the current name up on refresh
+    what the refresh renders its templates with: the scheduler name a PBS client talks to
+    and the zone it resolves it through, derived exactly as openpbs_client.jinja2 does at
+    first bootstrap, so a desktop from before a scheduler move picks the current name up.
+    bootstrap_refresh tells a template shared with first bootstrap which path it is on.
     """
     scheduler_dns_name = config.get_string('scheduler.private_dns_name')
     if not scheduler_dns_name:
-        return {'pbs_server_name': None, 'private_zone': None}
+        return {'pbs_server_name': None, 'private_zone': None, 'bootstrap_refresh': True}
     stable = bool(config.get_bool('scheduler.use_stable_server_name', default=False))
+    private_zone = (
+        config.get_string('cluster.route53.private_hosted_zone_name') if stable else None
+    )
+    if stable and not private_zone and logger is not None:
+        # the rest of the refresh (ssh kex, online accounts) still goes out
+        logger.warning(
+            'cluster.route53.private_hosted_zone_name is not set: the refresh leaves the '
+            'scheduler search path alone'
+        )
     return {
         'pbs_server_name': scheduler_dns_name
         if stable
         else scheduler_dns_name.split('.')[0],
-        'private_zone': config.get_string(
-            'cluster.route53.private_hosted_zone_name', required=True
-        )
-        if stable
-        else None,
+        'private_zone': private_zone or None,
+        'bootstrap_refresh': True,
     }
 
 
@@ -242,7 +249,7 @@ class VirtualDesktopSSMCommandsUtils:
         self, session: VirtualDesktopSession
     ) -> str:
         env = Jinja2Utils.env_using_file_system_loader(self.context.get_bootstrap_dir())
-        variables = bootstrap_refresh_variables(self.context.config())
+        variables = bootstrap_refresh_variables(self.context.config(), self._logger)
         block = '\n'.join(
             env.get_template(template).render(
                 context={'base_os': session.base_os}, **variables

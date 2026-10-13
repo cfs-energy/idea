@@ -397,8 +397,11 @@ def test_the_earlier_online_accounts_lock_is_removed(refresh, tmp_path):
 def test_a_desktop_from_before_a_scheduler_move_gets_the_new_name_once(refresh, tmp_path):
     # commercial after the container move: PBS_SERVER still named the old scheduler host
     env = Jinja2Utils.env_using_file_system_loader(refresh.context.get_bootstrap_dir())
-    block = env.get_template('_templates/linux/openpbs_client_server.jinja2').render(
-        pbs_server_name='scheduler.cluster.example.local', private_zone=None
+    template = env.get_template('_templates/linux/openpbs_client_server.jinja2')
+    block = template.render(
+        pbs_server_name='scheduler.cluster.example.local',
+        private_zone=None,
+        bootstrap_refresh=True,
     )
     pbs_conf = tmp_path / 'pbs.conf'
     pbs_conf.write_text('PBS_SERVER=ip-10-7-114-67\nPBS_START_MOM=1\n')
@@ -409,18 +412,67 @@ def test_a_desktop_from_before_a_scheduler_move_gets_the_new_name_once(refresh, 
     bin_dir.mkdir()
     (bin_dir / 'sed').symlink_to(shutil.which('gsed') or shutil.which('sed'))
     calls = tmp_path / 'calls'
-    (bin_dir / 'systemctl').write_text(f'#!/bin/sh\necho "systemctl $*" >> {calls}\n')
+    state = tmp_path / 'pbs-state'
+    broken = tmp_path / 'pbs-broken'
+    # shell builtins only, the stub's PATH is the stub directory: a restart brings pbs up
+    # unless the daemon is broken
+    (bin_dir / 'systemctl').write_text(
+        '#!/bin/sh\n'
+        f'echo "systemctl $*" >> {calls}\n'
+        'case "$1" in\n'
+        f'  is-active) s=; read -r s < {state} 2>/dev/null; [ "$s" = up ] ;;\n'
+        f'  restart) printf down > {state}; [ -f {broken} ] && exit 1; printf up > {state} ;;\n'
+        'esac\n'
+    )
     (bin_dir / 'systemctl').chmod(0o755)
-    script = 'log_info() { echo "$@"; }\n' + block.replace(
+    script = 'log_info() { echo "$@"; }\nlog_error() { echo "$@"; }\n' + block.replace(
         '/etc/pbs.conf', str(pbs_conf)
     ).replace('/var/spool/pbs/mom_priv/config', str(mom_config))
-    for _ in range(2):
-        _run(script, bin_dir)
+    # the name changes but the mom cannot start: the command fails, so the version is never marked
+    broken.touch()
+    assert _run(script, bin_dir, check=False).returncode == 1
     assert pbs_conf.read_text() == (
         'PBS_SERVER=scheduler.cluster.example.local\nPBS_START_MOM=1\n'
     )
     assert mom_config.read_text() == (
         '\n$clienthost scheduler.cluster.example.local\n$usecp *:/data /data\n'
     )
-    # pbs restarted for the change, not for the second run that found it already right
-    assert calls.read_text() == 'systemctl restart pbs\n'
+    # the retry finds the name already right and still has to bring pbs up
+    broken.unlink()
+    _run(script, bin_dir)
+    assert state.read_text() == 'up'
+    _run(script, bin_dir)
+    restarts = [c for c in calls.read_text().splitlines() if c == 'systemctl restart pbs']
+    assert len(restarts) == 3, calls.read_text()  # two for the broken mom, one to bring it up, none once it runs
+    # first bootstrap (no bootstrap_refresh) tries the same restart but carries on: qsub
+    # works without the local mom, and a desktop must not fail provisioning over it
+    bootstrap = 'log_info() { echo "$@"; }\nlog_error() { echo "$@"; }\n' + template.render(
+        pbs_server_name='scheduler.cluster.example.local', private_zone=None
+    ).replace('/etc/pbs.conf', str(pbs_conf)).replace(
+        '/var/spool/pbs/mom_priv/config', str(mom_config)
+    )
+    state.write_text('down')
+    broken.touch()
+    result = _run(bootstrap, bin_dir)
+    assert 'pbs is not running after pointing it at scheduler.cluster.example.local' in result.stdout
+    assert calls.read_text().splitlines()[-2:] == ['systemctl restart pbs', 'systemctl is-active --quiet pbs']
+
+
+def test_a_missing_private_zone_degrades_the_refresh(refresh):
+    config = refresh.context.config()
+    config.get_string.side_effect = lambda key, **kwargs: (
+        None if key == 'cluster.route53.private_hosted_zone_name' else key
+    )
+    logger = refresh.command_utils._logger
+    assert bootstrap_refresh_variables(config, logger) == {
+        'pbs_server_name': 'scheduler.private_dns_name',
+        'private_zone': None,
+        'bootstrap_refresh': True,
+    }
+    logger.warning.assert_called_once()
+    session = refresh.add_session()
+    refresh.command_utils.submit_ssm_command_to_refresh_bootstrap(session)
+    payload = refresh.ssm.requests[0]['Parameters']['commands'][0]
+    assert '/etc/ssh/sshd_config.d/10-idea-kex.conf' in payload
+    assert 'PBS_SERVER=scheduler.private_dns_name' in payload
+    assert 'idea-scheduler.conf' not in payload

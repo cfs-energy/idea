@@ -120,17 +120,26 @@ def test_resolved_hosts_keep_the_zone_across_a_reboot(tmp_path):
     assert 'systemctl restart systemd-resolved' in calls.read_text()
 
 
-def test_network_manager_hosts_keep_the_zone_across_a_reboot(tmp_path):
-    # NetworkManager regenerated resolv.conf at boot on a rocky9 compute node and pbs_mom never started
+@pytest.mark.parametrize('device_answers', [True, False])
+def test_network_manager_hosts_keep_the_zone_across_a_reboot(tmp_path, device_answers):
+    # NetworkManager regenerated resolv.conf at boot on a rocky9 compute node and pbs_mom never started;
+    # newer NetworkManager lists lo first among the active connections, which must never be picked
     calls = tmp_path / 'calls'
+    device_line = 'echo "System eth0"' if device_answers else ':'
     _run_block(
         tmp_path,
         {
             'systemctl': '[[ "$2" == NetworkManager ]]',  # NetworkManager up, resolved not
-            'nmcli': f'echo "nmcli $*" >> {calls}; [[ "$*" == *--active* ]] && echo "System eth0"; true',
+            'ip': 'echo "default via 10.0.0.1 dev eth0 proto dhcp"',
+            'nmcli': (
+                f'echo "nmcli $*" >> {calls}\n'
+                f'case "$*" in *"device show eth0"*) {device_line};; '
+                '*"connection show --active"*) printf "lo:loopback\\nSystem eth0:ethernet\\n";; esac\ntrue'
+            ),
             'lsattr': 'exit 0',
             'chattr': 'exit 0',
         },
         link=False,
     )
     assert f"nmcli connection modify System eth0 +ipv4.dns-search {ZONE}" in calls.read_text()
+    assert 'modify lo' not in calls.read_text()

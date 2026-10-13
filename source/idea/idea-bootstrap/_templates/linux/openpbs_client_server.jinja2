@@ -17,5 +17,16 @@ if [[ -f /etc/pbs.conf ]] && [[ "$(sed -n 's/^PBS_SERVER=//p' /etc/pbs.conf)" !=
   fi
   systemctl restart pbs
 fi
+if [[ -f /etc/pbs.conf ]]; then
+  systemctl is-active --quiet pbs || systemctl restart pbs
+  if ! systemctl is-active --quiet pbs; then
+    log_error "pbs is not running after pointing it at {{ pbs_server_name }}"
+{% if bootstrap_refresh %}
+    # the refresh is only marked done on success: a stopped mom fails it rather than hide
+    # behind a matching name. First bootstrap carries on: qsub works without the local mom.
+    exit 1
+{% endif %}
+  fi
+fi
 {% endif %}
 # End: OpenPBS Client Server

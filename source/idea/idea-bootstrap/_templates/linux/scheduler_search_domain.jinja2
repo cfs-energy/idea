@@ -28,7 +28,10 @@ else
   fi
   # NetworkManager rewrites resolv.conf at boot from the connection: put the zone there too
   if command -v nmcli >/dev/null 2>&1 && systemctl is-active NetworkManager >/dev/null 2>&1; then
-    NM_CONNECTION=$(nmcli -g NAME connection show --active | head -1)
+    NM_DEVICE=$(ip -o -4 route show default | awk '{print $5}' | head -1)
+    NM_CONNECTION=$(nmcli -g GENERAL.CONNECTION device show "${NM_DEVICE}" 2>/dev/null)
+    # newer NetworkManager lists lo as an active connection: fall back to the first real one
+    [[ -n "${NM_CONNECTION}" ]] || NM_CONNECTION=$(nmcli -g NAME,TYPE connection show --active | awk -F: '$2 != "loopback" {print $1; exit}')
     if [[ -n "${NM_CONNECTION}" ]] && ! nmcli -g ipv4.dns-search connection show "${NM_CONNECTION}" | grep -qw '{{ private_zone }}'; then
       nmcli connection modify "${NM_CONNECTION}" +ipv4.dns-search '{{ private_zone }}'
     fi
