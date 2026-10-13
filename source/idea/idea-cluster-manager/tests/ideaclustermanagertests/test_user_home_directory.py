@@ -221,6 +221,7 @@ def test_new_public_key_mode_ignores_restrictive_umask(monkeypatch, tmp_path):
         Mock(), User(username='user', uid=12001, gid=12002, home_dir=str(tmp_path))
     )
     monkeypatch.setattr(os, 'chown', Mock())
+    monkeypatch.setattr(os, 'fchown', Mock())
     previous = os.umask(0o077)
     try:
         helper.initialize_ssh_dir()
