@@ -123,6 +123,7 @@ function ecsSettings(datadogEnabled: boolean): ClusterConfig {
     "cluster.aws.region": REGION,
     "cluster.cluster_name": ECS_CLUSTER,
     "cluster.cluster_s3_bucket": "sample-cluster-bucket",
+    "cluster.home_dir": `/apps/${ECS_CLUSTER}`,
     "cluster.cluster_settings_lambda_arn": syntheticArn("lambda", "function:synthetic-settings-handler"),
     "cluster.iam.policies.amazon_ssm_managed_instance_core_arn": syntheticArn("iam", "policy/synthetic-ssm-policy"),
     "cluster.iam.policies.cloud_watch_agent_server_arn": syntheticArn("iam", "policy/synthetic-cloudwatch-policy"),
