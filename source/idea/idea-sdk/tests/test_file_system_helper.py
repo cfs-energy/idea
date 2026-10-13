@@ -373,3 +373,76 @@ def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
     # and the user can delete what the server wrote for them
     helper.delete_files(DeleteFilesRequest(files=[uploaded]))
     assert not os.path.exists(uploaded)
+
+
+def test_upload_never_follows_a_planted_link(numeric_tree, tmp_path):
+    # a link at the upload's name, dangling or live, is not opened: the next free name is taken
+    import asyncio
+    from ideasdk.server.soca_server import SocaServer
+
+    if os.geteuid() != 0:
+        pytest.skip('needs root: the server creates the file')
+    path, helper = numeric_tree
+    outside = tmp_path / 'outside'
+    outside.mkdir(mode=0o700)
+    secret = outside / 'secret'
+    secret.write_text('secret')
+    planted = outside / 'planted'
+    helper.run_as_user(lambda: os.symlink(str(planted), os.path.join(path, 'data.dat')))
+    helper.run_as_user(lambda: os.symlink(str(secret), os.path.join(path, 'live.dat')))
+    body = (
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="data.dat"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\nhello\r\n'
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="live.dat"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\nevil\r\n--b--\r\n'
+    )
+    chunks = iter([body, None])
+
+    class Stream:
+        async def read(self):
+            return next(chunks)
+
+    request = SimpleNamespace(
+        headers={'content-type': 'multipart/form-data; boundary=b'}, stream=Stream()
+    )
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    result = asyncio.run(
+        server._process_streaming_upload(request, helper, path, 'no-passwd-entry')
+    )
+    renamed = [os.path.join(path, 'data(1).dat'), os.path.join(path, 'live(1).dat')]
+    assert result['payload']['files_uploaded'] == renamed
+    assert [f['final_name'] for f in result['payload']['files_renamed']] == [
+        'data(1).dat',
+        'live(1).dat',
+    ]
+    assert [open(f).read() for f in renamed] == ['hello', 'evil']
+    assert all(os.stat(f).st_uid == helper._identity.uid for f in renamed)
+    assert not planted.exists()
+    assert secret.read_text() == 'secret' and secret.stat().st_uid == 0
+    assert os.path.islink(os.path.join(path, 'data.dat'))
+
+
+def test_rename_needs_the_folder_not_the_file(numeric_tree):
+    if os.geteuid() != 0:
+        pytest.skip('needs root to create files the user does not own')
+    path, helper = numeric_tree
+    read_only = os.path.join(path, 'readonly.dat')
+    helper.run_as_user(
+        lambda: (open(read_only, 'w').close(), os.chmod(read_only, 0o444))
+    )
+    helper.rename_file(RenameFileRequest(file=read_only, new_name='renamed.dat'))
+    assert os.path.exists(os.path.join(path, 'renamed.dat'))
+    server_written = os.path.join(path, 'server.dat')
+    with open(server_written, 'w') as f:
+        f.write('x')
+    helper.rename_file(RenameFileRequest(file=server_written, new_name='mine.dat'))
+    assert os.path.exists(os.path.join(path, 'mine.dat'))
+    locked = os.path.join(path, 'locked')
+    os.mkdir(locked, 0o755)  # root's folder: the user may not rename in it
+    kept = os.path.join(locked, 'kept.dat')
+    open(kept, 'w').close()
+    with pytest.raises(Exception) as exc:
+        helper.rename_file(RenameFileRequest(file=kept, new_name='moved.dat'))
+    assert exc.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    assert os.path.exists(kept)

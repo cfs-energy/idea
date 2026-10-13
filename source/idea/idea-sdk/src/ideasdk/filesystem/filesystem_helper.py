@@ -125,14 +125,15 @@ class FileSystemHelper:
             self._identity = UserIdentity(self.context.accounts, self.username)
         return self._identity.run(operation)
 
-    def own(self, path: str):
+    def own(self, fd: int):
         """
-        gives a file the server wrote on the user's behalf to the user, by id: the server
-        runs in a container that cannot look the user's name up
+        gives a file the server created on the user's behalf to the user, by id and by
+        descriptor: the server runs in a container that cannot look the user's name up,
+        and a path can be swapped for a link between a create and a chown
         """
         if self._identity is None:
             self._identity = UserIdentity(self.context.accounts, self.username)
-        os.chown(path, self._identity.uid, self._identity.gid)
+        os.fchown(fd, self._identity.uid, self._identity.gid)
 
     def get_user_home(self) -> str:
         user_home = self.context.config().get_string(
@@ -873,8 +874,15 @@ class FileSystemHelper:
         if not Utils.is_file(file) and not Utils.is_dir(file):
             raise exceptions.file_not_found(file)
 
-        # Check access permissions for the source file
-        self.check_access(file, check_read=True, check_write=True)
+        # rename needs write on the folder, not on the file: a read-only file, or one the
+        # server wrote and never handed over, is still the user's to rename, as to delete
+        self.check_access(file, check_read=False, check_write=False)
+        self.check_access(
+            os.path.dirname(file.rstrip('/')) or '/',
+            check_dir=True,
+            check_read=False,
+            check_write=True,
+        )
 
         # Extract directory and validate new name
         original_filename = new_name

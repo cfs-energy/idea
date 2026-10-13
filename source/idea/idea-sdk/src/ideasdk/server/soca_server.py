@@ -1066,9 +1066,10 @@ class SocaServer(SocaService):
                                 parsing_headers = False
                                 continue
 
-                            # Handle file name conflicts by auto-renaming
-                            file_path, was_renamed = self._get_unique_file_path(
-                                cwd, secure_filename, username
+                            # the user's file, created exclusively and handed over before
+                            # a byte is written; a taken name becomes the next free name(n)
+                            fd, file_path, was_renamed = self._create_upload(
+                                helper, cwd, secure_filename, username
                             )
                             current_file = file_path
 
@@ -1081,8 +1082,7 @@ class SocaServer(SocaService):
                                     }
                                 )
 
-                            # Open file for writing
-                            current_file_handle = await aiofiles.open(file_path, 'wb')
+                            current_file_handle = await aiofiles.open(fd, 'wb')
 
                             if self._logger.isEnabledFor(logging.DEBUG):
                                 self._logger.debug(
@@ -1111,13 +1111,6 @@ class SocaServer(SocaService):
                             # Close current file
                             await current_file_handle.close()
                             current_file_handle = None
-
-                            # the server wrote the file; hand it to the user, or leave nothing
-                            try:
-                                helper.own(current_file)
-                            except Exception:
-                                os.remove(current_file)
-                                raise
 
                             files_uploaded.append(current_file)
 
@@ -1159,50 +1152,50 @@ class SocaServer(SocaService):
             },
         }
 
-    def _get_unique_file_path(
-        self, directory: str, filename: str, username: str
-    ) -> tuple:
+    def _candidate_upload_paths(self, directory: str, filename: str):
         """
-        Generate a unique file path by auto-renaming if the file already exists.
-        Returns (file_path, was_renamed)
+        The names an upload may take, in order: the file's own, name(1) to name(999), then
+        a timestamped fallback. Whether a name is free is decided by the exclusive create
+        in _create_upload, never by looking first.
         """
-        import os
-
-        original_path = os.path.join(directory, filename)
-
-        # If file doesn't exist, use original name
-        if not os.path.exists(original_path):
-            return original_path, False
-
-        # File exists, generate unique name
-        name, ext = os.path.splitext(filename)
-        counter = 1
-
-        while counter < 1000:  # Prevent infinite loop
-            new_filename = f'{name}({counter}){ext}'
-            new_path = os.path.join(directory, new_filename)
-
-            if not os.path.exists(new_path):
-                if self._logger.isEnabledFor(logging.DEBUG):
-                    self._logger.debug(
-                        f'File conflict resolved - User: {username}, Original: {filename}, Renamed: {new_filename}'
-                    )
-                return new_path, True
-
-            counter += 1
-
-        # If we've tried 1000 variations, use timestamp-based naming as fallback
         import time
 
-        timestamp = int(time.time())
-        fallback_filename = f'{name}_{timestamp}{ext}'
-        fallback_path = os.path.join(directory, fallback_filename)
+        yield os.path.join(directory, filename), False
+        name, ext = os.path.splitext(filename)
+        for counter in range(1, 1000):
+            yield os.path.join(directory, f'{name}({counter}){ext}'), True
+        yield os.path.join(directory, f'{name}_{int(time.time())}{ext}'), True
 
-        self._logger.warning(
-            f'File conflict fallback - User: {username}, Original: {filename}, Fallback: {fallback_filename}'
-        )
-
-        return fallback_path, True
+    def _create_upload(
+        self, helper: FileSystemHelper, directory: str, filename: str, username: str
+    ) -> tuple:
+        """
+        Creates the upload's file exclusively and gives it to the user by descriptor before
+        anything is written. A name that exists, a link planted at it (dangling or not)
+        included, is neither opened nor followed: the next free name is taken. No path is
+        chowned after the fact. Returns (fd, file_path, was_renamed).
+        """
+        for file_path, was_renamed in self._candidate_upload_paths(directory, filename):
+            try:
+                fd = os.open(
+                    file_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    0o644,
+                )
+            except FileExistsError:
+                continue
+            try:
+                helper.own(fd)
+            except Exception:
+                os.close(fd)
+                os.unlink(file_path)
+                raise
+            if was_renamed and self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug(
+                    f'File conflict resolved - User: {username}, Original: {filename}, Renamed: {os.path.basename(file_path)}'
+                )
+            return fd, file_path, was_renamed
+        raise exceptions.general_exception(f'no free name for upload: {filename}')
 
     async def generate_download_url_route(self, http_request, **_):
         """Generate a temporary signed URL for secure file downloads"""
