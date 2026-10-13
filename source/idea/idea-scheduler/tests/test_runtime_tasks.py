@@ -76,17 +76,39 @@ def test_restore_licenses_paginates_and_repeated_start_is_idempotent(pbs_home):
     'code',
     ['ResourceNotFoundException', 'AccessDeniedException', 'ThrottlingException'],
 )
-def test_only_absent_license_table_is_deferred(pbs_home, code):
+def test_a_table_that_cannot_be_read_leaves_everything_as_it_is(pbs_home, code):
+    # a throttle or a denial must not crash-loop the scheduler, nor drop its licenses
     table = Mock()
+    table.scan.return_value = {'Items': [license()]}
+    tasks.configure_licenses(table, pbs_home)
+    files = [pbs_home / 'server_priv/resourcedef', pbs_home / 'sched_priv/sched_config']
+    before = [f.read_text() for f in files]
     table.scan.side_effect = ClientError({'Error': {'Code': code}}, 'Scan')
-    if code == 'ResourceNotFoundException':
-        tasks.configure_licenses(table, pbs_home)
-    else:
-        with pytest.raises(ClientError):
-            tasks.configure_licenses(table, pbs_home)
-    assert (
-        pbs_home / 'server_priv/resourcedef'
-    ).read_text() == 'site_resource type=string\n'
+    tasks.configure_licenses(table, pbs_home)
+    assert [f.read_text() for f in files] == before
+    assert 'app_lic_one type=long' in before[0]
+
+
+def test_only_licenses_idea_restored_are_removed_when_they_leave_the_table(pbs_home):
+    # a *_lic_* resource an operator declared by hand has no row and is not IDEA's to remove
+    resourcedef = pbs_home / 'server_priv/resourcedef'
+    config = pbs_home / 'sched_priv/sched_config'
+    resourcedef.write_text(resourcedef.read_text() + 'hand_lic_made type=long\n')
+    config.write_text(
+        config.read_text().replace('site_resource"', 'site_resource, hand_lic_made"')
+        + 'server_dyn_res: "hand_lic_made !/opt/check"\n'
+    )
+    table = Mock()
+    table.scan.return_value = {'Items': [license(), license('app_lic_two')]}
+    tasks.configure_licenses(table, pbs_home)
+    table.scan.return_value = {'Items': [license()]}
+    tasks.configure_licenses(table, pbs_home)
+    assert 'app_lic_two' not in resourcedef.read_text()
+    assert 'app_lic_two' not in config.read_text()
+    assert 'hand_lic_made type=long' in resourcedef.read_text()
+    assert 'server_dyn_res: "hand_lic_made !/opt/check"' in config.read_text()
+    assert 'hand_lic_made' in config.read_text().split('server_dyn_res')[0]
+    assert (pbs_home / 'idea/licenses/.managed').read_text() == 'app_lic_one\n'
 
 
 @pytest.mark.parametrize(
@@ -107,7 +129,9 @@ def test_a_bad_row_is_skipped_and_the_rest_restored(pbs_home, item):
     config = (pbs_home / 'sched_priv/sched_config').read_text()
     assert 'app_lic_good !' in config
     assert config.count('server_dyn_res:') == 2  # site_resource and the good one
-    assert [p.name for p in (pbs_home / 'idea/licenses').iterdir()] == ['app_lic_good']
+    assert [
+        p.name for p in (pbs_home / 'idea/licenses').iterdir() if p.name != '.managed'
+    ] == ['app_lic_good']
 
 
 def test_a_multi_line_command_runs_from_its_script(pbs_home):

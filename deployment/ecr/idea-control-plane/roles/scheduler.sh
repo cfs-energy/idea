@@ -164,7 +164,8 @@ if [[ -f "${PBS_HOME}/pbs_environment" ]]; then
   cp -p "${PBS_HOME}/pbs_environment" "${PBS_HOME}/pbs_environment.$(date -u +%Y%m%d%H%M%S)"
 fi
 printf 'PATH=/bin:/usr/bin\nIDEA_SCHEDULER_UNIX_SOCKET=/run/idea.sock\n' > "${PBS_HOME}/pbs_environment"
-python3.13 -m ideascheduler.app.runtime_tasks licenses "${PBS_HOME}"
+python3.13 -m ideascheduler.app.runtime_tasks licenses "${PBS_HOME}" \
+  || log "license restore failed; PBS keeps the license resources it has"
 
 log "starting pbs daemons (create=${PBS_CREATE})"
 /opt/pbs/libexec/pbs_init.d start

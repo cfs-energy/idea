@@ -15,6 +15,8 @@ LOGGER = logging.getLogger(__name__)
 DAY_SECONDS = 24 * 60 * 60
 
 
+# the names of the licenses IDEA restored, next to their check scripts
+MANAGED = '.managed'
 LICENSE_NAME = re.compile(r'[a-z][a-z0-9_]*')
 
 
@@ -56,17 +58,23 @@ def configure_licenses(table, pbs_home):
     Restore the host's manual license declarations before either PBS daemon starts.
     Each check runs from its own script under PBS_HOME, so a command carries no quoting
     rules. A row that cannot be restored is logged and skipped: one entry must not keep
-    the scheduler down. Declarations of licenses no longer in the table are removed.
+    the scheduler down. Only licenses IDEA restored before (recorded in .managed) are
+    removed when they leave the table; resources an operator declared by hand stay. A
+    table that cannot be read leaves every file as it is.
     """
-    from ideascheduler.app.licenses.license_service import PATTERN_LICENSE_RESOURCE_NAME
-
-    licenses = _license_rows(table)
+    try:
+        licenses = _license_rows(table)
+    except Exception as error:
+        LOGGER.error('License table could not be read, PBS license resources left as they are: %s', error)
+        return
     if licenses is None:
         return
     home = Path(pbs_home)
     resource_file = home / 'server_priv/resourcedef'
     config_file = home / 'sched_priv/sched_config'
     checks_dir = home / 'idea' / 'licenses'
+    managed_file = checks_dir / MANAGED
+    managed = set(managed_file.read_text().split()) if managed_file.is_file() else set()
     resources = resource_file.read_text()
     config = config_file.read_text()
 
@@ -83,7 +91,8 @@ def configure_licenses(table, pbs_home):
         restored[name] = command
 
     def stale(name):
-        return bool(PATTERN_LICENSE_RESOURCE_NAME.match(name)) and name not in restored
+        # restored by IDEA on an earlier start and gone from the table since
+        return name in managed and name not in restored
 
     kept = []
     for line in resources.splitlines():
@@ -118,21 +127,22 @@ def configure_licenses(table, pbs_home):
         )
         return
     quote = re.search(r"""^\s*resources:\s*(["'])""", config, re.MULTILINE)[1]
-    # IDEA's own dynamic resources are rewritten; anything else the operator put there stays
+    # the dynamic resources of licenses IDEA restores or retires are rewritten; anything
+    # else the operator put there stays
     config = (
         '\n'.join(
             line
             for line in config.splitlines()
             if not (
                 (entry := re.match(r"""^\s*server_dyn_res:\s*["']([^\s"']+)\s""", line))
-                and PATTERN_LICENSE_RESOURCE_NAME.match(entry[1])
+                and (entry[1] in restored or stale(entry[1]))
             )
         )
         + '\n'
     )
     checks_dir.mkdir(parents=True, exist_ok=True)
     for script in checks_dir.iterdir():
-        if script.name not in restored:
+        if script.name != MANAGED and script.name not in restored:
             script.unlink()
     for name, command in sorted(restored.items()):
         script = checks_dir / name
@@ -141,6 +151,7 @@ def configure_licenses(table, pbs_home):
         config += f'server_dyn_res: {quote}{name} !{script}{quote}\n'
     resource_file.write_text(resources)
     config_file.write_text(config)
+    managed_file.write_text(''.join(f'{name}\n' for name in sorted(restored)))
     LOGGER.info(
         'Restored %d PBS license resources (%d skipped)',
         len(restored),
