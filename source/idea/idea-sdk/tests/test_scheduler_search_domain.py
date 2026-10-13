@@ -21,6 +21,13 @@ TEMPLATES = (
 )
 
 
+def _search_domain_block(script):
+    # the compute node applies it before writing pbs.conf, the client after (shared with the refresh)
+    start = script.index('if [[ -L /etc/resolv.conf')
+    ends = [script.find(m, start) for m in ('echo -e "PBS_SERVER=', '\nif [[ -f /etc/pbs.conf')]
+    return script[start : min(i for i in ends if i > 0)]
+
+
 def config():
     c = Config()
     c.put('scheduler.use_stable_server_name', True)
@@ -35,7 +42,7 @@ def test_a_static_resolv_conf_gets_the_cluster_zone_while_resolved_runs(
     tmp_path, template, search
 ):
     script = render(template, 'ubuntu2204', config=config())
-    block = script[script.index('if [[ -L /etc/resolv.conf') : script.index('echo -e "PBS_SERVER=')]
+    block = _search_domain_block(script)
     resolv = tmp_path / 'resolv.conf'
     resolv.write_text('nameserver 10.0.0.2\n' + search)
     bin_dir = tmp_path / 'bin'
@@ -73,7 +80,7 @@ def test_a_static_resolv_conf_gets_the_cluster_zone_while_resolved_runs(
 
 def _run_block(tmp_path, stubs, link):
     script = render(TEMPLATES[1], 'amazonlinux2023', config=config())
-    block = script[script.index('if [[ -L /etc/resolv.conf') : script.index('echo -e "PBS_SERVER=')]
+    block = _search_domain_block(script)
     target = tmp_path / 'stub-resolv.conf'
     target.write_text('nameserver 127.0.0.53\nsearch ec2.internal\n')
     resolv = tmp_path / 'resolv.conf'

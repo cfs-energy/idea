@@ -1,0 +1,21 @@
+# Begin: OpenPBS Client Server
+{# Points an installed PBS client at pbs_server_name: the search path the daemon resolves it
+   through, PBS_SERVER in /etc/pbs.conf and $clienthost in mom_priv/config. Idempotent, and pbs
+   restarts only when the name changed, so the same block serves first bootstrap (openpbs_client
+   sets pbs_server_name and private_zone from config) and the desktop refresh after a scheduler
+   move (the controller passes them in). #}
+{% if pbs_server_name %}
+{% if private_zone %}
+{% include '_templates/linux/scheduler_search_domain.jinja2' %}
+{% endif %}
+if [[ -f /etc/pbs.conf ]] && [[ "$(sed -n 's/^PBS_SERVER=//p' /etc/pbs.conf)" != "{{ pbs_server_name }}" ]]; then
+  log_info "Pointing the PBS client at {{ pbs_server_name }}"
+  sed -i 's/^PBS_SERVER=.*/PBS_SERVER={{ pbs_server_name }}/' /etc/pbs.conf
+  if [[ -f /var/spool/pbs/mom_priv/config ]]; then
+    # shellcheck disable=SC2016
+    sed -i 's/^\$clienthost .*/$clienthost {{ pbs_server_name }}/' /var/spool/pbs/mom_priv/config
+  fi
+  systemctl restart pbs
+fi
+{% endif %}
+# End: OpenPBS Client Server
