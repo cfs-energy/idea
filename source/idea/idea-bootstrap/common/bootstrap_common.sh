@@ -390,6 +390,23 @@ convert_from_dynamodb_object
 " > /root/.convert_from_dynamodb_object.jq
 }
 
+# mount -a's status says nothing useful: util-linux returns 32 for "already mounted" and for
+# every real failure alike. The check is that each shared filesystem the bootstrap put in fstab
+# (its helpers write the mount point with a trailing slash) is a mount point afterwards.
+function mount_shared_filesystems () {
+  local mount_dir
+  local not_mounted=()
+  mount -a || true
+  while read -r mount_dir; do
+    mountpoint -q "${mount_dir}" || not_mounted+=("${mount_dir}")
+  done < <(awk '$1 !~ /^#/ && $2 ~ /.\/$/ {print $2}' /etc/fstab)
+  if [[ ${#not_mounted[@]} -gt 0 ]]; then
+    log_error "Shared storage not mounted: ${not_mounted[*]}"
+  fi
+  # the last command is the one a bake records, so it says what failed
+  [[ ${#not_mounted[@]} -eq 0 ]]
+}
+
 function remove_from_fstab () {
   # drop every fstab entry mounted at a directory (with or without a trailing slash)
   local MOUNT_DIR="$1"
