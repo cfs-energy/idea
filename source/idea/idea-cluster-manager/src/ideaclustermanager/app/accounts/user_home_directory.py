@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend as crypto_default_backend
 
 from ideaclustermanager.app.accounts.auth_constants import USER_HOME_DIR_BASE
+from ideaclustermanager.app.accounts.ppk import to_ppk
 from ideasdk.shell import ShellInvoker
 
 
@@ -40,6 +41,38 @@ class UserHomeDirectory:
     @property
     def ssh_dir(self) -> str:
         return os.path.join(self.user.home_dir, '.ssh')
+
+    def write_ppk(self, private_key_file: str, ppk_file: str) -> str:
+        """
+        the user's key as a PuTTY file: puttygen where the host has it, as before, and in
+        process where it does not (the container image carries none). Written as the
+        service user either way; containers cannot switch to directory users.
+        :returns: 'puttygen' or 'in-process'
+        """
+        result = self._shell.invoke('command -v puttygen', shell=True)
+        if result.returncode == 0:
+            putty_gen_bin = result.stdout.strip()
+            if not os.access(putty_gen_bin, os.X_OK):
+                os.chmod(putty_gen_bin, 0o700)
+            result = subprocess.run(
+                [putty_gen_bin, private_key_file, '-o', ppk_file],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise exceptions.general_exception(
+                    f'failed to generate .ppk file: {result.stderr.strip()}'
+                )
+            return 'puttygen'
+        with open(private_key_file, 'rb') as f:
+            private_key = f.read()
+        try:
+            ppk = to_ppk(private_key)
+        except ValueError as e:
+            raise exceptions.general_exception(f'failed to generate .ppk file: {e}')
+        with open(ppk_file, 'w') as f:
+            f.write(ppk)
+        return 'in-process'
 
     def own_path(self, path: str):
         # Account IDs are authoritative and work without NSS/SSSD in containers.
@@ -319,25 +352,9 @@ class UserHomeDirectory:
             return read_private_key_content(id_rsa_file)
 
         elif key_format == 'ppk':
-            result = self._shell.invoke('command -v puttygen', shell=True)
-            if result.returncode != 0:
-                raise exceptions.general_exception('puttygen binary not found in PATH')
-            putty_gen_bin = result.stdout.strip()
-            if not os.access(putty_gen_bin, os.X_OK):
-                os.chmod(putty_gen_bin, 0o700)
-
             id_rsa_ppk_file = os.path.join(self.ssh_dir, 'id_rsa.ppk')
             if not Utils.is_file(id_rsa_ppk_file):
-                # Convert as the service user; containers cannot switch to directory users.
-                result = subprocess.run(
-                    [putty_gen_bin, id_rsa_file, '-o', id_rsa_ppk_file],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    raise exceptions.general_exception(
-                        f'failed to generate .ppk file: {result.stderr.strip()}'
-                    )
+                self.write_ppk(id_rsa_file, id_rsa_ppk_file)
                 os.chmod(id_rsa_ppk_file, 0o600)
                 self.own_path(id_rsa_ppk_file)
 
