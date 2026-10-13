@@ -409,7 +409,7 @@ def test_a_failing_manager_step_does_not_stop_the_start(tmp_path):
 
 
 @pytest.mark.parametrize('fail_upload', [False, True])
-def test_archive_script_uploads_correct_paths_and_prunes_only_after_success(
+def test_archive_script_prunes_after_success_and_keeps_twice_the_retention_after_failure(
     tmp_path, fail_upload
 ):
     import time
@@ -424,12 +424,18 @@ def test_archive_script_uploads_correct_paths_and_prunes_only_after_success(
         compute,
     ]
     old_files = []
+    ancient_files = []
     for directory in directories:
         directory.mkdir(parents=True)
         old = directory / 'old.log'
         old.write_text('archivable')
         os.utime(old, (time.time() - 12 * 86400,) * 2)
         old_files.append(old)
+        # past twice the retention: pruned even on a day the upload fails
+        ancient = directory / 'ancient.log'
+        ancient.write_text('archived long ago')
+        os.utime(ancient, (time.time() - 25 * 86400,) * 2)
+        ancient_files.append(ancient)
     old_compute_dir = compute / 'old-node'
     old_compute_dir.mkdir()
     (old_compute_dir / 'log').write_text('old compute log')
@@ -455,7 +461,10 @@ flock() { return 0; }
     assert result.returncode == (1 if fail_upload else 0), result.stderr
     assert current.exists()
     assert all(file.exists() == fail_upload for file in old_files[:3])
+    assert not any(file.exists() for file in ancient_files[:3])
     assert old_compute_dir.exists() == fail_upload
+    if fail_upload:
+        assert 'upload of' in result.stderr and 'older than 20 days' in result.stderr
     if not fail_upload:
         assert (
             f's3 sync {compute} s3://cluster-bucket/logs/scheduler/compute_nodes/'
@@ -557,3 +566,32 @@ def test_the_config_keeps_its_quote_style_and_drops_the_old_entry(pbs_home):
     assert f"server_dyn_res: 'app_lic_one !{script}'" in first
     assert '/bin/old' not in first
     assert script.read_text() == '#!/bin/bash\n/bin/check "two words"\n'
+
+
+def test_a_failed_upload_of_one_directory_does_not_stop_the_others_pruning(tmp_path):
+    import time
+
+    pbs = tmp_path / 'pbs'
+    for name in ('server_logs', 'sched_logs'):
+        (pbs / name).mkdir(parents=True)
+        old = pbs / name / 'old.log'
+        old.write_text('x')
+        os.utime(old, (time.time() - 12 * 86400,) * 2)
+    harness = """aws() { [[ "$3" != */server_logs/ ]]; }
+flock() { return 0; }
+""" + SCRIPT.read_text()
+    result = subprocess.run(
+        ['bash', '-c', harness],
+        env={
+            **os.environ,
+            'PBS_HOME': str(pbs),
+            'IDEA_CLUSTER_HOME': str(tmp_path / 'apps'),
+            'IDEA_MODULE_ID': 'scheduler',
+            'IDEA_CLUSTER_S3_BUCKET': 'cluster-bucket',
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert (pbs / 'server_logs/old.log').exists()
+    assert not (pbs / 'sched_logs/old.log').exists()

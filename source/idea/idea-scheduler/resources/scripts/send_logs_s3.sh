@@ -39,22 +39,26 @@ COMPUTE_NODE_LOGS="${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/logs"
 exec 9>"${SCHEDULER_DIRECTORY}/.idea-log-archive.lock"
 flock -n 9 || exit 0
 
-sync_logs() {
-  if [[ -d "$1" ]]; then
-    aws s3 sync "$1" "${S3_BUCKET_SCHEDULER_LOGS}$2/"
+# Each directory is uploaded, then pruned of what is older than the retention. A failed
+# upload is logged and that directory keeps twice the retention instead, so one bad day
+# cannot let the logs grow on PBS_HOME without bound. The run still fails when an upload did.
+failed=0
+archive_logs() {
+  local directory="$1" name="$2" age="${DATA_RETENTION}"
+  [[ -d "${directory}" ]] || return 0
+  if ! aws s3 sync "${directory}" "${S3_BUCKET_SCHEDULER_LOGS}${name}/"; then
+    age=$(( DATA_RETENTION * 2 ))
+    echo "log archive: upload of ${directory} failed; pruning only what is older than ${age} days" >&2
+    failed=1
+  fi
+  if [[ "${name}" == compute_nodes ]]; then
+    find "${directory}" -mindepth 1 -maxdepth 1 -type d -mtime +"${age}" -exec rm -rf {} +
+  else
+    find "${directory}" -type f -mtime +"${age}" -delete
   fi
 }
-sync_logs "${SCHEDULER_ACCOUNTING}" accounting
-sync_logs "${SCHEDULER_SERVER_LOGS}" server_logs
-sync_logs "${SCHEDULER_SCHED_LOGS}" sched_logs
-sync_logs "${COMPUTE_NODE_LOGS}" compute_nodes
-
-# Never prune anything when an upload failed.
-if [[ -d "${COMPUTE_NODE_LOGS}" ]]; then
-  find "${COMPUTE_NODE_LOGS}" -mindepth 1 -maxdepth 1 -type d -mtime +${DATA_RETENTION} -exec rm -rf {} +
-fi
-for directory in "${SCHEDULER_SERVER_LOGS}" "${SCHEDULER_SCHED_LOGS}" "${SCHEDULER_ACCOUNTING}"; do
-  if [[ -d "${directory}" ]]; then
-    find "${directory}" -type f -mtime +${DATA_RETENTION} -delete
-  fi
-done
+archive_logs "${SCHEDULER_ACCOUNTING}" accounting
+archive_logs "${SCHEDULER_SERVER_LOGS}" server_logs
+archive_logs "${SCHEDULER_SCHED_LOGS}" sched_logs
+archive_logs "${COMPUTE_NODE_LOGS}" compute_nodes
+exit "${failed}"
