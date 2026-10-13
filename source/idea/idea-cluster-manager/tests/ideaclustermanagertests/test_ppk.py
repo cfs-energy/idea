@@ -151,7 +151,10 @@ def test_other_key_types_are_refused():
 
 
 def _home(puttygen):
+    import os
+
     home = UserHomeDirectory.__new__(UserHomeDirectory)
+    home.user = SimpleNamespace(uid=os.getuid(), gid=os.getgid())
     home._shell = Mock()
     home._shell.invoke.return_value = SimpleNamespace(
         returncode=0 if puttygen else 1, stdout=f'{puttygen}\n' if puttygen else ''
@@ -173,11 +176,13 @@ def test_puttygen_is_used_where_present_and_the_key_written_in_process_elsewhere
     )
     ppk_file = tmp_path / 'id_rsa.ppk'
     runs = []
-    monkeypatch.setattr(
-        user_home_directory.subprocess,
-        'run',
-        lambda args, **_: runs.append(args) or SimpleNamespace(returncode=0, stderr=''),
-    )
+    def run(args, **_):
+        runs.append(args)
+        with open(args[3], 'w') as f:
+            f.write('from puttygen\n')
+        return SimpleNamespace(returncode=0, stderr='')
+
+    monkeypatch.setattr(user_home_directory.subprocess, 'run', run)
     # the container: no puttygen on PATH
     assert _home(None).write_ppk(str(key_file), str(ppk_file)) == 'in-process'
     assert runs == []
@@ -190,4 +195,7 @@ def test_puttygen_is_used_where_present_and_the_key_written_in_process_elsewhere
         _home(puttygen).write_ppk(str(key_file), str(tmp_path / 'host.ppk'))
         == 'puttygen'
     )
-    assert runs == [[str(puttygen), str(key_file), '-o', str(tmp_path / 'host.ppk')]]
+    # puttygen converts a private copy; the result is written into the user's directory
+    assert len(runs) == 1 and runs[0][0] == str(puttygen) and runs[0][2] == '-o'
+    assert not runs[0][1].startswith(str(tmp_path))
+    assert (tmp_path / 'host.ppk').read_text() == 'from puttygen\n'
