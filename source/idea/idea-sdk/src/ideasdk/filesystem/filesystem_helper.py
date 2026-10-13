@@ -273,8 +273,14 @@ class FileSystemHelper:
                         continue
 
                 is_hidden = entry.name.startswith('.')
-                file_size = None if entry.is_dir() else entry.stat().st_size
-                mod_date = arrow.get(entry.stat().st_mtime).datetime
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    # a symlink whose target lives on another host (a desktop's /var/tmp)
+                    # lists as the link itself instead of failing the whole folder
+                    stat = entry.stat(follow_symlinks=False)
+                file_size = None if entry.is_dir() else stat.st_size
+                mod_date = arrow.get(stat.st_mtime).datetime
 
                 result.append(
                     FileData(

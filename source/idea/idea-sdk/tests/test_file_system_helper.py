@@ -167,6 +167,19 @@ def test_numeric_access_checks_real_permissions(numeric_tree):
         helper.check_access(readable + '/../unreadable')
 
 
+def test_dangling_symlink_does_not_fail_the_listing(numeric_tree):
+    path, helper = numeric_tree
+    helper.run_as_user(
+        lambda: (
+            os.mkdir(os.path.join(path, 'kept')),
+            os.symlink('/var/tmp/elsewhere/.vscode-server', os.path.join(path, '.vscode-server')),
+        )
+    )
+    listing = helper.list_files(ListFilesRequest(cwd=path)).listing
+    assert sorted(f.name for f in listing) == ['.vscode-server', 'kept']
+    assert not next(f for f in listing if f.name == '.vscode-server').is_dir
+
+
 def test_reads_and_writes_run_in_worker(numeric_tree, monkeypatch):
     import builtins
 
