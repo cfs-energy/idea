@@ -1,13 +1,39 @@
 # Change Log
 
 All notable changes to this project will be documented in this file.
+Each release starts with **Highlights for users**: what changed for people using the cluster and what to do, in plain language. The bullets that follow are for operators and developers.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [Unreleased]
+## [26.10.5] - 2026-10-13
 
-* **Ubuntu image kernels**: desktop bakes on Lustre clusters select and hold an FSx-supported kernel, install its client, and mount and validate Lustre after reboot so package upgrades cannot move them to an ABI without a Lustre module.
+**Highlights for users**
+
+* Jobs get the full CPU count of the node you asked for again; if you set `ncpus` yourself, it is kept.
+* The web file browser lists, uploads, deletes and renames again.
+* Ubuntu desktops launch again, and a desktop that fails to start can now be deleted.
+* The login node (`ssh.<cluster>`) is a small ARM Linux box for ssh, rsync and qsub; it now has uv, rsync and git. Run heavier or x86-only tools (h5dump, lmstat) on a desktop.
+* Desktops created before the 13 October move can submit jobs again after their next start.
+* Your Completed jobs list no longer empties when the scheduler restarts.
+
+* **File browser**: a folder that holds a symbolic link whose target is missing (for example `~/.vscode-server` pointing at a desktop's `/var/tmp`) lists again. The link is shown as a file; previously the whole folder came back empty.
+* **Image bakes**: Linux desktop bakes on clusters with FSx for Lustre no longer fail their in-bake check on `crontab -l` after the Lustre reboot, and desktop and compute bakes check every expected mount point after `mount -a` instead of trusting its exit status, so an already-mounted Lustre file system no longer fails the bake and a missing mount still does. The first failure left clusters on their previous desktop images.
+* **Ubuntu image kernels**: Ubuntu desktop bakes select and hold a kernel the FSx for Lustre repository publishes a module for, so a package upgrade cannot move the image to a kernel without one; the Lustre client is installed, and Lustre mounted and validated, after the reboot onto that kernel. An Ubuntu image whose kernel has no module failed every desktop with `lustre-module-missing`.
+* **Scheduler name resolution**: the cluster's private DNS zone now stays in the resolver search path across the reboots a host performs during setup (systemd-resolved, NetworkManager and plain `resolv.conf` hosts). Compute nodes that rebooted for a kernel update never started their PBS service, so their job stayed queued; desktops lost the same entry.
+* **Desktops after a scheduler move**: Linux desktops created before a scheduler moved to its stable name rewrite `PBS_SERVER` and the MoM client host from the current `scheduler.private_dns_name` the next time they reach READY, and restart PBS only when it changed. Previously `qsub` from such a desktop failed with "No route to host".
+* **Release promotion read-back**: the image tag read-back after promotion compares the digest of the raw manifest, which works for a multi-architecture index. The `26.10.4` promotion wrote its tags correctly but reported a failure and never published the release page.
+* **File browser uploads, deletes and renames**: an upload from the browser on a container cluster errored after the file was written and left it owned by root in the user's folder; the file is now created for the user before anything is written, and a name that already exists in any form, a link included, is skipped for the next free `name(n)`. Delete and rename work again on read-only files and on those earlier uploads: both need write permission on the folder, not on the file. Deletes of those files failed silently, with the error only in the server log.
+* **AD computer cleanup**: the desktop controller and the scheduler retire a node's Active Directory computer object from containers again. Every delete request on a container cluster failed as an unknown instance and was redelivered until the queue gave up, leaving the objects behind. A container sender is now verified through ECS as a host is through EC2, and a request that cannot be verified is dropped.
+* **Deleting a failed desktop**: a desktop whose host was released after a failed start can be deleted, and a second delete of the same desktop (two terminations racing, or a retry) is quiet. The delete returned GENERAL_ERROR and left the desktop in the list.
+* **Job CPUs**: jobs get the CPUs of the node they pay for. On container clusters every job was queued with `ncpus=1` whatever the instance type, and an explicit `select` was rewritten down to 1. The scheduler now sizes `ncpus` itself when a job is submitted, from the queue's or the job's instance type (the smallest of several alternatives, cores or threads as `ht_support` or `enable_ht_support` says); an explicit `ncpus` is honoured and a chunk whose count cannot be determined is left as submitted. The `calculate_ncpus` hook that did the rewriting is removed from PBS on upgrade, on hosts and in containers. The efficiency report reads a `select` with instance type alternatives again.
+* **Completed jobs**: the scheduler's job cache survives a scheduler container replacement. A restart emptied the Completed jobs list, lost finished jobs that were still to be indexed and dropped running jobs' host records. The cache stays on the container's local disk and a copy is kept on the scheduler's persistent volume, refreshed every minute when something changed and when the container stops; a new container starts from that copy, so at most the last minute is lost.
+* **.ppk download**: the PuTTY key download works on container clusters, which carry no puttygen; IDEA writes the key itself, in the layout puttygen produced.
+* **Scheduler start**: PBS hooks and license resources are applied on every scheduler start, so hook fixes reach existing clusters on upgrade and license-gated jobs run. A hook is reimported and enabled only when the release carries a different file, so a hook an administrator disabled stays disabled until a new version replaces it. A license entry that cannot be restored is logged and skipped rather than keeping the scheduler down, each license check runs from its own script, and declarations of licenses removed from the table are removed too. On container clusters the bastion gets no `qmgr` manager grant (administrators run `qmgr` from inside the scheduler task); grants of the host era to `root@ip-…` addresses are removed on start, since such an address can be reused by a desktop. The previous `pbs_environment` is kept as a dated copy before it is rewritten.
+* **Cost reports**: a missing token denominator for AI project attribution is reported once per collection run, not once per user, project and day.
+* **Login node**: the container login node (arm64 Amazon Linux 2023) carries `uv`, `rsync` and `git`, and runs `/apps/<cluster>/bastion-host/userdata_customizations.sh` at every start when the file exists, as compute nodes and desktops run their hooks, so a site can add the tools its users expect. AL2023 packages no hdf5, so `h5dump` is not included.
+* **Logging**: clusters log at INFO by default (`cluster.logging.default_log_level`, with a per-module override such as `scheduler.logging.default_log_level`; DEBUG stays available). The hourly scheduled-stop messages for deleted desktops are gone. When the Datadog agent is enabled, `ecs.datadog.logs_enabled` (default on) ships the IDEA containers' logs with source and service tags; CloudWatch logging is unchanged.
+* **PBS logs**: the scheduler container archives and prunes PBS logs daily again.
 
 ## [26.10.4] - 2026-10-08
 
