@@ -4,16 +4,29 @@
    when it is systemd-resolved's link does resolvectl reach it. Ubuntu bootstrap replaces the
    link with an immutable copy (systemd_resolved.jinja2), which resolvectl never updates. #}
 {% set private_zone = context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) %}
-RESOLVER_IF=$(ip -o -4 route show default | awk '{print $5}' | head -1)
-if [[ -L /etc/resolv.conf ]] && command -v resolvectl >/dev/null 2>&1 && systemctl is-active systemd-resolved >/dev/null 2>&1; then
-  resolvectl domain "${RESOLVER_IF}" {{ private_zone }} $(resolvectl domain "${RESOLVER_IF}" | sed 's/^[^:]*: *//')
-elif ! grep -q "^search .*{{ private_zone }}" /etc/resolv.conf; then
-  RESOLV_LOCKED=$(lsattr /etc/resolv.conf 2>/dev/null | awk '$1 ~ /i/ {print "yes"}')
-  if [[ -n "${RESOLV_LOCKED}" ]]; then chattr -i /etc/resolv.conf; fi
-  if grep -q "^search " /etc/resolv.conf; then
-    sed -i 's/^search /search {{ private_zone }} /' /etc/resolv.conf
-  else
-    echo "search {{ private_zone }}" >> /etc/resolv.conf
+{# Every path persists: bootstraps reboot (kernel, Lustre, GPU drivers) after this runs, and a
+   search path that is only runtime state is gone when pbs_init.d checks the name at boot. #}
+if [[ -L /etc/resolv.conf ]] && systemctl is-active systemd-resolved >/dev/null 2>&1; then
+  # resolvectl domain is runtime state; a global domain in a drop-in survives the reboot
+  mkdir -p /etc/systemd/resolved.conf.d
+  printf '[Resolve]\nDomains=%s\n' '{{ private_zone }}' > /etc/systemd/resolved.conf.d/idea-scheduler.conf
+  systemctl restart systemd-resolved
+else
+  if ! grep -q "^search .*{{ private_zone }}" /etc/resolv.conf; then
+    RESOLV_LOCKED=$(lsattr /etc/resolv.conf 2>/dev/null | awk '$1 ~ /i/ {print "yes"}')
+    if [[ -n "${RESOLV_LOCKED}" ]]; then chattr -i /etc/resolv.conf; fi
+    if grep -q "^search " /etc/resolv.conf; then
+      sed -i 's/^search /search {{ private_zone }} /' /etc/resolv.conf
+    else
+      echo "search {{ private_zone }}" >> /etc/resolv.conf
   fi
   if [[ -n "${RESOLV_LOCKED}" ]]; then chattr +i /etc/resolv.conf; fi
+  fi
+  # NetworkManager rewrites resolv.conf at boot from the connection: put the zone there too
+  if command -v nmcli >/dev/null 2>&1 && systemctl is-active NetworkManager >/dev/null 2>&1; then
+    NM_CONNECTION=$(nmcli -g NAME connection show --active | head -1)
+    if [[ -n "${NM_CONNECTION}" ]] && ! nmcli -g ipv4.dns-search connection show "${NM_CONNECTION}" | grep -qw '{{ private_zone }}'; then
+      nmcli connection modify "${NM_CONNECTION}" +ipv4.dns-search '{{ private_zone }}'
+    fi
+  fi
 fi

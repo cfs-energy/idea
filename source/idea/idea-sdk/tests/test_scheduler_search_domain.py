@@ -35,7 +35,7 @@ def test_a_static_resolv_conf_gets_the_cluster_zone_while_resolved_runs(
     tmp_path, template, search
 ):
     script = render(template, 'ubuntu2204', config=config())
-    block = script[script.index('RESOLVER_IF=') : script.index('echo -e "PBS_SERVER=')]
+    block = script[script.index('if [[ -L /etc/resolv.conf') : script.index('echo -e "PBS_SERVER=')]
     resolv = tmp_path / 'resolv.conf'
     resolv.write_text('nameserver 10.0.0.2\n' + search)
     bin_dir = tmp_path / 'bin'
@@ -68,3 +68,62 @@ def test_a_static_resolv_conf_gets_the_cluster_zone_while_resolved_runs(
         f'chattr -i {resolv}',
         f'chattr +i {resolv}',
     ]
+
+
+
+def _run_block(tmp_path, stubs, link):
+    script = render(TEMPLATES[1], 'amazonlinux2023', config=config())
+    block = script[script.index('if [[ -L /etc/resolv.conf') : script.index('echo -e "PBS_SERVER=')]
+    target = tmp_path / 'stub-resolv.conf'
+    target.write_text('nameserver 127.0.0.53\nsearch ec2.internal\n')
+    resolv = tmp_path / 'resolv.conf'
+    if link:
+        resolv.symlink_to(target)
+    else:
+        resolv.write_text(target.read_text())
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    for name, body in stubs.items():
+        (bin_dir / name).write_text(f'#!/bin/bash\n{body}\n')
+        (bin_dir / name).chmod(0o755)
+    block = block.replace('/etc/resolv.conf', str(resolv)).replace(
+        '/etc/systemd/resolved.conf.d', str(tmp_path / 'resolved.conf.d')
+    )
+    gnu_sed()
+    result = subprocess.run(
+        [BASH, '-euo', 'pipefail', '-c', block],
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_resolved_hosts_keep_the_zone_across_a_reboot(tmp_path):
+    # resolvectl domain is runtime state: the bootstrap reboot dropped it on a commercial desktop
+    calls = tmp_path / 'calls'
+    _run_block(
+        tmp_path,
+        {'systemctl': f'echo "systemctl $*" >> {calls}', 'lsattr': 'exit 0', 'chattr': 'exit 0'},
+        link=True,
+    )
+    assert (tmp_path / 'resolved.conf.d' / 'idea-scheduler.conf').read_text() == (
+        f'[Resolve]\nDomains={ZONE}\n'
+    )
+    assert 'systemctl restart systemd-resolved' in calls.read_text()
+
+
+def test_network_manager_hosts_keep_the_zone_across_a_reboot(tmp_path):
+    # NetworkManager regenerated resolv.conf at boot on a rocky9 compute node and pbs_mom never started
+    calls = tmp_path / 'calls'
+    _run_block(
+        tmp_path,
+        {
+            'systemctl': '[[ "$2" == NetworkManager ]]',  # NetworkManager up, resolved not
+            'nmcli': f'echo "nmcli $*" >> {calls}; [[ "$*" == *--active* ]] && echo "System eth0"; true',
+            'lsattr': 'exit 0',
+            'chattr': 'exit 0',
+        },
+        link=False,
+    )
+    assert f"nmcli connection modify System eth0 +ipv4.dns-search {ZONE}" in calls.read_text()
