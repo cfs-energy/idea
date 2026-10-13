@@ -3,6 +3,7 @@
 ## 🚀 First Time Users
 
 * [What is IDEA?](README.md)
+* [Changelog](changelog.md)
 * [Install IDEA](first-time-users/install-idea/README.md)
   * [Pre-Requisites](first-time-users/install-idea/pre-requisites.md)
   * [Standard Installation](first-time-users/install-idea/standard-installation.md)
