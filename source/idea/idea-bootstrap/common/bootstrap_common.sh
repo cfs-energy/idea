@@ -395,11 +395,25 @@ convert_from_dynamodb_object
 # (its helpers write the mount point with a trailing slash) is a mount point afterwards.
 # Arguments go to mount -a (an Ubuntu bake passes -t nolustre until it boots a kernel with
 # the Lustre module; the Lustre entry is not in fstab yet, so it is not expected either).
+function is_cluster_mount_dir () {
+  # IDEA_SHARED_MOUNT_DIRS is rendered from the cluster's shared storage; without it, every entry counts
+  declare -p IDEA_SHARED_MOUNT_DIRS >/dev/null 2>&1 || return 0
+  local dir
+  for dir in "${IDEA_SHARED_MOUNT_DIRS[@]}"; do
+    [[ "${dir%/}" != "${1%/}" ]] || return 0
+  done
+  return 1
+}
+
 function mount_shared_filesystems () {
   local mount_dir
   local not_mounted=()
   mount -a "$@" || true
   while read -r mount_dir; do
+    if ! is_cluster_mount_dir "${mount_dir}"; then
+      log_warning "Ignoring fstab entry ${mount_dir}: not shared storage of this cluster"
+      continue
+    fi
     mountpoint -q "${mount_dir}" || not_mounted+=("${mount_dir}")
   done < <(awk '$1 !~ /^#/ && $2 ~ /.\/$/ {print $2}' /etc/fstab)
   if [[ ${#not_mounted[@]} -gt 0 ]]; then

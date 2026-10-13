@@ -12,6 +12,7 @@
     fi
     {% endif %}
   {% endif %}
+  {% include '_templates/linux/shared_mount_dirs.jinja2' %}
   function mount_shared_storage () {
     {% for name, storage in context.config.get_config('shared-storage').items() %}
       {% if context.eval_shared_storage_scope(shared_storage=storage) %}
