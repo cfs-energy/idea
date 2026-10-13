@@ -1166,35 +1166,70 @@ class SocaServer(SocaService):
             yield os.path.join(directory, f'{name}({counter}){ext}'), True
         yield os.path.join(directory, f'{name}_{int(time.time())}{ext}'), True
 
+    @staticmethod
+    def _open_directory_nofollow(path: str) -> int:
+        """
+        a descriptor for an absolute directory path that holds no symbolic link, opened one
+        component at a time without following links: a directory swapped for a link after
+        the path was checked fails the open instead of redirecting it
+        """
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            for part in [p for p in path.split('/') if p]:
+                next_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=fd,
+                )
+                os.close(fd)
+                fd = next_fd
+        except OSError:
+            os.close(fd)
+            raise exceptions.unauthorized_access()
+        return fd
+
     def _create_upload(
         self, helper: FileSystemHelper, directory: str, filename: str, username: str
     ) -> tuple:
         """
         Creates the upload's file exclusively and gives it to the user by descriptor before
-        anything is written. A name that exists, a link planted at it (dangling or not)
-        included, is neither opened nor followed: the next free name is taken. No path is
-        chowned after the fact. Returns (fd, file_path, was_renamed).
+        anything is written. The folder is resolved once (a folder the user reached through
+        a link of their own stays usable), checked as the user, then opened component by
+        component without following links, and the file is created relative to it. A name
+        that exists, a link planted at it (dangling or not) included, is neither opened nor
+        followed: the next free name is taken. No path is chowned after the fact.
+        Returns (fd, file_path, was_renamed).
         """
-        for file_path, was_renamed in self._candidate_upload_paths(directory, filename):
-            try:
-                fd = os.open(
-                    file_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    0o644,
-                )
-            except FileExistsError:
-                continue
-            try:
-                helper.own(fd)
-            except Exception:
-                os.close(fd)
-                os.unlink(file_path)
-                raise
-            if was_renamed and self._logger.isEnabledFor(logging.DEBUG):
-                self._logger.debug(
-                    f'File conflict resolved - User: {username}, Original: {filename}, Renamed: {os.path.basename(file_path)}'
-                )
-            return fd, file_path, was_renamed
+        resolved = os.path.realpath(directory)
+        helper.check_access(resolved, check_dir=True, check_read=False, check_write=True)
+        dir_fd = self._open_directory_nofollow(resolved)
+        try:
+            for file_path, was_renamed in self._candidate_upload_paths(
+                resolved, filename
+            ):
+                name = os.path.basename(file_path)
+                try:
+                    fd = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        0o644,
+                        dir_fd=dir_fd,
+                    )
+                except FileExistsError:
+                    continue
+                try:
+                    helper.own(fd)
+                except Exception:
+                    os.close(fd)
+                    os.unlink(name, dir_fd=dir_fd)
+                    raise
+                if was_renamed and self._logger.isEnabledFor(logging.DEBUG):
+                    self._logger.debug(
+                        f'File conflict resolved - User: {username}, Original: {filename}, Renamed: {name}'
+                    )
+                return fd, os.path.join(directory, name), was_renamed
+        finally:
+            os.close(dir_fd)
         raise exceptions.general_exception(f'no free name for upload: {filename}')
 
     async def generate_download_url_route(self, http_request, **_):

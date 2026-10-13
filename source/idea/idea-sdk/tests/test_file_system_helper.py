@@ -456,3 +456,49 @@ def test_rename_needs_the_folder_not_the_file(numeric_tree):
         helper.rename_file(RenameFileRequest(file=kept, new_name='moved.dat'))
     assert exc.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
     assert os.path.exists(kept)
+
+
+def test_upload_folder_swapped_for_a_link_after_the_check_is_refused(numeric_tree, tmp_path):
+    # the check passes on the real folder; a link swapped in before the open is not followed
+    from ideasdk.server.soca_server import SocaServer
+
+    if os.geteuid() != 0:
+        pytest.skip('needs root: the server creates the file')
+    path, helper = numeric_tree
+    upper = os.path.join(path, 'upper')
+    helper.run_as_user(lambda: os.makedirs(os.path.join(upper, 'inner')))
+    outside = tmp_path / 'outside'
+    (outside / 'inner').mkdir(parents=True)
+    check = helper.check_access
+
+    def check_then_swap(*args, **kwargs):
+        check(*args, **kwargs)
+        os.rename(upper, upper + '.moved')
+        os.symlink(str(outside), upper)
+
+    helper.check_access = check_then_swap
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    with pytest.raises(Exception) as exc:
+        server._create_upload(helper, os.path.join(upper, 'inner'), 'data.dat', 'user')
+    assert exc.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    assert list((outside / 'inner').iterdir()) == []
+
+
+def test_upload_into_a_folder_reached_through_the_users_own_link(numeric_tree):
+    from ideasdk.server.soca_server import SocaServer
+
+    if os.geteuid() != 0:
+        pytest.skip('needs root: the server creates the file')
+    path, helper = numeric_tree
+    real = os.path.join(path, 'real')
+    helper.run_as_user(lambda: (os.mkdir(real), os.symlink(real, os.path.join(path, 'link'))))
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    fd, file_path, renamed = server._create_upload(
+        helper, os.path.join(path, 'link'), 'data.dat', 'user'
+    )
+    os.close(fd)
+    assert file_path == os.path.join(path, 'link', 'data.dat') and not renamed
+    assert os.path.isfile(os.path.join(real, 'data.dat'))
+    assert os.stat(os.path.join(real, 'data.dat')).st_uid == helper._identity.uid
