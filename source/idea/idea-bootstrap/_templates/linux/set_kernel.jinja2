@@ -340,4 +340,73 @@ function set_kernel_version() {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 set_kernel_version
 {% endif %}
+{% else %}
+# Hosts that are not baking keep the kernel their image boots and hold it as 26.10.4 did: the
+# running kernel's packages, and the linux-aws metapackages when they point at the running series
+# (removed otherwise), so an apt upgrade cannot move a desktop to a kernel without a Lustre module.
+function apply_kernel_holds() {
+  local target_version="$TARGET_KERNEL_VERSION"
+  local current_kernel=$(uname -r)
+
+  log_info "Applying holds for current kernel ${current_kernel} to prevent further upgrades"
+
+  # Hold the specific kernel version we're currently running
+  apt-mark hold linux-image-${current_kernel} linux-headers-${current_kernel} linux-modules-${current_kernel} linux-modules-extra-${current_kernel} >/dev/null 2>&1 || true
+
+  # Check if meta-packages point to our target series or need to be removed
+  local target_base="${target_version%\*}"
+  local meta_kernel_version=""
+
+  # Check what kernel version the meta-packages currently point to
+  if dpkg -l linux-aws 2>/dev/null | grep -q "^ii"; then
+    meta_kernel_version=$(apt-cache depends linux-aws | grep -E "Depends: linux-image-aws" | head -1 | cut -d'-' -f4 | cut -d'.' -f1-2 2>/dev/null || echo "")
+  fi
+
+  if [[ -n "$meta_kernel_version" ]] && [[ "$meta_kernel_version" == "${target_base%.*}" ]]; then
+    # Meta-packages point to our target series, hold them
+    log_info "Meta-packages point to target series ${target_base} - holding them"
+    apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
+  else
+    # Meta-packages point to wrong series or don't exist, remove them
+    log_info "Meta-packages point to wrong kernel series or don't exist - removing them"
+    DEBIAN_FRONTEND=noninteractive apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
+  fi
+}
+
+function remove_unwanted_kernels() {
+  local target_version="$TARGET_KERNEL_VERSION"
+  local target_base="${target_version%\*}"  # Remove wildcard for pattern matching
+  local current_kernel=$(uname -r)
+
+  log_info "Removing all non-target kernel packages (keeping only ${target_version} series)"
+
+  # Find all installed kernel packages that don't match our target series
+  PACKAGES_TO_REMOVE=$(apt list --installed 2>/dev/null | grep -E "linux-(image|headers|modules|modules-extra)" | grep -v "${target_base}" | cut -d'/' -f1 | tr '\n' ' ')
+
+  if [[ -n "$PACKAGES_TO_REMOVE" ]]; then
+    log_info "Found non-target kernel packages to remove: $PACKAGES_TO_REMOVE"
+    # Unhold packages before removal
+    apt-mark unhold $PACKAGES_TO_REMOVE >/dev/null 2>&1 || true
+    # Remove packages
+    DEBIAN_FRONTEND=noninteractive apt purge -y $PACKAGES_TO_REMOVE 2>/dev/null || true
+    # Clean up orphaned packages
+    DEBIAN_FRONTEND=noninteractive apt autoremove -y 2>/dev/null || true
+  else
+    log_info "No non-target kernel packages found to remove"
+  fi
+}
+
+function set_kernel_version() {
+  # Skip kernel management on captured images that already went through bootstrap
+  if [[ -n "${IDEA_MODULE_VERSION}" && "$(cat /var/lib/idea/baked-release 2>/dev/null)" == "${IDEA_MODULE_VERSION}" ]]; then
+    log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping kernel management"
+    return 0
+  fi
+
+  log_info "Keeping the running kernel $(uname -r)"
+  apply_kernel_holds
+  remove_unwanted_kernels
+}
+
+set_kernel_version
 {% endif %}# End: Kernel Version Management

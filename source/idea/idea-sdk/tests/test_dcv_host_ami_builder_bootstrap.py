@@ -532,26 +532,31 @@ def test_ubuntu_bake_stops_when_install_or_hold_fails(tmp_path, failure, status)
 
 @pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
 @pytest.mark.parametrize('lustre', [False, True])
-def test_ubuntu_runtime_render_has_only_the_running_kernel_gate(
+def test_ubuntu_runtime_holds_the_running_kernel_without_selecting_one(
     tmp_path, base_os, lustre
 ):
+    # a desktop that is not baking keeps its kernel and holds it, as 26.10.4 did: without the
+    # holds an apt upgrade boots a newer -aws kernel that has no Lustre module
     text = render('virtual-desktop-host-linux/setup.sh.jinja2', base_os, lustre=lustre)
     kernel = text.split('# Begin: Kernel Version Management')[1].split(
         '# End: Kernel Version Management'
     )[0]
-    for unexpected in (
-        'GRUB',
-        'apt-mark',
-        'apt install',
-        'pkgnames',
-        'remove_unwanted_kernels',
-    ):
+    for unexpected in ('GRUB', 'apt install', 'pkgnames', 'BAKE_STAGE'):
         assert unexpected not in kernel
+    assert 'apt-mark hold linux-image-${current_kernel} linux-headers-${current_kernel}' in kernel
+    assert 'apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-tools-aws' in kernel
     assert ('lustre-client-modules-${TARGET_KERNEL_ABI}' in kernel) == lustre
     assert ('fsx-lustre-client-repo' in kernel) == lustre
-    code, calls = run_set_kernel(tmp_path, base_os, '6.8.0-1040-aws', lustre=lustre)
+    running = '6.8.0-1040-aws'
+    code, calls = run_set_kernel(tmp_path, base_os, running, lustre=lustre)
     assert code == 0, calls
-    for unexpected in ('hold', 'install', 'grub', 'reboot'):
+    assert (
+        f'apt-mark hold linux-image-{running} linux-headers-{running} '
+        f'linux-modules-{running} linux-modules-extra-{running}'
+    ) in calls
+    # the stubbed host has no linux-aws pointing at the running series: the metapackages go
+    assert 'apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws' in calls
+    for unexpected in ('apt install', 'grub', 'reboot'):
         assert unexpected not in calls
 
 
