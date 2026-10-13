@@ -493,13 +493,15 @@ jobs:
           REPOSITORY="${REGISTRY}/idea-control-plane"
           test "${IMAGE%@*}" = "$REPOSITORY"
           docker buildx imagetools inspect "$IMAGE" >/dev/null
-          test "$(docker buildx imagetools inspect "${REPOSITORY}:${CANDIDATE_TAG#v}" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "${IMAGE#*@}"
+          # the digest is the hash of the manifest bytes; a multi-arch index has no .Manifest.Digest
+          digest() { echo "sha256:$(docker buildx imagetools inspect "$1" --raw | sha256sum | cut -d' ' -f1)"; }
+          test "$(digest "${REPOSITORY}:${CANDIDATE_TAG#v}")" = "${IMAGE#*@}"
           docker buildx imagetools create \
             --tag "${REPOSITORY}:v${VERSION}" \
             --tag "${REPOSITORY}:${VERSION}" \
             --tag "${REPOSITORY}:latest" "$IMAGE"
           for TAG in "v${VERSION}" "${VERSION}" latest; do
-            test "$(docker buildx imagetools inspect "${REPOSITORY}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')" = "${IMAGE#*@}"
+            test "$(digest "${REPOSITORY}:${TAG}")" = "${IMAGE#*@}"
           done
       - name: Publish the release
         env:
