@@ -353,6 +353,42 @@ def test_crontab_edits_survive_an_empty_crontab(tmp_path, name):
     ).read_text()
 
 
+@pytest.mark.parametrize(
+    'name',
+    [
+        'dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2',
+        'compute-node-ami-builder/compute_node_ami_builder.sh.jinja2',
+        '_templates/linux/mount_shared_storage.jinja2',
+    ],
+)
+def test_mount_all_accepts_already_mounted(tmp_path, name):
+    # mount -a exits 32 when Lustre is already mounted from the reboot path
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    (bin_dir / 'mount').write_text('#!/bin/sh\nexit 32\n')
+    (bin_dir / 'mount').chmod(0o755)
+    lines = [
+        line.strip()
+        for line in Path(IDEA_BOOTSTRAP_DIR, name).read_text().splitlines()
+        if line.strip().startswith('mount -a')
+    ]
+    assert lines
+    source = Path(
+        IDEA_BOOTSTRAP_DIR, 'dcv-host-ami-builder/image_bake_stage.sh'
+    ).read_text()
+    source = source.replace('/var/lib/idea', str(tmp_path))
+    result = subprocess.run(
+        ['bash', '-c', source + '\nBAKE_STAGE=packages\n' + '\n'.join(lines)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'bake-failed').exists(), (
+        tmp_path / 'bake-failed'
+    ).read_text()
+
+
 def test_parent_stage_preserves_the_reported_failure(tmp_path):
     report = tmp_path / 'image-checks.json'
     report.write_text(json.dumps({'checks': [{'name': 'kernel', 'ok': False}]}))

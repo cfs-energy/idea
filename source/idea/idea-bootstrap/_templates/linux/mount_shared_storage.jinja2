@@ -62,8 +62,8 @@
     local AWS=$(command -v aws)
     local FS_MOUNT_ATTEMPT=0
     local FS_MOUNT_MAX_ATTEMPTS=5
-    mount -a
-    local MOUNT_STATUS=$?
+    local MOUNT_STATUS=0
+    mount -a || MOUNT_STATUS=$?
     # Error code 32 means filesystem is already mounted, which is not a failure
     while [[ ${MOUNT_STATUS} -ne 0 ]] && [[ ${MOUNT_STATUS} -ne 32 ]] && [[ ${FS_MOUNT_ATTEMPT} -le 5 ]]
     do
@@ -71,8 +71,8 @@
       log_info "(${FS_MOUNT_ATTEMPT} of ${FS_MOUNT_MAX_ATTEMPTS}) Failed to mount FS (error ${MOUNT_STATUS}), retrying in ${SLEEP_TIME} seconds ..."
       sleep ${SLEEP_TIME}
       ((FS_MOUNT_ATTEMPT++))
-      mount -a
-      MOUNT_STATUS=$?
+      MOUNT_STATUS=0
+      mount -a || MOUNT_STATUS=$?
     done
 
     # Log success if we exited due to already mounted (code 32)
