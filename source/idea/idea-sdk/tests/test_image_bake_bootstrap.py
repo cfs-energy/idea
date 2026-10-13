@@ -365,7 +365,9 @@ def _mount_stubs(tmp_path, mounted):
     # util-linux returns 32 for "already mounted" and for every real failure alike
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    (bin_dir / 'mount').write_text(f'#!/bin/sh\necho mount >> {tmp_path}/mounts\nexit 32\n')
+    (bin_dir / 'mount').write_text(
+        f'#!/bin/sh\necho mount >> {tmp_path}/mounts\nexit 32\n'
+    )
     mounted_list = tmp_path / 'mounted'
     mounted_list.write_text(''.join(f'{m}\n' for m in mounted))
     (bin_dir / 'mountpoint').write_text(f'#!/bin/sh\ngrep -qx "$2" {mounted_list}\n')
@@ -396,7 +398,11 @@ def test_shared_mounts_are_checked_not_trusted_from_mount_status(tmp_path, mount
     bin_dir, source = _mount_stubs(tmp_path, mounted)
     result = subprocess.run(
         # the builders call it mid-stage, so the stage goes on and only the record remains
-        ['bash', '-c', source + '\nBAKE_STAGE=packages\nmount_shared_filesystems\ntrue'],
+        [
+            'bash',
+            '-c',
+            source + '\nBAKE_STAGE=packages\nmount_shared_filesystems\ntrue',
+        ],
         capture_output=True,
         text=True,
         env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
@@ -414,9 +420,14 @@ def test_shared_mounts_are_checked_not_trusted_from_mount_status(tmp_path, mount
 
 
 def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
-    script = render('_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False)
+    script = render(
+        '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
+    )
     marker = 'exit_fail "Shared storage did not mount"'
-    block = script[script.index('function mount_shared_storage ()') : script.index(marker) + len(marker)]
+    block = script[
+        script.index('function mount_shared_storage ()') : script.index(marker)
+        + len(marker)
+    ]
     bin_dir, source = _mount_stubs(tmp_path, ['/data/'])  # /apps/ never mounts
     stubs = 'mkdir() { :; }\nsleep() { :; }\n' + ''.join(
         f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)

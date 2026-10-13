@@ -38,10 +38,16 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
     """
     scheduler_dns_name = config.get_string('scheduler.private_dns_name')
     if not scheduler_dns_name:
-        return {'pbs_server_name': None, 'private_zone': None, 'bootstrap_refresh': True}
+        return {
+            'pbs_server_name': None,
+            'private_zone': None,
+            'bootstrap_refresh': True,
+        }
     stable = bool(config.get_bool('scheduler.use_stable_server_name', default=False))
     private_zone = (
-        config.get_string('cluster.route53.private_hosted_zone_name') if stable else None
+        config.get_string('cluster.route53.private_hosted_zone_name')
+        if stable
+        else None
     )
     if stable and not private_zone and logger is not None:
         # the rest of the refresh (ssh kex, online accounts) still goes out

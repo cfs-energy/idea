@@ -66,7 +66,11 @@ def _blobs(key):
             serialization.PrivateFormat.Raw,
             serialization.NoEncryption(),
         )
-        return b'ssh-ed25519', _string(b'ssh-ed25519') + _string(public), _string(private)
+        return (
+            b'ssh-ed25519',
+            _string(b'ssh-ed25519') + _string(public),
+            _string(private),
+        )
     raise ValueError(f'{type(key).__name__} keys cannot be written as .ppk')
 
 

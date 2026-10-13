@@ -196,7 +196,9 @@ class DailyCostsCalculator(MonthlyCostsService):
                     )
                 else:
                     self._reported.add(key)
-                    self.logger.warning(f'Daily project attribution unavailable: {error}')
+                    self.logger.warning(
+                        f'Daily project attribution unavailable: {error}'
+                    )
             else:
                 self.logger.exception('Daily project attribution unavailable')
             return MyCostsAiProject(

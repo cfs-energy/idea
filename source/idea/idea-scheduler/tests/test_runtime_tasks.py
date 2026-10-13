@@ -117,7 +117,10 @@ def test_a_multi_line_command_runs_from_its_script(pbs_home):
     }
     tasks.configure_licenses(table, pbs_home)
     script = pbs_home / 'idea/licenses/app_lic_one'
-    assert script.read_text() == '#!/bin/bash\ncd /opt/tool\n./check "two words" \'and more\'\n'
+    assert (
+        script.read_text()
+        == '#!/bin/bash\ncd /opt/tool\n./check "two words" \'and more\'\n'
+    )
     config = (pbs_home / 'sched_priv/sched_config').read_text()
     assert f'server_dyn_res: "app_lic_one !{script}"' in config
     assert 'two words' not in config
@@ -181,7 +184,8 @@ qmgr() {
   if [[ "$2" == 'list hook' ]]; then printf '%s\\n' "$EXISTING"; fi
 }
 """ + block.replace('/opt/pbs/bin/qmgr', 'qmgr').replace(
-        '${IDEA_APP_DEPLOY_DIR}/scheduler/resources/openpbs/hooks', str(hooks_dir or HOOKS_DIR)
+        '${IDEA_APP_DEPLOY_DIR}/scheduler/resources/openpbs/hooks',
+        str(hooks_dir or HOOKS_DIR),
     )
     result = subprocess.run(
         ['bash', '-c', harness],
@@ -246,7 +250,9 @@ def test_the_retired_ncpus_hook_is_deleted_when_present(tmp_path):
     result, calls = hook_harness(tmp_path, ALL_HOOKS + 'Hook calculate_ncpus\n')
     assert result.returncode == 0, result.stderr
     assert 'delete hook calculate_ncpus' in calls
-    assert not any(c.startswith(('import hook calculate', 'create hook calculate')) for c in calls)
+    assert not any(
+        c.startswith(('import hook calculate', 'create hook calculate')) for c in calls
+    )
     assert not (tmp_path / 'pbs/.idea-hooks/calculate_ncpus.sha256').exists()
     result, calls = hook_harness(tmp_path, ALL_HOOKS)
     assert calls == ['list hook']
@@ -299,7 +305,8 @@ def run_managers(tmp_path, container, existing, bastion=None, qmgr_fails=False):
     ]
     calls = tmp_path / 'qmgr.log'
     calls.touch()
-    harness = """set -euo pipefail
+    harness = (
+        """set -euo pipefail
 log() { echo "$*" >> "$LOG"; }
 setting() {
   case "$1" in
@@ -316,7 +323,10 @@ qmgr() {
     printf '%s\\n' "$2" >> "$CALLS"
   fi
 }
-""" + block.replace('/opt/pbs/bin/qmgr', 'qmgr') + 'echo reached-start >> "$LOG"\n'
+"""
+        + block.replace('/opt/pbs/bin/qmgr', 'qmgr')
+        + 'echo reached-start >> "$LOG"\n'
+    )
     result = subprocess.run(
         ['bash', '-c', harness],
         env={
@@ -325,14 +335,18 @@ qmgr() {
             'LOG': str(tmp_path / 'entrypoint.log'),
             'EXISTING': existing,
             'SERVICE': 'cluster-bastion' if container else '',
-            'BASTION': bastion if bastion is not None else ('nlb.elb.amazonaws.com' if container else HOST_BASTION),
+            'BASTION': bastion
+            if bastion is not None
+            else ('nlb.elb.amazonaws.com' if container else HOST_BASTION),
             'QMGR_FAILS': '1' if qmgr_fails else '',
         },
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    return calls.read_text().splitlines(), (tmp_path / 'entrypoint.log').read_text().splitlines()
+    return calls.read_text().splitlines(), (
+        tmp_path / 'entrypoint.log'
+    ).read_text().splitlines()
 
 
 @pytest.mark.parametrize(
@@ -343,7 +357,14 @@ qmgr() {
         (True, 'root@admin.example', []),
         (True, '', []),
         # a host bastion: its own grant stays or is made, others of the kind go
-        (False, STALE, [f'set server managers -= {STALE}', f'set server managers += root@{HOST_BASTION}']),
+        (
+            False,
+            STALE,
+            [
+                f'set server managers -= {STALE}',
+                f'set server managers += root@{HOST_BASTION}',
+            ],
+        ),
         (False, f'root@{HOST_BASTION}', []),
     ],
 )

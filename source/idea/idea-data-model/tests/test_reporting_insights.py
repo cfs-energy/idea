@@ -438,7 +438,13 @@ def test_allocation_keeps_instance_type_alternatives_in_one_chunk():
     # the '+' between instance type alternatives is not a chunk boundary; splitting on it
     # left the efficiency report with no allocation for such a job
     with_alternatives = allocation(
-        dict(custom_params={'select': '2:ncpus=4:mem=8gb:instance_type=c5.large+c5.xlarge'})
+        dict(
+            custom_params={
+                'select': '2:ncpus=4:mem=8gb:instance_type=c5.large+c5.xlarge'
+            }
+        )
     )
-    assert with_alternatives == allocation(dict(custom_params={'select': '2:ncpus=4:mem=8gb'}))
+    assert with_alternatives == allocation(
+        dict(custom_params={'select': '2:ncpus=4:mem=8gb'})
+    )
     assert with_alternatives[0] == 8 and with_alternatives[2] == 2

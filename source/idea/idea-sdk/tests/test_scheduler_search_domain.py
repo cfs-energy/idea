@@ -24,7 +24,10 @@ TEMPLATES = (
 def _search_domain_block(script):
     # the compute node applies it before writing pbs.conf, the client after (shared with the refresh)
     start = script.index('if [[ -L /etc/resolv.conf')
-    ends = [script.find(m, start) for m in ('echo -e "PBS_SERVER=', '\nif [[ -f /etc/pbs.conf')]
+    ends = [
+        script.find(m, start)
+        for m in ('echo -e "PBS_SERVER=', '\nif [[ -f /etc/pbs.conf')
+    ]
     return script[start : min(i for i in ends if i > 0)]
 
 
@@ -77,7 +80,6 @@ def test_a_static_resolv_conf_gets_the_cluster_zone_while_resolved_runs(
     ]
 
 
-
 def _run_block(tmp_path, stubs, link):
     script = render(TEMPLATES[1], 'amazonlinux2023', config=config())
     block = _search_domain_block(script)
@@ -111,7 +113,11 @@ def test_resolved_hosts_keep_the_zone_across_a_reboot(tmp_path):
     calls = tmp_path / 'calls'
     _run_block(
         tmp_path,
-        {'systemctl': f'echo "systemctl $*" >> {calls}', 'lsattr': 'exit 0', 'chattr': 'exit 0'},
+        {
+            'systemctl': f'echo "systemctl $*" >> {calls}',
+            'lsattr': 'exit 0',
+            'chattr': 'exit 0',
+        },
         link=True,
     )
     assert (tmp_path / 'resolved.conf.d' / 'idea-scheduler.conf').read_text() == (
@@ -141,5 +147,8 @@ def test_network_manager_hosts_keep_the_zone_across_a_reboot(tmp_path, device_an
         },
         link=False,
     )
-    assert f"nmcli connection modify System eth0 +ipv4.dns-search {ZONE}" in calls.read_text()
+    assert (
+        f'nmcli connection modify System eth0 +ipv4.dns-search {ZONE}'
+        in calls.read_text()
+    )
     assert 'modify lo' not in calls.read_text()

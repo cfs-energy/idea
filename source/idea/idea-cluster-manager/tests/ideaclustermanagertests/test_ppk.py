@@ -40,7 +40,9 @@ def _parse(ppk: str):
     public_count = int(lines[3].split('Public-Lines: ', 1)[1])
     public = base64.b64decode(''.join(lines[4 : 4 + public_count]))
     private_count = int(lines[4 + public_count].split('Private-Lines: ', 1)[1])
-    private = base64.b64decode(''.join(lines[5 + public_count : 5 + public_count + private_count]))
+    private = base64.b64decode(
+        ''.join(lines[5 + public_count : 5 + public_count + private_count])
+    )
     mac = lines[5 + public_count + private_count].split('Private-MAC: ', 1)[1]
     assert len(lines) == 6 + public_count + private_count
     assert all(len(line) <= 64 for line in lines[4:-1])
@@ -48,7 +50,13 @@ def _parse(ppk: str):
         MAC_KEY,
         b''.join(
             struct.pack('>I', len(part)) + part
-            for part in (algorithm.encode(), encryption.encode(), comment.encode(), public, private)
+            for part in (
+                algorithm.encode(),
+                encryption.encode(),
+                comment.encode(),
+                public,
+                private,
+            )
         ),
         hashlib.sha1,
     ).hexdigest()
@@ -58,7 +66,11 @@ def _parse(ppk: str):
 
 def _openssh_public(key) -> bytes:
     return base64.b64decode(
-        key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).split()[1]
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH
+        )
+        .split()[1]
     )
 
 
@@ -66,24 +78,43 @@ def _openssh_public(key) -> bytes:
 def test_an_rsa_key_round_trips_with_a_verified_mac(private_format):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     data = key.private_bytes(
-        serialization.Encoding.PEM, getattr(serialization.PrivateFormat, private_format), serialization.NoEncryption()
+        serialization.Encoding.PEM,
+        getattr(serialization.PrivateFormat, private_format),
+        serialization.NoEncryption(),
     )
     algorithm, encryption, comment, public, private = _parse(to_ppk(data))
-    assert (algorithm, encryption, comment) == ('ssh-rsa', 'none', 'imported-openssh-key')
+    assert (algorithm, encryption, comment) == (
+        'ssh-rsa',
+        'none',
+        'imported-openssh-key',
+    )
     assert public == _openssh_public(key)
     d, p, q, iqmp = (int.from_bytes(v, 'big') for v in _read(private))
     numbers = key.private_numbers()
-    assert d == numbers.d and {p, q} == {numbers.p, numbers.q} and p > q and (q * iqmp) % p == 1
+    assert (
+        d == numbers.d
+        and {p, q} == {numbers.p, numbers.q}
+        and p > q
+        and (q * iqmp) % p == 1
+    )
 
 
 def test_an_ed25519_key_round_trips_with_a_verified_mac():
     key = ed25519.Ed25519PrivateKey.generate()
-    data = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption())
+    data = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.OpenSSH,
+        serialization.NoEncryption(),
+    )
     algorithm, _, _, public, private = _parse(to_ppk(data, comment='someone@idea'))
     assert algorithm == 'ssh-ed25519'
     assert public == _openssh_public(key)
     assert _read(private) == [
-        key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+        key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
     ]
 
 
@@ -91,9 +122,19 @@ def test_primes_the_other_way_round_are_normalised_for_putty():
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     n = key.private_numbers()
     swapped = rsa.RSAPrivateNumbers(
-        p=n.q, q=n.p, d=n.d, dmp1=n.dmq1, dmq1=n.dmp1, iqmp=pow(n.p, -1, n.q), public_numbers=n.public_numbers
+        p=n.q,
+        q=n.p,
+        d=n.d,
+        dmp1=n.dmq1,
+        dmq1=n.dmp1,
+        iqmp=pow(n.p, -1, n.q),
+        public_numbers=n.public_numbers,
     ).private_key()
-    data = swapped.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    data = swapped.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
     _, _, _, _, private = _parse(to_ppk(data))
     d, p, q, iqmp = (int.from_bytes(v, 'big') for v in _read(private))
     assert p > q and (q * iqmp) % p == 1
@@ -101,7 +142,9 @@ def test_primes_the_other_way_round_are_normalised_for_putty():
 
 def test_other_key_types_are_refused():
     data = ec.generate_private_key(ec.SECP256R1()).private_bytes(
-        serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption()
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.OpenSSH,
+        serialization.NoEncryption(),
     )
     with pytest.raises(ValueError):
         to_ppk(data)
@@ -116,16 +159,24 @@ def _home(puttygen):
     return home
 
 
-def test_puttygen_is_used_where_present_and_the_key_written_in_process_elsewhere(tmp_path, monkeypatch):
+def test_puttygen_is_used_where_present_and_the_key_written_in_process_elsewhere(
+    tmp_path, monkeypatch
+):
     key_file = tmp_path / 'id_rsa'
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     key_file.write_bytes(
-        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption())
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.OpenSSH,
+            serialization.NoEncryption(),
+        )
     )
     ppk_file = tmp_path / 'id_rsa.ppk'
     runs = []
     monkeypatch.setattr(
-        user_home_directory.subprocess, 'run', lambda args, **_: runs.append(args) or SimpleNamespace(returncode=0, stderr='')
+        user_home_directory.subprocess,
+        'run',
+        lambda args, **_: runs.append(args) or SimpleNamespace(returncode=0, stderr=''),
     )
     # the container: no puttygen on PATH
     assert _home(None).write_ppk(str(key_file), str(ppk_file)) == 'in-process'
@@ -135,5 +186,8 @@ def test_puttygen_is_used_where_present_and_the_key_written_in_process_elsewhere
     puttygen = tmp_path / 'puttygen'
     puttygen.write_text('#!/bin/sh\n')
     puttygen.chmod(0o755)
-    assert _home(puttygen).write_ppk(str(key_file), str(tmp_path / 'host.ppk')) == 'puttygen'
+    assert (
+        _home(puttygen).write_ppk(str(key_file), str(tmp_path / 'host.ppk'))
+        == 'puttygen'
+    )
     assert runs == [[str(puttygen), str(key_file), '-o', str(tmp_path / 'host.ppk')]]

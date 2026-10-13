@@ -46,7 +46,12 @@ def _context(task=None, failures=None):
     return context
 
 
-def _task(module, task_id='a08865093a3b49bda527d44d31bce224', status='RUNNING', desired='RUNNING'):
+def _task(
+    module,
+    task_id='a08865093a3b49bda527d44d31bce224',
+    status='RUNNING',
+    desired='RUNNING',
+):
     return {
         'taskArn': f'arn:aws:ecs:us-east-2:871375171278:task/{CLUSTER}/{task_id}',
         'lastStatus': status,
@@ -69,21 +74,53 @@ def test_a_running_task_of_a_cluster_service_is_its_module(module):
 def test_the_bastion_join_still_verifies_as_the_bastion():
     task = _task('bastion-host')
     sender = f'{ROLES["bastion-host"]}:a08865093a3b49bda527d44d31bce224'
-    assert verify_bastion_task(_context(task), sender, task['taskArn']) == 'a08865093a3b49bda527d44d31bce224'
+    assert (
+        verify_bastion_task(_context(task), sender, task['taskArn'])
+        == 'a08865093a3b49bda527d44d31bce224'
+    )
     scheduler = _task('scheduler')
     with pytest.raises(ValueError):
-        verify_bastion_task(_context(scheduler), f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224', scheduler['taskArn'])
+        verify_bastion_task(
+            _context(scheduler),
+            f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224',
+            scheduler['taskArn'],
+        )
 
 
 @pytest.mark.parametrize(
     'sender,task,failures,reason',
     [
         ('AIDAIMTEBMVXFWRSXIKCK', _task('scheduler'), None, 'not a role session'),
-        ('AROASOMEONEELSE:a08865093a3b49bda527d44d31bce224', _task('scheduler'), None, 'not a cluster task role'),
-        (f'{ROLES["scheduler"]}:ffffffffffffffffffffffffffffffff', _task('scheduler'), None, 'session does not match'),
-        (f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224', None, [{'reason': 'MISSING'}], 'not found'),
-        (f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224', _task('scheduler', status='STOPPED'), None, 'not a running member'),
-        (f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224', _task('virtual-desktop-controller'), None, 'not a running member'),
+        (
+            'AROASOMEONEELSE:a08865093a3b49bda527d44d31bce224',
+            _task('scheduler'),
+            None,
+            'not a cluster task role',
+        ),
+        (
+            f'{ROLES["scheduler"]}:ffffffffffffffffffffffffffffffff',
+            _task('scheduler'),
+            None,
+            'session does not match',
+        ),
+        (
+            f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224',
+            None,
+            [{'reason': 'MISSING'}],
+            'not found',
+        ),
+        (
+            f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224',
+            _task('scheduler', status='STOPPED'),
+            None,
+            'not a running member',
+        ),
+        (
+            f'{ROLES["scheduler"]}:a08865093a3b49bda527d44d31bce224',
+            _task('virtual-desktop-controller'),
+            None,
+            'not a running member',
+        ),
     ],
 )
 def test_anything_else_is_refused(sender, task, failures, reason):

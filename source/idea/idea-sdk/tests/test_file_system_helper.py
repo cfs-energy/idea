@@ -36,7 +36,6 @@ from ideadatamodel import (
     CreateFileRequest,
     RenameFileRequest,
     DownloadFilesRequest,
-    DeleteFilesRequest,
 )
 
 
@@ -178,7 +177,10 @@ def test_dangling_symlink_does_not_fail_the_listing(numeric_tree):
     helper.run_as_user(
         lambda: (
             os.mkdir(os.path.join(path, 'kept')),
-            os.symlink('/var/tmp/elsewhere/.vscode-server', os.path.join(path, '.vscode-server')),
+            os.symlink(
+                '/var/tmp/elsewhere/.vscode-server',
+                os.path.join(path, '.vscode-server'),
+            ),
         )
     )
     listing = helper.list_files(ListFilesRequest(cwd=path)).listing

@@ -220,8 +220,14 @@ def test_compatibility_instance_type_endpoint(context):
 @pytest.mark.parametrize(
     'resources,expected',
     [
-        ({'select': '1:mem=8gb', 'enable_ht_support': 'true'}, '1:mem=8gb:ncpus=72:compute_node=tbd'),
-        ({'select': '1:mem=8gb', 'enable_ht_support': 'false', 'ht_support': 'true'}, '1:mem=8gb:ncpus=72:compute_node=tbd'),
+        (
+            {'select': '1:mem=8gb', 'enable_ht_support': 'true'},
+            '1:mem=8gb:ncpus=72:compute_node=tbd',
+        ),
+        (
+            {'select': '1:mem=8gb', 'enable_ht_support': 'false', 'ht_support': 'true'},
+            '1:mem=8gb:ncpus=72:compute_node=tbd',
+        ),
         (
             {'select': '1:enable_ht_support=true+2:mem=8gb'},
             '1:enable_ht_support=true:ncpus=72:compute_node=tbd+2:mem=8gb:ncpus=36:compute_node=tbd',

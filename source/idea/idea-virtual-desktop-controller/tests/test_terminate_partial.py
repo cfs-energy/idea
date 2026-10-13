@@ -229,9 +229,7 @@ def test_a_failed_desktop_whose_host_was_released_deletes_cleanly():
         session.dcv_session_id = None
     ec2 = FakeEc2([])
     utils = session_utils(ec2, sessions)
-    utils._server_utils._server_db.delete.side_effect = (
-        lambda server: db.delete(server)
-    )
+    utils._server_utils._server_db.delete.side_effect = lambda server: db.delete(server)
 
     success, failed = utils.terminate_sessions(sessions)
 

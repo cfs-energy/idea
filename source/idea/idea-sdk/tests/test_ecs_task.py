@@ -2,7 +2,6 @@
 
 import io
 import json
-from types import SimpleNamespace
 
 from ideasdk.aws import ecs_task
 

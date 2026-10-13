@@ -394,7 +394,9 @@ def test_the_earlier_online_accounts_lock_is_removed(refresh, tmp_path):
     assert _run(script, bin_dir, check=False).returncode == 1
 
 
-def test_a_desktop_from_before_a_scheduler_move_gets_the_new_name_once(refresh, tmp_path):
+def test_a_desktop_from_before_a_scheduler_move_gets_the_new_name_once(
+    refresh, tmp_path
+):
     # commercial after the container move: PBS_SERVER still named the old scheduler host
     env = Jinja2Utils.env_using_file_system_loader(refresh.context.get_bootstrap_dir())
     template = env.get_template('_templates/linux/openpbs_client_server.jinja2')
@@ -442,20 +444,33 @@ def test_a_desktop_from_before_a_scheduler_move_gets_the_new_name_once(refresh, 
     _run(script, bin_dir)
     assert state.read_text() == 'up'
     _run(script, bin_dir)
-    restarts = [c for c in calls.read_text().splitlines() if c == 'systemctl restart pbs']
-    assert len(restarts) == 3, calls.read_text()  # two for the broken mom, one to bring it up, none once it runs
+    restarts = [
+        c for c in calls.read_text().splitlines() if c == 'systemctl restart pbs'
+    ]
+    assert len(restarts) == 3, (
+        calls.read_text()
+    )  # two for the broken mom, one to bring it up, none once it runs
     # first bootstrap (no bootstrap_refresh) tries the same restart but carries on: qsub
     # works without the local mom, and a desktop must not fail provisioning over it
-    bootstrap = 'log_info() { echo "$@"; }\nlog_error() { echo "$@"; }\n' + template.render(
-        pbs_server_name='scheduler.cluster.example.local', private_zone=None
-    ).replace('/etc/pbs.conf', str(pbs_conf)).replace(
-        '/var/spool/pbs/mom_priv/config', str(mom_config)
+    bootstrap = (
+        'log_info() { echo "$@"; }\nlog_error() { echo "$@"; }\n'
+        + template.render(
+            pbs_server_name='scheduler.cluster.example.local', private_zone=None
+        )
+        .replace('/etc/pbs.conf', str(pbs_conf))
+        .replace('/var/spool/pbs/mom_priv/config', str(mom_config))
     )
     state.write_text('down')
     broken.touch()
     result = _run(bootstrap, bin_dir)
-    assert 'pbs is not running after pointing it at scheduler.cluster.example.local' in result.stdout
-    assert calls.read_text().splitlines()[-2:] == ['systemctl restart pbs', 'systemctl is-active --quiet pbs']
+    assert (
+        'pbs is not running after pointing it at scheduler.cluster.example.local'
+        in result.stdout
+    )
+    assert calls.read_text().splitlines()[-2:] == [
+        'systemctl restart pbs',
+        'systemctl is-active --quiet pbs',
+    ]
 
 
 def test_a_missing_private_zone_degrades_the_refresh(refresh):

@@ -319,7 +319,6 @@ def test_check_uses_host_account_only_when_present(
 def test_account_lookup_failure_does_not_run_check_as_current_identity(
     context, monkeypatch
 ):
-
     def lookup(_name):
         raise OSError('account database unavailable')
 

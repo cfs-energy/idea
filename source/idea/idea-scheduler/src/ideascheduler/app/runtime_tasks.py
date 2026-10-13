@@ -36,7 +36,9 @@ def _license_rows(table):
             name = str(item.get('name') or '')
             command = str(item.get('availability_check_cmd') or '')
             # the API's own rule, plus a plain name for the file the check runs from
-            if not PATTERN_LICENSE_RESOURCE_NAME.match(name) or not LICENSE_NAME.fullmatch(name):
+            if not PATTERN_LICENSE_RESOURCE_NAME.match(
+                name
+            ) or not LICENSE_NAME.fullmatch(name):
                 LOGGER.error('Skipping license resource with an invalid name: %r', name)
                 continue
             if not command.strip() or '\x00' in command:
@@ -96,7 +98,9 @@ def configure_licenses(table, pbs_home):
             resources += f'{name} type=long\n'
 
     def add_resources(match):
-        names = [n.strip() for n in match[3].split(',') if n.strip() and not stale(n.strip())]
+        names = [
+            n.strip() for n in match[3].split(',') if n.strip() and not stale(n.strip())
+        ]
         for name in ['compute_node', *sorted(restored)]:
             if name not in names:
                 names.append(name)
@@ -109,7 +113,9 @@ def configure_licenses(table, pbs_home):
         flags=re.MULTILINE,
     )
     if not count:
-        LOGGER.error('sched_config has no active resources declaration; licenses not restored')
+        LOGGER.error(
+            'sched_config has no active resources declaration; licenses not restored'
+        )
         return
     quote = re.search(r"""^\s*resources:\s*(["'])""", config, re.MULTILINE)[1]
     # IDEA's own dynamic resources are rewritten; anything else the operator put there stays
@@ -136,7 +142,9 @@ def configure_licenses(table, pbs_home):
     resource_file.write_text(resources)
     config_file.write_text(config)
     LOGGER.info(
-        'Restored %d PBS license resources (%d skipped)', len(restored), len(licenses) - len(restored)
+        'Restored %d PBS license resources (%d skipped)',
+        len(restored),
+        len(licenses) - len(restored),
     )
 
 

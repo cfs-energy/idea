@@ -666,17 +666,25 @@ def test_attribution_data_conditions_log_once_per_run(setup, monkeypatch, caplog
         for day in ('2026-09-02', '2026-09-03'):
             for project in ('project-a', 'project-b'):
                 result = calc._ai_project(
-                    'user-a', SimpleNamespace(project_id=project, name=project), day, day
+                    'user-a',
+                    SimpleNamespace(project_id=project, name=project),
+                    day,
+                    day,
                 )
                 assert result.cost_unavailable
     attribution = [
-        r for r in caplog.records if 'Daily project attribution unavailable' in r.message
+        r
+        for r in caplog.records
+        if 'Daily project attribution unavailable' in r.message
     ]
     assert [r.levelno for r in attribution] == [logging.WARNING] + [logging.DEBUG] * 3
     calc.begin()  # a new run says it again, once
     with caplog.at_level(logging.WARNING, logger='personal-cost-tests'):
         calc._ai_project(
-            'user-a', SimpleNamespace(project_id='project-a', name='project-a'), '2026-09-02', '2026-09-02'
+            'user-a',
+            SimpleNamespace(project_id='project-a', name='project-a'),
+            '2026-09-02',
+            '2026-09-02',
         )
     assert sum(r.levelno == logging.WARNING for r in caplog.records) == 2
     calc._workers.shutdown()

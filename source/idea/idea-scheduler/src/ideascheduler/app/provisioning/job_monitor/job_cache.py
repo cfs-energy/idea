@@ -197,7 +197,9 @@ class JobsDB:
                 self._backup_connection = sqlite3.connect(
                     self._db_file, check_same_thread=False
                 )
-            version = self._backup_connection.execute('PRAGMA data_version').fetchone()[0]
+            version = self._backup_connection.execute('PRAGMA data_version').fetchone()[
+                0
+            ]
             if not (force or version != self._backed_up_version):
                 return False
             self._publish_copy(self._backup_connection, self._backup_file)
@@ -239,7 +241,10 @@ class JobsDB:
         return dataset.connect(
             self.connection_string,
             engine_kwargs=self.ENGINE_KWARGS,
-            on_connect_statements=['PRAGMA journal_mode=WAL', 'PRAGMA synchronous=NORMAL'],
+            on_connect_statements=[
+                'PRAGMA journal_mode=WAL',
+                'PRAGMA synchronous=NORMAL',
+            ],
         )
 
     def init_db(self):

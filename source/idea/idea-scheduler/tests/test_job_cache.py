@@ -21,7 +21,7 @@ from ideadatamodel import (
     SocaJobLicenseAsk,
     SocaJobState,
 )
-from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache, JobsDB
+from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
 
 
 class FakeSchedulerContext:
@@ -30,7 +30,9 @@ class FakeSchedulerContext:
     logger(), config(), and get_scheduler_app_deploy_dir().
     """
 
-    def __init__(self, deploy_dir: str, ecs_enabled=False, db_dir=None, backup_interval=None):
+    def __init__(
+        self, deploy_dir: str, ecs_enabled=False, db_dir=None, backup_interval=None
+    ):
         self._deploy_dir = deploy_dir
         self._config = SocaConfig(
             {
@@ -140,9 +142,12 @@ def test_backup_copies_only_when_the_cache_changed(tmp_path, monkeypatch):
     assert db.backup() is True
     assert db.backup() is False
     with sqlite3.connect(copy) as connection:
-        assert connection.execute(
-            'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
+            ).fetchone()[0]
+            == 1
+        )
     assert [p.name for p in copy.parent.iterdir()] == ['job-cache-v3.db']
     cache.stop()
 
@@ -150,7 +155,9 @@ def test_backup_copies_only_when_the_cache_changed(tmp_path, monkeypatch):
 def test_backup_runs_on_the_interval_and_on_stop(tmp_path, monkeypatch):
     monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
     cache = JobCache(
-        context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True, backup_interval=0.05)
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=0.05
+        )
     )
     copy = Path(cache._jobs_db._backup_file)
     deadline = time.monotonic() + 5
@@ -162,9 +169,12 @@ def test_backup_runs_on_the_interval_and_on_stop(tmp_path, monkeypatch):
     )
     cache.stop()
     with sqlite3.connect(copy) as connection:
-        assert connection.execute(
-            'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_container_job_cache_survives_replacement(tmp_path, monkeypatch):
@@ -192,7 +202,9 @@ def test_container_job_cache_survives_replacement(tmp_path, monkeypatch):
         == tmp_path / 'task-2/db/job-cache-v3.db'
     )
     assert replacement.get_completed_job_by_uid('finished') is not None
-    assert [job.job_uid for job in replacement.list_pending_index_jobs()] == ['finished']
+    assert [job.job_uid for job in replacement.list_pending_index_jobs()] == [
+        'finished'
+    ]
     assert replacement.get_job('42') is not None
     assert (
         replacement.get_connection()['execution_hosts'].find_one(job_id='42')[
@@ -237,7 +249,9 @@ def test_an_unreadable_copy_starts_an_empty_cache(tmp_path, monkeypatch):
     cache.add_finished_job(build_job('41', job_uid='new'))
     cache.stop()
     with sqlite3.connect(copy) as connection:
-        assert connection.execute('SELECT count(*) FROM finished_jobs').fetchone()[0] == 1
+        assert (
+            connection.execute('SELECT count(*) FROM finished_jobs').fetchone()[0] == 1
+        )
 
 
 @pytest.mark.parametrize('ecs_enabled', [False, True])
