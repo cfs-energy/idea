@@ -154,7 +154,8 @@ class VirtualDesktopServerUtils:
         """
         # Note: EC2 terminate_instances API only supports InstanceIds and DryRun parameters
         # Force and SkipOsShutdown are only available for stop_instances, not terminate_instances
-        instance_ids = [server.instance_id for server in servers]
+        # a server that never got an instance, or lost it, has nothing to terminate
+        instance_ids = [server.instance_id for server in servers if server.instance_id]
         missing = []
         self._logger.info(
             f'Attempting to terminate instances: {instance_ids} (force parameter ignored - terminate is always immediate)'
