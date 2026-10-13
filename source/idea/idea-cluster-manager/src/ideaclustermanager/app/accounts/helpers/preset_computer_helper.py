@@ -25,7 +25,7 @@ import secrets
 import string
 import copy
 from types import SimpleNamespace
-from .task_directory_identity import verify_bastion_task
+from .task_directory_identity import verify_cluster_task
 
 
 # Fallback value - seconds to cache a domain discovery (domain controller IP addresses)
@@ -117,18 +117,20 @@ class PresetComputeHelper:
 
         task_arn = Utils.get_value_as_string('task_arn', payload)
         if task_arn:
+            # an ECS task (the bastion joining, the desktop controller or the scheduler
+            # retiring a node) is verified through ECS, as an instance is through EC2
             try:
-                verify_bastion_task(self.context, sender_id, task_arn)
+                module = verify_cluster_task(self.context, sender_id, task_arn)
             except ValueError as error:
                 raise exceptions.soca_exception(
                     error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                    message=str(error),
+                    message=f'Unable to verify cluster node identity: {error}',
                 ) from error
             # The full sender identity also scopes the task's DynamoDB read permission.
             self.instance_id = sender_id
             self.ec2_instance = SimpleNamespace(
                 soca_node_type='infra',
-                idea_module_id=self.context.config().get_module_id('bastion-host'),
+                idea_module_id=self.context.config().get_module_id(module),
             )
         else:
             instance_id = sender_id_tokens[1]

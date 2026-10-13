@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopServer, VirtualDesktopSession
+from ideasdk.aws.ecs_task import current_task_arn
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_db import (
     VirtualDesktopServerDB,
@@ -288,6 +289,10 @@ class VirtualDesktopServerUtils:
                             'instance_id': instance_id,
                         },
                     }
+                    # from a container, the task ARN is what the agent verifies the sender by
+                    task_arn = current_task_arn()
+                    if task_arn:
+                        request['payload']['task_arn'] = task_arn
 
                     # Send the message to SQS - always using FIFO parameters since AD automation queue is always FIFO
                     message_deduplication_id = (

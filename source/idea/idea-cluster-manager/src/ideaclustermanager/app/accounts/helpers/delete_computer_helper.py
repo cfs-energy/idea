@@ -198,6 +198,15 @@ class DeleteComputerHelper:
                 f'Computer object {computer_name} not found in AD. Nothing to delete.'
             )
         except Exception as e:
+            if (
+                isinstance(e, exceptions.SocaException)
+                and e.error_code == errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED
+            ):
+                # the request itself is bad (a sender that cannot be verified): the agent
+                # drops it, where a wrapped error would have it redelivered until the queue
+                # gave up
+                self.logger.error(f'Dropping AD delete request: {e}')
+                raise
             self.logger.error(
                 f'Failed to delete computer from Active Directory: {e}', exc_info=True
             )

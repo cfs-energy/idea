@@ -1820,6 +1820,13 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       clusterSettings['vdi_host_backup.backup_plan.arn'] = this.backupPlan.getBackupPlanArn();
     }
 
+    // The AD automation agent verifies a controller task's delete requests by the task role
+    // session and the service the task belongs to, as the bastion's join is verified.
+    if (this.controllerTaskRole !== undefined) {
+      clusterSettings['task_role_id'] = (this.controllerTaskRole.node.defaultChild as iam.CfnRole).attrRoleId;
+      clusterSettings['service_name'] = this.componentServiceName(COMPONENT_CONTROLLER);
+    }
+
     // The controller's iam:PassRole for project roles is granted at deploy time when bedrock is
     // enabled, so the setting is written under the same gate and the web portal can tell a
     // redeploy is owed.
