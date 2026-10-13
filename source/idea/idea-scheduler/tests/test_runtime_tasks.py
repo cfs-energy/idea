@@ -54,13 +54,22 @@ def test_restore_licenses_paginates_and_repeated_start_is_idempotent(pbs_home):
         'resources: "ncpus, mem, site_resource, compute_node, app_lic_one, app_lic_two"'
         in first[1]
     )
-    assert 'server_dyn_res: "app_lic_one !/bin/check --seats"' in first[1]
+    # each check runs from its own script, so the command is not quoted into the config
+    script = pbs_home / 'idea/licenses/app_lic_one'
+    assert f'server_dyn_res: "app_lic_one !{script}"' in first[1]
+    assert script.read_text() == '#!/bin/bash\n/bin/check --seats\n'
+    assert script.stat().st_mode & 0o755 == 0o755
     assert 'server_dyn_res: "site_resource !/bin/site"' in first[1]
     assert 'strict_ordering: true' in first[1]
     table.scan.return_value = {'Items': [license(command='/bin/new-check')]}
     tasks.configure_licenses(table, pbs_home)
-    assert 'server_dyn_res: "app_lic_one !/bin/new-check"' in files[1].read_text()
+    assert script.read_text() == '#!/bin/bash\n/bin/new-check\n'
     assert files[1].read_text().count('server_dyn_res: "app_lic_one ') == 1
+    # app_lic_two left the table: its declarations, check script and resources entry go
+    assert 'app_lic_two' not in files[0].read_text()
+    assert 'app_lic_two' not in files[1].read_text()
+    assert not (pbs_home / 'idea/licenses/app_lic_two').exists()
+    assert 'server_dyn_res: "site_resource !/bin/site"' in files[1].read_text()
 
 
 @pytest.mark.parametrize(
@@ -84,63 +93,45 @@ def test_only_absent_license_table_is_deferred(pbs_home, code):
     'item',
     [
         license('bad;name'),
+        license('app_lic_one/../x'),
         license(command=''),
-        license(command='check\nresources: bad'),
+        license(command='check\x00'),
+        {'name': 'app_lic_two'},
     ],
 )
-def test_invalid_license_config_is_not_written(pbs_home, item):
+def test_a_bad_row_is_skipped_and_the_rest_restored(pbs_home, item):
+    # one bad row must not keep the scheduler down
     table = Mock()
-    table.scan.return_value = {'Items': [item]}
-    before = (pbs_home / 'sched_priv/sched_config').read_text()
-    with pytest.raises(ValueError):
-        tasks.configure_licenses(table, pbs_home)
-    assert (pbs_home / 'sched_priv/sched_config').read_text() == before
+    table.scan.return_value = {'Items': [item, license('app_lic_good')]}
+    tasks.configure_licenses(table, pbs_home)
+    config = (pbs_home / 'sched_priv/sched_config').read_text()
+    assert 'app_lic_good !' in config
+    assert config.count('server_dyn_res:') == 2  # site_resource and the good one
+    assert [p.name for p in (pbs_home / 'idea/licenses').iterdir()] == ['app_lic_good']
 
 
-def test_conflicting_resource_type_fails_loudly(pbs_home):
+def test_a_multi_line_command_runs_from_its_script(pbs_home):
+    table = Mock()
+    table.scan.return_value = {
+        'Items': [license(command='cd /opt/tool\n./check "two words" \'and more\'')]
+    }
+    tasks.configure_licenses(table, pbs_home)
+    script = pbs_home / 'idea/licenses/app_lic_one'
+    assert script.read_text() == '#!/bin/bash\ncd /opt/tool\n./check "two words" \'and more\'\n'
+    config = (pbs_home / 'sched_priv/sched_config').read_text()
+    assert f'server_dyn_res: "app_lic_one !{script}"' in config
+    assert 'two words' not in config
+
+
+def test_a_conflicting_resource_type_is_skipped_not_fatal(pbs_home):
     file = pbs_home / 'server_priv/resourcedef'
     file.write_text('app_lic_one type=string\n')
     table = Mock()
-    table.scan.return_value = {'Items': [license()]}
-    with pytest.raises(ValueError, match='Conflicting'):
-        tasks.configure_licenses(table, pbs_home)
-    assert file.read_text() == 'app_lic_one type=string\n'
-
-
-def test_bastion_discovery_uses_interface_addresses_and_checks_dns(monkeypatch):
-    ec2 = Mock()
-    paginator = ec2.get_paginator.return_value
-    paginator.paginate.return_value = [
-        {'NetworkInterfaces': [{'PrivateIpAddress': '192.0.2.1'}]},
-        {'NetworkInterfaces': [{'PrivateIpAddress': '192.0.2.2'}]},
-    ]
-    monkeypatch.setattr(
-        tasks.socket, 'gethostbyaddr', lambda ip: (f'host-{ip}', [], [ip])
-    )
-    monkeypatch.setattr(
-        tasks.socket, 'gethostbyname_ex', lambda host: (host, [], [host[5:]])
-    )
-    assert tasks.bastion_hosts(ec2, 'sg-bastion') == [
-        'host-192.0.2.1',
-        'host-192.0.2.2',
-    ]
-    assert paginator.paginate.call_args.kwargs['Filters'] == [
-        {'Name': 'group-id', 'Values': ['sg-bastion']},
-        {'Name': 'interface-type', 'Values': ['interface']},
-        {'Name': 'status', 'Values': ['in-use']},
-    ]
-    monkeypatch.setattr(
-        tasks.socket, 'gethostbyname_ex', lambda host: (host, [], ['192.0.2.9'])
-    )
-    with pytest.raises(ValueError, match='forward-confirm'):
-        tasks.bastion_hosts(ec2, 'sg-bastion')
-
-
-def test_missing_bastion_is_loud():
-    ec2 = Mock()
-    ec2.get_paginator.return_value.paginate.return_value = [{'NetworkInterfaces': []}]
-    with pytest.raises(ValueError, match='No active bastion'):
-        tasks.bastion_hosts(ec2, 'sg-bastion')
+    table.scan.return_value = {'Items': [license(), license('app_lic_two')]}
+    tasks.configure_licenses(table, pbs_home)
+    assert file.read_text() == 'app_lic_one type=string\napp_lic_two type=long\n'
+    config = (pbs_home / 'sched_priv/sched_config').read_text()
+    assert 'app_lic_two !' in config and 'app_lic_one !' not in config
 
 
 @pytest.mark.parametrize(
@@ -172,12 +163,16 @@ def test_archive_stopped_before_start_does_nothing(monkeypatch):
     run.assert_not_called()
 
 
-def hook_harness(tmp_path, existing='', fail=''):
+HOOKS_DIR = ROOT / 'source/idea/idea-scheduler/resources/openpbs/hooks'
+
+
+def hook_harness(tmp_path, existing='', fail='', hooks_dir=None):
     source = ROLE.read_text()
     block = source[
         source.index('# Reconcile image-owned hooks') : source.index('# The NLB name')
     ]
     log = tmp_path / 'qmgr.log'
+    log.write_text('')
     harness = """set -euo pipefail
 log() { :; }
 qmgr() {
@@ -185,7 +180,9 @@ qmgr() {
   [[ "$2" != "$FAIL" ]] || return 42
   if [[ "$2" == 'list hook' ]]; then printf '%s\\n' "$EXISTING"; fi
 }
-""" + block.replace('/opt/pbs/bin/qmgr', 'qmgr')
+""" + block.replace('/opt/pbs/bin/qmgr', 'qmgr').replace(
+        '${IDEA_APP_DEPLOY_DIR}/scheduler/resources/openpbs/hooks', str(hooks_dir or HOOKS_DIR)
+    )
     result = subprocess.run(
         ['bash', '-c', harness],
         env={
@@ -193,7 +190,7 @@ qmgr() {
             'CALLS': str(log),
             'EXISTING': existing,
             'FAIL': fail,
-            'IDEA_APP_DEPLOY_DIR': '/image',
+            'PBS_HOME': str(tmp_path / 'pbs'),
         },
         capture_output=True,
         text=True,
@@ -201,10 +198,11 @@ qmgr() {
     return result, log.read_text().splitlines()
 
 
-@pytest.mark.parametrize(
-    'existing', ['', 'Hook validate_job\nHook job_status\nHook calculate_ncpus\n']
-)
-def test_hooks_created_only_if_absent_but_always_reimported(tmp_path, existing):
+ALL_HOOKS = 'Hook validate_job\nHook job_status\nHook calculate_ncpus\n'
+
+
+@pytest.mark.parametrize('existing', ['', ALL_HOOKS])
+def test_hooks_are_created_when_absent_and_imported_when_unrecorded(tmp_path, existing):
     result, calls = hook_harness(tmp_path, existing)
     assert result.returncode == 0, result.stderr
     assert sum(command.startswith('create hook') for command in calls) == (
@@ -215,6 +213,29 @@ def test_hooks_created_only_if_absent_but_always_reimported(tmp_path, existing):
     assert "set hook job_status event='runjob,execjob_begin,execjob_end'" in calls
     assert 'set hook calculate_ncpus enabled=true' in calls
     assert 'set hook calculate_ncpus order=2' in calls
+    recorded = sorted(p.name for p in (tmp_path / 'pbs/.idea-hooks').iterdir())
+    assert recorded == ['calculate_ncpus.sha256', 'job_status.sha256', 'validate_job.sha256']
+
+
+def test_an_unchanged_hook_is_left_as_the_operator_configured_it(tmp_path):
+    # an operator who disabled a hook as a mitigation keeps it disabled until a new image
+    # carries a different file; only that reimport re-enables it
+    hook_harness(tmp_path, ALL_HOOKS)
+    result, calls = hook_harness(tmp_path, ALL_HOOKS)
+    assert result.returncode == 0, result.stderr
+    assert calls == ['list hook']
+    image = tmp_path / 'image'
+    image.mkdir()
+    for file in HOOKS_DIR.iterdir():
+        (image / file.name).write_bytes(file.read_bytes())
+    (image / 'calculate_ncpus_hook.py').write_text('# a new hook\n')
+    result, calls = hook_harness(tmp_path, ALL_HOOKS, hooks_dir=image)
+    assert result.returncode == 0, result.stderr
+    assert [c for c in calls if c.startswith('import hook')] == [
+        f'import hook calculate_ncpus application/x-python default {image}/calculate_ncpus_hook.py'
+    ]
+    assert 'set hook calculate_ncpus enabled=true' in calls
+    assert 'set hook validate_job enabled=true' not in calls
 
 
 @pytest.mark.parametrize(
@@ -222,7 +243,7 @@ def test_hooks_created_only_if_absent_but_always_reimported(tmp_path, existing):
     [
         'list hook',
         'create hook validate_job',
-        'import hook validate_job application/x-python default /image/scheduler/resources/openpbs/hooks/openpbs_hook_handler.py',
+        f'import hook validate_job application/x-python default {HOOKS_DIR}/openpbs_hook_handler.py',
     ],
 )
 def test_hook_failure_aborts_startup(tmp_path, fail):
@@ -240,68 +261,92 @@ def test_reconciliation_is_outside_first_create_guard_and_before_scheduler():
     assert source.index('> "${PBS_HOME}/pbs_environment"') < source.index(
         'pbs_init.d start'
     )
+    # the previous file is kept, dated, before the rewrite, as the host bootstrap did
+    assert source.index(
+        'cp -p "${PBS_HOME}/pbs_environment" "${PBS_HOME}/pbs_environment.$(date'
+    ) < source.index('> "${PBS_HOME}/pbs_environment"')
     assert source.index('pbs server is answering') < source.index(
         '# Reconcile image-owned hooks'
     )
-    assert source.index('set hook calculate_ncpus order=2') < source.index(
-        'log "starting pbs_sched"'
-    )
+    assert source.index(
+        'install_hook calculate_ncpus queuejob calculate_ncpus_hook.py 2'
+    ) < source.index('log "starting pbs_sched"')
     assert 'wait -n "${IDEA_PID}" "${ARCHIVE_PID}" "${SYNC_PID}"' in source
 
 
-@pytest.mark.parametrize(
-    'container,existing,expected',
-    [
-        (True, 'root@old-host', ['root@task-host']),
-        (True, 'root@task-host', []),
-        (False, 'root@old-host', ['root@legacy-host']),
-    ],
-)
-def test_manager_grants_are_current_and_do_not_duplicate(
-    tmp_path, container, existing, expected
-):
+STALE = 'root@ip-10-7-0-9.us-east-2.compute.internal'
+HOST_BASTION = 'ip-10-0-0-5.us-east-2.compute.internal'
+
+
+def run_managers(tmp_path, container, existing, bastion=None, qmgr_fails=False):
     source = ROLE.read_text()
     block = source[
         source.index('# The NLB name') : source.index('log "starting pbs_sched"')
     ]
-    log = tmp_path / 'qmgr.log'
+    calls = tmp_path / 'qmgr.log'
+    calls.touch()
     harness = """set -euo pipefail
-log() { :; }
+log() { echo "$*" >> "$LOG"; }
 setting() {
   case "$1" in
     bastion-host.service_name) printf '%s' "$SERVICE" ;;
-    cluster.network.security_groups.bastion-host) echo sg-bastion ;;
-    bastion-host.private_dns_name) echo legacy-host ;;
+    bastion-host.private_dns_name) printf '%s' "$BASTION" ;;
+    *) printf '%s' "$2" ;;
   esac
 }
-python3.13() {
-  [[ "$*" == '-m ideascheduler.app.runtime_tasks bastion-hosts sg-bastion' ]] || return 99
-  echo task-host
-}
 qmgr() {
+  [[ -z "$QMGR_FAILS" ]] || return 1
   if [[ "$2" == 'list server managers' ]]; then
     printf 'Server scheduler\\n    managers = %s\\n' "$EXISTING"
   else
     printf '%s\\n' "$2" >> "$CALLS"
   fi
 }
-""" + block.replace('/opt/pbs/bin/qmgr', 'qmgr')
-    log.touch()
+""" + block.replace('/opt/pbs/bin/qmgr', 'qmgr') + 'echo reached-start >> "$LOG"\n'
     result = subprocess.run(
         ['bash', '-c', harness],
         env={
             **os.environ,
-            'CALLS': str(log),
+            'CALLS': str(calls),
+            'LOG': str(tmp_path / 'entrypoint.log'),
             'EXISTING': existing,
             'SERVICE': 'cluster-bastion' if container else '',
+            'BASTION': bastion if bastion is not None else ('nlb.elb.amazonaws.com' if container else HOST_BASTION),
+            'QMGR_FAILS': '1' if qmgr_fails else '',
         },
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert log.read_text().splitlines() == [
-        f'set server managers += {host}' for host in expected
-    ]
+    return calls.read_text().splitlines(), (tmp_path / 'entrypoint.log').read_text().splitlines()
+
+
+@pytest.mark.parametrize(
+    'container,existing,expected',
+    [
+        # a container bastion: no grant, and the host-era grant goes
+        (True, f'{STALE},root@admin.example', [f'set server managers -= {STALE}']),
+        (True, 'root@admin.example', []),
+        (True, '', []),
+        # a host bastion: its own grant stays or is made, others of the kind go
+        (False, STALE, [f'set server managers -= {STALE}', f'set server managers += root@{HOST_BASTION}']),
+        (False, f'root@{HOST_BASTION}', []),
+    ],
+)
+def test_managers_prune_host_era_grants_and_grant_only_a_host_bastion(
+    tmp_path, container, existing, expected
+):
+    calls, log = run_managers(tmp_path, container, existing)
+    assert calls == expected
+    assert log[-1] == 'reached-start'
+    if STALE in existing:
+        assert f'removing stale manager grant {STALE}' in log
+
+
+def test_a_failing_manager_step_does_not_stop_the_start(tmp_path):
+    calls, log = run_managers(tmp_path, True, '', qmgr_fails=True)
+    assert calls == []
+    assert log == ['could not list managers; leaving them', 'reached-start']
 
 
 @pytest.mark.parametrize('fail_upload', [False, True])
@@ -437,7 +482,7 @@ def test_restored_files_pass_existing_license_validation(pbs_home, monkeypatch):
     service.validate_license_resource(HpcLicenseResource(title='License', **license()))
 
 
-def test_single_quoted_config_and_double_quoted_command(pbs_home):
+def test_the_config_keeps_its_quote_style_and_drops_the_old_entry(pbs_home):
     file = pbs_home / 'sched_priv/sched_config'
     file.write_text(
         "resources: 'ncpus, mem'\nserver_dyn_res: 'app_lic_one !/bin/old'\n"
@@ -449,5 +494,7 @@ def test_single_quoted_config_and_double_quoted_command(pbs_home):
     tasks.configure_licenses(table, pbs_home)
     assert file.read_text() == first
     assert "resources: 'ncpus, mem, compute_node, app_lic_one'" in first
-    assert """server_dyn_res: 'app_lic_one !/bin/check "two words"' """.strip() in first
+    script = pbs_home / 'idea/licenses/app_lic_one'
+    assert f"server_dyn_res: 'app_lic_one !{script}'" in first
     assert '/bin/old' not in first
+    assert script.read_text() == '#!/bin/bash\n/bin/check "two words"\n'

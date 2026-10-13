@@ -160,6 +160,9 @@ fi
 
 # PBS reads this file during server initialization, so refresh it before starting.
 log "refreshing pbs_environment and license resources from the image and settings"
+if [[ -f "${PBS_HOME}/pbs_environment" ]]; then
+  cp -p "${PBS_HOME}/pbs_environment" "${PBS_HOME}/pbs_environment.$(date -u +%Y%m%d%H%M%S)"
+fi
 printf 'PATH=/bin:/usr/bin\nIDEA_SCHEDULER_UNIX_SOCKET=/run/idea.sock\n' > "${PBS_HOME}/pbs_environment"
 python3.13 -m ideascheduler.app.runtime_tasks licenses "${PBS_HOME}"
 
@@ -219,44 +222,69 @@ if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
 fi
 
 # Reconcile image-owned hooks on every start, including existing/imported datastores.
+# A hook is created when absent, and (re)imported, given its events and enabled when the
+# image's file differs from the one recorded at the last import. An unchanged hook is not
+# touched, so an operator's enabled/disabled choice stands until a new image replaces it.
 log "refreshing PBS hooks"
 HOOKS="${IDEA_APP_DEPLOY_DIR}/scheduler/resources/openpbs/hooks"
+HOOK_STATE="${PBS_HOME}/.idea-hooks"
+mkdir -p "${HOOK_STATE}"
 # Listing all hooks distinguishes an absent hook from a failed server connection.
 EXISTING_HOOKS="$(/opt/pbs/bin/qmgr -c 'list hook')"
 install_hook() {
-  local name="$1" events="$2" file="$3"
-  log "installing hook ${name} (${events})"
-  if ! grep -Eq "^Hook[[:space:]]+${name}([[:space:]]|$)" <<< "${EXISTING_HOOKS}"; then
+  local name="$1" events="$2" file="$3" order="${4:-}" digest recorded=""
+  digest="$(sha256sum "${HOOKS}/${file}" | cut -d' ' -f1)"
+  [[ ! -f "${HOOK_STATE}/${name}.sha256" ]] || recorded="$(cat "${HOOK_STATE}/${name}.sha256")"
+  if grep -Eq "^Hook[[:space:]]+${name}([[:space:]]|$)" <<< "${EXISTING_HOOKS}"; then
+    if [[ "${digest}" == "${recorded}" ]]; then
+      log "hook ${name} is unchanged; leaving it as configured"
+      return 0
+    fi
+  else
     /opt/pbs/bin/qmgr -c "create hook ${name}"
   fi
+  log "installing hook ${name} (${events})"
   /opt/pbs/bin/qmgr -c "set hook ${name} event='${events}'"
   /opt/pbs/bin/qmgr -c "import hook ${name} application/x-python default ${HOOKS}/${file}"
   /opt/pbs/bin/qmgr -c "set hook ${name} enabled=true"
+  [[ -z "${order}" ]] || /opt/pbs/bin/qmgr -c "set hook ${name} order=${order}"
+  printf '%s\n' "${digest}" > "${HOOK_STATE}/${name}.sha256"
 }
 install_hook validate_job 'queuejob,modifyjob,movejob' openpbs_hook_handler.py
 install_hook job_status 'runjob,execjob_begin,execjob_end' openpbs_hook_handler.py
-install_hook calculate_ncpus queuejob calculate_ncpus_hook.py
-/opt/pbs/bin/qmgr -c "set hook calculate_ncpus order=2"
+install_hook calculate_ncpus queuejob calculate_ncpus_hook.py 2
 
-# The NLB name is not the hostname PBS sees on a bastion's outbound connection.
-# Describe permissions already belong to the scheduler; exclude the NLB interfaces.
-BASTION_SERVICE="$(setting bastion-host.service_name '')"
-if [[ -n "${BASTION_SERVICE}" ]]; then
-  BASTION_SECURITY_GROUP="$(setting cluster.network.security_groups.bastion-host '')"
-  : "${BASTION_SECURITY_GROUP:?bastion security group is required}"
-  BASTION_HOSTS="$(python3.13 -m ideascheduler.app.runtime_tasks bastion-hosts "${BASTION_SECURITY_GROUP}")"
-else
-  BASTION_HOSTS="$(setting bastion-host.private_dns_name '')"
-fi
-EXISTING_MANAGERS="$(/opt/pbs/bin/qmgr -c 'list server managers')"
-while IFS= read -r host; do
-  [[ -n "${host}" ]] || continue
-  [[ "${host}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || { log "invalid bastion hostname: ${host}"; exit 1; }
-  if ! tr ', \t' '\n' <<< "${EXISTING_MANAGERS}" | grep -Fxq "root@${host}"; then
-    log "granting qmgr manager rights to root@${host}"
-    /opt/pbs/bin/qmgr -c "set server managers += root@${host}"
+# The NLB name is not a host PBS can match, and a container bastion's address is per task.
+# A container bastion gets no grant: an administrator runs qmgr from inside the scheduler
+# task, where root on the server's own host needs none, and a grant by a task's address
+# would go stale, then reach whichever desktop is given the address next (users have sudo
+# there). A host bastion keeps its grant by its EC2 name, as before. Grants IDEA made or
+# inherited from the host era, root@ip-… in the EC2 domain, are removed on every start;
+# anything an operator added by hand stays. Nothing here stops the start.
+reconcile_managers() {
+  local bastion_host="" existing entry grant_pattern
+  grant_pattern='^root@ip-[0-9]+(-[0-9]+){3}\.([a-z0-9-]+\.)?(compute|ec2)\.internal$'
+  if [[ -z "$(setting bastion-host.service_name '')" ]]; then
+    bastion_host="$(setting bastion-host.private_dns_name '')"
+    if [[ -n "${bastion_host}" && ! "${bastion_host}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
+      log "ignoring invalid bastion hostname: ${bastion_host}"
+      bastion_host=""
+    fi
   fi
-done <<< "${BASTION_HOSTS}"
+  existing="$(/opt/pbs/bin/qmgr -c 'list server managers')" || { log "could not list managers; leaving them"; return 0; }
+  while IFS= read -r entry; do
+    [[ -n "${entry}" && "${entry}" != "root@${bastion_host}" ]] || continue
+    if [[ "${entry}" =~ ${grant_pattern} ]]; then
+      log "removing stale manager grant ${entry}"
+      /opt/pbs/bin/qmgr -c "set server managers -= ${entry}" || log "could not remove ${entry}"
+    fi
+  done < <(sed -n 's/^[[:space:]]*managers = //p' <<< "${existing}" | tr ', \t' '\n')
+  if [[ -n "${bastion_host}" ]] && ! tr ', \t' '\n' <<< "${existing}" | grep -Fxq "root@${bastion_host}"; then
+    log "granting qmgr manager rights to root@${bastion_host}"
+    /opt/pbs/bin/qmgr -c "set server managers += root@${bastion_host}" || log "could not grant root@${bastion_host}"
+  fi
+}
+reconcile_managers || log "manager reconciliation failed; continuing"
 
 log "starting pbs_sched"
 /opt/pbs/sbin/pbs_sched

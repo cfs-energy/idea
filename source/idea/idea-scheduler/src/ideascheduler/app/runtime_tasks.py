@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import signal
-import socket
 import subprocess
 from threading import Event
 
@@ -16,8 +15,13 @@ LOGGER = logging.getLogger(__name__)
 DAY_SECONDS = 24 * 60 * 60
 
 
-def configure_licenses(table, pbs_home):
-    """Restore the host's manual license declarations before either PBS daemon starts."""
+LICENSE_NAME = re.compile(r'[a-z][a-z0-9_]*')
+
+
+def _license_rows(table):
+    """the table's rows, each validated on its own: a bad row is logged and skipped"""
+    from ideascheduler.app.licenses.license_service import PATTERN_LICENSE_RESOURCE_NAME
+
     licenses = {}
     scan = {'ConsistentRead': True}
     while True:
@@ -27,38 +31,73 @@ def configure_licenses(table, pbs_home):
             if error.response['Error']['Code'] != 'ResourceNotFoundException':
                 raise
             LOGGER.info('License table does not exist yet; no licenses to restore')
-            return
+            return None
         for item in page.get('Items', []):
-            name, command = item['name'], item['availability_check_cmd']
-            if not re.fullmatch(r'[a-z][a-z0-9]*_lic_[a-z][a-z0-9]*', name):
-                raise ValueError(f'Invalid PBS license resource name: {name!r}')
-            if (
-                not command.strip()
-                or any(c in command for c in '\r\n\x00')
-                or ('"' in command and "'" in command)
-            ):
-                raise ValueError(f'Invalid PBS dynamic resource command for {name}')
+            name = str(item.get('name') or '')
+            command = str(item.get('availability_check_cmd') or '')
+            # the API's own rule, plus a plain name for the file the check runs from
+            if not PATTERN_LICENSE_RESOURCE_NAME.match(name) or not LICENSE_NAME.fullmatch(name):
+                LOGGER.error('Skipping license resource with an invalid name: %r', name)
+                continue
+            if not command.strip() or '\x00' in command:
+                LOGGER.error('Skipping license resource %s: no usable command', name)
+                continue
             licenses[name] = command
         if not page.get('LastEvaluatedKey'):
             break
         scan['ExclusiveStartKey'] = page['LastEvaluatedKey']
+    return licenses
 
+
+def configure_licenses(table, pbs_home):
+    """
+    Restore the host's manual license declarations before either PBS daemon starts.
+    Each check runs from its own script under PBS_HOME, so a command carries no quoting
+    rules. A row that cannot be restored is logged and skipped: one entry must not keep
+    the scheduler down. Declarations of licenses no longer in the table are removed.
+    """
+    from ideascheduler.app.licenses.license_service import PATTERN_LICENSE_RESOURCE_NAME
+
+    licenses = _license_rows(table)
+    if licenses is None:
+        return
     home = Path(pbs_home)
     resource_file = home / 'server_priv/resourcedef'
     config_file = home / 'sched_priv/sched_config'
+    checks_dir = home / 'idea' / 'licenses'
     resources = resource_file.read_text()
     config = config_file.read_text()
-    for name in sorted(licenses):
+
+    restored = {}
+    for name, command in sorted(licenses.items()):
         existing = re.search(rf'^{name}\s+([^\n]*)', resources, re.MULTILINE)
-        if existing:
-            if existing[1].split('#', 1)[0].strip() != 'type=long':
-                raise ValueError(f'Conflicting PBS resource definition for {name}')
-        else:
-            resources = resources.rstrip('\n') + f'\n{name} type=long\n'
+        if existing and existing[1].split('#', 1)[0].strip() != 'type=long':
+            LOGGER.error(
+                'Skipping license resource %s: resourcedef declares it as %r',
+                name,
+                existing[1].strip(),
+            )
+            continue
+        restored[name] = command
+
+    def stale(name):
+        return bool(PATTERN_LICENSE_RESOURCE_NAME.match(name)) and name not in restored
+
+    kept = []
+    for line in resources.splitlines():
+        declared = re.match(r'^([a-z][a-z0-9_]*)\s+type=long\s*$', line)
+        if declared and stale(declared[1]):
+            LOGGER.info('Removing resource %s: no longer a license', declared[1])
+            continue
+        kept.append(line)
+    resources = '\n'.join(kept).rstrip('\n') + '\n'
+    for name in sorted(restored):
+        if not re.search(rf'^{name}\s', resources, re.MULTILINE):
+            resources += f'{name} type=long\n'
 
     def add_resources(match):
-        names = [name.strip() for name in match[3].split(',')]
-        for name in ['compute_node', *sorted(licenses)]:
+        names = [n.strip() for n in match[3].split(',') if n.strip() and not stale(n.strip())]
+        for name in ['compute_node', *sorted(restored)]:
             if name not in names:
                 names.append(name)
         return match[1] + match[2] + ', '.join(names) + match[2] + match[4]
@@ -70,49 +109,35 @@ def configure_licenses(table, pbs_home):
         flags=re.MULTILINE,
     )
     if not count:
-        raise ValueError('sched_config has no active resources declaration')
-    # Replace only entries represented in the table; keep unrelated operator policy.
+        LOGGER.error('sched_config has no active resources declaration; licenses not restored')
+        return
+    quote = re.search(r"""^\s*resources:\s*(["'])""", config, re.MULTILINE)[1]
+    # IDEA's own dynamic resources are rewritten; anything else the operator put there stays
     config = (
         '\n'.join(
             line
             for line in config.splitlines()
-            if not any(
-                re.match(rf"""^\s*server_dyn_res:\s*["']{name}\s""", line)
-                for name in licenses
+            if not (
+                (entry := re.match(r"""^\s*server_dyn_res:\s*["']([^\s"']+)\s""", line))
+                and PATTERN_LICENSE_RESOURCE_NAME.match(entry[1])
             )
         )
         + '\n'
     )
-    for name, command in sorted(licenses.items()):
-        quote = "'" if '"' in command else '"'
-        config += f'server_dyn_res: {quote}{name} !{command}{quote}\n'
+    checks_dir.mkdir(parents=True, exist_ok=True)
+    for script in checks_dir.iterdir():
+        if script.name not in restored:
+            script.unlink()
+    for name, command in sorted(restored.items()):
+        script = checks_dir / name
+        script.write_text(f'#!/bin/bash\n{command}\n')
+        script.chmod(0o755)
+        config += f'server_dyn_res: {quote}{name} !{script}{quote}\n'
     resource_file.write_text(resources)
     config_file.write_text(config)
-    LOGGER.info('Restored %d PBS license resources', len(licenses))
-
-
-def bastion_hosts(ec2, security_group):
-    """Find outbound clients, excluding the NLB that shares the bastion security group."""
-    hosts = set()
-    pages = ec2.get_paginator('describe_network_interfaces').paginate(
-        Filters=[
-            {'Name': 'group-id', 'Values': [security_group]},
-            {'Name': 'interface-type', 'Values': ['interface']},
-            {'Name': 'status', 'Values': ['in-use']},
-        ]
+    LOGGER.info(
+        'Restored %d PBS license resources (%d skipped)', len(restored), len(licenses) - len(restored)
     )
-    for page in pages:
-        for interface in page['NetworkInterfaces']:
-            address = interface['PrivateIpAddress']
-            hostname = socket.gethostbyaddr(address)[0]
-            if address not in socket.gethostbyname_ex(hostname)[2]:
-                raise ValueError(f'Reverse DNS does not forward-confirm {address}')
-            if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]*', hostname):
-                raise ValueError(f'Invalid bastion hostname: {hostname!r}')
-            hosts.add(hostname)
-    if not hosts:
-        raise ValueError('No active bastion interfaces found; cannot grant qmgr access')
-    return sorted(hosts)
 
 
 def run_archive(script):
@@ -142,7 +167,7 @@ def archive_logs(script, stop):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['licenses', 'bastion-hosts', 'archive-logs'])
+    parser.add_argument('task', choices=['licenses', 'archive-logs'])
     parser.add_argument('argument')
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -159,14 +184,10 @@ def main():
     import boto3
 
     session = boto3.Session(region_name=os.environ['AWS_DEFAULT_REGION'])
-    if args.task == 'licenses':
-        table = session.resource('dynamodb').Table(
-            f'{os.environ["IDEA_CLUSTER_NAME"]}.{os.environ["IDEA_MODULE_ID"]}.license-resources'
-        )
-        configure_licenses(table, args.argument)
-    else:
-        for hostname in bastion_hosts(session.client('ec2'), args.argument):
-            print(hostname)
+    table = session.resource('dynamodb').Table(
+        f'{os.environ["IDEA_CLUSTER_NAME"]}.{os.environ["IDEA_MODULE_ID"]}.license-resources'
+    )
+    configure_licenses(table, args.argument)
 
 
 if __name__ == '__main__':
