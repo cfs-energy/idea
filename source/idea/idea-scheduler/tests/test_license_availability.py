@@ -5,6 +5,7 @@ a license server that answers with zero seats and a license server that cannot b
 are different outcomes: the first rejects a submission, the second must not.
 """
 
+import pwd
 import subprocess
 
 import pytest
@@ -281,3 +282,50 @@ def test_enough_seats_passes_both_call_sites(context):
 
     util.check_licenses(reject_when_check_fails=False)
     util.check_licenses()
+
+
+@pytest.mark.parametrize('account_exists', [True, False])
+def test_check_uses_host_account_only_when_present(
+    context, monkeypatch, account_exists
+):
+    from ideadatamodel import constants
+
+    def lookup(name):
+        assert name == constants.IDEA_SERVICE_ACCOUNT
+        if not account_exists:
+            raise KeyError(name)
+        return object()
+
+    monkeypatch.setattr(pwd, 'getpwnam', lookup)
+    shell = MockShell(stdout='7')
+    service = build_license_service(context, monkeypatch, shell)
+    count, result, error = service._check_license_availability('printf 7')
+    assert (count, result.returncode, error) == (7, 0, None)
+    command = shell.invocations[0]['cmd']
+    assert command == (
+        [
+            'su',
+            constants.IDEA_SERVICE_ACCOUNT,
+            '--shell',
+            '/bin/bash',
+            '--command',
+            'cd /tmp && printf 7',
+        ]
+        if account_exists
+        else ['/bin/bash', '-c', 'cd /tmp && printf 7']
+    )
+
+
+def test_account_lookup_failure_does_not_run_check_as_current_identity(
+    context, monkeypatch
+):
+
+    def lookup(_name):
+        raise OSError('account database unavailable')
+
+    monkeypatch.setattr(pwd, 'getpwnam', lookup)
+    shell = MockShell()
+    service = build_license_service(context, monkeypatch, shell)
+    _, _, error = service._check_license_availability('printf 7')
+    assert isinstance(error, OSError)
+    assert shell.invocations == []

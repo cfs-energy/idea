@@ -36,6 +36,7 @@ from ideascheduler.app.scheduler.openpbs.openpbs_constants import (
 )
 
 from typing import Tuple, Optional
+import pwd
 import re
 
 PATTERN_LICENSE_RESOURCE_NAME = re.compile('(^[a-z][a-z0-9]*)_lic_([a-z][a-z0-9]*)')
@@ -307,14 +308,20 @@ class LicenseService(LicenseServiceProtocol):
         try:
             if Utils.is_empty(cmd):
                 raise exceptions.invalid_params('cmd is required')
-            cmd_tokens = [
-                'su',
-                constants.IDEA_SERVICE_ACCOUNT,
-                '--shell',
-                '/bin/bash',
-                '--command',
-                f'cd /tmp && {cmd}',
-            ]
+            try:
+                pwd.getpwnam(constants.IDEA_SERVICE_ACCOUNT)
+            except KeyError:
+                # Containers already run under the application service identity.
+                cmd_tokens = ['/bin/bash', '-c', f'cd /tmp && {cmd}']
+            else:
+                cmd_tokens = [
+                    'su',
+                    constants.IDEA_SERVICE_ACCOUNT,
+                    '--shell',
+                    '/bin/bash',
+                    '--command',
+                    f'cd /tmp && {cmd}',
+                ]
             result = self.context.shell.invoke(
                 cmd_tokens, timeout=self.avail_check_timeout_seconds
             )
