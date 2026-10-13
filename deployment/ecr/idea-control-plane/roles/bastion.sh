@@ -63,6 +63,14 @@ EOF
   # shellcheck disable=SC2016  # expanded by the login shell, not here
   echo 'export PATH=/opt/pbs/bin:/opt/pbs/sbin:$PATH' > /etc/profile.d/pbs.sh
 fi
+# Site customizations, as compute nodes and desktops run theirs from the shared /apps file
+# system: tools users expect on the login node. Output goes to the task log; a failing hook
+# is logged and the start goes on.
+SITE_HOOK="${IDEA_CLUSTER_HOME:-}/${IDEA_MODULE_ID:-bastion-host}/userdata_customizations.sh"
+if [[ -n "${IDEA_CLUSTER_HOME:-}" && -f "${SITE_HOOK}" ]]; then
+  echo "running site hook ${SITE_HOOK}"
+  /bin/bash "${SITE_HOOK}" || echo "site hook failed with status $?; continuing"
+fi
 /usr/sbin/sshd -t
 /usr/sbin/sssd -i --logger=stderr &
 sssd_pid=$!

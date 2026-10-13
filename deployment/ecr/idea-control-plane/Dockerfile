@@ -69,6 +69,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
+      rsync git \
   && dnf clean all
 
 # Install the session-manager broker, connection gateway, and web viewer from the
@@ -118,6 +119,14 @@ RUN set -eux; \
     done; \
     rm -rf /root/.cache/pip; \
     mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
+
+# Tools users had on the x86 host bastion and expect on the arm64 login node. uv comes as a
+# pinned wheel for the build architecture; AL2023 packages no hdf5 (h5dump) for either.
+ARG UV_VERSION=0.12.24
+RUN set -eux; \
+    python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
+    test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
+    /usr/local/bin/uv --version
 
 # Overlay the gateway web resources.
 ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/

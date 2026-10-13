@@ -159,6 +159,8 @@ export class BastionHostStack extends IdeaBaseStack {
     environment['IDEA_SSH_KEY_PAIR'] = config.getString('cluster.network.ssh_key_pair', undefined, { required: true }) as string;
     environment['IDEA_PBS_SERVER'] = config.getString('scheduler.private_dns_name', '');
     environment['IDEA_DATA_DIR'] = config.getString('shared-storage.data.mount_dir', undefined, { required: true }) as string;
+    // the site hook lives under the cluster home on /apps, as the compute and desktop hooks do
+    environment['IDEA_CLUSTER_HOME'] = config.getString('cluster.home_dir', undefined, { required: true }) as string;
     const secrets: Record<string, ecs.Secret> = {};
     if (provider === 'openldap') {
       environment['IDEA_LDAP_HOST'] = config.getString('directoryservice.hostname', undefined, { required: true }) as string;

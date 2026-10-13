@@ -295,5 +295,54 @@ class PbsServerSuffix(unittest.TestCase):
         self.assertIn('search idea-test.us-east-1.local', out)
 
 
+class SiteHook(unittest.TestCase):
+    """the login node runs the site's hook before sshd accepts; a failure never stops the start"""
+
+    def run_block(self, cluster_home):
+        import subprocess
+
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = text.index('# Site customizations')
+        end = text.index('/usr/sbin/sshd -t', start)
+        block = 'set -euo pipefail\n' + text[start:end] + 'echo reached-sshd\n'
+        env = {'PATH': '/usr/bin:/bin', 'IDEA_MODULE_ID': 'bastion-host'}
+        if cluster_home is not None:
+            env['IDEA_CLUSTER_HOME'] = str(cluster_home)
+        return subprocess.run(
+            ['bash', '-c', block], env=env, capture_output=True, text=True
+        )
+
+    def write_hook(self, root, body):
+        hook = Path(root) / 'bastion-host' / 'userdata_customizations.sh'
+        hook.parent.mkdir(parents=True)
+        hook.write_text(body)
+        return hook
+
+    def test_the_hook_runs_before_sshd_and_its_output_reaches_the_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = self.write_hook(tmp, 'echo tool installed\n')
+            result = self.run_block(tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [f'running site hook {hook}', 'tool installed', 'reached-sshd'],
+        )
+
+    def test_a_missing_hook_or_cluster_home_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.run_block(tmp).stdout.splitlines(), ['reached-sshd'])
+        self.assertEqual(self.run_block(None).stdout.splitlines(), ['reached-sshd'])
+
+    def test_a_failing_hook_does_not_stop_the_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_hook(tmp, 'echo partial\nexit 3\n')
+            result = self.run_block(tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines()[1:],
+            ['partial', 'site hook failed with status 3; continuing', 'reached-sshd'],
+        )
+
+
 if __name__ == '__main__':
     unittest.main()
