@@ -17,21 +17,54 @@ function fail_kernel_bootstrap() {
 }
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-# The host keeps the kernel its image boots. The FSx for Lustre repository publishes a module
-# package per kernel ABI, so the only check is that one exists for the running kernel.
+# Bakes pin an ABI available from both Ubuntu and FSx for Lustre before package upgrades.
+# Unbaked hosts keep the running-kernel check until their client install can target another ABI.
 # Add the repository here because kernel management runs before client installation.
 TARGET_KERNEL_ABI=$(uname -r)
+{% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
 # A baked image of this release already has the repository and passed the Lustre module
 # check for this kernel in the bake; an apt-get update here cost its first boot the gate.
 if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
   . /etc/os-release
   wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
   echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
-  apt-get update -qq
-  if [[ -z "$(apt-cache show "lustre-client-modules-${TARGET_KERNEL_ABI}" 2>/dev/null)" ]]; then
-    fail_kernel_bootstrap lustre-module-missing "The FSx for Lustre repository has no lustre-client-modules-${TARGET_KERNEL_ABI} for the running kernel ${TARGET_KERNEL_ABI}."
+  apt-get -o DPkg::Lock::Timeout=300 update -qq
+{% if ubuntu_desktop_bake | default(false) %}  if [[ -n "${BAKE_STAGE:-}" ]]; then
+    KERNEL_ARCH=$(dpkg --print-architecture)
+    NEWEST_FSX_KERNEL_ABI=""
+    SELECTED_KERNEL_ABI=""
+    # Native-architecture policy entries exclude installed-only packages and other repositories.
+    while read -r candidate_abi; do
+      [[ "${candidate_abi}" == "${TARGET_KERNEL_ABI%%-*}"-* ]] || continue
+      if ! apt-cache policy "lustre-client-modules-${candidate_abi}:${KERNEL_ARCH}" | grep -Fq "https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME}/main ${KERNEL_ARCH} Packages"; then
+        continue
+      fi
+      [[ -n "${NEWEST_FSX_KERNEL_ABI}" ]] || NEWEST_FSX_KERNEL_ABI="${candidate_abi}"
+      if [[ -n "$(apt-cache show "linux-image-${candidate_abi}:${KERNEL_ARCH}" 2>/dev/null)" ]]; then
+        if [[ -z "${SELECTED_KERNEL_ABI}" || "${candidate_abi}" == "${TARGET_KERNEL_ABI}" ]]; then
+          SELECTED_KERNEL_ABI="${candidate_abi}"
+        fi
+        [[ "${candidate_abi}" != "${TARGET_KERNEL_ABI}" ]] || break
+      fi
+    done < <(apt-cache pkgnames lustre-client-modules- | sed -n 's/^lustre-client-modules-\([0-9][0-9.]*-[0-9]*-aws\)$/\1/p' | sort -Vr)
+    if [[ -z "${SELECTED_KERNEL_ABI}" ]]; then
+      NEWEST_UBUNTU_KERNEL_ABI=""
+      while read -r candidate_abi; do
+        [[ "${candidate_abi}" == "${TARGET_KERNEL_ABI%%-*}"-* ]] || continue
+        if [[ -n "$(apt-cache show "linux-image-${candidate_abi}:${KERNEL_ARCH}" 2>/dev/null)" ]]; then
+          NEWEST_UBUNTU_KERNEL_ABI="${candidate_abi}"
+          break
+        fi
+      done < <(apt-cache pkgnames linux-image- | sed -n 's/^linux-image-\([0-9][0-9.]*-[0-9]*-aws\)$/\1/p' | sort -Vr)
+      fail_kernel_bootstrap lustre-module-missing "No available Ubuntu kernel has an FSx for Lustre module for ${KERNEL_ARCH}. Newest kernel supported by the FSx repository: ${NEWEST_FSX_KERNEL_ABI:-none}. Newest Ubuntu kernel ABI considered: ${NEWEST_UBUNTU_KERNEL_ABI:-none}."
+    fi
+    TARGET_KERNEL_ABI="${SELECTED_KERNEL_ABI}"
+  elif [[ -z "$(apt-cache show "lustre-client-modules-${TARGET_KERNEL_ABI}" 2>/dev/null)" ]]; then
+{% else %}  if [[ -z "$(apt-cache show "lustre-client-modules-${TARGET_KERNEL_ABI}" 2>/dev/null)" ]]; then
+{% endif %}    fail_kernel_bootstrap lustre-module-missing "The FSx for Lustre repository has no lustre-client-modules-${TARGET_KERNEL_ABI} for the running kernel ${TARGET_KERNEL_ABI}."
   fi
 fi
+{% endif %}
 TARGET_KERNEL_VERSION="${TARGET_KERNEL_ABI%-aws}*"
 {% elif context.base_os in ('amazonlinux2023',) %}
 # AL2023 builds lustre.ko into every kernel family (kernel, kernel6.12, kernel6.18): the kernel
@@ -50,33 +83,34 @@ TARGET_KERNEL_VERSION="5.14.0-687*"
 {% endif %}
 
 
-function apply_kernel_holds() {
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') or ubuntu_desktop_bake | default(false) %}function apply_kernel_holds() {
   local target_version="$TARGET_KERNEL_VERSION"
   local current_kernel=$(uname -r)
 
   log_info "Applying holds for current kernel ${current_kernel} to prevent further upgrades"
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  # Hold the specific kernel version we're currently running
-  apt-mark hold linux-image-${current_kernel} linux-headers-${current_kernel} linux-modules-${current_kernel} linux-modules-extra-${current_kernel} >/dev/null 2>&1 || true
-
-  # Check if meta-packages point to our target series or need to be removed
-  local target_base="${target_version%\*}"
-  local meta_kernel_version=""
-
-  # Check what kernel version the meta-packages currently point to
-  if dpkg -l linux-aws 2>/dev/null | grep -q "^ii"; then
-    meta_kernel_version=$(apt-cache depends linux-aws | grep -E "Depends: linux-image-aws" | head -1 | cut -d'-' -f4 | cut -d'.' -f1-2 2>/dev/null || echo "")
+  # Hold the selected ABI, which may not be running until the builder's existing reboot.
+  local package
+  local kernel_packages=()
+  local meta_packages=()
+  for package in linux-image-${TARGET_KERNEL_ABI} linux-headers-${TARGET_KERNEL_ABI} linux-modules-${TARGET_KERNEL_ABI} linux-modules-extra-${TARGET_KERNEL_ABI}; do
+    if dpkg -s "${package}" 2>/dev/null | grep -q '^Status: install ok installed$' || [[ -n "$(apt-cache show "${package}" 2>/dev/null)" ]]; then
+      kernel_packages+=("${package}")
+    fi
+  done
+  if [[ -n "${kernel_packages[*]}" ]]; then
+    apt-mark hold "${kernel_packages[@]}" >/dev/null 2>&1 || \
+        fail_kernel_bootstrap kernel-hold-failed "Unable to hold kernel ${TARGET_KERNEL_ABI}."
   fi
-
-  if [[ -n "$meta_kernel_version" ]] && [[ "$meta_kernel_version" == "${target_base%.*}" ]]; then
-    # Meta-packages point to our target series, hold them
-    log_info "Meta-packages point to target series ${target_base} - holding them"
-    apt-mark hold linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
-  else
-    # Meta-packages point to wrong series or don't exist, remove them
-    log_info "Meta-packages point to wrong kernel series or don't exist - removing them"
-    DEBIAN_FRONTEND=noninteractive apt remove -y linux-aws linux-image-aws linux-headers-aws linux-tools-aws >/dev/null 2>&1 || true
+  for package in linux-aws linux-image-aws linux-headers-aws linux-tools-aws; do
+    if dpkg -s "${package}" 2>/dev/null | grep -q '^Status: install ok installed$' || [[ -n "$(apt-cache show "${package}" 2>/dev/null)" ]]; then
+      meta_packages+=("${package}")
+    fi
+  done
+  if [[ -n "${meta_packages[*]}" ]]; then
+    apt-mark hold "${meta_packages[@]}" >/dev/null 2>&1 || \
+        log_warning "Unable to hold kernel metapackages."
   fi
 
 {% elif context.base_os in ('amazonlinux2023',) %}
@@ -151,16 +185,20 @@ function install_target_kernel() {
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
   # Update package cache
-  apt-get update
+  apt-get -o DPkg::Lock::Timeout=300 update
 
   # Exact ABI, not the linux-aws-<series> meta-package: the meta-package resolves to
   # whatever Ubuntu published last, which the FSx repo may not have modules for yet
-  if DEBIAN_FRONTEND=noninteractive apt install -y \
-      linux-image-${TARGET_KERNEL_ABI} \
-      linux-modules-${TARGET_KERNEL_ABI} \
-      linux-modules-extra-${TARGET_KERNEL_ABI} \
-      linux-headers-${TARGET_KERNEL_ABI} \
-      --allow-change-held-packages; then
+  local kernel_packages=(linux-image-${TARGET_KERNEL_ABI} linux-modules-${TARGET_KERNEL_ABI})
+  local package
+  for package in linux-modules-extra-${TARGET_KERNEL_ABI} linux-headers-${TARGET_KERNEL_ABI}; do
+    if [[ -n "$(apt-cache show "${package}" 2>/dev/null)" ]]; then
+      kernel_packages+=("${package}")
+    fi
+  done
+{% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}  kernel_packages+=(lustre-client-modules-${TARGET_KERNEL_ABI})
+{% endif %}  if DEBIAN_FRONTEND=noninteractive apt install -y "${kernel_packages[@]}" \
+      -o DPkg::Lock::Timeout=300 --allow-change-held-packages; then
     log_info "Target kernel ${target_version} packages installed successfully"
   else
     log_error "Failed to install target kernel ${target_version} packages"
@@ -190,7 +228,8 @@ function install_target_kernel() {
 }
 
 function set_kernel_version() {
-  # Skip kernel management on captured images that already went through bootstrap
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}  [[ -n "${BAKE_STAGE:-}" ]] || return 0
+{% endif %}  # Skip kernel management on captured images that already went through bootstrap
   if [[ -n "${IDEA_MODULE_VERSION}" && "$(cat /var/lib/idea/baked-release 2>/dev/null)" == "${IDEA_MODULE_VERSION}" ]]; then
     log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping kernel management"
     return 0
@@ -203,7 +242,7 @@ function set_kernel_version() {
   log_info "Current kernel: $current_kernel"
   log_info "Target kernel version: $target_version"
 
-  # Check if we're already running the target kernel series
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}  # Check if we're already running the target kernel series
   if [[ "$current_kernel" == "${target_base}"[.-]* ]]; then
     log_info "Confirmed running target kernel series $target_base - pinning current version"
     apply_kernel_holds
@@ -211,15 +250,16 @@ function set_kernel_version() {
     return 0
   fi
 
-  # A second pass on the old kernel means the boot loader did not honor the requested kernel.
-  if [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
-    fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${target_version} was installed, but the host is still running ${current_kernel} after reboot."
+{% endif %}  # A second pass on the old kernel means the boot loader did not honor the requested kernel.
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}  if [[ "${current_kernel}" != "${TARGET_KERNEL_ABI}" ]] && [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
+{% else %}  if [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
+{% endif %}    fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${target_version} was installed, but the host is still running ${current_kernel} after reboot."
   fi
 
   # Check if target kernel is already installed
   local kernel_installed=false
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-  if apt list --installed 2>/dev/null | grep -q "linux-image.*${target_base}\."; then
+  if [[ "${current_kernel}" == "${TARGET_KERNEL_ABI}" ]]; then
     kernel_installed=true
   fi
 {% elif context.base_os in ('rhel8', 'rocky8') %}
@@ -251,8 +291,10 @@ function set_kernel_version() {
     # Select by title because a positional entry changes as kernels are added or removed.
     # The exact ABI keeps the boot choice aligned with the installed Lustre module.
     sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}\"/" /etc/default/grub
-    update-grub
+    update-grub || fail_kernel_bootstrap kernel-boot-mismatch "Unable to update GRUB for ${TARGET_KERNEL_ABI}."
     log_info "Updated GRUB to boot kernel ${target_version} by default"
+  else
+    fail_kernel_bootstrap kernel-boot-mismatch "Missing /etc/default/grub; cannot select ${TARGET_KERNEL_ABI}."
   fi
 {% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
   local target_kernel
@@ -263,14 +305,17 @@ function set_kernel_version() {
   fi
 {% endif %}
 
-  # Only reboot if we're not already running the target kernel
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}  if [[ "${current_kernel}" != "${TARGET_KERNEL_ABI}" ]]; then
+    [[ -f /boot/vmlinuz-${TARGET_KERNEL_ABI} ]] || fail_kernel_bootstrap kernel-install-failed "Kernel ${TARGET_KERNEL_ABI} not found in /boot after installation."
+    set_reboot_required "Ubuntu kernel version change to ${target_version}"
+  fi
+  # Both builders own the continuation and reboot after their package upgrades.
+{% else %}  # Only reboot if we're not already running the target kernel
   if [[ "$current_kernel" != "${target_base}"[.-]* ]]; then
     # Verify target kernel will be available on next boot
     if ls /boot/vmlinuz-${target_base}[.-]* >/dev/null 2>&1; then
       log_info "Kernel ${target_version} found in /boot, rebooting to activate"
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
-      set_reboot_required "Ubuntu kernel version change to ${target_version}"
-{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
       set_reboot_required "RHEL kernel version change to ${target_version}"
 {% endif %}
 
@@ -289,10 +334,10 @@ function set_kernel_version() {
     apply_kernel_holds
     remove_unwanted_kernels
   fi
-}
+{% endif %}}
 
 # Execute kernel version management for all supported distributions
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
 set_kernel_version
 {% endif %}
-# End: Kernel Version Management
+{% endif %}# End: Kernel Version Management

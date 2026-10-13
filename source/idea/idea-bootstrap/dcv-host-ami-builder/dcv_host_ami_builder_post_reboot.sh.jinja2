@@ -18,6 +18,11 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 BAKE_STAGE=dcv
 source "${SCRIPT_DIR}/image_bake_stage.sh"
 
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+{% set ubuntu_desktop_bake = true %}
+{% include '_templates/linux/mount_shared_storage.jinja2' %}
+{% endif %}
+
 ## -- DCV SERVER AND AGENT INSTALLATION -- ##
 
 {% include '_templates/linux/dcv_server.jinja2' %}

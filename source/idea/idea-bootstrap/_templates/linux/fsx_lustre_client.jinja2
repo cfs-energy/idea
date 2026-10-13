@@ -209,6 +209,14 @@ fi
 log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx client repo publishes no 'resolute' suite and no modules for the 7.0 kernel. Lustre filesystems will NOT be mounted on this node."
 {% endif %}
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if ubuntu_desktop_bake | default(false) %}
+  if [[ "${BAKE_STAGE}" == setup ]]; then
+    # setup selected the ABI before this include; the builder owns the reboot.
+    DEBIAN_FRONTEND=noninteractive apt install -y lustre-client-utils "lustre-client-modules-${TARGET_KERNEL_ABI}" || \
+      fail_kernel_bootstrap lustre-client-install-failed "Unable to install FSx for Lustre client for ${TARGET_KERNEL_ABI}."
+    set_reboot_required "FSx for Lustre client installed"
+  fi
+{% else %}
   if [[ -z "$(dpkg -l lustre-client-utils | grep ^ii)" ]]; then
     # Kernel version is now managed by set_kernel.jinja2 - proceed with installation
     wget -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor | sudo tee /usr/share/keyrings/fsx-ubuntu-public-key.gpg >/dev/null
@@ -229,6 +237,7 @@ log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx clie
   else
     log_error "FSx for Lustre client is installed but has no module for kernel $(uname -r). Lustre filesystems will NOT be mounted on this node."
   fi
+{% endif %}
 {% endif %}
 # Performance tuning
 if [[ ! -f /etc/modprobe.d/lustre.conf ]] || [[ -z "$(grep ksocklnd /etc/modprobe.d/lustre.conf)" ]]; then

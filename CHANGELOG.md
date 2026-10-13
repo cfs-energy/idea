@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [Unreleased]
+
+* **Ubuntu image kernels**: desktop bakes on Lustre clusters select and hold an FSx-supported kernel, install its client, and mount and validate Lustre after reboot so package upgrades cannot move them to an ABI without a Lustre module.
+
 ## [26.10.4] - 2026-10-08
 
 * **Windows image validation**: Windows bakes no longer fail on a read-only share such as Apps. The check runs as the desktop's machine account, which users never write as, so each share is now listed instead of written to. For a per-user path, a parent whose listing and existence checks are refused to SYSTEM passes as "not probed (refused to SYSTEM)"; a missing parent still fails. For other paths, a refused listing passes only when the server's share list or the parent folder shows the share or folder exists, because Windows refuses a missing share with the same error. Errors are no longer hidden behind a misleading "Could not find file".

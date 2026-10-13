@@ -2,6 +2,7 @@
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
     {% include '_templates/linux/fsx_lustre_client.jinja2' %}
+    {% if not (ubuntu_desktop_bake | default(false)) %}
     REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
     if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
       (crontab -l 2>/dev/null || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
@@ -9,6 +10,7 @@
       reboot
       exit 0
     fi
+    {% endif %}
   {% endif %}
   function mount_shared_storage () {
     {% for name, storage in context.config.get_config('shared-storage').items() %}
@@ -61,14 +63,27 @@
 
     local FS_MOUNT_ATTEMPT=1
     local FS_MOUNT_MAX_ATTEMPTS=5
+    {% if (ubuntu_desktop_bake | default(false)) and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+    local MOUNT_TYPES=()
+    if ! modinfo lustre >/dev/null 2>&1; then
+      log_info "Deferring Lustre mounts until the builder boots the selected kernel"
+      MOUNT_TYPES=(-t nolustre)
+    fi
+    while [[ ${FS_MOUNT_ATTEMPT} -lt ${FS_MOUNT_MAX_ATTEMPTS} ]] && ! mount_shared_filesystems "${MOUNT_TYPES[@]}"; do
+    {% else %}
     while [[ ${FS_MOUNT_ATTEMPT} -lt ${FS_MOUNT_MAX_ATTEMPTS} ]] && ! mount_shared_filesystems; do
+    {% endif %}
       local SLEEP_TIME=$(( RANDOM % 33 + 8 ))  # Minimum of 8 seconds sleep
       log_info "(${FS_MOUNT_ATTEMPT} of ${FS_MOUNT_MAX_ATTEMPTS}) retrying in ${SLEEP_TIME} seconds ..."
       sleep "${SLEEP_TIME}"
       FS_MOUNT_ATTEMPT=$(( FS_MOUNT_ATTEMPT + 1 ))
     done
     # the last attempt is a plain call: a bake records it, the caller sees its status
+    {% if (ubuntu_desktop_bake | default(false)) and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+    mount_shared_filesystems "${MOUNT_TYPES[@]}"
+    {% else %}
     mount_shared_filesystems
+    {% endif %}
   }
   # a plain call, so a bake records the failure by name; a host stops rather than run without its storage
   mount_shared_storage

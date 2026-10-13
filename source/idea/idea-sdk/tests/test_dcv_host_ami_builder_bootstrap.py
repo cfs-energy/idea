@@ -6,11 +6,14 @@ the first-boot skip markers the session bootstrap checks.
 
 import os
 
+import pytest
+
 from ideasdk.context import BootstrapContext
 from ideasdk.utils import Jinja2Utils
 from ideadatamodel import SocaAnyPayload
 from ideatestutils import MockConfig
 from ideasdk.config.soca_config import SocaConfig
+from test_bootstrap_shell_syntax import Config
 
 IDEA_BOOTSTRAP_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'idea-bootstrap')
@@ -21,8 +24,24 @@ def render(
     template_path: str,
     base_os: str = 'amazonlinux2023',
     instance_type: str = 'c5.large',
+    lustre: bool = True,
+    bake: bool = False,
 ) -> str:
-    config = SocaConfig(config=MockConfig().get_config())
+    config_data = MockConfig().get_config()
+    config_data['global-settings'] = Config().get_config('global-settings')
+    config_data['shared-storage'] = {
+        name: storage
+        for name, storage in config_data['shared-storage'].items()
+        if storage.get('provider') not in ('fsx_lustre', 'fsx_cache')
+    }
+    if lustre:
+        config_data['shared-storage']['lustre'] = {
+            'provider': 'fsx_lustre',
+            'mount_dir': '/lustre',
+            'mount_options': 'defaults,_netdev',
+            'fsx_lustre': {'dns': 'fs.example.invalid', 'mount_name': 'test'},
+        }
+    config = SocaConfig(config=config_data)
     context = BootstrapContext(
         config=config,
         module_name='virtual-desktop-controller',
@@ -34,8 +53,12 @@ def render(
     context.vars.ami_dir = '/apps/idea-mock/vdc/ami_builder/idea-dcv-host/1'
     context.vars.ami_name = 'idea-dcv-host-amazonlinux2023-v01011970-000000'
     context.vars.session = SocaAnyPayload(type='console')
+    context.vars.bedrock_env = {}
+    context.vars.bedrock_model_messages = []
     env = Jinja2Utils.env_using_file_system_loader(IDEA_BOOTSTRAP_DIR)
-    return env.get_template(template_path).render(context=context)
+    return env.get_template(template_path).render(
+        context=context, ubuntu_desktop_bake=bake
+    )
 
 
 def test_build_setup_has_no_session_state():
@@ -103,7 +126,7 @@ def test_build_post_reboot_scrubs_the_builder_identity():
 KERNEL_STUBS = r"""
 log_info() { :; }
 log_warning() { echo "warning $*" >> "$CALLS"; }
-log_error() { :; }
+log_error() { echo "error $*" >> "$CALLS"; }
 instance_id() { echo i-0; }
 uname() { if [[ "$1" == "-r" ]]; then echo "$RUNNING_KERNEL"; else echo x86_64; fi; }
 rpm() {
@@ -115,18 +138,89 @@ rpm() {
 }
 dnf() { echo "dnf $*" >> "$CALLS"; [[ "$1 $2" != "install -y" || "$*" == *versionlock* ]]; }
 aws() { echo "aws $*" >> "$CALLS"; }
-apt-get() { :; }
-apt-mark() { :; }
-apt() { :; }
-apt-cache() { [[ -n "$NO_LUSTRE_MODULE" ]] || echo "Package: $2"; }
+apt-get() { echo "apt-get $*" >> "$CALLS"; }
+apt-mark() {
+  echo "apt-mark $*" >> "$CALLS"
+  [[ -z "$FAIL_HOLD" ]] || return 100
+  shift
+  local package
+  for package in "$@"; do
+    [[ -z "$FAIL_META_HOLD" || "$package" != linux-aws ]] || return 100
+    dpkg -s "$package" >/dev/null 2>&1 || [[ -n "$(apt-cache show "$package")" ]] || return 100
+  done
+}
+apt() {
+  echo "apt $*" >> "$CALLS"
+  [[ -z "$FAIL_INSTALL" ]] || return 1
+  for arg in "$@"; do
+    case "$arg" in linux-image-*) touch "${BOOTSTRAP_DIR}/vmlinuz-${arg#linux-image-}" ;; esac
+  done
+}
+dpkg() {
+  if [[ "$1" == --print-architecture ]]; then
+    echo "$KERNEL_ARCH"
+  elif [[ " $INSTALLED_PACKAGES " == *" $2 "* ]]; then
+    echo 'Status: install ok installed'
+  else
+    return 1
+  fi
+}
+apt-cache() {
+  local abi="${2#lustre-client-modules-}"
+  abi="${abi%:*}"
+  case "$1" in
+    pkgnames)
+      if [[ "$2" == linux-image- ]]; then
+        for abi in $IMAGE_ABIS; do echo "linux-image-${abi}"; done
+      else
+        for abi in $REPO_ABIS; do echo "lustre-client-modules-${abi}"; done
+      fi ;;
+    policy)
+      if [[ " $FSX_ABIS " == *" $abi "* ]]; then
+        echo "500 https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME}/main ${KERNEL_ARCH} Packages"
+      else
+        echo "500 https://example.org/ubuntu ${VERSION_CODENAME}/main ${KERNEL_ARCH} Packages"
+      fi ;;
+    show)
+      [[ " $MISSING_PACKAGES " != *" $2 "* ]] || return 100
+      if [[ "$2" == linux-image-[0-9]* ]]; then
+        abi="${2#linux-image-}"; abi="${abi%:*}"
+        [[ " $IMAGE_ABIS " != *" $abi "* ]] || echo "Package: linux-image-${abi}"
+      else
+        [[ -n "$NO_LUSTRE_MODULE" ]] || echo "Package: $2"
+      fi ;;
+  esac
+}
+sed() {
+  if [[ "$1" == -i ]]; then echo "sed $*" >> "$CALLS"; else command sed "$@"; fi
+}
 wget() { :; }
 gpg() { :; }
 grubby() { echo "grubby $*" >> "$CALLS"; }
-update-grub() { :; }
+update-grub() { echo update-grub >> "$CALLS"; }
 set_reboot_required() { echo "reboot_required $*" >> "$CALLS"; }
 check_reboot_loop() { :; }
 crontab() { :; }
 reboot() { echo reboot >> "$CALLS"; }
+"""
+
+STORAGE_STUBS = r"""
+mkdir() { :; }
+nproc() { echo 2; }
+free() { echo 'Mem: 16'; }
+modinfo() { [[ "$RUNNING_KERNEL" == 6.8.0-1057-aws ]]; }
+modprobe() { echo "modprobe $*" >> "$CALLS"; modinfo; }
+grep() {
+  if [[ "$*" == *'/proc/filesystems'* ]]; then modinfo; else command grep "$@"; fi
+}
+add_efs_to_fstab() { :; }
+add_fsx_lustre_to_fstab() { echo 'fstab lustre' >> "$CALLS"; }
+mount() {
+  echo "mount $*" >> "$CALLS"
+  if [[ "$*" != *nolustre* ]]; then MOUNTED=1; fi
+}
+findmnt() { [[ "$MOUNTED" == 1 ]]; }
+lctl() { echo "lctl $*" >> "$CALLS"; [[ "$MOUNTED" == 1 ]]; }
 """
 
 
@@ -136,22 +230,45 @@ def run_set_kernel(
     running_kernel: str,
     kernel_package: str = 'kernel',
     lustre_module: bool = True,
+    lustre: bool = True,
+    storage_stage: str = '',
+    **environment,
 ):
     import subprocess
 
-    rendered = render('_templates/linux/set_kernel.jinja2', base_os=base_os)
+    rendered = render(
+        '_templates/linux/set_kernel.jinja2',
+        base_os=base_os,
+        lustre=lustre,
+        bake=bool(environment.get('BAKE_STAGE')),
+    )
+    if storage_stage:
+        name = (
+            'setup' if storage_stage == 'setup' else 'dcv_host_ami_builder_post_reboot'
+        )
+        text = render(f'dcv-host-ami-builder/{name}.sh.jinja2', base_os, lustre=lustre)
+        storage = text.split('# Begin: Mount Shared Storage')[1].split(
+            '# End: Mount Shared Storage'
+        )[0]
+        rendered = (rendered if storage_stage == 'setup' else '') + storage
     rendered = (
         rendered.replace('. /etc/os-release', ': ')
         .replace('/etc/apt/sources.list.d/', f'{tmp_path}/')
         .replace('/usr/share/keyrings/', f'{tmp_path}/')
+        .replace('/etc/default/grub', f'{tmp_path}/grub')
+        .replace('/boot/', f'{tmp_path}/')
+        .replace('/etc/modprobe.d/', f'{tmp_path}/')
     )
+    (tmp_path / 'grub').write_text('GRUB_DEFAULT=0\n')
     calls = tmp_path / 'calls'
     calls.write_text('')
     script = tmp_path / 'set_kernel.sh'
     script.write_text(
         f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
+        + f'BOOTSTRAP_DIR="{tmp_path}"\n'
         + 'sleep() { :; }\n'
         + KERNEL_STUBS
+        + (STORAGE_STUBS if storage_stage else '')
         + rendered
     )
     result = subprocess.run(
@@ -163,6 +280,8 @@ def run_set_kernel(
             'RUNNING_KERNEL': running_kernel,
             'KERNEL_PACKAGE': kernel_package,
             'NO_LUSTRE_MODULE': '' if lustre_module else '1',
+            'VERSION_CODENAME': 'jammy' if base_os == 'ubuntu2204' else 'noble',
+            **environment,
         },
         capture_output=True,
         text=True,
@@ -234,3 +353,397 @@ def test_ubuntu2404_keeps_networkd_during_bootstrap():
     assert 'netplan apply' not in noble
     assert "renderer'] = 'NetworkManager'" not in noble
     assert 'netplan apply' in jammy
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+@pytest.mark.parametrize('instance_type', ['m7i.large', 'm7g.large'])
+def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type):
+    text = render(
+        'dcv-host-ami-builder/setup.sh.jinja2',
+        base_os,
+        instance_type,
+    )
+    kernel = text.split('# Begin: Kernel Version Management')[1].split(
+        '# End: Kernel Version Management'
+    )[0]
+    assert 'apt-cache pkgnames lustre-client-modules-' in kernel
+    assert text.index('BAKE_STAGE=setup') < text.index('apt-cache pkgnames')
+    assert 'dpkg --print-architecture' in kernel
+    assert (
+        'apt-cache policy "lustre-client-modules-${candidate_abi}:${KERNEL_ARCH}"'
+        in kernel
+    )
+    assert 'sort -Vr' in kernel
+    assert 'TARGET_KERNEL_ABI="${SELECTED_KERNEL_ABI}"' in kernel
+    assert 'linux-aws linux-image-aws linux-headers-aws linux-tools-aws' in kernel
+    assert 'apt-mark hold "${kernel_packages[@]}"' in kernel
+    assert (
+        'Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}' in kernel
+    )
+    assert 'set_reboot_required "Ubuntu kernel version change' in kernel
+    assert '\n      reboot\n' not in kernel
+    assert text.index('apt-mark hold') < text.index('# Begin: Mount Shared Storage')
+    assert 'lustre-client-modules-$(uname -r)' not in text
+    assert (
+        'apt install -y lustre-client-utils "lustre-client-modules-${TARGET_KERNEL_ABI}"'
+        in text
+    )
+    assert 'FSx storage mount reboot' not in text
+    packages = render('dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2', base_os)
+    assert 'apt-cache pkgnames' not in packages
+    assert 'apt upgrade -y' in packages
+    post = render(
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2', base_os
+    )
+    assert 'apt-cache pkgnames' not in post
+    assert (
+        post.index('# Begin: Mount Shared Storage')
+        < post.index('lctl lustre_build_version')
+        < post.index('image_checks.sh')
+    )
+    assert 'if findmnt -rn -t lustre >/dev/null; then' in post
+    checks = render('dcv-host-ami-builder/image_checks.sh.jinja2', base_os)
+    assert (
+        'packages_installed lustre-client-utils "lustre-client-modules-$(uname -r)"'
+        in checks
+    )
+    assert 'command -v mount.lustre' in checks
+    assert 'findmnt -rn -t lustre --mountpoint "/lustre"' in checks
+
+
+# Byte-for-byte kernel renders from 81d856e9; Ubuntu changes must not alter EL behavior.
+@pytest.mark.parametrize(
+    'base_os, expected',
+    [
+        (
+            'amazonlinux2023',
+            'd95315ace72b9a513b5eb20c47ab9c6f9c72e8caa0ad015867768a79ce22b80a',
+        ),
+        ('rhel8', 'f7db0745b0302ea6f37efa8b790b2fa92cb97f4408ff573d04341559d53f4471'),
+        ('rocky8', 'f7db0745b0302ea6f37efa8b790b2fa92cb97f4408ff573d04341559d53f4471'),
+        ('rhel9', '4fb6bbfdf1639f3a0a0feac788edefc44626636b9066d92b5beb8dbac803b604'),
+        ('rocky9', '4fb6bbfdf1639f3a0a0feac788edefc44626636b9066d92b5beb8dbac803b604'),
+    ],
+)
+def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
+    import hashlib
+    from pathlib import Path
+    from jinja2 import Template
+
+    text = Template(
+        Path(IDEA_BOOTSTRAP_DIR, '_templates/linux/set_kernel.jinja2').read_text()
+    ).render(context={'base_os': base_os, 'aws_region': 'us-east-1'})
+    assert hashlib.sha256(text.encode()).hexdigest() == expected
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+@pytest.mark.parametrize('arch', ['amd64', 'arm64'])
+@pytest.mark.parametrize('running', ['6.8.0-1063-aws', '6.8.0-1050-aws'])
+def test_ubuntu_bake_pins_supported_kernel_without_rebooting(
+    tmp_path, base_os, arch, running
+):
+    code, calls = run_set_kernel(
+        tmp_path,
+        base_os,
+        running,
+        BAKE_STAGE='packages',
+        KERNEL_ARCH=arch,
+        REPO_ABIS='7.0.0-1014-aws 6.17.0-1020-aws 6.8.0-1050-aws 6.8.0-1057-aws 6.8.0-1063-aws',
+        FSX_ABIS='7.0.0-1014-aws 6.17.0-1020-aws 6.8.0-1050-aws 6.8.0-1057-aws',
+        IMAGE_ABIS='7.0.0-1014-aws 6.17.0-1020-aws 6.8.0-1050-aws 6.8.0-1057-aws 6.8.0-1063-aws',
+    )
+    target = '6.8.0-1057-aws' if running.endswith('1063-aws') else running
+    assert code == 0, calls
+    assert (
+        f'apt-mark hold linux-image-{target} linux-headers-{target} linux-modules-{target}'
+        in calls
+    )
+    assert 'linux-aws linux-image-aws linux-headers-aws linux-tools-aws' in calls
+    assert f'Advanced options for Ubuntu>Ubuntu, with Linux {target}' in calls
+    assert 'update-grub' in calls
+    assert '\nreboot\n' not in calls
+    assert 'apt purge' not in calls and 'apt remove' not in calls
+    if target != running:
+        assert (
+            f'apt install -y linux-image-{target} linux-modules-{target} linux-modules-extra-{target} linux-headers-{target}'
+            in calls
+        )
+        assert 'reboot_required Ubuntu kernel version change' in calls
+    else:
+        assert 'apt install' not in calls
+        assert 'reboot_required' not in calls
+
+
+@pytest.mark.parametrize(
+    'images, expected',
+    [
+        ('6.8.0-1050-aws', '6.8.0-1050-aws'),
+        ('', None),
+    ],
+)
+def test_ubuntu_bake_requires_available_image_and_reports_newest_fsx_abi(
+    tmp_path, images, expected
+):
+    code, calls = run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        '6.8.0-1063-aws',
+        BAKE_STAGE='packages',
+        KERNEL_ARCH='arm64',
+        REPO_ABIS='6.8.0-1050-aws 6.8.0-1057-aws',
+        FSX_ABIS='6.8.0-1050-aws 6.8.0-1057-aws',
+        IMAGE_ABIS=images,
+    )
+    if expected:
+        assert code == 0, calls
+        assert f'apt-mark hold linux-image-{expected}' in calls
+    else:
+        assert code == 1, calls
+        assert 'Value=lustre-module-missing' in calls
+        assert 'Newest kernel supported by the FSx repository: 6.8.0-1057-aws.' in calls
+        assert 'Newest Ubuntu kernel ABI considered: none.' in calls
+        assert 'apt install' not in calls
+        assert 'reboot' not in calls
+
+
+@pytest.mark.parametrize(
+    'failure, status',
+    [
+        ('FAIL_INSTALL', 'kernel-install-failed'),
+        ('FAIL_HOLD', 'kernel-hold-failed'),
+    ],
+)
+def test_ubuntu_bake_stops_when_install_or_hold_fails(tmp_path, failure, status):
+    code, calls = run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        '6.8.0-1063-aws',
+        BAKE_STAGE='packages',
+        KERNEL_ARCH='amd64',
+        REPO_ABIS='6.8.0-1057-aws',
+        FSX_ABIS='6.8.0-1057-aws',
+        IMAGE_ABIS='6.8.0-1057-aws',
+        **{failure: '1'},
+    )
+    assert code == 1, calls
+    assert f'Value={status}' in calls
+    assert 'reboot' not in calls
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+@pytest.mark.parametrize('lustre', [False, True])
+def test_ubuntu_runtime_render_has_only_the_running_kernel_gate(
+    tmp_path, base_os, lustre
+):
+    text = render('virtual-desktop-host-linux/setup.sh.jinja2', base_os, lustre=lustre)
+    kernel = text.split('# Begin: Kernel Version Management')[1].split(
+        '# End: Kernel Version Management'
+    )[0]
+    for unexpected in (
+        'GRUB',
+        'apt-mark',
+        'apt install',
+        'pkgnames',
+        'remove_unwanted_kernels',
+    ):
+        assert unexpected not in kernel
+    assert ('lustre-client-modules-${TARGET_KERNEL_ABI}' in kernel) == lustre
+    assert ('fsx-lustre-client-repo' in kernel) == lustre
+    code, calls = run_set_kernel(tmp_path, base_os, '6.8.0-1040-aws', lustre=lustre)
+    assert code == 0, calls
+    for unexpected in ('hold', 'install', 'grub', 'reboot'):
+        assert unexpected not in calls
+
+
+@pytest.mark.parametrize('arch', ['amd64', 'arm64'])
+@pytest.mark.parametrize('optional_available', [False, True])
+def test_ubuntu_bake_installs_only_available_optional_kernel_packages(
+    tmp_path, arch, optional_available
+):
+    target = '6.8.0-1057-aws'
+    optional = [f'linux-modules-extra-{target}', f'linux-headers-{target}']
+    code, calls = run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        '6.8.0-1063-aws',
+        BAKE_STAGE='setup',
+        KERNEL_ARCH=arch,
+        REPO_ABIS=target,
+        FSX_ABIS=target,
+        IMAGE_ABIS=target,
+        MISSING_PACKAGES='' if optional_available else ' '.join(optional),
+    )
+    assert code == 0, calls
+    install = next(
+        line for line in calls.splitlines() if line.startswith('apt install')
+    )
+    hold = next(
+        line
+        for line in calls.splitlines()
+        if line.startswith('apt-mark hold linux-image-6')
+    )
+    for package in optional:
+        assert (package in install) == optional_available
+        assert (package in hold) == optional_available
+    assert f'linux-image-{target}' in install and f'linux-modules-{target}' in install
+    assert '-o DPkg::Lock::Timeout=300' in install
+    updates = [line for line in calls.splitlines() if line.startswith('apt-get')]
+    assert len(updates) == 2
+    assert all('-o DPkg::Lock::Timeout=300 update' in line for line in updates)
+
+
+@pytest.mark.parametrize('installed', [False, True])
+def test_ubuntu_bake_holds_old_abi_only_if_installed_when_unindexed(
+    tmp_path, installed
+):
+    target = '6.8.0-1040-aws'
+    packages = [
+        f'linux-{name}-{target}'
+        for name in ('image', 'headers', 'modules', 'modules-extra')
+    ]
+    code, calls = run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        target,
+        lustre=False,
+        BAKE_STAGE='setup',
+        MISSING_PACKAGES=' '.join(packages + ['linux-tools-aws']),
+        INSTALLED_PACKAGES=' '.join(packages[:3]) if installed else '',
+    )
+    assert code == 0, calls
+    assert ('apt-mark hold linux-image-6.8.0-1040-aws' in calls) == installed
+    assert 'linux-modules-extra-' not in calls
+    assert 'linux-tools-aws' not in calls
+    assert 'apt-mark hold linux-aws linux-image-aws linux-headers-aws' in calls
+
+
+@pytest.mark.parametrize('failure', ['', 'FAIL_META_HOLD'])
+def test_ubuntu_bake_metapackage_hold_is_best_effort(tmp_path, failure):
+    code, calls = run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        '6.8.0-1057-aws',
+        lustre=False,
+        BAKE_STAGE='setup',
+        IMAGE_ABIS='6.8.0-1057-aws',
+        **({failure: '1'} if failure else {}),
+    )
+    assert code == 0, calls
+    assert 'apt-mark hold linux-image-6.8.0-1057-aws' in calls
+    assert ('warning Unable to hold kernel metapackages.' in calls) == bool(failure)
+    assert 'update-grub' in calls
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+def test_ubuntu_bake_without_lustre_never_selects_or_installs_lustre(tmp_path, base_os):
+    for name in (
+        'setup',
+        'dcv_host_ami_builder',
+        'dcv_host_ami_builder_post_reboot',
+        'image_checks',
+    ):
+        text = render(f'dcv-host-ami-builder/{name}.sh.jinja2', base_os, lustre=False)
+        assert 'apt-cache pkgnames' not in text
+        assert 'lustre-client-' not in text
+        assert 'lustre-module-missing' not in text
+        assert 'check lustre ' not in text
+    code, calls = run_set_kernel(
+        tmp_path,
+        base_os,
+        '6.8.0-1063-aws',
+        lustre=False,
+        lustre_module=False,
+        BAKE_STAGE='setup',
+    )
+    assert code == 0, calls
+    assert 'lustre' not in calls
+    assert 'apt install' not in calls
+
+
+@pytest.mark.parametrize('base_os', ['ubuntu2204', 'ubuntu2404'])
+def test_ubuntu_bake_defers_lustre_until_selected_kernel_boots(tmp_path, base_os):
+    code, calls = run_set_kernel(
+        tmp_path,
+        base_os,
+        '6.8.0-1063-aws',
+        storage_stage='setup',
+        BAKE_STAGE='setup',
+        KERNEL_ARCH='amd64',
+        REPO_ABIS='6.8.0-1057-aws',
+        FSX_ABIS='6.8.0-1057-aws',
+        IMAGE_ABIS='6.8.0-1057-aws 6.8.0-1063-aws',
+    )
+    assert code == 0, calls
+    assert 'apt install -y linux-image-6.8.0-1057-aws' in calls
+    assert (
+        'apt install -y lustre-client-utils lustre-client-modules-6.8.0-1057-aws'
+        in calls
+    )
+    assert 'lustre-client-modules-6.8.0-1063-aws' not in calls
+    assert 'reboot_required Ubuntu kernel version change' in calls
+    assert 'mount -a -t nolustre' in calls
+    assert 'fstab lustre' not in calls
+    assert 'lctl' not in calls
+    assert '\nreboot\n' not in calls
+
+    code, calls = run_set_kernel(
+        tmp_path,
+        base_os,
+        '6.8.0-1057-aws',
+        storage_stage='post',
+        BAKE_STAGE='dcv',
+    )
+    assert code == 0, calls
+    assert 'apt install' not in calls
+    assert 'mount -a\n' in calls
+    assert 'nolustre' not in calls
+    assert (
+        calls.index('fstab lustre')
+        < calls.index('mount -a')
+        < calls.index('lctl lustre_build_version')
+    )
+
+
+def test_ubuntu_missing_common_abi_reports_both_repository_heads(tmp_path):
+    code, calls = run_set_kernel(
+        tmp_path,
+        'ubuntu2404',
+        '6.8.0-1063-aws',
+        BAKE_STAGE='setup',
+        KERNEL_ARCH='amd64',
+        REPO_ABIS='6.8.0-1057-aws',
+        FSX_ABIS='6.8.0-1057-aws',
+        IMAGE_ABIS='6.8.0-1063-aws 6.8.0-1061-aws',
+    )
+    assert code == 1, calls
+    assert 'Newest kernel supported by the FSx repository: 6.8.0-1057-aws.' in calls
+    assert 'Newest Ubuntu kernel ABI considered: 6.8.0-1063-aws.' in calls
+
+
+@pytest.mark.parametrize('missing', ['', 'utils', 'module', 'mount'])
+def test_ubuntu_lustre_image_check_requires_client_and_mounts(missing):
+    import subprocess
+
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'ubuntu2404')
+    function = (
+        'lustre_ok() {' + text.split('lustre_ok() {')[1].split('\ncheck lustre ')[0]
+    )
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            r"""
+packages_installed() { [[ "$MISSING" != utils ]]; }
+mount.lustre() { :; }
+modprobe() { [[ "$MISSING" != module ]]; }
+findmnt() { [[ "$MISSING" != mount ]]; }
+uname() { echo 6.8.0-1057-aws; }
+"""
+            + function
+            + '\nlustre_ok',
+        ],
+        env={'PATH': os.environ['PATH'], 'MISSING': missing},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == (1 if missing else 0), result.stderr
