@@ -13,6 +13,10 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 from ideadatamodel import exceptions
+from ideasdk.aws.compute_rate import (
+    COMPUTE_RATE_MULTIPLIER_KEY,
+    parse_compute_rate_multiplier,
+)
 from ideasdk.utils.group_name_helper import (
     DEFAULT_OPERATIONS_LEADS_GROUP_NAME,
     GroupNameHelper,
@@ -6042,7 +6046,7 @@ _DESCRIPTIONS = {
     'ecs.datadog.logs_enabled': 'Ship labeled IDEA container logs to Datadog when ecs.datadog.enabled is true. Defaults to true; deploy ECS and the service stacks after changing it. CloudWatch logging remains enabled.',
     'cluster.administrator_email': 'Email used when creating the initial administrator account.',
     'cluster.aws.pricing_region': "unused; job estimates price the cluster's own region",
-    'cluster.costs.compute_rate_multiplier': 'Multiplies the on-demand instance rate for job and desktop compute, e.g. 0.72 when savings plans cut compute about 28%. 1.0 shows list price. Must be above 0 and at most 1.5, otherwise it is ignored. Storage and spot are not scaled. Jobs keep the rate in force when they finished.',
+    'cluster.costs.compute_rate_multiplier': 'Multiplies the on-demand instance rate for job and desktop compute, e.g. 0.72 when savings plans cut compute about 28%. 1.0 shows list price. Must be above 0 and at most 1.5, otherwise it is ignored. Storage and spot are not scaled. Jobs keep the rate in force when they finished; desktop costs pick up a change on the next 15-minute collection.',
     'cluster-manager.metrics.cost.enabled': 'Collect Cost Explorer daily totals in the commercial AWS partition with the dogstatsd metrics provider. Other partitions and providers do not support this collection.',
     'cluster-manager.metrics.cost.by_account': "Split cost metrics by linked AWS account; only a payer account that can see other accounts' spend needs this.",
     'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history.",
@@ -6628,6 +6632,13 @@ def coerce_value(setting, value):
             invalid(f'must be at least {rule["minimum"]}')
         if 'maximum' in rule and value > rule['maximum']:
             invalid(f'must be at most {rule["maximum"]}')
+        # the same test the scheduler and cluster-manager apply, so a value that would be
+        # ignored at runtime (0 included) is refused here instead of saved
+        if (
+            key == COMPUTE_RATE_MULTIPLIER_KEY
+            and parse_compute_rate_multiplier(value) is None
+        ):
+            invalid('must be greater than 0 and at most 1.5')
     if key == 'cluster-manager.web_portal.default_landing_page' and value == 'home':
         value = 'my-costs'
     if kind == 'enum' and value not in setting['choices']:

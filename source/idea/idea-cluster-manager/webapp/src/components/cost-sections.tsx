@@ -3,7 +3,7 @@ import {Badge, Box, Button, ColumnLayout, Container, Header, SpaceBetween, Table
 import {TableProps} from "@cloudscape-design/components/table";
 import {GetMyCostsSummaryResult, MyCostsDesktopSession, MyCostsJob, MyCostsJobGroup} from "../client/data-model";
 import Utils from "../common/utils";
-import {computeRateNote} from "../pages/reporting/reporting-format";
+import {computeRateNote, jobRateNote} from "../pages/reporting/reporting-format";
 
 /**
  * The three cost sections, rendered from a summary payload. Shared by the self scoped My Costs
@@ -247,7 +247,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
     )
 
     const renderJobs = () => (
-        <Container header={sectionHeader('Jobs', `Jobs completed in the window, priced from the estimate the scheduler recorded for each one. ${computeRateNote(computeRate)}`)}>
+        <Container header={sectionHeader('Jobs', `Jobs completed in the window, priced from the estimate the scheduler recorded for each one. ${jobRateNote(computeRate)}`)}>
             <SpaceBetween size="s">
                 <ColumnLayout columns={2} variant="text-grid">
                     <div>

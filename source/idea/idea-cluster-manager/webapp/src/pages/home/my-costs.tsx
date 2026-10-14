@@ -12,7 +12,7 @@ import {FACETS, facetAmount} from '../../components/cost-charts';
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import {InfoTitle, InsightTab, MetricTile, TileRow} from '../reporting/insights-components';
 import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from '../reporting/reporting-period-picker';
-import {computeRateNote, costsDescription, date, money, STORAGE_EXCLUSIONS, updated} from '../reporting/reporting-format';
+import {computeRateNote, costsDescription, jobRateNote, date, money, STORAGE_EXCLUSIONS, updated} from '../reporting/reporting-format';
 import StorageUsage from './storage-usage';
 
 export interface MyCostsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {}
@@ -32,7 +32,7 @@ function MonthTiles({costs, previous = false, computeRate = 1}: {costs: GetMyCos
         {FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}) => {
             const line = month?.[key];
             const badge = costBadge(line, !costs?.current);
-            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={`${key === 'jobs' ? `Recorded job costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'} ${line?.reason || line?.note || ''}`}>
+            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={`${key === 'jobs' ? `Recorded job costs for this calendar month. ${jobRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'} ${line?.reason || line?.note || ''}`}>
                 {badge && badge !== 'Partial' && <Badge>{badge}</Badge>}
             </MetricTile>;
         })}

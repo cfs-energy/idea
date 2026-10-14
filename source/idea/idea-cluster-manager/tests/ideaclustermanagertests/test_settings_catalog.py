@@ -936,3 +936,16 @@ def test_application_logging_settings_are_restart_enums_and_datadog_is_deploymen
     assert setting['effect'] == 'deployment'
     assert setting['section'] == 'Logs'
     assert coerce_value(setting, False) is False
+
+
+@pytest.mark.parametrize('value', [0, '0', -0.1, 1.51, '2'])
+def test_compute_rate_multiplier_refuses_values_the_runtime_would_ignore(value):
+    setting = BY_KEY['cluster.costs.compute_rate_multiplier']
+    with pytest.raises(exceptions.SocaException):
+        coerce_value(setting, value)
+
+
+@pytest.mark.parametrize('value,expected', [(0.72, 0.72), ('1.5', 1.5), (1, 1)])
+def test_compute_rate_multiplier_accepts_valid_rates(value, expected):
+    setting = BY_KEY['cluster.costs.compute_rate_multiplier']
+    assert coerce_value(setting, value) == expected

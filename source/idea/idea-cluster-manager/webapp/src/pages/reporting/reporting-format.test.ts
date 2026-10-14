@@ -79,10 +79,10 @@ it('does not warn when a job finishes well under its requested time', () => {
 
 describe('compute rate label', () => {
     it('reads as list rate by default and adjusted otherwise', () => {
-        expect(computeRateNote()).toBe('Compute is priced at on-demand list rates.');
-        expect(computeRateNote(1)).toBe('Compute is priced at on-demand list rates.');
-        expect(computeRateNote(0.72)).toBe('Compute is priced at on-demand rates, adjusted (×0.72).');
-        expect(costsDescription(0.72)).toBe('Estimated costs and resource use. Compute is priced at on-demand rates, adjusted (×0.72).');
+        expect(computeRateNote()).toBe('On-demand compute is priced at list rates.');
+        expect(computeRateNote(1)).toBe('On-demand compute is priced at list rates.');
+        expect(computeRateNote(0.72)).toBe('On-demand compute is priced at list rates, adjusted (×0.72).');
+        expect(costsDescription(0.72)).toBe('Estimated costs and resource use. On-demand compute is priced at list rates, adjusted (×0.72).');
     });
     it.each([
         [undefined, 1], [null, 1], ['', 1], [0.72, 0.72], ['0.72', 0.72], [1.5, 1.5],

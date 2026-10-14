@@ -82,6 +82,8 @@ export const efficiencyLabel = (value: number, metric = 'cpu_efficiency_pct') =>
 
 // compute is priced at the public on-demand rate, scaled by cluster.costs.compute_rate_multiplier
 // (ClusterSettingsService.getComputeRate) when an administrator sets one.
-export const computeRateNote = (rate = 1) => rate === 1 ? 'Compute is priced at on-demand list rates.' : `Compute is priced at on-demand rates, adjusted (×${rate}).`;
+export const computeRateNote = (rate = 1) => rate === 1 ? 'On-demand compute is priced at list rates.' : `On-demand compute is priced at list rates, adjusted (×${rate}).`;
+// a job's cost is stored with the rate in force when it finished, so a rate change only reaches later jobs
+export const jobRateNote = (rate = 1) => rate === 1 ? computeRateNote(rate) : `${computeRateNote(rate)} Each job keeps the rate in force when it finished, so jobs from before a rate change use the earlier rate.`;
 export const STORAGE_EXCLUSIONS = 'FSx backups and Lustre scratch are not included in storage cost.';
 export const costsDescription = (rate = 1) => `Estimated costs and resource use. ${computeRateNote(rate)}`;

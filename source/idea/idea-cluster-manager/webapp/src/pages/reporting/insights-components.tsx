@@ -1,7 +1,7 @@
 import {createContext, ReactNode, useContext, useMemo} from 'react';
 import {AreaChart, BarChart, Box, Button, ColumnLayout, Container, Grid, Header, Link, LineChart, Popover, ProgressBar, Spinner, SpaceBetween, StatusIndicator} from '@cloudscape-design/components';
 import {DesktopRow, JobRow, Ranked, ReportingBudget, ReportingCoverage, ReportingInsights, ReportingNumber, ReportingRow, ReportingSummary} from '../../client/reporting-model';
-import {budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, computeRateNote, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent, STORAGE_EXCLUSIONS} from './reporting-format';
+import {budgetPresentation, bytes, palette, calendarDays, cappedSeries, colorByName, computeRateNote, jobRateNote, rankedColors, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, metricInfo, money, NamedPoint, numeric, percent, STORAGE_EXCLUSIONS} from './reporting-format';
 import InsightsTable, {InsightColumn, ReportLoading, ReportUser} from './insights-table';
 
 export const Missing = () => <span role="img" aria-label="No data">—</span>;
@@ -164,6 +164,7 @@ export function InsightTab(props: InsightTabProps) {
 }
 function InsightView({tab, insights: data, summary, userRow, timezone, personal = false, canOpenJobs = false, overviewTiles, overviewExtra, storageExtra, computeRate = 1}: InsightTabProps) {
     const rateNote = computeRateNote(computeRate);
+    const jobNote = jobRateNote(computeRate);
     const rateCaption = <Box variant="small" color="text-body-secondary">{rateNote}</Box>;
     const currency = data.currency;
     const username = useContext(ReportUser);
@@ -177,13 +178,13 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
         <DesktopCoaching desktops={data.desktops} currency={currency} personal={personal}/>
         {overviewTiles ?? (personal ? <TileRow>
             {tile('Total spend', total, summary?.coverage.spend_total, 'Adds the available job, desktop and storage costs for this period.')}
-            {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, `Estimated from jobs that finished in this period, at the on-demand or spot rate each ran at, plus job storage. ${rateNote}`)}
+            {tile('Job spend', data.jobs.cost, summary?.coverage.jobs, `Estimated from jobs that finished in this period, at the on-demand or spot rate each ran at, plus job storage. ${jobNote}`)}
             {tile('Desktop spend', data.desktops.cost, summary?.coverage.desktops, `Recorded desktop costs from stored daily costs for this period. ${rateNote}`)}
             {tile('Storage spend', data.storage.cost, summary?.coverage.shared_storage, `Storage cost based on measured use. ${STORAGE_EXCLUSIONS}`)}
         </TileRow> : !spend ? <StatusIndicator type="loading">Loading spend</StatusIndicator> : <TileRow>
             {tile('Total spend', spend.spend_total, spend.coverage.spend_total ?? summary?.coverage.spend_total, 'All recorded costs for this period: jobs, desktops, desktop disks, storage and AI.')}
             {([
-                ['jobs', 'Job spend', `Recorded job costs for this period. ${rateNote}`],
+                ['jobs', 'Job spend', `Recorded job costs for this period. ${jobNote}`],
                 ['desktops', 'Desktop spend', `Recorded desktop costs from stored daily costs for this period. ${rateNote}`],
                 ['desktop_disks', 'Desktop disk spend', 'Recorded desktop disk costs for this period.'],
                 ['shared_storage', 'Storage spend', `Storage cost based on measured use. ${STORAGE_EXCLUSIONS}`],
@@ -198,7 +199,7 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
         <BudgetTable budgets={data.budgets} currency={currency}/>
     </SpaceBetween>;
     if (tab === 'jobs') return <SpaceBetween size="l">
-        {rateCaption}
+        <Box variant="small" color="text-body-secondary">{jobNote}</Box>
         <EfficiencyTiles jobs={data.jobs} currency={currency} weightedInfo/>
         <Grid gridDefinition={[1, 2, 3].map(() => ({colspan: {default: 12, m: 4}}))}>
         <CostBars title="Job cost by queue" rows={data.jobs.by_queue} currency={currency} entity="Queue"/>

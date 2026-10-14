@@ -162,7 +162,7 @@ it('labels memory and walltime overruns separately', () => {
 it('distinguishes stored desktop costs from session hours', async () => {
     render(<InsightTab tab="desktops" insights={insightsFixture()} timezone="UTC"/>);
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop spend'}));
-    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period. Compute is priced at on-demand list rates.')).toBeInTheDocument();
+    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period. On-demand compute is priced at list rates.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop hours'}));
     expect(screen.getByText('Estimated desktop hours from sessions overlapping this period.')).toBeInTheDocument();
 });
@@ -217,12 +217,17 @@ it('personal job spend shows no on-demand comparison, even from a snapshot that 
 
 it.each(['jobs', 'desktops'])('labels %s compute as on-demand, and says when it is adjusted', tab => {
     const {rerender} = render(<InsightTab tab={tab} insights={insightsFixture()} timezone="UTC"/>);
-    expect(screen.getByText('Compute is priced at on-demand list rates.')).toBeInTheDocument();
+    expect(screen.getByText('On-demand compute is priced at list rates.')).toBeInTheDocument();
     rerender(<InsightTab tab={tab} insights={insightsFixture()} timezone="UTC" computeRate={0.72}/>);
-    expect(screen.getByText('Compute is priced at on-demand rates, adjusted (×0.72).')).toBeInTheDocument();
-    expect(screen.queryByText('Compute is priced at on-demand list rates.')).toBeNull();
+    expect(screen.getByText(/^On-demand compute is priced at list rates, adjusted \(×0\.72\)\./)).toBeInTheDocument();
+    expect(screen.queryByText('On-demand compute is priced at list rates.')).toBeNull();
 });
 it('says what storage cost leaves out', () => {
     render(<InsightTab tab="storage" insights={insightsFixture()} timezone="UTC"/>);
     expect(screen.getByText('FSx backups and Lustre scratch are not included in storage cost.')).toBeInTheDocument();
+});
+
+it('says adjusted job costs keep the rate in force when each job finished', () => {
+    render(<InsightTab tab="jobs" insights={insightsFixture()} timezone="UTC" computeRate={0.72}/>);
+    expect(screen.getByText('On-demand compute is priced at list rates, adjusted (×0.72). Each job keeps the rate in force when it finished, so jobs from before a rate change use the earlier rate.')).toBeInTheDocument();
 });
