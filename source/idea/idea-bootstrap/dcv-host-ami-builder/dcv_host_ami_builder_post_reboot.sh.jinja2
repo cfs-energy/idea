@@ -20,6 +20,8 @@ source "${SCRIPT_DIR}/image_bake_stage.sh"
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
 {% set ubuntu_desktop_bake = true %}
+{# this host mounts Lustre, so a failed client install stops it #}
+{% set lustre_required = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 {% endif %}
 

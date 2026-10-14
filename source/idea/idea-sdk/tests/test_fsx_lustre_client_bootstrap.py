@@ -1,6 +1,7 @@
 """
-a Lustre client that cannot be installed stops the bootstrap with its reason; it never
-reboots into the same failure until the reboot-loop guard gives up.
+a Lustre client that cannot be installed stops a host that mounts Lustre with its reason; it
+never reboots into the same failure until the reboot-loop guard gives up. a host that only
+installs the client because the cluster has Lustre logs the failure and carries on.
 """
 
 import subprocess
@@ -8,7 +9,7 @@ import subprocess
 import pytest
 
 from ideadatamodel import SocaAnyPayload
-from test_bootstrap_shell_syntax import IDEA_BOOTSTRAP_DIR
+from test_bootstrap_shell_syntax import Config, IDEA_BOOTSTRAP_DIR
 from test_image_bake_bootstrap import render
 
 # the commands the client install reaches, against a stock EL image with no client
@@ -35,18 +36,41 @@ reboot() { echo reboot >> "$CALLS"; }
 """
 
 
+def lustre_config():
+    # mounted by compute nodes of every queue profile, and by no infrastructure host
+    config = Config()
+    config.put(
+        'shared-storage.scratch',
+        {
+            'provider': 'fsx_lustre',
+            'mount_dir': '/scratch-lustre',
+            'mount_options': 'lustre defaults,noatime,flock,_netdev 0 0',
+            'scope': ['scheduler:queue-profile'],
+            'fsx_lustre': {'dns': 'fs.example.invalid', 'mount_name': 'test'},
+        },
+    )
+    return config
+
+
 def run_install(tmp_path, template, base_os, running, **environment):
     job = SocaAnyPayload(
         job_id='1', job_uid='u', owner='o', job_group='g', job_name='n'
     )
+    variables = {}
+    if template.startswith('compute-node'):
+        variables = {'job': job, 'job_directory': '/data/job'}
+    if template.startswith('compute-node/'):
+        variables['queue_profile'] = 'normal'
     text = render(
         template,
         base_os,
         drivers=('fsx_lustre',),
-        variables={'job': job, 'job_directory': '/data/job'},
+        config=lustre_config(),
+        variables=variables,
     )
+    # through the reboot decision; the mounts after it are not under test
     storage = text.split('# Begin: Mount Shared Storage')[1].split(
-        '# End: Mount Shared Storage'
+        'IDEA_SHARED_MOUNT_DIRS=('
     )[0]
     for path in ('/var/lib/idea/', '/etc/modprobe.d/', '/root/bootstrap/'):
         storage = storage.replace(path, f'{tmp_path}/')
@@ -147,3 +171,32 @@ def test_an_unsupported_kernel_reboots_only_into_a_new_kernel(tmp_path):
     )
     assert code == 0 and calls.splitlines()[-1] == 'reboot'
     assert 'Kernel installed for FSx for Lustre client' in history
+
+
+@pytest.mark.parametrize(
+    'template', ['bastion-host/setup.sh.jinja2', 'scheduler/setup.sh.jinja2']
+)
+@pytest.mark.parametrize('running', ['6.12.0-211.el10.x86_64', '6.12.0-55.el10.x86_64'])
+def test_a_host_that_does_not_mount_lustre_logs_and_carries_on(
+    tmp_path, template, running
+):
+    code, out, calls, history = run_install(
+        tmp_path, template, 'rocky10', running, FAIL_INSTALL='1'
+    )
+    assert code == 0 and calls.splitlines()[-1] == 'fell-through'
+    assert 'reboot' not in calls and history == ''
+    errors = [line for line in out.splitlines() if 'reason code:' in line]
+    assert len(errors) == 1 and '[ERROR]' in errors[0]
+
+
+def test_a_compute_node_reports_why_it_will_not_join(tmp_path):
+    code, out, _, _ = run_install(
+        tmp_path,
+        'compute-node/setup.sh.jinja2',
+        'rocky10',
+        '6.12.0-211.el10.x86_64',
+        FAIL_INSTALL='1',
+    )
+    assert code == 1
+    assert '(reason code: lustre-client-install-failed)' in out
+    assert 'Aborting bootstrap, this node will not join the cluster.' in out

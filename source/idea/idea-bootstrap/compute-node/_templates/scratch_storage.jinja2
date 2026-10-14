@@ -1,5 +1,7 @@
 # Begin: Scratch Storage
 {% if context.vars.job.params.fsx_lustre.enabled %}
+{# this host mounts Lustre, so a failed client install stops it #}
+{% set lustre_required = true %}
 {% include '_templates/linux/fsx_lustre_client.jinja2' %}
 function setup_scratch_storage_fsx_for_lustre () {
   FSX_MOUNTPOINT="{{ context.config.get_string('scheduler.scratch_storage.fsx_lustre.mount_point', '/fsx') }}"

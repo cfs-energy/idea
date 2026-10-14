@@ -76,6 +76,8 @@ systemctl enable --now amazon-ssm-agent
 {% include '_templates/linux/set_kernel.jinja2' %}
 {% endif %}
 
+{# this host mounts Lustre, so a failed client install stops it #}
+{% set lustre_required = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 mkdir -p ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}
