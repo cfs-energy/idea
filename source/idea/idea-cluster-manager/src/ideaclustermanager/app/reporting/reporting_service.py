@@ -583,7 +583,7 @@ class ReportingService:
             for entry in measured.values()
         ):
             pricing()._prefetch_running_hours(
-                list(measured.values()), runs, start_ms, end_ms
+                list(measured.values()), runs, start_ms, end_ms, deadline
             )
         user_desktops, project_desktops = {}, {}
         for identity, (_, source) in sessions.items():

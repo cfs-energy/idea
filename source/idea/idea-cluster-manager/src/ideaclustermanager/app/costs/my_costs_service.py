@@ -49,6 +49,7 @@ from ideaclustermanager.app.projects.bedrock_usage_service import (
 )
 
 import arrow
+import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
 # states in which the instance behind a desktop is still running and still costing
@@ -99,8 +100,9 @@ SESSION_FIELDS = [
 # desktop. the controller writes one per start, from 26.10.6.
 RUN_OF = 'run_of'
 
-# Known limitation: CloudWatch keeps hourly datapoints for 455 days, so a fallback
-# estimate older than that finds no hours.
+# CloudWatch keeps hourly datapoints for 455 days; time older than that is unknown to
+# it, not idle, and falls back to the whole interval
+CPU_RETENTION_MS = 455 * 86400000
 CPU_PERIOD = 3600
 # one GetMetricData call takes at most 500 queries
 CPU_QUERIES_PER_CALL = 500
@@ -752,11 +754,16 @@ class MyCostsService:
     def _days(start_ms: int, end_ms: int) -> Iterable[int]:
         return range(start_ms - start_ms % DAY_MS, end_ms, DAY_MS)
 
-    def _prefetch_running_hours(self, sources, runs, start_ms: int, end_ms: int):
+    def _prefetch_running_hours(
+        self, sources, runs, start_ms: int, end_ms: int, deadline: float = None
+    ):
         """
         one batched read for every desktop that needs an estimate, so pricing a page of
         desktops costs a handful of GetMetricData calls rather than one per desktop.
+        a report's deadline (time.monotonic) stops the reads; what was not read falls
+        back to the whole interval, flagged.
         """
+        retained = Utils.current_time_ms() - CPU_RETENTION_MS
         wanted: Dict[str, List[int]] = {}
         for source in sources:
             instance_id = Utils.get_value_as_string(
@@ -773,7 +780,7 @@ class MyCostsService:
             missing = [
                 day
                 for start, end in gaps
-                for day in self._days(start, end)
+                for day in self._days(max(start, retained), end)
                 if self._cached_hours(instance_id, day) is None
             ]
             if missing:
@@ -786,13 +793,18 @@ class MyCostsService:
         try:
             for offset in range(0, len(instance_ids), CPU_QUERIES_PER_CALL):
                 self._read_running_hours(
-                    instance_ids[offset : offset + CPU_QUERIES_PER_CALL], first, last
+                    instance_ids[offset : offset + CPU_QUERIES_PER_CALL],
+                    first,
+                    last,
+                    deadline,
                 )
         except Exception as e:
             # the estimate degrades to the whole interval; the page still renders
             self.logger.warning(f'failed to read desktop running hours: {e}')
 
-    def _read_running_hours(self, instance_ids: List[str], first: int, last: int):
+    def _read_running_hours(
+        self, instance_ids: List[str], first: int, last: int, deadline: float = None
+    ):
         """
         an hour with a CPUUtilization datapoint is an hour the instance ran: a stopped
         instance reports nothing.
@@ -824,6 +836,8 @@ class MyCostsService:
         hours: Dict[str, set] = {instance_id: set() for instance_id in instance_ids}
         cloudwatch = self.context.aws().cloudwatch()
         while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('report deadline reached')
             page = cloudwatch.get_metric_data(**request)
             for result in page.get('MetricDataResults', []):
                 instance_id = instance_ids[int(result['Id'][1:])]
@@ -859,7 +873,10 @@ class MyCostsService:
         """how long the instance ran between start and end, or None if that cannot be read."""
         if Utils.is_empty(instance_id):
             return None
-        total = 0
+        # beyond retention CloudWatch says nothing either way: the whole of that part
+        retained = Utils.current_time_ms() - CPU_RETENTION_MS
+        total = max(0, min(end, retained) - start)
+        start = max(start, retained)
         for day in MyCostsService._days(start, end):
             hours = MyCostsService._cached_hours(instance_id, day)
             if hours is None:
@@ -886,9 +903,13 @@ class MyCostsService:
         runs = runs or []
         for index, (run_start, run_stop, _) in enumerate(runs):
             if run_stop is None:
-                # still open: to the next start if a stop was missed, else to the
-                # recorded stop of a desktop no longer live, else to now
-                run_stop = runs[index + 1][0] if index + 1 < len(runs) else stopped_at
+                # still open: to the recorded stop of a desktop no longer live, else now
+                run_stop = stopped_at
+            if index + 1 < len(runs):
+                # never past the next start: two runs left open (a missed stop, a
+                # running state through ERROR and back) are closed together, and
+                # summing them would bill the overlap twice
+                run_stop = min(run_stop, runs[index + 1][0])
             run_ms += max(0, min(run_stop, end_ms) - max(run_start, start_ms))
 
         estimated_ms = 0

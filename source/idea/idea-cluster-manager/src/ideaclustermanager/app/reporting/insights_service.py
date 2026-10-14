@@ -391,7 +391,7 @@ class InsightsService:
                 ),
             )
             priced.append(source)
-        pricing._prefetch_running_hours(priced, runs, start_ms, end_ms)
+        pricing._prefetch_running_hours(priced, runs, start_ms, end_ms, deadline)
         for source in priced:
             check_deadline(deadline)
             session = pricing._desktop_session(

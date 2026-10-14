@@ -1690,3 +1690,60 @@ def test_the_time_before_a_reconciled_run_is_still_estimated():
     # and the hour since the reconciliation; not the fifteen days of the gap
     assert session.hours == pytest.approx(5 * 24 + 2 + 1, abs=0.01)
     assert session.stop_time_estimated is True
+
+
+def test_two_runs_closed_together_bill_their_union_not_their_sum():
+    now = arrow.utcnow()
+    created = now.shift(days=-3)
+    first = created.shift(seconds=1)
+    # running, to ERROR, back to READY: a second run opens while the first is still
+    # open, and the stop closes both at once
+    second = first.shift(hours=2)
+    stop = first.shift(hours=5)
+    session = summary_session(
+        [live_hit('sess-1', 'STOPPED', ms(created), ms(stop), stopped_on=ms(stop))],
+        [
+            run_row('sess-1', USER, ms(first), ms(stop)),
+            run_row('sess-1', USER, ms(second), ms(stop)),
+        ],
+    )
+
+    assert session.hours == pytest.approx(5.0, abs=0.01)
+
+
+def test_a_report_past_its_deadline_reads_no_cloudwatch_and_flags_the_fallback():
+    import time
+
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    cloudwatch = FakeCloudWatch(hours={'i-0abc': [now.shift(days=-5).floor('hour')]})
+    service, _ = build_service(prices={'m5.large': 0.1}, cloudwatch=cloudwatch)
+    source = live_hit('sess-1', 'READY', ms(created), ms(created), 'i-0abc')['_source']
+
+    service._prefetch_running_hours(
+        [source], {}, ms(created), ms(now), deadline=time.monotonic() - 1
+    )
+    session = service._desktop_session(source, ms(created), ms(now))
+
+    assert cloudwatch.calls == []
+    assert session.hours == pytest.approx(20 * 24, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_time_older_than_cloudwatch_retention_is_unknown_not_idle():
+    now = arrow.utcnow()
+    created = now.shift(days=-500)
+    ran = now.shift(days=-5).floor('hour')
+    service, _ = build_service(
+        prices={'m5.large': 0.1},
+        cloudwatch=FakeCloudWatch(hours={'i-0abc': [ran]}),
+    )
+    source = live_hit('sess-1', 'READY', ms(created), ms(created), 'i-0abc')['_source']
+    start = ms(now.shift(days=-460))
+    service._prefetch_running_hours([source], {}, start, ms(now))
+    session = service._desktop_session(source, start, ms(now))
+
+    # the five days CloudWatch no longer holds count whole, flagged; the rest is
+    # the one hour it saw
+    assert session.hours == pytest.approx(5 * 24 + 1, abs=0.05)
+    assert session.stop_time_estimated is True
