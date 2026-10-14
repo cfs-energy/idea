@@ -329,7 +329,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     // The inventory counts key patterns: `<app>.server.port` is one entry there and three keys here, as are
     // `<day>`, `<state>`, `<os>`, `<family>` and the `<module>.module_id` mappings.
     const distinct = new Set(RUNTIME_KEY_GROUPS.flatMap((group) => runtimeKeys[group] as string[]));
-    assert.equal(distinct.size, 698);
+    assert.equal(distinct.size, 720);
     // Spot-check expanded key identities.
     for (const key of [
       'global-settings.module_sets.default.virtual-desktop-controller.module_id',
@@ -405,6 +405,26 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
       'cluster-manager.ec2.autoscaling.base_os': 'rhel9',
       'scheduler.base_os': 'rhel9',
       'vdc.controller.autoscaling.base_os': 'rhel9',
+    },
+    absent: [],
+  },
+  'base-os-rhel10.yml': {
+    modules: 11,
+    present: {
+      'bastion-host.base_os': 'rhel10',
+      'cluster-manager.ec2.autoscaling.base_os': 'rhel10',
+      'scheduler.base_os': 'rhel10',
+      'vdc.controller.autoscaling.base_os': 'rhel10',
+    },
+    absent: [],
+  },
+  'base-os-rocky10.yml': {
+    modules: 11,
+    present: {
+      'bastion-host.base_os': 'rocky10',
+      'cluster-manager.ec2.autoscaling.base_os': 'rocky10',
+      'scheduler.base_os': 'rocky10',
+      'vdc.controller.autoscaling.base_os': 'rocky10',
     },
     absent: [],
   },
@@ -704,7 +724,6 @@ describe('error paths reject the values file', () => {
   const errorsDir = join(syntheticDir, 'errors');
   const expected: Record<string, RegExp> = {
     'eol-base-os.yml': /end-of-life/,
-    'el10-with-evdi.yml': /not supported with the virtual-desktop-controller module/,
     'arm64-flat-ami-file.yml': /architecture: arm64 was requested/,
     'prometheus-without-url.yml': /prometheus_remote_write_url is required/,
     'dogstatsd-ecs-without-secret.yml': /datadog_api_key_secret_arn is required/,

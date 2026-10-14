@@ -379,18 +379,18 @@ SocaInputParamSpec:
       help_text: ~
       default: amazonlinux2023
       # amazonlinux2 is deliberately not offered: it reached end-of-life on 2026-06-30.
-      # rhel10/rocky10 lack published DCV packages, hence "no eVDI support" below. they also have
-      # no AMIs in me-south-1 and us-gov-west-1, where resolve_region_ami names base_os and region.
+      # rhel10/rocky10 have no AMIs in me-south-1 and us-gov-west-1, where resolve_region_ami
+      # names base_os and region.
       choices:
         - title: Amazon Linux 2023
           value: amazonlinux2023
-        - title: Red Hat Enterprise Linux 10 (no eVDI support)
+        - title: Red Hat Enterprise Linux 10
           value: rhel10
         - title: Red Hat Enterprise Linux 9
           value: rhel9
         - title: Red Hat Enterprise Linux 8
           value: rhel8
-        - title: Rocky Linux 10 (no eVDI support)
+        - title: Rocky Linux 10
           value: rocky10
         - title: Rocky Linux 9
           value: rocky9

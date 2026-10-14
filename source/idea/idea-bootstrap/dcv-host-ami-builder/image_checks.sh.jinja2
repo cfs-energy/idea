@@ -101,7 +101,7 @@ bootstrap_ok() {
 
 kernel_ok() {
   local default_kernel running
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Resolve the generated GRUB menu, including saved entries and nested menu titles/ids.
   default_kernel=$("${BAKE_PYTHON}" - <<'PY'
 import re
@@ -164,7 +164,7 @@ PY
 packages_installed() {
   local package
   for package in "$@"; do
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
     [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" == 'install ok installed' ]] || { echo "package $package is not installed"; return 1; }
 {% else %}
     rpm -q "$package" >/dev/null 2>&1 || { echo "package $package is not installed"; return 1; }
@@ -193,7 +193,7 @@ dcv_runtime_ok() {
     echo "dcvserver: ${out}"
     return 1
   fi
-{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # rpm -q stays green after a failed scriptlet. A missing payload file does not.
   local missing
   missing=$(rpm -V nice-dcv-server 2>&1 | grep -E '^missing +/' || true)
@@ -208,7 +208,7 @@ dcv_ok() {
     dcv_runtime_ok
 }
 ssm_ok() {
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   { snap list amazon-ssm-agent >/dev/null 2>&1 || { echo "snap amazon-ssm-agent is not installed"; return 1; }; } &&
     unit_installed snap.amazon-ssm-agent.amazon-ssm-agent.service &&
     unit_enabled snap.amazon-ssm-agent.amazon-ssm-agent.service
@@ -222,7 +222,7 @@ mkdir -p "$STATE" || exit 1
 check bootstrap 'All stages succeeded and bootstrap logs are clean' bootstrap_ok "${1:-}"
 check kernel 'Running kernel equals the default boot kernel' kernel_ok
 {% if (compute and 'fsx_lustre' in (context.vars.enabled_drivers or ())) or (not compute and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache'))) %}
-{% if not compute and context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if not compute and context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 lustre_ok() {
   packages_installed lustre-client-utils "lustre-client-modules-$(uname -r)" &&
     command -v mount.lustre >/dev/null && modprobe -n lustre || return 1
@@ -238,7 +238,13 @@ check lustre 'Configured Lustre module resolves for the running kernel' modprobe
 {% endif %}
 {% endif %}
 {% if not compute %}
-check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404') else 'gdm' }}.service
+check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') else 'gdm' }}.service{% if context.base_os in ('rhel10', 'rocky10', 'ubuntu2604') %}
+# DCV virtual sessions on these desktops are Wayland sessions under GDM
+wayland_ok() {
+  [[ "$(systemctl get-default)" == graphical.target ]] || { echo "default target is $(systemctl get-default), not graphical.target"; return 1; }
+  ! grep -Eqs '^[[:space:]]*WaylandEnable[[:space:]]*=[[:space:]]*(false|0)' /etc/gdm/custom.conf /etc/gdm3/custom.conf || { echo "GDM has WaylandEnable=false, so DCV virtual sessions cannot start"; return 1; }
+}
+check wayland 'Boots to the graphical target with Wayland enabled in GDM' wayland_ok{% endif %}
 check dcv 'DCV server is installed, its units are present, and dcvserver libraries resolve' dcv_ok
 {% endif %}
 check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli

@@ -44,15 +44,15 @@ IDEA_SESSION_ID="{{ context.vars.idea_session_id }}"
 IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
 
 function install_microphone_redirect() {
-  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
-  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
   {% endif %}
     echo "Installing microphone redirect..."
-    {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+    {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
     package_transaction yum install -y pulseaudio-utils
-    {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
     apt install -y pulseaudio-utils
     {% endif %}
   else
@@ -189,7 +189,7 @@ function restart_x_server() {
 }
 
 function configure_gl() {
-  {% if context.base_os == 'amazonlinux2023' %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel10', 'rocky10', 'ubuntu2604') %}
     echo "OS is {{ context.base_os }}, no need for this configuration. NO-OP..."
   {% elif context.is_gpu_instance_type() %}
     if [[ $machine == "x86_64" ]]; then
@@ -414,7 +414,7 @@ systemctl restart NetworkManager
 {# 22.04: NetworkManager now owns the interface, so networkd-wait-online waits its full
    120 s on every later boot (the reboot below included); NetworkManager-wait-online still
    gates network-online.target. #}
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 systemctl disable systemd-networkd-wait-online.service
 {% endif %}
 

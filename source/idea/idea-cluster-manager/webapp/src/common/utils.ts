@@ -657,6 +657,11 @@ class Utils {
         return Utils.getScheduleTypeDisplay(schedule?.schedule_type, working_hours_start, working_hours_end, schedule?.start_up_time, schedule?.shut_down_time)
     }
 
+    // DCV runs these desktops on Wayland, which has virtual sessions only
+    static isWaylandDesktop(baseOs?: string): boolean {
+        return baseOs === 'rhel10' || baseOs === 'rocky10' || baseOs === 'ubuntu2604'
+    }
+
     static getOsTitle(name?: string): string {
         switch (name) {
             case 'amazonlinux2023':
@@ -680,7 +685,6 @@ class Utils {
                 return "Ubuntu 22.04";
             case "ubuntu2404":
                 return "Ubuntu 24.04";
-            // not a selectable base_os: only a custom AMI or a hand-set value reports it
             case "ubuntu2604":
                 return "Ubuntu 26.04";
             case 'windows':

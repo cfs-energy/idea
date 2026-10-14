@@ -280,7 +280,9 @@ def run_set_kernel(
             'RUNNING_KERNEL': running_kernel,
             'KERNEL_PACKAGE': kernel_package,
             'NO_LUSTRE_MODULE': '' if lustre_module else '1',
-            'VERSION_CODENAME': 'jammy' if base_os == 'ubuntu2204' else 'noble',
+            'VERSION_CODENAME': {'ubuntu2204': 'jammy', 'ubuntu2604': 'resolute'}.get(
+                base_os, 'noble'
+            ),
             **environment,
         },
         capture_output=True,

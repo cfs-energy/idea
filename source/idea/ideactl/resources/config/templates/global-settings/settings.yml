@@ -475,6 +475,9 @@ package_config:
         rhel_centos_rocky9:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el9-x86_64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el9-x86_64.tgz.sha256sum
+        rhel_centos_rocky10:
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el10-x86_64.tgz
+          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el10-x86_64.tgz.sha256sum
       debian:
         ubuntu2204:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-x86_64.tgz
@@ -482,6 +485,9 @@ package_config:
         ubuntu2404:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz.sha256sum
+        ubuntu2604:
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-x86_64.tgz
+          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-x86_64.tgz.sha256sum
     aarch64:
       linux:
         al2023:
@@ -493,12 +499,18 @@ package_config:
         rhel_centos_rocky9:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el9-aarch64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el9-aarch64.tgz.sha256sum
+        rhel_centos_rocky10:
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el10-aarch64.tgz
+          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-el10-aarch64.tgz.sha256sum
         ubuntu2204:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-aarch64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-aarch64.tgz.sha256sum
         ubuntu2404:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-aarch64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-aarch64.tgz.sha256sum
+        ubuntu2604:
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-aarch64.tgz
+          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-aarch64.tgz.sha256sum
     agent:
       x86_64:
         linux:
@@ -511,6 +523,9 @@ package_config:
           rhel_centos_rocky9:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el9.x86_64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el9.x86_64.rpm.sha256sum
+          rhel_centos_rocky10:
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el10.x86_64.rpm
+            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el10.x86_64.rpm.sha256sum
         ubuntu:
           ubuntu2204:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2204.deb
@@ -518,6 +533,9 @@ package_config:
           ubuntu2404:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb.sha256sum
+          ubuntu2604:
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2604.deb
+            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2604.deb.sha256sum
       aarch64:
         linux:
           al2023:
@@ -529,12 +547,18 @@ package_config:
           rhel_centos_rocky9:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el9.aarch64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el9.aarch64.rpm.sha256sum
+          rhel_centos_rocky10:
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el10.aarch64.rpm
+            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-el10.aarch64.rpm.sha256sum
           ubuntu2204:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2204.deb
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2204.deb.sha256sum
           ubuntu2404:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2404.deb
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2404.deb.sha256sum
+          ubuntu2604:
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2604.deb
+            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2604.deb.sha256sum
     connection_gateway:
       x86_64:
         linux:
@@ -547,6 +571,9 @@ package_config:
           rhel_centos_rocky9:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.x86_64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.x86_64.rpm.sha256sum
+          rhel_centos_rocky10:
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el10.x86_64.rpm
+            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el10.x86_64.rpm.sha256sum
       aarch64:
         linux:
           al2023:
@@ -558,6 +585,9 @@ package_config:
           rhel_centos_rocky9:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.aarch64.rpm
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el9.aarch64.rpm.sha256sum
+          rhel_centos_rocky10:
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el10.aarch64.rpm
+            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-connection-gateway-el10.aarch64.rpm.sha256sum
     broker:
       linux:
         al2023:
@@ -569,6 +599,9 @@ package_config:
         rhel_centos_rocky9:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el9.noarch.rpm
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el9.noarch.rpm.sha256sum
+        rhel_centos_rocky10:
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el10.noarch.rpm
+          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-broker-el10.noarch.rpm.sha256sum
     clients:
       windows:
         msi:

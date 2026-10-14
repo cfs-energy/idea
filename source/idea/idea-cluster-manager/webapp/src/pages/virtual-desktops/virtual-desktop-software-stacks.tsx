@@ -930,6 +930,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 value: 'rhel9'
                             },
                             {
+                                title: 'Red Hat Enterprise Linux 10',
+                                value: 'rhel10'
+                            },
+                            {
                                 title: 'Rocky Linux 8',
                                 value: 'rocky8'
                             },
@@ -938,12 +942,20 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 value: 'rocky9'
                             },
                             {
+                                title: 'Rocky Linux 10',
+                                value: 'rocky10'
+                            },
+                            {
                                 title: 'Ubuntu 22.04',
                                 value: 'ubuntu2204'
                             },
                             {
                                 title: 'Ubuntu 24.04',
                                 value: 'ubuntu2404'
+                            },
+                            {
+                                title: 'Ubuntu 26.04',
+                                value: 'ubuntu2604'
                             }
                         ]
                     }

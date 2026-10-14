@@ -1,4 +1,4 @@
-# rocky10 hosts. virtual-desktop-controller is omitted: Amazon DCV publishes no EL10 packages.
+# rocky10 hosts.
 base_os: rocky10
 enabled_modules:
   - metrics

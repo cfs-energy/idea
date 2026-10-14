@@ -271,6 +271,10 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                                 value: 'rhel9'
                             },
                             {
+                                title: 'RHEL 10',
+                                value: 'rhel10'
+                            },
+                            {
                                 title: 'Rocky 8',
                                 value: 'rocky8'
                             },
@@ -279,12 +283,20 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                                 value: 'rocky9'
                             },
                             {
+                                title: 'Rocky 10',
+                                value: 'rocky10'
+                            },
+                            {
                                 title: 'Ubuntu 22.04',
                                 value: 'ubuntu2204'
                             },
                             {
                                 title: 'Ubuntu 24.04',
                                 value: 'ubuntu2404'
+                            },
+                            {
+                                title: 'Ubuntu 26.04',
+                                value: 'ubuntu2604'
                             }
                         ]
                     }

@@ -624,18 +624,6 @@ async function validateBaseOs(deps: UpgradeDeps, options: UpgradeCommandOptions,
     deps.err(`Invalid base_os: ${baseOs}. Must be one of: ${UPGRADE_BASE_OS.join(", ")}`);
     throw new ExitWithCode(1);
   }
-  if (baseOs !== "rhel10" && baseOs !== "rocky10") return;
-  let modules: ModuleInfo[];
-  try {
-    modules = await clusterModules(deps, options.clusterName);
-  } catch (error) {
-    deps.err(`Could not read the cluster modules table to validate ${baseOs} eVDI compatibility: ${(error as Error).message}`);
-    throw new ExitWithCode(1);
-  }
-  if (modules.some((module) => module.name === "virtual-desktop-controller" && module.status === "deployed")) {
-    deps.err(`base_os ${baseOs} is not supported on clusters with the virtual-desktop-controller module deployed: Amazon DCV publishes no EL10 packages.`);
-    throw new ExitWithCode(1);
-  }
 }
 
 function backupDir(configDir: string, now: number): string {

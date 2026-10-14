@@ -382,7 +382,7 @@ def test_a_custom_build_cannot_repoint_a_stack():
 def test_build_rejects_unknown_os_and_missing_stack():
     service = build_service([])
     with pytest.raises(exceptions.SocaException):
-        service.build(BuildDesktopImageRequest(base_os='rocky10'), 'operator')
+        service.build(BuildDesktopImageRequest(base_os='ubuntu2004'), 'operator')
     with pytest.raises(exceptions.SocaException) as exc_info:
         service.build(BuildDesktopImageRequest(base_os='rocky9'), 'operator')
     assert 'does not exist' in exc_info.value.message

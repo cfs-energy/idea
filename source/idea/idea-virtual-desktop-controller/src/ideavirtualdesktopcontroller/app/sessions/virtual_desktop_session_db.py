@@ -918,10 +918,13 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                         VirtualDesktopBaseOS.AMAZON_LINUX2023.value,
                         VirtualDesktopBaseOS.RHEL8.value,
                         VirtualDesktopBaseOS.RHEL9.value,
+                        VirtualDesktopBaseOS.RHEL10.value,
                         VirtualDesktopBaseOS.ROCKY8.value,
                         VirtualDesktopBaseOS.ROCKY9.value,
+                        VirtualDesktopBaseOS.ROCKY10.value,
                         VirtualDesktopBaseOS.UBUNTU2204.value,
                         VirtualDesktopBaseOS.UBUNTU2404.value,
+                        VirtualDesktopBaseOS.UBUNTU2604.value,
                     ]
                 elif (
                     listing_filter.key

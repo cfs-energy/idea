@@ -22,8 +22,6 @@ AMI_PATTERNS = {
     'rhel9/x86-64': 'RHEL-9.*_HVM-*-x86_64-*',
     'rhel10/arm64': 'RHEL-10.*_HVM-*-arm64-*',
     'rhel10/x86-64': 'RHEL-10.*_HVM-*-x86_64-*',
-    # Lookup patterns only: these resolve an existing stack id, they do not create stacks.
-    # VirtualDesktopBaseOS has no UBUNTU2604 member, so no ubuntu2604 stack can exist.
     'ubuntu2204/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-arm64-server-*',
     'ubuntu2204/x86-64': 'ubuntu/images/hvm-ssd*/ubuntu-*-22.04-amd64-server-*',
     'ubuntu2404/arm64': 'ubuntu/images/hvm-ssd*/ubuntu-*-24.04-arm64-server-*',

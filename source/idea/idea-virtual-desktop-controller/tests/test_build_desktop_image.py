@@ -184,7 +184,7 @@ def test_vdi_subnets_win_over_cluster_subnets():
 def test_unsupported_base_os_is_rejected():
     with pytest.raises(exceptions.SocaException):
         DcvHostImageBuilder(
-            context=fake_context(), base_ami='ami-base', base_os='rocky10'
+            context=fake_context(), base_ami='ami-base', base_os='ubuntu2004'
         )
     with pytest.raises(exceptions.SocaException):
         DcvHostImageBuilder(

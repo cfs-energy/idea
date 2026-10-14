@@ -20,6 +20,9 @@ DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-set
 {% elif context.base_os in ('amazonlinux2023',) %}
 DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2023.url', required=True) }}"
 DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.al2023.sha256sum', required=True) }}"
+{% elif context.base_os in ('rhel10', 'rocky10') %}
+DCV_SESSION_MANAGER_BROKER_URL="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky10.url', required=True) }}"
+DCV_SESSION_MANAGER_BROKER_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.broker.linux.rhel_centos_rocky10.sha256sum', required=True) }}"
 {% endif %}
 
 timestamp=$(date +%s)

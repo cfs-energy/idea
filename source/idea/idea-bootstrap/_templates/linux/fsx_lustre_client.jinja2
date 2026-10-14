@@ -245,13 +245,9 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
     fi
 fi
 {% endif %}
-{% if context.base_os == 'ubuntu2604' %}
-{# The FSx for Lustre ubuntu repo publishes no 'resolute' suite and no lustre-client-modules
-   for the 7.0.0-*-aws ABI, so adding ubuntu2604 below would write a permanently 404ing apt
-   source. Re-add it only once that suite carries modules for the resolute linux-aws ABI. #}
-log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx client repo publishes no 'resolute' suite and no modules for the 7.0 kernel. Lustre filesystems will NOT be mounted on this node."
-{% endif %}
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{# ubuntu2604: the FSx repo's 'resolute' suite carries modules for one 7.0.0-*-aws ABI at a time;
+   bakes pick that kernel in set_kernel.jinja2 and unbaked hosts need their image to boot it #}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 {% if ubuntu_desktop_bake | default(false) %}
   if [[ "${BAKE_STAGE}" == setup ]]; then
     # setup selected the ABI before this include; the builder owns the reboot.

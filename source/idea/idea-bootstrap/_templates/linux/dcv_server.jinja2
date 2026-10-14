@@ -39,6 +39,18 @@ DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.pac
 
 DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.ubuntu2404.url', required=True) }}"
 DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.ubuntu2404.sha256sum', required=True) }}"
+{% elif context.base_os in ('rhel10', 'rocky10') %}
+DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.rhel_centos_rocky10.url', required=True) }}"
+DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.rhel_centos_rocky10.sha256sum', required=True) }}"
+
+DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.rhel_centos_rocky10.url', required=True) }}"
+DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.rhel_centos_rocky10.sha256sum', required=True) }}"
+{% elif context.base_os == 'ubuntu2604' %}
+DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.debian.ubuntu2604.url', required=True) }}"
+DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.debian.ubuntu2604.sha256sum', required=True) }}"
+
+DCV_SERVER_AARCH64_URL="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.ubuntu2604.url', required=True) }}"
+DCV_SERVER_AARCH64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.aarch64.linux.ubuntu2604.sha256sum', required=True) }}"
 {% endif %}
 
 log_info "Installing GPU drivers"
@@ -50,7 +62,7 @@ log_info "Installing GPU drivers"
 {% include '_templates/linux/gpu_drivers.jinja2' %}
 {% endwith %}
 
-{% if not context.is_gpu_instance_type() and context.vars.session.type.lower() == 'console' %}
+{% if not context.is_gpu_instance_type() and context.vars.session.type.lower() == 'console' and context.base_os not in ('rhel10', 'rocky10', 'ubuntu2604') %}
      {% include '_templates/linux/x_dummy_driver.jinja2' %}
 install_x_dummy_driver
 {% endif %}
@@ -59,6 +71,12 @@ install_x_dummy_driver
 if [[ -z "$(rpm -qa gnome-terminal)" ]]; then
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
 if [[ -z "$(dpkg -l gnome-terminal | grep ^ii)" ]]; then
+{% elif context.base_os in ('rhel10', 'rocky10') %}
+# ptyxis replaced gnome-terminal on these desktops; gnome-shell marks an installed desktop
+if [[ -z "$(rpm -qa gnome-shell)" ]]; then
+{% elif context.base_os == 'ubuntu2604' %}
+# ptyxis replaced gnome-terminal on these desktops; gnome-shell marks an installed desktop
+if [[ -z "$(dpkg -l gnome-shell | grep ^ii)" ]]; then
 {% endif %}
 {% if context.base_os in ('amazonlinux2023',) %}
   package_transaction dnf groupinstall "Desktop" -y
@@ -116,6 +134,47 @@ EOF
   fi
 
   update-desktop-database
+{% elif context.base_os in ('rhel10', 'rocky10') %}
+  # DCV runs virtual sessions on GDM's Wayland GNOME here: WaylandEnable stays as shipped and
+  # no Xorg is configured (EL10 ships none)
+  package_transaction dnf groupinstall "Server with GUI" -y --skip-broken --disablerepo=epel-cisco-openh264
+
+  systemctl set-default graphical.target
+  systemctl restart gdm
+  # "Authentication required to refresh system repositories" pop-up (bugzilla 1857654).
+  # polkit dropped .pkla support, so the rule is javascript here
+  mkdir -p /etc/polkit-1/rules.d
+  echo 'polkit.addRule(function (action, subject) {
+  if (action.id == "org.freedesktop.packagekit.system-sources-refresh") {
+    return polkit.Result.NO;
+  }
+});' > /etc/polkit-1/rules.d/49-idea-disable-package-refresh.rules
+  systemctl restart polkit
+  # "System Not Registered" notification (https://access.redhat.com/solutions/6976776); the
+  # subscription plugin ships on RHEL only
+  [[ ! -f /etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop ]] || sed -i 's,Exec=/usr/libexec/gsd-subman,#Exec=/usr/libexec/gsd-subman,' /etc/xdg/autostart/org.gnome.SettingsDaemon.Subscription.desktop
+  [[ ! -f /lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service ]] || sed -i 's,ExecStart=/usr/libexec/gsd-subman,#ExecStart=/usr/libexec/gsd-subman,' /lib/systemd/user/org.gnome.SettingsDaemon.Subscription.service
+  dnf -y remove subscription-manager-cockpit
+{% elif context.base_os == 'ubuntu2604' %}
+  # the firefox package installs its snap from preinst with no retry, so one snap store
+  # error fails the whole apt transaction; with the snap already present the preinst has nothing to fetch
+  for attempt in 1 2 3; do
+    snap install firefox && break
+    log_warning "snap install firefox failed (attempt ${attempt}), retrying"
+    sleep 30
+  done
+  # DCV runs virtual sessions on GDM's Wayland GNOME here (GNOME 50 has no X11 session):
+  # WaylandEnable stays as shipped and no Xsession or X input method is configured
+  DEBIAN_FRONTEND=noninteractive apt install -y ubuntu-desktop-minimal
+  systemctl set-default graphical.target
+  systemctl restart gdm3
+
+  if [[ -f /var/lib/snapd/desktop/applications/firefox_firefox.desktop ]]; then
+    log_info "Fixing Firefox snap desktop integration"
+    cp /var/lib/snapd/desktop/applications/firefox_firefox.desktop /usr/share/applications/ 2>/dev/null || true
+  fi
+
+  update-desktop-database
 {% endif %}
 
   # Apply colord policy fix for all distributions
@@ -127,9 +186,9 @@ fi
 
 {% include '_templates/linux/gnome_online_accounts.jinja2' %}
 
-{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
 {% endif %}
 
@@ -146,9 +205,9 @@ else
   DCV_SERVER_SHA256_HASH=${DCV_SERVER_AARCH64_SHA256_HASH}
 fi
 
-{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 if [[ -z "$(rpm -qa nice-dcv-server)" ]]; then
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 if [[ -z "$(dpkg -l nice-dcv-server | grep ^ii)" ]]; then
 {% endif %}
 
@@ -236,6 +295,13 @@ fi
     dpkg -i nice-xdcv_*.deb
     dpkg -i nice-dcv-server_*.deb
     dpkg -i nice-dcv-web-viewer_*.deb
+    usermod -aG video dcv
+  {% elif context.base_os in ('rhel10', 'rocky10') %}
+    # Wayland: there is no nice-xdcv or nice-dcv-gl, and dnf resolves the GUI dependencies
+    package_transaction dnf install -y ./nice-dcv-server-*.${machine}.rpm ./nice-dcv-web-viewer-*.${machine}.rpm
+  {% elif context.base_os == 'ubuntu2604' %}
+    # Wayland: there is no nice-xdcv or nice-dcv-gl, and apt resolves the GUI dependencies
+    DEBIAN_FRONTEND=noninteractive apt install -y ./nice-dcv-server_*.deb ./nice-dcv-web-viewer_*.deb
     usermod -aG video dcv
   {% endif %}
 
