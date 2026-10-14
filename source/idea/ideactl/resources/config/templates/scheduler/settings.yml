@@ -89,7 +89,7 @@ cost_estimation:
 # compute image pipeline. the schedule, ready gate and validation identity come from
 # virtual-desktop-controller.software_stacks.*; clusters without these keys use the same defaults
 images:
-  max_concurrent_bakes: 4
+  max_concurrent_bakes: 32
   keep_generations: 2 # current + previous validated
   # builder images the pipeline did not bake (older releases, manual builds) are removed once
   # this many days old and nothing references them; 0 keeps them

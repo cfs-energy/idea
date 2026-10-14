@@ -61,9 +61,9 @@ export interface HpcCustomAmisProps extends PathRouteProps, IdeaAppLayoutProps, 
 }
 
 const POLL_INTERVAL_MS = 30000
-// ponytail: fixed estimate per image at the default of 4 bakes at a time; read image_pipeline.max_concurrent_bakes if it drifts
+// ponytail: fixed estimate per image at the default of 32 bakes at a time; read image_pipeline.max_concurrent_bakes if it drifts
 const MINUTES_PER_IMAGE = 45
-const CONCURRENT_BAKES = 4
+const CONCURRENT_BAKES = 32
 
 const IN_FLIGHT: ImageRowStatus[] = ['queued', 'resolving', 'building', 'checking', 'test_launching', 'promoting', 'waiting_capacity']
 const BAKE_STEPS: ImageRowStatus[] = ['resolving', 'building', 'checking', 'test_launching', 'promoting']

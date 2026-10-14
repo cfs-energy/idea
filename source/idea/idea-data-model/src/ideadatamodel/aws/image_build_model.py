@@ -236,7 +236,7 @@ class ImagePipelineSettings(SocaBaseModel):
     templates and cover clusters deployed before the keys existed
     """
 
-    max_concurrent_bakes: Optional[int] = Field(default=4)
+    max_concurrent_bakes: Optional[int] = Field(default=32)
     keep_generations: Optional[int] = Field(default=2)
     ready_gate_seconds_linux: Optional[int] = Field(default=600)
     ready_gate_seconds_windows: Optional[int] = Field(default=900)
