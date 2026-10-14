@@ -9,7 +9,9 @@
 #           IDEA_BROKER_CLIENT_TARGET_GROUP_ARN (the target group the client port is
 #           registered in; finds EC2 instance targets only)
 # Optional: IDEA_COGNITO_PROVIDER_URL (read from the cluster settings when unset),
-#           IDEA_BROKER_CONF_FILE (where the rendered broker properties are written)
+#           IDEA_BROKER_CONF_FILE (where the rendered broker properties are written),
+#           DCV_BROKER_LOG_LEVEL (info; the root level, trace|debug|info|warn|error),
+#           IDEA_BROKER_LOGBACK_FILE (the broker's logback.xml)
 #
 # The broker runs on a Java virtual machine in a task network namespace with one address family.
 # JAVA_TOOL_OPTIONS carries -Djava.net.preferIPv4Stack=true from the task definition; the virtual
@@ -100,6 +102,27 @@ session-screenshot-max-width = 800
 EOF
 chown root:dcvsmbroker "${CONF}"
 chmod 640 "${CONF}"
+
+# The vendor logback.xml logs every load balancer health check and agent heartbeat at INFO, about
+# 42k lines per 15 minutes. Set the root level and hold those two loggers at WARN. The vendor file is
+# edited in place (it is read by the launcher through -Dlogback.configurationFile).
+LOGBACK="${IDEA_BROKER_LOGBACK_FILE:-/etc/dcv-session-manager-broker/logback.xml}"
+BROKER_LOG_LEVEL="$(printf '%s' "${DCV_BROKER_LOG_LEVEL:-info}" | tr '[:lower:]' '[:upper:]')"
+[[ "${BROKER_LOG_LEVEL}" =~ ^(TRACE|DEBUG|INFO|WARN|ERROR)$ ]] || { log "ERROR: DCV_BROKER_LOG_LEVEL must be trace, debug, info, warn or error"; exit 1; }
+if [ -f "${LOGBACK}" ]; then
+  # Written back with cat so the file keeps its owner and mode; sed -i differs between GNU and BSD.
+  sed -E \
+    -e '/<logger name="(io\.swagger\.api\.HealthApi|dcv\.sm\.filters\.LogRequestFilter)"/d' \
+    -e "s|<root level=\"[A-Za-z]+\"|<root level=\"${BROKER_LOG_LEVEL}\"|" \
+    -e 's|</configuration>|    <logger name="io.swagger.api.HealthApi" level="WARN" />\
+    <logger name="dcv.sm.filters.LogRequestFilter" level="WARN" />\
+</configuration>|' \
+    "${LOGBACK}" > "${LOGBACK}.new"
+  cat "${LOGBACK}.new" > "${LOGBACK}"
+  rm -f "${LOGBACK}.new"
+else
+  log "WARNING: ${LOGBACK} not found; the broker keeps its default log levels"
+fi
 
 # register-auth-server talks to a running broker (cli-to-broker-port), so it can only succeed after
 # the exec below; run it in the background until the broker accepts it. Without the registration the

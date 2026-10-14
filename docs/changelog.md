@@ -6,6 +6,10 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [Unreleased]
+
+* **Desktop broker logs**: the session manager broker no longer logs every load balancer health check and agent heartbeat (about 42,000 lines per 15 minutes on a busy cluster); those two loggers now sit at WARN. Set `DCV_BROKER_LOG_LEVEL` (default `info`) on the broker task to change the broker's overall log level.
+
 ## [26.10.5] - 2026-10-13
 
 **Highlights for users**
