@@ -4,16 +4,16 @@
  */
 
 export const ECS_HOST_SETTINGS = {
-  "ecs.hosts.instance_type": "m7g.large",
+  "ecs.hosts.instance_type": "m7g.xlarge",
   "ecs.hosts.max": 4,
   "ecs.hosts.min": 3,
   "ecs.hosts.volume_size": 60,
 };
 
 export const ECS_TASK_SETTINGS = {
-  "ecs.tasks.bastion-host.cpu": 256,
+  "ecs.tasks.bastion-host.cpu": 1024,
   "ecs.tasks.bastion-host.desired": 2,
-  "ecs.tasks.bastion-host.memory": 512,
+  "ecs.tasks.bastion-host.memory": 2048,
   "ecs.tasks.cluster-manager.cpu": 256,
   "ecs.tasks.cluster-manager.desired": 2,
   "ecs.tasks.cluster-manager.memory": 1024,

@@ -390,14 +390,23 @@ test("three resting hosts can borrow a fourth for each service surge", () => {
   const maximum = ECS_HOST_SETTINGS["ecs.hosts.max"];
   assert.equal(minimum, 3);
   assert.equal(maximum, 4);
-  const usableMemory = 8192 - 512 - 512;
+  // the configured host type's capacity, less the agent and OS reserve the old fixed numbers kept
+  const capacity: Record<string, {memory: number, cpu: number}> = {
+    "m7g.large": {memory: 8192, cpu: 2048},
+    "m7g.xlarge": {memory: 16384, cpu: 4096},
+    "m7g.2xlarge": {memory: 32768, cpu: 8192},
+  };
+  const host = capacity[ECS_HOST_SETTINGS["ecs.hosts.instance_type"] as string];
+  assert.ok(host, "the default host type has a known capacity");
+  const usableMemory = host.memory - 512 - 512;
+  const usableCpu = host.cpu - 2;
   const hosts = Array.from({length: minimum}, () => ({memory: 0, cpu: 0, roles: new Set<string>()}));
   const resting = tasks.flatMap(task => Array.from({length: task.desired}, () => task)).sort((a, b) => b.memory - a.memory);
   function place(index: number): boolean {
     const task = resting[index];
     if (task === undefined) return true;
     for (const host of hosts) {
-      if (host.roles.has(task.role) || host.memory + task.memory > usableMemory || host.cpu + task.cpu > 2046) continue;
+      if (host.roles.has(task.role) || host.memory + task.memory > usableMemory || host.cpu + task.cpu > usableCpu) continue;
       host.roles.add(task.role); host.memory += task.memory; host.cpu += task.cpu;
       if (place(index + 1)) return true;
       host.roles.delete(task.role); host.memory -= task.memory; host.cpu -= task.cpu;
@@ -407,7 +416,7 @@ test("three resting hosts can borrow a fourth for each service surge", () => {
   assert.ok(place(0), "the resting tasks fit the configured minimum");
   for (const task of tasks.filter(task => task.role !== "scheduler")) {
     assert.ok(maximum > minimum, "a surge can borrow a host outside the resting pool");
-    assert.ok(task.memory <= usableMemory && task.cpu <= 2046, task.role);
+    assert.ok(task.memory <= usableMemory && task.cpu <= usableCpu, task.role);
   }
 });
 
