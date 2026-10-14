@@ -207,6 +207,18 @@ dcv_ok() {
     unit_installed dcvserver.service && unit_installed dcv-session-manager-agent.service &&
     dcv_runtime_ok
 }
+dcv_launcher_ok() {
+  # Older DCV has no launcher. A masked/broken unit must fail, not look absent.
+  local state
+  state=$(systemctl show --property=LoadState --value dcvsessionlauncher.service) || return 1
+  [[ "$state" != not-found ]] || return 0
+  # D-Bus normally activates it on demand; exercise startup even on a headless builder.
+  systemctl start dcvsessionlauncher.service &&
+    systemctl is-active --quiet dcvsessionlauncher.service || {
+      echo 'dcvsessionlauncher.service failed to start or is not active'
+      return 1
+    }
+}
 ssm_ok() {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   { snap list amazon-ssm-agent >/dev/null 2>&1 || { echo "snap amazon-ssm-agent is not installed"; return 1; }; } &&
@@ -246,6 +258,7 @@ wayland_ok() {
 }
 check wayland 'Boots to the graphical target with Wayland enabled in GDM' wayland_ok{% endif %}
 check dcv 'DCV server is installed, its units are present, and dcvserver libraries resolve' dcv_ok
+check dcv-launcher 'DCV session launcher starts and is active when installed' dcv_launcher_ok
 {% endif %}
 check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli
 {% if context.config.get_string('scheduler.provider') == 'openpbs' %}

@@ -159,7 +159,10 @@ rpm() {
   [[ "$FAIL" != dcv || "$*" != *nice-dcv-server* ]] &&
   [[ "$FAIL" != ssm || "$*" != *amazon-ssm-agent* ]]
 }
-systemctl() { [[ "$*" != *LoadState* ]] || echo loaded; }
+systemctl() {
+  [[ "$*" != *LoadState* ]] || echo loaded
+  [[ "$FAIL" != dcv-launcher || "$*" != 'is-active --quiet dcvsessionlauncher.service' ]]
+}
 modprobe() { [[ "$FAIL" != lustre ]]; }
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
 # like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
@@ -259,7 +262,17 @@ def run_checks(
 
 @pytest.mark.parametrize(
     'failed',
-    ['bootstrap', 'kernel', 'lustre', 'dcv', 'directory', 'scheduler', 'ssm', 'gpu'],
+    [
+        'bootstrap',
+        'kernel',
+        'lustre',
+        'dcv',
+        'dcv-launcher',
+        'directory',
+        'scheduler',
+        'ssm',
+        'gpu',
+    ],
 )
 def test_failed_check_writes_json_and_never_tags_complete(tmp_path, failed):
     result, report, calls = run_checks(tmp_path, failed)

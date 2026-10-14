@@ -4,6 +4,9 @@ GDM's Wayland GNOME: no Xdcv, no DCV GL, no X server and no console sessions, so
 bootstrap must leave Wayland on and install only the packages the Wayland tarballs ship.
 """
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from test_dcv_host_ami_builder_bootstrap import render, run_set_kernel
@@ -18,6 +21,130 @@ X11 = [
     'ubuntu2204',
     'ubuntu2404',
 ]
+
+
+@pytest.mark.parametrize('base_os', WAYLAND + X11)
+@pytest.mark.parametrize('launcher_installed', [True, False])
+def test_host_preserves_the_2026_vendor_unit(tmp_path, base_os, launcher_installed):
+    from test_image_bake_bootstrap import render as render_host
+
+    text = render_host(
+        'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2', base_os
+    )
+    function = (
+        'function start_and_configure_dcv_service() {'
+        + text.split('function start_and_configure_dcv_service() {')[1].split('\n}\n')[
+            0
+        ]
+        + '\n}'
+    )
+    vendor = (
+        Path(__file__).parent / 'fixtures/dcv-2026.0/dcvserver.service'
+    ).read_text()
+    unit = tmp_path / 'dcvserver.service'
+    unit.write_text(vendor)
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'sudo() { "$@"; }\n'
+            'systemctl() { if [[ "$1" == cat ]]; then return '
+            + ('0' if launcher_installed else '1')
+            + '; fi; }\n'
+            + function.replace('/usr/lib/systemd/system/dcvserver.service', str(unit))
+            + '\nstart_and_configure_dcv_service',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    if launcher_installed:
+        assert unit.read_text() == vendor
+    else:
+        assert 'DefaultDependencies=no' in unit.read_text()
+        assert 'RuntimeDirectory=' not in unit.read_text()
+
+
+@pytest.mark.parametrize(
+    'state,active,ok',
+    [
+        ('not-found', False, True),
+        ('loaded', False, False),
+        ('loaded', True, True),
+        ('masked', False, False),
+    ],
+)
+def test_bake_checks_the_launcher_when_installed(tmp_path, state, active, ok):
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'rhel10')
+    assert "check dcv-launcher '" in text
+    function = (
+        'dcv_launcher_ok() {'
+        + text.split('dcv_launcher_ok() {')[1].split('\n}\n')[0]
+        + '\n}'
+    )
+    calls = tmp_path / 'calls'
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            f'systemctl() {{ echo "$*" >> "{calls}"; '
+            f'if [[ "$1" == show ]]; then echo {state}; '
+            f'else return {0 if active else 1}; fi; }}\n'
+            + function
+            + '\ndcv_launcher_ok',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is ok, result.stdout
+    if state == 'not-found':
+        assert 'start ' not in calls.read_text()
+        assert 'is-active' not in calls.read_text()
+
+
+@pytest.mark.parametrize('base_os', WAYLAND + X11)
+@pytest.mark.parametrize('launcher_installed', [True, False])
+def test_dcv_2026_orders_launcher_after_runtime_directory_creation(
+    tmp_path, base_os, launcher_installed
+):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    # This must also execute for a preinstalled server on a baked image.
+    setup = text[text.index('# DCV 2026.0 service dependencies') :]
+    assert 'if systemctl cat dcvsessionlauncher.service' in setup
+    assert 'dcvserver.service.d/idea.conf' in setup
+    assert 'Wants=dcvsessionlauncher.service' in setup
+    assert 'After=network-online.target remote-fs.target' in setup
+    assert 'dcvsessionlauncher.service.d/idea.conf' in setup
+    assert 'After=dcvserver.service' in setup
+    assert 'systemctl daemon-reload' in setup
+    assert 'ProtectSystem=' not in setup and 'ReadWritePaths=' not in setup
+    units = tmp_path / 'units'
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'systemctl() { if [[ "$1" == cat ]]; then return '
+            + ('0' if launcher_installed else '1')
+            + '; else echo "$*"; fi; }\n'
+            + setup.replace('/etc/systemd/system', str(units)),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    if launcher_installed:
+        assert (units / 'dcvserver.service.d/idea.conf').read_text() == (
+            '[Unit]\nAfter=network-online.target remote-fs.target\n'
+            'Wants=dcvsessionlauncher.service\n'
+        )
+        assert (units / 'dcvsessionlauncher.service.d/idea.conf').read_text() == (
+            '[Unit]\nAfter=dcvserver.service\n'
+        )
+        assert 'daemon-reload' in result.stdout
+    else:
+        assert not units.exists()
+        assert result.stdout == ''
+
 
 DCV_TARBALL = {
     'rhel10': 'nice-dcv-el10',

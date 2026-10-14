@@ -312,4 +312,21 @@ else
   log_info "Found nice-dcv-server pre-installed... skipping installation..."
 fi
 
+# DCV 2026.0 service dependencies (also needed on preinstalled images).
+if systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
+  # Keep the vendor unit: RuntimeDirectory creates dcv and dcvlogon as dcv:dcv, mode 0755.
+  mkdir -p /etc/systemd/system/dcvserver.service.d /etc/systemd/system/dcvsessionlauncher.service.d || exit 1
+  cat > /etc/systemd/system/dcvserver.service.d/idea.conf <<'EOF' || exit 1
+[Unit]
+After=network-online.target remote-fs.target
+Wants=dcvsessionlauncher.service
+EOF
+  # BindsTo alone does not order startup; the launcher's mount namespace needs /run/dcv.
+  cat > /etc/systemd/system/dcvsessionlauncher.service.d/idea.conf <<'EOF' || exit 1
+[Unit]
+After=dcvserver.service
+EOF
+  systemctl daemon-reload || exit 1
+fi
+
 # End: DCV Server

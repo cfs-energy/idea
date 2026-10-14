@@ -224,6 +224,8 @@ function start_and_validate_x_server() {
 function start_and_configure_dcv_service() {
   echo "# start dcv server ..."
   sudo systemctl enable dcvserver
+  # DCV 2026.0 owns its runtime directories and sandbox; only older releases need this unit.
+  if ! systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
   echo """
 #  This file is part of systemd.
 #  AGENT
@@ -251,12 +253,17 @@ Group=dcv
 [Install]
 WantedBy=multi-user.target
 """ > /usr/lib/systemd/system/dcvserver.service
+  fi
 
   # Because we have modified the .service file we need to tell systemctl to reload and recreate the dependency tree again.
   # This is necessary because we are introducing a dependency on network.targets.
   # Refer - https://serverfault.com/questions/700862/do-systemd-unit-files-have-to-be-reloaded-when-modified
   sudo systemctl daemon-reload
   sudo systemctl restart dcvserver
+  if systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
+    sudo systemctl start dcvsessionlauncher.service || exit 1
+    sudo systemctl is-active --quiet dcvsessionlauncher.service || exit 1
+  fi
 }
 
 function start_and_configure_dcv_agent_service() {
