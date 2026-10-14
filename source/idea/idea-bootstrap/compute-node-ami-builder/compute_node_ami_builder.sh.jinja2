@@ -54,6 +54,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
   {% include 'compute-node/_templates/efa.jinja2' %}
 {% endif %}
 
+{# a failed Lustre client install reports through the in-bake checks #}
+{% set compute_image_bake = true %}
 {% if 'fsx_lustre' in context.vars.enabled_drivers %}
   {% include '_templates/linux/fsx_lustre_client.jinja2' %}
 {% endif %}

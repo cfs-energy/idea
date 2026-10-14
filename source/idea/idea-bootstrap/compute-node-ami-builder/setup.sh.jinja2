@@ -89,6 +89,8 @@ systemctl enable --now amazon-ssm-agent
 
 {% include '_templates/linux/nfs_utils.jinja2' %}
 
+{# a failed Lustre client install reports through the in-bake checks #}
+{% set compute_image_bake = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 mkdir -p ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}
