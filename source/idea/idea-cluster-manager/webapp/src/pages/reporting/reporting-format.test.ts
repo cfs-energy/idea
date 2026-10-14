@@ -44,7 +44,7 @@ it('assigns distinct categorical colors by page rank and keeps them across chart
 it('maps budget and efficiency statuses to success, warning and error', () => {
     expect(Object.values(budgetPresentation).map(value => value.type)).toEqual(['success', 'warning', 'error']);
 
-    expect([39, 40, 69, 70].map(efficiencyStatus)).toEqual(['warning', 'warning', 'warning', 'success']);
+    expect([39, 40, 69, 70].map(v => efficiencyStatus(v))).toEqual(['warning', 'warning', 'warning', 'success']);
     expect([0.02, 0, 1].map(percent)).toEqual(['<1%', '0%', '1%']);
 });
 
@@ -66,4 +66,10 @@ it.each([100.01, 150])('warns for efficiency above 100 percent: %s', value => {
     expect(efficiencyStatus(value)).toBe('warning');
     expect(efficiencyLabel(value, 'memory_efficiency_pct')).toBe('Used more than requested');
     expect(efficiencyLabel(value, 'walltime_efficiency_pct')).toBe('Ran longer than requested');
+});
+
+it('does not warn when a job finishes well under its requested time', () => {
+    expect(efficiencyStatus(20, 'walltime_efficiency_pct')).toBe('info');
+    expect(efficiencyStatus(20)).toBe('warning');
+    expect(efficiencyStatus(150, 'walltime_efficiency_pct')).toBe('warning');
 });

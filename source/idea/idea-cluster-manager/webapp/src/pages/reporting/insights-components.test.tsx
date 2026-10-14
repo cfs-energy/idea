@@ -123,11 +123,16 @@ it('compares peak memory with total instance memory across nodes', () => {
 });
 it.each([
     [70, 'Well sized', 'Well sized', 'Close to requested'],
-    [40, 'Some cores sat idle', 'Some memory unused', 'Finished well early'],
-    [0, 'Most cores sat idle', 'Most memory unused', 'Finished far earlier than requested']
+    [40, 'Some cores sat idle', 'Some memory unused', 'Finished early'],
+    [0, 'Most cores sat idle', 'Most memory unused', 'Finished well under requested']
 ])('uses metric-specific efficiency labels at %s percent', (value, cpu, memory, walltime) => {
     render(<EfficiencyTiles jobs={{...insightsFixture().jobs, cpu_efficiency_pct: Number(value), memory_efficiency_pct: Number(value), walltime_efficiency_pct: Number(value)}} currency="USD"/>);
     for (const label of [cpu, memory, walltime]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+});
+it('says cost follows elapsed time, not the requested time', async () => {
+    render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
+    await userEvent.click(screen.getByRole('button', {name: 'About Walltime efficiency'}));
+    expect(screen.getByText(/Cost follows the time a job actually ran, not the time requested\. A closer time limit helps the scheduler and stops stuck jobs sooner\./)).toBeInTheDocument();
 });
 it('defines unused cost against requested cores', async () => {
     render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);

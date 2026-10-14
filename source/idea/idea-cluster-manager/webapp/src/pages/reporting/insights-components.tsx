@@ -18,7 +18,7 @@ const metricDefinitions = {
     cpu_efficiency_pct: 'CPU time used as a share of requested cores multiplied by elapsed time.',
     cpu_efficiency_weighted_pct: "CPU efficiency weighted by each job's requested core-hours.",
     memory_efficiency_pct: "Peak memory used as a share of memory requested, or of the instance's memory when a job on its own instance didn't request any.",
-    walltime_efficiency_pct: 'Elapsed time as a share of requested time.',
+    walltime_efficiency_pct: 'Elapsed time as a share of requested time. Cost follows the time a job actually ran, not the time requested. A closer time limit helps the scheduler and stops stuck jobs sooner.',
     wasted_core_hours: 'Estimated from jobs that finished in this period as requested cores multiplied by elapsed hours, minus CPU hours used.',
     wasted_cost: "Estimated from jobs that finished in this period as job cost multiplied by the unused share of requested core time."
 };
@@ -30,7 +30,7 @@ export function EfficiencyTiles({jobs, currency, weightedInfo = false, only}: {w
     ] as const).filter(([key]) => !only || only.includes(key));
     return <TileRow>{tiles.filter(([key]) => jobs[key] != null).map(([key, title]) => <MetricTile key={key} title={title}
         value={key === 'wasted_cost' ? money(jobs[key], currency) : key === 'wasted_core_hours' ? hours(jobs[key]) : percent(jobs[key])}
-        info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]))}>{efficiencyLabel(Number(jobs[key]), key)}</StatusIndicator>}</MetricTile>)}</TileRow>;
+        info={`${metricDefinitions[key]}${['cpu_efficiency_pct', 'memory_efficiency_pct', 'walltime_efficiency_pct'].includes(key) ? ' Averages jobs with the needed measurements.' : ''}${key === 'cpu_efficiency_pct' ? ` ${weightedInfo && jobs.cpu_efficiency_weighted_pct != null ? `CPU efficiency by core-hours: ${percent(jobs.cpu_efficiency_weighted_pct)}.` : `Uses ${jobs.jobs_with_efficiency} of ${jobs.count} finished jobs.`}` : ''}`}>{key.endsWith('_pct') && <StatusIndicator type={efficiencyStatus(Number(jobs[key]), key)}>{efficiencyLabel(Number(jobs[key]), key)}</StatusIndicator>}</MetricTile>)}</TileRow>;
 }
 export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; currency: string}) {
     if (!budgets.length) return null;

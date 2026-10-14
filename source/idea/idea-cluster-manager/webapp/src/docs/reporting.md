@@ -12,13 +12,13 @@ Use **Overview**, **Jobs**, **Desktops**, **Storage**, and **Breakdown**. Every 
 
 **Jobs** shows CPU, memory, and walltime efficiency, unused core-hours, and their cost. Percentage tiles average jobs with the needed measurements. CPU efficiency compares CPU time used with requested cores multiplied by elapsed time. Unused core-hours subtract CPU hours used from requested core-hours. Their cost is each measured job's cost multiplied by its unused share of requested core time. Both use requested cores rather than all instance vCPUs.
 
-Memory efficiency compares peak use with requested memory. Without a request, it uses the memory of the job's own instances only for single-job capacity that is not kept running for reuse. One known instance memory size is required. That size is multiplied by the node count. Walltime efficiency compares elapsed time with requested time.
+Memory efficiency compares peak use with requested memory. Without a request, it uses the memory of the job's own instances only for single-job capacity that is not kept running for reuse. One known instance memory size is required. That size is multiplied by the node count. Walltime efficiency compares elapsed time with requested time. Cost follows the time a job actually ran, not the time requested; the requested time is a limit that stops stuck jobs, and a closer one helps the scheduler.
 
 | Efficiency | 70% to 100% | 40% to below 70% | Below 40% |
 | --- | --- | --- | --- |
 | CPU | Well sized | Some cores sat idle | Most cores sat idle |
 | Memory | Well sized | Some memory unused | Most memory unused |
-| Walltime | Close to requested | Finished well early | Finished far earlier than requested |
+| Walltime | Close to requested | Finished early | Finished well under requested |
 
 Use the single **Top jobs** table to sort by **Highest cost** or **Most unused cores**. Job names link to completed-job records only with scheduler administration access; other Reporting readers see the names as text. Hints can suggest fewer cores, per node for multi-node jobs. Low memory use without a memory request can suggest a smaller instance type. **Find rows** searches the table. **Table preferences** controls columns and their order.
 
