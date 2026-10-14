@@ -36,7 +36,12 @@ class DesktopLaunches:
         self._sleep = sleep
         self._clock = clock
         self._request = None
+        # the oldest event read so far, epoch ms; a pass whose page token is refused
+        # carries on from here instead of from the start
+        self._oldest = None
+        self._recovered_at = None
         self.launches: List[Dict] = []
+        self._seen = set()
         self.complete = False
 
     def read(self, budget_seconds: float = 30) -> bool:
@@ -62,14 +67,23 @@ class DesktopLaunches:
             try:
                 page = cloudtrail.lookup_events(**self._request)
             except ClientError as e:
-                if e.response.get('Error', {}).get('Code') not in THROTTLED:
+                code = e.response.get('Error', {}).get('Code')
+                if code == 'InvalidNextTokenException' and self._resume():
+                    continue
+                if code not in THROTTLED:
                     raise
                 self._sleep(max(0, min(backoff, deadline - self._clock())))
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
                 continue
             backoff = 1
             for event in page.get('Events', []):
-                self.launches.extend(self._desktop_launches(event))
+                if event.get('EventTime') is not None:
+                    at = arrow.get(event['EventTime']).int_timestamp * 1000
+                    self._oldest = at if self._oldest is None else min(self._oldest, at)
+                for launch in self._desktop_launches(event):
+                    if launch['instance_id'] not in self._seen:
+                        self._seen.add(launch['instance_id'])
+                        self.launches.append(launch)
             token = page.get('NextToken')
             if not token:
                 self.complete = True
@@ -77,6 +91,24 @@ class DesktopLaunches:
             self._request['NextToken'] = token
             self._sleep(max(0, min(PAGE_INTERVAL_SECONDS, deadline - self._clock())))
         return False
+
+    def _resume(self) -> bool:
+        """
+        CloudTrail refused the page token: continue the same pass without it, from the
+        oldest event already read (events come newest first; the boundary second is
+        read twice and deduplicated). once per point reached, so a token refused again
+        with no progress since fails the slice rather than looping.
+        """
+        if self._oldest is None or self._oldest == self._recovered_at:
+            return False
+        self._recovered_at = self._oldest
+        self._request.pop('NextToken', None)
+        self._request['EndTime'] = arrow.get((self._oldest + 1000) / 1000).datetime
+        self.context.logger('desktop-launches').warning(
+            'CloudTrail refused the page token; resuming the RunInstances read from '
+            f'{self._request["EndTime"].isoformat()}'
+        )
+        return True
 
     def _desktop_launches(self, event: Dict) -> List[Dict]:
         try:

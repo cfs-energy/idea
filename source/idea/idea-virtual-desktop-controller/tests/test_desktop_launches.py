@@ -63,6 +63,9 @@ class FakeContext:
     def config(self):
         return FakeConfig()
 
+    def logger(self, name=None):
+        return Mock()
+
     def aws(self):
         return Mock(cloudtrail=lambda: self._cloudtrail)
 
@@ -357,3 +360,73 @@ def test_hidden_tags_are_skipped_not_fatal():
     )
     assert done
     assert stored(history, 'sess-1')['instance_id'] == 'i-0visible'
+
+
+def test_a_resumed_slice_sends_the_same_window_with_its_token():
+    created = arrow.utcnow().shift(days=-10)
+    cloudtrail = FakeCloudTrail([[launch('user-a', created, 'i-0a')], [], []])
+    clock = iter([0, 0, 0])
+    launches = DesktopLaunches(
+        FakeContext(cloudtrail), sleep=lambda _: None, clock=lambda: next(clock, 100)
+    )
+    assert launches.read(budget_seconds=1) is False
+    assert launches.read(budget_seconds=1000) is True
+    first, resumed = cloudtrail.requests[0], cloudtrail.requests[1]
+    assert resumed['NextToken'] == '1'
+    assert (resumed['StartTime'], resumed['EndTime']) == (
+        first['StartTime'],
+        first['EndTime'],
+    )
+
+
+class TimedCloudTrail:
+    """events newest first, two to a page, with a token CloudTrail refuses once"""
+
+    def __init__(self, events):
+        self.events = events
+        self.requests = []
+        self.refused = False
+
+    def lookup_events(self, **request):
+        self.requests.append(dict(request))
+        if 'NextToken' in request and not self.refused:
+            self.refused = True
+            raise ClientError(
+                {'Error': {'Code': 'InvalidNextTokenException', 'Message': ''}},
+                'LookupEvents',
+            )
+        end = arrow.get(request['EndTime'])
+        window = [e for e in self.events if arrow.get(e['EventTime']) <= end]
+        offset = int(request.get('NextToken', '0'))
+        page = {'Events': window[offset : offset + 2]}
+        if offset + 2 < len(window):
+            page['NextToken'] = str(offset + 2)
+        return page
+
+
+def test_a_refused_token_resumes_from_the_oldest_event_read_and_completes():
+    now = arrow.utcnow()
+    events = [launch('user-a', now.shift(days=-day), f'i-{day}') for day in range(1, 6)]
+    cloudtrail = TimedCloudTrail(events)
+    launches = DesktopLaunches(FakeContext(cloudtrail), sleep=lambda _: None)
+
+    assert launches.read() is True
+    # refused once, then read on without a token from the second day back
+    assert 'NextToken' not in cloudtrail.requests[2]
+    assert arrow.get(cloudtrail.requests[2]['EndTime']) <= now.shift(days=-2, seconds=1)
+    assert sorted(launch['instance_id'] for launch in launches.launches) == [
+        f'i-{day}' for day in range(1, 6)
+    ]
+
+
+def test_a_token_refused_again_without_progress_fails_the_slice():
+    cloudtrail = FakeCloudTrail([[]])
+    cloudtrail.lookup_events = Mock(
+        side_effect=ClientError(
+            {'Error': {'Code': 'InvalidNextTokenException', 'Message': ''}},
+            'LookupEvents',
+        )
+    )
+    launches = DesktopLaunches(FakeContext(cloudtrail), sleep=lambda _: None)
+    with pytest.raises(ClientError):
+        launches.read()
