@@ -144,7 +144,9 @@ def backfill(rows, pages, throttle=0, live=(), table=None):
 
 def stored(history, session_id):
     return next(
-        r for r in history._table_obj.rows.values() if r['idea_session_id'] == session_id
+        r
+        for r in history._table_obj.rows.values()
+        if r['idea_session_id'] == session_id
     )
 
 
@@ -252,7 +254,9 @@ def test_a_launch_another_desktop_holds_is_never_borrowed():
         pages,
     )
     assert stored(history, 'sess-a')['instance_unknown'] is True
-    history, _, _, _ = backfill([row('sess-a', 'user-a', created)], pages, live=['i-0b'])
+    history, _, _, _ = backfill(
+        [row('sess-a', 'user-a', created)], pages, live=['i-0b']
+    )
     assert stored(history, 'sess-a')['instance_unknown'] is True
 
 
