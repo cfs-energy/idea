@@ -69,7 +69,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
-      rsync git vim-minimal vim-enhanced nano emacs-nox \
+      rsync git vim-minimal vim-enhanced nano \
   && dnf clean all
 
 # Install the session-manager broker, connection gateway, and web viewer from the
@@ -120,9 +120,10 @@ RUN set -eux; \
     rm -rf /root/.cache/pip; \
     mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
 
-# Tools users had on the x86 host bastion and expect on the arm64 login node (vim, nano and
-# emacs are in the package list above). uv comes as a pinned wheel for the build
-# architecture; AL2023 packages no hdf5 (h5dump) for either.
+# Tools users had on the x86 host bastion and expect on the arm64 login node (vi, vim and
+# nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
+# site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
+# hdf5 (h5dump) for either.
 ARG UV_VERSION=0.12.24
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \

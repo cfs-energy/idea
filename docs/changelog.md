@@ -15,7 +15,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * A Linux desktop started after a scheduler change can run `qsub` and `qstat` right away.
 * A job that finishes well under its time limit no longer shows a warning; cost follows the time a job actually ran.
 * Jobs on RHEL 10 and Rocky 10 compute nodes can use Lustre scratch.
-* The login node (`ssh.<cluster>`) has editors again: `vi`, `vim`, `nvim`, `nano` and `emacs`.
+* The login node (`ssh.<cluster>`) has editors again: `vi`, `vim`, `nvim` and `nano`.
 
 * **Desktop broker logs**: the session manager broker no longer logs every load balancer health check and agent heartbeat (about 42,000 lines per 15 minutes on a busy cluster); those two loggers now sit at WARN. Set `DCV_BROKER_LOG_LEVEL` (default `info`) on the broker task to change the broker's overall log level.
 * **Walltime efficiency wording**: a job that finishes well under its requested time no longer shows a warning. The tile and help now say that cost follows the time a job actually ran, and that a closer time limit helps the scheduler and stops stuck jobs sooner.
@@ -30,6 +30,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Storage cost scope**: My costs, Reporting and By user state that storage cost leaves out FSx backups and Lustre scratch.
 * **Desktops deleted before this release**: the virtual desktop controller reads 90 days of CloudTrail `RunInstances` events once, on the leader, and puts the instance id back on each such desktop's history record when exactly one launch matches its owner and creation time, so its cost comes from CloudWatch instead of every hour from creation to deletion. A desktop it cannot match is counted but not priced ("N desktops deleted before usage history existed aren't priced"). The controller role gains `cloudtrail:LookupEvents`.
 * **Container sizing defaults**: new clusters get `m7g.xlarge` ECS hosts (was `m7g.large`) and a 1024 CPU / 2048 MiB login node task (was 256 / 512); 512 MiB ran out of memory under a handful of ssh sessions. Existing clusters keep their values; set `ecs.tasks.bastion-host.cpu` / `.memory` and `ecs.hosts.instance_type` to change them, then `ideactl deploy bastion-host --upgrade` and `ideactl deploy ecs --upgrade --refresh-hosts`.
+* **Login node editors**: the control-plane image installs `vi`, `vim` and `nano` from AL2023 and a pinned, checksum-verified `nvim` release. `emacs-nox` adds about 840 MB with its dependencies to an image every service pulls, so it is left out; a cluster that wants it installs it from the bastion site hook (`/apps/<cluster>/bastion-host/userdata_customizations.sh`), for example in the background with `setsid nohup dnf install -y emacs-nox ... &`.
 
 ## [26.10.5] - 2026-10-13
 
