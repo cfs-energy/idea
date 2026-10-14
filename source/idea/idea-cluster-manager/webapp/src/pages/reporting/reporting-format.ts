@@ -3,7 +3,7 @@ import {ReportingCoverage, ReportingNumber} from '../../client/reporting-model';
 
 export const numeric = (value: ReportingNumber | null | undefined): number | null => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
 export const money = (value: ReportingNumber | null | undefined, currency = 'USD') => numeric(value) == null ? '—' : new Intl.NumberFormat('en-US', {style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2}).format(Number(value));
-export const hours = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : new Intl.NumberFormat('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 1}).format(Number(value));
+export const hours = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : Number(value) > 0 && Number(value) < 0.05 ? '<0.1' : new Intl.NumberFormat('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 1}).format(Number(value));
 export const percent = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : Number(value) > 0 && Number(value) < 1 ? '<1%' : `${Math.round(Number(value))}%`;
 export const bytes = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : `${(Number(value) / (Number(value) >= 2 ** 40 ? 2 ** 40 : 2 ** 30)).toFixed(1)} ${Number(value) >= 2 ** 40 ? 'TiB' : 'GiB'}`;
 export function date(value: string, timezone: string, withTime = false): string {

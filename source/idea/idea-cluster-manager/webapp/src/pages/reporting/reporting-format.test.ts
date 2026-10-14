@@ -6,6 +6,8 @@ describe('human-readable report values', () => {
         expect(money('0')).toBe('$0.00');
         expect(money('-2.5', 'EUR')).toBe('-€2.50');
         expect(hours('12.345')).toBe('12.3');
+        expect(hours(0.03)).toBe('<0.1');
+        expect(hours(0)).toBe('0');
         expect(percent(69.7)).toBe('70%');
         expect(bytes(2 ** 30 * 1.25)).toBe('1.3 GiB');
         expect(bytes(2 ** 40)).toBe('1.0 TiB');

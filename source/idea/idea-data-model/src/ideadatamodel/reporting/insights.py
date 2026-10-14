@@ -72,6 +72,8 @@ class JobsInsights(InsightModel):
     walltime_efficiency_pct: float | None = None
     wasted_core_hours: float | None = None
     wasted_cost: Decimal | None = None
+    # cost of the jobs behind the efficiency figures, the base wasted_cost is a share of
+    efficiency_cost: Decimal | None = None
     jobs_with_efficiency: int = 0
     by_user: list[Ranked] = Field(default_factory=list)
     by_project: list[Ranked] = Field(default_factory=list)

@@ -213,6 +213,7 @@ class InsightsService:
                 'walltime_efficiency_pct',
                 'wasted_core_hours',
                 'wasted_cost',
+                'efficiency_cost',
             )
         }
         rows, weighted, weights = [], 0, 0
@@ -247,6 +248,9 @@ class InsightsService:
                 wasted_cost=cost * (1 - Decimal(str(cpu)) / 100)
                 if cost is not None and cpu is not None
                 else None,
+                # spend of the jobs the unused-core estimate covers, so the sentence
+                # compares like with like
+                efficiency_cost=cost if cpu is not None else None,
             )
             for key in totals:
                 if values.get(key) is not None:

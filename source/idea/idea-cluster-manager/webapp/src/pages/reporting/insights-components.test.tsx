@@ -61,13 +61,18 @@ it('coaches memory only with both values and low use', () => {
     expect(jobHint({...exampleJob, used_cores: null, requested_memory_gib: null, instance_memory_gib: 4})).toBeNull();
 });
 it('leads with money and hides coaching without efficiency data', () => {
-    const jobs = {...insightsFixture().jobs, cost: '3.46', wasted_cost: '2.23'};
+    const jobs = {...insightsFixture().jobs, count: 2, cost: '3.46', wasted_cost: '2.23'};
     const {rerender} = render(<Coaching jobs={jobs} currency="USD" personal/>);
     expect(screen.getByText("About $2.23 of the $3.46 estimated for your jobs that finished in this period paid for unused cores.")).toBeInTheDocument();
     rerender(<Coaching jobs={jobs} currency="USD"/>);
     expect(screen.getByText('About $2.23 of the $3.46 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
     rerender(<Coaching jobs={{...jobs, jobs_with_efficiency: 0}} currency="USD"/>);
     expect(screen.queryByText(/About/)).toBeNull();
+});
+it('compares unused-core spend with the jobs that were measured', () => {
+    const jobs = {...insightsFixture().jobs, count: 2, jobs_with_efficiency: 1, cost: '2.96', efficiency_cost: '0.48', wasted_cost: '0.48', wasted_core_hours: 0.03};
+    render(<Coaching jobs={jobs} currency="USD" personal/>);
+    expect(screen.getByText('About $0.48 of the $0.48 estimated for your jobs with CPU measurements that finished in this period paid for unused cores.')).toBeInTheDocument();
 });
 it('uses a heading for the tile label and ordinary text for its value', () => {
     render(<MetricTile title="Job spend" value="$3.46" info="Costs for this period."/>);

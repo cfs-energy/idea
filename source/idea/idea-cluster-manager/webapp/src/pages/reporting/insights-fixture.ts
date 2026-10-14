@@ -7,7 +7,7 @@ export const exampleDesktop: DesktopRow = {idea_session_id: 'session-1', name: '
 export const insightsFixture = (): ReportingInsights => ({
     period: {start: '2026-09-01', end: '2026-09-29', label: 'This month'}, currency: 'USD', updated_at: '2026-09-29T20:33:00Z',
     jobs: {count: 3, cost: '1524.22', savings: '200.00', cpu_efficiency_pct: 14, cpu_efficiency_weighted_pct: 20, memory_efficiency_pct: 60, walltime_efficiency_pct: 80,
-        wasted_core_hours: 12.5, wasted_cost: '120.00', jobs_with_efficiency: 2,
+        wasted_core_hours: 12.5, wasted_cost: '120.00', jobs_with_efficiency: 3,
         by_user: [{name: 'scientist-a', cost: '1524.22', count: 3, share_pct: 100}], by_project: [{name: 'Project Cedar', cost: '1524.22', count: 3, share_pct: 100}],
         by_queue: [{name: 'compute', cost: '1524.22', count: 3, share_pct: 100}], by_instance_family: [{name: 'c6i', cost: '1524.22', count: 3, share_pct: 100}],
         daily_by_project: [{date: '2026-09-29', project: 'Project Cedar', cost: '1524.22'}], costliest: [exampleJob], least_efficient: [exampleJob]},

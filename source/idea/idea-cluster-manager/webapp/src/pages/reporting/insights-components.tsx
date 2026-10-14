@@ -48,7 +48,10 @@ export function BudgetTable({budgets, currency}: {budgets: ReportingBudget[]; cu
 }
 export function Coaching({jobs, currency, personal = false}: {jobs: ReportingInsights['jobs']; currency: string; personal?: boolean}) {
     if (!jobs.jobs_with_efficiency || jobs.wasted_cost == null || jobs.cost == null) return null;
-    return <Box>{personal ? `About ${money(jobs.wasted_cost, currency)} of the ${money(jobs.cost, currency)} estimated for your jobs that finished in this period paid for unused cores.` : `About ${money(jobs.wasted_cost, currency)} of the ${money(jobs.cost, currency)} estimated for jobs that finished in this period paid for unused cores.`}</Box>;
+    // compare with the jobs the estimate covers; jobs without CPU measurements are not part of it
+    const covered = jobs.efficiency_cost ?? jobs.cost;
+    const scope = jobs.jobs_with_efficiency < jobs.count ? `${personal ? 'your ' : ''}jobs with CPU measurements that finished` : `${personal ? 'your ' : ''}jobs that finished`;
+    return <Box>{`About ${money(jobs.wasted_cost, currency)} of the ${money(covered, currency)} estimated for ${scope} in this period paid for unused cores.`}</Box>;
 }
 export function DesktopCoaching({desktops, currency, personal = false}: {desktops: ReportingInsights['desktops']; currency: string; personal?: boolean}) {
     if (!desktops.desktops_with_activity || desktops.idle_cost == null || desktops.cost == null || Number(desktops.idle_cost) > Number(desktops.cost)) return null;

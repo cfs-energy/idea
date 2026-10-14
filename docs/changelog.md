@@ -10,6 +10,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 * **Desktop broker logs**: the session manager broker no longer logs every load balancer health check and agent heartbeat (about 42,000 lines per 15 minutes on a busy cluster); those two loggers now sit at WARN. Set `DCV_BROKER_LOG_LEVEL` (default `info`) on the broker task to change the broker's overall log level.
 * **Walltime efficiency wording**: a job that finishes well under its requested time no longer shows a warning. The tile and help now say that cost follows the time a job actually ran, and that a closer time limit helps the scheduler and stops stuck jobs sooner.
+* **My costs**: the "paid for unused cores" sentence now compares unused-core spend with the jobs that have CPU measurements, not with every finished job, and tiny unused core-hours show as "<0.1" instead of "0".
 
 ## [26.10.5] - 2026-10-13
 
