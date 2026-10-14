@@ -22,6 +22,9 @@ from ideadatamodel import (
 from ideavirtualdesktopcontroller.app.events.handlers.validate_dcv_session_event_handlers.validate_dcv_session_deletion_event_handler import (
     ValidateDCVSessionDeletionEventHandler,
 )
+from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_db import (
+    VirtualDesktopServerDB,
+)
 from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_utils import (
     VirtualDesktopServerUtils,
 )
@@ -205,3 +208,31 @@ def test_the_deletion_event_deletes_the_row_once_the_host_is_gone():
     )
 
     handler.session_db.delete.assert_called_once()
+
+
+def test_a_failed_desktop_whose_host_was_released_deletes_cleanly():
+    # a lustre-module-missing desktop: its instance is terminated and its server row gone,
+    # and the user still has to be able to delete it
+    db = object.__new__(VirtualDesktopServerDB)
+    db._table_obj = Mock()
+    db._table_obj.delete_item.return_value = {}  # no Attributes: the row was already gone
+    db._logger = Mock()
+    db.trigger_delete_event = Mock()
+    db.delete(VirtualDesktopServer(instance_id=GONE[0]))
+    db.trigger_delete_event.assert_not_called()
+
+    sessions = [
+        a_session(GONE[0], state=VirtualDesktopSessionState.ERROR),
+        a_session(None, state=VirtualDesktopSessionState.ERROR),
+    ]
+    for session in sessions:
+        session.dcv_session_id = None
+    ec2 = FakeEc2([])
+    utils = session_utils(ec2, sessions)
+    utils._server_utils._server_db.delete.side_effect = lambda server: db.delete(server)
+
+    success, failed = utils.terminate_sessions(sessions)
+
+    assert failed == []
+    assert deleted(utils) == {s.idea_session_id for s in sessions}
+    assert ec2.calls == [[GONE[0]]]

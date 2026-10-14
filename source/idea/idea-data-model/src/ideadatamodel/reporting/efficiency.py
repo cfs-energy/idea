@@ -4,6 +4,8 @@ import math
 import re
 from datetime import datetime
 
+from ideadatamodel.pbs_select import select_chunks
+
 CPU_EFFICIENCY_MAX = 1.05
 
 
@@ -64,7 +66,7 @@ def allocation(params):
     if select is not None:
         cpus, memory, nodes = 0, 0, 0
         try:
-            for chunk in str(select).split('+'):
+            for chunk in select_chunks(str(select)):
                 tokens = chunk.split(':')
                 count = int(tokens.pop(0)) if '=' not in tokens[0] else 1
                 if count <= 0:

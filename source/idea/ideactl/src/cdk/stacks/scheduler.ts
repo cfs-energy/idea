@@ -113,6 +113,7 @@ export class SchedulerStack extends IdeaBaseStack {
   internalEndpoint!: CustomResource;
   /** Present under the container flag: the scheduler task service and its target groups. */
   containerService: ecs.Ec2Service | undefined;
+  private containerTaskRole?: iam.Role;
   private containerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
 
   constructor(props: StackBuildProps) {
@@ -477,6 +478,7 @@ export class SchedulerStack extends IdeaBaseStack {
         spot_fleet_request_role_arn: this.spotFleetRequestRole.roleArn,
       }),
     });
+    this.containerTaskRole = taskRole;
     for (const policy of this.schedulerManagedPolicies) taskRole.addManagedPolicy(policy);
     const datadogSecretArn = this.context.config.getString('ecs.datadog.api_key_secret_arn');
     if (datadogSecretArn) {
@@ -931,6 +933,12 @@ export class SchedulerStack extends IdeaBaseStack {
       // The container path has no instance address to pin the name with, so the row that makes the
       // scheduler and the execution hosts use the DNS name is written, not assumed.
       clusterSettings['use_stable_server_name'] = true;
+      // The AD automation agent verifies the scheduler task's node retirements by the task role
+      // session and the service the task belongs to, as the bastion's join is verified.
+      if (this.containerTaskRole !== undefined) {
+        clusterSettings['task_role_id'] = (this.containerTaskRole.node.defaultChild as iam.CfnRole).attrRoleId;
+        clusterSettings['service_name'] = this.containerServiceName;
+      }
     } else {
       clusterSettings['private_ip'] = this.ec2Instance.attrPrivateIp;
       if (this.context.config.getBool('scheduler.public', false)) {

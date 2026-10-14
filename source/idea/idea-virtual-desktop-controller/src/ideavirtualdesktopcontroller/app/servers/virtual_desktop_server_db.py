@@ -231,6 +231,11 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
             ReturnValues='ALL_OLD',
         )
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
+        if not old_db_entry:
+            # the host was released before this delete (a failed bootstrap does that):
+            # nothing is left to remove or announce
+            self._logger.info(f'server {dcv_host.instance_id} was already deleted')
+            return
         self.trigger_delete_event(
             old_db_entry[servers_constants.DCV_HOST_DB_HASH_KEY],
             '',

@@ -1168,8 +1168,13 @@ class VirtualDesktopSessionUtils:
             } | set(Utils.get_value_as_list('MissingInstanceIds', response, []))
 
         for session in stopped_sessions:
-            # a session whose host was not terminated stays, so deleting it again retries
-            if session.server and session.server.instance_id not in released:
+            # a session whose host was not terminated stays, so deleting it again retries;
+            # one whose host is already gone (a released failed desktop) has nothing left
+            if (
+                session.server
+                and session.server.instance_id
+                and session.server.instance_id not in released
+            ):
                 session.failure_reason = (
                     f'could not terminate host {session.server.instance_id}: '
                     f'{terminate_error or "not terminated"}'

@@ -32,7 +32,11 @@ import dataset
 import os
 import logging
 import re
-from threading import Event, RLock
+import sqlite3
+import tempfile
+from contextlib import closing
+from pathlib import Path
+from threading import Event, RLock, Thread
 
 
 JOBS_TABLE = 'jobs'
@@ -74,13 +78,46 @@ def build_job_error_message(error_code: str, message: str) -> str:
     return error_message[:ERROR_MESSAGE_MAX_LENGTH].strip(' _')
 
 
+JOB_CACHE_DB_NAME = 'job-cache-v3.db'
+
+
 class JobsDB:
+    """
+    The live cache is a SQLite file on local disk, where it is fast. A container's local
+    disk goes with every task replacement, so there a copy is kept under PBS_HOME (the
+    scheduler-pbs volume, which outlives the task): refreshed by SQLite's online backup
+    every minute when something changed, and on an orderly stop, and restored on a start
+    that finds no local file. At most the last minute of cache is lost at a replacement,
+    and no network filesystem locking sits in the hot path.
+    """
+
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
         self._logger = context.logger()
+        config = context.config()
 
-        db_dir = f'{self._context.get_scheduler_app_deploy_dir()}/db'
-        db_file = f'{db_dir}/job-cache-v3.db'
+        db_dir = config.get_string(
+            'scheduler.job_cache.db_dir',
+            default=os.path.join(context.get_scheduler_app_deploy_dir(), 'db'),
+        )
+        self._db_file = os.path.join(db_dir, JOB_CACHE_DB_NAME)
+        backup_dir = config.get_string('scheduler.job_cache.backup_dir')
+        if Utils.is_empty(backup_dir) and config.get_bool('ecs.enabled', default=False):
+            backup_dir = os.path.join(
+                os.environ.get('PBS_HOME', '/var/spool/pbs'), 'idea', 'db'
+            )
+        self._backup_file = (
+            os.path.join(backup_dir, JOB_CACHE_DB_NAME)
+            if Utils.is_not_empty(backup_dir)
+            else None
+        )
+        self._backup_interval = config.get_float(
+            'scheduler.job_cache.backup_interval_seconds', default=60
+        )
+        self._backup_stop = Event()
+        self._backup_thread: Optional[Thread] = None
+        self._backup_connection: Optional[sqlite3.Connection] = None
+        self._backed_up_version = None
 
         # Make sure directory exists with proper permissions
         try:
@@ -95,11 +132,97 @@ class JobsDB:
             self._logger.error(f'Failed to create database directory: {str(e)}')
             raise
 
-        self.connection_string = f'sqlite:///{db_file}'
+        if (
+            self._backup_file
+            and not os.path.exists(self._db_file)
+            and os.path.isfile(self._backup_file)
+        ):
+            self._logger.info(f'restoring job cache from {self._backup_file}')
+            try:
+                self._copy_database(self._backup_file, self._db_file)
+            except Exception as e:
+                # a cache: the monitors rebuild it, with the completed jobs' history lost
+                self._logger.error(f'job cache restore failed, starting empty: {e}')
+                if os.path.exists(self._db_file):
+                    os.remove(self._db_file)
+
+        self.connection_string = f'sqlite:///{self._db_file}'
         self._is_ready = Event()
         self.db = None
         self._db_lock = RLock()  # Keep the RLock for database operations
         self.init_db()
+        if self._backup_file:
+            self._backup_thread = Thread(
+                target=self._backup_loop, name='job-cache-backup', daemon=True
+            )
+            self._backup_thread.start()
+
+    @staticmethod
+    def _copy_database(source_file: str, destination_file: str):
+        """a complete, consistent copy (committed WAL records included), published whole"""
+        with closing(
+            sqlite3.connect(Path(source_file).resolve().as_uri() + '?mode=ro', uri=True)
+        ) as source:
+            JobsDB._publish_copy(source, destination_file)
+
+    @staticmethod
+    def _publish_copy(source: sqlite3.Connection, destination_file: str):
+        os.makedirs(os.path.dirname(destination_file), exist_ok=True)
+        fd, temporary_file = tempfile.mkstemp(
+            prefix='.job-cache-', dir=os.path.dirname(destination_file)
+        )
+        os.close(fd)
+        try:
+            with closing(sqlite3.connect(temporary_file)) as destination:
+                source.backup(destination)
+                # one plain file: the copy is opened without -wal/-shm sidecars, which matters
+                # on a network filesystem; the live file goes back to WAL when connected
+                destination.execute('PRAGMA journal_mode=DELETE')
+            os.replace(temporary_file, destination_file)
+        finally:
+            if os.path.exists(temporary_file):
+                os.remove(temporary_file)
+
+    def backup(self, force: bool = False) -> bool:
+        """
+        Copy the cache to persistent storage when it changed since the last copy, or when
+        forced. SQLite's data_version, read on one connection kept for the purpose, moves
+        whenever another connection commits, so the pool's writes are seen without
+        tracking each one. Used from the backup thread and from stop().
+        """
+        if not self._backup_file:
+            return False
+        try:
+            if self._backup_connection is None:
+                self._backup_connection = sqlite3.connect(
+                    self._db_file, check_same_thread=False
+                )
+            version = self._backup_connection.execute('PRAGMA data_version').fetchone()[
+                0
+            ]
+            if not (force or version != self._backed_up_version):
+                return False
+            self._publish_copy(self._backup_connection, self._backup_file)
+            # the version read before the copy: a commit made during it counts next time
+            self._backed_up_version = version
+            return True
+        except Exception as e:
+            self._logger.error(f'job cache backup to {self._backup_file} failed: {e}')
+            return False
+
+    def _backup_loop(self):
+        while not self._backup_stop.wait(self._backup_interval):
+            self.backup()
+
+    def stop(self):
+        """an orderly stop leaves a current copy behind"""
+        self._backup_stop.set()
+        if self._backup_thread is not None:
+            self._backup_thread.join(timeout=30)
+        self.backup(force=True)
+        if self._backup_connection is not None:
+            self._backup_connection.close()
+            self._backup_connection = None
 
     # SQLite serialises writers; with the default rollback journal a writer also blocks
     # every reader, and the API's job listings share this file with the job monitor's
@@ -115,10 +238,14 @@ class JobsDB:
     }
 
     def _connect(self):
-        db = dataset.connect(self.connection_string, engine_kwargs=self.ENGINE_KWARGS)
-        db.query('PRAGMA journal_mode=WAL')
-        db.query('PRAGMA synchronous=NORMAL')
-        return db
+        return dataset.connect(
+            self.connection_string,
+            engine_kwargs=self.ENGINE_KWARGS,
+            on_connect_statements=[
+                'PRAGMA journal_mode=WAL',
+                'PRAGMA synchronous=NORMAL',
+            ],
+        )
 
     def init_db(self):
         self._logger.info(f'initializing job cache db file: {self.connection_string}')
@@ -675,6 +802,9 @@ class JobCache(JobCacheProtocol):
         self._logger = context.logger()
         self._jobs_db = JobsDB(context=self._context)
         self._is_ready = Event()
+
+    def stop(self):
+        self._jobs_db.stop()
 
     def sync(self, jobs: List[SocaJob]):
         self._jobs_db.add_many(jobs=jobs)

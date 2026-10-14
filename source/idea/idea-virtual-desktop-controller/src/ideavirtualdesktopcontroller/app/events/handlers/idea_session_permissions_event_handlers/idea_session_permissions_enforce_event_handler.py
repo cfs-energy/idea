@@ -42,7 +42,7 @@ class IDEASessionPermissionsEnforceEventHandler(
             idea_session_id=idea_session_id, idea_session_owner=idea_session_owner
         )
         if Utils.is_empty(session):
-            self.log_error(
+            self.log_debug(
                 message_id=message_id,
                 message=f'No permissions found for idea session id: {idea_session_id}, owner: {idea_session_owner}',
             )

@@ -203,6 +203,11 @@ class IDEASessionCPUUtilizationCommandProgressEventHandler(
                     message_id=message_id,
                     message=f'CPU Utilization command execution failed for session {idea_session_id} (owner: {idea_session_owner}). Will try to stop session later.',
                 )
+        elif status == 'InProgress':
+            self.log_debug(
+                message_id=message_id,
+                message=f'Ignoring message because state is {status} for idea_session_id: {idea_session_id}',
+            )
         else:
             self.log_error(
                 message_id=message_id,

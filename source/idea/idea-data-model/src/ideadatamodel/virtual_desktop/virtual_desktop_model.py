@@ -205,6 +205,7 @@ class VirtualDesktopSchedule(SocaBaseModel):
     start_up_time: Optional[str] = Field(default=None)
     shut_down_time: Optional[str] = Field(default=None)
     schedule_type: Optional[VirtualDesktopScheduleType] = Field(default=None)
+    updated_on: Optional[datetime] = Field(default=None)
 
 
 class VirtualDesktopPermission(SocaBaseModel):

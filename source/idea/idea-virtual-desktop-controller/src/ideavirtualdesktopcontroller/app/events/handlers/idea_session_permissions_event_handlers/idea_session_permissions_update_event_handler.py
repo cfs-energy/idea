@@ -45,7 +45,7 @@ class IDEASessionPermissionsUpdateEventHandler(
             idea_session_id=idea_session_id
         )
         if Utils.is_empty(session_permissions):
-            self.log_error(
+            self.log_debug(
                 message_id=message_id,
                 message=f'No permissions found for idea session id: {idea_session_id}',
             )

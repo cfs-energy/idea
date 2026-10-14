@@ -125,6 +125,16 @@ class FileSystemHelper:
             self._identity = UserIdentity(self.context.accounts, self.username)
         return self._identity.run(operation)
 
+    def own(self, fd: int):
+        """
+        gives a file the server created on the user's behalf to the user, by id and by
+        descriptor: the server runs in a container that cannot look the user's name up,
+        and a path can be swapped for a link between a create and a chown
+        """
+        if self._identity is None:
+            self._identity = UserIdentity(self.context.accounts, self.username)
+        os.fchown(fd, self._identity.uid, self._identity.gid)
+
     def get_user_home(self) -> str:
         user_home = self.context.config().get_string(
             'shared-storage.data.mount_dir', default='/data'
@@ -273,8 +283,14 @@ class FileSystemHelper:
                         continue
 
                 is_hidden = entry.name.startswith('.')
-                file_size = None if entry.is_dir() else entry.stat().st_size
-                mod_date = arrow.get(entry.stat().st_mtime).datetime
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    # a symlink whose target lives on another host (a desktop's /var/tmp)
+                    # lists as the link itself instead of failing the whole folder
+                    stat = entry.stat(follow_symlinks=False)
+                file_size = None if entry.is_dir() else stat.st_size
+                mod_date = arrow.get(stat.st_mtime).datetime
 
                 result.append(
                     FileData(
@@ -776,7 +792,15 @@ class FileSystemHelper:
 
         for file in files:
             try:
-                self.check_access(file, check_read=False, check_write=True)
+                # unlink needs write on the folder, not on the file: a read-only file, or one
+                # the server wrote and never handed over, is still the user's to delete
+                self.check_access(file, check_read=False, check_write=False)
+                self.check_access(
+                    os.path.dirname(file.rstrip('/')) or '/',
+                    check_dir=True,
+                    check_read=False,
+                    check_write=True,
+                )
 
                 # Check file type and delete immediately to minimize race conditions
                 if os.path.islink(file):
@@ -850,8 +874,15 @@ class FileSystemHelper:
         if not Utils.is_file(file) and not Utils.is_dir(file):
             raise exceptions.file_not_found(file)
 
-        # Check access permissions for the source file
-        self.check_access(file, check_read=True, check_write=True)
+        # rename needs write on the folder, not on the file: a read-only file, or one the
+        # server wrote and never handed over, is still the user's to rename, as to delete
+        self.check_access(file, check_read=False, check_write=False)
+        self.check_access(
+            os.path.dirname(file.rstrip('/')) or '/',
+            check_dir=True,
+            check_read=False,
+            check_write=True,
+        )
 
         # Extract directory and validate new name
         original_filename = new_name

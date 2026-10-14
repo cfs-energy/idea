@@ -16,24 +16,49 @@
 # This is particularly useful is you are planning to do data mining with services such as Glue / Athena
 # To prevent disk to fill up, we also remove files after 10 days (default). This value can be changed using DATA_RETENTION variable
 
-# shellcheck disable=SC1091
-source /etc/environment
+set -euo pipefail
 
-DATA_RETENTION=10 # number of days logs stay in the server
+# Host cron gets these from /etc/environment; the container passes current settings.
+if [[ -z "${IDEA_CLUSTER_S3_BUCKET:-}" || -z "${IDEA_CLUSTER_HOME:-}" || -z "${IDEA_MODULE_ID:-}" ]]; then
+  # shellcheck disable=SC1091
+  source /etc/environment
+fi
+: "${IDEA_CLUSTER_S3_BUCKET:?IDEA_CLUSTER_S3_BUCKET is required}"
+: "${IDEA_CLUSTER_HOME:?IDEA_CLUSTER_HOME is required}"
+: "${IDEA_MODULE_ID:?IDEA_MODULE_ID is required}"
 
+DATA_RETENTION=10
 S3_BUCKET_SCHEDULER_LOGS="s3://${IDEA_CLUSTER_S3_BUCKET}/logs/${IDEA_MODULE_ID}/"
-SCHEDULER_DIRECTORY='/var/spool/pbs'
+SCHEDULER_DIRECTORY="${PBS_HOME:-/var/spool/pbs}"
 SCHEDULER_SERVER_LOGS="${SCHEDULER_DIRECTORY}/server_logs/"
 SCHEDULER_SCHED_LOGS="${SCHEDULER_DIRECTORY}/sched_logs/"
 SCHEDULER_ACCOUNTING="${SCHEDULER_DIRECTORY}/server_priv/accounting/"
 COMPUTE_NODE_LOGS="${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/logs"
 
-/usr/bin/aws s3 sync ${SCHEDULER_ACCOUNTING} "${S3_BUCKET_SCHEDULER_LOGS}accounting/"
-/usr/bin/aws s3 sync ${SCHEDULER_SERVER_LOGS} "${S3_BUCKET_SCHEDULER_LOGS}server_logs/"
-/usr/bin/aws s3 sync ${SCHEDULER_SCHED_LOGS} "${S3_BUCKET_SCHEDULER_LOGS}sched_logs/"
-/usr/bin/aws s3 sync "${COMPUTE_HOST_LOG}" "${S3_BUCKET_SCHEDULER_LOGS}compute_nodes/"
+# A cron invocation and the container loop may overlap during migration.
+exec 9>"${SCHEDULER_DIRECTORY}/.idea-log-archive.lock"
+flock -n 9 || exit 0
 
-find "${COMPUTE_NODE_LOGS}"/* -type d -mtime +${DATA_RETENTION} -exec rm -rf {} +
-find ${SCHEDULER_SERVER_LOGS} -type f -mtime +${DATA_RETENTION} -delete
-find ${SCHEDULER_SCHED_LOGS} -type f -mtime +${DATA_RETENTION} -delete
-find ${SCHEDULER_ACCOUNTING} -type f -mtime +${DATA_RETENTION} -delete
+# Each directory is uploaded, then pruned of what is older than the retention. A failed
+# upload is logged and that directory keeps twice the retention instead, so one bad day
+# cannot let the logs grow on PBS_HOME without bound. The run still fails when an upload did.
+failed=0
+archive_logs() {
+  local directory="$1" name="$2" age="${DATA_RETENTION}"
+  [[ -d "${directory}" ]] || return 0
+  if ! aws s3 sync "${directory}" "${S3_BUCKET_SCHEDULER_LOGS}${name}/"; then
+    age=$(( DATA_RETENTION * 2 ))
+    echo "log archive: upload of ${directory} failed; pruning only what is older than ${age} days" >&2
+    failed=1
+  fi
+  if [[ "${name}" == compute_nodes ]]; then
+    find "${directory}" -mindepth 1 -maxdepth 1 -type d -mtime +"${age}" -exec rm -rf {} +
+  else
+    find "${directory}" -type f -mtime +"${age}" -delete
+  fi
+}
+archive_logs "${SCHEDULER_ACCOUNTING}" accounting
+archive_logs "${SCHEDULER_SERVER_LOGS}" server_logs
+archive_logs "${SCHEDULER_SCHED_LOGS}" sched_logs
+archive_logs "${COMPUTE_NODE_LOGS}" compute_nodes
+exit "${failed}"

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -15,6 +15,9 @@ for (const script of ["idea-control-plane/roles/scheduler.sh"]) {
         const record = join(work, "calls");
         const files = ["server_priv/resourcedef", "sched_priv/sched_config", "pbs_environment"];
         writeFileSync(record, "");
+        const hooks = join(work, "scheduler/resources/openpbs/hooks");
+        mkdirSync(hooks, { recursive: true });
+        for (const hook of ["openpbs_hook_handler.py", "calculate_ncpus_hook.py"]) writeFileSync(join(hooks, hook), "# hook\n");
         if (state === "existing" || state === "marked") {
           for (const dir of ["datastore/base", "server_priv", "sched_priv"]) mkdirSync(join(home, dir), { recursive: true });
           writeFileSync(join(home, "datastore/base/server"), "existing database");
@@ -42,6 +45,7 @@ pbs_init.d() { echo daemons >> "$RECORD"; }
 qstat() { return 0; }
 qmgr() { echo "$*" >> "$RECORD"; }
 pbs_sched() { :; }
+python3.13() { :; }
 ${body}`], {
           encoding: "utf8", timeout: 10_000,
           env: { ...process.env, PBS_HOME: home, RECORD: record, FAIL_HABITAT: state === "habitat-failure" ? "1" : "0",
@@ -61,8 +65,13 @@ ${body}`], {
           assert.ok(existsSync(join(home, ".idea-server-configured")));
           assert.match(readFileSync(join(home, files[0]!), "utf8"), /compute_node/);
         } else {
-          assert.equal(calls, "daemons\n");
-          for (const file of files) assert.equal(readFileSync(join(home, file), "utf8"), "operator configuration\n");
+          // An existing datastore keeps its server and queue policy; only hooks (re-imported when
+          // the image changed them) and the manager list are refreshed on every start.
+          assert.ok(calls.startsWith("daemons\n"), calls);
+          assert.doesNotMatch(calls, /set server (?!managers)|create queue|set queue|set sched/);
+          for (const file of files.filter((f) => f !== "pbs_environment")) assert.equal(readFileSync(join(home, file), "utf8"), "operator configuration\n");
+          // pbs_environment is rewritten from the image on every start, after a timestamped copy.
+          assert.ok(readdirSync(home).some((f) => f.startsWith("pbs_environment.") && readFileSync(join(home, f), "utf8") === "operator configuration\n"));
           assert.equal(existsSync(join(home, ".idea-server-configured")), state === "marked");
         }
       } finally { rmSync(work, { recursive: true, force: true }); }

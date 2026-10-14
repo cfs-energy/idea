@@ -187,8 +187,18 @@ class DailyCostsCalculator(MonthlyCostsService):
             return self._priced_ai_project(username, project, start_date, end_date)
         except Exception as error:
             if isinstance(error, ValueError):
-                # An authored data condition (no billing, no token denominator), not a fault.
-                self.logger.warning(f'Daily project attribution unavailable: {error}')
+                # An authored data condition (no billing, no token denominator), not a fault:
+                # said once per run per cause, the users and days it covers at debug.
+                key = ('ai-project', str(error))
+                if key in self._reported:
+                    self.logger.debug(
+                        f'Daily project attribution unavailable: {error} ({username}, {project.project_id}, {start_date})'
+                    )
+                else:
+                    self._reported.add(key)
+                    self.logger.warning(
+                        f'Daily project attribution unavailable: {error}'
+                    )
             else:
                 self.logger.exception('Daily project attribution unavailable')
             return MyCostsAiProject(

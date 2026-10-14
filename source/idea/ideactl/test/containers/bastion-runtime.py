@@ -203,11 +203,12 @@ class TaskIdentity(unittest.TestCase):
         }
         task.update(changes)
         config = Mock()
+        # a key the cluster has no value for reads as None, as it does from the real configuration
         config.get_string.side_effect = lambda key, **kwargs: {
             'bastion-host.task_role_id': 'ROLE',
             'ecs.cluster_name': 'cluster',
             'bastion-host.service_name': 'cluster-bastion',
-        }[key]
+        }.get(key)
         context = Mock()
         context.config.return_value = config
         context.aws.return_value.get_client.return_value.describe_tasks.return_value = {
@@ -293,6 +294,83 @@ class PbsServerSuffix(unittest.TestCase):
     def test_a_resolv_conf_without_search_gets_one(self):
         out = self.run_block('nameserver 10.0.0.2\n')
         self.assertIn('search idea-test.us-east-1.local', out)
+
+
+class SiteHook(unittest.TestCase):
+    """the login node runs the site's hook before sshd accepts; a failure never stops the start"""
+
+    def run_block(self, cluster_home, owner_uid=0):
+        import subprocess
+
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = text.index('# Site customizations')
+        end = text.index('/usr/sbin/sshd -t', start)
+        # stat reports the owner the test asks for; the mode is the file's own
+        stub = (
+            'stat() { local mode; mode=$(command stat -L -c %a "${@: -1}"); '
+            f'echo "{owner_uid} $mode"; }}\n'
+            'timeout() { shift; "$@"; }\n'
+        )
+        block = 'set -euo pipefail\n' + stub + text[start:end] + 'echo reached-sshd\n'
+        env = {'PATH': '/usr/bin:/bin', 'IDEA_MODULE_ID': 'bastion-host'}
+        if cluster_home is not None:
+            env['IDEA_CLUSTER_HOME'] = str(cluster_home)
+        return subprocess.run(
+            ['bash', '-c', block], env=env, capture_output=True, text=True
+        )
+
+    def write_hook(self, root, body, mode=0o755):
+        hook = Path(root) / 'bastion-host' / 'userdata_customizations.sh'
+        hook.parent.mkdir(parents=True)
+        hook.write_text(body)
+        hook.chmod(mode)
+        return hook
+
+    def test_the_hook_runs_before_sshd_and_its_output_reaches_the_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = self.write_hook(tmp, 'echo tool installed\n')
+            result = self.run_block(tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [f'running site hook {hook}', 'tool installed', 'reached-sshd'],
+        )
+
+    def test_a_missing_hook_or_cluster_home_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.run_block(tmp).stdout.splitlines(), ['reached-sshd'])
+        self.assertEqual(self.run_block(None).stdout.splitlines(), ['reached-sshd'])
+
+    def test_a_failing_hook_does_not_stop_the_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_hook(tmp, 'echo partial\nexit 3\n')
+            result = self.run_block(tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines()[1:],
+            ['partial', 'site hook failed with status 3; continuing', 'reached-sshd'],
+        )
+
+    def test_a_hook_others_could_write_is_skipped(self):
+        for owner, mode in ((1000, 0o755), (0, 0o775), (0, 0o757)):
+            with (
+                self.subTest(owner=owner, mode=oct(mode)),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                self.write_hook(tmp, 'echo ran\n', mode)
+                result = self.run_block(tmp, owner_uid=owner)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.splitlines()
+                self.assertTrue(lines[0].startswith('skipping site hook '), lines)
+                self.assertNotIn('ran', lines)
+                self.assertEqual(lines[-1], 'reached-sshd')
+
+    def test_the_hook_runs_under_a_time_limit(self):
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        self.assertIn('timeout 120 /bin/bash "${SITE_HOOK}"', text)
+        self.assertLess(
+            text.index('timeout 120 /bin/bash'), text.index('/usr/sbin/sshd -t')
+        )
 
 
 if __name__ == '__main__':

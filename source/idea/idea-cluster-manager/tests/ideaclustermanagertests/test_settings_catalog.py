@@ -216,6 +216,11 @@ def test_known_effects_cover_live_startup_and_deployment_readers():
 
 def test_catalog_count_contract_and_explicit_dispositions():
     post_review_keys = {
+        'cluster.logging.default_log_level',
+        'cluster-manager.logging.default_log_level',
+        'scheduler.logging.default_log_level',
+        'virtual-desktop-controller.logging.default_log_level',
+        'ecs.datadog.logs_enabled',
         'global-settings.gpu_settings.nvidia_public_driver_versions.g7',
         'global-settings.gpu_settings.nvidia_public_driver_versions.g7e',
         'scheduler.job_provisioning.node_unavailable_timeout_seconds',
@@ -227,7 +232,7 @@ def test_catalog_count_contract_and_explicit_dispositions():
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == '6fb51e5a2d772cc472566bcf3ec87e0803559d54d991dbc700eba81540142c82'
+        == 'c64a4cc3769d425acc343d350726d67152e31087ccaf102cb504ca52e048443d'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -573,8 +578,8 @@ def test_existing_named_backup_rules_use_the_reviewed_rule_schema():
 
 def test_storage_discovery_does_not_expand_generated_module_outputs():
     api, config = make_api()
-    config.get_config.side_effect = (
-        lambda key, **kwargs: ConfigFactory.from_dict(
+    config.get_config.side_effect = lambda key, **kwargs: (
+        ConfigFactory.from_dict(
             {
                 'archive': {'provider': 'efs'},
                 'security_group_id': 'generated',
@@ -907,3 +912,26 @@ def test_scheduler_iam_policy_rows_without_a_reader_are_hidden():
         'cluster.iam.scheduler_iam_policy_arns',
     ):
         assert BY_KEY[key]['hidden'] is False
+
+
+def test_application_logging_settings_are_restart_enums_and_datadog_is_deployment():
+    keys = (
+        'cluster.logging.default_log_level',
+        'cluster-manager.logging.default_log_level',
+        'scheduler.logging.default_log_level',
+        'virtual-desktop-controller.logging.default_log_level',
+    )
+    for key in keys:
+        setting = BY_KEY[key]
+        assert setting['effect'] == 'restart'
+        assert setting['section'] == 'Logs'
+        assert setting['choices'] == ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        assert coerce_value(setting, 'DEBUG') == 'DEBUG'
+    assert BY_KEY['cluster.logging.default_log_level']['module'] == 'cluster'
+    assert BY_KEY['cluster.logging.default_log_level']['hidden'] is False
+    assert 'logging.default_log_level' not in BY_KEY
+    assert 'bastion-host.logging.default_log_level' not in BY_KEY
+    setting = BY_KEY['ecs.datadog.logs_enabled']
+    assert setting['effect'] == 'deployment'
+    assert setting['section'] == 'Logs'
+    assert coerce_value(setting, False) is False

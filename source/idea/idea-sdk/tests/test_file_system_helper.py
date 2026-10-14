@@ -15,7 +15,13 @@ Test Cases for FileSystemHelper
 
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions, errorcodes, ListFilesRequest, ReadFileRequest
+from ideadatamodel import (
+    exceptions,
+    errorcodes,
+    DeleteFilesRequest,
+    ListFilesRequest,
+    ReadFileRequest,
+)
 
 import pytest
 import os
@@ -30,7 +36,6 @@ from ideadatamodel import (
     CreateFileRequest,
     RenameFileRequest,
     DownloadFilesRequest,
-    DeleteFilesRequest,
 )
 
 
@@ -167,6 +172,22 @@ def test_numeric_access_checks_real_permissions(numeric_tree):
         helper.check_access(readable + '/../unreadable')
 
 
+def test_dangling_symlink_does_not_fail_the_listing(numeric_tree):
+    path, helper = numeric_tree
+    helper.run_as_user(
+        lambda: (
+            os.mkdir(os.path.join(path, 'kept')),
+            os.symlink(
+                '/var/tmp/elsewhere/.vscode-server',
+                os.path.join(path, '.vscode-server'),
+            ),
+        )
+    )
+    listing = helper.list_files(ListFilesRequest(cwd=path)).listing
+    assert sorted(f.name for f in listing) == ['.vscode-server', 'kept']
+    assert not next(f for f in listing if f.name == '.vscode-server').is_dir
+
+
 def test_reads_and_writes_run_in_worker(numeric_tree, monkeypatch):
     import builtins
 
@@ -298,3 +319,190 @@ def test_supplementary_gids_come_from_accounts():
     accounts.get_user.assert_called_once_with('no-passwd-entry')
     accounts.get_group.assert_any_call('project')
     accounts.get_group.assert_any_call('shared')
+
+
+def test_delete_removes_read_only_and_server_written_files(numeric_tree):
+    # an upload the server wrote and never handed over is root's: unlink needs the folder, not the file
+    if os.geteuid() != 0:
+        pytest.skip('needs root to create files the user does not own')
+    path, helper = numeric_tree
+    folder = os.path.join(path, 'uploads')
+    helper.run_as_user(lambda: os.mkdir(folder))
+    server_written = os.path.join(folder, 'server.dat')
+    with open(server_written, 'w') as f:
+        f.write('x')
+    read_only = os.path.join(folder, 'readonly.dat')
+    helper.run_as_user(
+        lambda: (open(read_only, 'w').close(), os.chmod(read_only, 0o444))
+    )
+    locked = os.path.join(path, 'locked')
+    os.mkdir(locked, 0o755)  # root's folder: the user may not delete from it
+    kept = os.path.join(locked, 'kept.dat')
+    open(kept, 'w').close()
+    helper.delete_files(DeleteFilesRequest(files=[server_written, read_only, kept]))
+    assert not os.path.exists(server_written)
+    assert not os.path.exists(read_only)
+    assert os.path.exists(kept)
+
+
+def run_upload(server, request, helper, path):
+    # a private loop, not asyncio.run: that unsets the thread's event loop on exit, and the
+    # session's server fixture asks for the main thread's loop when it stops
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            server._process_streaming_upload(request, helper, path, 'no-passwd-entry')
+        )
+    finally:
+        loop.close()
+
+
+def test_streaming_upload_hands_the_file_to_the_user(numeric_tree):
+    from ideasdk.server.soca_server import SocaServer
+
+    path, helper = numeric_tree
+    body = (
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="data.dat"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\nhello\r\n--b--\r\n'
+    )
+    chunks = iter([body, None])
+
+    class Stream:
+        async def read(self):
+            return next(chunks)
+
+    request = SimpleNamespace(
+        headers={'content-type': 'multipart/form-data; boundary=b'}, stream=Stream()
+    )
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    result = run_upload(server, request, helper, path)
+    uploaded = os.path.join(path, 'data.dat')
+    assert result['payload']['files_uploaded'] == [uploaded]
+    assert open(uploaded).read() == 'hello'
+    assert os.stat(uploaded).st_uid == helper._identity.uid
+    # and the user can delete what the server wrote for them
+    helper.delete_files(DeleteFilesRequest(files=[uploaded]))
+    assert not os.path.exists(uploaded)
+
+
+def test_upload_never_follows_a_planted_link(numeric_tree, tmp_path):
+    # a link at the upload's name, dangling or live, is not opened: the next free name is taken
+    from ideasdk.server.soca_server import SocaServer
+
+    if os.geteuid() != 0:
+        pytest.skip('needs root: the server creates the file')
+    path, helper = numeric_tree
+    outside = tmp_path / 'outside'
+    outside.mkdir(mode=0o700)
+    secret = outside / 'secret'
+    secret.write_text('secret')
+    planted = outside / 'planted'
+    helper.run_as_user(lambda: os.symlink(str(planted), os.path.join(path, 'data.dat')))
+    helper.run_as_user(lambda: os.symlink(str(secret), os.path.join(path, 'live.dat')))
+    body = (
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="data.dat"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\nhello\r\n'
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="live.dat"\r\n'
+        b'Content-Type: application/octet-stream\r\n\r\nevil\r\n--b--\r\n'
+    )
+    chunks = iter([body, None])
+
+    class Stream:
+        async def read(self):
+            return next(chunks)
+
+    request = SimpleNamespace(
+        headers={'content-type': 'multipart/form-data; boundary=b'}, stream=Stream()
+    )
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    result = run_upload(server, request, helper, path)
+    renamed = [os.path.join(path, 'data(1).dat'), os.path.join(path, 'live(1).dat')]
+    assert result['payload']['files_uploaded'] == renamed
+    assert [f['final_name'] for f in result['payload']['files_renamed']] == [
+        'data(1).dat',
+        'live(1).dat',
+    ]
+    assert [open(f).read() for f in renamed] == ['hello', 'evil']
+    assert all(os.stat(f).st_uid == helper._identity.uid for f in renamed)
+    assert not planted.exists()
+    assert secret.read_text() == 'secret' and secret.stat().st_uid == 0
+    assert os.path.islink(os.path.join(path, 'data.dat'))
+
+
+def test_rename_needs_the_folder_not_the_file(numeric_tree):
+    if os.geteuid() != 0:
+        pytest.skip('needs root to create files the user does not own')
+    path, helper = numeric_tree
+    read_only = os.path.join(path, 'readonly.dat')
+    helper.run_as_user(
+        lambda: (open(read_only, 'w').close(), os.chmod(read_only, 0o444))
+    )
+    helper.rename_file(RenameFileRequest(file=read_only, new_name='renamed.dat'))
+    assert os.path.exists(os.path.join(path, 'renamed.dat'))
+    server_written = os.path.join(path, 'server.dat')
+    with open(server_written, 'w') as f:
+        f.write('x')
+    helper.rename_file(RenameFileRequest(file=server_written, new_name='mine.dat'))
+    assert os.path.exists(os.path.join(path, 'mine.dat'))
+    locked = os.path.join(path, 'locked')
+    os.mkdir(locked, 0o755)  # root's folder: the user may not rename in it
+    kept = os.path.join(locked, 'kept.dat')
+    open(kept, 'w').close()
+    with pytest.raises(Exception) as exc:
+        helper.rename_file(RenameFileRequest(file=kept, new_name='moved.dat'))
+    assert exc.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    assert os.path.exists(kept)
+
+
+def test_upload_folder_swapped_for_a_link_after_the_check_is_refused(
+    numeric_tree, tmp_path
+):
+    # the check passes on the real folder; a link swapped in before the open is not followed
+    from ideasdk.server.soca_server import SocaServer
+
+    if os.geteuid() != 0:
+        pytest.skip('needs root: the server creates the file')
+    path, helper = numeric_tree
+    upper = os.path.join(path, 'upper')
+    helper.run_as_user(lambda: os.makedirs(os.path.join(upper, 'inner')))
+    outside = tmp_path / 'outside'
+    (outside / 'inner').mkdir(parents=True)
+    check = helper.check_access
+
+    def check_then_swap(*args, **kwargs):
+        check(*args, **kwargs)
+        os.rename(upper, upper + '.moved')
+        os.symlink(str(outside), upper)
+
+    helper.check_access = check_then_swap
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    with pytest.raises(Exception) as exc:
+        server._create_upload(helper, os.path.join(upper, 'inner'), 'data.dat', 'user')
+    assert exc.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    assert list((outside / 'inner').iterdir()) == []
+
+
+def test_upload_into_a_folder_reached_through_the_users_own_link(numeric_tree):
+    from ideasdk.server.soca_server import SocaServer
+
+    if os.geteuid() != 0:
+        pytest.skip('needs root: the server creates the file')
+    path, helper = numeric_tree
+    real = os.path.join(path, 'real')
+    helper.run_as_user(
+        lambda: (os.mkdir(real), os.symlink(real, os.path.join(path, 'link')))
+    )
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    fd, file_path, renamed = server._create_upload(
+        helper, os.path.join(path, 'link'), 'data.dat', 'user'
+    )
+    os.close(fd)
+    assert file_path == os.path.join(path, 'link', 'data.dat') and not renamed
+    assert os.path.isfile(os.path.join(real, 'data.dat'))
+    assert os.stat(os.path.join(real, 'data.dat')).st_uid == helper._identity.uid

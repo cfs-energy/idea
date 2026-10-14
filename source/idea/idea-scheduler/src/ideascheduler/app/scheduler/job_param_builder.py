@@ -629,6 +629,22 @@ class CpusParamBuilder(BaseParamBuilder):
         super().__init__(context, job_param)
 
     def validate(self) -> bool:
+        if self.params.get('select_chunks'):
+            valid = True
+            for params in self.params['select_chunks']:
+                chunk_context = JobParamsBuilderContext(
+                    context=self.soca_context,
+                    params=params,
+                    queue_profile=self.context.queue,
+                )
+                chunk_valid = chunk_context.get_builder(
+                    constants.JOB_PARAM_CPUS
+                ).validate()
+                for entry in chunk_context.validation_results:
+                    self.add_validation_entry(entry.error_code, entry.message)
+                valid = chunk_valid and valid
+            return valid
+
         cpus = self.get()
 
         if cpus is None:
@@ -663,7 +679,7 @@ class CpusParamBuilder(BaseParamBuilder):
 
         min_cpus = 9999999  # choose some arbitrary max value
         limiting_instance_type = None
-        for instance_type in instance_types:
+        for instance_type in instance_types or []:
             try:
                 ec2_instance_type = self.soca_context.aws_util().get_ec2_instance_type(
                     instance_type=instance_type

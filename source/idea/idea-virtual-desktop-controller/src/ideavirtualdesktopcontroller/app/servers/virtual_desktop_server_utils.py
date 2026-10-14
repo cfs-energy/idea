@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopServer, VirtualDesktopSession
+from ideasdk.aws.ecs_task import current_task_arn
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_db import (
     VirtualDesktopServerDB,
@@ -154,7 +155,8 @@ class VirtualDesktopServerUtils:
         """
         # Note: EC2 terminate_instances API only supports InstanceIds and DryRun parameters
         # Force and SkipOsShutdown are only available for stop_instances, not terminate_instances
-        instance_ids = [server.instance_id for server in servers]
+        # a server that never got an instance, or lost it, has nothing to terminate
+        instance_ids = [server.instance_id for server in servers if server.instance_id]
         missing = []
         self._logger.info(
             f'Attempting to terminate instances: {instance_ids} (force parameter ignored - terminate is always immediate)'
@@ -287,6 +289,16 @@ class VirtualDesktopServerUtils:
                             'instance_id': instance_id,
                         },
                     }
+                    # from a container, the task ARN is what the agent verifies the sender by
+                    try:
+                        task_arn = current_task_arn()
+                    except RuntimeError:
+                        self._logger.warning(
+                            'ECS metadata unavailable after retries; sending AD delete with legacy task verification'
+                        )
+                        task_arn = None
+                    if task_arn:
+                        request['payload']['task_arn'] = task_arn
 
                     # Send the message to SQS - always using FIFO parameters since AD automation queue is always FIFO
                     message_deduplication_id = (

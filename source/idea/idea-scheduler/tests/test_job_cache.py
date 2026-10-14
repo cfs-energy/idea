@@ -9,8 +9,11 @@ to prove all raw SQL statements use parameter binding.
 import glob
 import logging
 import sqlite3
+import time
+from pathlib import Path
 
 import pytest
+from ideasdk.config.soca_config import SocaConfig
 
 from ideadatamodel import (
     SocaJob,
@@ -24,11 +27,23 @@ from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
 class FakeSchedulerContext:
     """
     minimal stand-in for ideascheduler.AppContext: JobsDB/JobCache only use
-    logger() and get_scheduler_app_deploy_dir().
+    logger(), config(), and get_scheduler_app_deploy_dir().
     """
 
-    def __init__(self, deploy_dir: str):
+    def __init__(
+        self, deploy_dir: str, ecs_enabled=False, db_dir=None, backup_interval=None
+    ):
         self._deploy_dir = deploy_dir
+        self._config = SocaConfig(
+            {
+                'ecs.enabled': ecs_enabled,
+                'scheduler.job_cache.db_dir': db_dir,
+                'scheduler.job_cache.backup_interval_seconds': backup_interval,
+            }
+        )
+
+    def config(self):
+        return self._config
 
     def logger(self, name: str = None):
         return logging.getLogger(name or 'test-job-cache')
@@ -67,6 +82,186 @@ def build_job(
         provisioned=provisioned,
         total_time_secs=total_time_secs,
         params=SocaJobParams(nodes=nodes, cpus=cpus, licenses=licenses),
+    )
+
+
+def test_host_job_cache_keeps_deploy_directory_default(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+    assert (
+        Path(cache.get_connection().engine.url.database)
+        == tmp_path / 'db/job-cache-v3.db'
+    )
+    assert (
+        list(cache.get_connection().query('PRAGMA journal_mode'))[0]['journal_mode']
+        == 'wal'
+    )
+
+
+def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    db = cache._jobs_db
+    assert Path(db._db_file) == tmp_path / 'db/job-cache-v3.db'
+    assert Path(db._backup_file) == tmp_path / 'pbs/idea/db/job-cache-v3.db'
+    assert db._backup_interval == 60
+    assert db._backup_thread.is_alive()
+    assert (
+        list(cache.get_connection().query('PRAGMA journal_mode'))[0]['journal_mode']
+        == 'wal'
+    )
+    cache.stop()
+    assert not db._backup_thread.is_alive()
+
+
+def test_host_job_cache_has_no_backup(tmp_path):
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+    assert cache._jobs_db._backup_file is None
+    assert cache._jobs_db._backup_thread is None
+    assert cache._jobs_db.backup(force=True) is False
+    cache.stop()
+
+
+def test_backup_copies_only_when_the_cache_changed(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=3600
+        )
+    )
+    db = cache._jobs_db
+    copy = Path(db._backup_file)
+    assert db.backup() is True  # the first copy, whatever the state
+    assert copy.exists()
+    assert db.backup() is False  # nothing changed
+    cache.add_finished_job(
+        build_job('41', job_uid='finished', state=SocaJobState.FINISHED)
+    )
+    assert db.backup() is True
+    assert db.backup() is False
+    with sqlite3.connect(copy) as connection:
+        assert (
+            connection.execute(
+                'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
+            ).fetchone()[0]
+            == 1
+        )
+    assert [p.name for p in copy.parent.iterdir()] == ['job-cache-v3.db']
+    cache.stop()
+
+
+def test_backup_runs_on_the_interval_and_on_stop(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=0.05
+        )
+    )
+    copy = Path(cache._jobs_db._backup_file)
+    deadline = time.monotonic() + 5
+    while not copy.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert copy.exists(), 'the backup thread did not copy the cache'
+    cache.add_finished_job(
+        build_job('41', job_uid='finished', state=SocaJobState.FINISHED)
+    )
+    cache.stop()
+    with sqlite3.connect(copy) as connection:
+        assert (
+            connection.execute(
+                'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_container_job_cache_survives_replacement(tmp_path, monkeypatch):
+    pbs_home = tmp_path / 'persistent-pbs'
+    monkeypatch.setenv('PBS_HOME', str(pbs_home))
+    cache = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-1'), ecs_enabled=True)
+    )
+    cache.add_finished_job(
+        build_job('41', job_uid='finished', state=SocaJobState.FINISHED)
+    )
+    cache.sync([build_job('42')])
+    cache.get_connection()['execution_hosts'].insert(
+        {'job_id': '42', 'instance_id': 'instance-42'}
+    )
+    # committed records are still in the live file's WAL when the task stops
+    assert Path(f'{cache._jobs_db._db_file}-wal').stat().st_size > 0
+    cache.stop()
+
+    replacement = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-2'), ecs_enabled=True)
+    )
+    assert (
+        Path(replacement.get_connection().engine.url.database)
+        == tmp_path / 'task-2/db/job-cache-v3.db'
+    )
+    assert replacement.get_completed_job_by_uid('finished') is not None
+    assert [job.job_uid for job in replacement.list_pending_index_jobs()] == [
+        'finished'
+    ]
+    assert replacement.get_job('42') is not None
+    assert (
+        replacement.get_connection()['execution_hosts'].find_one(job_id='42')[
+            'instance_id'
+        ]
+        == 'instance-42'
+    )
+    assert list(replacement.get_connection().query('PRAGMA integrity_check')) == [
+        {'integrity_check': 'ok'}
+    ]
+    assert (
+        list(replacement.get_connection().query('PRAGMA busy_timeout'))[0]['timeout']
+        == 30000
+    )
+    replacement.stop()
+
+
+def test_an_existing_local_cache_is_not_replaced_by_the_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    first = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    first.add_finished_job(build_job('41', job_uid='copied'))
+    first.stop()
+    local = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    local.add_finished_job(build_job('42', job_uid='local'))
+    local.get_connection().close()
+    local._jobs_db._backup_stop.set()
+
+    reopened = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    assert reopened.get_completed_job_by_uid('local') is not None
+    assert reopened.get_completed_job_by_uid('copied') is not None
+    reopened.stop()
+
+
+def test_an_unreadable_copy_starts_an_empty_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    copy = tmp_path / 'pbs/idea/db/job-cache-v3.db'
+    copy.parent.mkdir(parents=True)
+    copy.write_bytes(b'not a sqlite database')
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    assert cache.get_completed_job_by_uid('anything') is None
+    assert copy.read_bytes() == b'not a sqlite database'
+    cache.add_finished_job(build_job('41', job_uid='new'))
+    cache.stop()
+    with sqlite3.connect(copy) as connection:
+        assert (
+            connection.execute('SELECT count(*) FROM finished_jobs').fetchone()[0] == 1
+        )
+
+
+@pytest.mark.parametrize('ecs_enabled', [False, True])
+def test_job_cache_directory_can_be_configured(tmp_path, ecs_enabled):
+    db_dir = tmp_path / 'configured'
+    cache = JobCache(
+        context=FakeSchedulerContext(str(tmp_path), ecs_enabled, str(db_dir))
+    )
+    assert (
+        Path(cache.get_connection().engine.url.database) == db_dir / 'job-cache-v3.db'
     )
 
 
@@ -287,3 +482,12 @@ def test_index_marker_tracks_completed_record_identity(job_cache, job_uid, mark_
     assert [j.job_uid for j in job_cache.list_pending_index_jobs()] == [
         second.job_uid if mark_first else first.job_uid
     ]
+
+
+def test_a_new_job_cache_reports_ready_only_after_set_ready(tmp_path):
+    # every PBS hook call asks is_ready(); a JobCache without _is_ready fails them all
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+    assert cache.is_ready() is False
+    cache.set_ready()
+    assert cache.is_ready() is True
+    cache.stop()

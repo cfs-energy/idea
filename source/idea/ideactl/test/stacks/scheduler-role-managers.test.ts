@@ -1,18 +1,12 @@
 /**
- * The scheduler role script's batch-manager grant.
+ * The scheduler role script's batch-manager reconciliation.
  *
- * A person, not this tool, closes admission before a migration and reopens it afterwards, and
- * after the cutover the batch server's host is a task with no shell into it. The grant puts the
- * bastion host in the server's `managers` list so those `qmgr` commands have an authorised
- * client over the batch protocol.
- *
- * Two things have to hold and neither is visible by reading the line:
- *
- *  - It must name the EC2 private DNS name. The server matches a connection against the name it
- *    reverse-resolves the caller's address to. The private-zone alias in `bastion-host.hostname`
- *    resolves forward to the same address but canonicalizes to itself, so an entry built from it
- *    is accepted and never matches: a grant that silently does nothing.
- *  - A cluster with no bastion module must get no grant rather than a malformed one.
+ * A host bastion keeps its grant by the name the server matches: the server authorizes a
+ * connection by the name it reverse-resolves the caller's address to, so an entry built from the
+ * private-zone alias in `bastion-host.hostname` would be accepted and never match. A container
+ * bastion gets no grant: an administrator runs qmgr from inside the scheduler task, and a grant by
+ * a task's address goes stale, then reaches whichever desktop is given the address next. Grants of
+ * that shape from the host era are removed on every start; operator-added entries stay.
  *
  * The block is executed rather than pattern-matched, with `setting` and the batch client stubbed.
  * The one rewrite the harness makes is the client's absolute path, which cannot be stubbed on PATH.
@@ -36,17 +30,17 @@ after(() => {
   for (const workdir of workdirs) rmSync(workdir, { force: true, recursive: true });
 });
 
-/** The grant, from its first line to the `fi` that closes it. */
+/** The runtime grant, independent of first-create defaults. */
 function grantBlock(): string {
-  const start = SOURCE.indexOf("BASTION_PRIVATE_DNS_NAME=");
+  const start = SOURCE.indexOf("# The NLB name");
   assert.notEqual(start, -1, "the role script grants the bastion host batch-manager rights");
-  const end = SOURCE.indexOf("\n  fi\n", start);
+  const end = SOURCE.indexOf('log "starting pbs_sched"', start);
   assert.notEqual(end, -1, "the grant is a closed conditional");
-  return SOURCE.slice(start, end + 6);
+  return SOURCE.slice(start, end);
 }
 
 /** Runs the grant with a settings table holding `rows`, and returns the batch client's arguments. */
-function runGrant(rows: Record<string, string>): string[] {
+function runGrant(rows: Record<string, string>, existing = ""): string[] {
   const workdir = mkdtempSync(join(tmpdir(), "ideactl-managers-"));
   workdirs.push(workdir);
   const record = join(workdir, "qmgr-calls");
@@ -63,7 +57,7 @@ function runGrant(rows: Record<string, string>): string[] {
       "    *) printf '%s' \"$2\";;",
       "  esac",
       "}",
-      `qmgr() { printf '%s\\n' "$*" >> '${record}'; }`,
+      `qmgr() { if [[ "$2" == 'list server managers' ]]; then echo '    managers = ${existing}'; else printf '%s\\n' "$*" >> '${record}'; fi; }`,
       grantBlock().replaceAll("/opt/pbs/bin/qmgr", "qmgr"),
       "",
     ].join("\n"),
@@ -74,7 +68,9 @@ function runGrant(rows: Record<string, string>): string[] {
   return readFileSync(record, "utf8").split("\n").filter((line) => line !== "");
 }
 
-test("grants the bastion host batch-manager rights under the name the server matches", () => {
+const STALE = ["root", "ip-10-7-0-9.us-east-2.compute.internal"].join("@");
+
+test("grants a host bastion batch-manager rights under the name the server matches", () => {
   const calls = runGrant({ "bastion-host.private_dns_name": "ip-192-0-2-10.us-east-2.compute.internal" });
   assert.deepEqual(calls, [
     '-c set server managers += root@ip-192-0-2-10.us-east-2.compute.internal',
@@ -90,9 +86,20 @@ test("ignores the private-zone alias, which resolves but never matches a connect
   assert.deepEqual(calls, [], "an entry built from bastion-host.hostname would be a grant that never matches");
 });
 
-test("preserves imported manager policy on subsequent starts", () => {
-  const guard = SOURCE.indexOf('if [[ "${PBS_CREATE}" == 1 ]]; then', SOURCE.indexOf('pbs server did not come up'));
-  const grant = SOURCE.indexOf("BASTION_PRIVATE_DNS_NAME=");
-  const close = SOURCE.indexOf('\nfi\n\nlog "starting pbs_sched"', grant);
-  assert.ok(guard >= 0 && guard < grant && close > grant);
+test("grants a container bastion nothing and removes the host-era grant", () => {
+  assert.deepEqual(runGrant({
+    "bastion-host.service_name": "test-bastion-host",
+    "bastion-host.private_dns_name": "nlb.elb.amazonaws.com",
+  }, `${STALE},root@example.invalid`), [`-c set server managers -= ${STALE}`]);
+});
+
+test("does not add an existing grant again", () => {
+  assert.deepEqual(runGrant({ "bastion-host.private_dns_name": "example.invalid" }, "root@example.invalid"), []);
+});
+
+test("refreshes grants after first-create defaults have finished", () => {
+  const grant = SOURCE.indexOf("# The NLB name");
+  const marker = SOURCE.indexOf('log "PBS server configured"');
+  assert.ok(marker >= 0 && marker < grant);
+  assert.ok(SOURCE.slice(marker, grant).includes("\nfi\n"));
 });

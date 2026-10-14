@@ -222,7 +222,20 @@ mkdir -p "$STATE" || exit 1
 check bootstrap 'All stages succeeded and bootstrap logs are clean' bootstrap_ok "${1:-}"
 check kernel 'Running kernel equals the default boot kernel' kernel_ok
 {% if (compute and 'fsx_lustre' in (context.vars.enabled_drivers or ())) or (not compute and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache'))) %}
+{% if not compute and context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+lustre_ok() {
+  packages_installed lustre-client-utils "lustre-client-modules-$(uname -r)" &&
+    command -v mount.lustre >/dev/null && modprobe -n lustre || return 1
+  {% for name, storage in context.config.get_config('shared-storage').items() %}
+  {% if storage['provider'] in ('fsx_lustre', 'fsx_cache') and context.eval_shared_storage_scope(shared_storage=storage) %}
+  findmnt -rn -t lustre --mountpoint "{{ storage['mount_dir'] }}" >/dev/null || return 1
+  {% endif %}
+  {% endfor %}
+}
+check lustre 'Lustre client is installed for the running kernel and configured filesystems are mounted' lustre_ok
+{% else %}
 check lustre 'Configured Lustre module resolves for the running kernel' modprobe -n lustre
+{% endif %}
 {% endif %}
 {% if not compute %}
 check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404') else 'gdm' }}.service

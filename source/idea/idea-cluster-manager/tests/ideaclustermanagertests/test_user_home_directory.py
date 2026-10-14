@@ -9,17 +9,19 @@ def test_home_initialization_uses_account_ids_without_local_user(monkeypatch, tm
     user = User(username='user', uid=12001, gid=12002, home_dir=str(tmp_path / 'home'))
     helper = UserHomeDirectory(Mock(), user)
     chown = Mock()
+    fchown = Mock()
     monkeypatch.setattr('os.chown', chown)
+    monkeypatch.setattr('os.fchown', fchown)
     monkeypatch.setattr(
         'pwd.getpwnam', Mock(side_effect=AssertionError('NSS unavailable'))
     )
-    monkeypatch.setattr('shutil.copy', Mock())
     helper.initialize()
     assert (tmp_path / 'home/.ssh/id_rsa').is_file()
     for name in ('id_rsa', 'authorized_keys'):
         assert (tmp_path / 'home/.ssh' / name).stat().st_mode & 0o777 == 0o600, name
-    assert chown.call_count > 1
-    assert all(call.args[1:] == (12001, 12002) for call in chown.call_args_list)
+    calls = chown.call_args_list + fchown.call_args_list
+    assert len(calls) > 1
+    assert all(call.args[1:] == (12001, 12002) for call in calls)
 
 
 @pytest.mark.parametrize(
@@ -46,17 +48,24 @@ def test_ppk_conversion_runs_without_su_and_owns_the_result(monkeypatch, tmp_pat
     puttygen.chmod(0o755)
     helper._shell = Mock()
     helper._shell.invoke.return_value = Mock(returncode=0, stdout=f'{puttygen}\n')
-    chown = Mock()
-    monkeypatch.setattr('os.chown', chown)
+    fchown = Mock()
+    monkeypatch.setattr('os.fchown', fchown)
 
     def convert(args, **kwargs):
-        assert args == [str(puttygen), str(key), '-o', str(key.with_suffix('.ppk'))]
-        key.with_suffix('.ppk').write_text('converted key\n')
+        # puttygen works on a private copy, never in the user's directory
+        assert args[0] == str(puttygen) and args[2] == '-o'
+        assert (
+            not args[1].startswith(str(tmp_path))
+            and open(args[1]).read() == 'PRIVATE KEY\n'
+        )
+        with open(args[3], 'w') as f:
+            f.write('converted key\n')
         return Mock(returncode=0)
 
     monkeypatch.setattr('subprocess.run', convert)
     assert helper.get_key_material('ppk') == 'converted key'
-    chown.assert_called_once_with(str(key.with_suffix('.ppk')), 12001, 12002)
+    assert fchown.call_args.args[1:] == (12001, 12002)
+    assert key.with_suffix('.ppk').stat().st_mode & 0o777 == 0o600
 
 
 def ownership_tree(monkeypatch, tmp_path):
@@ -212,6 +221,7 @@ def test_new_public_key_mode_ignores_restrictive_umask(monkeypatch, tmp_path):
         Mock(), User(username='user', uid=12001, gid=12002, home_dir=str(tmp_path))
     )
     monkeypatch.setattr(os, 'chown', Mock())
+    monkeypatch.setattr(os, 'fchown', Mock())
     previous = os.umask(0o077)
     try:
         helper.initialize_ssh_dir()
@@ -258,3 +268,89 @@ def test_tree_read_failures_are_counted(monkeypatch, tmp_path, operation):
     assert result.skipped == 2
     assert owners[helper.home_dir] == (11001, 11002)
     assert owners[str(tmp_path / 'home/nested/data')] == (11001, 11002)
+
+
+def _key_home(monkeypatch, tmp_path):
+    import os
+
+    home = tmp_path / 'home'
+    (home / '.ssh').mkdir(parents=True)
+    helper = UserHomeDirectory(
+        Mock(),
+        User(username='user', uid=os.getuid(), gid=os.getgid(), home_dir=str(home)),
+    )
+    helper._shell = Mock()
+    helper._shell.invoke.return_value = Mock(returncode=1, stdout='')
+    return helper, home
+
+
+@pytest.mark.parametrize('live', [False, True])
+def test_a_planted_ppk_link_is_never_written_through(monkeypatch, tmp_path, live):
+    # root must not create or overwrite the link's target and hand it to the user
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    helper, home = _key_home(monkeypatch, tmp_path)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    (home / '.ssh/id_rsa').write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    target = tmp_path / 'system-file'
+    if live:
+        target.write_text('system')
+    (home / '.ssh/id_rsa.ppk').symlink_to(target)
+    with pytest.raises(Exception):
+        helper.get_key_material('ppk')
+    assert target.read_text() == 'system' if live else not target.exists()
+    assert (home / '.ssh/id_rsa.ppk').is_symlink()
+
+
+def test_a_ppk_is_written_for_the_user_and_an_id_rsa_link_is_not_read(
+    monkeypatch, tmp_path
+):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    helper, home = _key_home(monkeypatch, tmp_path)
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    (home / '.ssh/id_rsa').write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    assert helper.get_key_material('ppk').startswith('PuTTY-User-Key-File-2: ssh-rsa')
+    assert (home / '.ssh/id_rsa.ppk').stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in (home / '.ssh').iterdir() if p.name.startswith('.')] == []
+    # the key download reads as root: a link to another file is refused, not returned
+    secret = tmp_path / 'secret'
+    secret.write_text("not the user's")
+    (home / '.ssh/id_rsa').unlink()
+    (home / '.ssh/id_rsa').symlink_to(secret)
+    with pytest.raises(Exception, match='cannot be read'):
+        helper.get_key_material('pem')
+
+
+def test_home_setup_does_not_write_through_a_planted_dotfile_link(tmp_path):
+    import os
+
+    if os.geteuid() != 0 or not os.path.isfile('/etc/skel/.bashrc'):
+        pytest.skip('needs root and /etc/skel/.bashrc')
+    home = tmp_path / 'home'
+    home.mkdir()
+    target = tmp_path / 'planted'
+    (home / '.bashrc').symlink_to(target)
+    helper = UserHomeDirectory(
+        Mock(), User(username='user', uid=12001, gid=12002, home_dir=str(home))
+    )
+    helper.initialize_home_dir()
+    assert not target.exists()
+    assert (home / '.bashrc').is_symlink()
+    logout = home / '.bash_logout'
+    if os.path.isfile('/etc/skel/.bash_logout'):
+        assert not logout.is_symlink() and os.stat(logout).st_uid == 12001

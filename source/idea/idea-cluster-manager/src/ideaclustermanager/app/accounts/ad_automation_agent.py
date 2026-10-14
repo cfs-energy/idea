@@ -338,7 +338,9 @@ class ADAutomationAgent(SocaService):
                                 e.error_code
                                 == errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED
                             ):
-                                self.logger.error(f'{e}')
+                                self.logger.error(
+                                    f'Dropping {namespace} request from {sender_id}: {e}'
+                                )
                                 add_to_delete(sqs_message)
                             elif (
                                 e.error_code

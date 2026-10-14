@@ -2,14 +2,17 @@
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
     {% include '_templates/linux/fsx_lustre_client.jinja2' %}
+    {% if not (ubuntu_desktop_bake | default(false)) %}
     REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
     if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
-      (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
+      (crontab -l 2>/dev/null || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
       check_reboot_loop "FSx storage mount reboot"
       reboot
       exit 0
     fi
+    {% endif %}
   {% endif %}
+  {% include '_templates/linux/shared_mount_dirs.jinja2' %}
   function mount_shared_storage () {
     {% for name, storage in context.config.get_config('shared-storage').items() %}
       {% if context.eval_shared_storage_scope(shared_storage=storage) %}
@@ -59,28 +62,34 @@
       {% endif %}
     {% endfor %}
 
-    local AWS=$(command -v aws)
-    local FS_MOUNT_ATTEMPT=0
+    local FS_MOUNT_ATTEMPT=1
     local FS_MOUNT_MAX_ATTEMPTS=5
-    mount -a
-    local MOUNT_STATUS=$?
-    # Error code 32 means filesystem is already mounted, which is not a failure
-    while [[ ${MOUNT_STATUS} -ne 0 ]] && [[ ${MOUNT_STATUS} -ne 32 ]] && [[ ${FS_MOUNT_ATTEMPT} -le 5 ]]
-    do
-      local SLEEP_TIME=$(( RANDOM % 33 + 8 ))  # Minimum of 8 seconds sleep
-      log_info "(${FS_MOUNT_ATTEMPT} of ${FS_MOUNT_MAX_ATTEMPTS}) Failed to mount FS (error ${MOUNT_STATUS}), retrying in ${SLEEP_TIME} seconds ..."
-      sleep ${SLEEP_TIME}
-      ((FS_MOUNT_ATTEMPT++))
-      mount -a
-      MOUNT_STATUS=$?
-    done
-
-    # Log success if we exited due to already mounted (code 32)
-    if [[ ${MOUNT_STATUS} -eq 32 ]]; then
-      log_info "Filesystems already mounted, continuing..."
+    {% if (ubuntu_desktop_bake | default(false)) and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+    local MOUNT_TYPES=()
+    if ! modinfo lustre >/dev/null 2>&1; then
+      log_info "Deferring Lustre mounts until the builder boots the selected kernel"
+      MOUNT_TYPES=(-t nolustre)
     fi
+    while [[ ${FS_MOUNT_ATTEMPT} -lt ${FS_MOUNT_MAX_ATTEMPTS} ]] && ! mount_shared_filesystems "${MOUNT_TYPES[@]}"; do
+    {% else %}
+    while [[ ${FS_MOUNT_ATTEMPT} -lt ${FS_MOUNT_MAX_ATTEMPTS} ]] && ! mount_shared_filesystems; do
+    {% endif %}
+      local SLEEP_TIME=$(( RANDOM % 33 + 8 ))  # Minimum of 8 seconds sleep
+      log_info "(${FS_MOUNT_ATTEMPT} of ${FS_MOUNT_MAX_ATTEMPTS}) retrying in ${SLEEP_TIME} seconds ..."
+      sleep "${SLEEP_TIME}"
+      FS_MOUNT_ATTEMPT=$(( FS_MOUNT_ATTEMPT + 1 ))
+    done
+    # the last attempt is a plain call: a bake records it, the caller sees its status
+    {% if (ubuntu_desktop_bake | default(false)) and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+    mount_shared_filesystems "${MOUNT_TYPES[@]}"
+    {% else %}
+    mount_shared_filesystems
+    {% endif %}
   }
+  # a plain call, so a bake records the failure by name; a host stops rather than run without its storage
   mount_shared_storage
+  # shellcheck disable=SC2181
+  [[ $? -eq 0 ]] || exit_fail "Shared storage did not mount"
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
     # Lustre client tuning for some adjustments takes place _after_ the client mounts have taken place
     {% include '_templates/linux/fsx_lustre_client_tuning_postmount.jinja2' %}

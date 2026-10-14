@@ -12,7 +12,7 @@ from typing import List, Dict, Optional
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSchedule, DayOfWeek, VirtualDesktopScheduleType
-from ideasdk.utils import Utils
+from ideasdk.utils import DateTimeUtils, Utils
 from ideavirtualdesktopcontroller.app.virtual_desktop_notifiable_db import (
     VirtualDesktopNotifiableDB,
 )
@@ -91,6 +91,8 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
             schedules_constants.SCHEDULE_DB_IDEA_SESSION_OWNER_KEY: schedule.idea_session_owner,
             schedules_constants.SCHEDULE_DB_SCHEDULE_TYPE_KEY: schedule.schedule_type,
         }
+        if schedule.updated_on is not None:
+            schedule_dict['updated_on'] = Utils.to_milliseconds(schedule.updated_on)
 
         if schedule.schedule_type == VirtualDesktopScheduleType.CUSTOM_SCHEDULE:
             schedule_dict[schedules_constants.SCHEDULE_DB_START_UP_TIME_KEY] = (
@@ -141,8 +143,12 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
             start_up_time = '00:00'
             shut_down_time = '23:59'
 
+        updated_on_ms = Utils.get_value_as_int('updated_on', db_entry)
         return VirtualDesktopSchedule(
             schedule_id=schedule_id,
+            updated_on=DateTimeUtils.to_datetime(updated_on_ms)
+            if updated_on_ms is not None
+            else None,
             start_up_time=start_up_time,
             shut_down_time=shut_down_time,
             schedule_type=schedule_type,
@@ -159,6 +165,7 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
 
     def create(self, schedule: VirtualDesktopSchedule) -> VirtualDesktopSchedule:
         db_entry = self.convert_schedule_object_to_db_dict(schedule)
+        db_entry['updated_on'] = DateTimeUtils.current_time_millis()
         db_entry[schedules_constants.SCHEDULE_DB_RANGE_KEY] = Utils.uuid()
         self._table.put_item(Item=db_entry)
         super().trigger_create_event(
@@ -193,6 +200,7 @@ class VirtualDesktopScheduleDB(VirtualDesktopNotifiableDB):
 
     def update(self, schedule: VirtualDesktopSchedule) -> VirtualDesktopSchedule:
         db_entry = self.convert_schedule_object_to_db_dict(schedule)
+        db_entry['updated_on'] = DateTimeUtils.current_time_millis()
         update_expression_tokens = []
         expression_attr_names = {}
         expression_attr_values = {}

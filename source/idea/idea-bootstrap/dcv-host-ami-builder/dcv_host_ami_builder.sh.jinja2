@@ -33,7 +33,9 @@ source "${SCRIPT_DIR}/image_bake_stage.sh"
 
 {% include '_templates/linux/systemd_resolved.jinja2' %}
 
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
 {% include '_templates/linux/set_kernel.jinja2' %}
+{% endif %}
 
 if [[ ! -f /var/lib/idea/bake-packages.ok ]]; then
   {% if context.base_os in ('rhel8', 'rocky8') %}
@@ -92,7 +94,8 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot
   exit 0
 else
-  mount -a
+  {% include '_templates/linux/shared_mount_dirs.jinja2' %}
+  mount_shared_filesystems
   log_info "reboot not required. executing dcv_host_ami_builder_post_reboot.sh ..."
   /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder_post_reboot.sh >> "${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log" 2>&1
 fi

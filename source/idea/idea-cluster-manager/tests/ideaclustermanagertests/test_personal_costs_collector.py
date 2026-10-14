@@ -655,6 +655,41 @@ def test_ai_spend_without_token_denominator_is_not_a_free_day(setup, monkeypatch
     calc._workers.shutdown()
 
 
+def test_attribution_data_conditions_log_once_per_run(setup, monkeypatch, caplog):
+    # a missing token denominator is one condition, not one warning per user, project and day
+    context, store, _ = setup
+    calc = DailyCostsCalculator(context, store)
+    monkeypatch.setattr(calc, '_usage_rows', lambda *args: [])
+    monkeypatch.setattr(calc, '_billing', lambda *args: {('Amazon Bedrock',): 5})
+    calc.begin()
+    with caplog.at_level(logging.DEBUG, logger='personal-cost-tests'):
+        for day in ('2026-09-02', '2026-09-03'):
+            for project in ('project-a', 'project-b'):
+                result = calc._ai_project(
+                    'user-a',
+                    SimpleNamespace(project_id=project, name=project),
+                    day,
+                    day,
+                )
+                assert result.cost_unavailable
+    attribution = [
+        r
+        for r in caplog.records
+        if 'Daily project attribution unavailable' in r.message
+    ]
+    assert [r.levelno for r in attribution] == [logging.WARNING] + [logging.DEBUG] * 3
+    calc.begin()  # a new run says it again, once
+    with caplog.at_level(logging.WARNING, logger='personal-cost-tests'):
+        calc._ai_project(
+            'user-a',
+            SimpleNamespace(project_id='project-a', name='project-a'),
+            '2026-09-02',
+            '2026-09-02',
+        )
+    assert sum(r.levelno == logging.WARNING for r in caplog.records) == 2
+    calc._workers.shutdown()
+
+
 def test_minute_check_honours_a_request_arriving_during_collection(setup, monkeypatch):
     worker, calculator = collector(setup, monkeypatch)
     _, store, _ = setup

@@ -621,7 +621,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             ReturnValues='ALL_OLD',
         )
 
-        old_db_entry = result['Attributes']
+        old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
         self.trigger_update_event(
             db_entry[sessions_constants.USER_SESSION_DB_HASH_KEY],
             db_entry[sessions_constants.USER_SESSION_DB_RANGE_KEY],
@@ -655,7 +655,12 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             },
             ReturnValues='ALL_OLD',
         )
-        old_db_entry = result['Attributes']
+        old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
+        if not old_db_entry:
+            # a second delete of the same session (two terminations racing, or a retry):
+            # nothing is left to remove or announce
+            self._logger.info(f'session {session.idea_session_id} was already deleted')
+            return
         self.trigger_delete_event(
             old_db_entry[sessions_constants.USER_SESSION_DB_HASH_KEY],
             old_db_entry[sessions_constants.USER_SESSION_DB_RANGE_KEY],

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -309,6 +310,176 @@ def test_stage_error_survives_later_success_and_subshell(tmp_path):
         == 'a command failed: setup: source "$HOME/.cargo/env" (exit 1)'
     )
     assert 'Value=failed:bootstrap' in calls
+
+
+# every crontab edit a bake stage can reach, including the Lustre and kernel reboot paths
+BAKE_CRONTAB_SOURCES = [
+    'dcv-host-ami-builder/setup.sh.jinja2',
+    'dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2',
+    '_templates/linux/mount_shared_storage.jinja2',
+    '_templates/linux/set_kernel.jinja2',
+    '_templates/linux/gpu_drivers.jinja2',
+]
+
+
+@pytest.mark.parametrize('name', BAKE_CRONTAB_SOURCES)
+def test_crontab_edits_survive_an_empty_crontab(tmp_path, name):
+    # root has no crontab before the first bake reboot: crontab -l exits 1
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    fake = bin_dir / 'crontab'
+    fake.write_text(
+        '#!/bin/sh\n[ "$1" = -l ] && { echo "no crontab for root" >&2; exit 1; }\ncat >/dev/null\n'
+    )
+    fake.chmod(0o755)
+    lines = [
+        line.strip()
+        for line in Path(IDEA_BOOTSTRAP_DIR, name).read_text().splitlines()
+        if 'crontab -l' in line
+    ]
+    assert lines
+    source = Path(
+        IDEA_BOOTSTRAP_DIR, 'dcv-host-ami-builder/image_bake_stage.sh'
+    ).read_text()
+    source = source.replace('/var/lib/idea', str(tmp_path))
+    result = subprocess.run(
+        ['bash', '-c', source + '\nBAKE_STAGE=setup\n' + '\n'.join(lines)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'bake-failed').exists(), (
+        tmp_path / 'bake-failed'
+    ).read_text()
+
+
+MOUNT_CALLERS = [
+    'dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2',
+    'compute-node-ami-builder/compute_node_ami_builder.sh.jinja2',
+    '_templates/linux/mount_shared_storage.jinja2',
+]
+
+
+def _mount_stubs(tmp_path, mounted):
+    # util-linux returns 32 for "already mounted" and for every real failure alike
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    (bin_dir / 'mount').write_text(
+        f'#!/bin/sh\necho mount >> {tmp_path}/mounts\nexit 32\n'
+    )
+    mounted_list = tmp_path / 'mounted'
+    mounted_list.write_text(''.join(f'{m}\n' for m in mounted))
+    (bin_dir / 'mountpoint').write_text(f'#!/bin/sh\ngrep -qx "$2" {mounted_list}\n')
+    for stub in ('mount', 'mountpoint'):
+        (bin_dir / stub).chmod(0o755)
+    fstab = tmp_path / 'fstab'
+    fstab.write_text(
+        'UUID=root / xfs defaults 0 0\n'
+        'fs-1.efs.example.invalid:/ /apps/ efs _netdev 0 0\n'
+        'svm.example.invalid:/data /data/ nfs defaults 0 0\n'
+    )
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    source = Path(
+        IDEA_BOOTSTRAP_DIR, 'dcv-host-ami-builder/image_bake_stage.sh'
+    ).read_text()
+    return (
+        bin_dir,
+        source.replace('/var/lib/idea', str(tmp_path))
+        + common.replace('/etc/fstab', str(fstab)),
+    )
+
+
+@pytest.mark.parametrize('mounted', [['/apps/', '/data/'], ['/data/']])
+def test_shared_mounts_are_checked_not_trusted_from_mount_status(tmp_path, mounted):
+    for name in MOUNT_CALLERS:
+        text = Path(IDEA_BOOTSTRAP_DIR, name).read_text()
+        assert 'mount_shared_filesystems' in text and 'mount -a' not in text, name
+    bin_dir, source = _mount_stubs(tmp_path, mounted)
+    result = subprocess.run(
+        # the builders call it mid-stage, so the stage goes on and only the record remains
+        [
+            'bash',
+            '-c',
+            source + '\nBAKE_STAGE=packages\nmount_shared_filesystems\ntrue',
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert result.returncode == 0, result.stderr
+    failed = tmp_path / 'bake-failed'
+    if '/apps/' in mounted:
+        assert not failed.exists(), failed.read_text()
+    else:
+        # the bake records the check by name, and the log says which mount is missing
+        assert failed.read_text().splitlines()[0] == (
+            'packages: [[ ${#not_mounted[@]} -eq 0 ]] (exit 1)'
+        )
+        assert 'Shared storage not mounted: /apps/' in result.stdout
+
+
+@pytest.mark.parametrize(
+    'cluster_dirs,failed',
+    [('"/data"', False), ('"/data" "/apps"', True), (None, True)],
+)
+def test_only_this_clusters_shared_storage_must_be_mounted(
+    tmp_path, cluster_dirs, failed
+):
+    # /apps/ is in fstab but not mounted: a leftover entry is warned about and ignored, the
+    # cluster's own entry fails the check; without the rendered list every entry counts
+    bin_dir, source = _mount_stubs(tmp_path, ['/data/'])
+    setup = '' if cluster_dirs is None else f'IDEA_SHARED_MOUNT_DIRS=({cluster_dirs})\n'
+    result = subprocess.run(
+        ['bash', '-c', source + '\n' + setup + 'mount_shared_filesystems'],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert (result.returncode != 0) == failed, result.stdout + result.stderr
+    assert ('Ignoring fstab entry /apps/' in result.stdout) == (
+        cluster_dirs == '"/data"'
+    )
+
+
+@pytest.mark.parametrize('name', MOUNT_CALLERS)
+def test_every_mount_check_knows_the_clusters_mount_points(name):
+    text = render(name, 'rocky9', lustre=False)
+    start = text.index('IDEA_SHARED_MOUNT_DIRS=(')
+    dirs = text[start : text.index(')', start)]
+    assert '/apps"' in dirs and '/data"' in dirs
+    assert text.index('IDEA_SHARED_MOUNT_DIRS=(') < text.rindex(
+        'mount_shared_filesystems'
+    )
+
+
+def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
+    script = render(
+        '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
+    )
+    marker = 'exit_fail "Shared storage did not mount"'
+    block = script[
+        script.index('function mount_shared_storage ()') : script.index(marker)
+        + len(marker)
+    ]
+    bin_dir, source = _mount_stubs(tmp_path, ['/data/'])  # /apps/ never mounts
+    stubs = 'mkdir() { :; }\nsleep() { :; }\n' + ''.join(
+        f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)
+    )
+    result = subprocess.run(
+        ['bash', '-c', source + '\nBAKE_STAGE=setup\n' + stubs + block],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    # five attempts, then the stage stops: the bake names the function, the host exits
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert (tmp_path / 'mounts').read_text().count('mount') == 5
+    assert (tmp_path / 'bake-failed').read_text().splitlines()[0] == (
+        'setup: [[ ${#not_mounted[@]} -eq 0 ]] (exit 1)'
+    )
+    assert result.stdout.count('Shared storage not mounted: /apps/') == 5
+    assert 'Failed: Shared storage did not mount' in result.stdout
 
 
 def test_parent_stage_preserves_the_reported_failure(tmp_path):

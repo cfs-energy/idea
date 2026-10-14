@@ -49,7 +49,7 @@ systemctl start crond
 SOURCE="${1}"
 if [[ "${SOURCE}" == "crontab" ]]; then
   # clean crontab, remove current file from reboot commands
-  crontab -l | grep -v 'setup.sh' | crontab -
+  (crontab -l 2>/dev/null | grep -v 'setup.sh' || true) | crontab -
 fi
 
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
@@ -70,6 +70,11 @@ systemctl enable --now amazon-ssm-agent
 {% include '_templates/linux/epel_repo.jinja2' %}
 
 {% include '_templates/linux/nfs_utils.jinja2' %}
+
+{% set ubuntu_desktop_bake = context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if ubuntu_desktop_bake %}
+{% include '_templates/linux/set_kernel.jinja2' %}
+{% endif %}
 
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 

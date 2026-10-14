@@ -91,14 +91,7 @@ class OpenPBSAPI(BaseAPI):
             job = pbs_context.job
 
             if Utils.is_true(job.provisioning_options.keep_forever):
-                select = Utils.get_value_as_string(
-                    'select', job.params.custom_params, ''
-                )
-                select = select.split(':compute_node')[0]
-                if Utils.is_not_empty(select):
-                    select += f':compute_node={job.get_compute_stack()}'
-                else:
-                    select = f'{job.desired_nodes()}:ncpus=1:compute_node={job.get_compute_stack()}'
+                select = pbs_context.job_select(job.get_compute_stack())
 
                 self.context.job_monitor.job_queued(job=job)
 
@@ -128,14 +121,7 @@ class OpenPBSAPI(BaseAPI):
                 else:
                     job = pbs_context.job
 
-                    select = Utils.get_value_as_string(
-                        'select', job.params.custom_params, ''
-                    )
-                    select = select.split(':compute_node')[0]
-                    if Utils.is_not_empty(select):
-                        select += ':compute_node=tbd'
-                    else:
-                        select = f'{job.desired_nodes()}:ncpus=1:compute_node=tbd'
+                    select = pbs_context.job_select('tbd')
 
                     pbs_context.get_bom_cost()
                     pbs_context.get_budget_usage()
@@ -205,12 +191,36 @@ class OpenPBSAPI(BaseAPI):
                 OpenPBSHookResult(accept=True, formatted_user_message=None)
             )
 
+    def instance_type_info(self, context: ApiInvocationContext):
+        """
+        Compatibility endpoint for older installed hooks; reads the instance type cache.
+        """
+        payload = Utils.get_value_as_dict('payload', context.get_request(), {})
+        instance_type = Utils.get_value_as_string('instance_type', payload)
+        if Utils.is_empty(instance_type):
+            raise exceptions.invalid_params('instance_type is required')
+        ec2_instance_type = self.context.aws_util().get_ec2_instance_type(instance_type)
+        info = {
+            'instance_type': instance_type,
+            'vcpus': ec2_instance_type.vcpu_info_default_vcpus,
+            'cores': ec2_instance_type.vcpu_info_default_cores,
+            'threads_per_core': ec2_instance_type.vcpu_info_default_threads_per_core,
+        }
+        if not all(info.values()):
+            raise exceptions.general_exception(
+                f'no CPU information for instance type {instance_type}'
+            )
+        context.success(info)
+
     def invoke(self, context: ApiInvocationContext):
         # only root/administrators invoke this: openpbs (as root) calls /run/idea.sock.
         # job_status events reach us from mom hooks on compute nodes via the SQS queue.
 
         if not context.is_administrator():
             raise exceptions.unauthorized_access()
+
+        if context.namespace == 'OpenPBSHook.InstanceTypeInfo':
+            return self.instance_type_info(context)
 
         pbs_context = OpenPBSAPIInvocationContext(context=context)
         if pbs_context.event.hook_name == 'validate_job':

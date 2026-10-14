@@ -45,7 +45,10 @@ const DISPATCH_ONLY = "github.event_name == 'workflow_dispatch'";
 const BUILD_JOBS = ['build_ideactl_artifacts', 'build_ideactl_linux_artifact', 'build_ideactl_windows_artifact'];
 const TREE = 'tree-under-release';
 const REPOSITORY = 'registry.example.invalid/idea/idea-control-plane';
-const CANDIDATE_IMAGE = `${REPOSITORY}@sha256:candidate`;
+// the registry returns a multi-arch index; its digest is the hash of these bytes
+const INDEX = '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}';
+const DIGEST = `sha256:${createHash('sha256').update(INDEX).digest('hex')}`;
+const CANDIDATE_IMAGE = `${REPOSITORY}@${DIGEST}`;
 
 test('publication requires both validation workflows and extracted artifact smoke tests', () => {
   assert.equal(workflow.jobs.checks?.uses, './.github/workflows/ideactl_checks.yaml');
@@ -184,7 +187,7 @@ if (name === 'docker') {
   if (args[0] === 'buildx' && args[1] === 'build' && mode === 'build-failure') process.exit(1);
   if (args[0] === 'buildx' && args[1] === 'imagetools' && args[2] === 'inspect') {
     if (mode === 'missing-image') process.exit(1);
-    if (args.includes('--format')) console.log(JSON.stringify(((mode === 'digest-mismatch' && !args[3].includes('-rc.')) || (mode === 'rc-digest-mismatch' && args[3].includes('-rc.'))) ? 'sha256:other' : process.env.TAGGED_DIGEST));
+    if (args.includes('--raw')) process.stdout.write(((mode === 'digest-mismatch' && !args[3].includes('-rc.')) || (mode === 'rc-digest-mismatch' && args[3].includes('-rc.'))) ? process.env.INDEX.replace('[]', '[{}]') : process.env.INDEX);
     process.exit(0);
   }
   if (args[0] === 'run') {
@@ -245,7 +248,7 @@ class Harness {
       cwd, encoding: 'utf8',
       env: {
         ...process.env, PATH: `${join(this.directory, '.bin')}:${process.env.PATH}`, COMMAND_LOG: this.log, RELEASE_TEST_MODE: this.mode,
-        REAL_JQ, RELEASES_DIR: this.releases, TREE, TAGGED_DIGEST: 'sha256:candidate', GITHUB_OUTPUT: this.output,
+        REAL_JQ, RELEASES_DIR: this.releases, TREE, INDEX, GITHUB_OUTPUT: this.output,
         GITHUB_REPOSITORY: 'example/project', GITHUB_SHA: 'test-commit', GITHUB_RUN_ID: '5', GITHUB_RUN_ATTEMPT: '2',
         ECR_REGISTRY: 'registry.example.invalid/idea', CONTROL_PLANE_IMAGE_NAME: 'idea-control-plane', RELEASE_CANDIDATE: '', ...env,
       },
@@ -570,7 +573,7 @@ test('promotion re-tags the candidate digest and republishes its files unchanged
       '--tag', `${REPOSITORY}:v1.2.3`, '--tag', `${REPOSITORY}:1.2.3`, '--tag', `${REPOSITORY}:latest`, CANDIDATE_IMAGE,
     ]);
     const write = commands.indexOf(writes[0]!);
-    const verified = commands.slice(write + 1).filter((args) => args[2] === 'imagetools' && args[3] === 'inspect' && args.includes('--format'));
+    const verified = commands.slice(write + 1).filter((args) => args[2] === 'imagetools' && args[3] === 'inspect' && args.includes('--raw'));
     assert.deepEqual(verified.map((args) => args[4]), RELEASED_TAGS, 'each released tag is read back after the write');
     const releasesCreated = releaseWrites(commands);
     assert.equal(releasesCreated.length, 1);
@@ -584,7 +587,7 @@ test('promotion re-tags the candidate digest and republishes its files unchanged
     }
     assert.ok(create.includes('release/candidate.json'));
     const notes = create[create.indexOf('--notes') + 1] ?? '';
-    assert.match(notes, /Released unchanged from v1\.2\.3-rc\.3: .*digest sha256:candidate\./);
+    assert.ok(notes.includes(`digest ${DIGEST}.`) && /Released unchanged from v1\.2\.3-rc\.3: /.test(notes), notes);
     assert.match(notes, /unsigned.*SmartScreen.*Run anyway/);
     // The released files are the candidate's bytes.
     for (const [name, body] of Object.entries(candidate('v1.2.3-rc.3', '1.2.3', TREE).assets!)) assert.equal(readFileSync(join(h.directory, 'release', name), 'utf8'), body, name);
@@ -599,7 +602,7 @@ test('promotion stops before any tag or release on a missing, altered or unverif
   const unnamed = candidate('v1.2.3-rc.3', '1.2.3', TREE);
   unnamed.candidate!.image = '';
   const wrongRepository = candidate('v1.2.3-rc.3', '1.2.3', TREE);
-  wrongRepository.candidate!.image = 'foreign.invalid/repository@sha256:candidate';
+  wrongRepository.candidate!.image = `foreign.invalid/repository@${DIGEST}`;
   for (const release of [undigested, unnamed, wrongRepository]) {
     release.assets!['SHA256SUMS'] = releaseFiles()['SHA256SUMS']! +
       `${createHash('sha256').update(JSON.stringify(release.candidate)).digest('hex')}  candidate.json\n`;

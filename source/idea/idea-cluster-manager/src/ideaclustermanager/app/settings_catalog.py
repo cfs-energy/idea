@@ -24,6 +24,39 @@ from ideasdk.utils.group_name_helper import (
 # constructors require restart. Keep new writable keys subject to this review.
 _ROWS = [
     (
+        'cluster.logging.default_log_level',
+        'string',
+        'restart',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'cluster-manager.logging.default_log_level',
+        'string',
+        'restart',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'scheduler.logging.default_log_level',
+        'string',
+        'restart',
+        'monitoring',
+        False,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.logging.default_log_level',
+        'string',
+        'restart',
+        'monitoring',
+        False,
+        False,
+    ),
+    ('ecs.datadog.logs_enabled', 'boolean', 'deployment', 'monitoring', False, False),
+    (
         'analytics.kinesis.kms_key_id',
         'string',
         'deployment',
@@ -5586,6 +5619,11 @@ _GROUP_SECTIONS = {
     'storage': 'File systems',
 }
 _SECTIONS = {
+    'cluster.logging.default_log_level': 'Logs',
+    'cluster-manager.logging.default_log_level': 'Logs',
+    'scheduler.logging.default_log_level': 'Logs',
+    'virtual-desktop-controller.logging.default_log_level': 'Logs',
+    'ecs.datadog.logs_enabled': 'Logs',
     'virtual-desktop-controller.server.tls_key_file': 'Load balancers and certificates',
     'virtual-desktop-controller.server.tls_certificate_file': 'Load balancers and certificates',
     'virtual-desktop-controller.server.enable_tls': 'Load balancers and certificates',
@@ -5928,6 +5966,34 @@ _CHOICES = {
     'key_type': ['', 'customer-managed', 'aws-managed'],
 }
 _KEY_CHOICES = {
+    'cluster.logging.default_log_level': [
+        'DEBUG',
+        'INFO',
+        'WARNING',
+        'ERROR',
+        'CRITICAL',
+    ],
+    'cluster-manager.logging.default_log_level': [
+        'DEBUG',
+        'INFO',
+        'WARNING',
+        'ERROR',
+        'CRITICAL',
+    ],
+    'scheduler.logging.default_log_level': [
+        'DEBUG',
+        'INFO',
+        'WARNING',
+        'ERROR',
+        'CRITICAL',
+    ],
+    'virtual-desktop-controller.logging.default_log_level': [
+        'DEBUG',
+        'INFO',
+        'WARNING',
+        'ERROR',
+        'CRITICAL',
+    ],
     'cluster-manager.web_portal.cost_ticker.period': ['wtd', 'mtd', 'qtd', 'ytd'],
     'cluster-manager.web_portal.default_landing_page': [
         'my-jobs',
@@ -5957,6 +6023,11 @@ _KEY_CHOICES = {
     'cluster-manager.bedrock.budgets.action': ['block', 'warn'],
 }
 _DESCRIPTIONS = {
+    'cluster.logging.default_log_level': 'Application log level, read at process startup. Defaults to INFO.',
+    'cluster-manager.logging.default_log_level': 'Application log level, read at process startup. Inherits cluster.logging.default_log_level when unset.',
+    'scheduler.logging.default_log_level': 'Application log level, read at process startup. Inherits cluster.logging.default_log_level when unset.',
+    'virtual-desktop-controller.logging.default_log_level': 'Application log level, read at process startup. Inherits cluster.logging.default_log_level when unset.',
+    'ecs.datadog.logs_enabled': 'Ship labeled IDEA container logs to Datadog when ecs.datadog.enabled is true. Defaults to true; deploy ECS and the service stacks after changing it. CloudWatch logging remains enabled.',
     'cluster.administrator_email': 'Email used when creating the initial administrator account.',
     'cluster.aws.pricing_region': "unused; job estimates price the cluster's own region",
     'cluster-manager.metrics.cost.enabled': 'Collect Cost Explorer daily totals in the commercial AWS partition with the dogstatsd metrics provider. Other partitions and providers do not support this collection.',
