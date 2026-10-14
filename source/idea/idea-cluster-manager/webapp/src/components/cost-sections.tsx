@@ -33,15 +33,20 @@ export const summaryCost = (cost?: number, rowCount?: number, unpriced?: number)
     return missing > 0 ? `${money(cost)} *` : money(cost)
 }
 
-export const unpricedNote = (unpriced?: number, rowCount?: number, noun?: string) => {
+// unknown: of the unpriced, desktops deleted before IDEA recorded desktop runs, with no
+// launch record left to measure them by.
+export const unpricedNote = (unpriced?: number, rowCount?: number, noun?: string, unknown?: number) => {
     const rows = rowCount ?? 0
     const missing = unpriced ?? 0
-    if (missing === 0 || missing >= rows) {
+    const why = unknown ? `${unknown} deleted before usage history existed` : ''
+    if (missing === 0 || (missing >= rows && !unknown)) {
         return null
     }
     return (
         <Box variant="small" color="text-body-secondary">
-            {`* ${missing} of ${rows} ${noun} could not be priced and are not in this total.`}
+            {missing >= rows
+                ? `None of the ${noun} could be priced: ${why}.`
+                : `* ${missing} of ${rows} ${noun} could not be priced and are not in this total${why ? ` (${why})` : ''}.`}
         </Box>
     )
 }
@@ -94,9 +99,13 @@ const DESKTOP_COLUMNS: TableProps.ColumnDefinition<MyCostsDesktopSession>[] = [
         id: 'hours',
         header: 'Hours',
         // An inferred stop time is an upper bound, so the hours are marked estimated.
-        cell: (item) => (item.stop_time_estimated ? `${hours(item.hours)} (estimated)` : hours(item.hours))
+        cell: (item) => (item.usage_unknown ? 'Unknown' : item.stop_time_estimated ? `${hours(item.hours)} (estimated)` : hours(item.hours))
     },
-    {id: 'cost', header: 'Cost', cell: (item) => (item.price_unavailable ? 'Price not available' : money(item.cost))}
+    {
+        id: 'cost',
+        header: 'Cost',
+        cell: (item) => (item.usage_unknown ? 'Not priced' : item.price_unavailable ? 'Price not available' : money(item.cost))
+    }
 ]
 
 export interface CostSectionsProps {
@@ -230,7 +239,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
                         <Box>{summaryCost(desktops?.cost, desktops?.session_count, desktops?.unpriced_sessions)}</Box>
                     </div>
                 </ColumnLayout>
-                {unpricedNote(desktops?.unpriced_sessions, desktops?.session_count, 'sessions')}
+                {unpricedNote(desktops?.unpriced_sessions, desktops?.session_count, 'sessions', desktops?.usage_unknown_sessions)}
                 <Table
                     variant="embedded"
                     trackBy="idea_session_id"

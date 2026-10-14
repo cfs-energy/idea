@@ -657,6 +657,21 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         elif new_state in stopped and old_state not in stopped:
             self._history_db.close_runs(session)
 
+    def instance_ids(self) -> set:
+        """the instance of every desktop that still exists"""
+        ids = set()
+        cursor = None
+        while True:
+            result = self.list_all_from_db(
+                ListSessionsRequest(paginator=SocaPaginator(cursor=cursor))
+            )
+            for session in Utils.get_as_list(result.listing, []):
+                if session.server is not None and session.server.instance_id:
+                    ids.add(session.server.instance_id)
+            cursor = result.cursor
+            if Utils.is_empty(cursor):
+                return ids
+
     def reconcile_runs(self) -> int:
         """
         open a run for every running desktop that has none. run by the leader once

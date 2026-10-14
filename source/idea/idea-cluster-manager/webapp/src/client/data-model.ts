@@ -1498,6 +1498,7 @@ export interface MyCostsDesktops {
   hours?: number;
   cost?: number;
   unpriced_sessions?: number;
+  usage_unknown_sessions?: number;
   estimated?: boolean;
   sessions?: MyCostsDesktopSession[];
   is_unavailable?: boolean;
@@ -1515,6 +1516,7 @@ export interface MyCostsDesktopSession {
   estimated?: boolean;
   stop_time_estimated?: boolean;
   price_unavailable?: boolean;
+  usage_unknown?: boolean;
 }
 export interface GetMyCostsSummaryRequest {}
 export interface GetParamChoicesRequest {

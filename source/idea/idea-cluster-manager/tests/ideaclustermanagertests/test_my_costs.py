@@ -1426,7 +1426,7 @@ def test_cleanup_warning_live_cost_matches_controller_history(real_stop_hours):
         **dict(hit['_source'], owner=USER, project=None, hibernation_enabled=False)
     )
     session.cleanup_warning_stop_time = real_stop
-    session.server = SimpleNamespace(instance_type='m5.large', instance_id=None)
+    session.server = SimpleNamespace(instance_type='m5.large', instance_id='i-0abc')
     history = module.VirtualDesktopSessionHistoryDB(None, logger=object())
     history.get_retention_days = lambda: 400
     row = history.build_entry(session, deleted_on=deleted)
@@ -1862,3 +1862,68 @@ def test_the_listing_applies_the_rate_once():
     rows = {row.username: row for row in service.list_user_costs().listing}
     # 2 hours x 0.1 x 0.5, not x 0.25
     assert rows[USER].desktop_cost == pytest.approx(0.1, abs=0.002)
+
+
+# desktops deleted before runs were recorded
+
+
+def test_a_backfilled_deleted_desktop_bills_what_cloudwatch_saw():
+    now = arrow.utcnow()
+    created = now.shift(days=-25)
+    deleted = now.shift(days=-9)
+    ran = now.shift(days=-20).floor('hour')
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['instance_id'] = 'i-0abc'
+    session = summary_session(
+        [],
+        [row],
+        cloudwatch=FakeCloudWatch(hours={'i-0abc': [ran, ran.shift(hours=1)]}),
+    )
+
+    # two hours, not the sixteen days from creation to deletion
+    assert session.hours == pytest.approx(2.0, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_a_deleted_desktop_with_unknown_usage_is_counted_not_priced():
+    now = arrow.utcnow()
+    created = now.shift(days=-25)
+    deleted = now.shift(days=-9)
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['instance_unknown'] = True
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': []}}},
+        prices={'m5.large': 0.1},
+        history_rows=[row],
+    )
+    desktops = service.get_summary(USER).desktops
+
+    assert desktops.session_count == 1
+    assert desktops.cost == 0.0
+    assert desktops.hours == 0.0
+    assert desktops.unpriced_sessions == 1
+    assert desktops.usage_unknown_sessions == 1
+    assert desktops.sessions[0].usage_unknown is True
+    assert desktops.sessions[0].cost is None
+
+
+def test_an_unknown_desktop_deleted_before_the_window_is_left_out():
+    now = arrow.utcnow()
+    created = now.shift(days=-80)
+    deleted = now.shift(days=-60)
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['instance_unknown'] = True
+    assert summary_session([], [row]) is None
+
+
+def test_a_desktop_deleted_before_it_had_an_instance_never_ran():
+    now = arrow.utcnow()
+    created = now.shift(days=-3)
+    deleted = now.shift(days=-2)
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['never_ran'] = True
+    # the provisioning run the controller opened at creation is not billed either
+    session = summary_session(
+        [], [row, run_row('sess-1', USER, ms(created), ms(deleted))]
+    )
+    assert session is None

@@ -363,6 +363,29 @@ def test_desktop_hours_are_the_recorded_runs_not_creation_to_stop():
     assert row['coverage']['desktop_hours']['total_count'] == 1
 
 
+def test_a_desktop_with_unknown_usage_is_a_missing_record_not_a_guess():
+    value = data()
+    value['desktops'] = [
+        {
+            '_history': True,
+            '_source': dict(
+                idea_session_id='session',
+                owner='former',
+                state='DELETED',
+                created_on=1706832000000,
+                stopped_on=1707436800000,
+                deleted_on=1707436800000,
+                instance_unknown=True,
+            ),
+        }
+    ]
+    row = build(value)[0]['user'][0]
+
+    # unknown, not a guessed seven days
+    assert row['desktop_hours'] is None
+    assert row['coverage']['desktop_hours']['missing_records'] == 1
+
+
 def test_source_failures_preserve_money_and_missing_optional_metrics():
     value = data()
     value['coverage'].update(

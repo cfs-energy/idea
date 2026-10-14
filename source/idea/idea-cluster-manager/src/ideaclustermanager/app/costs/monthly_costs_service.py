@@ -338,7 +338,15 @@ class MonthlyCostsService(MyCostsService):
             ),
             desktops=line(
                 desktops.cost,
-                desktops.is_unavailable or desktops.unpriced_sessions,
+                # a desktop whose usage is unknown is left out and counted in the
+                # details; the line is unavailable only when every desktop is, as
+                # in the daily line and the page header
+                desktops.is_unavailable
+                or (desktops.unpriced_sessions or 0)
+                > (desktops.usage_unknown_sessions or 0)
+                or 0
+                < (desktops.session_count or 0)
+                <= (desktops.unpriced_sessions or 0),
                 DESKTOP_NOTE,
             ),
             ai=line(

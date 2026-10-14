@@ -491,6 +491,30 @@ def test_total_is_marked_partial_when_storage_has_no_usage(service, monkeypatch)
     assert month.total == pytest.approx(45.6667)
 
 
+@pytest.mark.parametrize(
+    'unknown,count,unavailable', [(1, 1, True), (1, 2, False), (0, 2, True)]
+)
+def test_unknown_desktops_leave_the_line_unavailable_only_when_all_are(
+    service, monkeypatch, unknown, count, unavailable
+):
+    # the daily line and the page header say "not available" when every desktop is
+    # unpriced; a month must agree. one unpriced type still blanks the month, as before
+    monkeypatch.setattr(service, '_compute_jobs', lambda *args: MyCostsJobs(cost=10))
+    monkeypatch.setattr(
+        service,
+        '_desktops',
+        lambda *args: MyCostsDesktops(
+            cost=20,
+            session_count=count,
+            unpriced_sessions=1,
+            usage_unknown_sessions=unknown,
+        ),
+    )
+    monkeypatch.setattr(service, '_ai', lambda *args: MyCostsAi(cost=5))
+    month = service._month('user-absent', START, END)
+    assert (month.desktops.status == 'unavailable') is unavailable
+
+
 def test_public_price_list_also_reads_volume_prices():
     lines = ['metadata'] * 5 + [
         'Region Code,TermType,Product Family,Unit,Volume API Name,PricePerUnit',

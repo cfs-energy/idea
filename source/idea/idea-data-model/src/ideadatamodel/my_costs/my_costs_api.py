@@ -116,6 +116,9 @@ class MyCostsDesktopSession(SocaBaseModel):
     stop_time_estimated: Optional[bool] = Field(default=None)
     # no on-demand price for the instance type, so hours stand alone.
     price_unavailable: Optional[bool] = Field(default=None)
+    # deleted before 26.10.6 with no launch record left: how long it ran is unknown, so
+    # it is counted but not priced (price_unavailable is set too).
+    usage_unknown: Optional[bool] = Field(default=None)
 
 
 class MyCostsDesktops(SocaBaseModel):
@@ -125,6 +128,8 @@ class MyCostsDesktops(SocaBaseModel):
     # sessions whose instance type had no on-demand price. cost is the subtotal of the
     # priced ones; when this equals session_count there is no cost to report at all.
     unpriced_sessions: Optional[int] = Field(default=None)
+    # of the unpriced sessions, those deleted before usage history existed
+    usage_unknown_sessions: Optional[int] = Field(default=None)
     estimated: Optional[bool] = Field(default=None)
     sessions: Optional[List[MyCostsDesktopSession]] = Field(default=None)
     is_unavailable: Optional[bool] = Field(default=None)

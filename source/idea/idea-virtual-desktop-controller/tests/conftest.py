@@ -237,6 +237,8 @@ def refresh_loop(monkeypatch, refresh):
     # so is the one-time run reconcile; tests of it live in test_session_runs.py
     app._session_db = Mock()
     app._runs_reconciled = False
+    app._history_backfilled = False
+    app._desktop_launches = None
     app._bootstrap_exit = BootstrapRefreshLoopExit(
         clock, [60, 21599, 21600, 21660, 43200]
     )

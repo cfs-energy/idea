@@ -525,6 +525,9 @@ class MyCostsService:
             unpriced_sessions=sum(
                 1 for session in sessions if session.price_unavailable
             ),
+            usage_unknown_sessions=sum(
+                1 for session in sessions if session.usage_unknown
+            ),
             estimated=True,
             sessions=sessions,
         )
@@ -641,6 +644,12 @@ class MyCostsService:
                                 'instance_id', row
                             ),
                         },
+                        # deleted before 26.10.6 and no launch found for it in
+                        # CloudTrail: how long it ran cannot be known
+                        'instance_unknown': Utils.get_value_as_bool(
+                            'instance_unknown', row, False
+                        ),
+                        'never_ran': Utils.get_value_as_bool('never_ran', row, False),
                     },
                 }
             )
@@ -946,11 +955,23 @@ class MyCostsService:
         state = Utils.get_value_as_string('state', source, '')
         stopped_at, _ = self._stop_time(source, state, updated_on, end_ms)
         server = Utils.get_value_as_dict('server', source, {})
-        running_ms, stop_time_estimated = self._running_time(
-            source, start_ms, end_ms, runs
-        )
-        if running_ms <= 0:
+        if Utils.get_value_as_bool('never_ran', source, False):
+            # deleted before it was given an instance: it cost nothing
             return None
+        # no runs and no instance to ask CloudWatch about: counted, never guessed
+        unknown = not runs and Utils.get_value_as_bool(
+            'instance_unknown', source, False
+        )
+        if unknown:
+            if not self._unrecorded(source, None, start_ms, end_ms):
+                return None
+            running_ms, stop_time_estimated = 0, False
+        else:
+            running_ms, stop_time_estimated = self._running_time(
+                source, start_ms, end_ms, runs
+            )
+            if running_ms <= 0:
+                return None
 
         started = max(created_on, start_ms)
         stopped = max(min(stopped_at, end_ms), started)
@@ -972,6 +993,10 @@ class MyCostsService:
         )
         if stop_time_estimated:
             session.stop_time_estimated = True
+        if unknown:
+            session.usage_unknown = True
+            session.price_unavailable = True
+            return session
 
         price = self._ondemand_price(instance_type)
         if price is None:

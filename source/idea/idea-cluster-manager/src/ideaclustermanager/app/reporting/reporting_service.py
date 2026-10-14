@@ -549,7 +549,13 @@ class ReportingService:
             source = hit.get('_source', {})
             identity = source.get('idea_session_id')
             # a run row is read below as part of its desktop, never as a desktop
-            if not identity or source.get('run_of') or not subject(source.get('owner')):
+            # a desktop deleted before it was given an instance never ran
+            if (
+                not identity
+                or source.get('run_of')
+                or source.get('never_ran')
+                or not subject(source.get('owner'))
+            ):
                 continue
             rank = (
                 bool(hit.get('_history')),
@@ -596,7 +602,12 @@ class ReportingService:
                 and not entry['stopped_on']
                 and not entry['updated_on']
             )
-            if unknown:
+            if source.get('instance_unknown'):
+                # deleted before usage history existed: counted, hours unknown
+                if not MyCostsService._unrecorded(entry, None, start_ms, end_ms):
+                    continue
+                hours = None
+            elif unknown:
                 hours = None
             else:
                 running_ms, _ = MyCostsService._running_time(

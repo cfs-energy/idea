@@ -56,6 +56,7 @@ AWS_CLIENT_BACKUP = 'backup'
 AWS_CLIENT_ECS = 'ecs'
 AWS_CLIENT_BEDROCK = 'bedrock'
 AWS_CLIENT_COST_EXPLORER = 'ce'
+AWS_CLIENT_CLOUDTRAIL = 'cloudtrail'
 
 SUPPORTED_CLIENTS = {
     AWS_CLIENT_S3,
@@ -93,6 +94,7 @@ SUPPORTED_CLIENTS = {
     AWS_CLIENT_BACKUP,
     AWS_CLIENT_BEDROCK,
     AWS_CLIENT_COST_EXPLORER,
+    AWS_CLIENT_CLOUDTRAIL,
 }
 
 DEFAULT_PRICING_API_REGION = 'us-east-1'
@@ -211,6 +213,9 @@ class AwsClientProvider(AwsClientProviderProtocol):
                     # reporting only, and it is reached over the internet: an api read
                     # waiting on it must fail quickly rather than hold up its caller.
                     config = REPORTING_CLIENT_CONFIG
+                elif service_name == AWS_CLIENT_CLOUDTRAIL:
+                    # a one-time history lookup with its own time budget and backoff
+                    config = REPORTING_CLIENT_CONFIG
 
                 aws_endpoint = self.get_service_endpoint_url(service_name)
                 client = self._session.client(
@@ -320,6 +325,9 @@ class AwsClientProvider(AwsClientProviderProtocol):
         return self.get_client(
             service_name=AWS_CLIENT_COST_EXPLORER, region_name=COST_EXPLORER_REGION
         )
+
+    def cloudtrail(self):
+        return self.get_client(service_name=AWS_CLIENT_CLOUDTRAIL)
 
     def cloudformation(self):
         return self.get_client(service_name=AWS_CLIENT_CLOUDFORMATION)

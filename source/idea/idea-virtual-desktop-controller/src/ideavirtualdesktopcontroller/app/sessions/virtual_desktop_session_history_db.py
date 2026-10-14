@@ -12,6 +12,7 @@ from ideadatamodel import VirtualDesktopSession, VirtualDesktopSessionState
 from ideasdk.utils import Utils
 
 from boto3.dynamodb.conditions import Attr, Key
+from botocore.exceptions import ClientError
 
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -21,6 +22,10 @@ DEFAULT_RETENTION_DAYS = 400
 
 # run rows sort under their desktop's id and never collide with its termination row
 RUN_KEY = '#run#'
+
+# a desktop is launched when its row is created; its RunInstances event is matched to
+# the row within this much of created_on
+LAUNCH_MATCH_MS = 15 * 60 * 1000
 
 # Known limitation: the administrator view reads every user's history with a scan. a
 # cluster that outgrows this wants an index on the deletion time.
@@ -127,6 +132,8 @@ class VirtualDesktopSessionHistoryDB:
             'base_os': Utils.get_as_string(session.base_os, None),
             'instance_type': None if server is None else server.instance_type,
             'instance_id': None if server is None else server.instance_id,
+            # deleted before it was ever given an instance: it never ran or cost
+            'never_ran': server is None or Utils.is_empty(server.instance_id),
             'project_id': None if project is None else project.project_id,
             'created_on': to_epoch_ms(session.created_on),
             'stopped_on': stopped_on,
@@ -239,6 +246,95 @@ class VirtualDesktopSessionHistoryDB:
             )
             return False
         self.open_run(session, reconciled=True)
+        return True
+
+    def backfill_instance_ids(self, launches, live_instance_ids=lambda: set()) -> bool:
+        """
+        put the instance id back on rows of desktops deleted before runs were
+        recorded, so their cost comes from what CloudWatch saw rather than from
+        creation to stop. a row is matched to the one launch of its owner (and
+        instance type) within LAUNCH_MATCH_MS of its creation, among the instances no
+        other desktop holds; with none, several, a creation older than CloudTrail
+        keeps, or an instance another row also matched, it is marked instance_unknown
+        and the cost pages leave it unpriced. each row is written once, so this is
+        safe to repeat; true when nothing is left to do.
+        """
+        from ideavirtualdesktopcontroller.app.sessions.desktop_launches import (
+            CLOUDTRAIL_DAYS,
+        )
+
+        all_rows = self.list_all()
+        # runs began to be recorded at the first run; a desktop deleted since then
+        # without an instance id never had one, and has nothing to look up
+        runs = [
+            Utils.get_value_as_int('started_on', row, 0)
+            for row in all_rows
+            if row.get('run_of')
+        ]
+        recording_since = min(runs) if runs else Utils.current_time_ms()
+        rows = [
+            row
+            for row in all_rows
+            if not row.get('run_of')
+            and not row.get('instance_id')
+            and not row.get('instance_unknown')
+            and not row.get('never_ran')
+            and Utils.get_value_as_int('deleted_on', row, 0) < recording_since
+        ]
+        if not rows:
+            return True
+        if not launches.read():
+            return False
+        taken = set(live_instance_ids()) | {
+            row['instance_id'] for row in all_rows if row.get('instance_id')
+        }
+        horizon = Utils.current_time_ms() - CLOUDTRAIL_DAYS * 86400000
+        claims: Dict[str, List[Dict]] = {}
+        for row in rows:
+            created_on = Utils.get_value_as_int('created_on', row, 0)
+            instance_type = row.get('instance_type')
+            matches = set()
+            if created_on >= horizon:
+                matches = {
+                    launch['instance_id']
+                    for launch in launches.launches
+                    if launch['owner'] == row.get('owner')
+                    and launch['instance_id'] not in taken
+                    and abs(launch['launched_on'] - created_on) <= LAUNCH_MATCH_MS
+                    and (
+                        not instance_type
+                        or not launch['instance_type']
+                        or launch['instance_type'] == instance_type
+                    )
+                }
+            claims.setdefault(matches.pop() if len(matches) == 1 else None, []).append(
+                row
+            )
+        for instance_id, claimants in claims.items():
+            # two rows on one instance: at most one is right, and which is unknown
+            unique = instance_id is not None and len(claimants) == 1
+            for row in claimants:
+                if unique:
+                    update, values = 'SET instance_id = :value', {':value': instance_id}
+                else:
+                    update, values = 'SET instance_unknown = :value', {':value': True}
+                try:
+                    self.table.update_item(
+                        Key={
+                            'owner': row['owner'],
+                            'idea_session_id': row['idea_session_id'],
+                        },
+                        UpdateExpression=update,
+                        ExpressionAttributeValues=values,
+                        # a row its ttl removed meanwhile stays removed
+                        ConditionExpression='attribute_exists(idea_session_id)',
+                    )
+                except ClientError as e:
+                    if (
+                        e.response.get('Error', {}).get('Code')
+                        != 'ConditionalCheckFailedException'
+                    ):
+                        raise
         return True
 
     def list_for_owner(self, owner: str) -> List[Dict]:

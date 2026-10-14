@@ -183,6 +183,13 @@ Statement:
     Resource: '*'
     Effect: Allow
 
+  # desktops deleted before 26.10.6 get their instance id back from the RunInstances
+  # events in CloudTrail's 90 days. read only; LookupEvents takes no resource scoping.
+  - Action:
+      - cloudtrail:LookupEvents
+    Resource: '*'
+    Effect: Allow
+
   - Action:
       - secretsmanager:GetSecretValue
     Condition:
