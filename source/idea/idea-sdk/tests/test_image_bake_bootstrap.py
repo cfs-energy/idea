@@ -1399,3 +1399,15 @@ def test_dcv_missing_config_and_docs_are_optional(tmp_path, monkeypatch, marker,
     dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
     assert dcv['ok'] is ok, dcv['detail']
     assert result.returncode == (0 if ok else 1)
+
+
+@pytest.mark.parametrize(
+    'base_os,unit',
+    [('rocky10', 'firewalld'), ('rhel10', 'firewalld'), ('ubuntu2604', 'ufw')],
+)
+def test_host_firewall_is_masked_before_it_is_installed(base_os, unit):
+    # fail2ban-firewalld installs and enables firewalld after this step runs on EL10, which
+    # blocked DCV on 8443; masking a unit that is not installed yet still keeps it from starting
+    script = render('_templates/linux/disable_firewall.jinja2', base_os=base_os)
+    assert f'systemctl mask {unit}' in script
+    assert 'LoadState' not in script
