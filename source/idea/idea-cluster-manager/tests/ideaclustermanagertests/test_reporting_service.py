@@ -327,6 +327,42 @@ def test_desktop_history_wins_and_keeps_raw_project():
     )
 
 
+def test_desktop_hours_are_the_recorded_runs_not_creation_to_stop():
+    value = data()
+    hour = 3600000
+    created = 1706832000000  # 2024-02-02
+    second = created + 10 * 24 * hour
+    value['desktops'] = [
+        {
+            '_source': dict(
+                idea_session_id='session',
+                owner='former',
+                state='STOPPED',
+                created_on=created,
+                updated_on=second + 3 * hour,
+                stopped_on=second + 3 * hour,
+            )
+        },
+    ] + [
+        {
+            '_history': True,
+            '_source': dict(
+                owner='former',
+                idea_session_id=f'session#run#{started}',
+                run_of='session',
+                started_on=started,
+                stopped_on=started + hours * hour,
+            ),
+        }
+        for started, hours in ((created + 1000, 2), (second, 3))
+    ]
+    row = build(value)[0]['user'][0]
+
+    # five hours of running, as on the cost pages, not ten days from creation
+    assert row['desktop_hours'] == pytest.approx(5, abs=0.01)
+    assert row['coverage']['desktop_hours']['total_count'] == 1
+
+
 def test_source_failures_preserve_money_and_missing_optional_metrics():
     value = data()
     value['coverage'].update(

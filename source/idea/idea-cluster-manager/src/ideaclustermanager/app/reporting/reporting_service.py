@@ -20,6 +20,11 @@ from ideadatamodel import (
 )
 from ideadatamodel.reporting.job_cost import job_spend
 
+from ideaclustermanager.app.costs.my_costs_service import (
+    LIVE_SESSION_STATES,
+    MyCostsService,
+)
+
 from .reporting_sources import user_label, ReportingSources, number, timestamp, subject
 from .snapshot_store import (
     SnapshotStore,
@@ -322,7 +327,12 @@ class ReportingService:
         period = resolve_period(request, timezone_name, now)
         data = self.sources.read(period, deadline, include_storage=True)
         tables, tiles, covers, warnings = self.build(
-            data, period, currency, timezone_name, deadline
+            data,
+            period,
+            currency,
+            timezone_name,
+            deadline,
+            pricing=lambda: MyCostsService(self.context),
         )
         times = [
             value['source_as_of']
@@ -365,7 +375,7 @@ class ReportingService:
         return ReportingSummary.model_validate(summary)
 
     @staticmethod
-    def build(data, period, currency, timezone_name, deadline):
+    def build(data, period, currency, timezone_name, deadline, pricing=None):
         users = {
             key: new_row(key, label)
             for key, label in data['users'].items()
@@ -538,7 +548,8 @@ class ReportingService:
         for hit in data['desktops']:
             source = hit.get('_source', {})
             identity = source.get('idea_session_id')
-            if not identity or not subject(source.get('owner')):
+            # a run row is read below as part of its desktop, never as a desktop
+            if not identity or source.get('run_of') or not subject(source.get('owner')):
                 continue
             rank = (
                 bool(hit.get('_history')),
@@ -547,34 +558,53 @@ class ReportingService:
             )
             if identity not in sessions or rank > sessions[identity][0]:
                 sessions[identity] = (rank, source)
+        # measured the way the cost pages measure them, so the two agree
+        runs = MyCostsService._runs_by_session(data['desktops'])
+        start_ms, end_ms = int(start * 1000), int(end * 1000)
+        measured = {}
+        for identity, (_, source) in sessions.items():
+            entry = dict(source)
+            for key in ('created_on', 'updated_on', 'stopped_on', 'deleted_on'):
+                entry[key] = int((timestamp(source.get(key)) or 0) * 1000)
+            if entry['deleted_on']:
+                entry['state'] = 'DELETED'
+                entry['updated_on'] = entry['deleted_on']
+            entry.setdefault(
+                'server',
+                dict(
+                    instance_type=source.get('instance_type'),
+                    instance_id=source.get('instance_id'),
+                ),
+            )
+            measured[identity] = entry
+        # pricing builds the reader that reads CloudWatch, only when a desktop needs it
+        if pricing is not None and any(
+            (entry.get('server') or {}).get('instance_id')
+            for entry in measured.values()
+        ):
+            pricing()._prefetch_running_hours(
+                list(measured.values()), runs, start_ms, end_ms
+            )
         user_desktops, project_desktops = {}, {}
-        for _, source in sessions.values():
+        for identity, (_, source) in sessions.items():
             check_deadline(deadline)
             project = project_for(source)
-            created = timestamp(source.get('created_on'))
-            stopped = timestamp(source.get('stopped_on'))
-            if stopped is None:
-                if source.get('state') in (
-                    'PROVISIONING',
-                    'CREATING',
-                    'INITIALIZING',
-                    'READY',
-                    'RESUMING',
-                ):
-                    stopped = end
-                else:
-                    stopped = timestamp(
-                        source.get('deleted_on') or source.get('updated_on')
-                    )
-            if created is not None and (
-                created >= end or stopped is not None and stopped <= start
-            ):
-                continue
-            hours = (
-                Decimal(str(max(0, min(stopped, end) - max(created, start)))) / HOUR
-                if created is not None and stopped is not None and stopped >= created
-                else None
+            entry = measured[identity]
+            # no creation or stop time at all: counted, with its hours unknown
+            unknown = not entry['created_on'] or (
+                source.get('state') not in LIVE_SESSION_STATES
+                and not entry['stopped_on']
+                and not entry['updated_on']
             )
+            if unknown:
+                hours = None
+            else:
+                running_ms, _ = MyCostsService._running_time(
+                    entry, start_ms, end_ms, runs.get(identity)
+                )
+                if running_ms <= 0:
+                    continue
+                hours = Decimal(str(running_ms / 1000)) / HOUR
             user_desktops.setdefault(source['owner'], []).append(hours)
             project_desktops.setdefault(project['key'], []).append(hours)
         desktop_status = combine(
@@ -600,7 +630,7 @@ class ReportingService:
                     else 'partial'
                     if desktop_status == 'partial' or eligible < len(entries)
                     else 'estimated',
-                    'Creation-to-stop overlap; stop/restart gaps are unrecoverable.',
+                    'Recorded runs; time before runs were recorded is estimated.',
                     eligible_count=eligible,
                     total_count=len(entries),
                     missing_records=len(entries) - eligible,

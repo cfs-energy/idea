@@ -203,6 +203,15 @@ def test_background_sweep_waits_for_leadership_and_survives_failure(refresh_loop
     assert app.context.logger().warning.call_count == 2
 
 
+def test_runs_are_reconciled_once_and_only_on_the_leader(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    app._session_db.reconcile_runs.side_effect = [RuntimeError('throttled'), 3]
+    app._refresh_bootstrap_loop()
+    # not before leadership; a failed pass is retried, a completed one is not repeated
+    assert app._session_db.reconcile_runs.call_count == 2
+
+
 def test_sweep_resumes_after_running_out_of_time(refresh):
     refresh.add_session()
     assert refresh.sweep.refresh_bootstrap(time_budget_ms=0) == 0

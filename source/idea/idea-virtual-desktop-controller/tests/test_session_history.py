@@ -261,4 +261,5 @@ def test_cleanup_warning_deletion_and_pricing_preserve_stop_time(
     )
     assert priced.hours == 24
     assert priced.cost == 24
-    assert bool(priced.stop_time_estimated) is (previous_stop != 'recorded')
+    # a desktop with no recorded runs is billed as an estimate, recorded stop or not
+    assert priced.stop_time_estimated is True

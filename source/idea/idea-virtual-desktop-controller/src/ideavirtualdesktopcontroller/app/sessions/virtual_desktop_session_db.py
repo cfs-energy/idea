@@ -75,6 +75,11 @@ RUNNING_STATES = frozenset(
 )
 
 
+def _state_value(state) -> Optional[str]:
+    # the session model holds the enum, the stored row the plain string
+    return getattr(state, 'value', state)
+
+
 class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
     DEFAULT_PAGE_SIZE = 10
 
@@ -560,6 +565,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             Utils.current_time_ms()
         )
         self._table.put_item(Item=db_entry)
+        self._record_run(session, None)
         self.trigger_create_event(
             db_entry[sessions_constants.USER_SESSION_DB_HASH_KEY],
             db_entry[sessions_constants.USER_SESSION_DB_RANGE_KEY],
@@ -622,6 +628,12 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         )
 
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
+        self._record_run(
+            session,
+            Utils.get_value_as_string(
+                sessions_constants.USER_SESSION_DB_STATE_KEY, old_db_entry, None
+            ),
+        )
         self.trigger_update_event(
             db_entry[sessions_constants.USER_SESSION_DB_HASH_KEY],
             db_entry[sessions_constants.USER_SESSION_DB_RANGE_KEY],
@@ -629,6 +641,42 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             new_entry=db_entry,
         )
         return self.convert_db_dict_to_session_object(db_entry)
+
+    def _record_run(self, session: VirtualDesktopSession, old_state: Optional[str]):
+        """
+        the intervals the desktop actually ran, for the cost pages: a run opens on the
+        write that takes it into a running state and closes on the one that takes it
+        into a stopped or deleted state. both the old and the new state are in hand
+        here, and every state change passes through, so no transition is missed.
+        """
+        running = {state.value for state in RUNNING_STATES}
+        stopped = {state.value for state in STOP_TIME_STATES}
+        new_state = _state_value(session.state)
+        if new_state in running and old_state not in running:
+            self._history_db.open_run(session)
+        elif new_state in stopped and old_state not in stopped:
+            self._history_db.close_runs(session)
+
+    def reconcile_runs(self) -> int:
+        """
+        open a run for every running desktop that has none. run by the leader once
+        per process; repeating it opens nothing new.
+        """
+        running = {state.value for state in RUNNING_STATES}
+        opened = 0
+        cursor = None
+        while True:
+            result = self.list_all_from_db(
+                ListSessionsRequest(paginator=SocaPaginator(cursor=cursor))
+            )
+            for session in Utils.get_as_list(result.listing, []):
+                if _state_value(
+                    session.state
+                ) in running and self._history_db.reconcile_run(session):
+                    opened += 1
+            cursor = result.cursor
+            if Utils.is_empty(cursor):
+                return opened
 
     @property
     def history_db(self) -> VirtualDesktopSessionHistoryDB:
@@ -643,6 +691,8 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         # and is never allowed to block the deletion.
         try:
             self._history_db.record_termination(session)
+            # a desktop deleted without a DELETING write still stops costing here
+            self._history_db.close_runs(session)
         except Exception as e:
             self._logger.warning(
                 f'failed to record session history for {session.idea_session_id}: {e}'

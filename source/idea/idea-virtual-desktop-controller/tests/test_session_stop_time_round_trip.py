@@ -91,6 +91,12 @@ class FakeHistoryDB:
             raise RuntimeError('ResourceNotFoundException')
         self.recorded.append(session)
 
+    def open_run(self, session):
+        pass
+
+    def close_runs(self, session):
+        pass
+
 
 class FakeLogger:
     def __init__(self):

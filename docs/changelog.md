@@ -12,6 +12,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Walltime efficiency wording**: a job that finishes well under its requested time no longer shows a warning. The tile and help now say that cost follows the time a job actually ran, and that a closer time limit helps the scheduler and stops stuck jobs sooner.
 * **My costs**: the "paid for unused cores" sentence now compares unused-core spend with the jobs that have CPU measurements, not with every finished job, and tiny unused core-hours show as "<0.1" instead of "0".
 * **Desktops after a scheduler move**: a Linux desktop started or resumed after a scheduler change picks up the new scheduler name as soon as it reaches READY, instead of waiting up to six hours for the background refresh, so `qsub` and `qstat` work right away.
+* **Desktop costs**: desktops are billed for the hours they actually ran. The controller now records each start and stop, and the cost pages, the cost header, the administrator listing and Reporting add up those runs; a desktop that was stopped most of the month and started once is no longer billed for the whole month. Desktops already running at the upgrade get a run from that moment. Time from before the upgrade is estimated from the instance's CloudWatch CPU datapoints (one hour with a datapoint is one hour running) and marked as an estimate; the cluster manager role gains `cloudwatch:GetMetricData` for this.
 
 ## [26.10.5] - 2026-10-13
 

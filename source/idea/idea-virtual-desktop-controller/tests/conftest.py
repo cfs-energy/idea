@@ -234,6 +234,9 @@ def refresh_loop(monkeypatch, refresh):
     app._bootstrap_session_utils = Mock()
     # the image pipeline tick shares the loop; tests of it live in test_image_pipeline.py
     app._image_pipeline = Mock()
+    # so is the one-time run reconcile; tests of it live in test_session_runs.py
+    app._session_db = Mock()
+    app._runs_reconciled = False
     app._bootstrap_exit = BootstrapRefreshLoopExit(
         clock, [60, 21599, 21600, 21660, 43200]
     )

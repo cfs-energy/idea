@@ -343,6 +343,13 @@ Statement:
       - '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("virtual-desktop-controller") + ".controller.session-history") }}'
     Effect: Allow
 
+  # desktop hours from before the controller recorded runs are estimated from EC2
+  # CPUUtilization datapoints. read only; GetMetricData takes no resource scoping.
+  - Action:
+      - cloudwatch:GetMetricData
+    Resource: '*'
+    Effect: Allow
+
   # the cost collector reads the checks the idle stop writes per desktop, to report idle time.
   - Action:
       - logs:FilterLogEvents
