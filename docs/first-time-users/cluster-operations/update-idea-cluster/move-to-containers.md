@@ -6,7 +6,7 @@ New clusters already use the container control plane. Use this runbook once for 
 
 * The cluster must be on the previous published release. `upgrade-cluster` refuses an older one; upgrade it one release at a time first.
 * The account must have the `awsvpcTrunking` ECS setting enabled in the cluster's region. The upgrade checks and refuses otherwise.
-* The container hosts are Graviton (`ecs.hosts.instance_type`, default `m7g.large`). Check the type is offered in the cluster's subnets' availability zones.
+* The container hosts are Graviton (`ecs.hosts.instance_type`, default `m7g.xlarge`). Check the type is offered in the cluster's subnets' availability zones.
 * The control plane image must be reachable from the cluster: `ecs.image` defaults to the release image in the public repository for the commercial partition. A partition with no repository entry (GovCloud) needs the image pushed to a repository in that account and `ecs.image` set to it, or the stack refuses.
 * Resolve held and permanently blocked jobs before the window. Draining waits for queued, running and all other unfinished jobs; it does not release holds, cancel jobs or repair jobs that cannot start.
 * Job submission will close for the length of the run, and users see a maintenance message when they try to submit. Announce a window.

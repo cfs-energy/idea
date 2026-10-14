@@ -29,6 +29,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **By user window**: every column of the administrator By user listing now covers the same last 30 days. Storage used to add the calendar month to date on top of 30 days of jobs and desktops; it now sums the stored daily storage amounts in the window. Jobs, desktops and storage use cluster time zone days, matching Reporting; AI usage stays on UTC days, as its records are kept.
 * **Storage cost scope**: My costs, Reporting and By user state that storage cost leaves out FSx backups and Lustre scratch.
 * **Desktops deleted before this release**: the virtual desktop controller reads 90 days of CloudTrail `RunInstances` events once, on the leader, and puts the instance id back on each such desktop's history record when exactly one launch matches its owner and creation time, so its cost comes from CloudWatch instead of every hour from creation to deletion. A desktop it cannot match is counted but not priced ("N desktops deleted before usage history existed aren't priced"). The controller role gains `cloudtrail:LookupEvents`.
+* **Container sizing defaults**: new clusters get `m7g.xlarge` ECS hosts (was `m7g.large`) and a 1024 CPU / 2048 MiB login node task (was 256 / 512); 512 MiB ran out of memory under a handful of ssh sessions. Existing clusters keep their values; set `ecs.tasks.bastion-host.cpu` / `.memory` and `ecs.hosts.instance_type` to change them, then `ideactl deploy bastion-host --upgrade` and `ideactl deploy ecs --upgrade --refresh-hosts`.
 
 ## [26.10.5] - 2026-10-13
 

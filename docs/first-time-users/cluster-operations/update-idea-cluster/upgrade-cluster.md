@@ -72,7 +72,7 @@ Cleanup removes only builder images that carry the cluster's tag. Desktop and co
 
 ### Container Host Instance Type
 
-New clusters and converted host-based clusters run control-plane tasks on the shared container host pool. The default is `m7g.large`, configured by `ecs.hosts.instance_type`. Confirm that the type is available in every selected Availability Zone before installing or converting a cluster. Recheck capacity after changing task sizes, task counts, or the metrics agent.
+New clusters and converted host-based clusters run control-plane tasks on the shared container host pool. The default is `m7g.xlarge`, configured by `ecs.hosts.instance_type`. Confirm that the type is available in every selected Availability Zone before installing or converting a cluster. Recheck capacity after changing task sizes, task counts, or the metrics agent.
 
 ### Analytics Data Node Instance Type
 
