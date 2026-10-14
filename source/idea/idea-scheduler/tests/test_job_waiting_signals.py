@@ -7,6 +7,7 @@ estimate, or an invented start time.
 """
 
 import datetime
+import json
 from typing import Optional
 
 import pytest
@@ -217,8 +218,22 @@ def test_apply_waiting_signals_carries_no_thresholds(context, job_cache):
     serialized = Utils.to_json(job)
     assert 'queue_threshold' not in serialized
     assert 'queue_current' not in serialized
-    assert '137' not in serialized
-    assert '142' not in serialized
+
+    # compare values, not substrings: timestamps in the mock job can contain '137'
+    def values(node):
+        if isinstance(node, dict):
+            for v in node.values():
+                yield from values(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from values(v)
+        else:
+            yield node
+
+    leaked = {
+        v for v in values(json.loads(serialized)) if v in (137, 142, '137', '142')
+    }
+    assert not leaked
 
 
 def test_apply_waiting_signals_omits_attempts_for_a_provisioned_job(context, job_cache):
