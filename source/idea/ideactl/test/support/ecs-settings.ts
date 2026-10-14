@@ -5,8 +5,8 @@
 
 export const ECS_HOST_SETTINGS = {
   "ecs.hosts.instance_type": "m7g.xlarge",
-  "ecs.hosts.max": 4,
-  "ecs.hosts.min": 3,
+  "ecs.hosts.max": 5,
+  "ecs.hosts.min": 4,
   "ecs.hosts.volume_size": 60,
 };
 

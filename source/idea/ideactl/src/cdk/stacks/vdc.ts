@@ -87,6 +87,9 @@ import {
   addStorageMounts,
   adoptedLogDriver,
   applicationTargetGroup,
+  CONTAINER_STOP_SECONDS,
+  STOP_SIGNAL_ENVIRONMENT,
+  stopSignalInit,
   applicationContainerSettings,
   attachApplicationFileLogs,
   buildEc2Service,
@@ -516,7 +519,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         // create its sockets. The virtual machine reads this variable itself at startup, which is
         // why it is this name and not one the vendor launcher would have to pass on.
         JAVA_TOOL_OPTIONS: '-Djava.net.preferIPv4Stack=true',
+        // The vendor launcher is a bash script that runs Java as its child.
+        ...STOP_SIGNAL_ENVIRONMENT,
       },
+      linuxParameters: stopSignalInit(this.stack, 'dcv-broker-linux-parameters'),
       image: containerImage(scope),
       logging: adoptedLogDriver(scope, 'dcv-broker-log-group', logGroupName, STREAM_PREFIX_BROKER),
       memoryLimitMiB: sizing.memory,
@@ -1479,7 +1485,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
           vpc: this.cluster.vpc,
           targetGroupName: this.getTargetGroupName(`gw-ecs-${tgSuffix}`),
           healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP, interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
-          deregistrationDelay: Duration.seconds(300),
+          // The NLB resets a draining DCV connection at the end of the drain, so a longer drain
+          // only delays the client's reconnect to a gateway that is already healthy.
+          deregistrationDelay: Duration.seconds(CONTAINER_STOP_SECONDS),
           connectionTermination: true,
         },
       );
@@ -1600,10 +1608,13 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         AWS_DEFAULT_REGION: this.awsRegion,
         IDEA_CLUSTER_NAME: this.clusterName,
         IDEA_CONTAINER_ROLE: 'dcv-gateway',
+        // The gateway binary runs by exec and installs no SIGTERM handler.
+        ...STOP_SIGNAL_ENVIRONMENT,
         IDEA_INTERNAL_ALB_ENDPOINT: `https://${this.requiredString(
           'cluster.load_balancers.internal_alb.load_balancer_dns_name',
         )}`,
       },
+      linuxParameters: stopSignalInit(this.stack, 'dcv-connection-gateway-linux-parameters'),
       image: containerImage(scope),
       logging: adoptedLogDriver(scope, 'dcv-connection-gateway-log-group', logGroupName, STREAM_PREFIX_GATEWAY),
       memoryLimitMiB: requiredEcsInt(scope, 'ecs.tasks.dcv-gateway.memory'),

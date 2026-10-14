@@ -2188,6 +2188,27 @@ test("both command flags skip the registry lookup and keep the release image mov
   }
 });
 
+test("upgrade-cluster deploys each priority group's stacks in parallel unless told not to", async () => {
+  // The serial path waited on each module stack in turn, so the scheduler stack queued behind the
+  // desktop stack although neither reads what the other writes.
+  for (const [flags, expected] of [[[], true], [["--no-optimize-deployment"], false], [["--optimize-deployment"], true]] as const) {
+    await withFixture(async (state) => {
+      await routineReleaseFixture(state);
+      const { deps } = state;
+      const seen: boolean[] = [];
+      const deploy = deps.deploy.bind(deps);
+      deps.deploy = async (input) => { seen.push(input.optimizeDeployment); await deploy(input); };
+      const program = new Command("ideactl");
+      registerUpgradeCommands(program, deps);
+      await program.parseAsync([
+        "upgrade-cluster", "--force", "--accept-config-drift", "--skip-release-image-check",
+        "--cluster-name", clusterName, "--aws-region", awsRegion, ...flags,
+      ], { from: "user" });
+      assert.deepEqual(seen, [expected], flags.join(" ") || "default");
+    });
+  }
+});
+
 test("ECR token and manifest requests honor proxy environment and NO_PROXY without network", async () => {
   const savedEnv = process.env;
   try {

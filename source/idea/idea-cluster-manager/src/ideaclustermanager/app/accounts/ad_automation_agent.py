@@ -36,6 +36,9 @@ import re
 
 DEFAULT_MAX_MESSAGES = 1
 DEFAULT_WAIT_INTERVAL_SECONDS = 20
+# the container gets 30 seconds between SIGTERM and SIGKILL; a stop must not spend them waiting on
+# a 20 second long poll. an unfinished message stays on the queue and is received again.
+STOP_JOIN_SECONDS = 5
 
 AD_RESET_PASSWORD_LOCK_KEY = 'activedirectory.reset-password'
 
@@ -67,7 +70,7 @@ class ADAutomationAgent(SocaService):
         self._reset_disabled_logged = False
         self._stop_event = Event()
         self._automation_thread = Thread(
-            name='ad-automation-thread', target=self.automation_loop
+            name='ad-automation-thread', target=self.automation_loop, daemon=True
         )
 
     @staticmethod
@@ -483,4 +486,8 @@ class ADAutomationAgent(SocaService):
     def stop(self):
         self.logger.info('stopping ad automation agent ...')
         self._stop_event.set()
-        self._automation_thread.join()
+        self._automation_thread.join(timeout=STOP_JOIN_SECONDS)
+        if self._automation_thread.is_alive():
+            self.logger.warning(
+                f'ad automation agent still in a queue poll after {STOP_JOIN_SECONDS}s; not waiting for it'
+            )

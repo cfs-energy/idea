@@ -309,3 +309,32 @@ def test_healthy_password_reads_no_secrets_after_startup(directory):
     for _ in range(3):
         agent.check_and_reset_admin_password()
     assert directory.context.aws().secretsmanager().get_secret_value.call_count == reads
+
+
+def test_stop_does_not_wait_out_a_queue_long_poll(directory, monkeypatch):
+    # a stop used to join the thread while it sat in a 20 second receive, so the container spent its
+    # whole stop allowance there and ended in SIGKILL
+    import threading
+    import time as real_time
+
+    monkeypatch.setattr(ad_automation_agent, 'STOP_JOIN_SECONDS', 0.2)
+    directory.code = None
+    agent = directory.build()
+    released = threading.Event()
+    polling = threading.Event()
+
+    def receive_message(**_):
+        polling.set()
+        released.wait(10)
+        return {}
+
+    directory.context.aws().sqs().receive_message.side_effect = receive_message
+    agent._automation_thread.start()
+    assert polling.wait(5)
+    started = real_time.monotonic()
+    agent.stop()
+    elapsed = real_time.monotonic() - started
+    released.set()
+    assert elapsed < 2
+    # a thread still polling must not hold the interpreter open at exit
+    assert agent._automation_thread.daemon

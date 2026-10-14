@@ -2031,7 +2031,10 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .option("--force-build-bootstrap", "Render bootstrap packages again.")
     .option("--rollback", "Rollback stack to stable state on failure. Default.", true)
     .option("--no-rollback", "Do not roll back on failure.")
-    .option("--optimize-deployment", "Deploy applicable stacks in parallel.")
+    // An upgrade redeploys every module, and stacks of one deployment priority read nothing the
+    // others write, so they go together: the scheduler no longer queues behind the desktop stack.
+    .option("--optimize-deployment", "Deploy the stacks of one priority group in parallel. Default.", true)
+    .option("--no-optimize-deployment", "Deploy one stack at a time.")
     .option("--module-set <module-set>", "Name of the ModuleSet. Default: default", "default")
     .option("--force", "Skip all confirmation prompts.")
     .option(
