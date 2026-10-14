@@ -349,25 +349,10 @@ class VirtualDesktopSessionUtils:
                         )
                     return submitted
                 try:
-                    if (
-                        session.state == VirtualDesktopSessionState.READY
-                        and session.base_os in BOOTSTRAP_REFRESH_LINUX_BASE_OS
-                        and session.server is not None
-                        and session.server.instance_id
-                    ):
-                        # Session rows embed an older copy of the server, so only the
-                        # server table can establish whether a completed refresh ran.
-                        server = self._session_db.server_db.get(
-                            session.server.instance_id
-                        )
-                        if (
-                            server is not None
-                            and (server.bootstrap_refresh_version or 0)
-                            < BOOTSTRAP_REFRESH_VERSION
-                        ):
-                            attempted += 1
-                            commands.submit_ssm_command_to_refresh_bootstrap(session)
-                            submitted += 1
+                    if self._bootstrap_refresh_due(session):
+                        attempted += 1
+                        commands.submit_ssm_command_to_refresh_bootstrap(session)
+                        submitted += 1
                 except Exception as e:
                     self._logger.warning(
                         f'Bootstrap refresh failed for session '
@@ -380,6 +365,50 @@ class VirtualDesktopSessionUtils:
                 with SWEEP_CURSOR_LOCK:
                     VirtualDesktopSessionUtils._bootstrap_refresh_cursor = None
                 return submitted
+
+    def _bootstrap_refresh_due(self, session: VirtualDesktopSession) -> bool:
+        if not (
+            session.state == VirtualDesktopSessionState.READY
+            and session.base_os in BOOTSTRAP_REFRESH_LINUX_BASE_OS
+            and session.server is not None
+            and session.server.instance_id
+        ):
+            return False
+        # Session rows embed an older copy of the server, so only the server table can
+        # establish whether a completed refresh ran.
+        server = self._session_db.server_db.get(session.server.instance_id)
+        return (
+            server is not None
+            and (server.bootstrap_refresh_version or 0) < BOOTSTRAP_REFRESH_VERSION
+        )
+
+    def refresh_bootstrap_on_ready(self, session: VirtualDesktopSession) -> bool:
+        """
+        refresh a linux desktop as it becomes READY after a start or resume, so one that
+        was created before a scheduler move gets the new scheduler name in /etc/pbs.conf
+        now instead of on the next sweep, up to six hours later. the sweep stays the
+        backstop: a refresh already on its way to the instance is not sent again, and
+        anything that goes wrong here is logged and left to the sweep rather than failing
+        the desktop.
+        """
+        try:
+            if not self._bootstrap_refresh_due(session):
+                return False
+            commands_db = VirtualDesktopSSMCommandsDB(self.context)
+            if commands_db.has_bootstrap_refresh_in_flight(
+                session.server.instance_id, BOOTSTRAP_REFRESH_VERSION
+            ):
+                return False
+            VirtualDesktopSSMCommandsUtils(
+                self.context, commands_db
+            ).submit_ssm_command_to_refresh_bootstrap(session)
+            return True
+        except Exception as e:
+            self._logger.warning(
+                f'Bootstrap refresh failed for session {session.idea_session_id}, '
+                f'the sweep retries it: {" ".join(str(e).splitlines())}'
+            )
+            return False
 
     def _is_bedrock_enabled(self) -> bool:
         # no project carries an instance profile while the feature is off, so the whole

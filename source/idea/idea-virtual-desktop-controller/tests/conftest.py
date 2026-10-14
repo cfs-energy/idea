@@ -75,6 +75,10 @@ class BootstrapRefreshTable:
     def delete_item(self, Key):
         self.rows.pop(Key[self.key], None)
 
+    def scan(self, **request):
+        # the FilterExpression is not evaluated; callers match the rows themselves too
+        return {'Items': [deepcopy(row) for row in self.rows.values()]}
+
     def update_item(self, **request):
         self.updates.append(request)
         row = self.rows.get(request['Key'][self.key])

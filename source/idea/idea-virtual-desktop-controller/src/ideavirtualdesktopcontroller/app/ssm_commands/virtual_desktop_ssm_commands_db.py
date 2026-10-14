@@ -151,3 +151,39 @@ class VirtualDesktopSSMCommandsDB:
                 ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: command_id,
             }
         )
+
+    def has_bootstrap_refresh_in_flight(self, instance_id: str, version: int) -> bool:
+        """
+        whether a bootstrap refresh at this version was sent to the instance and has not
+        finished: the completion handler deletes the row on any terminal status.
+        """
+        # ponytail: a scan, fine while the table only holds commands awaiting completion.
+        # a completion that never arrives leaves its row behind, and that desktop then
+        # waits for the sweep at this version instead of refreshing on ready.
+        from boto3.dynamodb.conditions import Attr
+
+        request = {
+            'FilterExpression': Attr(
+                ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_TYPE_KEY
+            ).eq(VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP.value)
+        }
+        while True:
+            result = self._table.scan(**request)
+            for item in Utils.get_value_as_list('Items', result, []):
+                payload = (
+                    item.get(
+                        ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_ADDITIONAL_PAYLOAD_KEY
+                    )
+                    or {}
+                )
+                if (
+                    item.get(ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_TYPE_KEY)
+                    == VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP
+                    and payload.get('instance_id') == instance_id
+                    and payload.get('refresh_version') == version
+                ):
+                    return True
+            last_key = Utils.get_value_as_dict('LastEvaluatedKey', result, None)
+            if last_key is None:
+                return False
+            request['ExclusiveStartKey'] = last_key
