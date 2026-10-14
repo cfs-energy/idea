@@ -11,6 +11,7 @@ import {AppContext} from "../../common";
 import IdeaSplitPanel from "../../components/split-panel";
 import {CostsBillboard} from "../../components/monthly-costs";
 import {DailyCostCharts} from "../../components/cost-charts";
+import {computeRateNote, STORAGE_EXCLUSIONS} from "../reporting/reporting-format";
 
 export interface UserCostsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -73,6 +74,11 @@ const USER_COLUMNS: TableProps.ColumnDefinition<UserCosts>[] = [
         cell: (item) => `${money(item.total_cost)}${item.total_cost_excludes_storage ? ' (excludes storage)' : ''}`
     }
 ]
+
+// One window for every column: the last 30 days on cluster time zone days.
+export const userCostsDescription = (storageDisabled: boolean, computeRate = 1): string => storageDisabled
+    ? `Estimated measurements for the last 30 days. ${computeRateNote(computeRate)} Storage is excluded from these subtotals.`
+    : `Estimated measurements for the last 30 days. ${computeRateNote(computeRate)} ${STORAGE_EXCLUSIONS}`
 
 // Matches the page size the other administration tables use.
 export const USER_COSTS_PAGE_SIZE = 30
@@ -238,6 +244,7 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
                     summary={this.state.summary}
                     loading={this.state.summaryLoading}
                     subject="user"
+                    computeRate={AppContext.get().getClusterSettingsService().getComputeRate()}
                     historicalStorageNotice={Boolean(this.state.listing?.storage_disabled || this.state.listing?.storage_unavailable)}/>
                 <DailyCostCharts costs={this.state.costs}/>
             </SpaceBetween>
@@ -362,9 +369,7 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
                 header={
                     <Header
                         variant="h1"
-                        description={this.state.listing?.storage_disabled
-                            ? 'Estimated measurements: compute and AI cover the last 30 days. Storage is excluded from these subtotals.'
-                            : 'Estimated measurements: compute and AI cover the last 30 days; storage covers the current month.'}>
+                        description={userCostsDescription(Boolean(this.state.listing?.storage_disabled), AppContext.get().getClusterSettingsService().getComputeRate())}>
                         By user
                     </Header>
                 }

@@ -1,4 +1,5 @@
-import {budgetPresentation, bytes, cappedSeries, colorByName, rankedColors, palette, calendarDays, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, money, percent, updated} from './reporting-format';
+import {budgetPresentation, bytes, cappedSeries, colorByName, computeRateNote, costsDescription, rankedColors, palette, calendarDays, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, money, percent, updated} from './reporting-format';
+import {parseComputeRate} from '../../service/cluster-settings-service';
 
 describe('human-readable report values', () => {
     it('formats decimal strings, zero and missing numbers', () => {
@@ -74,4 +75,19 @@ it('does not warn when a job finishes well under its requested time', () => {
     expect(efficiencyStatus(20, 'walltime_efficiency_pct')).toBe('info');
     expect(efficiencyStatus(20)).toBe('warning');
     expect(efficiencyStatus(150, 'walltime_efficiency_pct')).toBe('warning');
+});
+
+describe('compute rate label', () => {
+    it('reads as list rate by default and adjusted otherwise', () => {
+        expect(computeRateNote()).toBe('Compute is priced at on-demand list rates.');
+        expect(computeRateNote(1)).toBe('Compute is priced at on-demand list rates.');
+        expect(computeRateNote(0.72)).toBe('Compute is priced at on-demand rates, adjusted (×0.72).');
+        expect(costsDescription(0.72)).toBe('Estimated costs and resource use. Compute is priced at on-demand rates, adjusted (×0.72).');
+    });
+    it.each([
+        [undefined, 1], [null, 1], ['', 1], [0.72, 0.72], ['0.72', 0.72], [1.5, 1.5],
+        [0, 1], [-1, 1], [1.6, 1], ['cheap', 1], [NaN, 1], [true, 1]
+    ])('parses %s as %s, ignoring what the server ignores', (value, expected) => {
+        expect(parseComputeRate(value)).toBe(expected);
+    });
 });

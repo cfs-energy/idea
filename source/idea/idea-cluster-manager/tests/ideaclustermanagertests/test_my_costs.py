@@ -1747,3 +1747,118 @@ def test_time_older_than_cloudwatch_retention_is_unknown_not_idle():
     # the one hour it saw
     assert session.hours == pytest.approx(5 * 24 + 1, abs=0.05)
     assert session.stop_time_estimated is True
+
+
+# window on cluster time zone days
+
+
+def jobs_range(os_client):
+    index, body = next(
+        (index, body) for index, body in os_client.queries if '_scheduler_jobs' in index
+    )
+    return body['query']['bool']['filter'][0]['range']['end_time']
+
+
+def test_listing_window_starts_at_local_midnight_in_the_cluster_time_zone(monkeypatch):
+    """
+    10 pm on 12 october in new york is already 13 october in utc. reporting draws days in
+    the cluster time zone, so the listing's 30 days are 13 september..12 october, from new
+    york midnight, not the utc days 14 september..13 october.
+    """
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get('2026-10-13T02:00:00Z'))
+    service, os_client = build_service(
+        config_values={
+            'cluster.timezone': 'America/New_York',
+            'virtual-desktop-controller.opensearch.dcv_session.alias': 'idea-test_vdc_user_sessions',
+        },
+    )
+
+    result = service.list_user_costs()
+
+    assert result.start_date == '2026-09-13'
+    assert result.end_date == '2026-10-12'
+    window = jobs_range(os_client)
+    assert arrow.get(window['gte']) == arrow.get('2026-09-13T04:00:00Z')
+    assert arrow.get(window['lte']) == arrow.get('2026-10-13T02:00:00Z')
+
+
+def test_summary_window_uses_the_cluster_time_zone_too(monkeypatch):
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get('2026-10-13T02:00:00Z'))
+    service, _ = build_service(
+        config_values={'cluster.timezone': 'America/New_York'},
+    )
+
+    result = service.get_summary(USER)
+
+    assert (result.start_date, result.end_date) == ('2026-09-13', '2026-10-12')
+
+
+def test_bedrock_usage_window_stays_on_utc_days(monkeypatch):
+    """the bedrock day rows are keyed by utc date; the time zone change leaves them alone"""
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get('2026-10-13T02:00:00Z'))
+    assert usage_window_dates() == ('2026-09-14', '2026-10-13')
+
+
+# effective compute rate
+
+
+class RateConfig(FakeConfig):
+    def get(self, key, default=None, required=False, module_id=None):
+        return self.values.get(key, default)
+
+
+def priced_session_service(multiplier):
+    now = arrow.utcnow()
+    created = now.shift(hours=-4).int_timestamp * 1000
+    updated = now.shift(hours=-2).int_timestamp * 1000
+    values = {
+        'virtual-desktop-controller.opensearch.dcv_session.alias': 'idea-test_vdc_user_sessions',
+    }
+    if multiplier is not None:
+        values['cluster.costs.compute_rate_multiplier'] = multiplier
+    service, _ = build_service(
+        os_responses={
+            'user_sessions': {
+                'hits': {
+                    'hits': [
+                        {
+                            '_source': dict(
+                                session_hit(
+                                    'sess-1', 'STOPPED', 'm5.large', created, updated
+                                )['_source'],
+                                owner=USER,
+                            )
+                        }
+                    ]
+                }
+            }
+        },
+        prices={'m5.large': 0.1},
+    )
+    service.context._config = RateConfig(values)
+    return service
+
+
+@pytest.mark.parametrize(
+    'multiplier,expected',
+    [
+        (None, 0.2),  # unset: list rate
+        (1.0, 0.2),
+        (0.72, 0.144),
+        ('0.72', 0.144),
+        (0, 0.2),  # invalid values are ignored, not applied
+        (-1, 0.2),
+        (1.6, 0.2),
+        ('cheap', 0.2),
+    ],
+)
+def test_desktop_hours_are_priced_at_the_effective_compute_rate(multiplier, expected):
+    session = priced_session_service(multiplier).get_summary(USER).desktops.sessions[0]
+    assert session.cost == pytest.approx(expected, abs=0.002)
+
+
+def test_the_listing_applies_the_rate_once():
+    service = priced_session_service(0.5)
+    rows = {row.username: row for row in service.list_user_costs().listing}
+    # 2 hours x 0.1 x 0.5, not x 0.25
+    assert rows[USER].desktop_cost == pytest.approx(0.1, abs=0.002)

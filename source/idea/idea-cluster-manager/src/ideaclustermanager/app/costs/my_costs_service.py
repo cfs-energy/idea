@@ -36,6 +36,7 @@ from ideadatamodel import (
     UserCosts,
 )
 from ideadatamodel.reporting.job_cost import job_spend
+from ideasdk.aws.compute_rate import compute_rate_multiplier
 from ideasdk.utils import Utils
 
 from boto3.dynamodb.conditions import Key
@@ -43,6 +44,7 @@ from boto3.dynamodb.conditions import Key
 from ideaclustermanager.app.reporting.reporting_sources import source_not_created
 from ideaclustermanager.app.projects.bedrock_usage_service import (
     USAGE_WINDOW,
+    USAGE_WINDOW_DAYS,
     get_project_window_usage,
     list_bedrock_projects,
     usage_window_dates,
@@ -160,20 +162,30 @@ class MyCostsService:
         if Utils.is_empty(username):
             raise exceptions.unauthorized_access()
 
-        start_date, end_date = usage_window_dates()
-        window_start = arrow.get(start_date).floor('day')
-        window_end = arrow.utcnow()
+        window_start, window_end = self.usage_window()
+        # bedrock day rows are keyed by utc date, so ai keeps utc days
+        ai_start, ai_end = usage_window_dates()
 
         return GetMyCostsSummaryResult(
             username=username,
             window=USAGE_WINDOW,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=window_start.format('YYYY-MM-DD'),
+            end_date=window_end.format('YYYY-MM-DD'),
             currency=locale.get_currency_code(),
-            ai=self._ai(username, start_date, end_date),
+            ai=self._ai(username, ai_start, ai_end),
             jobs=self._jobs(username, window_start, window_end),
             desktops=self._desktops(username, window_start, window_end),
         )
+
+    def usage_window(self) -> Tuple[arrow.Arrow, arrow.Arrow]:
+        """
+        the trailing window on cluster time zone days, the days reporting draws: from the
+        start of the local day USAGE_WINDOW_DAYS - 1 days ago through now. bedrock usage
+        rows stay keyed by utc date (usage_window_dates), so ai figures keep utc days.
+        """
+        timezone = self.context.config().get_string('cluster.timezone', 'UTC') or 'UTC'
+        now = arrow.utcnow().to(timezone)
+        return now.shift(days=-(USAGE_WINDOW_DAYS - 1)).floor('day'), now
 
     # ai
 
@@ -976,9 +988,7 @@ class MyCostsService:
         sources the per user summary reads. an unreadable source is reported as
         unavailable rather than leaving rows silently short.
         """
-        start_date, end_date = usage_window_dates()
-        window_start = arrow.get(start_date).floor('day')
-        window_end = arrow.utcnow()
+        window_start, window_end = self.usage_window()
         start_ms = window_start.int_timestamp * 1000
         end_ms = window_end.int_timestamp * 1000
 
@@ -1017,8 +1027,8 @@ class MyCostsService:
 
         return ListUserCostsResult(
             window=USAGE_WINDOW,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=window_start.format('YYYY-MM-DD'),
+            end_date=window_end.format('YYYY-MM-DD'),
             currency=locale.get_currency_code(),
             listing=listing,
             ai_unavailable=ai_unavailable,
@@ -1217,4 +1227,6 @@ class MyCostsService:
         ondemand = Utils.get_as_float(getattr(unit_price, 'ondemand', None), 0.0)
         if ondemand <= 0:
             return None
-        return ondemand
+        # every desktop hour (my costs, reporting, the admin listing, idle cost) is priced
+        # through here, so the effective rate is applied here and nowhere else.
+        return ondemand * compute_rate_multiplier(self.context.config(), self.logger)

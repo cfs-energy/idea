@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 from ideasdk.protocols import SocaContextProtocol
+from ideasdk.aws.compute_rate import compute_rate_label, compute_rate_multiplier
 from ideadatamodel import (
     EC2InstanceUnitPrice,
     SocaJob,
@@ -204,14 +205,20 @@ class PricingHelper:
 
         if self.job.ondemand_nodes() > 0:
             ondemand_usage_hours = self.total_time_hours * self.job.ondemand_nodes()
+            # the effective rate is applied here, once, and stored with the job; reports
+            # read the stored line and never re-price it.
+            multiplier = compute_rate_multiplier(
+                self.config(), self._context.logger('pricing-helper')
+            )
+            adjusted = '' if multiplier == 1.0 else f' {compute_rate_label(multiplier)}'
             estimated_bom_cost.add_line_item(
-                title=f'Compute On-Demand: '
+                title=f'Compute On-Demand{adjusted}: '
                 f'({self.job.ondemand_nodes()} x {self.job.default_instance_type})',
                 service='aws.ec2',
                 product=f'instance_type={self.job.default_instance_type},lifecycle=default',
                 unit='per hour',
                 quantity=ondemand_usage_hours,
-                unit_price=instance_type_unit_price.ondemand,
+                unit_price=instance_type_unit_price.ondemand * multiplier,
             )
             # no reserved-instance savings line: the discount is only real for an
             # account holding reservations, and subtracting it understated spend.

@@ -225,14 +225,15 @@ def test_catalog_count_contract_and_explicit_dispositions():
         'global-settings.gpu_settings.nvidia_public_driver_versions.g7e',
         'scheduler.job_provisioning.node_unavailable_timeout_seconds',
         'identity-provider.cognito.operations_leads_group_name',
+        'cluster.costs.compute_rate_multiplier',
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
-    assert len(DESTINATION_SECTIONS) == 36
+    assert len(DESTINATION_SECTIONS) == 37
     assert len(baseline) == 753
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == 'c64a4cc3769d425acc343d350726d67152e31087ccaf102cb504ca52e048443d'
+        == '91fdfc6ac5b49126857df64c6a5b7f77b4bd1614474e1239550814045af50d12'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'

@@ -14,7 +14,7 @@ Choose **Edit** on one card, change its values, then choose **Save** or **Cancel
 | AI access | Amazon Bedrock access, models, usage, and spending controls |
 | Notifications | Email delivery, Notifications, Email templates |
 | Users and sign-in | Account synchronization, Sign-in, Directory connection, Directory mapping, AD automation |
-| Costs | Cost collection, Storage cost collection, Cost estimation |
+| Costs | Cost collection, Storage cost collection, Compute rate, Cost estimation |
 | Network | Encryption and access, Load balancers and certificates, Network and connectivity |
 | Storage | File systems |
 | Backup | Backup policy |
@@ -40,6 +40,8 @@ Edit the single **Notifications** table under **Notifications**. It combines des
 The remaining guided editors keep their own save buttons. There is no page-wide Save button.
 
 ## Costs and reconciliation
+
+Open **Costs > Compute rate** to set `cluster.costs.compute_rate_multiplier`, the effective compute rate as a share of the on-demand list price (default 1.0; valid above 0 up to 1.5, anything else is ignored and logged). Job and desktop compute is priced at the on-demand rate times this value, and the cost pages label it as adjusted. Spot, EBS, file-system storage, and AI are never scaled. The scheduler stores the adjusted figure with each job when it finishes, so changing the rate does not reprice finished jobs; desktop costs use the current rate. Set it from the account's savings-plan or reserved-instance coverage, for example 0.72 for about 28% off.
 
 Open **Costs > Storage cost collection** to enable storage costs shown under **Costs and usage > By user**. Configure a read-only ONTAP username and password secret ARN for every attachment, save, deploy required secret permissions, and restart cluster-manager. See [Costs by user](../../modules/cluster-manager/costs-by-user.md).
 

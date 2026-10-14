@@ -162,7 +162,7 @@ it('labels memory and walltime overruns separately', () => {
 it('distinguishes stored desktop costs from session hours', async () => {
     render(<InsightTab tab="desktops" insights={insightsFixture()} timezone="UTC"/>);
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop spend'}));
-    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period.')).toBeInTheDocument();
+    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period. Compute is priced at on-demand list rates.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop hours'}));
     expect(screen.getByText('Estimated desktop hours from sessions overlapping this period.')).toBeInTheDocument();
 });
@@ -213,4 +213,16 @@ it('personal job spend shows no on-demand comparison, even from a snapshot that 
     render(<InsightTab tab="overview" insights={{...insightsFixture(), jobs: {...insightsFixture().jobs, savings: '200.00'}}} timezone="UTC" personal/>);
     expect(screen.getByRole('heading', {name: /Job spend/})).toBeInTheDocument();
     expect(screen.queryByText(/less than on-demand/)).toBeNull();
+});
+
+it.each(['jobs', 'desktops'])('labels %s compute as on-demand, and says when it is adjusted', tab => {
+    const {rerender} = render(<InsightTab tab={tab} insights={insightsFixture()} timezone="UTC"/>);
+    expect(screen.getByText('Compute is priced at on-demand list rates.')).toBeInTheDocument();
+    rerender(<InsightTab tab={tab} insights={insightsFixture()} timezone="UTC" computeRate={0.72}/>);
+    expect(screen.getByText('Compute is priced at on-demand rates, adjusted (×0.72).')).toBeInTheDocument();
+    expect(screen.queryByText('Compute is priced at on-demand list rates.')).toBeNull();
+});
+it('says what storage cost leaves out', () => {
+    render(<InsightTab tab="storage" insights={insightsFixture()} timezone="UTC"/>);
+    expect(screen.getByText('FSx backups and Lustre scratch are not included in storage cost.')).toBeInTheDocument();
 });

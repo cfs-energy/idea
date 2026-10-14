@@ -15,6 +15,14 @@ aws:
   pricing_region: us-east-1
   region: "{{ aws_region }}"
 
+costs:
+  # job and desktop compute is priced at the public on-demand rate. set this to what the
+  # account actually pays as a share of it (e.g. 0.72 under savings plans) and every cost
+  # page shows the adjusted figure, labelled as such. 1.0 is list price. read by the
+  # scheduler when it prices a job and by cluster-manager for desktop hours; values outside
+  # 0 < x <= 1.5 are ignored. spot, ebs and file system storage are never scaled.
+  compute_rate_multiplier: 1.0
+
 ses:
   enabled: false
   account_id: "{{aws_account_id}}"

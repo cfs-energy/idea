@@ -2,6 +2,8 @@
 
 Open **Administration > Costs and usage > By user**. The table shows recorded AI, shared-storage, desktop, and job measurements. Select a user to open the five personal-cost facets, daily charts, and project AI use.
 
+Every column covers the same last 30 days. Jobs, desktops, and storage use cluster time zone days, as Reporting does; AI usage rows are kept on UTC days. Compute is priced at the on-demand rate, adjusted by the effective compute rate when one is set. Storage leaves out FSx backups and Lustre scratch.
+
 Values are estimates from stored records. **Not available**, **Partial**, and totals that exclude storage do not mean zero. See [My costs](../../first-time-users/my-costs.md) for the calculation and history rules.
 
 ## Enable shared-storage costs

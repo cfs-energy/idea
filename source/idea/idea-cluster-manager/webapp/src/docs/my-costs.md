@@ -27,8 +27,10 @@ The single **Top jobs** table sorts by **Highest cost** or **Most unused cores**
 | Jobs | Priced completed jobs: compute at the on-demand or spot rate charged, plus job storage. |
 | Desktops | Recorded session intervals. Uncertain historical stop times are estimated. Deleting a legacy stopped desktop does not bill its stopped interval as running. |
 | Desktop disks | Observed provisioned storage from collection onward. |
-| Shared storage | Daily storage rates multiplied by dated byte shares. ONTAP includes SSD, throughput, excess IOPS, and capacity-pool bytes. EFS uses storage class. No storage cost-allocation tag is required. |
+| Shared storage | Daily storage rates multiplied by dated byte shares. ONTAP includes SSD, throughput, excess IOPS, and capacity-pool bytes. EFS uses storage class. No storage cost-allocation tag is required. FSx backups and Lustre scratch are not included. |
 | AI | Project daily spend apportioned by recorded user tokens. |
+
+Compute (job instance hours and desktop hours) is priced at the public on-demand rate, so it is an estimate that ignores savings plans and reserved instances. When an administrator sets an effective compute rate, the page header and the job and desktop figures say **adjusted (×0.72)** or similar, and compute is multiplied by that rate; storage, spot, and AI are not. A job keeps the rate in force when it finished; desktops use the current rate.
 
 A user absent from a complete ONTAP quota report counts as zero only when a default user quota rule exists. Historical dates without a dated share remain missing. Source times are recorded in UTC and grouped in the cluster timezone.
 

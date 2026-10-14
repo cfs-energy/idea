@@ -3,6 +3,7 @@ import {Badge, Box, Button, ColumnLayout, Container, Header, SpaceBetween, Table
 import {TableProps} from "@cloudscape-design/components/table";
 import {GetMyCostsSummaryResult, MyCostsDesktopSession, MyCostsJob, MyCostsJobGroup} from "../client/data-model";
 import Utils from "../common/utils";
+import {computeRateNote} from "../pages/reporting/reporting-format";
 
 /**
  * The three cost sections, rendered from a summary payload. Shared by the self scoped My Costs
@@ -106,6 +107,8 @@ export interface CostSectionsProps {
     /** Empty state wording: "You have not" reads wrong on another user's page. */
     subject?: 'self' | 'user'
     historicalStorageNotice?: boolean
+    /** effective compute rate as a share of on-demand list price, from cluster settings */
+    computeRate?: number
 }
 
 /**
@@ -120,7 +123,7 @@ export const showAiSection = (summary: GetMyCostsSummaryResult | null, loading: 
     return (ai?.total_tokens ?? 0) > 0 || (ai?.invocations ?? 0) > 0
 }
 
-const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onRetry, subject = 'self', historicalStorageNotice = false}) => {
+const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onRetry, subject = 'self', historicalStorageNotice = false, computeRate = 1}) => {
 
     const [expandedAi, setExpandedAi] = useState<AiRow[]>([])
 
@@ -211,7 +214,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
     )
 
     const renderDesktops = () => (
-        <Container header={sectionHeader('Desktops', 'Hours IDEA recorded for virtual desktops, priced at the on-demand rate for the instance type.')}>
+        <Container header={sectionHeader('Desktops', `Hours IDEA recorded for virtual desktops, priced by instance type. ${computeRateNote(computeRate)}`)}>
             <SpaceBetween size="s">
                 <ColumnLayout columns={3} variant="text-grid">
                     <div>
@@ -244,7 +247,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
     )
 
     const renderJobs = () => (
-        <Container header={sectionHeader('Jobs', 'Jobs completed in the window, priced from the estimate the scheduler recorded for each one.')}>
+        <Container header={sectionHeader('Jobs', `Jobs completed in the window, priced from the estimate the scheduler recorded for each one. ${computeRateNote(computeRate)}`)}>
             <SpaceBetween size="s">
                 <ColumnLayout columns={2} variant="text-grid">
                     <div>

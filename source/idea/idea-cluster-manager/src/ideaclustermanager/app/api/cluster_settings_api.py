@@ -68,6 +68,8 @@ USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
         'cluster_name',
         'locale',
         'timezone',
+        # cost pages label compute as an on-demand estimate, and say when it is adjusted
+        'costs.compute_rate_multiplier',
     ],
     constants.MODULE_CLUSTER_MANAGER: [
         # feature flag only. the catalog is admin-only; a user's own allowed

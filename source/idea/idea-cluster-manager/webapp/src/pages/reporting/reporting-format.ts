@@ -79,3 +79,9 @@ export const efficiencyLabel = (value: number, metric = 'cpu_efficiency_pct') =>
         : ['Well sized', 'Some cores sat idle', 'Most cores sat idle'];
     return labels[value >= 70 ? 0 : value >= 40 ? 1 : 2];
 };
+
+// compute is priced at the public on-demand rate, scaled by cluster.costs.compute_rate_multiplier
+// (ClusterSettingsService.getComputeRate) when an administrator sets one.
+export const computeRateNote = (rate = 1) => rate === 1 ? 'Compute is priced at on-demand list rates.' : `Compute is priced at on-demand rates, adjusted (×${rate}).`;
+export const STORAGE_EXCLUSIONS = 'FSx backups and Lustre scratch are not included in storage cost.';
+export const costsDescription = (rate = 1) => `Estimated costs and resource use. ${computeRateNote(rate)}`;

@@ -32,6 +32,8 @@ Breakdown's **Export CSV** includes all pages for the selected user or **All use
 
 An expired report reloads once automatically. **Reload** requests the report again. **Try again** retries a failed load. Retry a failed CSV download after the report loads. Newer stored records can change the values.
 
+Compute (job instance hours and desktop hours) is priced at the public on-demand rate, so it is an estimate that ignores savings plans and reserved instances. When an administrator sets an effective compute rate, the page header and the job and desktop figures say **adjusted (×0.72)** or similar, and compute is multiplied by that rate; storage, spot, and AI are not. A job keeps the rate in force when it finished; desktops use the current rate. Storage cost leaves out FSx backups and Lustre scratch.
+
 Open the information buttons for definitions, missing data, and source dates. Missing or unavailable data is not zero. Stored estimates do not reconstruct missing history and are not a billing statement.
 
 The **User** picker includes all users with recorded activity in the period, including users outside the top spenders and users with unpriced jobs. It includes finished jobs, overlapping desktops, measured storage use, and positive recorded costs; inactive accounts and system identities are excluded. The list comes from the Reporting-gated **GetSummary** response, without an additional unfiltered insights request. **ListRows** applies the selected username on the server before pagination. Missing sources show **No users found in available records** rather than claiming there were no users.

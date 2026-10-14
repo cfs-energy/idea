@@ -12,14 +12,14 @@ import {FACETS, facetAmount} from '../../components/cost-charts';
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import {InfoTitle, InsightTab, MetricTile, TileRow} from '../reporting/insights-components';
 import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from '../reporting/reporting-period-picker';
-import {date, money, updated} from '../reporting/reporting-format';
+import {computeRateNote, costsDescription, date, money, STORAGE_EXCLUSIONS, updated} from '../reporting/reporting-format';
 import StorageUsage from './storage-usage';
 
 export interface MyCostsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {}
 const tabs = [{id: 'overview', label: 'Overview'}, {id: 'jobs', label: 'Jobs'}, {id: 'desktops', label: 'Desktops'}, {id: 'storage', label: 'Storage'}];
 const facetTabs: Record<string, string> = {'cost-jobs': 'jobs', 'cost-desktops': 'desktops', 'cost-disks': 'overview', 'cost-storage': 'storage', 'cost-ai': 'overview'};
 const titles = {jobs: 'Job spend', desktops: 'Desktop spend', desktop_disks: 'Desktop disks', shared_storage: 'Storage spend', ai: 'AI'};
-function MonthTiles({costs, previous = false}: {costs: GetMyCostsResult | null; previous?: boolean}) {
+function MonthTiles({costs, previous = false, computeRate = 1}: {costs: GetMyCostsResult | null; previous?: boolean; computeRate?: number}) {
     const month = previous ? costs?.previous : costs?.current;
     const currency = costs?.currency ?? 'USD';
     const currentTotal = costs?.current?.total, previousTotal = costs?.previous?.total;
@@ -32,7 +32,7 @@ function MonthTiles({costs, previous = false}: {costs: GetMyCostsResult | null; 
         {FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}) => {
             const line = month?.[key];
             const badge = costBadge(line, !costs?.current);
-            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={`${key === 'jobs' ? 'Recorded job costs for this calendar month.' : key === 'desktops' ? 'Recorded desktop costs from stored daily costs for this calendar month.' : 'Uses the available daily costs for this calendar month.'} ${line?.reason || line?.note || ''}`}>
+            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={`${key === 'jobs' ? `Recorded job costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'} ${line?.reason || line?.note || ''}`}>
                 {badge && badge !== 'Partial' && <Badge>{badge}</Badge>}
             </MetricTile>;
         })}
@@ -62,6 +62,7 @@ function MyCosts(props: MyCostsProps) {
     useEffect(() => personalCostsCache().subscribe(result => {setCosts(result); setCostError('');},
         () => setCostError('Could not load monthly costs. Use Refresh to try again.')), [client]);
     const timezone = costs?.timezone ?? context.getClusterSettingsService().getClusterTimeZone();
+    const computeRate = context.getClusterSettingsService().getComputeRate();
     const validation = validateReportingPeriod(period, timezone);
     const insights = snapshot?.key === periodKey && !validation ? snapshot.data : undefined;
     useEffect(() => {
@@ -86,7 +87,7 @@ function MyCosts(props: MyCostsProps) {
     };
     const calendarMonth = period.period === 'this_month' || period.period === 'last_month';
     return <IdeaAppLayout {...props} breadcrumbItems={[{text: 'IDEA', href: '#/'}, {text: 'My costs', href: ''}]}
-        header={<Header variant="h1" description="Estimated costs and resource use" actions={<SpaceBetween direction="horizontal" size="s">
+        header={<Header variant="h1" description={costsDescription(computeRate)} actions={<SpaceBetween direction="horizontal" size="s">
             <span role="status">{acknowledged ? 'Refresh requested' : ''}</span>
             <Button loading={refreshing} onClick={refresh}>Refresh</Button>
         </SpaceBetween>}>My costs</Header>}
@@ -104,9 +105,9 @@ function MyCosts(props: MyCostsProps) {
                 {(validation || error) && <Alert type="error" action={<Button onClick={() => setReload(value => value + 1)}>Try again</Button>}>{validation || error}</Alert>}
                 {costError && <Alert type="error">{costError}</Alert>}
                 <Tabs activeTabId={tab} onChange={({detail}) => {const next = new URLSearchParams(query); next.set('tab', detail.activeTabId); setQuery(next);}} tabs={tabs}/>
-                {insights && <InsightTab personal loading={busy} tab={tab} insights={insights} timezone={timezone}
-                    overviewTiles={calendarMonth ? <MonthTiles costs={costs} previous={period.period === 'last_month'}/> : undefined}
-                    overviewExtra={!calendarMonth && <SpaceBetween size="m"><Header variant="h2">This month</Header><MonthTiles costs={costs}/></SpaceBetween>}
+                {insights && <InsightTab personal loading={busy} tab={tab} insights={insights} timezone={timezone} computeRate={computeRate}
+                    overviewTiles={calendarMonth ? <MonthTiles costs={costs} previous={period.period === 'last_month'} computeRate={computeRate}/> : undefined}
+                    overviewExtra={!calendarMonth && <SpaceBetween size="m"><Header variant="h2">This month</Header><MonthTiles costs={costs} computeRate={computeRate}/></SpaceBetween>}
                     storageExtra={<ExpandableSection headerText="Storage usage: folders and quotas" expanded={storageOpen} onChange={({detail}) => setStorageOpen(detail.expanded)}>
                         {storageOpen && <StorageUsage compact/>}
                     </ExpandableSection>}/>}

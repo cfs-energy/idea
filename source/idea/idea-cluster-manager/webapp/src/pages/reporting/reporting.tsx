@@ -10,10 +10,11 @@ import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from 
 import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS} from './reporting-table';
 import {InfoTitle, InsightTab} from './insights-components';
 import {readPreferences, savePreferences} from './insights-table';
-import {date, updated} from './reporting-format';
+import {costsDescription, date, updated} from './reporting-format';
 
 export function ReportingContent() {
     const context = AppContext.get();
+    const computeRate = context.getClusterSettingsService().getComputeRate();
     const auth = context.auth();
     const access = useSyncExternalStore(listener => auth.subscribeReporting(listener), () => `${auth.isReportingResolved()}:${auth.canReadReporting()}`);
     const allowed = access === 'true:true';
@@ -168,7 +169,7 @@ export function ReportingContent() {
     if (!auth.isReportingResolved()) return <StatusIndicator type="loading">Checking access</StatusIndicator>;
     if (!allowed) return <Alert type="error">Access denied. Ask your administrator for reporting access.</Alert>;
     const error = validation || summaryError || exportError || rowError;
-    return <ContentLayout header={<SpaceBetween size="m"><Header variant="h1" description="Estimated costs and resource use" actions={<SpaceBetween direction="horizontal" size="s">
+    return <ContentLayout header={<SpaceBetween size="m"><Header variant="h1" description={costsDescription(computeRate)} actions={<SpaceBetween direction="horizontal" size="s">
         <Button onClick={() => setReload(value => value + 1)} disabled={summaryBusy}>Reload</Button>
         {tableVisible && <Button onClick={exportCsv} loading={exportBusy} disabled={exportBusy}>Export CSV</Button>}
     </SpaceBetween>}>Cost and activity overview</Header>
@@ -200,7 +201,7 @@ export function ReportingContent() {
                     onPage={page => setPaging(previous => ({...previous, page}))}
                     onSort={(column, descending) => {const next = new URLSearchParams(query); next.set('sort_by', column); next.set('descending', String(descending)); setQuery(next);}}
                     onPreferences={(pageSize, columns) => {setPageSize(pageSize); setColumns(columns); savePreferences(`reporting.breakdown.${table}`, {pageSize, columns});}}/>
-                    : <InsightTab canOpenJobs={hasAccess(context, 'jobs-admin')} username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone}/>}
+                    : <InsightTab canOpenJobs={hasAccess(context, 'jobs-admin')} username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone} computeRate={computeRate}/>}
             </SpaceBetween>}
             <div role="status" aria-label="CSV download status" aria-live="polite">{exportStatus}</div>
         </SpaceBetween>

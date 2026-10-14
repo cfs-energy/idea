@@ -20,6 +20,7 @@ import Utils from "../../common/utils";
 import IdeaForm from "../form";
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import {GetCostTickerResult} from '../../client/data-model';
+import {computeRateNote} from '../../pages/reporting/reporting-format';
 import './navbar.scss';
 
 export interface IdeaNavbarProps {
@@ -298,7 +299,7 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                             text: `${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency}).format(ticker.total!)} · ${ticker.period}`,
                             href: '#/home/my-costs',
                             iconName: ticker.incomplete !== false ? 'status-info' as const : undefined,
-                            ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some costs are still estimates' : ''}. Open My costs`
+                            ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some costs are still estimates' : ''}. ${computeRateNote(AppContext.get().getClusterSettingsService().getComputeRate())} Open My costs`
                         }] : []),
                         {
                             type: "menu-dropdown",
