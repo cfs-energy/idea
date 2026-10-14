@@ -37,6 +37,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Base software stacks for new OSes**: the desktop controller seeds base stacks once per release and again whenever the base stack list changes, so a release candidate or a release that adds an OS creates its stacks on clusters that already seeded that version.
 * **DCV 2026.0 desktops start their sessions**: RHEL 10, Rocky 10 and Ubuntu 26.04 desktops keep the DCV server's own service unit, which creates its runtime directories, so the session launcher starts and virtual sessions are created. Image bakes now fail when the session launcher does not start.
 * **Image bakes on new base images**: Ubuntu builders refresh package lists before installing the AWS CLI's prerequisites, and a builder whose AWS CLI install or bootstrap download fails stops at once and says why instead of waiting out the 60-minute timeout. Kernel modules (DCV USB, NVIDIA) install the kernel-devel package for the running kernel, retrying while mirrors catch up, and fail naming both versions when it is not available.
+* **Desktops on RHEL 10 and Rocky 10 are reachable**: the host firewall stays off on every image. fail2ban pulled in firewalld after the bootstrap had already checked for it, which blocked DCV's port.
+* **Wayland desktops open as the owner**: RHEL 10, Rocky 10 and Ubuntu 26.04 sessions log the session owner into GNOME without a second password, as X11 desktops always have. Only the DCV session's owner is signed in, only on that session's remote display, and Active Directory remote-desktop policy still applies.
 
 ## [26.10.5] - 2026-10-13
 

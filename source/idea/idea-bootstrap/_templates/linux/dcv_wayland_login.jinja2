@@ -1,0 +1,56 @@
+# Begin: DCV Wayland owner login
+# DCV's documented GNOME SSO needs system credentials; IDEA authenticates with broker tokens.
+# https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-linux-wayland-installation.html
+if ! /usr/bin/python3 -c 'from gi.repository import Gio, GLib' >/dev/null 2>&1; then
+{% if context.base_os == 'ubuntu2604' %}
+  DEBIAN_FRONTEND=noninteractive apt install -y python3-gi || exit 1
+{% else %}
+  package_transaction dnf install -y python3-gobject-base || exit 1
+{% endif %}
+fi
+install -d -m 755 /usr/local/libexec /usr/share/gdm/greeter/autostart || exit 1
+cat > /usr/local/libexec/idea-dcv-login <<'PYCODE' || exit 1
+{% include '_templates/linux/dcv_wayland_login_helper.jinja2' %}
+PYCODE
+chmod 755 /usr/local/libexec/idea-dcv-login || exit 1
+cat > /etc/pam.d/idea-dcv-login <<'EOF_PAM' || exit 1
+auth requisite pam_exec.so expose_authtok quiet /usr/local/libexec/idea-dcv-login pam
+# pam_exec does not implement setcred; permit it only after the requisite owner check.
+auth required pam_permit.so
+account required pam_nologin.so
+{% if context.base_os == 'ubuntu2604' %}
+account include common-account
+{% else %}
+account include system-auth
+{% endif %}
+password requisite pam_deny.so
+session include gdm-password
+EOF_PAM
+cat > /usr/share/gdm/greeter/autostart/idea-dcv-login.desktop <<'EOF_DESKTOP' || exit 1
+[Desktop Entry]
+Type=Application
+Name=IDEA DCV owner login
+Exec=/usr/local/libexec/idea-dcv-login login
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications
+EOF_DESKTOP
+cat > /etc/systemd/system/idea-dcv-login.service <<'EOF_SERVICE' || exit 1
+[Unit]
+Description=Authorize IDEA DCV owner login on the remote GDM greeter
+After=dbus.service dcvserver.service
+PartOf=dcvserver.service
+[Service]
+ExecStart=/usr/local/libexec/idea-dcv-login serve
+Restart=on-failure
+RuntimeDirectory=idea-dcv-login
+RuntimeDirectoryMode=0755
+UMask=0077
+[Install]
+WantedBy=dcvserver.service
+EOF_SERVICE
+systemctl daemon-reload || exit 1
+systemctl enable idea-dcv-login.service || exit 1
+if systemctl is-active --quiet dcvserver.service; then
+  systemctl restart idea-dcv-login.service || exit 1
+fi
+# End: DCV Wayland owner login

@@ -232,7 +232,10 @@ realmd_tags = manages-system joined-with-adcli
 cache_credentials = true
 id_provider = ad
 access_provider = ad
-auth_provider = ad
+{% if context.base_os in ('rhel10', 'rocky10', 'ubuntu2604') and context.module_name == 'virtual-desktop-controller' and context.vars.session is defined %}
+# Broker-authorized GDM login still enforces AD Remote Desktop account policy.
+ad_gpo_map_remote_interactive = +idea-dcv-login
+{% endif %}auth_provider = ad
 chpass_provider = ad
 krb5_store_password_if_offline = true
 default_shell = /bin/bash

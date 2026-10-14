@@ -311,7 +311,9 @@ fi
 else
   log_info "Found nice-dcv-server pre-installed... skipping installation..."
 fi
-
+{% if context.base_os in ('rhel10', 'rocky10', 'ubuntu2604') %}
+{% include '_templates/linux/dcv_wayland_login.jinja2' %}
+{% endif %}
 # DCV 2026.0 service dependencies (also needed on preinstalled images).
 if systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
   # Keep the vendor unit: RuntimeDirectory creates dcv and dcvlogon as dcv:dcv, mode 0755.
