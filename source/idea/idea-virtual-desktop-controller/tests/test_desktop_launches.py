@@ -315,3 +315,45 @@ def test_the_budget_is_a_hard_limit():
     # one call, a wait cut to what was left of the second, and no call past it
     assert len(cloudtrail.requests) == 1
     assert sleeps == [pytest.approx(0.1)]
+
+
+def hidden_launch(at, instance_id):
+    """CloudTrail hides tag specifications and tag sets on many RunInstances events"""
+    return {
+        'EventName': 'RunInstances',
+        'EventTime': at.datetime,
+        'CloudTrailEvent': json.dumps(
+            {
+                'eventTime': at.isoformat(),
+                'requestParameters': {
+                    'tagSpecificationSet': 'HIDDEN_DUE_TO_SECURITY_REASONS'
+                },
+                'responseElements': {
+                    'instancesSet': {
+                        'items': [
+                            {
+                                'instanceId': instance_id,
+                                'instanceType': 'c7i.2xlarge',
+                                'tagSet': 'HIDDEN_DUE_TO_SECURITY_REASONS',
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+    }
+
+
+def test_hidden_tags_are_skipped_not_fatal():
+    created = arrow.utcnow().shift(days=-20)
+    history, _, _, done = backfill(
+        [row('sess-1', 'granetz', created)],
+        [
+            [
+                hidden_launch(created, 'i-0hidden'),
+                launch('granetz', created.shift(seconds=30), 'i-0visible'),
+            ]
+        ],
+    )
+    assert done
+    assert stored(history, 'sess-1')['instance_id'] == 'i-0visible'

@@ -86,17 +86,18 @@ class DesktopLaunches:
         if detail.get('errorCode'):
             return []
         tags = {}
-        request = detail.get('requestParameters') or {}
-        for spec in (request.get('tagSpecificationSet') or {}).get('items', []):
+        request = _as_dict(detail.get('requestParameters'))
+        for spec in _items(request.get('tagSpecificationSet')):
             if spec.get('resourceType') == 'instance':
-                for tag in spec.get('tags', []):
-                    tags[tag.get('key')] = tag.get('value')
-        response = detail.get('responseElements') or {}
+                for tag in _as_list(spec.get('tags')):
+                    if isinstance(tag, dict):
+                        tags[tag.get('key')] = tag.get('value')
+        response = _as_dict(detail.get('responseElements'))
         launched = arrow.get(detail.get('eventTime') or event['EventTime'])
         result = []
-        for item in (response.get('instancesSet') or {}).get('items', []):
+        for item in _items(response.get('instancesSet')):
             item_tags = dict(tags)
-            for tag in (item.get('tagSet') or {}).get('items', []):
+            for tag in _items(item.get('tagSet')):
                 item_tags[tag.get('key')] = tag.get('value')
             if (
                 item_tags.get(constants.IDEA_TAG_NODE_TYPE)
@@ -115,3 +116,21 @@ class DesktopLaunches:
                 }
             )
         return result
+
+
+# CloudTrail replaces some fields with the string HIDDEN_DUE_TO_SECURITY_REASONS (tag
+# specifications and tag sets, for example), so every nested field may be a str
+def _as_dict(value) -> Dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value) -> List:
+    return value if isinstance(value, list) else []
+
+
+def _items(value) -> List[Dict]:
+    return [
+        item
+        for item in _as_list(_as_dict(value).get('items'))
+        if isinstance(item, dict)
+    ]
