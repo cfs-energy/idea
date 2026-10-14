@@ -761,3 +761,25 @@ uname() { echo 6.8.0-1057-aws; }
         text=True,
     )
     assert result.returncode == (1 if missing else 0), result.stderr
+
+
+@pytest.mark.parametrize(
+    'base_os', ['rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10']
+)
+def test_el_fsx_lustre_imports_a_key_the_os_accepts_and_logs_a_failed_import(base_os):
+    # rpm-sequoia on EL10 refuses fsx-rpm-public-key.asc (SHA-1 binding signature only);
+    # the el/10 packages are signed by fsx-rpm-public-key-2.asc instead
+    rendered = render('_templates/linux/fsx_lustre_client.jinja2', base_os=base_os)
+    key = 'https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/'
+    if base_os.endswith('10'):
+        assert f'{key}fsx-rpm-public-key-2.asc ' in rendered
+        assert f'{key}fsx-rpm-public-key.asc ' not in rendered
+    else:
+        assert f'{key}fsx-rpm-public-key.asc ' in rendered
+        assert f'{key}fsx-rpm-public-key-2.asc ' not in rendered
+    imports = [line for line in rendered.splitlines() if 'rpm --import' in line]
+    assert imports
+    for line in imports:
+        assert (
+            '|| log_error "Failed to import the FSx for Lustre RPM signing key' in line
+        )
