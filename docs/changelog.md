@@ -15,6 +15,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * A Linux desktop started after a scheduler change can run `qsub` and `qstat` right away.
 * A job that finishes well under its time limit no longer shows a warning; cost follows the time a job actually ran.
 * Jobs on RHEL 10 and Rocky 10 compute nodes can use Lustre scratch.
+* The login node (`ssh.<cluster>`) has editors again: `vi`, `vim`, `nvim`, `nano` and `emacs`.
 
 * **Desktop broker logs**: the session manager broker no longer logs every load balancer health check and agent heartbeat (about 42,000 lines per 15 minutes on a busy cluster); those two loggers now sit at WARN. Set `DCV_BROKER_LOG_LEVEL` (default `info`) on the broker task to change the broker's overall log level.
 * **Walltime efficiency wording**: a job that finishes well under its requested time no longer shows a warning. The tile and help now say that cost follows the time a job actually ran, and that a closer time limit helps the scheduler and stops stuck jobs sooner.

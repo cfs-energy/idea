@@ -69,7 +69,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
-      rsync git \
+      rsync git vim-minimal vim-enhanced nano emacs-nox \
   && dnf clean all
 
 # Install the session-manager broker, connection gateway, and web viewer from the
@@ -120,13 +120,33 @@ RUN set -eux; \
     rm -rf /root/.cache/pip; \
     mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
 
-# Tools users had on the x86 host bastion and expect on the arm64 login node. uv comes as a
-# pinned wheel for the build architecture; AL2023 packages no hdf5 (h5dump) for either.
+# Tools users had on the x86 host bastion and expect on the arm64 login node (vim, nano and
+# emacs are in the package list above). uv comes as a pinned wheel for the build
+# architecture; AL2023 packages no hdf5 (h5dump) for either.
 ARG UV_VERSION=0.12.24
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
     /usr/local/bin/uv --version
+
+# neovim for the login node: AL2023 packages none, so the release tarball, pinned and
+# checked against the digest GitHub records for each asset.
+ARG TARGETARCH
+ARG NVIM_VERSION=0.12.5
+RUN set -eux; \
+    case "${TARGETARCH:-}" in \
+      amd64) A=x86_64; SUM=bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875 ;; \
+      arm64) A=arm64; SUM=1aa5ca085249580ae0f91eb14f27ec0919773ff2d99a163d03f3d6c21ac29725 ;; \
+      *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/nvim.tar.gz "https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-linux-${A}.tar.gz"; \
+    printf '%s  %s\n' "${SUM}" /tmp/nvim.tar.gz > /tmp/nvim.sha256; \
+    sha256sum -c /tmp/nvim.sha256; \
+    mkdir -p /opt/nvim; \
+    tar -xzf /tmp/nvim.tar.gz -C /opt/nvim --strip-components=1 --no-same-owner; \
+    ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim; \
+    rm -f /tmp/nvim.tar.gz /tmp/nvim.sha256; \
+    /usr/local/bin/nvim --version > /dev/null
 
 # Overlay the gateway web resources.
 ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/
