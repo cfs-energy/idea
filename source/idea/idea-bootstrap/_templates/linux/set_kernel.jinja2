@@ -28,7 +28,7 @@ if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/n
   . /etc/os-release
   wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
   echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
-  apt-get -o DPkg::Lock::Timeout=300 update -qq
+  apt_update || exit 1
 {% if ubuntu_desktop_bake | default(false) %}  if [[ -n "${BAKE_STAGE:-}" ]]; then
     KERNEL_ARCH=$(dpkg --print-architecture)
     NEWEST_FSX_KERNEL_ABI=""
@@ -189,7 +189,7 @@ function install_target_kernel() {
 
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Update package cache
-  apt-get -o DPkg::Lock::Timeout=300 update
+  apt_update || exit 1
 
   # Exact ABI, not the linux-aws-<series> meta-package: the meta-package resolves to
   # whatever Ubuntu published last, which the FSx repo may not have modules for yet

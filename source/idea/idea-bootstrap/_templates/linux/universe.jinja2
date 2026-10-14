@@ -38,6 +38,6 @@
   fi
 
   # Update package lists
-  apt update
+  apt_update || exit 1
 {% endif %}
 # End: Enable extra repo for Ubuntu

@@ -240,6 +240,10 @@ function install_nvidia_grid_drivers () {
     return 0
   fi
 
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+  install_matching_kernel_devel || fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+{% endif %}
+
   log_info "Installing NVIDIA GRID Drivers"
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
@@ -299,6 +303,10 @@ function install_nvidia_public_drivers() {
     log_info "GPU driver already installed. Skip."
     return 0
   fi
+
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+  install_matching_kernel_devel || fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+{% endif %}
 
   # Instance    Product Type    Product Series  Product
   # G2        GRID          GRID Series     GRID K520

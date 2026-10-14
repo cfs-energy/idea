@@ -710,6 +710,11 @@ class DcvHostImageBuilder:
         results), then refuse anything but 'complete'. a Windows builder generalizes and
         shuts itself down after reporting, and is snapshotted only once stopped.
         """
+        if status.startswith('failed:userdata-'):
+            raise exceptions.general_exception(
+                f'{status} on builder {instance_id}; '
+                'see /root/bootstrap/logs/userdata.log; nothing was snapshotted'
+            )
         if self.before_snapshot is not None:
             self.before_snapshot(instance_id, status)
         if status != AMI_BUILDER_STATUS_COMPLETE:

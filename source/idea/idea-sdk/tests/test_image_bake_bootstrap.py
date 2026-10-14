@@ -1014,7 +1014,13 @@ def test_ubuntu_host_refreshes_apt_only_without_a_current_baked_release(
         '/usr/share/keyrings/', f'{tmp_path}/'
     )
     result = subprocess.run(
-        ['bash', '-c', stubs + block],
+        [
+            'bash',
+            '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
+            + stubs
+            + block,
+        ],
         env={**os.environ, 'IDEA_MODULE_VERSION': 'current'},
         capture_output=True,
         text=True,

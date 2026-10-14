@@ -52,7 +52,7 @@ function package_transaction() {
       return 0
     fi
     # A package no repository carries is not transient; callers rely on that failing at once.
-    if grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides' "$output"; then
+    if [[ "${PACKAGE_RETRY_MISSING:-no}" != yes ]] && grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides' "$output"; then
       cat "$output"
       log_error "$manager transaction failed (exit $status)"
       rm -f "$output"
@@ -61,10 +61,12 @@ function package_transaction() {
     [[ $delay -ne 0 ]] || break
     sed 's/^/[retried] /' "$output"
     log_warning "$manager transaction failed (exit $status); refreshing metadata and retrying in ${delay}s"
-    "$manager" clean packages metadata 2>&1 | sed 's/^/[retried] /' || true
+    if [[ "$manager" != apt-get ]]; then
+      "$manager" clean packages metadata 2>&1 | sed 's/^/[retried] /' || true
+    fi
     sleep "$delay"
   done
-  if grep -Eqi 'best candidate|nothing provides' "$output"; then
+  if [[ "${PACKAGE_RETRY_MISSING:-no}" != yes && "$manager" != apt-get ]] && grep -Eqi 'best candidate|nothing provides' "$output"; then
     sed 's/^/[retried] /' "$output"
     log_warning "$manager dependency resolution failed after retries; retrying once with --nobest"
     if LC_ALL=C "$manager" --nobest "$@" > "$output" 2>&1; then
@@ -78,6 +80,28 @@ function package_transaction() {
   [[ $status -eq 0 ]] || log_error "$manager transaction failed (exit $status)"
   rm -f "$output"
   return "$status"
+}
+
+# apt otherwise returns success when some indexes could not be downloaded.
+function apt_update() {
+  package_transaction apt-get -o APT::Update::Error-Mode=any -o DPkg::Lock::Timeout=300 update
+}
+
+# Exact packages can temporarily be missing while BaseOS and AppStream mirrors converge.
+function install_matching_kernel_devel() {
+  local kernel installed message
+  kernel=$(uname -r)
+  if PACKAGE_RETRY_MISSING=yes package_transaction dnf --refresh install -y "kernel-devel-${kernel}" "kernel-headers-${kernel}" \
+      && [[ -f "${KERNEL_SRC_DIR:-/usr/src/kernels}/${kernel}/Makefile" ]]; then
+    return 0
+  fi
+  installed=$(rpm -qa kernel-devel kernel-headers | tr '\n' ' ')
+  message="Matching kernel-devel/kernel-headers unavailable for running kernel ${kernel}; installed: ${installed:-none}. Cannot build kernel modules."
+  log_error "${message}"
+  if [[ -n "${BAKE_STAGE:-}" ]]; then
+    printf '%s: %s\n' "${BAKE_STAGE}" "${message}" >> /var/lib/idea/bake-failed
+  fi
+  return 1
 }
 
 function set_reboot_required () {

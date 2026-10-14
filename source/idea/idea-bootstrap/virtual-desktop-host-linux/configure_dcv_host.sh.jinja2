@@ -65,6 +65,9 @@ function install_usb_support() {
   # and dcvserver loads it (ExecStartPre modprobe); rebuilding it through DKMS cost ~90 s
   if ! modinfo eveusb >/dev/null 2>&1; then
     echo "Installing usb support..."
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+    install_matching_kernel_devel || exit 1
+{% endif %}
     DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
     $DCV_USB_DRIVER_INSTALLER --quiet
   else

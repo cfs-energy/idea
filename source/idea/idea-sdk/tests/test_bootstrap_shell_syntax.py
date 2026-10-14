@@ -346,7 +346,7 @@ def test_linux_bootstrap_packages_parse(tmp_path, base_os, instance_type):
             with open(script) as f:
                 content = f.read()
             assert_package_transactions_wrapped(content)
-            if re.search(
+            if Path(script).name != 'bootstrap_common.sh' and re.search(
                 r'^\s*(?:if |.*\|\| )?package_transaction ', content, re.MULTILINE
             ):
                 assert content.index(

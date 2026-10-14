@@ -479,3 +479,14 @@ def test_windows_snapshot_does_not_reboot_a_stopped_builder(monkeypatch):
     builder, order = _build_ready(monkeypatch, 'windows2022')
     assert builder.build() == 'ami-new'
     assert order == [('create', True)]
+
+
+@pytest.mark.parametrize('stage', ['aws-cli', 'bootstrap-download'])
+def test_userdata_failure_does_not_wait_for_uninstalled_image_checks(stage):
+    builder = DcvHostImageBuilder(
+        context=fake_context(), base_ami='ami-base', base_os='ubuntu2604'
+    )
+    builder.before_snapshot = Mock(side_effect=AssertionError('checks not installed'))
+    with pytest.raises(exceptions.SocaException, match=f'userdata-{stage}'):
+        builder.check_builder_status('i-builder', f'failed:userdata-{stage}')
+    builder.before_snapshot.assert_not_called()
