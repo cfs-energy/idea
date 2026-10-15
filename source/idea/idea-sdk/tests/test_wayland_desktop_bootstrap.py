@@ -4,6 +4,7 @@ GDM's Wayland GNOME: no Xdcv, no DCV GL, no X server and no console sessions, so
 bootstrap must leave Wayland on and install only the packages the Wayland tarballs ship.
 """
 
+import configparser
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,208 @@ X11 = [
     'ubuntu2204',
     'ubuntu2404',
 ]
+
+
+@pytest.mark.parametrize('base_os', WAYLAND)
+@pytest.mark.parametrize('key', ['color-scheme', 'gtk-theme'])
+def test_desktop_dark_defaults(base_os, key):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    value = (
+        'prefer-dark'
+        if key == 'color-scheme'
+        else 'Yaru-dark'
+        if base_os == 'ubuntu2604'
+        else 'Adwaita-dark'
+    )
+    assert f"{key}='{value}'" in text
+
+
+@pytest.mark.parametrize('base_os', ['rhel10', 'rocky10'])
+def test_desktop_el10_legacy_dark_theme(base_os):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    assert '/usr/local/share/themes/Adwaita-dark/gtk-3.0' in text
+    assert 'resource:///org/gtk/libgtk/theme/Adwaita/gtk-dark.css' in text
+
+
+@pytest.mark.parametrize('base_os', ['rhel10', 'rocky10'])
+@pytest.mark.parametrize(
+    'key', ['allow-updates', 'download-updates', 'download-updates-notify']
+)
+def test_desktop_software_update_defaults(base_os, key):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    assert f'{key}=false' in text
+
+
+@pytest.mark.parametrize(
+    'setting',
+    [
+        'no-show-notifications=true',
+        'hide-reboot-notification=true',
+        'show-updates-status-icon=false',
+        'update-notifier.desktop',
+        'update-notifier-release.path',
+        'update-notifier-release.service',
+        'update-notifier-livepatch.path',
+        'update-notifier-livepatch.service',
+    ],
+)
+def test_desktop_ubuntu_update_defaults(setting):
+    text = render('_templates/linux/dcv_server.jinja2', 'ubuntu2604')
+    assert setting in text
+
+
+@pytest.mark.parametrize('base_os', WAYLAND)
+@pytest.mark.parametrize(
+    'entrypoint',
+    [
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+        'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+    ],
+)
+def test_desktop_polish_runs_for_bakes_and_preinstalled_desktops(base_os, entrypoint):
+    from test_image_bake_bootstrap import render as render_host
+
+    text = render_host(entrypoint, base_os)
+    assert text.index('# Begin: GNOME Desktop Polish') > text.index(
+        'Found window manager pre-installed'
+    )
+    assert 'gnome-initial-setup-first-login.service' in text
+    assert 'gnome-initial-setup-upgrade-login.service' in text
+
+
+@pytest.mark.parametrize('base_os', X11)
+def test_desktop_polish_does_not_change_older_desktops(base_os):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    assert '# Begin: GNOME Desktop Polish' not in text
+
+
+@pytest.mark.parametrize('base_os', WAYLAND)
+@pytest.mark.parametrize('installed', [True, False])
+@pytest.mark.parametrize('existing_profile', [True, False])
+def test_desktop_polish_is_targeted_and_idempotent(
+    tmp_path, base_os, installed, existing_profile
+):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    assert '# Begin: GNOME Desktop Polish' in text
+    block = text.split('# Begin: GNOME Desktop Polish')[1].split(
+        '# End: GNOME Desktop Polish'
+    )[0]
+    etc = tmp_path / 'etc'
+    units = tmp_path / 'units'
+    units.mkdir()
+    autostart = etc / 'xdg/autostart'
+    autostart.mkdir(parents=True)
+    welcome = autostart / 'gnome-initial-setup-first-login.desktop'
+    pro = autostart / 'ubuntu-advantage-notification.desktop'
+    updater = autostart / 'update-notifier.desktop'
+    desktop = '[Desktop Entry]\nType=Application\nExec=original\nHidden=false\n'
+    updater.write_text(desktop)
+    unrelated = autostart / 'unrelated.desktop'
+    unrelated.write_text(desktop)
+    services = ['gnome-initial-setup-first-login.service']
+    if base_os == 'ubuntu2604':
+        services.extend(
+            [
+                'gnome-initial-setup-upgrade-login.service',
+                'update-notifier-release.path',
+                'update-notifier-release.service',
+                'update-notifier-livepatch.path',
+                'update-notifier-livepatch.service',
+            ]
+        )
+    if installed:
+        welcome.write_text(desktop)
+        if base_os == 'ubuntu2604':
+            pro.write_text(desktop)
+        for unit in services:
+            (units / unit).write_text('[Service]\nExecStart=original\n')
+    profile = etc / 'dconf/profile/user'
+    if existing_profile:
+        profile.parent.mkdir(parents=True)
+        profile.write_text('user-db:user\nsystem-db:site\n')
+    # These are the schemas observed on rc.13; absent optional packages are supported.
+    schemas = ''
+    if installed:
+        schemas = (
+            'org.gnome.shell.extensions.ding\ncom.ubuntu.update-notifier'
+            if base_os == 'ubuntu2604'
+            else 'org.gnome.software'
+        )
+    protected = {}
+    for unit in [
+        'apt-daily.timer',
+        'apt-daily-upgrade.timer',
+        'unattended-upgrades.service',
+        'packagekit.service',
+        'packagekit-offline-update.service',
+    ]:
+        path = etc / 'systemd/system' / unit
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('[Unit]\nDescription=preserve\n')
+        protected[path] = path.read_bytes()
+    crash = etc / 'systemd/user/update-notifier-crash.path'
+    crash.parent.mkdir(parents=True, exist_ok=True)
+    crash.write_text('[Path]\nPathExistsGlob=/var/crash/*\n')
+    protected[crash] = crash.read_bytes()
+    script = (
+        f'gsettings() {{ printf "%s\\n" "{schemas}"; }}\n'
+        'dconf() { echo "dconf $*"; }\n'
+        + block.replace('/etc/', f'{etc}/')
+        .replace('/usr/lib/systemd/user/', f'{units}/')
+        .replace('/usr/local/share/', f'{tmp_path}/share/')
+    )
+    for _ in range(2):
+        result = subprocess.run(
+            ['bash', '-eu', '-c', script], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+    assert unrelated.read_text() == desktop
+    assert all(path.read_bytes() == value for path, value in protected.items())
+    if base_os == 'ubuntu2604':
+        assert 'Hidden=true' in updater.read_text()
+    else:
+        assert updater.read_text() == desktop
+    assert profile.read_text().count('system-db:local\n') == 1
+    if existing_profile:
+        assert 'system-db:site\n' in profile.read_text()
+    defaults = configparser.ConfigParser()
+    defaults.read(etc / 'dconf/db/local.d/00-idea-desktop')
+    assert defaults['org/gnome/desktop/interface']['color-scheme'] == "'prefer-dark'"
+    theme = 'Yaru-dark' if base_os == 'ubuntu2604' else 'Adwaita-dark'
+    assert defaults['org/gnome/desktop/interface']['gtk-theme'] == f"'{theme}'"
+    if base_os != 'ubuntu2604':
+        assert (tmp_path / 'share/themes/Adwaita-dark/gtk-3.0/gtk.css').read_text() == (
+            '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-dark.css");\n'
+        )
+    assert 'dconf update' in result.stdout
+    if installed:
+        assert 'Hidden=true' in welcome.read_text()
+        assert 'Hidden=false' not in welcome.read_text()
+        for unit in services:
+            assert (etc / 'systemd/user' / unit).readlink() == Path('/dev/null')
+        if base_os == 'ubuntu2604':
+            assert 'Hidden=true' in pro.read_text()
+            for key in ['show-home', 'show-trash']:
+                assert defaults['org/gnome/shell/extensions/ding'][key] == 'false'
+            notifier = defaults['com/ubuntu/update-notifier']
+            for key in [
+                'notify-ubuntu-advantage-available',
+                'show-livepatch-status-icon',
+                'show-updates-status-icon',
+            ]:
+                assert notifier[key] == 'false'
+            for key in ['no-show-notifications', 'hide-reboot-notification']:
+                assert notifier[key] == 'true'
+        else:
+            for key in ['allow-updates', 'download-updates', 'download-updates-notify']:
+                assert defaults['org/gnome/software'][key] == 'false'
+    else:
+        assert not welcome.exists()
+        assert not pro.exists()
+        assert list((etc / 'systemd/user').iterdir()) == [crash]
+    if not schemas:
+        assert defaults.sections() == ['org/gnome/desktop/interface']
+    assert not (etc / 'dconf/db/local.d/locks').exists()
 
 
 @pytest.mark.parametrize('base_os', WAYLAND + X11)

@@ -1,0 +1,82 @@
+{% if context.base_os in ('ubuntu2604', 'rhel10', 'rocky10') %}
+# Begin: GNOME Desktop Polish
+# GNOME 50 launches both first-login and release-upgrade welcome through user services.
+desktop_units=(gnome-initial-setup-first-login.service gnome-initial-setup-upgrade-login.service)
+{% if context.base_os == 'ubuntu2604' %}
+# Release and Livepatch prompts have independent path-triggered launchers.
+desktop_units+=(update-notifier-release.path update-notifier-release.service update-notifier-livepatch.path update-notifier-livepatch.service)
+{% endif %}
+for unit in "${desktop_units[@]}"; do
+  if [ -f "/usr/lib/systemd/user/$unit" ]; then
+    mkdir -p /etc/systemd/user || exit 1
+    ln -sfn /dev/null "/etc/systemd/user/$unit" || exit 1
+  fi
+done
+
+# EL10 still ships the XDG launcher; Ubuntu's separate Pro offer comes from update-notifier.
+desktop_launchers=(gnome-initial-setup-first-login.desktop)
+{% if context.base_os == 'ubuntu2604' %}
+desktop_launchers+=(ubuntu-advantage-notification.desktop update-notifier.desktop)
+{% endif %}
+for launcher in "${desktop_launchers[@]}"; do
+  if [ -f "/etc/xdg/autostart/$launcher" ]; then
+    sed -i '/^Hidden=/d; /^\[Desktop Entry\]/a Hidden=true' "/etc/xdg/autostart/$launcher" || exit 1
+  fi
+done
+
+{% if context.base_os in ('rhel10', 'rocky10') %}
+# EL10 ships GTK's dark CSS but omits the Adwaita-dark theme alias needed by GTK 3 apps.
+mkdir -p /usr/local/share/themes/Adwaita-dark/gtk-3.0 || exit 1
+printf '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-dark.css");\n' > /usr/local/share/themes/Adwaita-dark/gtk-3.0/gtk.css || exit 1
+{% endif %}
+
+desktop_schemas=$(gsettings list-schemas) || exit 1
+desktop_defaults="[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+{% if context.base_os == 'ubuntu2604' %}
+gtk-theme='Yaru-dark'
+{% else %}
+gtk-theme='Adwaita-dark'
+{% endif %}
+"
+# EL10 has no DING schema; only configure desktop icons when it exists.
+if printf '%s\n' "$desktop_schemas" | grep -Fxq org.gnome.shell.extensions.ding; then
+  desktop_defaults="${desktop_defaults}
+[org/gnome/shell/extensions/ding]
+show-home=false
+show-trash=false
+"
+fi
+# IDEA updates arrive through rebakes; GNOME Software also drives PackageKit offline prompts.
+if printf '%s\n' "$desktop_schemas" | grep -Fxq org.gnome.software; then
+  desktop_defaults="${desktop_defaults}
+[org/gnome/software]
+allow-updates=false
+download-updates=false
+download-updates-notify=false
+"
+fi
+{% if context.base_os == 'ubuntu2604' %}
+if printf '%s\n' "$desktop_schemas" | grep -Fxq com.ubuntu.update-notifier; then
+  desktop_defaults="${desktop_defaults}
+[com/ubuntu/update-notifier]
+notify-ubuntu-advantage-available=false
+show-livepatch-status-icon=false
+no-show-notifications=true
+hide-reboot-notification=true
+show-updates-status-icon=false
+"
+fi
+{% endif %}
+# Keep these as defaults: existing user preferences and users' ability to change them survive.
+mkdir -p /etc/dconf/profile /etc/dconf/db/local.d || exit 1
+if [ ! -f /etc/dconf/profile/user ]; then
+  printf 'user-db:user\n' > /etc/dconf/profile/user || exit 1
+fi
+if ! grep -Fxq 'system-db:local' /etc/dconf/profile/user; then
+  printf '\nsystem-db:local\n' >> /etc/dconf/profile/user || exit 1
+fi
+printf '%s\n' "$desktop_defaults" > /etc/dconf/db/local.d/00-idea-desktop || exit 1
+dconf update || exit 1
+# End: GNOME Desktop Polish
+{% endif %}
