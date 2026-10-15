@@ -43,6 +43,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Locked Wayland desktops show the lock screen**: GNOME blanks a locked screen to black, which also blanked the portal preview; a small session helper keeps the lock screen visible while locked, without unlocking or typing anything.
 * **Desktop previews when a desktop is locked**: a preview that comes back black shows "Desktop locked for security. Preview unavailable. Connect to unlock." On Wayland desktops the lock screen helper checks the GNOME interface it relies on and turns itself off with a single warning if a future GNOME drops it, and an image bake only warns.
 * **New desktops start clean**: RHEL 10, Rocky 10 and Ubuntu 26.04 desktops open in dark mode, skip the Ubuntu welcome and Pro windows, hide the desktop Home and Trash icons that landed mid-screen, and do not offer software updates to users, since desktop updates arrive through image rebakes. Ubuntu security updates keep running.
+* **No crash dialog on new desktops**: image bakes clear crash reports left by the build (Ubuntu apport, EL abrt and core dumps), so a new desktop no longer opens with "a problem has occurred". Crash reporting stays on for users.
 
 ## [26.10.5] - 2026-10-13
 

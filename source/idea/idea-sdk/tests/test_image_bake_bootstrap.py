@@ -826,6 +826,46 @@ def test_templates_tolerate_the_builder_environment():
     assert 'foreach ($Attempt in 1..5)' in windows
 
 
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', LINUX)
+def test_scrub_removes_bake_crash_reports(tmp_path, builder, base_os):
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    paths = ['/var/crash', '/var/spool/abrt', '/var/lib/systemd/coredump']
+    block = '\n'.join(
+        line
+        for line in scrub.splitlines()
+        if line.startswith('rm ') and any(path in line for path in paths)
+    )
+    for path in paths:
+        block = block.replace(path, str(tmp_path / path.lstrip('/')))
+    # Missing optional spools must not fail a set -e scrub.
+    subprocess.run(['bash', '-ec', block], check=True)
+    crash = tmp_path / 'var/crash'
+    crash.mkdir(parents=True)
+    keep = crash / 'unrelated.txt'
+    keep.write_text('keep')
+    if base_os.startswith('ubuntu'):
+        reports = [
+            crash / f'_usr_bin_cloud-init.0.{ext}'
+            for ext in ('crash', 'upload', 'uploaded')
+        ]
+        for report in reports:
+            report.write_text('bake crash')
+    else:
+        abrt = tmp_path / 'var/spool/abrt/ccpp-bake'
+        abrt.mkdir(parents=True)
+        (abrt / 'reason').write_text('bake crash')
+        core = tmp_path / 'var/lib/systemd/coredump/core.bake.zst'
+        core.parent.mkdir(parents=True)
+        core.write_text('bake core')
+        reports = [abrt, core]
+    subprocess.run(['bash', '-ec', block], check=True)
+    assert all(not report.exists() for report in reports)
+    assert keep.read_text() == 'keep'
+    # Cleanup stays repeatable once the reports have gone.
+    subprocess.run(['bash', '-ec', block], check=True)
+
+
 @pytest.mark.parametrize('has_dbus_dir', [False, True])
 def test_scrub_machine_id_works_with_and_without_var_lib_dbus(tmp_path, has_dbus_dir):
     """dbus-broker images (EL9 and later, AL2023) have no /var/lib/dbus"""
