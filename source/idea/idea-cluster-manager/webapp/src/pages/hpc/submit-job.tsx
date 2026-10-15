@@ -33,7 +33,7 @@ import {
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {faBug, faCheckCircle, faEdit, faPlay, faStar, faRefresh, faCircleMinus} from "@fortawesome/free-solid-svg-icons";
 import {
-    HpcApplication, JobValidationResultEntry,
+    HpcApplication, JobValidationResultEntry, QueueSummary,
     SocaInstanceTypeOptions,
     SocaJobEstimatedBOMCostLineItem,
     SocaUserInputParamMetadata,
@@ -90,6 +90,7 @@ export interface SubmitJobState {
     activeTab: string
 
     jobSizeEstimate?: JobSizeEstimate
+    queues: QueueSummary[]
     errorMessage: string
     submitJobLoading: boolean
     dryRunLoading: boolean
@@ -131,6 +132,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         this.state = {
             splitPanelOpen: false,
 
+            queues: [],
             applications: [],
             applicationFilterText: '',
             filteredApplications: [],
@@ -183,6 +185,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     componentDidMount() {
+        this.getSchedulerClient().listQueues()
+            .then(result => this.setState({queues: result.listing ?? []}))
+            .catch(() => this.setState({queues: []}))
         this.initialize()
     }
 
@@ -709,6 +714,23 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         </SpaceBetween>
     }
 
+    getJobSubmissionFormParamsWithQueueHint(): SocaUserInputParamMetadata[] {
+        const params = this.getJobSubmissionFormTemplateParams()
+        const values = this.getJobSubmissionFormValues()
+        const queueValue = (name: string) => values?.[name]
+            ?? this.state.jobSubmissionParameters?.[name]
+            ?? params.find(param => param.name === name)?.default
+        const queueName = queueValue('queue_name') || queueValue('queue')
+        const queue = this.state.queues.find(queue => queue.name === queueName)
+        if (!queue?.instance_type_rules) {
+            return params
+        }
+        return params.map(param => param.name === 'instance_type' ? {
+            ...param,
+            description: [param.description, `Queue ${queue.name}. ${queue.instance_type_rules}`].filter(Boolean).join(' ')
+        } : param)
+    }
+
     buildSubmitJobForm() {
 
         const getProjectErrorText = () => {
@@ -769,11 +791,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                 showActions={false}
                                 values={this.state.jobSubmissionParameters}
                                 onStateChange={(event) => {
+                                    if (['queue', 'queue_name'].includes(event.param.name!)) {
+                                        this.setState({}) // refresh the instance type description from the form's current queue
+                                    }
                                     if (JOB_SIZE_PARAMS.includes(event.param.name!)) {
                                         this.scheduleJobSizeEstimate()
                                     }
                                 }}
-                                params={this.getJobSubmissionFormTemplateParams()}/>
+                                params={this.getJobSubmissionFormParamsWithQueueHint()}/>
                         }
                         {this.buildJobSizeEstimate()}
                     </SpaceBetween>

@@ -260,6 +260,7 @@ class GetInstanceTypeOptionsResult(SocaPayload):
 
 # Scheduler.ListQueues
 class QueueSummary(SocaPayload):
+    instance_type_rules: Optional[str] = Field(default=None)
     name: Optional[str] = Field(default=None)
     queue_profile: Optional[str] = Field(default=None)
     base_os: Optional[str] = Field(default=None)

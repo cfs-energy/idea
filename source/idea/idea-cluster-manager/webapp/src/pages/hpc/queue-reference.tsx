@@ -13,7 +13,7 @@ const OS_LABELS: {[k: string]: string} = {
 
 /** Which queue runs which processor architecture and operating system, so a script names a
  * queue that can run it. Renders nothing when the list cannot be read. */
-export default function QueueReference() {
+export default function QueueReference({queueName}: {queueName?: string}) {
     const [queues, setQueues] = useState<QueueSummary[]>();
     useEffect(() => {
         AppContext.get().client().scheduler().listQueues()
@@ -23,15 +23,22 @@ export default function QueueReference() {
     if (!queues || queues.length === 0) {
         return null;
     }
+    const selected = queues.find(queue => queue.name === queueName);
     return (
-        <ExpandableSection headerText={`Queues you can use (${queues.length})`}
-                           headerDescription="Set one with #PBS -q. Instance types must match the queue's architecture.">
-            <Table variant="embedded" items={queues} trackBy="name" columnDefinitions={[
-                {id: 'name', header: 'Queue', cell: q => <Box variant="code">{q.name}</Box>},
-                {id: 'architecture', header: 'Architecture', cell: q => q.architecture ?? '–'},
-                {id: 'os', header: 'Operating system', cell: q => (q.base_os && OS_LABELS[q.base_os]) ?? q.base_os ?? '–'},
-                {id: 'types', header: 'Default instance types', cell: q => q.instance_types?.join(', ') || '–'},
-            ]}/>
-        </ExpandableSection>
+        <div>
+            {selected?.instance_type_rules && <Box color="text-body-secondary">
+                Queue {selected.name}. {selected.instance_type_rules}
+            </Box>}
+            <ExpandableSection headerText={`Queues you can use (${queues.length})`}
+                               headerDescription="Set one with #PBS -q. Instance types must match the queue's architecture.">
+                <Table variant="embedded" items={queues} trackBy="name" columnDefinitions={[
+                    {id: 'name', header: 'Queue', cell: q => <Box variant="code">{q.name}</Box>},
+                    {id: 'architecture', header: 'Architecture', cell: q => q.architecture ?? '–'},
+                    {id: 'os', header: 'Operating system', cell: q => (q.base_os && OS_LABELS[q.base_os]) ?? q.base_os ?? '–'},
+                    {id: 'types', header: 'Default instance types', cell: q => q.instance_types?.join(', ') || '–'},
+                    {id: 'rules', header: 'Allowed instance types', cell: q => q.instance_type_rules ?? '–'},
+                ]}/>
+            </ExpandableSection>
+        </div>
     );
 }

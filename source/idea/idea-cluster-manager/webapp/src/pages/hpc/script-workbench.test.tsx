@@ -274,3 +274,19 @@ describe('script workbench', () => {
         expect(screen.getByRole('button', {name: /Submit job/i})).toBeDisabled();
     });
 });
+
+it('shows rules for the queue named in the script', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.client().scheduler(), 'listQueues').mockResolvedValue({listing: [
+        {name: 'normal', instance_type_rules: 'Allowed instance types: c5 (large, xlarge).'},
+        {name: 'arm', instance_type_rules: 'Allowed instance types: c8g (all sizes). Excluded: c8g (large).'},
+    ]} as any);
+    renderScriptWorkbench();
+    const user = userEvent.setup();
+    await setScript(user, '#!/bin/bash\n#PBS -q arm\n#PBS -l instance_type=c8g.large\n');
+    expect(await screen.findByText('Queue arm. Allowed instance types: c8g (all sizes). Excluded: c8g (large).')).toBeVisible();
+    await setScript(user, '#!/bin/bash\n#PBS -q normal\n');
+    expect(await screen.findByText('Queue normal. Allowed instance types: c5 (large, xlarge).')).toBeVisible();
+    expect(screen.queryByText(/^Queue arm\./)).toBeNull();
+    vi.restoreAllMocks();
+});

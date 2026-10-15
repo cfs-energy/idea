@@ -866,13 +866,17 @@ def test_list_queues_names_architecture_and_os_per_queue(
     scheduler_api, context, monkeypatch
 ):
     from types import SimpleNamespace
-    from ideadatamodel import HpcQueueProfile, SocaJobParams
+    from ideadatamodel import HpcQueueProfile, SocaJobParams, SocaQueueManagementParams
 
     profiles = [
         HpcQueueProfile(
             name='compute',
             queues=['normal', 'high'],
             enabled=True,
+            queue_management_params=SocaQueueManagementParams(
+                allowed_instance_types=['c5.large', 'c5.xlarge'],
+                excluded_instance_types=['c5.xlarge'],
+            ),
             default_job_params=SocaJobParams(instance_types=['c5.large']),
         ),
         HpcQueueProfile(
@@ -899,3 +903,9 @@ def test_list_queues_names_architecture_and_os_per_queue(
         ('high', 'x86_64', 'amazonlinux2023'),
         ('normal', 'x86_64', 'amazonlinux2023'),
     ]
+
+    assert listing[0]['instance_type_rules'] == 'Allowed instance types: all types.'
+    for queue in listing[1:]:
+        assert queue['instance_type_rules'] == (
+            'Allowed instance types: c5 (large, xlarge). Excluded: c5 (xlarge).'
+        )

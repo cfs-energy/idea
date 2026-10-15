@@ -2113,6 +2113,7 @@ export interface ListQueuesResult {
   listing?: QueueSummary[];
 }
 export interface QueueSummary {
+  instance_type_rules?: string;
   name?: string;
   queue_profile?: string;
   base_os?: string;

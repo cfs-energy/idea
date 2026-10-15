@@ -148,6 +148,7 @@ class OpenPBSAPIInvocationContext:
             self._job_builder = SocaJobBuilder(
                 context=self.app_context,
                 params=job_params,
+                queue_name=queue_name,
                 queue_profile=queue_profile,
                 project=project_name,
             )

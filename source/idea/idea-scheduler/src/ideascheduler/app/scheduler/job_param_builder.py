@@ -341,6 +341,10 @@ class JobParamsBuilderContextProtocol(ABC):
     def queue(self) -> Optional[HpcQueueProfile]: ...
 
     @property
+    def queue_name(self) -> Optional[str]:
+        return None
+
+    @property
     def project(self) -> Optional[str]:
         """
         the job's project name, when the caller knows it. params carry scheduler
@@ -1254,26 +1258,30 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
                 invalid.append(instance_type)
 
         success = True
+        queue = self.context.queue
+        queue_name = None
+        rules = ''
+        if queue:
+            queue_name = (
+                self.context.queue_name or ', '.join(queue.queues or []) or queue.name
+            )
+            rules = (
+                self.queue_management or SocaQueueManagementParams()
+            ).instance_type_rules()
         if len(invalid) > 0:
+            hint = f' Queue "{queue_name}". {rules}' if queue else ''
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_TYPES,
-                message=f'Instance types invalid or not found: [{", ".join(invalid)}]',
+                message=f'Instance types invalid or not found: [{", ".join(invalid)}].{hint}',
             )
             success = False
 
-        if len(not_allowed) > 0:
+        if not_allowed or excluded:
+            refused = list(dict.fromkeys(not_allowed + excluded))
             self.add_validation_entry(
                 param=constants.JOB_PARAM_INSTANCE_TYPES,
-                message=f'Instance types not allowed for this queue: [{", ".join(not_allowed)}]. '
-                f'Allowed instance types are: [{", ".join(self.queue_management.allowed_instance_types)}]',
-            )
-            success = False
-
-        if len(excluded) > 0:
-            self.add_validation_entry(
-                param=constants.JOB_PARAM_INSTANCE_TYPES,
-                message=f'One of more of given instance types are excluded for this queue: [{", ".join(excluded)}]. '
-                f'Excluded instance types are: [{", ".join(self.queue_management.excluded_instance_types)}]',
+                message=f'Instance types not allowed for queue "{queue_name}": [{", ".join(refused)}]. '
+                f'{rules}',
             )
             success = False
 
@@ -3724,10 +3732,12 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         stack_uuid: Optional[str] = None,
         project: Optional[str] = None,
         job_id: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ):
         self._params = params
         self._project = project
         self._job_id = job_id
+        self._queue_name = queue_name
 
         if Utils.is_empty(stack_uuid) and queue_profile is not None:
             stack_uuid = queue_profile.stack_uuid
@@ -3954,6 +3964,10 @@ class JobParamsBuilderContext(JobParamsBuilderContextProtocol):
         return self._queue_profile is not None
 
     @property
+    def queue_name(self) -> Optional[str]:
+        return self._queue_name
+
+    @property
     def queue(self) -> Optional[HpcQueueProfile]:
         return self._queue_profile
 
@@ -3989,6 +4003,7 @@ class SocaJobBuilder:
         stack_uuid: Optional[str] = None,
         project: Optional[str] = None,
         job_id: Optional[str] = None,
+        queue_name: Optional[str] = None,
     ):
         self._context = JobParamsBuilderContext(
             context=context,
@@ -3997,6 +4012,7 @@ class SocaJobBuilder:
             stack_uuid=stack_uuid,
             project=project,
             job_id=job_id,
+            queue_name=queue_name,
         )
 
     def validate(self) -> JobValidationResult:
