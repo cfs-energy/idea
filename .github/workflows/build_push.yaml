@@ -28,6 +28,10 @@ concurrency:
 jobs:
   checks:
     uses: ./.github/workflows/ideactl_checks.yaml
+    # the called private-parity job requests OIDC; a caller must grant at least what it asks
+    permissions:
+      contents: read
+      id-token: write
   tests:
     uses: ./.github/workflows/unit_tests.yaml
   release_available:
@@ -63,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up release runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '26.8.2'
           cache: npm
@@ -92,7 +96,7 @@ jobs:
           tar -xzf dist/release/ideactl-v*-${{ matrix.target }}.tar.gz -C "$SMOKE_ROOT"
           node test/support/release-smoke.ts "$SMOKE_ROOT/ideactl"
       - name: Upload the macOS release artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ideactl-${{ matrix.target }}
           path: |
@@ -120,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up release runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '26.8.2'
           cache: npm
@@ -180,7 +184,7 @@ jobs:
               --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
       - name: Upload the Linux release artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ideactl-${{ matrix.target }}
           path: |
@@ -200,7 +204,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up release runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '26.8.2'
           cache: npm
@@ -227,7 +231,7 @@ jobs:
             Remove-Item -Recurse -Force $smokeRoot
           }
       - name: Upload the Windows release artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ideactl-windows-amd64
           path: |
@@ -314,7 +318,7 @@ jobs:
           printf '{"credHelpers":{"public.ecr.aws":"ecr-login"}}\n' > ~/.docker/config.json
       - name: Expose the build cache runtime
         # Shell buildx commands need the cache credentials provided to JavaScript actions.
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8; trufflehog:ignore (public action commit)
         with:
           script: |
             for (const name of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL']) {
@@ -395,7 +399,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: ideactl-*
           path: release

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.27@sha256:bde3983e9c939224420ddaf6b784cc30e09b035a4dea01f581230c50809f372e
+# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
@@ -98,27 +98,7 @@ RUN set -eux; \
 
 FROM dcv-runtime
 
-ARG IDEA_VERSION
-
 COPY --from=pbs /opt/pbs /opt/pbs
-
-# Install all module packages from the release bundle. The selected role runs at startup.
-# Keep the release bundle in /root/.idea/downloads for package commands.
-ADD deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz /root/.idea/downloads/
-RUN set -eux; \
-    for MODULE in idea-cluster-manager idea-virtual-desktop-controller idea-scheduler; do \
-      APP_NAME="${MODULE#idea-}"; \
-      PKG="/tmp/idea/${MODULE}"; \
-      mkdir -p "${PKG}"; \
-      tar -xf "/root/.idea/downloads/${MODULE}-${IDEA_VERSION}.tar.gz" -C "${PKG}"; \
-      python3.13 -m pip install --no-cache-dir -r "${PKG}/requirements.txt"; \
-      python3.13 -m pip install --no-cache-dir "${PKG}"/*-lib.tar.gz; \
-      mkdir -p "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}"; \
-      cp -r "${PKG}/resources" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; \
-      if [ -d "${PKG}/webapp" ]; then cp -r "${PKG}/webapp" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; fi; \
-    done; \
-    rm -rf /root/.cache/pip; \
-    mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
 
 # Tools users had on the x86 host bastion and expect on the arm64 login node (vi, vim and
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
@@ -149,10 +129,6 @@ RUN set -eux; \
     rm -f /tmp/nvim.tar.gz /tmp/nvim.sha256; \
     /usr/local/bin/nvim --version > /dev/null
 
-# Overlay the gateway web resources.
-ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/
-RUN cp -a /tmp/idea-gateway/static_resources/. /usr/share/dcv/www/ && rm -rf /tmp/idea-gateway /tmp/idea
-
 # Build ideactl and include its pinned CDK CLI.
 # The build uses the repository path expected by its resource-copy script.
 ARG NODE_VERSION=26.8.2
@@ -169,6 +145,30 @@ RUN set -eux; \
 
 ENV PATH="/usr/local/node/bin:/opt/idea/ideactl/node_modules/.bin:${PATH}"
 ENV CDK_DISABLE_CLI_TELEMETRY=true
+
+# Keep runtime tools cached when only the application bundle changes.
+ARG IDEA_VERSION
+# Install all module packages from the release bundle. The selected role runs at startup.
+# Keep the release bundle in /root/.idea/downloads for package commands.
+ADD deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz /root/.idea/downloads/
+RUN set -eux; \
+    for MODULE in idea-cluster-manager idea-virtual-desktop-controller idea-scheduler; do \
+      APP_NAME="${MODULE#idea-}"; \
+      PKG="/tmp/idea/${MODULE}"; \
+      mkdir -p "${PKG}"; \
+      tar -xf "/root/.idea/downloads/${MODULE}-${IDEA_VERSION}.tar.gz" -C "${PKG}"; \
+      python3.13 -m pip install --no-cache-dir -r "${PKG}/requirements.txt"; \
+      python3.13 -m pip install --no-cache-dir "${PKG}"/*-lib.tar.gz; \
+      mkdir -p "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}"; \
+      cp -r "${PKG}/resources" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; \
+      if [ -d "${PKG}/webapp" ]; then cp -r "${PKG}/webapp" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; fi; \
+    done; \
+    rm -rf /root/.cache/pip; \
+    mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
+
+# Overlay the gateway web resources.
+ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/
+RUN cp -a /tmp/idea-gateway/static_resources/. /usr/share/dcv/www/ && rm -rf /tmp/idea-gateway /tmp/idea
 
 COPY IDEA_VERSION.txt /idea-build/IDEA_VERSION.txt
 COPY source/idea/ideactl/resources /idea-build/source/idea/ideactl/resources

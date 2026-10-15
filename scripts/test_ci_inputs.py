@@ -63,9 +63,17 @@ class InputTests(unittest.TestCase):
                             ('images', images),
                             ('release', release),
                             ('runtimes', runtimes),
+                            ('version', False),
                         ]
                     },
                 )
+
+    def test_version_changes_are_checked(self):
+        for path in ['IDEA_VERSION.txt', 'idea-admin.sh']:
+            with self.subTest(path=path):
+                code, values = self.run_gate(path)
+                self.assertEqual(code, 0)
+                self.assertEqual(values['version'], 'true')
 
     def test_real_renames_out_of_gated_trees(self):
         for source, release in [
@@ -85,6 +93,7 @@ class InputTests(unittest.TestCase):
 
                 git('init', '-q')
                 git('config', 'commit.gpgsign', 'false')
+                git('config', 'core.hooksPath', '/dev/null')
                 git('config', 'user.name', 'fixture')
                 git('config', 'user.email', 'fixture@example.invalid')
                 path = root / source
@@ -114,7 +123,12 @@ class InputTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     dict(line.split('=') for line in output.read_text().splitlines()),
-                    {'images': 'true', 'release': release, 'runtimes': 'false'},
+                    {
+                        'images': 'true',
+                        'release': release,
+                        'runtimes': 'false',
+                        'version': 'false',
+                    },
                 )
 
     def test_push_dispatch_and_diff_failure(self):

@@ -100,7 +100,7 @@ repos:
         args: [--ignore, jinja-statements-indentation, --]
   # Docker linting
   - repo: https://github.com/hadolint/hadolint
-    rev: v2.13.1-beta
+    rev: v2.15.1
     hooks:
       - id: hadolint
         args:

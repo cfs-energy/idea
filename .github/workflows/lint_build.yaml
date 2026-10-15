@@ -21,6 +21,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-inputs.sh
       - name: Check version consistency
+        if: steps.inputs.outputs.version == 'true'
         run: |
           SH_REV=$(grep -m1 '^IDEA_REVISION=' idea-admin.sh | sed -E 's/.*:-"([^"]+)"\}.*/\1/')
           VERSION=$(tr -d '[:space:]' < IDEA_VERSION.txt)
