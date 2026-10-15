@@ -126,6 +126,13 @@ repos:
   # Web portal linting
   - repo: local
     hooks:
+      - id: repository-hygiene
+        name: Repository hygiene (no account identifiers or private data in public files)
+        description: Same check CI runs in ideactl checks; catches an AWS account id before it is committed, not 25 minutes into a release build.
+        language: system
+        entry: node source/idea/ideactl/scripts/ci-checks.mjs hygiene
+        pass_filenames: false
+        always_run: true
       - id: lint-cloudscape-usage
         name: Lint Cloudscape usage
         description: Hardcoded per-release class names and React.Fragment children of layout components both break silently on upgrade

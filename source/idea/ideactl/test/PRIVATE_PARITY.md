@@ -3,13 +3,13 @@
 Status: workflow and harness implemented; no AWS or GitHub resources created.
 
 Provision through the dev account's enforcing Terraform/Spacelift workflow in
-**459724015654 / us-east-2**:
+**<dev-account-id> / us-east-2**:
 
-- S3 bucket `idea-ideactl-parity-459724015654-us-east-2`, all four Block Public
+- S3 bucket `idea-ideactl-parity-<dev-account-id>-us-east-2`, all four Block Public
   Access settings enabled, Object Ownership `BucketOwnerEnforced`, default
   encryption SSE-S3 (`AES256`), versioning enabled. No public ACL or read policy.
 - Use the existing IAM OIDC provider
-  `arn:aws:iam::459724015654:oidc-provider/token.actions.githubusercontent.com`,
+  `arn:aws:iam::<dev-account-id>:oidc-provider/token.actions.githubusercontent.com`,
   or create it with URL `https://token.actions.githubusercontent.com` and client
   ID `sts.amazonaws.com` if absent.
 - Role `idea-ideactl-parity-read`, maximum session duration 3600 seconds; the
@@ -21,7 +21,7 @@ Provision through the dev account's enforcing Terraform/Spacelift workflow in
   "Statement": [{
     "Effect": "Allow",
     "Principal": {
-      "Federated": "arn:aws:iam::459724015654:oidc-provider/token.actions.githubusercontent.com"
+      "Federated": "arn:aws:iam::<dev-account-id>:oidc-provider/token.actions.githubusercontent.com"
     },
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
@@ -42,7 +42,7 @@ Exact role read policy (no listing, writes, other keys or KMS permissions):
   "Statement": [{
     "Effect": "Allow",
     "Action": "s3:GetObject",
-    "Resource": "arn:aws:s3:::idea-ideactl-parity-459724015654-us-east-2/captures/v1.tar.gz"
+    "Resource": "arn:aws:s3:::idea-ideactl-parity-<dev-account-id>-us-east-2/captures/v1.tar.gz"
   }]
 }
 ```
@@ -57,8 +57,8 @@ Bucket policy requiring TLS:
     "Principal": "*",
     "Action": "s3:*",
     "Resource": [
-      "arn:aws:s3:::idea-ideactl-parity-459724015654-us-east-2",
-      "arn:aws:s3:::idea-ideactl-parity-459724015654-us-east-2/*"
+      "arn:aws:s3:::idea-ideactl-parity-<dev-account-id>-us-east-2",
+      "arn:aws:s3:::idea-ideactl-parity-<dev-account-id>-us-east-2/*"
     ],
     "Condition": {"Bool": {"aws:SecureTransport": "false"}}
   }]
@@ -107,3 +107,5 @@ bundle exist.
 References: [AWS OIDC role trust](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html),
 [GitHub AWS OIDC](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws),
 [reusable workflow permission limits](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
+
+Repository variables: `IDEACTL_PRIVATE_PARITY=1`, `IDEACTL_PARITY_SHA256`, `IDEACTL_PARITY_BUCKET` (bucket name), `IDEACTL_PARITY_ROLE_ARN` (read role ARN) and `IDEACTL_PARITY_ACCOUNT_ID` (the dev account id). No account identifier is committed to this repository.

@@ -12,7 +12,8 @@ set +e
 (
   set -e
   [[ "$IDEACTL_PARITY_SHA256" =~ ^[a-f0-9]{64}$ ]]
-  aws s3api get-object --bucket idea-ideactl-parity-459724015654-us-east-2 \
+  [[ -n "${IDEACTL_PARITY_BUCKET:-}" ]]
+  aws s3api get-object --bucket "$IDEACTL_PARITY_BUCKET" \
     --key captures/v1.tar.gz "$scratch/captures.tar.gz" >/dev/null
   python3 scripts/unpack-private-parity.py "$scratch/captures.tar.gz" "$IDEACTL_PARITY_SHA256"
   # Require all captures while retaining explicit platform skips (e.g. macOS builds).

@@ -145,13 +145,14 @@ jobs:
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           aws-region: us-east-2
-          role-to-assume: arn:aws:iam::459724015654:role/idea-ideactl-parity-read
+          role-to-assume: ${{ vars.IDEACTL_PARITY_ROLE_ARN }}
           role-duration-seconds: 900
-          allowed-account-ids: '459724015654'
+          allowed-account-ids: ${{ vars.IDEACTL_PARITY_ACCOUNT_ID }}
           mask-aws-account-id: true
       - name: Fetch and run private parity without publishing capture data
         env:
           IDEACTL_PARITY_SHA256: ${{ vars.IDEACTL_PARITY_SHA256 }}
+          IDEACTL_PARITY_BUCKET: ${{ vars.IDEACTL_PARITY_BUCKET }}
         run: bash scripts/private-parity.sh
       - name: Remove private captures and logs
         if: always()
