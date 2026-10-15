@@ -44,6 +44,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Desktop previews when a desktop is locked**: a preview that comes back black shows "Desktop locked for security. Preview unavailable. Connect to unlock." On Wayland desktops the lock screen helper checks the GNOME interface it relies on and turns itself off with a single warning if a future GNOME drops it, and an image bake only warns.
 * **New desktops start clean**: RHEL 10, Rocky 10 and Ubuntu 26.04 desktops open in dark mode, skip the Ubuntu welcome and Pro windows, hide the desktop Home and Trash icons that landed mid-screen, and do not offer software updates to users, since desktop updates arrive through image rebakes. Ubuntu security updates keep running.
 * **No crash dialog on new desktops**: image bakes clear crash reports left by the build (Ubuntu apport, EL abrt and core dumps), so a new desktop no longer opens with "a problem has occurred". Crash reporting stays on for users.
+* **Wallpaper survives moving between desktops**: home folders are shared by all of a user's desktops, so a wallpaper chosen on one OS can be missing on another and showed a flat colour. Wayland desktops now fall back to their own default when the saved wallpaper file does not exist there, and keep it when it does.
 
 ## [26.10.5] - 2026-10-13
 

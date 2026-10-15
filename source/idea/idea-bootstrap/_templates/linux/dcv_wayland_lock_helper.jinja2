@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Keep the DCV owner's locked Wayland screen visible using real pointer input."""
 
+import ast
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import xml.etree.ElementTree as ET
+from urllib.parse import unquote, urlsplit
 
 LOG = logging.getLogger('idea-dcv-lock')
 
@@ -56,6 +58,25 @@ def desktop_version():
         return 'GNOME/mutter version unavailable'
 
 
+def reset_missing_wallpapers():
+    schema = 'org.gnome.desktop.background'
+    for key in ('picture-uri', 'picture-uri-dark'):
+        try:
+            uri = ast.literal_eval(subprocess.check_output(
+                ['gsettings', 'get', schema, key], text=True, timeout=5
+            ).strip())
+            if not uri.startswith('file://'):
+                continue
+            path = unquote(urlsplit(uri).path)
+            try:
+                os.stat(path)
+            except FileNotFoundError:
+                subprocess.run(['gsettings', 'reset', schema, key], check=True, timeout=5)
+                LOG.info('Reset %s: wallpaper file is missing: %s', key, path)
+        except (OSError, ValueError, SyntaxError, subprocess.SubprocessError) as error:
+            LOG.warning('Could not check wallpaper %s: %s', key, error)
+
+
 def owner_session(sessions, username):
     owned = [s for s in sessions if s['owner'] == username]
     if len(owned) != 1:
@@ -81,6 +102,8 @@ class Remote:
             self.system, LOGIN, '/org/freedesktop/login1', LOGIN + '.Manager',
             'GetSession', '(s)', (sid,)
         )[0]
+        self.is_locked()  # Validate the active owner Wayland session before changing settings.
+        reset_missing_wallpapers()
 
     def invoke(self, bus, name, path, interface, method, signature=None, args=()):
         return bus.call_sync(
