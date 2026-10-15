@@ -3,6 +3,8 @@
 import json
 import os
 import sys
+import threading
+import time
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -272,5 +274,19 @@ def main():
     print(json.dumps(rendered, sort_keys=True))
 
 
+def watch_parent():
+    """Bound orphan lifetime even when the runner is killed with SIGKILL."""
+    parent = os.getppid()
+    deadline = time.monotonic() + 60
+
+    def watch():
+        while os.getppid() == parent and time.monotonic() < deadline:
+            time.sleep(0.2)
+        os._exit(124)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 if __name__ == '__main__':
+    watch_parent()
     main()

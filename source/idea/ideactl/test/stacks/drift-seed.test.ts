@@ -574,7 +574,7 @@ function measureEdits(
   return { rows, mismatches };
 }
 
-test("upgrade settings sync matches the analysis prediction for every edit class", { timeout: 120_000 }, async (t) => {
+test("upgrade settings sync matches the analysis prediction for every edit class", { timeout: 180_000 }, async (t) => {
   const local = await startDynamoDbLocal();
   t.after(() => local.stop());
   t.diagnostic(`DynamoDB Local via ${local.how} at ${local.endpoint}`);

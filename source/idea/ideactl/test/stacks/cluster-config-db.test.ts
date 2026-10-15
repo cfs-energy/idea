@@ -27,6 +27,7 @@ import {
 
 import { ClusterConfigDb, ClusterConfigDbError, type ConfigEntry } from '../../src/config/cluster-config-db.ts';
 import { compareUpgradeDrift, type CurrentConfigRow } from '../../src/config/upgrade-drift.ts';
+import { resolveJava, startDynamoDbLocal as startJavaDynamoDbLocal, waitForDynamoDb } from "./drift-local-db.ts";
 import { optionalFixtures, requiredService } from '../support/fixtures.ts';
 
 const JAR = path.join(os.homedir(), '.idea/lib/dynamodb-local/DynamoDBLocal.jar');
@@ -258,32 +259,6 @@ async function freePort(): Promise<number> {
   });
 }
 
-/**
- * Wait for a real HTTP response, not just an accepted socket: a container port-forward accepts
- * TCP before the process behind it is listening, and the SDK then sees ECONNRESET.
- */
-async function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
-  const http = await import('node:http');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: '/', timeout: 2000 }, (res) => {
-        res.resume();
-        resolve(true);
-      });
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => {
-        req.destroy();
-        resolve(false);
-      });
-      req.end();
-    });
-    if (ok) return true;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  return false;
-}
-
 interface Local {
   endpoint: string;
   stop: () => void;
@@ -292,22 +267,14 @@ interface Local {
 
 async function startDynamoDbLocal(): Promise<Local> {
   if (process.env['DDB_LOCAL_ENDPOINT']) {
+    await waitForDynamoDb(process.env['DDB_LOCAL_ENDPOINT']);
     return { endpoint: process.env['DDB_LOCAL_ENDPOINT'], stop: () => {}, how: 'DDB_LOCAL_ENDPOINT' };
   }
 
-  const javaOk = spawnSync('java', ['-version'], { stdio: 'ignore' }).status === 0;
-  if (javaOk && fs.existsSync(JAR)) {
-    const port = await freePort();
-    const { spawn } = await import('node:child_process');
-    const child = spawn('java', [`-Djava.library.path=${path.dirname(JAR)}/DynamoDBLocal_lib`, '-jar', JAR, '-inMemory', '-port', String(port)], {
-      stdio: 'ignore',
-      cwd: path.dirname(JAR),
-    });
-    if (!(await waitForPort(port, 30_000))) {
-      child.kill('SIGKILL');
-      return requiredService("local database emulator", `java -jar ${JAR} -inMemory -port ${port}`);
-    }
-    return { endpoint: `http://127.0.0.1:${port}`, stop: () => child.kill('SIGKILL'), how: 'java -jar' };
+  let java: string | undefined;
+  try { java = resolveJava(); } catch { /* Docker remains a supported fallback. */ }
+  if (java !== undefined && fs.existsSync(JAR)) {
+    return await startJavaDynamoDbLocal();
   }
 
   const dockerOk = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore' }).status === 0;
@@ -320,9 +287,11 @@ async function startDynamoDbLocal(): Promise<Local> {
     if (run.status !== 0) {
       return requiredService("local database emulator", "docker run --rm -p 8000:8000 amazon/dynamodb-local");
     }
-    if (!(await waitForPort(port, 60_000))) {
+    try {
+      await waitForDynamoDb(`http://127.0.0.1:${port}`);
+    } catch (error) {
       spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
-      return requiredService("local database emulator", "docker run --rm -p 8000:8000 amazon/dynamodb-local");
+      throw error;
     }
     return {
       endpoint: `http://127.0.0.1:${port}`,
