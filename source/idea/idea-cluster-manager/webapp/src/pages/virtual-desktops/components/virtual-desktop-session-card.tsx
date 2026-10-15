@@ -269,7 +269,11 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
     buildScreenShotImage() {
         const imageUrl = this.getScreenshotImageUrl()
         if (imageUrl && this.state.blackScreenshot === imageUrl) {
-            return <div className="virtual-desktop-placeholder-image">
+            return <div className="virtual-desktop-placeholder-image" onClick={() => {
+                if (this.canConnect()) {
+                    this.props.onLaunchSession(this.getSession()).finally()
+                }
+            }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
                 <Box textAlign="center" padding="m" color="inherit">
                     <div>Desktop locked for security.</div>
                     <div>Preview unavailable. Connect to unlock.</div>

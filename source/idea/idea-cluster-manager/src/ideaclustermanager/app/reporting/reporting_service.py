@@ -583,14 +583,8 @@ class ReportingService:
                 ),
             )
             measured[identity] = entry
-        # pricing builds the reader that reads CloudWatch, only when a desktop needs it
-        if pricing is not None and any(
-            (entry.get('server') or {}).get('instance_id')
-            for entry in measured.values()
-        ):
-            pricing()._prefetch_running_hours(
-                list(measured.values()), runs, start_ms, end_ms, deadline
-            )
+        # Use cached CloudWatch hours or the flagged interval estimate. Optional metric
+        # reads must not exhaust the report's build deadline on every retry.
         user_desktops, project_desktops = {}, {}
         for identity, (_, source) in sessions.items():
             check_deadline(deadline)

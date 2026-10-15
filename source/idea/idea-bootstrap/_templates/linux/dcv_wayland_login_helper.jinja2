@@ -16,6 +16,7 @@ import time
 
 SOCKET = '/run/idea-dcv-login/socket'
 FIRST_LOGIN = Path('/var/lib/idea-dcv-login/first-login-complete')
+INSTANCE_ID = Path('/var/lib/cloud/data/instance-id')
 SERVICE = 'idea-dcv-login'
 GDM = 'org.gnome.DisplayManager'
 REMOTE = GDM + '.RemoteDisplay'
@@ -45,7 +46,7 @@ def is_greeter(uid):
 
 def authorized_owner(session_id, greeter_uid, sessions, logins, displays):
     # IDEA provisions one DCV session per host. Ambiguity must never grant a login.
-    remote = [s for s in logins if s['Remote']]
+    remote = [s for s in logins if s['Remote'] and s['Class'] == 'greeter']
     if len(sessions) != 1 or len(remote) != 1:
         raise ValueError('expected one DCV session and one remote greeter')
     session, greeter = sessions[0], remote[0]
@@ -175,11 +176,16 @@ class Grants:
     def __init__(self, system):
         self.system = system
         self.tokens = {}
+        self.instance_id = INSTANCE_ID.read_text().strip()
+        if not re.fullmatch(r'i-[0-9a-f]+', self.instance_id):
+            raise ValueError('EC2 instance identity unavailable')
+        # Instance-specific filenames also keep an interrupted marker write fail-closed.
+        self.first_login = FIRST_LOGIN.with_name(FIRST_LOGIN.name + '-' + self.instance_id)
 
     def handle(self, pid, uid, request):
         now = time.monotonic()
         self.tokens = {k: v for k, v in self.tokens.items() if v[0] > now}
-        if FIRST_LOGIN.exists():
+        if self.first_login.exists():
             raise ValueError('automatic first login already completed')
         if request['op'] == 'issue' and is_greeter(uid):
             session_id = self.system.caller_session(pid, uid)['Id']
@@ -206,12 +212,12 @@ class Grants:
                 raise ValueError('DCV owner/session changed')
             # Consume the one-time privilege before PAM proceeds: later PAM failures
             # require a password too, rather than reopening automatic authentication.
-            fd = os.open(FIRST_LOGIN, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            fd = os.open(self.first_login, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as marker:
-                marker.write(owner[1] + '\n')
+                marker.write(self.instance_id + '\n')
                 marker.flush()
                 os.fsync(marker.fileno())
-            directory = os.open(FIRST_LOGIN.parent, os.O_RDONLY | os.O_DIRECTORY)
+            directory = os.open(self.first_login.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(directory)
             finally:

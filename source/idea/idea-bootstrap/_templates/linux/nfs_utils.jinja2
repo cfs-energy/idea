@@ -8,7 +8,7 @@ fi
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 if [[ -z "$(dpkg -l nfs-common | grep ^ii)" ]]; then
   log_info "# installing nfs-common"
-  apt_update || exit 1
+  apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
   apt install -y nfs-common
 fi
 {% endif %}

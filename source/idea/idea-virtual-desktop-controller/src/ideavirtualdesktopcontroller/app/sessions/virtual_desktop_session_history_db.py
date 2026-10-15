@@ -263,6 +263,8 @@ class VirtualDesktopSessionHistoryDB:
             CLOUDTRAIL_DAYS,
         )
 
+        if not launches.read():
+            return False
         all_rows = self.list_all()
         # runs began to be recorded at the first run; a desktop deleted since then
         # without an instance id never had one, and has nothing to look up
@@ -283,8 +285,6 @@ class VirtualDesktopSessionHistoryDB:
         ]
         if not rows:
             return True
-        if not launches.read():
-            return False
         taken = set(live_instance_ids()) | {
             row['instance_id'] for row in all_rows if row.get('instance_id')
         }

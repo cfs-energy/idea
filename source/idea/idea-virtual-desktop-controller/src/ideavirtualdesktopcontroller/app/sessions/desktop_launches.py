@@ -99,10 +99,10 @@ class DesktopLaunches:
         read twice and deduplicated). once per point reached, so a token refused again
         with no progress since fails the slice rather than looping.
         """
+        self._request.pop('NextToken', None)
         if self._oldest is None or self._oldest == self._recovered_at:
             return False
         self._recovered_at = self._oldest
-        self._request.pop('NextToken', None)
         self._request['EndTime'] = arrow.get((self._oldest + 1000) / 1000).datetime
         self.context.logger('desktop-launches').warning(
             'CloudTrail refused the page token; resuming the RunInstances read from '

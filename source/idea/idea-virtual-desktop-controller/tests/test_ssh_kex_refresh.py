@@ -318,6 +318,7 @@ def test_legacy_command_completion_does_not_mark_the_versioned_set(refresh):
     session = refresh.add_session()
     refresh.sweep.refresh_bootstrap()
     command = refresh.commands.rows['command-1']
+    refresh.commands.rows.pop(f'bootstrap-refresh:{session.server.instance_id}')
     command['command_type'] = VirtualDesktopSSMCommandType.REFRESH_SSH_KEX
     del command['additional_payload']['refresh_version']
     refresh.complete('Success')

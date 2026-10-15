@@ -75,7 +75,7 @@ ln -sfn ../idea-dcv-login.service /etc/systemd/user/gnome-session@gnome-login.ta
 cat > /etc/systemd/system/idea-dcv-login.service <<'EOF_SERVICE' || exit 1
 [Unit]
 Description=Authorize IDEA DCV owner login on the remote GDM greeter
-After=dbus.service dcvserver.service
+After=dbus.service dcvserver.service cloud-init.service
 PartOf=dcvserver.service
 [Service]
 ExecStart=/usr/local/libexec/idea-dcv-login serve

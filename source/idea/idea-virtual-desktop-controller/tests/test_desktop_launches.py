@@ -207,7 +207,7 @@ def test_throttling_backs_off_and_carries_on():
     assert stored(history, 'sess-1')['instance_id'] == 'i-0abc'
 
 
-def test_a_second_run_reads_and_writes_nothing():
+def test_a_completed_reader_and_backfill_write_nothing_on_second_run():
     created = arrow.utcnow().shift(days=-10)
     history, cloudtrail, _, _ = backfill(
         [row('sess-1', 'user-a', created), row('sess-2', 'user-b', created)],
@@ -218,13 +218,13 @@ def test_a_second_run_reads_and_writes_nothing():
     launches = DesktopLaunches(history.context, sleep=lambda _: None)
     assert history.backfill_instance_ids(launches) is True
     assert len(history._table_obj.updates) == written
-    assert len(cloudtrail.requests) == 1
+    assert len(cloudtrail.requests) == 2
     # run rows and rows written since 26.10.6 never needed it
     history._table_obj.rows[('user-c', 'sess-3#run#1')] = dict(
         owner='user-c', idea_session_id='sess-3#run#1', run_of='sess-3'
     )
     assert history.backfill_instance_ids(launches) is True
-    assert len(cloudtrail.requests) == 1
+    assert len(cloudtrail.requests) == 2
 
 
 def test_reading_resumes_from_the_page_it_stopped_at():
@@ -292,7 +292,7 @@ def test_desktops_deleted_since_runs_were_recorded_are_not_looked_up():
     flagged = row('sess-flagged', 'user-a', now.shift(days=-2), never_ran=True)
     history, cloudtrail, _, done = backfill([run, newer, flagged], [[]])
     assert done
-    assert cloudtrail.requests == []
+    assert len(cloudtrail.requests) == 1
     assert history._table_obj.updates == []
 
 
@@ -430,3 +430,30 @@ def test_a_token_refused_again_without_progress_fails_the_slice():
     launches = DesktopLaunches(FakeContext(cloudtrail), sleep=lambda _: None)
     with pytest.raises(ClientError):
         launches.read()
+
+
+def test_refused_token_without_progress_is_cleared_for_next_slice():
+    cloudtrail = FakeCloudTrail([[]])
+    cloudtrail.lookup_events = Mock(
+        side_effect=[
+            {'Events': [], 'NextToken': 'refused'},
+            ClientError(
+                {'Error': {'Code': 'InvalidNextTokenException'}}, 'LookupEvents'
+            ),
+            {'Events': []},
+        ]
+    )
+    launches = DesktopLaunches(FakeContext(cloudtrail), sleep=lambda _: None)
+    with pytest.raises(ClientError):
+        launches.read()
+    assert launches.read() is True
+    assert 'NextToken' not in cloudtrail.lookup_events.call_args.kwargs
+
+
+def test_backfill_does_not_scan_until_cloudtrail_is_complete():
+    history = VirtualDesktopSessionHistoryDB.__new__(VirtualDesktopSessionHistoryDB)
+    history.list_all = Mock(side_effect=AssertionError('premature scan'))
+    launches = Mock()
+    launches.read.return_value = False
+    assert history.backfill_instance_ids(launches) is False
+    history.list_all.assert_not_called()

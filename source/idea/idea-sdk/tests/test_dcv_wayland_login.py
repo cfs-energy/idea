@@ -41,6 +41,9 @@ def login(monkeypatch, tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, 'FIRST_LOGIN', tmp_path / 'first-login', raising=False)
+    identity = tmp_path / 'instance-id'
+    identity.write_text('i-0123456789abcdef0\n')
+    monkeypatch.setattr(module, 'INSTANCE_ID', identity, raising=False)
     accounts = {
         42: SimpleNamespace(pw_name='gdm', pw_uid=42, pw_gid=43),
         60578: SimpleNamespace(pw_name='gdm-greeter', pw_uid=60578, pw_gid=43),
@@ -57,6 +60,12 @@ def login(monkeypatch, tmp_path):
     monkeypatch.setattr(module.pwd, 'getpwuid', accounts.__getitem__)
     monkeypatch.setattr(module.pwd, 'getpwnam', getpwnam)
     return module
+
+
+def first_login(login):
+    return login.FIRST_LOGIN.with_name(
+        login.FIRST_LOGIN.name + '-' + login.INSTANCE_ID.read_text().strip()
+    )
 
 
 def fixture_state():
@@ -332,7 +341,7 @@ def test_credential_cannot_authorize_another_login(login, monkeypatch, change):
         now[0] = 41
     with pytest.raises(ValueError):
         grants.handle(pid, uid, redeem)
-    assert not login.FIRST_LOGIN.exists()
+    assert not first_login(login).exists()
 
 
 @pytest.mark.parametrize('uid', [0, 1000])
@@ -349,7 +358,7 @@ def test_first_login_privilege_is_consumed_at_validated_pam_redemption(
     issued = grants.handle(100, 42, {'op': 'issue'})
     pam = {'user': 'alice', 'remote': '0.0.0.0', 'token': issued['token']}
     assert grants.handle(200, 0, dict(pam, op='redeem')) == {'ok': True}
-    assert login.FIRST_LOGIN.stat().st_mode & 0o777 == 0o600
+    assert first_login(login).stat().st_mode & 0o777 == 0o600
     # Recreating both service and DCV session must not grant a second automatic login.
     system = System()
     system.owner = lambda *args: ('alice', 'new-session', 'tomorrow')
@@ -361,7 +370,7 @@ def test_outstanding_credential_cannot_bypass_completed_first_login(login, monke
     monkeypatch.setattr(login, 'pam_worker', lambda pid: 123)
     grants = login.Grants(System())
     issued = grants.handle(100, 42, {'op': 'issue'})
-    login.FIRST_LOGIN.write_text('completed')
+    first_login(login).write_text(login.INSTANCE_ID.read_text())
     with pytest.raises(ValueError, match='first login'):
         grants.handle(
             200,
@@ -490,3 +499,43 @@ def test_non_desktop_ad_join_has_no_login_mapping(module_name):
         )
     )
     assert 'ad_gpo_map_remote_interactive' not in text
+
+
+@pytest.mark.parametrize('marker', ['i-11111111111111111', 'old-session-id'])
+def test_live_session_image_marker_does_not_consume_new_instance_login(
+    login, monkeypatch, marker
+):
+    inherited = login.FIRST_LOGIN
+    if marker.startswith('i-'):
+        inherited = inherited.with_name(inherited.name + '-' + marker)
+    inherited.write_text(marker)
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: True)
+    grants = login.Grants(System())
+    issued = grants.handle(100, 42, {'op': 'issue'})
+    assert grants.handle(
+        200, 0, dict(op='redeem', user='alice', remote='remote', token=issued['token'])
+    ) == {'ok': True}
+    assert (
+        first_login(login).read_text().strip() == login.INSTANCE_ID.read_text().strip()
+    )
+    with pytest.raises(ValueError, match='first login'):
+        login.Grants(System()).handle(100, 42, {'op': 'issue'})
+
+
+def test_ssh_session_does_not_block_remote_greeter(login):
+    sessions, logins, displays = fixture_state()
+    logins.append(dict(logins[0], Id='ssh', User=1000, Class='user', Type='tty'))
+    assert login.authorized_owner('c2', 42, sessions, logins, displays)[0] == 'alice'
+
+
+@pytest.mark.parametrize('identity', ['', 'not-an-instance'])
+def test_unavailable_instance_identity_fails_closed(login, identity):
+    login.INSTANCE_ID.write_text(identity)
+    with pytest.raises(ValueError, match='identity'):
+        login.Grants(System())
+
+
+def test_interrupted_marker_write_still_consumes_first_login(login):
+    first_login(login).touch()
+    with pytest.raises(ValueError, match='first login'):
+        login.Grants(System()).handle(100, 42, {'op': 'issue'})

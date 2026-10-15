@@ -1927,3 +1927,56 @@ def test_a_desktop_deleted_before_it_had_an_instance_never_ran():
         [], [row, run_row('sess-1', USER, ms(created), ms(deleted))]
     )
     assert session is None
+
+
+@pytest.mark.parametrize('timeout', [False, True])
+def test_admin_prefetch_is_batched_across_owners_with_one_deadline(
+    monkeypatch, timeout
+):
+    from unittest.mock import Mock
+    from ideadatamodel import UserCosts
+
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    hits = []
+    for index, owner in enumerate((USER, OTHER_USER)):
+        hit = live_hit(f'sess-{index}', 'READY', ms(created), ms(created), f'i-{index}')
+        hit['_source']['owner'] = owner
+        hits.append(hit)
+    cloudwatch = FakeCloudWatch()
+    service, _ = build_service(prices={'m5.large': 0.1}, cloudwatch=cloudwatch)
+    service._desktop_hits = lambda *args, **kwargs: hits
+    service._history_hits = lambda *args, **kwargs: []
+    clock = [100.0]
+    monkeypatch.setattr(my_costs_service.time, 'monotonic', lambda: clock[0])
+    read = cloudwatch.get_metric_data
+
+    def page(**request):
+        result = read(**request)
+        if len(cloudwatch.calls) > 1:
+            raise RuntimeError('unexpected read after deadline')
+        if timeout:
+            clock[0] += 6
+            result['NextToken'] = 'more'
+        return result
+
+    cloudwatch.get_metric_data = page
+    prefetch = Mock(wraps=service._prefetch_running_hours)
+    service._prefetch_running_hours = prefetch
+    rows = {
+        owner: UserCosts(
+            username=owner,
+            desktop_session_count=0,
+            desktop_hours=0.0,
+            desktop_cost=0.0,
+            desktop_unpriced_sessions=0,
+        )
+        for owner in (USER, OTHER_USER)
+    }
+    assert service._desktops_by_user(rows.__getitem__, ms(created), ms(now)) is False
+    assert prefetch.call_count == 1
+    assert prefetch.call_args.args[-1] == 105.0
+    assert len(cloudwatch.calls) == 1
+    assert len(cloudwatch.calls[0]['MetricDataQueries']) == 2
+    if timeout:
+        assert all(row.desktop_hours == pytest.approx(480) for row in rows.values())

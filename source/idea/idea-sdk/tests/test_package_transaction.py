@@ -91,9 +91,10 @@ echo completed
     calls = (tmp_path / 'calls').read_text().splitlines()
     transactions = [line for line in calls if not line.startswith('clean ')]
     assert len(transactions) == attempts
-    for line in transactions:
+    for index, line in enumerate(transactions):
         assert '--setopt=timeout=30' in line
-        assert '--setopt=minrate=512k' in line
+        assert f'--setopt=minrate={"64k" if index < 3 else "0"}' in line
+        assert line.count('--setopt=minrate=') == 1
         assert '--setopt=retries=2' in line
         assert '--setopt=max_parallel_downloads=10' in line
     assert all(

@@ -200,3 +200,25 @@ def test_a_compute_node_reports_why_it_will_not_join(tmp_path):
     assert code == 1
     assert '(reason code: lustre-client-install-failed)' in out
     assert 'Aborting bootstrap, this node will not join the cluster.' in out
+
+
+def test_optional_lustre_failure_preserves_an_earlier_reboot(tmp_path):
+    text = render(
+        '_templates/linux/fsx_lustre_client.jinja2', 'rocky10', config=lustre_config()
+    )
+    body = text.split('function fail_lustre_client () {', 1)[1].split('\n}', 1)[0]
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
+            f'BOOTSTRAP_DIR="{tmp_path}"\nLUSTRE_REQUIRED=no\n'
+            'set_reboot_required "Earlier kernel update"\n'
+            'function fail_lustre_client () {' + body + '\n}\n'
+            'fail_lustre_client missing "Optional client missing"\n',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / 'reboot_required.txt').read_text() == 'yes'

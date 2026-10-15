@@ -16,7 +16,7 @@
      {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
       package_transaction yum install -y ${STUNNEL_CMD}
      {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
-      apt_update || exit 1
+      apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
       apt install -y ${STUNNEL_CMD}
      {% endif %}
   else

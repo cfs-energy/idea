@@ -1162,3 +1162,31 @@ def test_a_source_not_created_yet_is_empty_not_unavailable():
         )
     )
     assert not source_not_created(RuntimeError('opensearch unreachable'))
+
+
+@pytest.mark.parametrize('attempt', range(2))
+def test_report_without_cached_hours_finishes_without_cloudwatch(attempt):
+    value = data()
+    value['desktops'] = [
+        {
+            '_source': dict(
+                idea_session_id='session',
+                owner='former',
+                state='STOPPED',
+                created_on=1706832000000,
+                updated_on=1706918400000,
+                server=dict(instance_id='i-uncached'),
+            )
+        }
+    ]
+    pricing = Mock()
+    pricing.return_value._prefetch_running_hours.side_effect = TimeoutError(
+        'slow CloudWatch'
+    )
+    tables, *_ = ReportingService.build(
+        value, period(), 'USD', 'UTC', time.monotonic() + 30, pricing=pricing
+    )
+    row = tables['user'][0]
+    assert row['desktop_hours'] == 24
+    assert row['coverage']['desktop_hours']['status'] == 'estimated'
+    pricing.return_value._prefetch_running_hours.assert_not_called()

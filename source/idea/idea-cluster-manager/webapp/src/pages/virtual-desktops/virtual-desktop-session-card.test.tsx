@@ -86,8 +86,10 @@ describe('virtual desktop session card', () => {
         expect(screen.getByText('Desktop locked for security.')).toBeInTheDocument();
         expect(screen.getByText('Preview unavailable. Connect to unlock.')).toBeInTheDocument();
         expect(screen.queryByAltText('Desktop preview')).not.toBeInTheDocument();
-        await userEvent.setup().click(screen.getByRole('button', { name: 'Connect' }));
-        expect(handlers.onLaunchSession).toHaveBeenCalled();
+        const placeholder = screen.getByText('Preview unavailable. Connect to unlock.');
+        expect(placeholder.closest('.virtual-desktop-placeholder-image')).toHaveStyle({cursor: 'pointer'});
+        await userEvent.setup().click(placeholder);
+        expect(handlers.onLaunchSession).toHaveBeenCalledWith(expect.objectContaining({idea_session_id: BASE.idea_session_id}));
     });
 
     it.each(['normal', 'canvas unavailable'])('keeps a preview for %s', (kind) => {

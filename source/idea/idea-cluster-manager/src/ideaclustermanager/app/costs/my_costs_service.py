@@ -81,6 +81,7 @@ MAX_SESSIONS = 200
 # every desktop session in the window across every user. only the fields the hours are
 # computed from are fetched, so a page this size stays small.
 MAX_ADMIN_SESSIONS = 10000
+CPU_PREFETCH_SECONDS = 5
 
 # the fields a session's hours and price are computed from; without this the query
 # returns whole session documents, none of the rest of which is read.
@@ -730,11 +731,14 @@ class MyCostsService:
         return runs
 
     def _sessions_from(
-        self, hits, start_ms: int, end_ms: int
+        self, hits, start_ms: int, end_ms: int, *, prefetch: bool = True
     ) -> List[MyCostsDesktopSession]:
         runs = self._runs_by_session(hits)
         sources = self._newest_per_session(hits)
-        self._prefetch_running_hours(sources, runs, start_ms, end_ms)
+        if prefetch:
+            self._prefetch_running_hours(
+                sources, runs, start_ms, end_ms, time.monotonic() + CPU_PREFETCH_SECONDS
+            )
         sessions = [
             self._desktop_session(
                 source,
@@ -1190,6 +1194,13 @@ class MyCostsService:
 
         hits = list(hits) + self._history_hits(None, start_ms, end_ms, all_users=True)
 
+        self._prefetch_running_hours(
+            self._newest_per_session(hits),
+            self._runs_by_session(hits),
+            start_ms,
+            end_ms,
+            time.monotonic() + CPU_PREFETCH_SECONDS,
+        )
         by_owner: Dict[str, List] = {}
         for hit in hits:
             source = Utils.get_value_as_dict('_source', hit, {})
@@ -1200,7 +1211,7 @@ class MyCostsService:
 
         for owner, owner_hits in by_owner.items():
             totals = self._desktop_totals(
-                self._sessions_from(owner_hits, start_ms, end_ms)
+                self._sessions_from(owner_hits, start_ms, end_ms, prefetch=False)
             )
             row = row_for(owner)
             row.desktop_session_count += Utils.get_as_int(totals.session_count, 0)

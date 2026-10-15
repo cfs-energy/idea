@@ -65,14 +65,22 @@ class BootstrapRefreshTable:
         self.rows = {}
         self.updates = []
 
-    def get_item(self, Key):
+    def get_item(self, Key, **kwargs):
         row = self.rows.get(Key[self.key])
         return {} if row is None else {'Item': deepcopy(row)}
 
     def put_item(self, Item):
         self.rows[Item[self.key]] = deepcopy(Item)
 
-    def delete_item(self, Key):
+    def delete_item(self, Key, **kwargs):
+        if (
+            kwargs.get('ConditionExpression')
+            and self.rows.get(Key[self.key], {}).get('refresh_command_id')
+            != kwargs['ExpressionAttributeValues'][':command']
+        ):
+            raise ClientError(
+                {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'DeleteItem'
+            )
         self.rows.pop(Key[self.key], None)
 
     def scan(self, **request):

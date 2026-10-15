@@ -241,7 +241,14 @@ function install_nvidia_grid_drivers () {
   fi
 
 {% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
-  install_matching_kernel_devel || fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+  if ! install_matching_kernel_devel; then
+    {% if context.fail_on_missing_gpu_driver() %}
+    fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+    {% else %}
+    log_warning "Matching kernel-devel unavailable; skipping NVIDIA driver installation because fail_on_missing_driver is disabled."
+    return 0
+    {% endif %}
+  fi
 {% endif %}
 
   log_info "Installing NVIDIA GRID Drivers"
@@ -305,7 +312,14 @@ function install_nvidia_public_drivers() {
   fi
 
 {% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
-  install_matching_kernel_devel || fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+  if ! install_matching_kernel_devel; then
+    {% if context.fail_on_missing_gpu_driver() %}
+    fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+    {% else %}
+    log_warning "Matching kernel-devel unavailable; skipping NVIDIA driver installation because fail_on_missing_driver is disabled."
+    return 0
+    {% endif %}
+  fi
 {% endif %}
 
   # Instance    Product Type    Product Series  Product

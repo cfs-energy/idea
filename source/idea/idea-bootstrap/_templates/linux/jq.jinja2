@@ -7,7 +7,7 @@ fi
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 if ! command -v jq > /dev/null 2>&1; then
   log_info "installing jq"
-  apt_update || exit 1
+  apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
   apt install -y jq
 fi
 {% endif %}

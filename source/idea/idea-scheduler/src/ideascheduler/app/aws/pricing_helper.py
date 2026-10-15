@@ -185,7 +185,10 @@ class PricingHelper:
         if self.job.is_mixed_capacity() or self.job.is_spot_capacity():
             if self.job.params.spot_price is None:
                 unit_price = self.get_instance_type_unit_price()
-                spot_price = unit_price.ondemand
+                multiplier = compute_rate_multiplier(
+                    self.config(), self._context.logger('pricing-helper')
+                )
+                spot_price = unit_price.ondemand * min(1.0, multiplier)
             else:
                 spot_price = self.job.params.spot_price.amount
             return spot_price

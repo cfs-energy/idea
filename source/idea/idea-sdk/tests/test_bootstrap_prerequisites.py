@@ -175,7 +175,7 @@ install_matching_kernel_devel
     )
     calls = (tmp_path / 'calls').read_text()
     assert 'kernel-devel-6.12.0-211.65.1.el10_2.x86_64' in calls
-    assert 'kernel-headers-6.12.0-211.65.1.el10_2.x86_64' in calls
+    assert 'kernel-headers' not in calls
     assert '--skip-broken' not in calls and '--nobest' not in calls
     sleeps = tmp_path / 'sleeps'
     assert (sleeps.read_text().splitlines() if sleeps.exists() else []) == (
@@ -198,8 +198,8 @@ def test_el_module_builds_require_matching_devel(base_os):
     ]:
         text = render(template, base_os=base_os, lustre=False)
         usb = text[text.index('if ! modinfo eveusb') :]
-        assert usb.index('install_matching_kernel_devel || exit 1') < usb.index(
-            '$DCV_USB_DRIVER_INSTALLER --quiet'
+        assert usb.index('install_matching_kernel_devel ||') < usb.index(
+            'DCV_USB_DRIVER_INSTALLER'
         )
     gpu = render(
         '_templates/linux/gpu_drivers.jinja2',
@@ -243,7 +243,7 @@ apt_update
 )
 def test_ubuntu_entry_paths_refresh_before_install(base_os, template):
     text = render(f'_templates/linux/{template}.jinja2', base_os=base_os)
-    assert text.index('apt_update || exit 1') < text.index('apt install')
+    assert text.index('apt_update || log_warning') < text.index('apt install')
 
 
 @pytest.mark.parametrize('substitution', [True, False])
@@ -257,3 +257,102 @@ def test_builder_userdata_failure_uses_existing_status_tag(substitution):
     ).build()
     assert 'BOOTSTRAP_FAILURE_TAG="idea:AmiBuilderStatus"' in text
     assert 'status="failed:userdata-$1"' in text
+
+
+@pytest.mark.parametrize('failure', ['devel', 'driver', 'installer'])
+def test_optional_usb_failure_warns_and_bootstrap_continues(tmp_path, failure):
+    text = render(
+        'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+        base_os='rocky9',
+        lustre=False,
+    )
+    body = text.split('function install_usb_support() {', 1)[1].split('\n}', 1)[0]
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            f'''set -e
+source "{COMMON}"
+modinfo() {{ return 1; }}
+install_matching_kernel_devel() {{ [[ "{failure}" != devel ]]; }}
+which() {{ [[ "{failure}" != installer ]] && echo false; }}
+function install_usb_support() {{{body}
+}}
+install_usb_support
+echo BOOTSTRAP_CONTINUED
+''',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '[WARNING]' in result.stdout
+    assert 'BOOTSTRAP_CONTINUED' in result.stdout
+
+
+@pytest.mark.parametrize('required', [True, False])
+@pytest.mark.parametrize('driver', ['grid', 'public'])
+def test_el_gpu_missing_devel_honors_fail_setting(tmp_path, required, driver):
+    from test_bootstrap_shell_syntax import Config
+
+    config = Config()
+    config.put('global-settings.gpu_settings.fail_on_missing_driver', required)
+    text = render(
+        '_templates/linux/gpu_drivers.jinja2',
+        base_os='rocky9',
+        instance_type='g5.xlarge',
+        config=config,
+    )
+    name = f'install_nvidia_{driver}_drivers'
+    body = text.split('function ' + name, 1)[1].split('{', 1)[1].split('\n}', 1)[0]
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            f'''set -e
+source "{COMMON}"
+command() {{ [[ "$*" != '-v nvidia-smi' ]] && builtin command "$@"; }}
+install_matching_kernel_devel() {{ return 1; }}
+fail_gpu_drivers() {{ echo "FATAL:$1"; exit 1; }}
+function {name} () {{{body}
+}}
+{name}
+echo BOOTSTRAP_CONTINUED
+''',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == int(required), result.stdout + result.stderr
+    assert ('BOOTSTRAP_CONTINUED' in result.stdout) != required
+    assert ('FATAL:gpu-kernel-devel-missing' in result.stdout) == required
+    assert ('[WARNING]' in result.stdout) != required
+
+
+@pytest.mark.parametrize(
+    'template',
+    ['system_packages', 'universe', 'jq', 'nfs_utils', 'stunnel', 'efs_mount_helper'],
+)
+def test_apt_index_failure_uses_existing_index(template):
+    text = render(f'_templates/linux/{template}.jinja2', base_os='ubuntu2404')
+    refresh = next(
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith('apt_update')
+    )
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            f'''set -e
+source "{COMMON}"
+apt_update() {{ return 1; }}
+{refresh}
+echo INSTALL_REACHED
+''',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert '[WARNING]' in result.stdout and 'INSTALL_REACHED' in result.stdout

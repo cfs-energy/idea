@@ -148,8 +148,23 @@ def test_effective_rate_scales_compute_only_and_only_once():
     )
 
 
-def test_spot_compute_is_never_scaled():
-    """spot is already the rate paid; savings plans do not apply to it"""
-    bom = rated_helper(0.5, spot=True).compute_estimated_bom_cost()
+def test_explicit_spot_compute_is_never_scaled():
+    """An explicit spot rate is already the rate paid."""
+    pricing = rated_helper(0.5, spot=True)
+    pricing.job.params.spot_price = SimpleNamespace(amount=0.1)
+    bom = pricing.compute_estimated_bom_cost()
     compute = next(item for item in bom.line_items if item.service == 'aws.ec2')
     assert compute.unit_price.amount == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize('multiplier,expected', [(0.7, 0.07), (1.0, 0.1), (1.5, 0.1)])
+@pytest.mark.parametrize('mixed', [False, True])
+def test_spot_fallback_is_capped_at_scaled_on_demand(multiplier, expected, mixed):
+    pricing = rated_helper(multiplier, spot=True)
+    pricing.job.is_mixed_capacity.return_value = mixed
+    pricing.job.ondemand_nodes.return_value = int(mixed)
+    bom = pricing.compute_estimated_bom_cost()
+    spot = next(
+        line for line in bom.line_items if line.product.endswith('lifecycle=spot')
+    )
+    assert spot.unit_price.amount == pytest.approx(expected)

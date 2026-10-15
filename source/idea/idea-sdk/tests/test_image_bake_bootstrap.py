@@ -1239,8 +1239,8 @@ def test_the_compute_bake_drops_slow_rocky_mirrors_before_its_first_install(base
     # the compute builder installs ~930 MB from the public mirrorlist; on one ~130 kB/s
     # mirror it missed its hour. it gets the same mirror settings as the hosts
     setup = render('compute-node-ami-builder/setup.sh.jinja2', base_os, config=Config())
-    assert 'minrate=512k' in setup
-    assert setup.index('minrate=512k') < setup.index('epel')
+    assert 'minrate=64k' in setup
+    assert setup.index('minrate=64k') < setup.index('epel')
 
 
 @pytest.mark.parametrize('base_os', WINDOWS)

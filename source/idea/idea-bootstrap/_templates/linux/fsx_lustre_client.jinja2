@@ -19,11 +19,11 @@ LUSTRE_REQUIRED=yes
 function fail_lustre_client () {
   local reason="${1}"
   local message="${2} Lustre filesystems cannot be mounted on this node (reason code: ${1})."
-  echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
-  # desktops: set_kernel tags idea:BootstrapStatus so the controller releases the host
-  [[ "${LUSTRE_REQUIRED}" != yes ]] || ! declare -F fail_kernel_bootstrap >/dev/null || fail_kernel_bootstrap "${reason}" "${message}"
   log_error "${message}"
   [[ "${LUSTRE_REQUIRED}" == yes ]] || return 0
+  echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+  # desktops: set_kernel tags idea:BootstrapStatus so the controller releases the host
+  ! declare -F fail_kernel_bootstrap >/dev/null || fail_kernel_bootstrap "${reason}" "${message}"
 {% if compute_image_bake | default(false) %}
   # compute bakes have no ERR trap: record the reason and tag the builder failed now
   echo "lustre: ${message}" >> /var/lib/idea/bake-failed

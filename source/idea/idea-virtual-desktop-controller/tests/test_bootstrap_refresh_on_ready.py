@@ -116,3 +116,20 @@ def test_command_from_an_older_refresh_version_does_not_count_as_in_flight(refre
         BOOTSTRAP_REFRESH_VERSION - 1
     )
     assert refresh.sweep.refresh_bootstrap_on_ready(session) is True
+
+
+def test_ready_looks_up_refresh_without_scanning_historical_commands(refresh):
+    refresh.commands.scan = Mock(side_effect=AssertionError('READY must not scan'))
+    session = refresh.add_session()
+    assert refresh.sweep.refresh_bootstrap_on_ready(session) is True
+    assert refresh.sweep.refresh_bootstrap_on_ready(session) is False
+    refresh.complete('Failed')
+    assert refresh.sweep.refresh_bootstrap_on_ready(session) is True
+
+
+def test_old_completion_does_not_remove_new_refresh_pointer(refresh):
+    session = refresh.add_session()
+    refresh.sweep.refresh_bootstrap()
+    refresh.sweep.refresh_bootstrap()
+    refresh.command_utils._ssm_commands_db.delete('command-1')
+    assert refresh.sweep.refresh_bootstrap_on_ready(session) is False

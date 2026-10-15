@@ -38,6 +38,6 @@
   fi
 
   # Update package lists
-  apt_update || exit 1
+  apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
 {% endif %}
 # End: Enable extra repo for Ubuntu

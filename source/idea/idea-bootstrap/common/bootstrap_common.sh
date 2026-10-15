@@ -43,12 +43,16 @@ function package_transaction() {
       set -- -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 "$@"
       ;;
     dnf|yum)
-      set -- --setopt=timeout=30 --setopt=minrate=512k --setopt=retries=2 --setopt=max_parallel_downloads=10 "$@"
+      set -- --setopt=timeout=30 --setopt=minrate=64k --setopt=retries=2 --setopt=max_parallel_downloads=10 "$@"
       ;;
   esac
   output=$(mktemp) || return $?
   # RHUI/mirrors can publish AppStream before its matching BaseOS dependencies.
   for delay in 15 30 60 0; do
+    # Slow proxies must still be able to finish the final attempt.
+    if [[ $delay -eq 0 && "$manager" != apt-get ]]; then
+      set -- "$1" --setopt=minrate=0 "${@:3}"
+    fi
     # Only final attempts may leave fatal-looking lines in the bake logs.
     if LC_ALL=C "$manager" "$@" > "$output" 2>&1; then
       status=0
@@ -101,12 +105,12 @@ function apt_update() {
 function install_matching_kernel_devel() {
   local kernel installed message
   kernel=$(uname -r)
-  if PACKAGE_RETRY_MISSING=yes package_transaction dnf --refresh install -y "kernel-devel-${kernel}" "kernel-headers-${kernel}" \
+  if PACKAGE_RETRY_MISSING=yes package_transaction dnf --refresh install -y "kernel-devel-${kernel}" \
       && [[ -f "${KERNEL_SRC_DIR:-/usr/src/kernels}/${kernel}/Makefile" ]]; then
     return 0
   fi
-  installed=$(rpm -qa kernel-devel kernel-headers | tr '\n' ' ')
-  message="Matching kernel-devel/kernel-headers unavailable for running kernel ${kernel}; installed: ${installed:-none}. Cannot build kernel modules."
+  installed=$(rpm -qa kernel-devel | tr '\n' ' ')
+  message="Matching kernel-devel unavailable for running kernel ${kernel}; installed: ${installed:-none}. Cannot build kernel modules."
   log_error "${message}"
   if [[ -n "${BAKE_STAGE:-}" ]]; then
     printf '%s: %s\n' "${BAKE_STAGE}" "${message}" >> /var/lib/idea/bake-failed
