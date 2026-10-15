@@ -125,10 +125,52 @@ function set_reboot_required () {
 }
 
 function reboot_after_cloud_init () {
-  # A timer alone can interrupt final modules; order its service after cloud-final too.
-  systemd-run --unit=idea-bootstrap-reboot --no-block --on-active=5s \
-    --timer-property=AccuracySec=1s --property=After=cloud-final.service \
-    /sbin/reboot || exit_fail "Unable to schedule bootstrap reboot"
+  # An independent worker can bound the wait; After=cloud-final cannot time out inside its command.
+  # shellcheck disable=SC2016
+  timeout 15 systemd-run --unit=idea-bootstrap-reboot --no-block --on-active=5s \
+    --timer-property=AccuracySec=1s --property=StandardOutput=journal+console \
+    --property=StandardError=journal+console \
+    /bin/bash -c '[[ ! -f /etc/environment ]] || source /etc/environment; source "$1"; complete_bootstrap_reboot' \
+    bash "${BASH_SOURCE[0]}" || fail_bootstrap reboot-failed "Unable to schedule bootstrap reboot"
+}
+
+function fail_bootstrap () {
+  local status="${1}"
+  shift
+  log_error "${1}"
+  mkdir -p "${BOOTSTRAP_DIR}"
+  printf '%s\n' "${1}" > "${BOOTSTRAP_DIR}/bootstrap_failed.txt"
+  # Failure reporting must not hang on metadata or AWS either, including under cron.
+  set +x
+  local token id region
+  token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || true
+  id=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: ${token}" http://169.254.169.254/latest/meta-data/instance-id) || true
+  region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
+  if [[ -z "${region}" ]]; then
+    region=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: ${token}" http://169.254.169.254/latest/meta-data/placement/region) || true
+  fi
+  if [[ -z "${id}" ]] || ! AWS_MAX_ATTEMPTS=1 timeout 30 aws --region "${region}" --cli-connect-timeout 5 --cli-read-timeout 10 \
+      ec2 create-tags --resources "${id}" --tags "Key=idea:BootstrapStatus,Value=${status}"; then
+    log_error "Unable to tag instance with idea:BootstrapStatus=${status}"
+  fi
+  exit 1
+}
+
+function complete_bootstrap_reboot () {
+  local attempt state
+  for ((attempt=0; attempt<60; attempt++)); do
+    state=$(timeout 5 systemctl show cloud-final.service --property=SubState --property=Job) \
+      || fail_bootstrap reboot-failed "Unable to read cloud-final state"
+    # Cron can run before cloud-final starts: an inactive unit with a queued job is not finished.
+    if grep -Eq '^SubState=(exited|dead|failed)$' <<< "${state}" && ! grep -Eq '^Job=[1-9]' <<< "${state}"; then
+      log_info "cloud-final finished; requesting bootstrap reboot"
+      timeout 30 /sbin/reboot || fail_bootstrap reboot-failed "Bootstrap reboot request failed"
+      sleep 60
+      fail_bootstrap reboot-failed "Bootstrap reboot did not shut down the node within 60 seconds"
+    fi
+    sleep 5
+  done
+  fail_bootstrap reboot-failed "Timed out waiting for cloud-final before bootstrap reboot"
 }
 
 function check_reboot_loop () {

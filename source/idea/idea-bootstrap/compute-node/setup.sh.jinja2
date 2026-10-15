@@ -51,6 +51,17 @@ source /etc/environment
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
+# Begin: Compute bootstrap memory check
+# Loading EPEL metadata alone exceeded 1 GiB with the OS on an unbaked Rocky compute node.
+if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
+  BOOTSTRAP_MEMORY_KIB=$(awk '/^(MemTotal|SwapTotal):/ { total += $2 } END { printf "%.0f", total }' /proc/meminfo) \
+    || fail_bootstrap insufficient-memory "Unable to determine compute bootstrap memory"
+  if (( BOOTSTRAP_MEMORY_KIB < 2097152 )); then
+    fail_bootstrap insufficient-memory "Unbaked compute bootstrap requires at least 2 GiB RAM plus swap; found ${BOOTSTRAP_MEMORY_KIB} KiB. Use a larger instance or an image baked for ${IDEA_MODULE_VERSION}."
+  fi
+fi
+# End: Compute bootstrap memory check
+
 {% if context.base_os == 'amazonlinux2023' %}
 package_transaction dnf -y install cronie
 systemctl enable crond

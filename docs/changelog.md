@@ -52,6 +52,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Clearer instance-type refusals**: a job refused for its instance type names the queue and the instance types it allows, and the job submission page shows the selected queue's allowed types.
 * **Lighter desktop start and cost paths**: desktops reaching READY no longer scan the SSM command table, reports and the per-user cost listing bound their CloudWatch reads, and the CloudTrail backfill cannot stall on a refused page.
 * **Dependencies**: AWS SDK, CDK, Vite 8, vite-plugin-pwa 2, Vitest 5 and refreshed Python locks.
+* **Compute nodes that cannot finish setup say so**: an unbaked compute node with under 2 GiB of memory stops at once with idea:BootstrapStatus=insufficient-memory instead of hanging until the scheduler replaces it, and a bootstrap reboot that cannot complete tags reboot-failed.
 
 ## [26.10.5] - 2026-10-13
 
