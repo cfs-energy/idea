@@ -48,6 +48,10 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Image bakes survive a slow package mirror**: package installs drop a mirror that stalls below 512 KB/s for 30 seconds and move to the next, with parallel downloads, instead of spending the whole bake on it. Installs are never interrupted mid-transaction.
 * **No crash report from the first boot**: bootstrap reboots now wait for cloud-init to finish, so new Ubuntu desktops no longer start with a cloud-init crash report and its "a problem has occurred" dialog.
 * **Each desktop OS keeps its own wallpaper**: home folders are shared by all of a user's desktops, so one OS's wallpaper setting showed a flat colour on the others. Wayland desktops now show their OS's stock light and dark wallpaper, locked; a missing file only costs a plain colour.
+* **Optional parts never stop a host**: a failed DCV USB driver, NVIDIA driver (when not required), optional Lustre client or an apt index error no longer aborts a desktop or compute node bootstrap; the host comes up without that part and says so.
+* **Clearer instance-type refusals**: a job refused for its instance type names the queue and the instance types it allows, and the job submission page shows the selected queue's allowed types.
+* **Lighter desktop start and cost paths**: desktops reaching READY no longer scan the SSM command table, reports and the per-user cost listing bound their CloudWatch reads, and the CloudTrail backfill cannot stall on a refused page.
+* **Dependencies**: AWS SDK, CDK, Vite 8, vite-plugin-pwa 2, Vitest 5 and refreshed Python locks.
 
 ## [26.10.5] - 2026-10-13
 
