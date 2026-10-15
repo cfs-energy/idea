@@ -34,6 +34,24 @@ Exec=/usr/local/libexec/idea-dcv-login login
 NoDisplay=true
 X-GNOME-Autostart-Phase=Applications
 EOF_DESKTOP
+{% if context.base_os == 'ubuntu2604' %}
+# GNOME's kiosk greeter does not run desktop autostart entries.
+install -d -m 755 /etc/systemd/user/gnome-session@gnome-login.target.wants || exit 1
+cat > /etc/systemd/user/idea-dcv-login.service <<'EOF_USER_SERVICE' || exit 1
+[Unit]
+Description=Sign in the IDEA DCV owner from the remote GDM greeter
+After=org.gnome.Shell@gdm.service
+PartOf=graphical-session.target
+ConditionEnvironment=XDG_SESSION_CLASS=greeter
+CollectMode=inactive-or-failed
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/idea-dcv-login login
+TimeoutStartSec=100
+TimeoutStopSec=5
+EOF_USER_SERVICE
+ln -sfn ../idea-dcv-login.service /etc/systemd/user/gnome-session@gnome-login.target.wants/idea-dcv-login.service || exit 1
+{% endif %}
 cat > /etc/systemd/system/idea-dcv-login.service <<'EOF_SERVICE' || exit 1
 [Unit]
 Description=Authorize IDEA DCV owner login on the remote GDM greeter

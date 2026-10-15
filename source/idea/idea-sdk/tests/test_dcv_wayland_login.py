@@ -3,6 +3,7 @@
 import importlib.machinery
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,7 +32,7 @@ def test_login_is_installed_on_fresh_and_baked_desktops(base_os, instance_type):
 
 
 @pytest.fixture
-def login():
+def login(monkeypatch):
     # the helper ships as a .jinja2 template, so name its loader explicitly
     spec = importlib.util.spec_from_loader(
         'dcv_wayland_login',
@@ -39,6 +40,21 @@ def login():
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    accounts = {
+        42: SimpleNamespace(pw_name='gdm', pw_uid=42, pw_gid=43),
+        60578: SimpleNamespace(pw_name='gdm-greeter', pw_uid=60578, pw_gid=43),
+        60579: SimpleNamespace(pw_name='gdm-greeter-2', pw_uid=60579, pw_gid=43),
+        99: SimpleNamespace(pw_name='mallory', pw_uid=99, pw_gid=43),
+    }
+
+    def getpwnam(name):
+        for account in accounts.values():
+            if account.pw_name == name:
+                return account
+        raise KeyError(name)
+
+    monkeypatch.setattr(module.pwd, 'getpwuid', accounts.__getitem__)
+    monkeypatch.setattr(module.pwd, 'getpwnam', getpwnam)
     return module
 
 
@@ -121,7 +137,7 @@ def test_scope_fails_closed(login, change):
 
 
 class System:
-    def caller_session(self, pid):
+    def caller_session(self, pid, uid):
         return {'Id': 'c2'}
 
     def owner(self, session_id, uid):
@@ -129,9 +145,145 @@ class System:
         return ('alice', 'test-session', 'today')
 
 
+class DynamicSystem:
+    def __init__(self, login, uid=60578):
+        self.login = login
+        self.sessions, self.logins, self.displays = fixture_state()
+        self.logins[0].update(User=uid, Name='gdm-greeter')
+        self.logins.append(
+            dict(
+                self.logins[0],
+                Id='c3',
+                User=60579,
+                Name='gdm-greeter-2',
+                Seat='seat0',
+                Remote=False,
+            )
+        )
+
+    def caller_session(self, pid, uid):
+        return self.logins[pid - 100]
+
+    def owner(self, session_id, uid):
+        return self.login.authorized_owner(
+            session_id, uid, self.sessions, self.logins, self.displays
+        )
+
+
+@pytest.mark.parametrize('gdm_name', ['gdm', 'Debian-gdm'])
+@pytest.mark.parametrize('greeter_name', ['gdm-greeter', 'gdm-greeter-3'])
+def test_dynamic_greeter_can_issue_and_redeem_for_own_remote_session(
+    login, monkeypatch, gdm_name, greeter_name
+):
+    login.pwd.getpwuid(42).pw_name = gdm_name
+    login.pwd.getpwuid(60578).pw_name = greeter_name
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: pid == 200)
+    grants = login.Grants(DynamicSystem(login))
+    issued = grants.handle(100, 60578, {'op': 'issue'})
+    assert issued['owner'] == 'alice'
+    redeem = dict(op='redeem', user='alice', remote='0.0.0.0', token=issued['token'])
+    assert grants.handle(200, 0, redeem) == {'ok': True}
+    with pytest.raises(ValueError):
+        grants.handle(200, 0, redeem)
+
+
+def test_dynamic_seat0_greeter_cannot_request_remote_owner(login):
+    system = DynamicSystem(login)
+    with pytest.raises(ValueError):
+        login.Grants(system).handle(101, 60579, {'op': 'issue'})
+    with pytest.raises(ValueError):
+        system.owner('c3', 60579)
+    with pytest.raises(ValueError):
+        system.owner('c2', 60579)
+
+
+@pytest.mark.parametrize(
+    'name,gid',
+    [
+        ('mallory', 43),
+        ('gdm-greeter-extra', 43),
+        ('gdm-greeter-2-extra', 43),
+        ('gdm-greeter', 44),
+        ('gdm-greeter-3', 44),
+    ],
+)
+def test_gdm_group_member_is_not_a_greeter(login, name, gid):
+    login.pwd.getpwuid(99).pw_name = name
+    login.pwd.getpwuid(99).pw_gid = gid
+    system = DynamicSystem(login, uid=99)
+    with pytest.raises(ValueError):
+        login.Grants(system).handle(100, 99, {'op': 'issue'})
+    with pytest.raises(ValueError):
+        system.owner('c2', 99)
+
+
+@pytest.mark.parametrize('gdm_name', ['gdm', 'Debian-gdm'])
+def test_static_gdm_account_can_request_owner(login, gdm_name):
+    login.pwd.getpwuid(42).pw_name = gdm_name
+    issued = login.Grants(System()).handle(100, 42, {'op': 'issue'})
+    assert issued['owner'] == 'alice'
+    assert login.authorized_owner('c2', 42, *fixture_state())[0] == 'alice'
+
+
+@pytest.mark.parametrize('uid,expected', [(60578, 'c2'), (60579, 'c3')])
+def test_dynamic_user_service_resolves_only_its_own_greeter(login, uid, expected):
+    state = DynamicSystem(login)
+    manager = dict(state.logins[0], Id='manager', Class='manager-early', Remote=False)
+    sessions = state.logins + [manager]
+    system = object.__new__(login.System)
+    system.call = lambda *args: (
+        [(s['Id'], s['User'], s['Name'], s['Seat'], s['Id']) for s in sessions],
+    )
+    system.properties = lambda path: next(s for s in sessions if s['Id'] == path)
+    assert system.caller_session(100, uid)['Id'] == expected
+
+
+@pytest.mark.parametrize('count', [0, 2])
+def test_dynamic_user_service_rejects_missing_or_ambiguous_greeter(login, count):
+    system = object.__new__(login.System)
+    system.call = lambda *args: (
+        [('c2', 60578, 'gdm-greeter', '', '/session')] * count,
+    )
+    system.properties = lambda path: dict(fixture_state()[1][0], User=60578)
+    with pytest.raises(ValueError):
+        system.caller_session(100, 60578)
+
+
+@pytest.mark.parametrize('uid', [42, 99])
+def test_static_or_untrusted_uid_cannot_select_a_session_by_uid(login, uid):
+    system = object.__new__(login.System)
+
+    def call(name, path, interface, method, signature, args):
+        assert method == 'GetSessionByPID'
+        assert args == (100,)
+        return ('/session',)
+
+    system.call = call
+    system.properties = lambda path: fixture_state()[1][0]
+    assert system.caller_session(100, uid)['Id'] == 'c2'
+
+
+@pytest.mark.parametrize('change', ['uid', 'gid'])
+def test_dynamic_greeter_identity_is_rechecked_at_redeem(login, monkeypatch, change):
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: pid == 200)
+    system = DynamicSystem(login)
+    grants = login.Grants(system)
+    issued = grants.handle(100, 60578, {'op': 'issue'})
+    if change == 'uid':
+        system.logins[0]['User'] = 60579
+    else:
+        login.pwd.getpwuid(60578).pw_gid = 44
+    with pytest.raises(ValueError):
+        grants.handle(
+            200,
+            0,
+            dict(op='redeem', user='alice', remote='0.0.0.0', token=issued['token']),
+        )
+
+
 def test_credentials_are_one_use_and_bound_to_owner(login, monkeypatch):
     monkeypatch.setattr(login, 'pam_worker', lambda pid: pid == 200)
-    grants = login.Grants(System(), 42)
+    grants = login.Grants(System())
     issued = grants.handle(100, 42, {'op': 'issue'})
     redeem = {
         'op': 'redeem',
@@ -152,7 +304,7 @@ def test_credential_cannot_authorize_another_login(login, monkeypatch, change):
     now = [10]
     monkeypatch.setattr(login.time, 'monotonic', lambda: now[0])
     system = System()
-    grants = login.Grants(system, 42)
+    grants = login.Grants(system)
     issued = grants.handle(100, 42, {'op': 'issue'})
     redeem = {
         'op': 'redeem',
@@ -184,7 +336,7 @@ def test_credential_cannot_authorize_another_login(login, monkeypatch, change):
 @pytest.mark.parametrize('uid', [0, 1000])
 def test_only_gdm_can_request_an_owner_credential(login, uid):
     with pytest.raises(ValueError):
-        login.Grants(System(), 42).handle(100, uid, {'op': 'issue'})
+        login.Grants(System()).handle(100, uid, {'op': 'issue'})
 
 
 @pytest.mark.parametrize('base_os', WAYLAND + ['rocky9', 'ubuntu2404'])
@@ -250,6 +402,23 @@ def test_installation_is_idempotent_and_contains_no_baked_owner(tmp_path, base_o
     )
     assert 'account required pam_nologin.so' in pam
     assert 'account include ' in pam
+    user_service = tmp_path / 'etc/systemd/user/idea-dcv-login.service'
+    assert user_service.exists() == (base_os == 'ubuntu2604')
+    if user_service.exists():
+        assert (
+            'ConditionEnvironment=XDG_SESSION_CLASS=greeter' in user_service.read_text()
+        )
+        assert (
+            'ExecStart=/usr/local/libexec/idea-dcv-login login'.replace(
+                '/usr/local/libexec', str(tmp_path) + '/usr/local/libexec'
+            )
+            in user_service.read_text()
+        )
+        wants = (
+            tmp_path
+            / 'etc/systemd/user/gnome-session@gnome-login.target.wants/idea-dcv-login.service'
+        )
+        assert wants.resolve() == user_service
     scrub = render('dcv-host-ami-builder/image_scrub.sh.jinja2', base_os)
     assert 'idea-dcv-login' not in scrub
 
