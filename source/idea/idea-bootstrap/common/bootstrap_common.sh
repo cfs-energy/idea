@@ -37,6 +37,15 @@ function package_transaction() {
   local manager="$1"
   shift
   local output status delay
+  # Bound slow network I/O inside the manager; killing an RPM/dpkg transaction is unsafe.
+  case "$manager" in
+    apt-get)
+      set -- -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 "$@"
+      ;;
+    dnf|yum)
+      set -- --setopt=timeout=30 --setopt=minrate=512k --setopt=retries=2 --setopt=max_parallel_downloads=10 "$@"
+      ;;
+  esac
   output=$(mktemp) || return $?
   # RHUI/mirrors can publish AppStream before its matching BaseOS dependencies.
   for delay in 15 30 60 0; do
@@ -52,7 +61,8 @@ function package_transaction() {
       return 0
     fi
     # A package no repository carries is not transient; callers rely on that failing at once.
-    if [[ "${PACKAGE_RETRY_MISSING:-no}" != yes ]] && grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides' "$output"; then
+    # Optional missing packages can also precede a resolved transaction's download failure.
+    if [[ "${PACKAGE_RETRY_MISSING:-no}" != yes ]] && grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides|Dependencies resolved' "$output"; then
       cat "$output"
       log_error "$manager transaction failed (exit $status)"
       rm -f "$output"
@@ -108,6 +118,13 @@ function set_reboot_required () {
   log_info "Reboot Required: ${1}"
   echo -n "yes" > ${BOOTSTRAP_DIR}/reboot_required.txt
   echo "$(date): ${1}" >> ${BOOTSTRAP_DIR}/reboot_history.log
+}
+
+function reboot_after_cloud_init () {
+  # A timer alone can interrupt final modules; order its service after cloud-final too.
+  systemd-run --unit=idea-bootstrap-reboot --no-block --on-active=5s \
+    --timer-property=AccuracySec=1s --property=After=cloud-final.service \
+    /sbin/reboot || exit_fail "Unable to schedule bootstrap reboot"
 }
 
 function check_reboot_loop () {

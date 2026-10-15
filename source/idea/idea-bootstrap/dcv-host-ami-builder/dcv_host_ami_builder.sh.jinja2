@@ -91,7 +91,7 @@ touch /var/lib/idea/bake-packages.ok
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   log_info "reboot required. dcv_host_ami_builder_post_reboot.sh will be executed after reboot ..."
-  reboot
+  reboot_after_cloud_init
   exit 0
 else
   {% include '_templates/linux/shared_mount_dirs.jinja2' %}

@@ -366,7 +366,7 @@ KERNEL_HARNESS = """
 function sleep () { :; }
 function set_reboot_required () { echo -n "yes" > "${BOOTSTRAP_DIR}/reboot_required.txt"; }
 function check_reboot_loop () { echo "[INFO] check_reboot_loop: ${1}"; }
-function reboot () { echo "reboot" >> "${BOOTSTRAP_DIR}/reboot.log"; }
+function reboot_after_cloud_init () { echo "reboot" >> "${BOOTSTRAP_DIR}/reboot.log"; }
 function grubby () { echo "grubby $*" >> "${BOOTSTRAP_DIR}/grubby.log"; }
 function systemctl () { echo "systemctl $*" >> "${BOOTSTRAP_DIR}/systemctl.log"; }
 function uname () {
@@ -382,6 +382,13 @@ function rpm () {
 }
 function dnf () {
   echo "dnf $*" >> "${BOOTSTRAP_DIR}/dnf.log"
+  while (( $# )); do
+    case "$1" in
+      --setopt=*) shift ;;
+      -o|--setopt) shift 2 ;;
+      *) break ;;
+    esac
+  done
   if [[ "${1}" != "install" ]]; then return 0; fi
   local SPEC
   for SPEC in "$@"; do

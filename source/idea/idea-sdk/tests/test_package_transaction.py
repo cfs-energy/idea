@@ -20,6 +20,8 @@ COMMON = (
     'scenario,attempts,code',
     [
         ('transient', 3, 0),
+        ('slow download recovers', 3, 0),
+        ('slow download fails', 4, 42),
         ('dependency recovers', 3, 0),
         ('disk recovers', 3, 0),
         ('silent failure', 4, 42),
@@ -38,10 +40,15 @@ printf '%s\\n' "$*" >> "$CALLS"
 count=$(cat "$COUNT" 2>/dev/null || echo 0)
 count=$((count + 1))
 echo "$count" > "$COUNT"
-[[ ( "$SCENARIO" == transient || "$SCENARIO" == "dependency recovers" || "$SCENARIO" == "disk recovers" ) && $count -ge 3 ]] && { echo success; exit 0; }
+[[ ( "$SCENARIO" == transient || "$SCENARIO" == "slow download recovers" || "$SCENARIO" == "dependency recovers" || "$SCENARIO" == "disk recovers" ) && $count -ge 3 ]] && { echo success; exit 0; }
 [[ "$SCENARIO" == "silent failure" ]] && exit 42
 [[ "$1" == --nobest && "$SCENARIO" != 'nobest fails' ]] && { echo success; exit 0; }
 case "$SCENARIO" in
+  'slow download'*)
+    echo 'No match for argument: postgresql17-server'
+    echo 'Dependencies resolved.'
+    echo 'Downloading Packages:'
+    echo 'Error: Error downloading packages: Curl error (28): Timeout was reached (Operation too slow)' >&2 ;;
   'disk recovers') echo 'Error: No space left on device' >&2 ;;
   transient) echo 'Error: repository unavailable' >&2 ;;
   permanent) echo 'Error: Failed to download metadata for repo' >&2 ;;
@@ -84,6 +91,11 @@ echo completed
     calls = (tmp_path / 'calls').read_text().splitlines()
     transactions = [line for line in calls if not line.startswith('clean ')]
     assert len(transactions) == attempts
+    for line in transactions:
+        assert '--setopt=timeout=30' in line
+        assert '--setopt=minrate=512k' in line
+        assert '--setopt=retries=2' in line
+        assert '--setopt=max_parallel_downloads=10' in line
     assert all(
         line.endswith('--exclude=unwanted groupinstall -y Server with GUI')
         for line in transactions
@@ -91,6 +103,8 @@ echo completed
     assert '--skip-broken' not in '\n'.join(calls)
     fallback = scenario not in (
         'transient',
+        'slow download recovers',
+        'slow download fails',
         'dependency recovers',
         'disk recovers',
         'permanent',
@@ -99,6 +113,7 @@ echo completed
     )
     retries = {
         'transient': 2,
+        'slow download recovers': 2,
         'dependency recovers': 2,
         'disk recovers': 2,
         'missing package': 0,

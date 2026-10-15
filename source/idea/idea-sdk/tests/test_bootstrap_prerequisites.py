@@ -230,7 +230,9 @@ apt_update
     calls = (tmp_path / 'calls').read_text().splitlines()
     assert len(calls) == (3 if recover else 4)
     assert all(
-        line == '-o APT::Update::Error-Mode=any -o DPkg::Lock::Timeout=300 update'
+        line == '-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 '
+        '-o Acquire::Retries=2 '
+        '-o APT::Update::Error-Mode=any -o DPkg::Lock::Timeout=300 update'
         for line in calls
     )
 

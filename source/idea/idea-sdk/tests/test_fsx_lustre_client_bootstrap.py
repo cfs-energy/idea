@@ -32,7 +32,7 @@ yum() {
 grubby() { echo "/boot/vmlinuz-${DEFAULT_KERNEL:-$RUNNING_KERNEL}"; }
 aws() { echo "aws $*" >> "$CALLS"; }
 crontab() { :; }
-reboot() { echo reboot >> "$CALLS"; }
+reboot_after_cloud_init() { echo reboot >> "$CALLS"; }
 """
 
 

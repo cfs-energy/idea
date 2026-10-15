@@ -141,7 +141,7 @@ echo "@daily source /etc/environment; /bin/bash ${IDEA_APP_DEPLOY_DIR}/scheduler
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/scheduler_post_reboot.sh crontab >> ${BOOTSTRAP_DIR}/logs/scheduler_post_reboot.log 2>&1") | crontab -
-  reboot
+  reboot_after_cloud_init
 else
   /bin/bash ${SCRIPT_DIR}/scheduler_post_reboot.sh >> ${BOOTSTRAP_DIR}/logs/scheduler_post_reboot.log 2>&1
 fi
