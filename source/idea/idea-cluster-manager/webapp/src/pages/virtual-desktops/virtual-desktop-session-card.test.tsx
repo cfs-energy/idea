@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import VirtualDesktopSessionCard, { describeSchedule, primaryAction } from './components/virtual-desktop-session-card';
 import { initTestAppContext } from '../../test-support';
@@ -23,13 +23,15 @@ function renderCard(state: string, props: any = {}) {
         onDownloadDcvSessionFile: vi.fn().mockResolvedValue(true),
         onConnectHelp: vi.fn().mockResolvedValue(true)
     };
-    render(<VirtualDesktopSessionCard
+    const card = (overrides: any = {}) => <VirtualDesktopSessionCard
         virtualDesktopClient={{} as any}
         isActiveDirectory={false}
         session={{ ...BASE, state }}
         {...handlers}
-        {...props}/>);
-    return handlers;
+        {...props}
+        {...overrides}/>;
+    const view = render(card());
+    return {...handlers, rerender: (overrides: any) => view.rerender(card(overrides))};
 }
 
 describe('primaryAction', () => {
@@ -71,6 +73,47 @@ describe('describeSchedule', () => {
 describe('virtual desktop session card', () => {
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it.each(['ubuntu2604', 'rocky10', 'windows2022', 'amazonlinux2023'])('replaces a black %s preview and still connects', async (base_os) => {
+        const data = new Uint8ClampedArray(32 * 32 * 4);
+        for (let i = 3; i < data.length; i += 4) data[i] = 255;
+        vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+            drawImage: vi.fn(), getImageData: () => ({ data })
+        } as any);
+        const handlers = renderCard('READY', { screenshot: 'black', session: { ...BASE, state: 'READY', base_os } });
+        fireEvent.load(screen.getByAltText('Desktop preview'));
+        expect(screen.getByText('Desktop locked for security.')).toBeInTheDocument();
+        expect(screen.getByText('Preview unavailable. Connect to unlock.')).toBeInTheDocument();
+        expect(screen.queryByAltText('Desktop preview')).not.toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Connect' }));
+        expect(handlers.onLaunchSession).toHaveBeenCalled();
+    });
+
+    it.each(['normal', 'canvas unavailable'])('keeps a preview for %s', (kind) => {
+        vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => {
+            if (kind === 'canvas unavailable') throw new Error('canvas unavailable');
+            return { drawImage: vi.fn(), getImageData: () => ({ data: new Uint8ClampedArray(32 * 32 * 4).fill(255) }) } as any;
+        });
+        renderCard('READY', { screenshot: 'normal' });
+        fireEvent.load(screen.getByAltText('Desktop preview'));
+        expect(screen.getByAltText('Desktop preview')).toBeInTheDocument();
+        expect(screen.queryByText('Desktop locked for security.')).not.toBeInTheDocument();
+    });
+
+    it('allows JPEG noise and clears the locked card when a new preview has content', () => {
+        const data = new Uint8ClampedArray(32 * 32 * 4).fill(8);
+        vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+            drawImage: vi.fn(), getImageData: () => ({ data })
+        } as any);
+        const card = renderCard('READY', { screenshot: 'near-black' });
+        fireEvent.load(screen.getByAltText('Desktop preview'));
+        expect(screen.getByText('Desktop locked for security.')).toBeInTheDocument();
+        data[0] = 9;
+        card.rerender({ screenshot: 'new-content' });
+        fireEvent.load(screen.getByAltText('Desktop preview'));
+        expect(screen.queryByText('Desktop locked for security.')).not.toBeInTheDocument();
+        expect(screen.getByAltText('Desktop preview')).toHaveAttribute('src', 'data:image/jpeg;base64,new-content');
     });
 
     it('connects a ready desktop from the primary button', async () => {

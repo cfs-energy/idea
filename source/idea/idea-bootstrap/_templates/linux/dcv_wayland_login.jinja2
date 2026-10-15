@@ -26,9 +26,10 @@ PartOf=graphical-session.target
 ConditionEnvironment=XDG_SESSION_TYPE=wayland
 ConditionEnvironment=XDG_SESSION_CLASS=user
 [Service]
+Type=simple
 ExecStart=/usr/local/libexec/idea-dcv-lock-visible
-Restart=on-failure
-RestartSec=5
+Restart=no
+StandardError=journal
 TimeoutStopSec=10
 EOF_LOCK_SERVICE
 ln -sfn ../idea-dcv-lock-visible.service /etc/systemd/user/gnome-session.target.wants/idea-dcv-lock-visible.service || exit 1

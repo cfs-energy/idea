@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,68 @@ from test_bootstrap_shell_syntax import Config, DESKTOP_BASE_OS, IDEA_BOOTSTRAP_
 
 LINUX = [os for os in DESKTOP_BASE_OS if not os.startswith('windows')]
 WINDOWS = [os for os in DESKTOP_BASE_OS if os.startswith('windows')]
+
+MUTTER_SYMBOLS = [
+    'org.gnome.Mutter.RemoteDesktop',
+    'org.gnome.Mutter.RemoteDesktop.Session',
+    'CreateSession',
+    'NotifyPointerMotionRelative',
+]
+
+
+@pytest.mark.parametrize('base_os', ['rhel10', 'rocky10', 'ubuntu2604'])
+@pytest.mark.parametrize('missing', [None, 'library', *MUTTER_SYMBOLS])
+def test_mutter_contract_is_advisory_and_publishes(tmp_path, base_os, missing):
+    library = tmp_path / 'libmutter-18.so.0'
+    if missing != 'library':
+        # Synthetic binary data; omit the longer interface too when its prefix is missing.
+        library.write_bytes(
+            b'\x00'.join(
+                s.encode()
+                for s in MUTTER_SYMBOLS
+                if missing is None or missing not in s
+            )
+        )
+    script = render('dcv-host-ami-builder/image_checks.sh.jinja2', base_os)
+    assert 'check --warning mutter-lock ' in script
+    script = script.replace('source /etc/environment', ':')
+    script = script.replace('/var/lib/idea', str(tmp_path))
+    script = script.replace('/usr/lib64/libmutter-*.so.*', str(library))
+    script = script.replace('/usr/lib/*/libmutter-*.so.*', str(library))
+    script = script.replace(
+        'BAKE_PYTHON=$(command -v python3 || command -v /usr/libexec/platform-python)',
+        f'BAKE_PYTHON={sys.executable}',
+    )
+    # Exercise the actual reporter and publish path; all unrelated checks are out of scope.
+    script = re.sub(r'^check (?!--warning mutter-lock).*$', ':', script, flags=re.M)
+    script = (
+        'aws() { echo "stub aws $*"; }\nrpm() { echo "mutter 48.2-test"; }\ndpkg-query() { echo "mutter-common 48.2-test"; }\n'
+        + script
+    )
+    path = tmp_path / 'checks.sh'
+    path.write_text(script)
+    (tmp_path / 'baked-release').write_text('test-release')
+    env = {**os.environ, 'IDEA_MODULE_VERSION': 'test-release'}
+    result = subprocess.run(
+        ['bash', str(path)], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    checks = json.loads((tmp_path / 'image-checks.json').read_text())['checks']
+    assert len(checks) == 1
+    check = checks[0]
+    assert check['name'] == 'mutter-lock' and check['ok'] is True
+    assert check['level'] == ('warning' if missing else 'pass')
+    if missing:
+        assert 'WARNING' in result.stdout and '48.2-test' in check['detail']
+        for symbol in MUTTER_SYMBOLS if missing == 'library' else [missing]:
+            assert symbol in check['detail']
+    published = subprocess.run(
+        ['bash', str(path), '--publish'], env=env, capture_output=True, text=True
+    )
+    assert published.returncode == 0, published.stderr
+    assert 'Value=complete' in published.stdout
+    if missing:
+        assert 'WARNING' in published.stdout
 
 
 def render(

@@ -61,15 +61,24 @@ fi
 
 check() {
   # a check prints why it failed; that line replaces the description in the report
+  local advisory=false level=pass
+  if [[ $1 == --warning ]]; then advisory=true; shift; fi
   local name=$1 detail=$2 started=$SECONDS ok=true reason
   shift 2
   if ! reason=$("$@" 2>&1); then
-    ok=false
-    [[ $STATUS != complete ]] || STATUS="failed:$name"
-    reason=$(printf '%s' "$reason" | tr -s '\n\t ' ' ' | tail -c 400)
-    [[ -z "$reason" ]] || detail=$reason
+    reason=$(printf '%s' "$reason" | tr -s '\n\t ' ' ')
+    if $advisory; then
+      level=warning
+      detail="WARNING: ${reason:-$detail}"
+      echo "$detail"
+    else
+      level=error
+      ok=false
+      [[ $STATUS != complete ]] || STATUS="failed:$name"
+      [[ -z "$reason" ]] || detail=$(printf '%s' "$reason" | tail -c 400)
+    fi
   fi
-  CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))")
+  CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))" "$level")
 }
 
 pbs_ok() {
@@ -256,7 +265,30 @@ wayland_ok() {
   [[ "$(systemctl get-default)" == graphical.target ]] || { echo "default target is $(systemctl get-default), not graphical.target"; return 1; }
   ! grep -Eqs '^[[:space:]]*WaylandEnable[[:space:]]*=[[:space:]]*(false|0)' /etc/gdm/custom.conf /etc/gdm3/custom.conf || { echo "GDM has WaylandEnable=false, so DCV virtual sessions cannot start"; return 1; }
 }
-check wayland 'Boots to the graphical target with Wayland enabled in GDM' wayland_ok{% endif %}
+check wayland 'Boots to the graphical target with Wayland enabled in GDM' wayland_ok
+mutter_lock_ok() {
+  local version library symbol found missing=()
+{% if context.base_os == 'ubuntu2604' %}
+  local libraries=(/usr/lib/*/libmutter-*.so.*)
+  version=$(dpkg-query -W -f='${Package} ${Version}' mutter-common 2>/dev/null) || version='mutter version unavailable'
+{% else %}
+  local libraries=(/usr/lib64/libmutter-*.so.*)
+  version=$(rpm -q mutter 2>/dev/null) || version='mutter version unavailable'
+{% endif %}
+  for symbol in org.gnome.Mutter.RemoteDesktop org.gnome.Mutter.RemoteDesktop.Session CreateSession NotifyPointerMotionRelative; do
+    found=false
+    for library in "${libraries[@]}"; do
+      [[ -f "$library" ]] || continue
+      if grep -a -F -q -- "$symbol" "$library"; then found=true; break; fi
+    done
+    $found || missing+=("$symbol")
+  done
+  if [[ -n "${missing[*]}" ]]; then
+    echo "${version:-mutter version unavailable}: libmutter missing or missing strings: ${missing[*]}; locked previews may be unavailable"
+    return 1
+  fi
+}
+check --warning mutter-lock 'Mutter lock visibility strings are present' mutter_lock_ok{% endif %}
 check dcv 'DCV server is installed, its units are present, and dcvserver libraries resolve' dcv_ok
 check dcv-launcher 'DCV session launcher starts and is active when installed' dcv_launcher_ok
 {% endif %}
@@ -275,8 +307,8 @@ import json
 import os
 import sys
 path, release, *values = sys.argv[1:]
-checks = [dict(name=n, ok=o == 'true', detail=d, seconds=int(s))
-          for n, o, d, s in zip(*[iter(values)] * 4)]
+checks = [dict(name=n, ok=o == 'true', detail=d, seconds=int(s), level=level)
+          for n, o, d, s, level in zip(*[iter(values)] * 5)]
 with open(path + '.tmp', 'w') as out:
     json.dump(dict(release=release, checks=checks), out)
 os.replace(path + '.tmp', path)
