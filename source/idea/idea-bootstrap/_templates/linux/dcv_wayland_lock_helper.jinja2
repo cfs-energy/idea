@@ -1,0 +1,140 @@
+#!/usr/bin/python3
+"""Keep the DCV owner's locked Wayland screen visible using real pointer input."""
+
+import json
+import logging
+import os
+import pwd
+import signal
+import subprocess
+
+REMOTE = 'org.gnome.Mutter.RemoteDesktop'
+ROOT = '/org/gnome/Mutter/RemoteDesktop'
+LOGIN = 'org.freedesktop.login1'
+PROPERTIES = 'org.freedesktop.DBus.Properties'
+INTERVAL = 5
+
+
+def owner_session(sessions, username):
+    owned = [s for s in sessions if s['owner'] == username]
+    if len(owned) != 1:
+        raise ValueError('expected one DCV session for this owner')
+    session = owned[0]
+    if session['type'] != 'virtual' or session['user'] != username:
+        raise ValueError('not an owner virtual session')
+    return session['xdg-session-id']
+
+
+class Remote:
+    def __init__(self):
+        from gi.repository import Gio, GLib
+
+        self.Gio, self.GLib = Gio, GLib
+        self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        sessions = json.loads(
+            subprocess.check_output(['/usr/bin/dcv', 'list-sessions', '-j'], timeout=10)
+        )
+        sid = owner_session(sessions, pwd.getpwuid(os.getuid()).pw_name)
+        self.path = self.invoke(
+            self.system, LOGIN, '/org/freedesktop/login1', LOGIN + '.Manager',
+            'GetSession', '(s)', (sid,)
+        )[0]
+
+    def invoke(self, bus, name, path, interface, method, signature=None, args=()):
+        return bus.call_sync(
+            name, path, interface, method,
+            self.GLib.Variant(signature, args) if signature else None,
+            None, self.Gio.DBusCallFlags.NO_AUTO_START, 5000, None
+        ).unpack()
+
+    def is_locked(self):
+        props = self.invoke(
+            self.system, LOGIN, self.path, PROPERTIES, 'GetAll',
+            '(s)', (LOGIN + '.Session',)
+        )[0]
+        if not (
+            props['User'][0] == os.getuid() and props['Class'] == 'user'
+            and props['Type'] == 'wayland' and props['Remote']
+            and not props['Seat'][0] and props['State'] == 'active'
+        ):
+            raise ValueError('not an active remote owner Wayland session')
+        return props['LockedHint']
+
+    def call(self, path, method, signature=None, args=()):
+        interface = REMOTE if path == ROOT else REMOTE + '.Session'
+        return self.invoke(self.bus, REMOTE, path, interface, method, signature, args)
+
+
+class Keeper:
+    def __init__(self, remote):
+        self.remote = remote
+        self.session = None
+
+    def stop(self):
+        if self.session:
+            session, self.session = self.session, None
+            self.remote.call(session, 'Stop')
+
+    def tick(self):
+        if not self.remote.is_locked():
+            self.stop()
+            return
+        if self.session is None:
+            self.session = self.remote.call(ROOT, 'CreateSession')[0]
+            self.remote.call(self.session, 'Start')
+        # Nudge before GNOME's locked display can reblank.
+        # Recheck after Start and before each motion; never send keys or buttons.
+        for dx in (1.0, -1.0):
+            if not self.remote.is_locked():
+                self.stop()
+                return
+            self.remote.call(
+                self.session, 'NotifyPointerMotionRelative', '(dd)', (dx, 0.0)
+            )
+
+
+def main():
+    remote = Remote()
+    keeper = Keeper(remote)
+    loop = remote.GLib.MainLoop()
+    failed = False
+
+    def tick():
+        nonlocal failed
+        try:
+            keeper.tick()
+        except Exception:
+            logging.exception('DCV lock visibility stopped; retrying with a new session')
+            failed = True
+            loop.quit()
+            return False
+        return True
+
+    def changed(connection, sender, path, interface, name, parameters, user_data=None):
+        iface, props, invalidated = parameters.unpack()
+        if iface == LOGIN + '.Session' and (
+            'LockedHint' in props or 'LockedHint' in invalidated
+        ):
+            tick()
+
+    remote.system.signal_subscribe(
+        LOGIN, PROPERTIES, 'PropertiesChanged', remote.path, None,
+        remote.Gio.DBusSignalFlags.NONE, changed
+    )
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        remote.GLib.unix_signal_add(
+            remote.GLib.PRIORITY_DEFAULT, sig, lambda: (loop.quit(), False)[1]
+        )
+    remote.GLib.timeout_add_seconds(INTERVAL, tick)
+    try:
+        if tick():
+            loop.run()
+    finally:
+        keeper.stop()
+    return int(failed)
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    raise SystemExit(main())

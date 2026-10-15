@@ -13,6 +13,25 @@ cat > /usr/local/libexec/idea-dcv-login <<'PYCODE' || exit 1
 {% include '_templates/linux/dcv_wayland_login_helper.jinja2' %}
 PYCODE
 chmod 755 /usr/local/libexec/idea-dcv-login || exit 1
+cat > /usr/local/libexec/idea-dcv-lock-visible <<'PYCODE' || exit 1
+{% include '_templates/linux/dcv_wayland_lock_helper.jinja2' %}
+PYCODE
+chmod 755 /usr/local/libexec/idea-dcv-lock-visible || exit 1
+install -d -m 755 /etc/systemd/user/gnome-session.target.wants || exit 1
+cat > /etc/systemd/user/idea-dcv-lock-visible.service <<'EOF_LOCK_SERVICE' || exit 1
+[Unit]
+Description=Keep the IDEA DCV owner's locked Wayland screen visible
+After=gnome-session-initialized.target
+PartOf=graphical-session.target
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionEnvironment=XDG_SESSION_CLASS=user
+[Service]
+ExecStart=/usr/local/libexec/idea-dcv-lock-visible
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+EOF_LOCK_SERVICE
+ln -sfn ../idea-dcv-lock-visible.service /etc/systemd/user/gnome-session.target.wants/idea-dcv-lock-visible.service || exit 1
 cat > /etc/pam.d/idea-dcv-login <<'EOF_PAM' || exit 1
 auth requisite pam_exec.so expose_authtok quiet /usr/local/libexec/idea-dcv-login pam
 # pam_exec does not implement setcred; permit it only after the requisite owner check.
@@ -62,6 +81,8 @@ ExecStart=/usr/local/libexec/idea-dcv-login serve
 Restart=on-failure
 RuntimeDirectory=idea-dcv-login
 RuntimeDirectoryMode=0755
+StateDirectory=idea-dcv-login
+StateDirectoryMode=0700
 UMask=0077
 [Install]
 WantedBy=dcvserver.service

@@ -39,6 +39,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Image bakes on new base images**: Ubuntu builders refresh package lists before installing the AWS CLI's prerequisites, and a builder whose AWS CLI install or bootstrap download fails stops at once and says why instead of waiting out the 60-minute timeout. Kernel modules (DCV USB, NVIDIA) install the kernel-devel package for the running kernel, retrying while mirrors catch up, and fail naming both versions when it is not available.
 * **Desktops on RHEL 10 and Rocky 10 are reachable**: the host firewall stays off on every image. fail2ban pulled in firewalld after the bootstrap had already checked for it, which blocked DCV's port.
 * **Wayland desktops open as the owner**: RHEL 10, Rocky 10 and Ubuntu 26.04 sessions log the session owner into GNOME without a second password, as X11 desktops always have. Only the DCV session's owner is signed in, only on that session's remote display, and Active Directory remote-desktop policy still applies.
+* **Wayland desktops lock like X11 desktops**: the owner is signed in automatically only on a desktop's first launch; after a reboot, stop/start or idle lock the normal password prompt applies.
+* **Locked Wayland desktops show the lock screen**: GNOME blanks a locked screen to black, which also blanked the portal preview; a small session helper keeps the lock screen visible while locked, without unlocking or typing anything.
 
 ## [26.10.5] - 2026-10-13
 

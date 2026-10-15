@@ -32,7 +32,7 @@ def test_login_is_installed_on_fresh_and_baked_desktops(base_os, instance_type):
 
 
 @pytest.fixture
-def login(monkeypatch):
+def login(monkeypatch, tmp_path):
     # the helper ships as a .jinja2 template, so name its loader explicitly
     spec = importlib.util.spec_from_loader(
         'dcv_wayland_login',
@@ -40,6 +40,7 @@ def login(monkeypatch):
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'FIRST_LOGIN', tmp_path / 'first-login', raising=False)
     accounts = {
         42: SimpleNamespace(pw_name='gdm', pw_uid=42, pw_gid=43),
         60578: SimpleNamespace(pw_name='gdm-greeter', pw_uid=60578, pw_gid=43),
@@ -331,12 +332,57 @@ def test_credential_cannot_authorize_another_login(login, monkeypatch, change):
         now[0] = 41
     with pytest.raises(ValueError):
         grants.handle(pid, uid, redeem)
+    assert not login.FIRST_LOGIN.exists()
 
 
 @pytest.mark.parametrize('uid', [0, 1000])
 def test_only_gdm_can_request_an_owner_credential(login, uid):
     with pytest.raises(ValueError):
         login.Grants(System()).handle(100, uid, {'op': 'issue'})
+
+
+def test_first_login_privilege_is_consumed_at_validated_pam_redemption(
+    login, monkeypatch
+):
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: 123 if pid == 200 else None)
+    grants = login.Grants(System())
+    issued = grants.handle(100, 42, {'op': 'issue'})
+    pam = {'user': 'alice', 'remote': '0.0.0.0', 'token': issued['token']}
+    assert grants.handle(200, 0, dict(pam, op='redeem')) == {'ok': True}
+    assert login.FIRST_LOGIN.stat().st_mode & 0o777 == 0o600
+    # Recreating both service and DCV session must not grant a second automatic login.
+    system = System()
+    system.owner = lambda *args: ('alice', 'new-session', 'tomorrow')
+    with pytest.raises(ValueError, match='first login'):
+        login.Grants(system).handle(100, 42, {'op': 'issue'})
+
+
+def test_outstanding_credential_cannot_bypass_completed_first_login(login, monkeypatch):
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: 123)
+    grants = login.Grants(System())
+    issued = grants.handle(100, 42, {'op': 'issue'})
+    login.FIRST_LOGIN.write_text('completed')
+    with pytest.raises(ValueError, match='first login'):
+        grants.handle(
+            200,
+            0,
+            dict(op='redeem', user='alice', remote='remote', token=issued['token']),
+        )
+
+
+def test_first_login_fails_closed_if_state_cannot_be_persisted(
+    login, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: pid == 200)
+    monkeypatch.setattr(login, 'FIRST_LOGIN', tmp_path / 'missing' / 'marker')
+    grants = login.Grants(System())
+    issued = grants.handle(100, 42, {'op': 'issue'})
+    with pytest.raises(OSError):
+        grants.handle(
+            200,
+            0,
+            dict(op='redeem', user='alice', remote='remote', token=issued['token']),
+        )
 
 
 @pytest.mark.parametrize('base_os', WAYLAND + ['rocky9', 'ubuntu2404'])
@@ -368,6 +414,9 @@ def test_ad_account_policy_is_preserved(base_os):
 def test_x11_does_not_install_owner_login(base_os):
     text = render('_templates/linux/dcv_server.jinja2', base_os)
     assert 'idea-dcv-login' not in text
+    assert 'idea-dcv-login' not in render(
+        'dcv-host-ami-builder/image_scrub.sh.jinja2', base_os
+    )
 
 
 @pytest.mark.parametrize('base_os', WAYLAND)
@@ -420,7 +469,8 @@ def test_installation_is_idempotent_and_contains_no_baked_owner(tmp_path, base_o
         )
         assert wants.resolve() == user_service
     scrub = render('dcv-host-ami-builder/image_scrub.sh.jinja2', base_os)
-    assert 'idea-dcv-login' not in scrub
+    assert 'rm -rf /var/lib/idea-dcv-login' in scrub
+    assert 'StateDirectoryMode=0700' in text
 
 
 @pytest.mark.parametrize('module_name', ['scheduler', 'virtual-desktop-controller'])

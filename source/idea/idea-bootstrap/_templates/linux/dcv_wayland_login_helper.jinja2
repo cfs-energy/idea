@@ -15,6 +15,7 @@ import sys
 import time
 
 SOCKET = '/run/idea-dcv-login/socket'
+FIRST_LOGIN = Path('/var/lib/idea-dcv-login/first-login-complete')
 SERVICE = 'idea-dcv-login'
 GDM = 'org.gnome.DisplayManager'
 REMOTE = GDM + '.RemoteDisplay'
@@ -178,6 +179,8 @@ class Grants:
     def handle(self, pid, uid, request):
         now = time.monotonic()
         self.tokens = {k: v for k, v in self.tokens.items() if v[0] > now}
+        if FIRST_LOGIN.exists():
+            raise ValueError('automatic first login already completed')
         if request['op'] == 'issue' and is_greeter(uid):
             session_id = self.system.caller_session(pid, uid)['Id']
             owner = self.system.owner(session_id, uid)
@@ -201,6 +204,18 @@ class Grants:
                 or self.system.owner(session_id, greeter_uid) != owner
             ):
                 raise ValueError('DCV owner/session changed')
+            # Consume the one-time privilege before PAM proceeds: later PAM failures
+            # require a password too, rather than reopening automatic authentication.
+            fd = os.open(FIRST_LOGIN, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as marker:
+                marker.write(owner[1] + '\n')
+                marker.flush()
+                os.fsync(marker.fileno())
+            directory = os.open(FIRST_LOGIN.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
             logging.info(
                 'Authorized owner %s on DCV session %s, GDM session %s',
                 owner[0],
