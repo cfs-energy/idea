@@ -47,6 +47,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Wallpaper survives moving between desktops**: home folders are shared by all of a user's desktops, so a wallpaper chosen on one OS can be missing on another and showed a flat colour. Wayland desktops now fall back to their own default when the saved wallpaper file does not exist there, and keep it when it does.
 * **Image bakes survive a slow package mirror**: package installs drop a mirror that stalls below 512 KB/s for 30 seconds and move to the next, with parallel downloads, instead of spending the whole bake on it. Installs are never interrupted mid-transaction.
 * **No crash report from the first boot**: bootstrap reboots now wait for cloud-init to finish, so new Ubuntu desktops no longer start with a cloud-init crash report and its "a problem has occurred" dialog.
+* **Each desktop OS keeps its own wallpaper**: home folders are shared by all of a user's desktops, so one OS's wallpaper setting showed a flat colour on the others. Wayland desktops now show their OS's stock light and dark wallpaper, locked; a missing file only costs a plain colour.
 
 ## [26.10.5] - 2026-10-13
 

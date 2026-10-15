@@ -472,35 +472,8 @@ def test_warning_version_queries_installed_desktop_packages(lock, monkeypatch, r
     )
 
 
-@pytest.mark.parametrize('key', ['picture-uri', 'picture-uri-dark'])
-@pytest.mark.parametrize('kind', ['missing', 'existing', 'non-file'])
-def test_wallpaper_resets_only_missing_files(lock, monkeypatch, tmp_path, key, kind):
-    image = tmp_path / "owner's wallpaper.jpg"
-    if kind == 'existing':
-        image.touch()
-    uri = 'https://example.org/wallpaper.jpg' if kind == 'non-file' else image.as_uri()
-    values = dict.fromkeys(('picture-uri', 'picture-uri-dark'), '')
-    values[key] = uri
-    resets, messages = [], []
-
-    def check_output(command, **kwargs):
-        assert command[:3] == ['gsettings', 'get', 'org.gnome.desktop.background']
-        return repr(values[command[3]])
-
-    def run(command, **kwargs):
-        assert command[:3] == ['gsettings', 'reset', 'org.gnome.desktop.background']
-        assert kwargs['check']
-        resets.append(command[3])
-        values[command[3]] = ''
-
-    monkeypatch.setattr(lock.subprocess, 'check_output', check_output)
-    monkeypatch.setattr(lock.subprocess, 'run', run)
-    monkeypatch.setattr(
-        lock.LOG, 'info', lambda msg, *args: messages.append(msg % args)
-    )
-    lock.reset_missing_wallpapers()
-    lock.reset_missing_wallpapers()
-    assert resets == ([key] if kind == 'missing' else [])
-    assert len(messages) == len(resets)
-    if messages:
-        assert key in messages[0]
+def test_helper_does_not_change_wallpapers():
+    path = Path(IDEA_BOOTSTRAP_DIR) / '_templates/linux/dcv_wayland_lock_helper.jinja2'
+    text = path.read_text()
+    assert 'reset_missing_wallpapers' not in text
+    assert 'gsettings' not in text

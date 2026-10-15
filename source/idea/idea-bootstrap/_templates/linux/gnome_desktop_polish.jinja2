@@ -30,6 +30,18 @@ mkdir -p /usr/local/share/themes/Adwaita-dark/gtk-3.0 || exit 1
 printf '@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-dark.css");\n' > /usr/local/share/themes/Adwaita-dark/gtk-3.0/gtk.css || exit 1
 {% endif %}
 
+# Each OS shows its own stock wallpaper; locked below so the shared home cannot carry another OS's.
+{% if context.base_os == 'rhel10' %}
+desktop_light=file:///usr/share/backgrounds/rhel10-brandrects-l.jpg
+desktop_dark=file:///usr/share/backgrounds/rhel10-brandrects-d.jpg
+{% elif context.base_os == 'rocky10' %}
+desktop_light=file:///usr/share/backgrounds/rocky-default-10-gemstone-skies-day.png
+desktop_dark=file:///usr/share/backgrounds/rocky-default-10-gemstone-skies-night.png
+{% else %}
+desktop_light=file:///usr/share/backgrounds/warty-final-ubuntu.png
+desktop_dark=file:///usr/share/backgrounds/ubuntu-wallpaper-d.png
+{% endif %}
+
 desktop_schemas=$(gsettings list-schemas) || exit 1
 desktop_defaults="[org/gnome/desktop/interface]
 color-scheme='prefer-dark'
@@ -38,6 +50,11 @@ gtk-theme='Yaru-dark'
 {% else %}
 gtk-theme='Adwaita-dark'
 {% endif %}
+
+[org/gnome/desktop/background]
+picture-uri='$desktop_light'
+picture-uri-dark='$desktop_dark'
+picture-options='zoom'
 "
 # EL10 has no DING schema; only configure desktop icons when it exists.
 if printf '%s\n' "$desktop_schemas" | grep -Fxq org.gnome.shell.extensions.ding; then
@@ -68,8 +85,8 @@ show-updates-status-icon=false
 "
 fi
 {% endif %}
-# Keep these as defaults: existing user preferences and users' ability to change them survive.
-mkdir -p /etc/dconf/profile /etc/dconf/db/local.d || exit 1
+# Only the wallpaper is locked; the other polish settings remain user-changeable defaults.
+mkdir -p /etc/dconf/profile /etc/dconf/db/local.d/locks || exit 1
 if [ ! -f /etc/dconf/profile/user ]; then
   printf 'user-db:user\n' > /etc/dconf/profile/user || exit 1
 fi
@@ -77,6 +94,13 @@ if ! grep -Fxq 'system-db:local' /etc/dconf/profile/user; then
   printf '\nsystem-db:local\n' >> /etc/dconf/profile/user || exit 1
 fi
 printf '%s\n' "$desktop_defaults" > /etc/dconf/db/local.d/00-idea-desktop || exit 1
+# GNOME 47/50 also use these keys for the lock screen; 'none' would suppress the image.
+cat > /etc/dconf/db/local.d/locks/idea-background <<'IDEA_BACKGROUND_LOCKS'
+/org/gnome/desktop/background/picture-uri
+/org/gnome/desktop/background/picture-uri-dark
+/org/gnome/desktop/background/picture-options
+IDEA_BACKGROUND_LOCKS
+[ "$?" -eq 0 ] || exit 1
 dconf update || exit 1
 # End: GNOME Desktop Polish
 {% endif %}

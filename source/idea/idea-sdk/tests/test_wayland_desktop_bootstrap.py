@@ -13,6 +13,15 @@ import pytest
 from test_dcv_host_ami_builder_bootstrap import render, run_set_kernel
 
 WAYLAND = ['rhel10', 'rocky10', 'ubuntu2604']
+WALLPAPERS = {
+    'rhel10': ('rhel10-brandrects-l.jpg', 'rhel10-brandrects-d.jpg'),
+    'rocky10': (
+        'rocky-default-10-gemstone-skies-day.png',
+        'rocky-default-10-gemstone-skies-night.png',
+    ),
+    'ubuntu2604': ('warty-final-ubuntu.png', 'ubuntu-wallpaper-d.png'),
+}
+
 X11 = [
     'amazonlinux2023',
     'rhel8',
@@ -165,12 +174,17 @@ def test_desktop_polish_is_targeted_and_idempotent(
     crash.parent.mkdir(parents=True, exist_ok=True)
     crash.write_text('[Path]\nPathExistsGlob=/var/crash/*\n')
     protected[crash] = crash.read_bytes()
+    backgrounds = tmp_path / 'backgrounds'
+    backgrounds.mkdir()
+    for name in WALLPAPERS[base_os]:
+        (backgrounds / name).touch()
     script = (
         f'gsettings() {{ printf "%s\\n" "{schemas}"; }}\n'
         'dconf() { echo "dconf $*"; }\n'
         + block.replace('/etc/', f'{etc}/')
         .replace('/usr/lib/systemd/user/', f'{units}/')
         .replace('/usr/local/share/', f'{tmp_path}/share/')
+        .replace('/usr/share/backgrounds/', f'{backgrounds}/')
     )
     for _ in range(2):
         result = subprocess.run(
@@ -222,8 +236,43 @@ def test_desktop_polish_is_targeted_and_idempotent(
         assert not pro.exists()
         assert list((etc / 'systemd/user').iterdir()) == [crash]
     if not schemas:
-        assert defaults.sections() == ['org/gnome/desktop/interface']
-    assert not (etc / 'dconf/db/local.d/locks').exists()
+        assert defaults.sections() == [
+            'org/gnome/desktop/interface',
+            'org/gnome/desktop/background',
+        ]
+    background = defaults['org/gnome/desktop/background']
+    for key, name in zip(('picture-uri', 'picture-uri-dark'), WALLPAPERS[base_os]):
+        assert background[key] == f"'{(backgrounds / name).as_uri()}'"
+    assert background['picture-options'] == "'zoom'"
+    assert (
+        etc / 'dconf/db/local.d/locks/idea-background'
+    ).read_text().splitlines() == [
+        '/org/gnome/desktop/background/picture-uri',
+        '/org/gnome/desktop/background/picture-uri-dark',
+        '/org/gnome/desktop/background/picture-options',
+    ]
+
+
+@pytest.mark.parametrize(
+    'base_os,light,dark',
+    [
+        ('rhel10', 'rhel10-brandrects-l.jpg', 'rhel10-brandrects-d.jpg'),
+        (
+            'rocky10',
+            'rocky-default-10-gemstone-skies-day.png',
+            'rocky-default-10-gemstone-skies-night.png',
+        ),
+        ('ubuntu2604', 'warty-final-ubuntu.png', 'ubuntu-wallpaper-d.png'),
+    ],
+)
+def test_each_os_uses_its_own_stock_wallpaper(base_os, light, dark):
+    # the shared home carries another OS's wallpaper setting; a locked system default wins,
+    # and a missing file only costs a plain colour, never the bootstrap
+    text = render('_templates/linux/gnome_desktop_polish.jinja2', base_os)
+    assert f'desktop_light=file:///usr/share/backgrounds/{light}' in text
+    assert f'desktop_dark=file:///usr/share/backgrounds/{dark}' in text
+    assert 'desktop_wallpaper' not in text
+    assert '/org/gnome/desktop/background/picture-uri-dark' in text
 
 
 @pytest.mark.parametrize('base_os', WAYLAND + X11)
