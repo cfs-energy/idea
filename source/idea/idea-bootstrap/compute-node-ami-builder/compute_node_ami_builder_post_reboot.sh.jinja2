@@ -25,7 +25,7 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 # a reboot may be required if GPU Drivers are installed.
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
-  reboot
+  reboot_after_cloud_init
   exit 0
 else
 

@@ -12,6 +12,8 @@ Install-time values, generated resource identities, internal wiring, and package
 
 **Desktop schedule** is one table for all days. **Notifications** is one table for desktop and job events and their templates. Other guided editors keep their own save buttons; there is no page-wide Save button.
 
+Under **Costs > Compute rate**, set the effective compute rate: what the account pays as a share of on-demand list price, for example 0.72 under savings plans. It applies to job and desktop compute only, must be above 0 and at most 1.5, and 1.0 (the default) means list price.
+
 Under **Costs > Storage cost collection**, enable ONTAP storage collection, set a read-only username and password secret ARN for each attachment, save, deploy required secret permissions, and restart cluster-manager.
 
 Under **Users and sign-in > Account synchronization**, **Scheduled reconciliation** saves immediately. **Preview changes** and **Run reconciliation** use the saved policy even when scheduling is off. Advanced edits require **Save reconciliation settings**.

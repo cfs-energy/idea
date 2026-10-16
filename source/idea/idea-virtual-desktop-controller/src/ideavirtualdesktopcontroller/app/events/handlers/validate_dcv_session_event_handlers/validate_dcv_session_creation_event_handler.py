@@ -97,6 +97,9 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
             session.state = VirtualDesktopSessionState.READY
             _ = self.session_db.update(session)
             self.session_counter_db.delete(counter_db_entry)
+            # create and resume both arrive here; a desktop from before a scheduler move
+            # must not wait for the six-hourly sweep to learn the new scheduler name.
+            self.session_utils.refresh_bootstrap_on_ready(session)
         elif (
             counter_db_entry.counter > self.SESSION_DELETED_THRESHOLD
             and state == 'DELETED'

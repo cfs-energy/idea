@@ -624,18 +624,6 @@ async function validateBaseOs(deps: UpgradeDeps, options: UpgradeCommandOptions,
     deps.err(`Invalid base_os: ${baseOs}. Must be one of: ${UPGRADE_BASE_OS.join(", ")}`);
     throw new ExitWithCode(1);
   }
-  if (baseOs !== "rhel10" && baseOs !== "rocky10") return;
-  let modules: ModuleInfo[];
-  try {
-    modules = await clusterModules(deps, options.clusterName);
-  } catch (error) {
-    deps.err(`Could not read the cluster modules table to validate ${baseOs} eVDI compatibility: ${(error as Error).message}`);
-    throw new ExitWithCode(1);
-  }
-  if (modules.some((module) => module.name === "virtual-desktop-controller" && module.status === "deployed")) {
-    deps.err(`base_os ${baseOs} is not supported on clusters with the virtual-desktop-controller module deployed: Amazon DCV publishes no EL10 packages.`);
-    throw new ExitWithCode(1);
-  }
 }
 
 function backupDir(configDir: string, now: number): string {
@@ -2031,7 +2019,10 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .option("--force-build-bootstrap", "Render bootstrap packages again.")
     .option("--rollback", "Rollback stack to stable state on failure. Default.", true)
     .option("--no-rollback", "Do not roll back on failure.")
-    .option("--optimize-deployment", "Deploy applicable stacks in parallel.")
+    // An upgrade redeploys every module, and stacks of one deployment priority read nothing the
+    // others write, so they go together: the scheduler no longer queues behind the desktop stack.
+    .option("--optimize-deployment", "Deploy the stacks of one priority group in parallel. Default.", true)
+    .option("--no-optimize-deployment", "Deploy one stack at a time.")
     .option("--module-set <module-set>", "Name of the ModuleSet. Default: default", "default")
     .option("--force", "Skip all confirmation prompts.")
     .option(

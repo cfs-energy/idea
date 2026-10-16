@@ -1,4 +1,5 @@
-import {budgetPresentation, bytes, cappedSeries, colorByName, rankedColors, palette, calendarDays, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, money, percent, updated} from './reporting-format';
+import {budgetPresentation, bytes, cappedSeries, colorByName, computeRateNote, costsDescription, rankedColors, palette, calendarDays, date, efficiencyLabel, efficiencyStatus, hours, measuredTierPoints, money, percent, updated} from './reporting-format';
+import {parseComputeRate} from '../../service/cluster-settings-service';
 
 describe('human-readable report values', () => {
     it('formats decimal strings, zero and missing numbers', () => {
@@ -6,6 +7,8 @@ describe('human-readable report values', () => {
         expect(money('0')).toBe('$0.00');
         expect(money('-2.5', 'EUR')).toBe('-€2.50');
         expect(hours('12.345')).toBe('12.3');
+        expect(hours(0.03)).toBe('<0.1');
+        expect(hours(0)).toBe('0');
         expect(percent(69.7)).toBe('70%');
         expect(bytes(2 ** 30 * 1.25)).toBe('1.3 GiB');
         expect(bytes(2 ** 40)).toBe('1.0 TiB');
@@ -44,7 +47,7 @@ it('assigns distinct categorical colors by page rank and keeps them across chart
 it('maps budget and efficiency statuses to success, warning and error', () => {
     expect(Object.values(budgetPresentation).map(value => value.type)).toEqual(['success', 'warning', 'error']);
 
-    expect([39, 40, 69, 70].map(efficiencyStatus)).toEqual(['warning', 'warning', 'warning', 'success']);
+    expect([39, 40, 69, 70].map(v => efficiencyStatus(v))).toEqual(['warning', 'warning', 'warning', 'success']);
     expect([0.02, 0, 1].map(percent)).toEqual(['<1%', '0%', '1%']);
 });
 
@@ -66,4 +69,25 @@ it.each([100.01, 150])('warns for efficiency above 100 percent: %s', value => {
     expect(efficiencyStatus(value)).toBe('warning');
     expect(efficiencyLabel(value, 'memory_efficiency_pct')).toBe('Used more than requested');
     expect(efficiencyLabel(value, 'walltime_efficiency_pct')).toBe('Ran longer than requested');
+});
+
+it('does not warn when a job finishes well under its requested time', () => {
+    expect(efficiencyStatus(20, 'walltime_efficiency_pct')).toBe('info');
+    expect(efficiencyStatus(20)).toBe('warning');
+    expect(efficiencyStatus(150, 'walltime_efficiency_pct')).toBe('warning');
+});
+
+describe('compute rate label', () => {
+    it('reads as list rate by default and adjusted otherwise', () => {
+        expect(computeRateNote()).toBe('On-demand compute is priced at list rates.');
+        expect(computeRateNote(1)).toBe('On-demand compute is priced at list rates.');
+        expect(computeRateNote(0.72)).toBe('On-demand compute is priced at list rates, adjusted (×0.72).');
+        expect(costsDescription(0.72)).toBe('Estimated costs and resource use. On-demand compute is priced at list rates, adjusted (×0.72).');
+    });
+    it.each([
+        [undefined, 1], [null, 1], ['', 1], [0.72, 0.72], ['0.72', 0.72], [1.5, 1.5],
+        [0, 1], [-1, 1], [1.6, 1], ['cheap', 1], [NaN, 1], [true, 1]
+    ])('parses %s as %s, ignoring what the server ignores', (value, expected) => {
+        expect(parseComputeRate(value)).toBe(expected);
+    });
 });

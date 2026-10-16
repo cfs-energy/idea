@@ -107,10 +107,13 @@ class VirtualDesktopBaseOS(str, Enum):
     AMAZON_LINUX2023 = constants.OS_AMAZONLINUX2023
     RHEL8 = constants.OS_RHEL8
     RHEL9 = constants.OS_RHEL9
+    RHEL10 = constants.OS_RHEL10
     ROCKY8 = constants.OS_ROCKY8
     ROCKY9 = constants.OS_ROCKY9
+    ROCKY10 = constants.OS_ROCKY10
     UBUNTU2204 = constants.OS_UBUNTU2204
     UBUNTU2404 = constants.OS_UBUNTU2404
+    UBUNTU2604 = constants.OS_UBUNTU2604
     WINDOWS = constants.OS_WINDOWS
     WINDOWS2019 = constants.OS_WINDOWS2019
     WINDOWS2022 = constants.OS_WINDOWS2022

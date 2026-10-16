@@ -77,21 +77,31 @@ class CostsAPI(BaseAPI):
                 storage_unavailable = True
                 row.total_cost_excludes_storage = True
                 continue
-            month = costs.current
-            if (
-                month is None
-                or month.shared_storage.status
-                not in ('ready', 'partial', 'estimated_share')
-                or month.shared_storage.cost is None
-            ):
+            # the stored daily storage amounts that fall in the listing's own window, so
+            # storage is summed over the same days as jobs and desktops, not month to date.
+            # a day with no stored amount adds nothing, as a partial month did before.
+            # ponytail: only this month and last are stored, so on march 1 the window's
+            # first day (january 31) is never counted; read older generations if it matters.
+            amounts = [
+                day.amount
+                for month in (costs.previous, costs.current)
+                if month is not None
+                for day in month.shared_storage.daily
+                if result.start_date <= day.date <= result.end_date
+                and day.amount is not None
+            ]
+            if not amounts:
                 row.total_cost_excludes_storage = True
                 continue
             result.storage_data_available = True
-            row.storage_cost = month.shared_storage.cost
+            row.storage_cost = round(sum(amounts), 4)
+            month = costs.current
             row.storage_gb = round(
-                sum(item.used_bytes or 0 for item in month.storage) / (1024**3), 2
+                sum(item.used_bytes or 0 for item in (month.storage if month else []))
+                / (1024**3),
+                2,
             )
-            row.storage_cost_period = f'{month.start_date} through {month.end_date}'
+            row.storage_cost_period = f'{result.start_date} through {result.end_date}'
             row.total_cost = round((row.total_cost or 0) + (row.storage_cost or 0), 2)
         result.storage_unavailable = storage_unavailable
         context.success(result)

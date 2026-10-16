@@ -1,0 +1,49 @@
+[Unit]
+Description=Amazon DCV server daemon
+
+[Service]
+ExecStartPre=+-/sbin/modprobe -a eveusb
+ExecStart=/usr/bin/dcvserver -d --service
+Restart=always
+BusName=com.nicesoftware.DcvServer
+User=dcv
+Group=dcv
+ConfigurationDirectory=dcv::ro
+RuntimeDirectory=dcv dcvlogon
+LogsDirectory=dcv
+LogsDirectoryMode=3777
+StateDirectory=dcv
+UMask=0022
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# Required for license validation
+BindReadOnlyPaths=/var/tmp
+ProtectProc=invisible
+ProcSubset=pid
+
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+
+# Required by dcvpamhelper for PAM authentication
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE
+# dcvpamhelper is setuid
+NoNewPrivileges=no
+
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=~@clock @cpu-emulation @debug @module @mount @obsolete @raw-io @reboot @swap @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

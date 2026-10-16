@@ -76,7 +76,7 @@ def build_session(state, stopped_on=None, created_on=None, updated_on=None):
         created_on=created_on,
         updated_on=updated_on,
         stopped_on=stopped_on,
-        server=VirtualDesktopServer(instance_type='m5.large'),
+        server=VirtualDesktopServer(instance_id='i-0abc', instance_type='m5.large'),
         project=Project(project_id='project-1', name='project-a'),
     )
 
@@ -261,4 +261,15 @@ def test_cleanup_warning_deletion_and_pricing_preserve_stop_time(
     )
     assert priced.hours == 24
     assert priced.cost == 24
-    assert bool(priced.stop_time_estimated) is (previous_stop != 'recorded')
+    # a desktop with no recorded runs is billed as an estimate, recorded stop or not
+    assert priced.stop_time_estimated is True
+
+
+def test_a_desktop_deleted_before_it_had_an_instance_is_recorded_as_never_ran():
+    db = build_db()
+    session = build_session(VirtualDesktopSessionState.DELETED)
+    session.server = VirtualDesktopServer(instance_type='m5.large')
+    db.record_termination(session, deleted_on=arrow.utcnow().int_timestamp * 1000)
+    assert db._table_obj.items[0]['never_ran'] is True
+    db.record_termination(build_session(VirtualDesktopSessionState.DELETED))
+    assert db._table_obj.items[1]['never_ran'] is False

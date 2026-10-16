@@ -35,7 +35,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-inputs.sh
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.8.2"
           cache: npm
@@ -110,3 +110,52 @@ jobs:
             --volume "$SMOKE_ROOT/config:/tmp/config" "$IMAGE" \
             config generate --values-file /tmp/values.yml --config-dir /tmp/config --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
+  private-parity:
+    # Only reviewed main code may read private captures. Never run this on PR code.
+    if: >-
+      github.repository == 'cfs-energy/idea' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.IDEACTL_PRIVATE_PARITY == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: source/idea/ideactl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "26.8.2"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install and build before fetching private data
+        run: |
+          npm ci --strict-allow-scripts
+          npm run build
+          python3 -m pip install 'jinja2==3.1.6' 'PyYAML==6.0.3'
+          mkdir -p ~/.idea/lib/dynamodb-local
+          curl -fsSL https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.tar.gz | tar -xz -C ~/.idea/lib/dynamodb-local
+      - name: Authenticate for the single private capture object
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          aws-region: us-east-2
+          role-to-assume: ${{ vars.IDEACTL_PARITY_ROLE_ARN }}
+          role-duration-seconds: 900
+          allowed-account-ids: ${{ vars.IDEACTL_PARITY_ACCOUNT_ID }}
+          mask-aws-account-id: true
+      - name: Fetch and run private parity without publishing capture data
+        env:
+          IDEACTL_PARITY_SHA256: ${{ vars.IDEACTL_PARITY_SHA256 }}
+          IDEACTL_PARITY_BUCKET: ${{ vars.IDEACTL_PARITY_BUCKET }}
+        run: bash scripts/private-parity.sh
+      - name: Remove private captures and logs
+        if: always()
+        run: |
+          rm -rf tools/parity/live tools/parity/fixtures docs/port
+          rm -rf "$RUNNER_TEMP/ideactl-private-parity"

@@ -93,6 +93,7 @@ set -x
 mkdir -p /root/bootstrap
 AWS_REGION="{self.aws_region}"
 BASE_OS="{self.base_os}"
+BOOTSTRAP_FAILURE_TAG="{'idea:AmiBuilderStatus' if any('-ami-builder/setup.sh' in cmd for cmd in self.install_commands) else 'idea:BootstrapStatus'}"
 DEFAULT_AWS_REGION="{self.aws_region}"
 AWSCLI_X86_64_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
 AWSCLI_AARCH64_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
@@ -131,35 +132,71 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 
 export PATH="${!PATH}:/usr/local/bin"
 
+function retry_bootstrap () {
+  local delay status output
+  output=$(mktemp) || return $?
+  for delay in 15 30 60 0; do
+    if "$@" > "$output" 2>&1; then status=0; else status=$?; fi
+    if [[ $status -eq 0 || $delay -eq 0 ]]; then
+      cat "$output"
+      rm -f "$output"
+      return "$status"
+    fi
+    # Recovered errors must not fail the later in-bake log scan.
+    sed 's/^/[retried] /' "$output"
+    echo "Retrying $* in ${!delay}s (exit $status)"
+    sleep "$delay"
+  done
+}
+
+function fail_userdata () {
+  echo "userdata failed: $1; see /root/bootstrap/logs/userdata.log" >&2
+  # A failed CLI install may leave no way to publish the failure tag.
+  if command -v aws >/dev/null 2>&1; then
+    local token instance_id status
+    token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+    instance_id=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+    status="$1-failed"
+    [[ "$BOOTSTRAP_FAILURE_TAG" != idea:AmiBuilderStatus ]] || status="failed:userdata-$1"
+    [[ -z "$instance_id" ]] || aws --region "$AWS_REGION" --cli-connect-timeout 5 --cli-read-timeout 10 ec2 create-tags --resources "$instance_id" --tags "Key=$BOOTSTRAP_FAILURE_TAG,Value=$status" || true
+  fi
+  exit 1
+}
+
 function install_aws_cli () {
   # an image baked from this bootstrap already has the CLI; reinstalling it cost every boot
   if [[ -x /usr/local/aws-cli/v2/current/bin/aws && -x /bin/aws ]]; then
     return 0
   fi
   if [[ "${!BASE_OS}" == "amazonlinux2023" ]]; then
-    yum remove -y awscli
+    retry_bootstrap yum remove -y awscli || return $?
   fi
-  cd /root/bootstrap
+  cd /root/bootstrap || return $?
   local machine=$(uname -m)
   if [[ ${!machine} == "x86_64" ]]; then
-    curl -s ${!AWSCLI_X86_64_URL} -o "awscliv2.zip"
+    curl -fSL --retry 3 --connect-timeout 10 --max-time 120 ${!AWSCLI_X86_64_URL} -o "awscliv2.zip" || return $?
     elif [[ ${!machine} == "aarch64" ]]; then
-      curl -s ${!AWSCLI_AARCH64_URL} -o "awscliv2.zip"
+      curl -fSL --retry 3 --connect-timeout 10 --max-time 120 ${!AWSCLI_AARCH64_URL} -o "awscliv2.zip" || return $?
+  else
+    echo "Unsupported AWS CLI architecture: $machine" >&2
+    return 1
   fi
-  which unzip > /dev/null 2>&1
-  if [[ "$?" != "0" ]]; then
+  if ! command -v unzip > /dev/null 2>&1; then
     if [[ $BASE_OS =~ ^ubuntu ]]; then
-      apt install -y unzip
+      retry_bootstrap apt-get -o APT::Update::Error-Mode=any -o DPkg::Lock::Timeout=300 update || return $?
+      retry_bootstrap apt-get -o DPkg::Lock::Timeout=300 install -y unzip || return $?
     else
-      yum install -y unzip
+      retry_bootstrap yum install -y unzip || return $?
     fi
   fi
-  unzip -q awscliv2.zip
-  ./aws/install --bin-dir /bin --update
+  unzip -q awscliv2.zip || return $?
+  ./aws/install --bin-dir /bin --update || return $?
+  aws --version || return $?
   rm -rf aws awscliv2.zip
 }
 
 echo "#!/bin/bash
+set -e
 PACKAGE_DOWNLOAD_URI=\\${!1}
 PACKAGE_ARCHIVE=\\$(basename \\${!PACKAGE_DOWNLOAD_URI})
 PACKAGE_NAME=\\${!PACKAGE_ARCHIVE%.tar.gz*}
@@ -183,7 +220,7 @@ if [[ -d \\${!PACKAGE_DIR} ]]; then
 fi
 mkdir -p \\${!PACKAGE_DIR}
 tar -xvf /root/bootstrap/\\${!PACKAGE_ARCHIVE} -C \\${!PACKAGE_DIR}
-rm /root/bootstrap/latest
+rm -f /root/bootstrap/latest
 ln -sf \\${!PACKAGE_DIR} /root/bootstrap/latest
 " > /root/bootstrap/download_bootstrap.sh
 
@@ -191,10 +228,10 @@ chmod +x /root/bootstrap/download_bootstrap.sh
         """
 
         userdata += f'''
-install_aws_cli
-bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}"
+install_aws_cli || fail_userdata aws-cli
+bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}" || fail_userdata bootstrap-download
 
-cd /root/bootstrap/latest
+cd /root/bootstrap/latest || fail_userdata bootstrap-download
 '''
         for install_command in self.install_commands:
             userdata += f'{install_command}{os.linesep}'
@@ -207,6 +244,7 @@ set -x
 mkdir -p /root/bootstrap
 AWS_REGION="{self.aws_region}"
 BASE_OS="{self.base_os}"
+BOOTSTRAP_FAILURE_TAG="{'idea:AmiBuilderStatus' if any('-ami-builder/setup.sh' in cmd for cmd in self.install_commands) else 'idea:BootstrapStatus'}"
 DEFAULT_AWS_REGION="{self.aws_region}"
 AWSCLI_X86_64_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
 AWSCLI_AARCH64_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
@@ -234,35 +272,71 @@ exec > /root/bootstrap/logs/userdata.log 2>&1
 
 export PATH="${PATH}:/usr/local/bin"
 
+function retry_bootstrap () {
+  local delay status output
+  output=$(mktemp) || return $?
+  for delay in 15 30 60 0; do
+    if "$@" > "$output" 2>&1; then status=0; else status=$?; fi
+    if [[ $status -eq 0 || $delay -eq 0 ]]; then
+      cat "$output"
+      rm -f "$output"
+      return "$status"
+    fi
+    # Recovered errors must not fail the later in-bake log scan.
+    sed 's/^/[retried] /' "$output"
+    echo "Retrying $* in ${delay}s (exit $status)"
+    sleep "$delay"
+  done
+}
+
+function fail_userdata () {
+  echo "userdata failed: $1; see /root/bootstrap/logs/userdata.log" >&2
+  # A failed CLI install may leave no way to publish the failure tag.
+  if command -v aws >/dev/null 2>&1; then
+    local token instance_id status
+    token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+    instance_id=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+    status="$1-failed"
+    [[ "$BOOTSTRAP_FAILURE_TAG" != idea:AmiBuilderStatus ]] || status="failed:userdata-$1"
+    [[ -z "$instance_id" ]] || aws --region "$AWS_REGION" --cli-connect-timeout 5 --cli-read-timeout 10 ec2 create-tags --resources "$instance_id" --tags "Key=$BOOTSTRAP_FAILURE_TAG,Value=$status" || true
+  fi
+  exit 1
+}
+
 function install_aws_cli () {
   # an image baked from this bootstrap already has the CLI; reinstalling it cost every boot
   if [[ -x /usr/local/aws-cli/v2/current/bin/aws && -x /bin/aws ]]; then
     return 0
   fi
   if [[ "${BASE_OS}" == "amazonlinux2023" ]]; then
-    yum remove -y awscli
+    retry_bootstrap yum remove -y awscli || return $?
   fi
-  cd /root/bootstrap
+  cd /root/bootstrap || return $?
   local machine=$(uname -m)
   if [[ ${machine} == "x86_64" ]]; then
-    curl -s ${AWSCLI_X86_64_URL} -o "awscliv2.zip"
+    curl -fSL --retry 3 --connect-timeout 10 --max-time 120 ${AWSCLI_X86_64_URL} -o "awscliv2.zip" || return $?
     elif [[ ${machine} == "aarch64" ]]; then
-      curl -s ${AWSCLI_AARCH64_URL} -o "awscliv2.zip"
+      curl -fSL --retry 3 --connect-timeout 10 --max-time 120 ${AWSCLI_AARCH64_URL} -o "awscliv2.zip" || return $?
+  else
+    echo "Unsupported AWS CLI architecture: $machine" >&2
+    return 1
   fi
-  which unzip > /dev/null 2>&1
-  if [[ "$?" != "0" ]]; then
+  if ! command -v unzip > /dev/null 2>&1; then
     if [[ $BASE_OS =~ ^ubuntu ]]; then
-      apt install -y unzip
+      retry_bootstrap apt-get -o APT::Update::Error-Mode=any -o DPkg::Lock::Timeout=300 update || return $?
+      retry_bootstrap apt-get -o DPkg::Lock::Timeout=300 install -y unzip || return $?
     else
-      yum install -y unzip
+      retry_bootstrap yum install -y unzip || return $?
     fi
   fi
-  unzip -q awscliv2.zip
-  ./aws/install --bin-dir /bin --update
+  unzip -q awscliv2.zip || return $?
+  ./aws/install --bin-dir /bin --update || return $?
+  aws --version || return $?
   rm -rf aws awscliv2.zip
 }
 
 echo "#!/bin/bash
+set -e
 PACKAGE_DOWNLOAD_URI=\\${1}
 PACKAGE_ARCHIVE=\\$(basename \\${PACKAGE_DOWNLOAD_URI})
 PACKAGE_NAME=\\${PACKAGE_ARCHIVE%.tar.gz*}
@@ -286,7 +360,7 @@ if [[ -d \\${PACKAGE_DIR} ]]; then
 fi
 mkdir -p \\${PACKAGE_DIR}
 tar -xvf /root/bootstrap/\\${PACKAGE_ARCHIVE} -C \\${PACKAGE_DIR}
-rm /root/bootstrap/latest
+rm -f /root/bootstrap/latest
 ln -sf \\${PACKAGE_DIR} /root/bootstrap/latest
 " > /root/bootstrap/download_bootstrap.sh
 
@@ -294,10 +368,10 @@ chmod +x /root/bootstrap/download_bootstrap.sh
         """
 
         userdata += f'''
-install_aws_cli
-bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}"
+install_aws_cli || fail_userdata aws-cli
+bash /root/bootstrap/download_bootstrap.sh "{self.bootstrap_package_uri}" || fail_userdata bootstrap-download
 
-cd /root/bootstrap/latest
+cd /root/bootstrap/latest || fail_userdata bootstrap-download
 '''
         for install_command in self.install_commands:
             userdata += f'{install_command}{os.linesep}'

@@ -560,14 +560,12 @@ test("Phase 4 clears protection, deploys, restores live instances, then saves va
   });
 });
 
-test("pre-flight rejects EL10 when eVDI is deployed before any mutation", async () => {
+test("pre-flight accepts EL10 when eVDI is deployed", async () => {
+  // Amazon DCV 2026.0 publishes EL10 packages, so the desktop module no longer rules EL10 out
   await withFixture(async ({ deps, events }) => {
-    await assert.rejects(
-      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "rhel10", moduleSet: "default", force: true, acceptConfigDrift: true }),
-      (error: unknown) => error instanceof Error && error.name === "ExitWithCode",
-    );
-    assert.ok(!events.some((event) => event.startsWith("Phase ")));
-    assert.ok(!events.includes("deploy"));
+    deps.regionAmiConfig = () => ({ "us-east-2": { rhel10: "ami-release" } });
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "rhel10", moduleSet: "default", force: true, acceptConfigDrift: true });
+    assert.ok(events.includes("deploy"));
   });
 });
 
@@ -2184,6 +2182,27 @@ test("both command flags skip the registry lookup and keep the release image mov
         assert.ok(events.includes("deploy"));
         assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === "ecs.image")?.["value"], `${repository}:${ideaVersion()}`);
       }
+    });
+  }
+});
+
+test("upgrade-cluster deploys each priority group's stacks in parallel unless told not to", async () => {
+  // The serial path waited on each module stack in turn, so the scheduler stack queued behind the
+  // desktop stack although neither reads what the other writes.
+  for (const [flags, expected] of [[[], true], [["--no-optimize-deployment"], false], [["--optimize-deployment"], true]] as const) {
+    await withFixture(async (state) => {
+      await routineReleaseFixture(state);
+      const { deps } = state;
+      const seen: boolean[] = [];
+      const deploy = deps.deploy.bind(deps);
+      deps.deploy = async (input) => { seen.push(input.optimizeDeployment); await deploy(input); };
+      const program = new Command("ideactl");
+      registerUpgradeCommands(program, deps);
+      await program.parseAsync([
+        "upgrade-cluster", "--force", "--accept-config-drift", "--skip-release-image-check",
+        "--cluster-name", clusterName, "--aws-region", awsRegion, ...flags,
+      ], { from: "user" });
+      assert.deepEqual(seen, [expected], flags.join(" ") || "default");
     });
   }
 });

@@ -65,15 +65,27 @@ class BootstrapRefreshTable:
         self.rows = {}
         self.updates = []
 
-    def get_item(self, Key):
+    def get_item(self, Key, **kwargs):
         row = self.rows.get(Key[self.key])
         return {} if row is None else {'Item': deepcopy(row)}
 
     def put_item(self, Item):
         self.rows[Item[self.key]] = deepcopy(Item)
 
-    def delete_item(self, Key):
+    def delete_item(self, Key, **kwargs):
+        if (
+            kwargs.get('ConditionExpression')
+            and self.rows.get(Key[self.key], {}).get('refresh_command_id')
+            != kwargs['ExpressionAttributeValues'][':command']
+        ):
+            raise ClientError(
+                {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'DeleteItem'
+            )
         self.rows.pop(Key[self.key], None)
+
+    def scan(self, **request):
+        # the FilterExpression is not evaluated; callers match the rows themselves too
+        return {'Items': [deepcopy(row) for row in self.rows.values()]}
 
     def update_item(self, **request):
         self.updates.append(request)
@@ -230,6 +242,11 @@ def refresh_loop(monkeypatch, refresh):
     app._bootstrap_session_utils = Mock()
     # the image pipeline tick shares the loop; tests of it live in test_image_pipeline.py
     app._image_pipeline = Mock()
+    # so is the one-time run reconcile; tests of it live in test_session_runs.py
+    app._session_db = Mock()
+    app._runs_reconciled = False
+    app._history_backfilled = False
+    app._desktop_launches = None
     app._bootstrap_exit = BootstrapRefreshLoopExit(
         clock, [60, 21599, 21600, 21660, 43200]
     )

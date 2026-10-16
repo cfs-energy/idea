@@ -13,7 +13,7 @@
  */
 
 import { Aws, Duration, RemovalPolicy, type Stack } from "aws-cdk-lib";
-import type { IConstruct } from "constructs";
+import { Construct, type IConstruct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
@@ -59,6 +59,30 @@ export const APPLICATION_START_SECONDS = 120;
  * Grace suppresses premature replacement; it does not delay a successful readiness check.
  */
 export const TARGET_REGISTRATION_SECONDS = 150;
+/**
+ * How long a stopping task keeps a target, and then how long its container gets between SIGTERM and
+ * SIGKILL. A rollout starts every replacement and stops the old tasks only once the new ones pass
+ * their checks, so a load balancer already has healthy targets when an old one leaves. The drain
+ * only lets requests already in flight finish: on SIGTERM the servers stop listening at once, and a
+ * DCV or SSH connection is reset at the end of the drain whatever its length, so a longer drain
+ * delays the client's one reconnect rather than saving it. At 300 seconds every stop held a
+ * rollout for five minutes.
+ */
+export const CONTAINER_STOP_SECONDS = 30;
+
+/**
+ * A process that is PID 1 and never installs a SIGTERM handler ignores the signal: a bash launcher
+ * or loop, or a binary run with exec. Each then sat out the stop allowance and ended in SIGKILL
+ * (exit 137). Docker's init runs as PID 1 instead and, with this variable, passes the signal to
+ * the whole process group, so the vendor launcher's Java child and the log follower's tails get it
+ * too.
+ */
+export const STOP_SIGNAL_ENVIRONMENT = { TINI_KILL_PROCESS_GROUP: "1" } as const;
+
+/** The init process that delivers SIGTERM, for a container whose own PID 1 would ignore it. */
+export function stopSignalInit(parent: IConstruct, constructId: string): ecs.LinuxParameters {
+  return new ecs.LinuxParameters(parent as Construct, constructId, { initProcessEnabled: true });
+}
 
 /** Container role, which is the `ecs.tasks.<role>` sizing key and the `IDEA_CONTAINER_ROLE` value. */
 export type ContainerRole = "cluster-manager" | "vdc" | "scheduler" | "dcv-broker" | "dcv-gateway" | "bastion-host";
@@ -408,8 +432,10 @@ export function addLogTailContainer(
   const container = taskDefinition.addContainer(input.containerId, {
     command: [fileTailScript(input.directories, input.streamPrefix === STREAM_PREFIX_APPLICATION)],
     entryPoint: ["/bin/bash", "-lc"],
+    environment: { ...STOP_SIGNAL_ENVIRONMENT },
     essential: false,
     image: containerImage(scope),
+    linuxParameters: stopSignalInit(taskDefinition, `${input.containerId}-linux-parameters`),
     logging: adoptedLogDriver(scope, input.logGroupConstructId, input.logGroupName, input.streamPrefix),
     memoryReservationMiB: 32,
     dockerLabels: scope.ctx.config.getBool("ecs.datadog.enabled", false)
@@ -468,7 +494,7 @@ export function applicationTargetGroup(
   },
 ): elbv2.ApplicationTargetGroup {
   return new elbv2.ApplicationTargetGroup(scope.stack, input.constructId, {
-    deregistrationDelay: Duration.seconds(input.deregistrationDelaySeconds ?? 300),
+    deregistrationDelay: Duration.seconds(input.deregistrationDelaySeconds ?? CONTAINER_STOP_SECONDS),
     healthCheck: {
       path: input.healthCheckPath, protocol: elbv2.Protocol.HTTPS,
       interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2,
@@ -516,7 +542,7 @@ export function applicationContainerSettings(role: ContainerRole, brokerPorts = 
     },
     // ECS deregisters the task and drains its target groups before entering STOPPING.
     // This is the separate allowance between SIGTERM and SIGKILL, not a drain timer.
-    stopTimeout: Duration.seconds(30),
+    stopTimeout: Duration.seconds(CONTAINER_STOP_SECONDS),
   };
 }
 
@@ -583,11 +609,16 @@ export function buildEc2Service(scope: ContainerScope, input: ServiceInput): ecs
     // adding one. It stays out of this tool's own identity: the tool observes and refuses.
     enableExecuteCommand: true,
     healthCheckGracePeriod: input.healthCheckGracePeriod,
-    maxHealthyPercent: input.singleWriter === true ? 100 : Math.ceil(100 * (input.desiredCount + 1) / input.desiredCount),
-    // Surge by one task when a distinct host has room; otherwise ECS may stop one replica first.
-    // At a floor of 100 a two-task distinct-instance service needs a third host with the task's
-    // memory free, and a rollout that finds none waits until the stack times out.
-    minHealthyPercent: input.singleWriter === true ? 0 : Math.floor(100 * (input.desiredCount - 1) / input.desiredCount),
+    // A full surge with no replica stopped first, the way a disruption budget of zero with a surge of
+    // one hundred percent rolls a deployment: every replacement starts at once, and an old task stops
+    // only when a new one passes its checks. A replacement that finds no room waits in provisioning
+    // while the old tasks keep serving, so a short host pool slows a rollout and never thins it.
+    // The scheduler alone stops first: two batch servers cannot hold its state directory at once.
+    maxHealthyPercent: input.singleWriter === true ? 100 : 200,
+    minHealthyPercent: input.singleWriter === true ? 0 : 100,
+    // One replica per host, mid-rollout too: a host loss never takes two tasks of a role. The
+    // constraint counts the old tasks, so a two-task service needs four distinct hosts for its full
+    // surge, which is why the pool rests at four (the capacity contract test).
     placementConstraints: [
       ...(input.distinctInstances === false ? [] : [ecs.PlacementConstraint.distinctInstances()]),
       ...(input.placementConstraints ?? []),

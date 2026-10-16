@@ -59,6 +59,7 @@ interface VirtualDesktopSessionCardProps {
 
 interface VirtualDesktopSessionCardState {
     view: string
+    blackScreenshot?: string
 }
 
 const DAYS: (keyof VirtualDesktopWeekSchedule)[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
@@ -267,6 +268,18 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
 
     buildScreenShotImage() {
         const imageUrl = this.getScreenshotImageUrl()
+        if (imageUrl && this.state.blackScreenshot === imageUrl) {
+            return <div className="virtual-desktop-placeholder-image" onClick={() => {
+                if (this.canConnect()) {
+                    this.props.onLaunchSession(this.getSession()).finally()
+                }
+            }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
+                <Box textAlign="center" padding="m" color="inherit">
+                    <div>Desktop locked for security.</div>
+                    <div>Preview unavailable. Connect to unlock.</div>
+                </Box>
+            </div>
+        }
         if (Utils.isEmpty(imageUrl)) {
             const session = this.getSession()
             const placeholders: { [state: string]: string } = {
@@ -284,14 +297,30 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 {placeholders[session.state ?? ''] ?? 'No preview'}
             </div>
         }
-        return <div onClick={() => {
+        return <img alt="Desktop preview" src={imageUrl} onLoad={(event) => {
+            try {
+                const canvas = document.createElement('canvas')
+                canvas.width = canvas.height = 32
+                const context = canvas.getContext('2d')
+                if (!context) return
+                context.drawImage(event.currentTarget, 0, 0, 32, 32)
+                const pixels = context.getImageData(0, 0, 32, 32).data
+                // Allow JPEG noise, but require every sampled RGB channel to be near black.
+                const black = pixels.length > 0 && pixels.every((value, index) => index % 4 === 3 || value <= 8)
+                if (black && imageUrl === this.getScreenshotImageUrl()) {
+                    this.setState({blackScreenshot: imageUrl})
+                }
+            } catch {
+                // Canvas/decode failures must leave the preview and Connect action usable.
+            }
+        }} onClick={() => {
             if (this.canConnect()) {
                 this.props.onLaunchSession(this.getSession()).finally()
             }
         }} style={{
             cursor: 'pointer',
-            backgroundImage: `url('${imageUrl}')`,
-            backgroundSize: 'cover',
+            objectFit: 'cover',
+            display: 'block',
             width: '100%',
             height: '300px'
         }}/>

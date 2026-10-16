@@ -3,6 +3,7 @@ import {Badge, Box, Button, ColumnLayout, Container, Header, SpaceBetween, Table
 import {TableProps} from "@cloudscape-design/components/table";
 import {GetMyCostsSummaryResult, MyCostsDesktopSession, MyCostsJob, MyCostsJobGroup} from "../client/data-model";
 import Utils from "../common/utils";
+import {computeRateNote, jobRateNote} from "../pages/reporting/reporting-format";
 
 /**
  * The three cost sections, rendered from a summary payload. Shared by the self scoped My Costs
@@ -32,15 +33,20 @@ export const summaryCost = (cost?: number, rowCount?: number, unpriced?: number)
     return missing > 0 ? `${money(cost)} *` : money(cost)
 }
 
-export const unpricedNote = (unpriced?: number, rowCount?: number, noun?: string) => {
+// unknown: of the unpriced, desktops deleted before IDEA recorded desktop runs, with no
+// launch record left to measure them by.
+export const unpricedNote = (unpriced?: number, rowCount?: number, noun?: string, unknown?: number) => {
     const rows = rowCount ?? 0
     const missing = unpriced ?? 0
-    if (missing === 0 || missing >= rows) {
+    const why = unknown ? `${unknown} deleted before usage history existed` : ''
+    if (missing === 0 || (missing >= rows && !unknown)) {
         return null
     }
     return (
         <Box variant="small" color="text-body-secondary">
-            {`* ${missing} of ${rows} ${noun} could not be priced and are not in this total.`}
+            {missing >= rows
+                ? `None of the ${noun} could be priced: ${why}.`
+                : `* ${missing} of ${rows} ${noun} could not be priced and are not in this total${why ? ` (${why})` : ''}.`}
         </Box>
     )
 }
@@ -93,9 +99,13 @@ const DESKTOP_COLUMNS: TableProps.ColumnDefinition<MyCostsDesktopSession>[] = [
         id: 'hours',
         header: 'Hours',
         // An inferred stop time is an upper bound, so the hours are marked estimated.
-        cell: (item) => (item.stop_time_estimated ? `${hours(item.hours)} (estimated)` : hours(item.hours))
+        cell: (item) => (item.usage_unknown ? 'Unknown' : item.stop_time_estimated ? `${hours(item.hours)} (estimated)` : hours(item.hours))
     },
-    {id: 'cost', header: 'Cost', cell: (item) => (item.price_unavailable ? 'Price not available' : money(item.cost))}
+    {
+        id: 'cost',
+        header: 'Cost',
+        cell: (item) => (item.usage_unknown ? 'Not priced' : item.price_unavailable ? 'Price not available' : money(item.cost))
+    }
 ]
 
 export interface CostSectionsProps {
@@ -106,6 +116,8 @@ export interface CostSectionsProps {
     /** Empty state wording: "You have not" reads wrong on another user's page. */
     subject?: 'self' | 'user'
     historicalStorageNotice?: boolean
+    /** effective compute rate as a share of on-demand list price, from cluster settings */
+    computeRate?: number
 }
 
 /**
@@ -120,7 +132,7 @@ export const showAiSection = (summary: GetMyCostsSummaryResult | null, loading: 
     return (ai?.total_tokens ?? 0) > 0 || (ai?.invocations ?? 0) > 0
 }
 
-const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onRetry, subject = 'self', historicalStorageNotice = false}) => {
+const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onRetry, subject = 'self', historicalStorageNotice = false, computeRate = 1}) => {
 
     const [expandedAi, setExpandedAi] = useState<AiRow[]>([])
 
@@ -211,7 +223,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
     )
 
     const renderDesktops = () => (
-        <Container header={sectionHeader('Desktops', 'Hours IDEA recorded for virtual desktops, priced at the on-demand rate for the instance type.')}>
+        <Container header={sectionHeader('Desktops', `Hours IDEA recorded for virtual desktops, priced by instance type. ${computeRateNote(computeRate)}`)}>
             <SpaceBetween size="s">
                 <ColumnLayout columns={3} variant="text-grid">
                     <div>
@@ -227,7 +239,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
                         <Box>{summaryCost(desktops?.cost, desktops?.session_count, desktops?.unpriced_sessions)}</Box>
                     </div>
                 </ColumnLayout>
-                {unpricedNote(desktops?.unpriced_sessions, desktops?.session_count, 'sessions')}
+                {unpricedNote(desktops?.unpriced_sessions, desktops?.session_count, 'sessions', desktops?.usage_unknown_sessions)}
                 <Table
                     variant="embedded"
                     trackBy="idea_session_id"
@@ -244,7 +256,7 @@ const CostSections: React.FC<CostSectionsProps> = ({summary, loading, error, onR
     )
 
     const renderJobs = () => (
-        <Container header={sectionHeader('Jobs', 'Jobs completed in the window, priced from the estimate the scheduler recorded for each one.')}>
+        <Container header={sectionHeader('Jobs', `Jobs completed in the window, priced from the estimate the scheduler recorded for each one. ${jobRateNote(computeRate)}`)}>
             <SpaceBetween size="s">
                 <ColumnLayout columns={2} variant="text-grid">
                     <div>

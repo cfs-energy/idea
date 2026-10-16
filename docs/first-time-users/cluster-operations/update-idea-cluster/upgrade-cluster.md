@@ -72,7 +72,7 @@ Cleanup removes only builder images that carry the cluster's tag. Desktop and co
 
 ### Container Host Instance Type
 
-New clusters and converted host-based clusters run control-plane tasks on the shared container host pool. The default is `m7g.large`, configured by `ecs.hosts.instance_type`. Confirm that the type is available in every selected Availability Zone before installing or converting a cluster. Recheck capacity after changing task sizes, task counts, or the metrics agent.
+New clusters and converted host-based clusters run control-plane tasks on the shared container host pool. The default is `m7g.xlarge`, configured by `ecs.hosts.instance_type`. Confirm that the type is available in every selected Availability Zone before installing or converting a cluster. Recheck capacity after changing task sizes, task counts, or the metrics agent.
 
 ### Analytics Data Node Instance Type
 
@@ -192,7 +192,7 @@ If no modules are specified, all modules will be upgraded automatically.
 * `--termination-protection`: Set CloudFormation stack termination protection (default: true)
 * `--force-build-bootstrap`: Re-build bootstrap package even if directory exists
 * `--rollback/--no-rollback`: Enable/disable stack rollback on failure (default: true)
-* `--optimize-deployment`: Deploy applicable stacks in parallel to speed up the process
+* `--optimize-deployment/--no-optimize-deployment`: Deploy the stacks of one priority group in parallel, for example the scheduler beside the desktop stack (default: on)
 * `--force`: Skip phase confirmation prompts; overwritten rows with no source marker that differ from generated configuration still require drift acceptance
 * `--accept-config-drift`: Accept overwriting differing rows with no source marker after reviewing `./idea-admin.sh config preview-upgrade`; release image moves, template default updates and rows written from the portal or the command line (which keep their values) do not need this flag
 * `--skip-global-settings-update`: Skip the global settings update if you've already done it
@@ -340,13 +340,13 @@ If you've already updated global settings and want to skip that step:
   --aws-profile default
 ```
 
-#### Optimize for Speed (experimental)
+#### Deploy One Stack at a Time
 
-Use parallel deployment where possible:
+Stacks of one priority group deploy in parallel by default. To deploy them one after another:
 
 ```bash
 ./idea-admin.sh upgrade-cluster --base-os amazonlinux2023 \
-  --optimize-deployment \
+  --no-optimize-deployment \
   --aws-region us-east-2 \
   --cluster-name idea-test1 \
   --aws-profile default

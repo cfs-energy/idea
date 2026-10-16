@@ -13,6 +13,10 @@ from collections.abc import Mapping
 from copy import deepcopy
 
 from ideadatamodel import exceptions
+from ideasdk.aws.compute_rate import (
+    COMPUTE_RATE_MULTIPLIER_KEY,
+    parse_compute_rate_multiplier,
+)
 from ideasdk.utils.group_name_helper import (
     DEFAULT_OPERATIONS_LEADS_GROUP_NAME,
     GroupNameHelper,
@@ -1869,7 +1873,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.aarch64.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.aarch64.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.aarch64.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -1901,7 +1921,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.aarch64.linux.ubuntu2604.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.aarch64.linux.ubuntu2404.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.aarch64.linux.ubuntu2604.url',
         'string',
         'deployment',
         'software',
@@ -1949,7 +1985,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.agent.aarch64.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -1981,7 +2033,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2604.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2404.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.agent.aarch64.linux.ubuntu2604.url',
         'string',
         'deployment',
         'software',
@@ -2029,7 +2097,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.agent.x86_64.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -2061,7 +2145,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.agent.x86_64.ubuntu.ubuntu2604.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.agent.x86_64.ubuntu.ubuntu2404.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.agent.x86_64.ubuntu.ubuntu2604.url',
         'string',
         'deployment',
         'software',
@@ -2109,7 +2209,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.broker.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.broker.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.broker.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -2317,7 +2433,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.connection_gateway.aarch64.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.connection_gateway.aarch64.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.connection_gateway.aarch64.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -2365,7 +2497,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -2405,7 +2553,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.x86_64.debian.ubuntu2604.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.x86_64.debian.ubuntu2404.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.x86_64.debian.ubuntu2604.url',
         'string',
         'deployment',
         'software',
@@ -2453,7 +2617,23 @@ _ROWS = [
         False,
     ),
     (
+        'global-settings.package_config.dcv.x86_64.linux.rhel_centos_rocky10.sha256sum',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
         'global-settings.package_config.dcv.x86_64.linux.rhel_centos_rocky9.url',
+        'string',
+        'deployment',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'global-settings.package_config.dcv.x86_64.linux.rhel_centos_rocky10.url',
         'string',
         'deployment',
         'software',
@@ -3131,6 +3311,14 @@ _ROWS = [
         False,
     ),
     ('scheduler.compute_node_os', 'string', 'runtime', 'job-placement', False, False),
+    (
+        'cluster.costs.compute_rate_multiplier',
+        'number',
+        'runtime',
+        'cost-collection',
+        False,
+        False,
+    ),
     (
         'scheduler.cost_estimation.default_fsx_lustre_size',
         'integer',
@@ -5531,6 +5719,7 @@ DESTINATION_SECTIONS = (
     'Analytics',
     'Backup policy',
     'Collection',
+    'Compute rate',
     'Cost estimation',
     'Cost header',
     'Dashboard link',
@@ -5569,6 +5758,7 @@ _DESTINATION_GROUPS = {
     'Analytics': 'monitoring',
     'Backup policy': 'backup',
     'Collection': 'costs',
+    'Compute rate': 'costs',
     'Cost estimation': 'costs',
     'Cost header': 'general',
     'Dashboard link': 'general',
@@ -5639,6 +5829,7 @@ _SECTIONS = {
     'cluster.locale': 'Regional defaults',
     'cluster.timezone': 'Regional defaults',
     'cluster.aws.pricing_region': 'Cost estimation',
+    'cluster.costs': 'Compute rate',
     'cluster.backups': 'Backup policy',
     'cluster.cloudwatch_logs': 'Logs',
     'cluster.dynamodb': 'Encryption and access',
@@ -5838,6 +6029,7 @@ _LABELS = {
     'scheduler.cost_estimation.ebs_io1_storage': 'EBS io1 storage (USD/GB-month)',
     'scheduler.cost_estimation.provisioned_iops': 'io1 provisioned IOPS (USD/IOPS-month)',
     'scheduler.cost_estimation.fsx_lustre': 'FSx for Lustre (USD/GB-hour)',
+    'cluster.costs.compute_rate_multiplier': 'Effective compute rate (× on-demand)',
     'virtual-desktop-controller.server.usb_remotization': 'USB device forwarding',
     'global-settings.gpu_settings.instance_families': 'GPU instance families',
     'global-settings.gpu_settings.fail_on_missing_driver': 'Require a GPU driver',
@@ -6030,6 +6222,7 @@ _DESCRIPTIONS = {
     'ecs.datadog.logs_enabled': 'Ship labeled IDEA container logs to Datadog when ecs.datadog.enabled is true. Defaults to true; deploy ECS and the service stacks after changing it. CloudWatch logging remains enabled.',
     'cluster.administrator_email': 'Email used when creating the initial administrator account.',
     'cluster.aws.pricing_region': "unused; job estimates price the cluster's own region",
+    'cluster.costs.compute_rate_multiplier': 'Multiplies the on-demand instance rate for job and desktop compute, e.g. 0.72 when savings plans cut compute about 28%. 1.0 shows list price. Must be above 0 and at most 1.5, otherwise it is ignored. Storage and spot are not scaled. Jobs keep the rate in force when they finished; desktop costs pick up a change on the next 15-minute collection.',
     'cluster-manager.metrics.cost.enabled': 'Collect Cost Explorer daily totals in the commercial AWS partition with the dogstatsd metrics provider. Other partitions and providers do not support this collection.',
     'cluster-manager.metrics.cost.by_account': "Split cost metrics by linked AWS account; only a payer account that can see other accounts' spend needs this.",
     'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history.",
@@ -6418,6 +6611,8 @@ def _definition(row):
             validation.update(maximum=5)
         if key == 'scheduler.efa.max_interfaces':
             validation.update(minimum=1, maximum=2)
+        if key == 'cluster.costs.compute_rate_multiplier':
+            validation.update(maximum=1.5)
     if leaf in ('start_up_time', 'shut_down_time'):
         validation['pattern'] = r'^([01][0-9]|2[0-3]):[0-5][0-9]$'
     if value_type == 'secret':
@@ -6613,6 +6808,13 @@ def coerce_value(setting, value):
             invalid(f'must be at least {rule["minimum"]}')
         if 'maximum' in rule and value > rule['maximum']:
             invalid(f'must be at most {rule["maximum"]}')
+        # the same test the scheduler and cluster-manager apply, so a value that would be
+        # ignored at runtime (0 included) is refused here instead of saved
+        if (
+            key == COMPUTE_RATE_MULTIPLIER_KEY
+            and parse_compute_rate_multiplier(value) is None
+        ):
+            invalid('must be greater than 0 and at most 1.5')
     if key == 'cluster-manager.web_portal.default_landing_page' and value == 'home':
         value = 'my-costs'
     if kind == 'enum' and value not in setting['choices']:

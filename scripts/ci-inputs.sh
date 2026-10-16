@@ -20,3 +20,9 @@ if grep -Eq '^(software_versions.yml$|scripts/ci-(inputs|runtime)\.sh$|\.github/
 fi
 printf 'runtimes=%s\n' "$runtimes" >> "$GITHUB_OUTPUT"
 printf 'images=%s\nrelease=%s\n' "$images" "$release" >> "$GITHUB_OUTPUT"
+# An unrelated PR must not inherit a release-version mismatch from its base.
+version=false
+if [ "${GITHUB_EVENT_NAME:-}" != pull_request ] || grep -Eq '^(IDEA_VERSION\.txt|idea-admin\.sh)$' "$RUNNER_TEMP/ci-changed-paths"; then
+  version=true
+fi
+printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"

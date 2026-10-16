@@ -66,13 +66,13 @@ export default defineConfig(({ mode }) => {
             outDir: 'build',
             sourcemap: false,
             // The support floor, stated where it is actually enforced. CRA transpiled to
-            // es5; this is Vite 7's default and is roughly Chrome/Edge 107, Firefox 104,
-            // Safari 16. package.json's browserslist no longer influences the build.
-            target: 'baseline-widely-available',
+            // es5; preserve the Vite 7 floor through the Vite 8 upgrade.
+            // package.json's browserslist no longer influences the build.
+            target: ['chrome107', 'edge107', 'firefox104', 'safari16'],
             // emit context-help .md and sample-script .txt assets as real files
             // (fetched at runtime) instead of inlining them as data: URIs
             assetsInlineLimit: 0,
-            rollupOptions: {
+            rolldownOptions: {
                 output: {
                     entryFileNames: 'static/js/[name].[hash].js',
                     chunkFileNames: 'static/js/[name].[hash].js',

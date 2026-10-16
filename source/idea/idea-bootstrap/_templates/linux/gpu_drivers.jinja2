@@ -214,7 +214,7 @@ function boot_kernel_with_headers () {
   local RESUME_SCRIPT=$(basename "${BASH_SOURCE[0]}")
   (crontab -l 2>/dev/null | grep -v "${RESUME_SCRIPT}" || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/${RESUME_SCRIPT} crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
   check_reboot_loop "Kernel ${TARGET_KERNEL} for NVIDIA driver build"
-  reboot
+  reboot_after_cloud_init
   exit 0
 }
 
@@ -239,6 +239,17 @@ function install_nvidia_grid_drivers () {
     log_info "GPU driver already installed. Skip."
     return 0
   fi
+
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+  if ! install_matching_kernel_devel; then
+    {% if context.fail_on_missing_gpu_driver() %}
+    fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+    {% else %}
+    log_warning "Matching kernel-devel unavailable; skipping NVIDIA driver installation because fail_on_missing_driver is disabled."
+    return 0
+    {% endif %}
+  fi
+{% endif %}
 
   log_info "Installing NVIDIA GRID Drivers"
   mkdir -p /root/bootstrap/gpu_drivers
@@ -299,6 +310,17 @@ function install_nvidia_public_drivers() {
     log_info "GPU driver already installed. Skip."
     return 0
   fi
+
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+  if ! install_matching_kernel_devel; then
+    {% if context.fail_on_missing_gpu_driver() %}
+    fail_gpu_drivers "gpu-kernel-devel-missing" "Matching kernel build packages unavailable for $(uname -r)."
+    {% else %}
+    log_warning "Matching kernel-devel unavailable; skipping NVIDIA driver installation because fail_on_missing_driver is disabled."
+    return 0
+    {% endif %}
+  fi
+{% endif %}
 
   # Instance    Product Type    Product Series  Product
   # G2        GRID          GRID Series     GRID K520

@@ -36,6 +36,7 @@ from ideadatamodel import (
     UserCosts,
 )
 from ideadatamodel.reporting.job_cost import job_spend
+from ideasdk.aws.compute_rate import compute_rate_multiplier
 from ideasdk.utils import Utils
 
 from boto3.dynamodb.conditions import Key
@@ -43,13 +44,15 @@ from boto3.dynamodb.conditions import Key
 from ideaclustermanager.app.reporting.reporting_sources import source_not_created
 from ideaclustermanager.app.projects.bedrock_usage_service import (
     USAGE_WINDOW,
+    USAGE_WINDOW_DAYS,
     get_project_window_usage,
     list_bedrock_projects,
     usage_window_dates,
 )
 
 import arrow
-from typing import Dict, List, Optional
+import time
+from typing import Dict, Iterable, List, Optional, Tuple
 
 # states in which the instance behind a desktop is still running and still costing
 LIVE_SESSION_STATES = frozenset(
@@ -78,6 +81,7 @@ MAX_SESSIONS = 200
 # every desktop session in the window across every user. only the fields the hours are
 # computed from are fetched, so a page this size stays small.
 MAX_ADMIN_SESSIONS = 10000
+CPU_PREFETCH_SECONDS = 5
 
 # the fields a session's hours and price are computed from; without this the query
 # returns whole session documents, none of the rest of which is read.
@@ -92,7 +96,32 @@ SESSION_FIELDS = [
     'stopped_on',
     'cleanup_warning_stop_time',
     'server.instance_type',
+    'server.instance_id',
 ]
+
+# a run row in the session history: one interval the instance ran, pointing back at its
+# desktop. the controller writes one per start, from 26.10.6.
+RUN_OF = 'run_of'
+
+# CloudWatch keeps hourly datapoints for 455 days; time older than that is unknown to
+# it, not idle, and falls back to the whole interval
+CPU_RETENTION_MS = 455 * 86400000
+CPU_PERIOD = 3600
+# one GetMetricData call takes at most 500 queries
+CPU_QUERIES_PER_CALL = 500
+# a day is settled, and its hours safe to keep, once CloudWatch has stopped filling it;
+# an unsettled day is read again after CPU_RECENT_SECONDS
+CPU_SETTLE_SECONDS = 3 * 3600
+CPU_RECENT_SECONDS = 900
+DAY_MS = 86400000
+HOUR_MS = 3600000
+# a run opened a moment after the desktop was created leaves no real gap to estimate
+RUN_GRACE_MS = 60000
+# the running hours of settled days, by (instance id, day) and shared by every reader in
+# the process, so a backfill does not ask CloudWatch for the same day twice.
+# ponytail: cleared whole when it reaches CPU_CACHE_DAYS; an LRU if that ever churns.
+CPU_CACHE_DAYS = 100000
+_cpu_hours_cache: Dict = {}
 
 # spend is the sum of the line items, never total: records before 26.10.1 subtract a
 # hypothetical reserved-instance discount from total. same figure as job_spend().
@@ -134,20 +163,30 @@ class MyCostsService:
         if Utils.is_empty(username):
             raise exceptions.unauthorized_access()
 
-        start_date, end_date = usage_window_dates()
-        window_start = arrow.get(start_date).floor('day')
-        window_end = arrow.utcnow()
+        window_start, window_end = self.usage_window()
+        # bedrock day rows are keyed by utc date, so ai keeps utc days
+        ai_start, ai_end = usage_window_dates()
 
         return GetMyCostsSummaryResult(
             username=username,
             window=USAGE_WINDOW,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=window_start.format('YYYY-MM-DD'),
+            end_date=window_end.format('YYYY-MM-DD'),
             currency=locale.get_currency_code(),
-            ai=self._ai(username, start_date, end_date),
+            ai=self._ai(username, ai_start, ai_end),
             jobs=self._jobs(username, window_start, window_end),
             desktops=self._desktops(username, window_start, window_end),
         )
+
+    def usage_window(self) -> Tuple[arrow.Arrow, arrow.Arrow]:
+        """
+        the trailing window on cluster time zone days, the days reporting draws: from the
+        start of the local day USAGE_WINDOW_DAYS - 1 days ago through now. bedrock usage
+        rows stay keyed by utc date (usage_window_dates), so ai figures keep utc days.
+        """
+        timezone = self.context.config().get_string('cluster.timezone', 'UTC') or 'UTC'
+        now = arrow.utcnow().to(timezone)
+        return now.shift(days=-(USAGE_WINDOW_DAYS - 1)).floor('day'), now
 
     # ai
 
@@ -487,6 +526,9 @@ class MyCostsService:
             unpriced_sessions=sum(
                 1 for session in sessions if session.price_unavailable
             ),
+            usage_unknown_sessions=sum(
+                1 for session in sessions if session.usage_unknown
+            ),
             estimated=True,
             sessions=sessions,
         )
@@ -561,6 +603,11 @@ class MyCostsService:
 
         hits = []
         for row in rows:
+            if row.get(RUN_OF):
+                # every run, not only the window's: the earliest one says from when on
+                # the desktop's runs are known at all
+                hits.append({'_source': row})
+                continue
             created_on = Utils.get_value_as_int('created_on', row, 0)
             deleted_on = Utils.get_value_as_int('deleted_on', row, 0)
             stopped_on = Utils.get_value_as_int('stopped_on', row, 0)
@@ -593,8 +640,17 @@ class MyCostsService:
                         'server': {
                             'instance_type': Utils.get_value_as_string(
                                 'instance_type', row
-                            )
+                            ),
+                            'instance_id': Utils.get_value_as_string(
+                                'instance_id', row
+                            ),
                         },
+                        # deleted before 26.10.6 and no launch found for it in
+                        # CloudTrail: how long it ran cannot be known
+                        'instance_unknown': Utils.get_value_as_bool(
+                            'instance_unknown', row, False
+                        ),
+                        'never_ran': Utils.get_value_as_bool('never_ran', row, False),
                     },
                 }
             )
@@ -627,7 +683,7 @@ class MyCostsService:
         for hit in hits:
             source = Utils.get_value_as_dict('_source', hit, {})
             session_id = Utils.get_value_as_string('idea_session_id', source, '')
-            if Utils.is_empty(session_id):
+            if Utils.is_empty(session_id) or source.get(RUN_OF):
                 continue
             is_history = Utils.get_value_as_bool('_history', hit, False)
             seen = newest.get(session_id)
@@ -648,32 +704,282 @@ class MyCostsService:
                 from_history[session_id] = is_history
         return list(newest.values())
 
+    @staticmethod
+    def _runs_by_session(hits) -> Dict[str, List[Tuple[int, Optional[int], bool]]]:
+        """
+        each desktop's recorded runs as (started, stopped or None while open,
+        reconciled), oldest first. a reconciled run was opened for a desktop already
+        running, so its start is not when the desktop started.
+        """
+        runs: Dict[str, List[Tuple[int, Optional[int], bool]]] = {}
+        for hit in hits:
+            source = Utils.get_value_as_dict('_source', hit, {})
+            session_id = Utils.get_value_as_string(RUN_OF, source, '')
+            started = Utils.get_value_as_int('started_on', source, 0)
+            if Utils.is_empty(session_id) or started <= 0:
+                continue
+            stopped = Utils.get_value_as_int('stopped_on', source, 0)
+            runs.setdefault(session_id, []).append(
+                (
+                    started,
+                    stopped or None,
+                    Utils.get_value_as_bool('reconciled', source, False),
+                )
+            )
+        for entries in runs.values():
+            entries.sort()
+        return runs
+
     def _sessions_from(
-        self, hits, start_ms: int, end_ms: int
+        self, hits, start_ms: int, end_ms: int, *, prefetch: bool = True
     ) -> List[MyCostsDesktopSession]:
+        runs = self._runs_by_session(hits)
+        sources = self._newest_per_session(hits)
+        if prefetch:
+            self._prefetch_running_hours(
+                sources, runs, start_ms, end_ms, time.monotonic() + CPU_PREFETCH_SECONDS
+            )
         sessions = [
-            self._desktop_session(source, start_ms, end_ms)
-            for source in self._newest_per_session(hits)
+            self._desktop_session(
+                source,
+                start_ms,
+                end_ms,
+                runs.get(Utils.get_value_as_string('idea_session_id', source, '')),
+            )
+            for source in sources
         ]
         return [session for session in sessions if session is not None]
 
+    @staticmethod
+    def _unrecorded(source: Dict, runs, start_ms: int, end_ms: int):
+        """
+        the parts of the window no run records, which only an estimate can fill: all
+        of it for a desktop with no runs (history from before the controller recorded
+        them), else the time before the first run and before each reconciled run.
+        bounded by when it was created and, failing a later run, by when it last
+        stopped.
+        """
+        created_on = Utils.get_value_as_int('created_on', source, 0)
+        updated_on = Utils.get_value_as_int('updated_on', source, 0)
+        state = Utils.get_value_as_string('state', source, '')
+        stopped_at, _ = MyCostsService._stop_time(source, state, updated_on, end_ms)
+        start = max(created_on, start_ms)
+        end = min(stopped_at, end_ms)
+        if not runs:
+            return [(start, end)] if end > start else []
+        gaps = [(start, min(end, runs[0][0]))]
+        for previous, run in zip(runs, runs[1:]):
+            if run[2]:
+                gaps.append((max(start, previous[1] or run[0]), min(end, run[0])))
+        return [(a, b) for a, b in gaps if b - a >= RUN_GRACE_MS]
+
+    # running hours from CloudWatch, for the time before runs were recorded
+
+    @staticmethod
+    def _days(start_ms: int, end_ms: int) -> Iterable[int]:
+        return range(start_ms - start_ms % DAY_MS, end_ms, DAY_MS)
+
+    def _prefetch_running_hours(
+        self, sources, runs, start_ms: int, end_ms: int, deadline: float = None
+    ):
+        """
+        one batched read for every desktop that needs an estimate, so pricing a page of
+        desktops costs a handful of GetMetricData calls rather than one per desktop.
+        a report's deadline (time.monotonic) stops the reads; what was not read falls
+        back to the whole interval, flagged.
+        """
+        retained = Utils.current_time_ms() - CPU_RETENTION_MS
+        wanted: Dict[str, List[int]] = {}
+        for source in sources:
+            instance_id = Utils.get_value_as_string(
+                'instance_id', Utils.get_value_as_dict('server', source, {})
+            )
+            if Utils.is_empty(instance_id):
+                continue
+            gaps = self._unrecorded(
+                source,
+                runs.get(Utils.get_value_as_string('idea_session_id', source, '')),
+                start_ms,
+                end_ms,
+            )
+            missing = [
+                day
+                for start, end in gaps
+                for day in self._days(max(start, retained), end)
+                if self._cached_hours(instance_id, day) is None
+            ]
+            if missing:
+                wanted.setdefault(instance_id, []).extend(missing)
+        if not wanted:
+            return
+        first = min(min(days) for days in wanted.values())
+        last = max(max(days) for days in wanted.values()) + DAY_MS
+        instance_ids = sorted(wanted)
+        try:
+            for offset in range(0, len(instance_ids), CPU_QUERIES_PER_CALL):
+                self._read_running_hours(
+                    instance_ids[offset : offset + CPU_QUERIES_PER_CALL],
+                    first,
+                    last,
+                    deadline,
+                )
+        except Exception as e:
+            # the estimate degrades to the whole interval; the page still renders
+            self.logger.warning(f'failed to read desktop running hours: {e}')
+
+    def _read_running_hours(
+        self, instance_ids: List[str], first: int, last: int, deadline: float = None
+    ):
+        """
+        an hour with a CPUUtilization datapoint is an hour the instance ran: a stopped
+        instance reports nothing.
+        """
+        now_ms = Utils.current_time_ms()
+        request = {
+            'MetricDataQueries': [
+                {
+                    'Id': f'i{index}',
+                    'MetricStat': {
+                        'Metric': {
+                            'Namespace': 'AWS/EC2',
+                            'MetricName': 'CPUUtilization',
+                            'Dimensions': [
+                                {'Name': 'InstanceId', 'Value': instance_id}
+                            ],
+                        },
+                        'Period': CPU_PERIOD,
+                        'Stat': 'SampleCount',
+                    },
+                    'ReturnData': True,
+                }
+                for index, instance_id in enumerate(instance_ids)
+            ],
+            'StartTime': arrow.get(first / 1000).datetime,
+            'EndTime': arrow.get(min(last, now_ms) / 1000).datetime,
+            'ScanBy': 'TimestampAscending',
+        }
+        hours: Dict[str, set] = {instance_id: set() for instance_id in instance_ids}
+        cloudwatch = self.context.aws().cloudwatch()
+        while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('report deadline reached')
+            page = cloudwatch.get_metric_data(**request)
+            for result in page.get('MetricDataResults', []):
+                instance_id = instance_ids[int(result['Id'][1:])]
+                for stamp, value in zip(
+                    result.get('Timestamps', []), result.get('Values', [])
+                ):
+                    if value > 0:
+                        hours[instance_id].add(arrow.get(stamp).int_timestamp * 1000)
+            if not page.get('NextToken'):
+                break
+            request['NextToken'] = page['NextToken']
+
+        if len(_cpu_hours_cache) >= CPU_CACHE_DAYS:
+            _cpu_hours_cache.clear()
+        recent = Utils.current_time() + CPU_RECENT_SECONDS
+        for instance_id, stamps in hours.items():
+            for day in self._days(first, min(last, now_ms)):
+                settled = day + DAY_MS <= now_ms - CPU_SETTLE_SECONDS * 1000
+                _cpu_hours_cache[(instance_id, day)] = (
+                    None if settled else recent,
+                    frozenset(h for h in stamps if day <= h < day + DAY_MS),
+                )
+
+    @staticmethod
+    def _cached_hours(instance_id: str, day: int):
+        entry = _cpu_hours_cache.get((instance_id, day))
+        if entry is None or (entry[0] is not None and entry[0] < Utils.current_time()):
+            return None
+        return entry[1]
+
+    @staticmethod
+    def _running_ms(instance_id: str, start: int, end: int) -> Optional[int]:
+        """how long the instance ran between start and end, or None if that cannot be read."""
+        if Utils.is_empty(instance_id):
+            return None
+        # beyond retention CloudWatch says nothing either way: the whole of that part
+        retained = Utils.current_time_ms() - CPU_RETENTION_MS
+        total = max(0, min(end, retained) - start)
+        start = max(start, retained)
+        for day in MyCostsService._days(start, end):
+            hours = MyCostsService._cached_hours(instance_id, day)
+            if hours is None:
+                return None
+            total += sum(
+                max(0, min(hour + HOUR_MS, end) - max(hour, start)) for hour in hours
+            )
+        return total
+
+    @staticmethod
+    def _running_time(source: Dict, start_ms: int, end_ms: int, runs=None):
+        """
+        how long the instance ran in the window, and whether any of it is estimated:
+        the recorded runs clipped to the window, an open run to now, and an estimate
+        for whatever came before the first run. the cost pages and the reports both
+        measure desktops here, so they agree.
+        """
+        updated_on = Utils.get_value_as_int('updated_on', source, 0)
+        state = Utils.get_value_as_string('state', source, '')
+        stopped_at, _ = MyCostsService._stop_time(source, state, updated_on, end_ms)
+        server = Utils.get_value_as_dict('server', source, {})
+
+        run_ms = 0
+        runs = runs or []
+        for index, (run_start, run_stop, _) in enumerate(runs):
+            if run_stop is None:
+                # still open: to the recorded stop of a desktop no longer live, else now
+                run_stop = stopped_at
+            if index + 1 < len(runs):
+                # never past the next start: two runs left open (a missed stop, a
+                # running state through ERROR and back) are closed together, and
+                # summing them would bill the overlap twice
+                run_stop = min(run_stop, runs[index + 1][0])
+            run_ms += max(0, min(run_stop, end_ms) - max(run_start, start_ms))
+
+        estimated_ms = 0
+        stop_time_estimated = False
+        for gap_start, gap_end in MyCostsService._unrecorded(
+            source, runs, start_ms, end_ms
+        ):
+            stop_time_estimated = True
+            running = MyCostsService._running_ms(
+                Utils.get_value_as_string('instance_id', server), gap_start, gap_end
+            )
+            # no instance id or CloudWatch unreadable: the whole interval, as costed
+            # before runs were recorded
+            estimated_ms += gap_end - gap_start if running is None else running
+        return run_ms + estimated_ms, stop_time_estimated
+
     def _desktop_session(
-        self, source: Dict, start_ms: int, end_ms: int
+        self, source: Dict, start_ms: int, end_ms: int, runs=None
     ) -> Optional[MyCostsDesktopSession]:
         created_on = Utils.get_value_as_int('created_on', source, 0)
         updated_on = Utils.get_value_as_int('updated_on', source, 0)
         state = Utils.get_value_as_string('state', source, '')
-
-        stopped_at, stop_time_estimated = self._stop_time(
-            source, state, updated_on, end_ms
-        )
-        started = max(created_on, start_ms)
-        stopped = min(stopped_at, end_ms)
-        if stopped <= started:
-            return None
-
-        hours = (stopped - started) / 3600000.0
+        stopped_at, _ = self._stop_time(source, state, updated_on, end_ms)
         server = Utils.get_value_as_dict('server', source, {})
+        if Utils.get_value_as_bool('never_ran', source, False):
+            # deleted before it was given an instance: it cost nothing
+            return None
+        # no runs and no instance to ask CloudWatch about: counted, never guessed
+        unknown = not runs and Utils.get_value_as_bool(
+            'instance_unknown', source, False
+        )
+        if unknown:
+            if not self._unrecorded(source, None, start_ms, end_ms):
+                return None
+            running_ms, stop_time_estimated = 0, False
+        else:
+            running_ms, stop_time_estimated = self._running_time(
+                source, start_ms, end_ms, runs
+            )
+            if running_ms <= 0:
+                return None
+
+        started = max(created_on, start_ms)
+        stopped = max(min(stopped_at, end_ms), started)
+        hours = running_ms / 3600000.0
         instance_type = Utils.get_value_as_string('instance_type', server)
 
         session = MyCostsDesktopSession(
@@ -691,6 +997,10 @@ class MyCostsService:
         )
         if stop_time_estimated:
             session.stop_time_estimated = True
+        if unknown:
+            session.usage_unknown = True
+            session.price_unavailable = True
+            return session
 
         price = self._ondemand_price(instance_type)
         if price is None:
@@ -707,9 +1017,7 @@ class MyCostsService:
         sources the per user summary reads. an unreadable source is reported as
         unavailable rather than leaving rows silently short.
         """
-        start_date, end_date = usage_window_dates()
-        window_start = arrow.get(start_date).floor('day')
-        window_end = arrow.utcnow()
+        window_start, window_end = self.usage_window()
         start_ms = window_start.int_timestamp * 1000
         end_ms = window_end.int_timestamp * 1000
 
@@ -748,8 +1056,8 @@ class MyCostsService:
 
         return ListUserCostsResult(
             window=USAGE_WINDOW,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=window_start.format('YYYY-MM-DD'),
+            end_date=window_end.format('YYYY-MM-DD'),
             currency=locale.get_currency_code(),
             listing=listing,
             ai_unavailable=ai_unavailable,
@@ -886,6 +1194,13 @@ class MyCostsService:
 
         hits = list(hits) + self._history_hits(None, start_ms, end_ms, all_users=True)
 
+        self._prefetch_running_hours(
+            self._newest_per_session(hits),
+            self._runs_by_session(hits),
+            start_ms,
+            end_ms,
+            time.monotonic() + CPU_PREFETCH_SECONDS,
+        )
         by_owner: Dict[str, List] = {}
         for hit in hits:
             source = Utils.get_value_as_dict('_source', hit, {})
@@ -896,7 +1211,7 @@ class MyCostsService:
 
         for owner, owner_hits in by_owner.items():
             totals = self._desktop_totals(
-                self._sessions_from(owner_hits, start_ms, end_ms)
+                self._sessions_from(owner_hits, start_ms, end_ms, prefetch=False)
             )
             row = row_for(owner)
             row.desktop_session_count += Utils.get_as_int(totals.session_count, 0)
@@ -948,4 +1263,6 @@ class MyCostsService:
         ondemand = Utils.get_as_float(getattr(unit_price, 'ondemand', None), 0.0)
         if ondemand <= 0:
             return None
-        return ondemand
+        # every desktop hour (my costs, reporting, the admin listing, idle cost) is priced
+        # through here, so the effective rate is applied here and nowhere else.
+        return ondemand * compute_rate_multiplier(self.context.config(), self.logger)

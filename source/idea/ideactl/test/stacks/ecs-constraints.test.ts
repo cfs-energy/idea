@@ -226,8 +226,10 @@ test("every application service rolls its own failed deployment back", async () 
     const deployment = servicesByRole(resourcesOf(all[stack]))[role]?.["Properties"]["DeploymentConfiguration"] as
       | Json
       | undefined;
-    assert.equal(deployment?.["MinimumHealthyPercent"], role === "scheduler" ? 0 : 50, `${role} healthy floor: one replica may stop before the new one places`);
-    assert.equal(deployment?.["MaximumPercent"], role === "scheduler" ? 100 : 150, `${role} surge`);
+    // Every replica's replacement starts at once and no old task stops before a new one is healthy:
+    // a disruption budget of zero with a full surge. Only the single batch server stops first.
+    assert.equal(deployment?.["MinimumHealthyPercent"], role === "scheduler" ? 0 : 100, `${role} healthy floor: no replica stops before its replacement is healthy`);
+    assert.equal(deployment?.["MaximumPercent"], role === "scheduler" ? 100 : 200, `${role} surge: every replacement starts at once`);
     assert.deepEqual(
       deployment?.["DeploymentCircuitBreaker"],
       { Enable: true, Rollback: true },
@@ -248,13 +250,22 @@ test("every application service rolls its own failed deployment back", async () 
     "the one scheduler task carries no distinct-instance constraint",
   );
 
-  // Every other service spreads across hosts, so one host loss never takes a whole role.
+  // Every other service keeps one replica per host, mid-rollout too, so one host loss never
+  // takes two tasks of a role. Zones first, then pack.
   for (const { role, stack } of SERVICES.filter((entry) => entry.role !== "scheduler")) {
     const service = servicesByRole(resourcesOf(all[stack]))[role];
     assert.deepEqual(
       service?.["Properties"]["PlacementConstraints"],
       [{ Type: "distinctInstance" }],
       `${role} spreads across hosts`,
+    );
+    assert.deepEqual(
+      service?.["Properties"]["PlacementStrategies"],
+      [
+        { Type: "spread", Field: "attribute:ecs.availability-zone" },
+        { Type: "binpack", Field: "MEMORY" },
+      ],
+      `${role} spreads across zones, then packs`,
     );
   }
 });
@@ -565,12 +576,19 @@ test("application tasks use readiness checks and explicit shutdown allowances", 
     const command = JSON.stringify(container.HealthCheck.Command);
     assert.ok(command.includes(role === "scheduler" ? "Scheduler.ListActiveJobs" : role === "dcv-gateway" ? "/8989" : role === "dcv-broker" ? "/health" : "/healthcheck"), role);
     if (role === "dcv-broker") for (const port of [8444, 8445, 8446]) assert.ok(command.includes(`:${port}/health`));
+    // The broker's bash launcher and the gateway's exec'd binary ignore SIGTERM as PID 1.
+    if (role === "dcv-broker" || role === "dcv-gateway") {
+      assert.equal(container.LinuxParameters?.InitProcessEnabled, true, role);
+      assert.ok((container.Environment as Json[]).some((entry) => entry.Name === "TINI_KILL_PROCESS_GROUP" && entry.Value === "1"), role);
+    }
     const service = servicesByRole(resources)[role];
     for (const target of service.Properties.LoadBalancers as Json[]) {
       const group = resources[target.TargetGroupArn.Ref].Properties;
       assert.equal(group.HealthCheckIntervalSeconds, 5, role);
       assert.equal(group.HealthyThresholdCount, 2, role);
-      assert.equal(group.TargetGroupAttributes.find((entry: Json) => entry.Key === "deregistration_delay.timeout_seconds")?.Value, role === "scheduler" ? "15" : "300", role);
+      // The drain matches the container's stop allowance: SIGTERM stops the servers listening, and
+      // an NLB resets a DCV connection at the end of the drain whatever its length.
+      assert.equal(group.TargetGroupAttributes.find((entry: Json) => entry.Key === "deregistration_delay.timeout_seconds")?.Value, role === "scheduler" ? "15" : "30", role);
       assert.equal(group.HealthCheckProtocol, role === "dcv-gateway" ? "TCP" : "HTTPS", role);
     }
   }

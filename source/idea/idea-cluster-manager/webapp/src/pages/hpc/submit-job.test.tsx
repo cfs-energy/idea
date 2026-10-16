@@ -226,3 +226,30 @@ describe('submit job page', () => {
         expect(item.content).toContain('Read timed out');
     });
 });
+
+it('shows the selected queue rules beside the instance type and updates when the queue changes', async () => {
+    const context = initTestAppContext();
+    const scheduler = context.client().scheduler();
+    vi.spyOn(scheduler, 'listQueues').mockResolvedValue({listing: [
+        {name: 'normal', instance_type_rules: 'Allowed instance types: c5 (large, xlarge).'},
+        {name: 'arm', instance_type_rules: 'Allowed instance types: c8g (all sizes). Excluded: c8g (large).'},
+    ]} as any);
+    vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [{
+        ...APPLICATION,
+        form_template: {sections: [{params: [
+            {name: 'queue', title: 'Queue', param_type: 'text', data_type: 'str', default: 'normal'},
+            ...APPLICATION.form_template!.sections![0].params!,
+        ]}]},
+    }]} as any);
+    vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+    renderSubmitJob();
+    const hint = await screen.findByText('Queue normal. Allowed instance types: c5 (large, xlarge).');
+    expect(screen.getByRole('textbox', {name: 'Instance Type'})).toHaveAccessibleDescription(hint.textContent!);
+    const user = userEvent.setup();
+    const queue = screen.getByRole('textbox', {name: 'Queue'});
+    await user.clear(queue);
+    await user.type(queue, 'arm');
+    expect(await screen.findByText('Queue arm. Allowed instance types: c8g (all sizes). Excluded: c8g (large).')).toBeInTheDocument();
+    expect(screen.queryByText('Queue normal. Allowed instance types: c5 (large, xlarge).')).toBeNull();
+    vi.restoreAllMocks();
+});

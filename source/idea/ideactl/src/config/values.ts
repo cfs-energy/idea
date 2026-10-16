@@ -37,6 +37,7 @@ export const SUPPORTED_OS: readonly string[] = [
   'rocky10',
   'ubuntu2204',
   'ubuntu2404',
+  'ubuntu2604',
 ];
 
 /** `constants.EOL_BASEOS`: base_os values that are gone, mapped to their replacement. */
@@ -447,15 +448,6 @@ function getters(values: UserValues, options: BuildContextOptions) {
         throw new ClusterConfigError(
           `base_os: ${baseOs} has reached end-of-life and is no longer supported by IDEA. ` +
             `Update base_os to ${EOL_BASEOS[baseOs]} in values.yml and re-run.`,
-        );
-      }
-      // EL10 has no Amazon DCV packages: an eVDI-enabled install on rhel10/rocky10 would deploy
-      // broker/gateway/controller nodes with no DCV installed.
-      if ((baseOs === 'rhel10' || baseOs === 'rocky10') &&
-        g.enabledModules().includes('virtual-desktop-controller')) {
-        throw new GeneralException(
-          `base_os ${baseOs} is not supported with the virtual-desktop-controller module: ` +
-            'Amazon DCV publishes no EL10 packages. Choose rhel9/rocky9, or install without eVDI.',
         );
       }
       return baseOs;

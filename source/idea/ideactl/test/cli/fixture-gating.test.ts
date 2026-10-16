@@ -8,6 +8,7 @@ import test from "node:test";
 
 import {
   PUBLIC_CHECKOUT_ENV,
+  REQUIRE_CAPTURES_ENV,
   optionalFixtures,
   requireFixtures,
   requiredService,
@@ -41,14 +42,20 @@ test("optional fixtures skip only in explicit public checkout mode", () => {
   const present = join(root, "present.json");
   writeFileSync(present, "{}\n");
   const previous = process.env[PUBLIC_CHECKOUT_ENV];
+  const previousRequired = process.env[REQUIRE_CAPTURES_ENV];
   try {
+    delete process.env[REQUIRE_CAPTURES_ENV];
     delete process.env[PUBLIC_CHECKOUT_ENV];
     assert.throws(() => optionalFixtures([missing], "regenerate-fixture"));
     process.env[PUBLIC_CHECKOUT_ENV] = "1";
     assert.equal(optionalFixtures([missing], "regenerate-fixture"), false);
+    process.env[REQUIRE_CAPTURES_ENV] = "1";
+    assert.throws(() => optionalFixtures([missing], "regenerate-fixture"));
     // Public checkout still runs optional coverage when the fixture is on disk.
     assert.equal(optionalFixtures([present], "regenerate-fixture"), true);
   } finally {
+    if (previousRequired === undefined) delete process.env[REQUIRE_CAPTURES_ENV];
+    else process.env[REQUIRE_CAPTURES_ENV] = previousRequired;
     if (previous === undefined) delete process.env[PUBLIC_CHECKOUT_ENV];
     else process.env[PUBLIC_CHECKOUT_ENV] = previous;
     rmSync(root, { force: true, recursive: true });
@@ -82,10 +89,14 @@ test("a required capture ends the file quietly in a public checkout and loudly e
     ].join("\n"),
   );
   try {
-    const publicCheckout = spawnSync(process.execPath, [script], { encoding: "utf8", env: { ...process.env, [PUBLIC_CHECKOUT_ENV]: "1" } });
+    const publicCheckout = spawnSync(process.execPath, [script], { encoding: "utf8", env: { ...process.env, [PUBLIC_CHECKOUT_ENV]: "1", [REQUIRE_CAPTURES_ENV]: "0" } });
     assert.equal(publicCheckout.status, 0, publicCheckout.stderr);
     assert.match(publicCheckout.stdout, /^PRIVATE CAPTURE ABSENT, tests not run: .*absent\.json \(regenerate with: node tools\/parity\/capture\.ts --live\)$/m);
     assert.doesNotMatch(publicCheckout.stdout, /REACHED THE TESTS/);
+    const strictCapture = spawnSync(process.execPath, [script], { encoding: "utf8", env: { ...process.env, [PUBLIC_CHECKOUT_ENV]: "1", [REQUIRE_CAPTURES_ENV]: "1" } });
+    assert.notEqual(strictCapture.status, 0);
+    assert.match(strictCapture.stderr, /Required fixture is missing/);
+    assert.doesNotMatch(strictCapture.stdout, /PRIVATE CAPTURE ABSENT/);
     const env = { ...process.env };
     delete env[PUBLIC_CHECKOUT_ENV];
     const privateCheckout = spawnSync(process.execPath, [script], { encoding: "utf8", env });

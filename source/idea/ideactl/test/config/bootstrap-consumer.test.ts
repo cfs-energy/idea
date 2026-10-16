@@ -23,8 +23,9 @@ test("Linux user data unpacks with tar -xvf -C into a directory named from %.tar
   });
   assert.match(userdata, /PACKAGE_NAME=\\\$\{!PACKAGE_ARCHIVE%\.tar\.gz\*\}/);
   assert.match(userdata, /tar -xvf \/root\/bootstrap\/\\\$\{!PACKAGE_ARCHIVE\} -C \\\$\{!PACKAGE_DIR\}/);
-  assert.match(userdata, /rm \/root\/bootstrap\/latest/);
-  assert.equal(userdata.includes("set -e\n"), false);
+  assert.match(userdata, /rm -f \/root\/bootstrap\/latest/);
+  // only the generated download script stops on errors; the user data itself reports through fail_userdata
+  assert.equal(userdata.split("set -e\n").length - 1, 1);
   assert.match(userdata, /^set -x$/m);
   assert.match(userdata, /source \/root\/bootstrap\/proxy\.cfg/);
   assert.match(userdata, /\/root\/bootstrap\/infra\.cfg/);
@@ -108,7 +109,7 @@ test("broker and gateway install scripts source infra.cfg which only substitutio
   });
 });
 
-test("download_bootstrap.sh does not checksum the bootstrap archive before tar", () => {
+test("download_bootstrap.sh does not checksum the bootstrap archive, and a failed download fails the user data", () => {
   const userdata = buildBootstrapUserData({
     baseOs: "amazonlinux2023",
     awsRegion: "us-east-2",
@@ -116,7 +117,8 @@ test("download_bootstrap.sh does not checksum the bootstrap archive before tar",
     installCommands: ["/bin/bash scheduler/setup.sh"],
   });
   assert.equal(userdata.includes("sha256sum"), false);
-  assert.equal(/s3 cp[\s\S]*\|\|/.test(userdata), false);
+  assert.match(userdata, /download_bootstrap\.sh "[^"]*" \|\| fail_userdata bootstrap-download/);
+  assert.match(userdata, /^install_aws_cli \|\| fail_userdata aws-cli$/m);
 });
 
 test("a wrapping top-level folder would break the Linux install command, and the builder does not emit one", () => {
@@ -145,16 +147,16 @@ test("Linux install commands invoke bash by path, so a rendered setup.sh need no
   });
 });
 
-test("download_bootstrap.sh rm of latest is unguarded and that script has no set -e", () => {
+test("download_bootstrap.sh stops at its first failure and replaces latest even when it is absent", () => {
   const userdata = buildBootstrapUserData({
     baseOs: "amazonlinux2023",
     awsRegion: "us-east-2",
     bootstrapPackageUri: LINUX_URI,
     installCommands: ["/bin/bash scheduler/setup.sh"],
   });
-  assert.match(userdata, /rm \/root\/bootstrap\/latest/);
+  assert.match(userdata, /#!\/bin\/bash\nset -e\nPACKAGE_DOWNLOAD_URI=/);
+  assert.match(userdata, /rm -f \/root\/bootstrap\/latest/);
   assert.match(userdata, /ln -sf/);
-  assert.equal(userdata.includes("rm -f /root/bootstrap/latest"), false);
 });
 
 test("Windows VDI user data uses substitutionSupport false, so it never writes infra.cfg", () => {

@@ -115,6 +115,13 @@ export function parseDashboardUrl(url?: string): URL | null {
     return parsed
 }
 
+// cluster.costs.compute_rate_multiplier scales on-demand compute to what the account pays. the
+// server ignores a value outside 0 < x <= 1.5 and prices at list rate, so the label does too.
+export function parseComputeRate(value: unknown): number {
+    const rate = typeof value === 'string' && value.trim() !== '' ? Number(value) : typeof value === 'number' ? value : NaN
+    return Number.isFinite(rate) && rate > 0 && rate <= 1.5 ? rate : 1
+}
+
 class ClusterSettingsService {
 
     private props: ClusterSettingsServiceProps
@@ -126,6 +133,7 @@ class ClusterSettingsService {
     clusterLocale: string
     clusterTimezone: string
     clusterHomeDir: string
+    computeRate: number
     customDashboard: CustomDashboardSettings
     maintenance: MaintenanceSettings
 
@@ -138,6 +146,7 @@ class ClusterSettingsService {
         this.clusterLocale = 'en-US'
         this.clusterTimezone = 'UTC'
         this.clusterHomeDir = ''
+        this.computeRate = 1
         this.customDashboard = CUSTOM_DASHBOARD_DISABLED
         this.maintenance = readBootstrapMaintenance()
     }
@@ -191,6 +200,7 @@ class ClusterSettingsService {
             this.clusterLocale = clusterSettings.locale.replace('_', '-')
             this.clusterTimezone = clusterSettings.timezone
             this.clusterName = clusterSettings.cluster_name
+            this.computeRate = parseComputeRate(clusterSettings.costs?.compute_rate_multiplier)
             return this.getModuleSettings(Constants.MODULE_SHARED_STORAGE)
         }).then(sharedStorageSettings => {
             this.clusterHomeDir = `${sharedStorageSettings.apps.mount_dir}/${this.clusterName}`
@@ -293,6 +303,11 @@ class ClusterSettingsService {
             errorCode: 'MODULE_NOT_FOUND',
             message: `ModuleId not found for module name: ${name}`
         }))
+    }
+
+    /** the effective compute rate as a share of on-demand list price; 1 when unset or invalid */
+    getComputeRate(): number {
+        return this.computeRate
     }
 
     getClusterTimeZone(): string {

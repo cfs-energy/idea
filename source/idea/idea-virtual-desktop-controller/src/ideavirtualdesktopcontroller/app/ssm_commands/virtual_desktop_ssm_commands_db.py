@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+from botocore.exceptions import ClientError
 from enum import Enum
 from typing import Optional, Union, Dict
 from pydantic import Field
@@ -125,6 +126,13 @@ class VirtualDesktopSSMCommandsDB:
     def create(self, db_model: VirtualDesktopSSMCommand) -> VirtualDesktopSSMCommand:
         db_entry = self._convert_db_model_to_db_dict(db_model)
         self._table.put_item(Item=db_entry)
+        if db_model.command_type == VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP:
+            self._table.put_item(
+                Item={
+                    ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: f'bootstrap-refresh:{db_model.additional_payload["instance_id"]}',
+                    'refresh_command_id': db_model.command_id,
+                }
+            )
         return self._convert_db_dict_to_db_model(db_entry)
 
     def get(self, command_id: str) -> Union[VirtualDesktopSSMCommand, None]:
@@ -146,8 +154,56 @@ class VirtualDesktopSSMCommandsDB:
         return self._convert_db_dict_to_db_model(db_entry)
 
     def delete(self, command_id: Optional[str]):
+        command = self.get(command_id)
+        if (
+            command
+            and command.command_type == VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP
+        ):
+            try:
+                self._table.delete_item(
+                    Key={
+                        ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: f'bootstrap-refresh:{command.additional_payload["instance_id"]}'
+                    },
+                    ConditionExpression='refresh_command_id = :command',
+                    ExpressionAttributeValues={':command': command_id},
+                )
+            except ClientError as error:
+                if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                    raise
         self._table.delete_item(
             Key={
                 ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: command_id,
             }
+        )
+
+    def has_bootstrap_refresh_in_flight(self, instance_id: str, version: int) -> bool:
+        """
+        whether a bootstrap refresh at this version was sent to the instance and has not
+        finished: the completion handler deletes the row on any terminal status.
+        """
+        # Look up the latest refresh directly; historical CPU checks never enter this path.
+        pointer = self._table.get_item(
+            Key={
+                ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: f'bootstrap-refresh:{instance_id}'
+            },
+            ConsistentRead=True,
+        ).get('Item', {})
+        command_id = pointer.get('refresh_command_id')
+        if not command_id:
+            return False
+        item = self._table.get_item(
+            Key={ssm_commands_constants.SSM_COMMANDS_DB_HASH_KEY: command_id},
+            ConsistentRead=True,
+        ).get('Item', {})
+        payload = (
+            item.get(
+                ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_ADDITIONAL_PAYLOAD_KEY
+            )
+            or {}
+        )
+        return (
+            item.get(ssm_commands_constants.SSM_COMMANDS_DB_COMMAND_TYPE_KEY)
+            == VirtualDesktopSSMCommandType.REFRESH_BOOTSTRAP
+            and payload.get('instance_id') == instance_id
+            and payload.get('refresh_version') == version
         )

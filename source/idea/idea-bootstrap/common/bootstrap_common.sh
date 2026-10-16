@@ -37,9 +37,22 @@ function package_transaction() {
   local manager="$1"
   shift
   local output status delay
+  # Bound slow network I/O inside the manager; killing an RPM/dpkg transaction is unsafe.
+  case "$manager" in
+    apt-get)
+      set -- -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 "$@"
+      ;;
+    dnf|yum)
+      set -- --setopt=timeout=30 --setopt=minrate=64k --setopt=retries=2 --setopt=max_parallel_downloads=10 "$@"
+      ;;
+  esac
   output=$(mktemp) || return $?
   # RHUI/mirrors can publish AppStream before its matching BaseOS dependencies.
   for delay in 15 30 60 0; do
+    # Slow proxies must still be able to finish the final attempt.
+    if [[ $delay -eq 0 && "$manager" != apt-get ]]; then
+      set -- "$1" --setopt=minrate=0 "${@:3}"
+    fi
     # Only final attempts may leave fatal-looking lines in the bake logs.
     if LC_ALL=C "$manager" "$@" > "$output" 2>&1; then
       status=0
@@ -52,7 +65,8 @@ function package_transaction() {
       return 0
     fi
     # A package no repository carries is not transient; callers rely on that failing at once.
-    if grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides' "$output"; then
+    # Optional missing packages can also precede a resolved transaction's download failure.
+    if [[ "${PACKAGE_RETRY_MISSING:-no}" != yes ]] && grep -Eqi 'Unable to find a match|No match for argument' "$output" && ! grep -Eqi 'best candidate|nothing provides|Dependencies resolved' "$output"; then
       cat "$output"
       log_error "$manager transaction failed (exit $status)"
       rm -f "$output"
@@ -61,10 +75,12 @@ function package_transaction() {
     [[ $delay -ne 0 ]] || break
     sed 's/^/[retried] /' "$output"
     log_warning "$manager transaction failed (exit $status); refreshing metadata and retrying in ${delay}s"
-    "$manager" clean packages metadata 2>&1 | sed 's/^/[retried] /' || true
+    if [[ "$manager" != apt-get ]]; then
+      "$manager" clean packages metadata 2>&1 | sed 's/^/[retried] /' || true
+    fi
     sleep "$delay"
   done
-  if grep -Eqi 'best candidate|nothing provides' "$output"; then
+  if [[ "${PACKAGE_RETRY_MISSING:-no}" != yes && "$manager" != apt-get ]] && grep -Eqi 'best candidate|nothing provides' "$output"; then
     sed 's/^/[retried] /' "$output"
     log_warning "$manager dependency resolution failed after retries; retrying once with --nobest"
     if LC_ALL=C "$manager" --nobest "$@" > "$output" 2>&1; then
@@ -80,10 +96,81 @@ function package_transaction() {
   return "$status"
 }
 
+# apt otherwise returns success when some indexes could not be downloaded.
+function apt_update() {
+  package_transaction apt-get -o APT::Update::Error-Mode=any -o DPkg::Lock::Timeout=300 update
+}
+
+# Exact packages can temporarily be missing while BaseOS and AppStream mirrors converge.
+function install_matching_kernel_devel() {
+  local kernel installed message
+  kernel=$(uname -r)
+  if PACKAGE_RETRY_MISSING=yes package_transaction dnf --refresh install -y "kernel-devel-${kernel}" \
+      && [[ -f "${KERNEL_SRC_DIR:-/usr/src/kernels}/${kernel}/Makefile" ]]; then
+    return 0
+  fi
+  installed=$(rpm -qa kernel-devel | tr '\n' ' ')
+  message="Matching kernel-devel unavailable for running kernel ${kernel}; installed: ${installed:-none}. Cannot build kernel modules."
+  log_error "${message}"
+  if [[ -n "${BAKE_STAGE:-}" ]]; then
+    printf '%s: %s\n' "${BAKE_STAGE}" "${message}" >> /var/lib/idea/bake-failed
+  fi
+  return 1
+}
+
 function set_reboot_required () {
   log_info "Reboot Required: ${1}"
   echo -n "yes" > ${BOOTSTRAP_DIR}/reboot_required.txt
   echo "$(date): ${1}" >> ${BOOTSTRAP_DIR}/reboot_history.log
+}
+
+function reboot_after_cloud_init () {
+  # An independent worker can bound the wait; After=cloud-final cannot time out inside its command.
+  # shellcheck disable=SC2016
+  timeout 15 systemd-run --unit=idea-bootstrap-reboot --no-block --on-active=5s \
+    --timer-property=AccuracySec=1s --property=StandardOutput=journal+console \
+    --property=StandardError=journal+console \
+    /bin/bash -c '[[ ! -f /etc/environment ]] || source /etc/environment; source "$1"; complete_bootstrap_reboot' \
+    bash "${BASH_SOURCE[0]}" || fail_bootstrap reboot-failed "Unable to schedule bootstrap reboot"
+}
+
+function fail_bootstrap () {
+  local status="${1}"
+  shift
+  log_error "${1}"
+  mkdir -p "${BOOTSTRAP_DIR}"
+  printf '%s\n' "${1}" > "${BOOTSTRAP_DIR}/bootstrap_failed.txt"
+  # Failure reporting must not hang on metadata or AWS either, including under cron.
+  set +x
+  local token id region
+  token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || true
+  id=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: ${token}" http://169.254.169.254/latest/meta-data/instance-id) || true
+  region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
+  if [[ -z "${region}" ]]; then
+    region=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: ${token}" http://169.254.169.254/latest/meta-data/placement/region) || true
+  fi
+  if [[ -z "${id}" ]] || ! AWS_MAX_ATTEMPTS=1 timeout 30 aws --region "${region}" --cli-connect-timeout 5 --cli-read-timeout 10 \
+      ec2 create-tags --resources "${id}" --tags "Key=idea:BootstrapStatus,Value=${status}"; then
+    log_error "Unable to tag instance with idea:BootstrapStatus=${status}"
+  fi
+  exit 1
+}
+
+function complete_bootstrap_reboot () {
+  local attempt state
+  for ((attempt=0; attempt<60; attempt++)); do
+    state=$(timeout 5 systemctl show cloud-final.service --property=SubState --property=Job) \
+      || fail_bootstrap reboot-failed "Unable to read cloud-final state"
+    # Cron can run before cloud-final starts: an inactive unit with a queued job is not finished.
+    if grep -Eq '^SubState=(exited|dead|failed)$' <<< "${state}" && ! grep -Eq '^Job=[1-9]' <<< "${state}"; then
+      log_info "cloud-final finished; requesting bootstrap reboot"
+      timeout 30 /sbin/reboot || fail_bootstrap reboot-failed "Bootstrap reboot request failed"
+      sleep 60
+      fail_bootstrap reboot-failed "Bootstrap reboot did not shut down the node within 60 seconds"
+    fi
+    sleep 5
+  done
+  fail_bootstrap reboot-failed "Timed out waiting for cloud-final before bootstrap reboot"
 }
 
 function check_reboot_loop () {

@@ -102,6 +102,7 @@ export interface ReportingInsights {
         walltime_efficiency_pct: number | null;
         wasted_core_hours: number | null;
         wasted_cost: string | null;
+        efficiency_cost?: string | null;
         jobs_with_efficiency: number;
         by_user?: Ranked[];
         by_project: Ranked[];

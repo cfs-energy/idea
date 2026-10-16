@@ -17,10 +17,13 @@ To launch your virtual desktop click "**Launch new Virtual Desktop"** button. Yo
     * Amazon Linux 2023
     * Red Hat Enterprise Linux 8
     * Red Hat Enterprise Linux 9
+    * Red Hat Enterprise Linux 10 (virtual sessions only)
     * Rocky Linux 8
     * Rocky Linux 9
+    * Rocky Linux 10 (virtual sessions only)
     * Ubuntu 22.04
     * Ubuntu 24.04
+    * Ubuntu 26.04 (virtual sessions only)
   * **Windows**:
     * Windows Server 2019
     * Windows Server 2022
@@ -29,7 +32,7 @@ To launch your virtual desktop click "**Launch new Virtual Desktop"** button. Yo
 * **Hibernation**: Select whether or not you want to enable hibernation for your session. You must be verify if your EC2 instance supports hibernation first
 * **Virtual Desktop Size:** Instance type to provision. Select of EC2 instance types is based on the list of instances safe-listed by your cluster administrator and the project selected. You can change this value later without having to re-create a new desktop (see [modify-a-virtual-desktop.md](modify-a-virtual-desktop.md "mention"))
 * **Storage Size**: Size of the main EBS partition
-* **Advanced Options**: Advanced option such as enforcing a subnet ID or choose the DCV sessions type
+* **Advanced Options**: Advanced option such as enforcing a subnet ID or choose the DCV sessions type. RHEL 10, Rocky Linux 10 and Ubuntu 26.04 desktops run on Wayland, where Amazon DCV offers virtual sessions only, so the session type is fixed to Virtual for them
 
 <figure><img src="../../../.gitbook/assets/mods_vdi_user_create_launch.webp" alt=""><figcaption></figcaption></figure>
 

@@ -1,9 +1,9 @@
-# syntax=docker/dockerfile:1.27@sha256:bde3983e9c939224420ddaf6b784cc30e09b035a4dea01f581230c50809f372e
+# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.10.5 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.10.6 .
 # Copy the release tarballs into this directory before the build.
 # The dcv-packages context contains NICE-GPG-KEY, checksums.txt, the broker RPM,
 # both gateway RPMs, and both DCV archives. checksums.txt covers each package
@@ -69,7 +69,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
-      rsync git \
+      rsync git vim-minimal vim-enhanced nano \
   && dnf clean all
 
 # Install the session-manager broker, connection gateway, and web viewer from the
@@ -98,10 +98,56 @@ RUN set -eux; \
 
 FROM dcv-runtime
 
-ARG IDEA_VERSION
-
 COPY --from=pbs /opt/pbs /opt/pbs
 
+# Tools users had on the x86 host bastion and expect on the arm64 login node (vi, vim and
+# nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
+# site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
+# hdf5 (h5dump) for either.
+ARG UV_VERSION=0.12.24
+RUN set -eux; \
+    python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
+    test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
+    /usr/local/bin/uv --version
+
+# neovim for the login node: AL2023 packages none, so the release tarball, pinned and
+# checked against the digest GitHub records for each asset.
+ARG TARGETARCH
+ARG NVIM_VERSION=0.12.5
+RUN set -eux; \
+    case "${TARGETARCH:-}" in \
+      amd64) A=x86_64; SUM=bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875 ;; \
+      arm64) A=arm64; SUM=1aa5ca085249580ae0f91eb14f27ec0919773ff2d99a163d03f3d6c21ac29725 ;; \
+      *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/nvim.tar.gz "https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-linux-${A}.tar.gz"; \
+    printf '%s  %s\n' "${SUM}" /tmp/nvim.tar.gz > /tmp/nvim.sha256; \
+    sha256sum -c /tmp/nvim.sha256; \
+    mkdir -p /opt/nvim; \
+    tar -xzf /tmp/nvim.tar.gz -C /opt/nvim --strip-components=1 --no-same-owner; \
+    ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim; \
+    rm -f /tmp/nvim.tar.gz /tmp/nvim.sha256; \
+    /usr/local/bin/nvim --version > /dev/null
+
+# Build ideactl and include its pinned CDK CLI.
+# The build uses the repository path expected by its resource-copy script.
+ARG NODE_VERSION=26.8.2
+RUN set -eux; \
+    case "${TARGETARCH:-}" in \
+      amd64) N=x64 ;; \
+      arm64) N=arm64 ;; \
+      *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /usr/local/node; \
+    curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${N}.tar.gz"; \
+    tar -xzf /tmp/node.tar.gz -C /usr/local/node --strip-components=1 --no-same-owner; \
+    rm -f /tmp/node.tar.gz
+
+ENV PATH="/usr/local/node/bin:/opt/idea/ideactl/node_modules/.bin:${PATH}"
+ENV CDK_DISABLE_CLI_TELEMETRY=true
+
+# Keep runtime tools cached when only the application bundle changes.
+ARG IDEA_VERSION
 # Install all module packages from the release bundle. The selected role runs at startup.
 # Keep the release bundle in /root/.idea/downloads for package commands.
 ADD deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz /root/.idea/downloads/
@@ -120,34 +166,9 @@ RUN set -eux; \
     rm -rf /root/.cache/pip; \
     mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
 
-# Tools users had on the x86 host bastion and expect on the arm64 login node. uv comes as a
-# pinned wheel for the build architecture; AL2023 packages no hdf5 (h5dump) for either.
-ARG UV_VERSION=0.12.24
-RUN set -eux; \
-    python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
-    test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
-    /usr/local/bin/uv --version
-
 # Overlay the gateway web resources.
 ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/
 RUN cp -a /tmp/idea-gateway/static_resources/. /usr/share/dcv/www/ && rm -rf /tmp/idea-gateway /tmp/idea
-
-# Build ideactl and include its pinned CDK CLI.
-# The build uses the repository path expected by its resource-copy script.
-ARG NODE_VERSION=26.8.2
-RUN set -eux; \
-    case "${TARGETARCH:-}" in \
-      amd64) N=x64 ;; \
-      arm64) N=arm64 ;; \
-      *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
-    esac; \
-    mkdir -p /usr/local/node; \
-    curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${N}.tar.gz"; \
-    tar -xzf /tmp/node.tar.gz -C /usr/local/node --strip-components=1 --no-same-owner; \
-    rm -f /tmp/node.tar.gz
-
-ENV PATH="/usr/local/node/bin:/opt/idea/ideactl/node_modules/.bin:${PATH}"
-ENV CDK_DISABLE_CLI_TELEMETRY=true
 
 COPY IDEA_VERSION.txt /idea-build/IDEA_VERSION.txt
 COPY source/idea/ideactl/resources /idea-build/source/idea/ideactl/resources

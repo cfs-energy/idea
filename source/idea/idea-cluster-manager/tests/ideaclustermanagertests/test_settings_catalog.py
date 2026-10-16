@@ -225,14 +225,15 @@ def test_catalog_count_contract_and_explicit_dispositions():
         'global-settings.gpu_settings.nvidia_public_driver_versions.g7e',
         'scheduler.job_provisioning.node_unavailable_timeout_seconds',
         'identity-provider.cognito.operations_leads_group_name',
+        'cluster.costs.compute_rate_multiplier',
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
-    assert len(DESTINATION_SECTIONS) == 36
-    assert len(baseline) == 753
+    assert len(DESTINATION_SECTIONS) == 37
+    assert len(baseline) == 775
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == 'c64a4cc3769d425acc343d350726d67152e31087ccaf102cb504ca52e048443d'
+        == 'd27869370d8ab391cf1a692dcf1c9594e2cba90a21b99a03043bed9aba28feac'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -935,3 +936,16 @@ def test_application_logging_settings_are_restart_enums_and_datadog_is_deploymen
     assert setting['effect'] == 'deployment'
     assert setting['section'] == 'Logs'
     assert coerce_value(setting, False) is False
+
+
+@pytest.mark.parametrize('value', [0, '0', -0.1, 1.51, '2'])
+def test_compute_rate_multiplier_refuses_values_the_runtime_would_ignore(value):
+    setting = BY_KEY['cluster.costs.compute_rate_multiplier']
+    with pytest.raises(exceptions.SocaException):
+        coerce_value(setting, value)
+
+
+@pytest.mark.parametrize('value,expected', [(0.72, 0.72), ('1.5', 1.5), (1, 1)])
+def test_compute_rate_multiplier_accepts_valid_rates(value, expected):
+    setting = BY_KEY['cluster.costs.compute_rate_multiplier']
+    assert coerce_value(setting, value) == expected

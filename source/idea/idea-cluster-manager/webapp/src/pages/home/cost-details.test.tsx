@@ -350,6 +350,33 @@ describe('shared cost details and storage usage', () => {
         expect(await screen.findByText(/1 of 2 sessions could not be priced/)).toBeInTheDocument();
     });
 
+    it('says in the one note which unpriced desktops were deleted before usage history', async () => {
+        const context = initTestAppContext();
+        stubMyCosts(context, {
+            ...EMPTY_SUMMARY,
+            desktops: {
+                session_count: 2,
+                hours: 4.5,
+                cost: 0.45,
+                unpriced_sessions: 1,
+                usage_unknown_sessions: 1,
+                estimated: true,
+                sessions: [
+                    {idea_session_id: 's1', name: 'one', instance_type: 'm5.large', state: 'STOPPED', hours: 4.5, cost: 0.45},
+                    {idea_session_id: 's2', name: 'two', instance_type: 'm5.large', state: 'Terminated', hours: 0, price_unavailable: true, usage_unknown: true}
+                ]
+            }
+        });
+        renderMyCosts();
+
+        expect(await screen.findByText(
+            '* 1 of 2 sessions could not be priced and are not in this total (1 deleted before usage history existed).',
+            {}, {timeout: 10000}
+        )).toBeInTheDocument();
+        expect(screen.getByText('Not priced')).toBeInTheDocument();
+        expect(screen.getByText('Unknown')).toBeInTheDocument();
+    });
+
     it('shows the section as unavailable rather than as zero when a read failed', async () => {
         const context = initTestAppContext();
         stubMyCosts(context, {

@@ -13,10 +13,10 @@ description: Which base_os values work with which regions, hardware features and
 | `amazonlinux2023` | Amazon Linux 2023           | Supported. Default for new installs. |
 | `rhel8`           | Red Hat Enterprise Linux 8  | Supported.                           |
 | `rhel9`           | Red Hat Enterprise Linux 9  | Supported.                           |
-| `rhel10`          | Red Hat Enterprise Linux 10 | Supported. Compute nodes only.       |
+| `rhel10`          | Red Hat Enterprise Linux 10 | Supported.                           |
 | `rocky8`          | Rocky Linux 8               | Supported.                           |
 | `rocky9`          | Rocky Linux 9               | Supported.                           |
-| `rocky10`         | Rocky Linux 10              | Supported. Compute nodes only.       |
+| `rocky10`         | Rocky Linux 10              | Supported.                           |
 | `ubuntu2204`      | Ubuntu 22.04                | Accepted; no AMIs published.         |
 | `ubuntu2404`      | Ubuntu 24.04                | Accepted; no AMIs published.         |
 
@@ -26,9 +26,7 @@ Windows values (`windows2019`, `windows2022`, `windows2025`) are used only by vi
 
 ### EL 10
 
-`rhel10` and `rocky10` run compute nodes only. They are absent from the virtual desktop software stack config, so they do not appear in the virtual desktop OS list and no stack can be created on them.
-
-The reason is Amazon DCV: it publishes no EL 10 build. `nice-dcv-el9-x86_64.tgz` and its aarch64 counterpart exist, `nice-dcv-el10-*` return 404 at every architecture. So the desktop bootstrap has no EL 10 branch to write, and a desktop on either would boot without DCV and never become usable. Compute nodes are unaffected, because they do not install DCV.
+`rhel10` and `rocky10` run compute nodes and, from Amazon DCV 2026.0, virtual desktops. DCV runs EL 10 desktops on Wayland, which supports virtual sessions only: no console sessions, so no AMD GPU (`g4ad`) desktops.
 
 They also **require an EL 10.1 or 10.2 AMI**. See the FSx for Lustre note below.
 
@@ -36,11 +34,7 @@ They also **require an EL 10.1 or 10.2 AMI**. See the FSx for Lustre note below.
 
 `ubuntu2204` and `ubuntu2404` pass submission validation, but `region_ami_config.yml` carries no Ubuntu AMIs in any region, so a job using either must pass its own `instance_ami`. Their bootstrap path is complete, and EFA installs on both.
 
-Ubuntu 26.04 is **not accepted**: `ubuntu2604` is absent from the values the scheduler allows, so a job requesting it is rejected at submission. Three dependencies publish nothing for it:
-
-* **Amazon DCV**: no Ubuntu 26.04 package, so no virtual desktops.
-* **FSx for Lustre**: no client; the repo publishes no `resolute` suite and no modules for the 7.0 kernel.
-* **EFA**: the pinned installer (1.44.0) ships no `DEBS/UBUNTU2604`.
+Ubuntu 26.04 is a **virtual desktop OS only**: `ubuntu2604` is absent from the values the scheduler allows, so a job requesting it is rejected at submission, because the pinned EFA installer (1.44.0) ships no `DEBS/UBUNTU2604`. Its desktops run on Wayland (virtual sessions only), and the FSx for Lustre client comes from the repo's `resolute` suite.
 
 ### Architecture
 
@@ -79,6 +73,7 @@ The client install is gated on `base_os` and the running kernel series, because 
 * `rhel8`/`rocky8`, `rhel9`/`rocky9`: from the AWS FSx client repo matching the running kernel. An unrecognized kernel series logs an error and skips the install.
 * `rhel10`/`rocky10`: **require an EL 10.1 or 10.2 AMI.** EL 10.0 has no client; the bootstrap logs an error and Lustre is not mounted. The AMI refresh tooling pins EL10 lookups to 10.1 and 10.2 for this reason.
 * `ubuntu2204`, `ubuntu2404`: install normally from the AWS FSx client repo.
+* `ubuntu2604` (virtual desktops): the `resolute` suite carries modules for one `7.0.0-*-aws` kernel at a time. Desktop image bakes move to that kernel and hold it; a desktop launched from the stock image needs that kernel to be the one it boots.
 
 An EL 10 client cannot mount a Lustre 2.10 or 2.12 filesystem. New scratch filesystems default to 2.15, but an imported pre-2.15 filesystem does not mount from these nodes.
 

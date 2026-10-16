@@ -224,8 +224,8 @@ ideactl build-desktop-image --base-os rocky9 --base-ami <vendor ami> --force
 | `virtual-desktop-controller.software_stacks.image_refresh_schedule.hour` | `2` | Hour in cluster time. |
 | `virtual-desktop-controller.software_stacks.image_pipeline.ready_gate_seconds_linux` | `600` | Linux test launch limit from request to Ready. Also limits the compute test job. |
 | `virtual-desktop-controller.software_stacks.image_pipeline.ready_gate_seconds_windows` | `900` | Windows test launch limit. |
-| `virtual-desktop-controller.software_stacks.image_pipeline.max_concurrent_bakes` | `4` | Desktop bakes at a time. |
-| `scheduler.images.max_concurrent_bakes` | `4` | Compute bakes at a time. |
+| `virtual-desktop-controller.software_stacks.image_pipeline.max_concurrent_bakes` | `32` | Desktop bakes at a time. |
+| `scheduler.images.max_concurrent_bakes` | `32` | Compute bakes at a time. |
 | `virtual-desktop-controller.images.legacy_cleanup_min_age_days` | `30` | Age before untracked desktop builder images are removed. `0` keeps them. |
 | `scheduler.images.legacy_cleanup_min_age_days` | `30` | The same for compute builder images. |
 | `scheduler.images.default_image_pinned` | `false` | Keep `scheduler.compute_node_ami` when a compute row switches. |

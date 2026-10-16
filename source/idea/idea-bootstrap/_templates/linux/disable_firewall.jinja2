@@ -1,15 +1,13 @@
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   # RHEL, CentOS, Rocky Linux, and Amazon Linux (firewalld-based distros)
-  if [[ "$(systemctl show --property=LoadState --value firewalld.service)" == loaded ]]; then
-    systemctl stop firewalld
-    systemctl disable firewalld
-    systemctl mask firewalld
-  fi
+  # Mask even when firewalld is not installed yet: later packages (fail2ban-firewalld on EL10)
+  # install and enable it, and a masked unit never starts.
+  systemctl stop firewalld >/dev/null 2>&1 || true
+  systemctl disable firewalld >/dev/null 2>&1 || true
+  systemctl mask firewalld
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Ubuntu
-  if [[ "$(systemctl show --property=LoadState --value ufw.service)" == loaded ]]; then
-    systemctl stop ufw
-    systemctl disable ufw
-    systemctl mask ufw
-  fi
+  systemctl stop ufw >/dev/null 2>&1 || true
+  systemctl disable ufw >/dev/null 2>&1 || true
+  systemctl mask ufw
 {% endif %}

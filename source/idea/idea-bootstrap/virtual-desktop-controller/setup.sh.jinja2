@@ -133,6 +133,6 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
-  reboot
+  reboot_after_cloud_init
   exit 0
 fi

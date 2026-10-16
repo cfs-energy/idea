@@ -61,15 +61,24 @@ fi
 
 check() {
   # a check prints why it failed; that line replaces the description in the report
+  local advisory=false level=pass
+  if [[ $1 == --warning ]]; then advisory=true; shift; fi
   local name=$1 detail=$2 started=$SECONDS ok=true reason
   shift 2
   if ! reason=$("$@" 2>&1); then
-    ok=false
-    [[ $STATUS != complete ]] || STATUS="failed:$name"
-    reason=$(printf '%s' "$reason" | tr -s '\n\t ' ' ' | tail -c 400)
-    [[ -z "$reason" ]] || detail=$reason
+    reason=$(printf '%s' "$reason" | tr -s '\n\t ' ' ')
+    if $advisory; then
+      level=warning
+      detail="WARNING: ${reason:-$detail}"
+      echo "$detail"
+    else
+      level=error
+      ok=false
+      [[ $STATUS != complete ]] || STATUS="failed:$name"
+      [[ -z "$reason" ]] || detail=$(printf '%s' "$reason" | tail -c 400)
+    fi
   fi
-  CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))")
+  CHECKS+=("$name" "$ok" "$detail" "$((SECONDS - started))" "$level")
 }
 
 pbs_ok() {
@@ -101,7 +110,7 @@ bootstrap_ok() {
 
 kernel_ok() {
   local default_kernel running
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Resolve the generated GRUB menu, including saved entries and nested menu titles/ids.
   default_kernel=$("${BAKE_PYTHON}" - <<'PY'
 import re
@@ -164,7 +173,7 @@ PY
 packages_installed() {
   local package
   for package in "$@"; do
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
     [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" == 'install ok installed' ]] || { echo "package $package is not installed"; return 1; }
 {% else %}
     rpm -q "$package" >/dev/null 2>&1 || { echo "package $package is not installed"; return 1; }
@@ -193,7 +202,7 @@ dcv_runtime_ok() {
     echo "dcvserver: ${out}"
     return 1
   fi
-{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # rpm -q stays green after a failed scriptlet. A missing payload file does not.
   local missing
   missing=$(rpm -V nice-dcv-server 2>&1 | grep -E '^missing +/' || true)
@@ -207,8 +216,20 @@ dcv_ok() {
     unit_installed dcvserver.service && unit_installed dcv-session-manager-agent.service &&
     dcv_runtime_ok
 }
+dcv_launcher_ok() {
+  # Older DCV has no launcher. A masked/broken unit must fail, not look absent.
+  local state
+  state=$(systemctl show --property=LoadState --value dcvsessionlauncher.service) || return 1
+  [[ "$state" != not-found ]] || return 0
+  # D-Bus normally activates it on demand; exercise startup even on a headless builder.
+  systemctl start dcvsessionlauncher.service &&
+    systemctl is-active --quiet dcvsessionlauncher.service || {
+      echo 'dcvsessionlauncher.service failed to start or is not active'
+      return 1
+    }
+}
 ssm_ok() {
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   { snap list amazon-ssm-agent >/dev/null 2>&1 || { echo "snap amazon-ssm-agent is not installed"; return 1; }; } &&
     unit_installed snap.amazon-ssm-agent.amazon-ssm-agent.service &&
     unit_enabled snap.amazon-ssm-agent.amazon-ssm-agent.service
@@ -222,7 +243,7 @@ mkdir -p "$STATE" || exit 1
 check bootstrap 'All stages succeeded and bootstrap logs are clean' bootstrap_ok "${1:-}"
 check kernel 'Running kernel equals the default boot kernel' kernel_ok
 {% if (compute and 'fsx_lustre' in (context.vars.enabled_drivers or ())) or (not compute and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache'))) %}
-{% if not compute and context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if not compute and context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 lustre_ok() {
   packages_installed lustre-client-utils "lustre-client-modules-$(uname -r)" &&
     command -v mount.lustre >/dev/null && modprobe -n lustre || return 1
@@ -238,8 +259,38 @@ check lustre 'Configured Lustre module resolves for the running kernel' modprobe
 {% endif %}
 {% endif %}
 {% if not compute %}
-check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404') else 'gdm' }}.service
+check desktop 'GNOME display manager is installed' unit_installed {{ 'gdm3' if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') else 'gdm' }}.service{% if context.base_os in ('rhel10', 'rocky10', 'ubuntu2604') %}
+# DCV virtual sessions on these desktops are Wayland sessions under GDM
+wayland_ok() {
+  [[ "$(systemctl get-default)" == graphical.target ]] || { echo "default target is $(systemctl get-default), not graphical.target"; return 1; }
+  ! grep -Eqs '^[[:space:]]*WaylandEnable[[:space:]]*=[[:space:]]*(false|0)' /etc/gdm/custom.conf /etc/gdm3/custom.conf || { echo "GDM has WaylandEnable=false, so DCV virtual sessions cannot start"; return 1; }
+}
+check wayland 'Boots to the graphical target with Wayland enabled in GDM' wayland_ok
+mutter_lock_ok() {
+  local version library symbol found missing=()
+{% if context.base_os == 'ubuntu2604' %}
+  local libraries=(/usr/lib/*/libmutter-*.so.*)
+  version=$(dpkg-query -W -f='${Package} ${Version}' mutter-common 2>/dev/null) || version='mutter version unavailable'
+{% else %}
+  local libraries=(/usr/lib64/libmutter-*.so.*)
+  version=$(rpm -q mutter 2>/dev/null) || version='mutter version unavailable'
+{% endif %}
+  for symbol in org.gnome.Mutter.RemoteDesktop org.gnome.Mutter.RemoteDesktop.Session CreateSession NotifyPointerMotionRelative; do
+    found=false
+    for library in "${libraries[@]}"; do
+      [[ -f "$library" ]] || continue
+      if grep -a -F -q -- "$symbol" "$library"; then found=true; break; fi
+    done
+    $found || missing+=("$symbol")
+  done
+  if [[ -n "${missing[*]}" ]]; then
+    echo "${version:-mutter version unavailable}: libmutter missing or missing strings: ${missing[*]}; locked previews may be unavailable"
+    return 1
+  fi
+}
+check --warning mutter-lock 'Mutter lock visibility strings are present' mutter_lock_ok{% endif %}
 check dcv 'DCV server is installed, its units are present, and dcvserver libraries resolve' dcv_ok
+check dcv-launcher 'DCV session launcher starts and is active when installed' dcv_launcher_ok
 {% endif %}
 check directory 'sssd, realmd and adcli packages are installed' packages_installed sssd realmd adcli
 {% if context.config.get_string('scheduler.provider') == 'openpbs' %}
@@ -256,8 +307,8 @@ import json
 import os
 import sys
 path, release, *values = sys.argv[1:]
-checks = [dict(name=n, ok=o == 'true', detail=d, seconds=int(s))
-          for n, o, d, s in zip(*[iter(values)] * 4)]
+checks = [dict(name=n, ok=o == 'true', detail=d, seconds=int(s), level=level)
+          for n, o, d, s, level in zip(*[iter(values)] * 5)]
 with open(path + '.tmp', 'w') as out:
     json.dump(dict(release=release, checks=checks), out)
 os.replace(path + '.tmp', path)

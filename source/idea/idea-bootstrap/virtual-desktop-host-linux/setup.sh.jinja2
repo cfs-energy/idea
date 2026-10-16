@@ -190,7 +190,7 @@ if [[ "${PACKAGES_INSTALLED}" == "yes" ]] || [[ "${REBOOT_REQUIRED}" == "yes" ]]
   log_info "Will continue with DCV host configuration after reboot..."
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/configure_dcv_host.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
   check_reboot_loop "System configuration reboot"
-  reboot
+  reboot_after_cloud_init
   exit 0
 else
   /bin/bash ${SCRIPT_DIR}/configure_dcv_host.sh

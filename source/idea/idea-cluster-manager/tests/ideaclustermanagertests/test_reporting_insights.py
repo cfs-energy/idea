@@ -96,6 +96,7 @@ def test_mean_weighting_and_waste_cost():
     assert result.cpu_efficiency_weighted_pct == 87.5
     assert result.wasted_core_hours == 2
     assert result.wasted_cost == Decimal('5')
+    assert result.efficiency_cost == 40
     assert result.jobs_with_efficiency == 2
     assert result.by_user[0].name == 'user-b'
     assert result.by_instance_family[0].name == 'c7i'
@@ -132,6 +133,17 @@ def test_invalid_efficiency_does_not_contribute_to_weight_or_waste():
     assert result.wasted_core_hours == 2
     assert result.wasted_cost == 5
     assert result.jobs_with_efficiency == 1
+
+
+def test_unused_core_spend_is_a_share_of_the_measured_jobs_only():
+    value = data()
+    value['jobs'][1]['_source']['execution_hosts'] = []
+    result = build(value).jobs
+    assert result.cost == 40
+    assert result.jobs_with_efficiency == 1
+    assert result.wasted_cost == 5
+    # the sentence compares wasted_cost with this, not with the cost of every job
+    assert result.efficiency_cost == 10
 
 
 def test_top_n_other_and_job_limits():

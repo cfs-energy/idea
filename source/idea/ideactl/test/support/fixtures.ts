@@ -9,6 +9,11 @@
 import { existsSync } from "node:fs";
 
 export const PUBLIC_CHECKOUT_ENV = "IDEACTL_PUBLIC_CHECKOUT";
+export const REQUIRE_CAPTURES_ENV = "IDEACTL_REQUIRE_PRIVATE_CAPTURES";
+
+function maySkipCaptures(): boolean {
+  return process.env[PUBLIC_CHECKOUT_ENV] === "1" && process.env[REQUIRE_CAPTURES_ENV] !== "1";
+}
 
 function missingPaths(paths: readonly string[]): string[] {
   return paths.filter((path) => !existsSync(path));
@@ -38,7 +43,8 @@ export function requireFixtures(paths: readonly string[], regenerate: string): v
 /**
  * Require a private capture at module level, in a file whose every test compares against it.
  *
- * Captures live only on machines that made them and are never in a public checkout. Where the
+ * Captures are local or fetched by trusted CI. IDEACTL_REQUIRE_PRIVATE_CAPTURES=1
+ * makes missing captures fatal even when platform-specific services may skip. Where the
  * checkout declares itself public (`IDEACTL_PUBLIC_CHECKOUT=1`) and the capture is absent, the
  * file announces that and ends before registering a test, so the runner lists it as run with no
  * tests and the gate reports how many files that was. Anywhere else a missing capture is the
@@ -47,7 +53,7 @@ export function requireFixtures(paths: readonly string[], regenerate: string): v
 export function requireCapture(paths: readonly string[], regenerate: string): void {
   const missing = missingPaths(paths);
   if (missing.length === 0) return;
-  if (process.env[PUBLIC_CHECKOUT_ENV] === "1") {
+  if (maySkipCaptures()) {
     console.log(`${CAPTURE_ABSENT_MARKER} ${missing[0]} (regenerate with: ${regenerate})`);
     process.exit(0);
   }
@@ -60,7 +66,7 @@ export const CAPTURE_ABSENT_MARKER = "PRIVATE CAPTURE ABSENT, tests not run:";
 /** `requireCapture` for a set of equivalent locations. */
 export function requireAnyCapture(paths: readonly string[], regenerate: string): void {
   if (paths.some((path) => existsSync(path))) return;
-  if (process.env[PUBLIC_CHECKOUT_ENV] === "1") {
+  if (maySkipCaptures()) {
     console.log(`${CAPTURE_ABSENT_MARKER} ${paths[0] ?? "?"} (regenerate with: ${regenerate})`);
     process.exit(0);
   }
@@ -85,7 +91,7 @@ export function requireAnyFixture(paths: readonly string[], regenerate: string):
 export function optionalFixtures(paths: readonly string[], regenerate: string): boolean {
   const missing = missingPaths(paths);
   if (missing.length === 0) return true;
-  if (process.env[PUBLIC_CHECKOUT_ENV] === "1") return false;
+  if (maySkipCaptures()) return false;
   throw fixtureFailure(missing, regenerate);
 }
 

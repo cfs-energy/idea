@@ -86,6 +86,7 @@ BOOTSTRAP_STATUS_MESSAGES = {
     'gpu-kernel-devel-missing': 'No kernel headers were available on the host for this desktop, so the GPU driver could not be built and the desktop never became usable. The host has been released. Ask an administrator to check the software stack image.',
     'kernel-boot-mismatch': "The desktop's operating system update did not finish: it did not start on the kernel it installed. The host has been released. Ask an administrator (reason code: kernel-boot-mismatch).",
     'lustre-module-missing': "The desktop's operating system has no FSx for Lustre driver for the kernel it runs, so shared Lustre storage could not be mounted. The host has been released. Ask an administrator (reason code: lustre-module-missing).",
+    'lustre-client-install-failed': 'The FSx for Lustre client failed to install on the host for this desktop, so shared Lustre storage could not be mounted. The host has been released. Ask an administrator (reason code: lustre-client-install-failed).',
     'kernel-install-failed': "The desktop's operating system update did not finish: its kernel could not be installed. The host has been released. Ask an administrator (reason code: kernel-install-failed).",
 }
 

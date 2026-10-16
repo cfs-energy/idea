@@ -10,6 +10,8 @@
 #  and limitations under the License.
 from typing import List, Optional, Dict
 
+import hashlib
+
 import yaml
 from botocore.exceptions import ClientError
 
@@ -161,9 +163,11 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         self._seed_base_software_stacks_once_per_release()
 
     def _seed_base_software_stacks_once_per_release(self):
-        # every release seeds its base stacks once. a stack an administrator deleted stays
-        # deleted until the next release, and a start does not fail on the seeding.
-        release = ideavirtualdesktopcontroller.__version__
+        # every release seeds its base stacks once, and so does every change to the base
+        # stack list: release candidates share a version, so a candidate that adds an OS
+        # would otherwise never seed it. a stack an administrator deleted stays deleted
+        # until the release or the list changes, and a start does not fail on the seeding.
+        release = f'{ideavirtualdesktopcontroller.__version__}+{self._base_stack_config_digest()}'
         key = f'{self.context.module_id()}.software_stacks.base_stacks_seeded_release'
         if self.context.config().get_string(key, default=None) == release:
             return
@@ -397,6 +401,14 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
     def get_base_software_stack_config(self) -> dict:
         with open(self.BASE_STACKS_CONFIG_FILE, 'r') as f:
             return yaml.safe_load(f)
+
+    def _base_stack_config_digest(self) -> str:
+        path = getattr(self, 'BASE_STACKS_CONFIG_FILE', None)
+        try:
+            with open(path, 'rb') as f:
+                return hashlib.sha256(f.read()).hexdigest()[:12]
+        except (OSError, TypeError):
+            return 'none'
 
     @property
     def table_name(self) -> str:

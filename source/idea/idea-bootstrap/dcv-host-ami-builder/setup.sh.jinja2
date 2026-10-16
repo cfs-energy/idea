@@ -61,7 +61,7 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 {% include '_templates/linux/idea_service_account.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
 {% else %}
 systemctl enable --now amazon-ssm-agent
@@ -71,11 +71,13 @@ systemctl enable --now amazon-ssm-agent
 
 {% include '_templates/linux/nfs_utils.jinja2' %}
 
-{% set ubuntu_desktop_bake = context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% set ubuntu_desktop_bake = context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 {% if ubuntu_desktop_bake %}
 {% include '_templates/linux/set_kernel.jinja2' %}
 {% endif %}
 
+{# this host mounts Lustre, so a failed client install stops it #}
+{% set lustre_required = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 mkdir -p ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}

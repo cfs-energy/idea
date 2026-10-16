@@ -15,6 +15,7 @@ from ideadatamodel import (
     GetMyCostsSummaryResult,
     ListUserCostsResult,
     MyCostsAmount,
+    MyCostsDaily,
     MyCostsMonth,
     MyCostsStorageShare,
     UserCosts,
@@ -158,12 +159,81 @@ def test_get_user_summary_requires_a_username():
         api.invoke(context)
 
 
+def storage_days(start, amounts):
+    return [
+        MyCostsDaily(
+            date=f'{start[:8]}{int(start[8:]) + index:02d}',
+            day=int(start[8:]) + index,
+            amount=amount,
+            status='ready' if amount is not None else 'unavailable',
+        )
+        for index, amount in enumerate(amounts)
+    ]
+
+
+def stored_month(start_date, end_date, daily, storage=None):
+    known = [day.amount for day in daily if day.amount is not None]
+    return MyCostsMonth(
+        start_date=start_date,
+        end_date=end_date,
+        incomplete=False,
+        jobs=MyCostsAmount(status='ready'),
+        desktops=MyCostsAmount(status='ready'),
+        desktop_disks=MyCostsAmount(status='ready'),
+        shared_storage=MyCostsAmount(
+            cost=sum(known) if known else None, status='ready', daily=daily
+        ),
+        ai=MyCostsAmount(status='ready'),
+        storage=storage or [],
+    )
+
+
+def listing_for_window(start_date='2026-08-24', end_date='2026-09-22', total=4.0):
+    return lambda: ListUserCostsResult(
+        start_date=start_date,
+        end_date=end_date,
+        listing=[UserCosts(username='user-a', total_cost=total)],
+    )
+
+
+def test_listing_storage_covers_the_same_30_days_as_jobs_and_desktops():
+    """
+    the listing's jobs and desktops cover the trailing 30 days; storage used to add the
+    calendar month to date on top. it now sums the stored daily amounts in that window,
+    reaching into last month and leaving out the days before the window.
+    """
+    api, _ = build_costs_api()
+    api.my_costs.list_user_costs = listing_for_window('2026-08-24', '2026-09-22')
+    api.monthly_costs = Mock()
+    api.monthly_costs.get_costs.return_value = GetMyCostsResult(
+        currency='USD',
+        state='ready',
+        # 2026-08-01..08-31 at 1.0 a day: only 08-24..08-31 (8 days) are in the window
+        previous=stored_month(
+            '2026-08-01', '2026-08-31', storage_days('2026-08-01', [1.0] * 31)
+        ),
+        # 2026-09-01..09-22 at 0.5 a day, all in the window, one day not measured
+        current=stored_month(
+            '2026-09-01',
+            '2026-09-22',
+            storage_days('2026-09-01', [0.5] * 21 + [None]),
+        ),
+    )
+    context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
+
+    api.invoke(context)
+
+    row = context.response_payload.listing[0]
+    assert row.storage_cost == pytest.approx(8 * 1.0 + 21 * 0.5)
+    assert row.storage_cost_period == '2026-08-24 through 2026-09-22'
+    assert row.total_cost == pytest.approx(4.0 + 18.5)
+    assert row.total_cost_excludes_storage is False
+
+
 @pytest.mark.parametrize('has_items', [True, False])
 def test_list_user_costs_adds_cached_shared_storage_to_each_row(has_items):
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
-        listing=[UserCosts(username='user-a', total_cost=4.0)]
-    )
+    api.my_costs.list_user_costs = listing_for_window('2026-08-24', '2026-09-22')
     api.monthly_costs = Mock()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD',
@@ -175,7 +245,9 @@ def test_list_user_costs_adds_cached_shared_storage_to_each_row(has_items):
             jobs=MyCostsAmount(status='ready'),
             desktops=MyCostsAmount(status='ready'),
             desktop_disks=MyCostsAmount(status='ready'),
-            shared_storage=MyCostsAmount(cost=2.5, status='ready'),
+            shared_storage=MyCostsAmount(
+                cost=2.5, status='ready', daily=storage_days('2026-09-01', [1.0, 1.5])
+            ),
             ai=MyCostsAmount(status='ready'),
             storage=[
                 MyCostsStorageShare(
@@ -193,7 +265,7 @@ def test_list_user_costs_adds_cached_shared_storage_to_each_row(has_items):
     row = context.response_payload.listing[0]
     assert row.storage_cost == 2.5
     assert row.storage_gb == (3.0 if has_items else 0.0)
-    assert row.storage_cost_period == '2026-09-01 through 2026-09-22'
+    assert row.storage_cost_period == '2026-08-24 through 2026-09-22'
     assert row.total_cost == 6.5
     assert row.total_cost_excludes_storage is False
     assert context.response_payload.storage_data_available is True
@@ -303,22 +375,13 @@ def test_storage_read_failure_is_unavailable_not_zero():
 
 def test_measured_storage_zero_remains_a_known_zero():
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
-        listing=[UserCosts(username='user-a', total_cost=4.0)]
-    )
+    api.my_costs.list_user_costs = listing_for_window('2026-08-24', '2026-09-22')
     api.monthly_costs = Mock()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD',
         state='ready',
-        current=MyCostsMonth(
-            start_date='2026-09-01',
-            end_date='2026-09-22',
-            incomplete=False,
-            jobs=MyCostsAmount(status='ready'),
-            desktops=MyCostsAmount(status='ready'),
-            desktop_disks=MyCostsAmount(status='ready'),
-            shared_storage=MyCostsAmount(cost=0.0, status='ready'),
-            ai=MyCostsAmount(status='ready'),
+        current=stored_month(
+            '2026-09-01', '2026-09-22', storage_days('2026-09-01', [0.0, 0.0])
         ),
     )
     context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
@@ -423,9 +486,7 @@ def test_monthly_costs_requires_authorized_membership():
 @pytest.mark.parametrize('amount', [2.5, 0.0, None])
 def test_collector_storage_estimate_is_available_when_amount_is_known(amount):
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
-        listing=[UserCosts(username='user-a', total_cost=4.0)]
-    )
+    api.my_costs.list_user_costs = listing_for_window('2026-08-04', '2026-09-02')
     api.monthly_costs = Mock()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult.model_validate(
         {

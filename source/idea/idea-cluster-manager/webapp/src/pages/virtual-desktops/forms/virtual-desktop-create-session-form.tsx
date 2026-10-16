@@ -445,7 +445,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             title: 'Virtual',
             value: 'VIRTUAL'
         }
-        if (arch === 'arm64') {
+        if (arch === 'arm64' || Utils.isWaylandDesktop(base_os)) {
             dcvSessionTypeDefaultChoice = 'VIRTUAL'
             dcvSessionTypeChoices.push(virtual_choice)
             disableSessionTypeChoice = true

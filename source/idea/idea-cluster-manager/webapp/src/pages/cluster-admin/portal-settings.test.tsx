@@ -187,7 +187,7 @@ it('keeps module-only administrators out of cluster policy editors', async () =>
 it('defines unique groups and card destinations', () => {
     expect(SETTINGS_GROUPS).toHaveLength(12);
     expect(Object.keys(SETTINGS_CARDS)).toHaveLength(12);
-    expect(Object.values(SETTINGS_CARDS).flat()).toHaveLength(36);
+    expect(Object.values(SETTINGS_CARDS).flat()).toHaveLength(37);
     expect(new Set(Object.values(SETTINGS_CARDS).flat()).size).toBe(Object.values(SETTINGS_CARDS).flat().length);
 });
 
@@ -339,7 +339,7 @@ it('renders sixteen notification rows and one distinct cleanup reference, retain
 });
 
 
-const fixtureSections = ["AD automation","Account synchronization","Amazon Bedrock","Analytics","Backup policy","Collection","Cost estimation","Desktop placement","Desktop policy","Desktop schedule","Directory connection","Directory mapping","Email delivery","Email templates","Encryption and access","Fair-share scheduling","File systems","Installed deployment","Job limits and placement","Load balancers and certificates","Logs","Maintenance notice","Metrics","Network and connectivity","Notifications","Portal","Regional defaults","Resource tags","Scratch storage","Sign-in","Stopped desktop cleanup","Storage measurement","Cost header","Dashboard link","GPU policy"];
+const fixtureSections = ["AD automation","Account synchronization","Amazon Bedrock","Analytics","Backup policy","Collection","Cost estimation","Desktop placement","Desktop policy","Desktop schedule","Directory connection","Directory mapping","Email delivery","Email templates","Encryption and access","Fair-share scheduling","File systems","Installed deployment","Job limits and placement","Load balancers and certificates","Logs","Maintenance notice","Metrics","Network and connectivity","Notifications","Portal","Regional defaults","Resource tags","Scratch storage","Sign-in","Stopped desktop cleanup","Storage measurement","Cost header","Dashboard link","GPU policy","Compute rate"];
 const fieldManifest = `
 analytics.kinesis.kms_key_id|3|Kinesis KMS key ID|string|deployment|1|read_only|80
 analytics.kinesis.removal_policy|3|Removal policy|enum|deployment|1|read_only|80
@@ -788,6 +788,7 @@ scheduler.cost_estimation.ebs_io1_storage|6|EBS io1 storage (USD/GB-month)|numbe
 scheduler.cost_estimation.ec2_boot_penalty_seconds|6|EC2 boot penalty (seconds)|integer|runtime|0|editable|26
 scheduler.cost_estimation.fsx_lustre|6|FSx for Lustre (USD/GB-hour)|number|runtime|0|editable|26
 scheduler.cost_estimation.provisioned_iops|6|io1 provisioned IOPS (USD/IOPS-month)|number|runtime|0|editable|26
+cluster.costs.compute_rate_multiplier|35|Effective compute rate (× on-demand)|number|runtime|0|editable|later
 scheduler.ec2.enable_detailed_monitoring|18|Scheduler detailed monitoring|boolean|deployment|1|read_only|138
 scheduler.ec2.enable_termination_protection|18|Scheduler termination protection|boolean|deployment|1|read_only|138
 scheduler.ec2.metadata_http_tokens|18|Metadata HTTP tokens|enum|deployment|1|read_only|138
@@ -1213,11 +1214,11 @@ function fullCatalogContext() {
     return context;
 }
 
-it('assembles four Costs cards and groups credentials only for the configured ONTAP attachment', async () => {
+it('assembles five Costs cards and groups credentials only for the configured ONTAP attachment', async () => {
     const context = fullCatalogContext();
     await renderGroups('/cluster/settings/cost-collection', context);
     const headings = within(screen.getByRole('region', {name: 'Costs'})).getAllByRole('heading', {level: 2});
-    expect(headings.map(node => node.textContent)).toEqual(['Costs', 'Collection Applies after restart', 'Storage measurement Applies after restart', 'Cost estimation', 'History backfill']);
+    expect(headings.map(node => node.textContent?.trim())).toEqual(['Costs', 'Collection Applies after restart', 'Storage measurement Applies after restart', 'Compute rate', 'Cost estimation', 'History backfill']);
     const credential = document.getElementById('setting-shared-storage.archive.fsx_netapp_ontap.metrics.username')!;
     expect(credential).toBeVisible();
     expect(credential.closest('.settings-subgroup')).toHaveTextContent('archive');
@@ -1225,6 +1226,7 @@ it('assembles four Costs cards and groups credentials only for the configured ON
     expect(document.getElementById('setting-shared-storage.data.fsx_netapp_ontap.metrics.username')).toBeNull();
     expect(screen.getByText(/Grant a read-only SVM REST user/)).toBeVisible();
     expect(screen.queryByRole('textbox', {name: 'Pricing region'})).toBeNull();
+    expect(document.getElementById('setting-cluster.costs.compute_rate_multiplier')).toBeVisible();
     expect(context.client().clusterSettings().getCostMetricsBackfill).toHaveBeenCalledTimes(1);
     expect(context.client().schedulerAdmin().getJobMetricsBackfill).toHaveBeenCalledTimes(1);
     const anchors = Array.from(document.querySelectorAll('[id^="setting-"]')).map(node => node.id);

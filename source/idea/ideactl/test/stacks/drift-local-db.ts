@@ -7,10 +7,11 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+
+import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 
 import { requiredService } from "../support/fixtures.ts";
 
@@ -41,29 +42,39 @@ async function freePort(): Promise<number> {
   });
 }
 
-/** Wait until the emulator accepts HTTP, not merely TCP. */
-async function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
+/** Wait for a successful DynamoDB operation, including during a slow JVM startup. */
+export async function waitForDynamoDb(
+  endpoint: string,
+  timeoutMs = 90_000,
+  startupFailure: () => string | undefined = () => undefined,
+): Promise<void> {
+  const client = new DynamoDBClient({
+    endpoint,
+    region: "us-east-2",
+    credentials: { accessKeyId: "local", secretAccessKey: "local" },
+    maxAttempts: 1,
+    requestHandler: { connectionTimeout: 1000, requestTimeout: 2000 },
+  });
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const req = http.request(
-        { host: "127.0.0.1", port, method: "GET", path: "/", timeout: 2000 },
-        (res) => {
-          res.resume();
-          resolve(true);
-        },
-      );
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => {
-        req.destroy();
-        resolve(false);
-      });
-      req.end();
-    });
-    if (ok) return true;
-    await new Promise((resolve) => setTimeout(resolve, 250));
+  let lastError: unknown;
+  try {
+    while (Date.now() < deadline) {
+      const failure = startupFailure();
+      if (failure !== undefined) throw new Error(failure);
+      try {
+        await client.send(new ListTablesCommand({ Limit: 1 }), {
+          abortSignal: AbortSignal.timeout(Math.max(1, Math.min(2000, deadline - Date.now()))),
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`DynamoDB readiness exceeded ${timeoutMs}ms at ${endpoint}: ${String(lastError)}`);
+  } finally {
+    client.destroy();
   }
-  return false;
 }
 
 /**
@@ -93,10 +104,11 @@ export function resolveJava(): string {
 export async function startDynamoDbLocal(): Promise<LocalEmulator> {
   const existing = process.env["DDB_LOCAL_ENDPOINT"];
   if (existing !== undefined && existing !== "") {
+    await waitForDynamoDb(existing);
     return {
       endpoint: existing,
       how: "DDB_LOCAL_ENDPOINT",
-      java: resolveJava(),
+      java: "external",
       stop: () => {},
     };
   }
@@ -120,21 +132,33 @@ export async function startDynamoDbLocal(): Promise<LocalEmulator> {
       "-port",
       String(port),
     ],
-    { stdio: "ignore", cwd: path.dirname(JAR) },
+    { stdio: ["ignore", "pipe", "pipe"], cwd: path.dirname(JAR) },
   );
-  if (!(await waitForPort(port, 30_000))) {
-    child.kill("SIGKILL");
-    return requiredService(
-      "local database emulator",
-      `${java} -jar ${JAR} -inMemory -port ${port}`,
-    );
+  let output = "";
+  let launchError: Error | undefined;
+  child.on("error", (error) => { launchError = error; });
+  const capture = (chunk: Buffer): void => { output = (output + chunk.toString()).slice(-8192); };
+  child.stdout?.on("data", capture);
+  child.stderr?.on("data", capture);
+  const stop = (): void => { child.kill("SIGKILL"); };
+  process.once("exit", stop);
+  child.once("close", () => process.removeListener("exit", stop));
+  try {
+    await waitForDynamoDb(`http://127.0.0.1:${port}`, 90_000, () => {
+      if (launchError !== undefined) return launchError.message;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return `DynamoDB exited (${child.exitCode ?? child.signalCode}): ${output}`;
+      }
+      return undefined;
+    });
+  } catch (error) {
+    stop();
+    throw new Error(`${String(error)}\nDynamoDB startup output: ${output}`);
   }
   return {
     endpoint: `http://127.0.0.1:${port}`,
     how: `${java} -jar ${JAR}`,
     java,
-    stop: () => {
-      child.kill("SIGKILL");
-    },
+    stop,
   };
 }

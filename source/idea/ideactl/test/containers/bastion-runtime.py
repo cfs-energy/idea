@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import shlex
 import stat
 import sys
 import tempfile
@@ -306,9 +307,16 @@ class SiteHook(unittest.TestCase):
         start = text.index('# Site customizations')
         end = text.index('/usr/sbin/sshd -t', start)
         # stat reports the owner the test asks for; the mode is the file's own
+        # Python follows symlinks like GNU stat -L, without depending on GNU stat on macOS.
         stub = (
-            'stat() { local mode; mode=$(command stat -L -c %a "${@: -1}"); '
-            f'echo "{owner_uid} $mode"; }}\n'
+            'stat() { '
+            + shlex.quote(sys.executable)
+            + ' -c '
+            + shlex.quote(
+                'import os, stat, sys; '
+                f'print({owner_uid}, format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))'
+            )
+            + ' "${@: -1}"; }\n'
             'timeout() { shift; "$@"; }\n'
         )
         block = 'set -euo pipefail\n' + stub + text[start:end] + 'echo reached-sshd\n'

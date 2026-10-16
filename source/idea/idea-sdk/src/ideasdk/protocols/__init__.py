@@ -141,6 +141,9 @@ class AwsClientProviderProtocol(SocaBaseProtocol):
     def cost_explorer(self): ...
 
     @abstractmethod
+    def cloudtrail(self): ...
+
+    @abstractmethod
     def cloudformation(self): ...
 
     @abstractmethod

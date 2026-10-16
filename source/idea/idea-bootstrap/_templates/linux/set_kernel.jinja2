@@ -16,7 +16,7 @@ function fail_kernel_bootstrap() {
   exit 1
 }
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 # Bakes pin an ABI available from both Ubuntu and FSx for Lustre before package upgrades.
 # Unbaked hosts keep the running-kernel check until their client install can target another ABI.
 # Add the repository here because kernel management runs before client installation.
@@ -28,7 +28,7 @@ if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/n
   . /etc/os-release
   wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
   echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
-  apt-get -o DPkg::Lock::Timeout=300 update -qq
+  apt_update || exit 1
 {% if ubuntu_desktop_bake | default(false) %}  if [[ -n "${BAKE_STAGE:-}" ]]; then
     KERNEL_ARCH=$(dpkg --print-architecture)
     NEWEST_FSX_KERNEL_ABI=""
@@ -80,16 +80,20 @@ TARGET_KERNEL_VERSION="4.18.0-553*"
 {% elif context.base_os in ('rhel9', 'rocky9') %}
 {# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm #}
 TARGET_KERNEL_VERSION="5.14.0-687*"
+{% elif context.base_os in ('rhel10', 'rocky10') %}
+{# the series the image boots: fsx_lustre_client.jinja2 has a client for the 10.1 and 10.2 series,
+   and pinning it keeps a package upgrade from moving the host to a kernel without one #}
+TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
 {% endif %}
 
 
-{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') or ubuntu_desktop_bake | default(false) %}function apply_kernel_holds() {
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') or ubuntu_desktop_bake | default(false) %}function apply_kernel_holds() {
   local target_version="$TARGET_KERNEL_VERSION"
   local current_kernel=$(uname -r)
 
   log_info "Applying holds for current kernel ${current_kernel} to prevent further upgrades"
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Hold the selected ABI, which may not be running until the builder's existing reboot.
   local package
   local kernel_packages=()
@@ -124,7 +128,7 @@ TARGET_KERNEL_VERSION="5.14.0-687*"
   kernel_package=$(rpm -qf --queryformat '%{NAME}' "/boot/vmlinuz-${current_kernel}" 2>/dev/null) || kernel_package=kernel
   dnf versionlock ${kernel_package}-${current_kernel} ${kernel_package}-devel-${current_kernel} ${kernel_package}-headers-${current_kernel} >/dev/null 2>&1 || true
 
-{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   # Install dnf-plugin-versionlock if not already present
   if ! dnf list installed dnf-plugin-versionlock >/dev/null 2>&1; then
     log_info "Installing dnf-plugin-versionlock for kernel version management"
@@ -142,7 +146,7 @@ function remove_unwanted_kernels() {
 
   log_info "Removing all non-target kernel packages (keeping only ${target_version} series)"
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Find all installed kernel packages that don't match our target series
   PACKAGES_TO_REMOVE=$(apt list --installed 2>/dev/null | grep -E "linux-(image|headers|modules|modules-extra)" | grep -v "${target_base}" | cut -d'/' -f1 | tr '\n' ' ')
 
@@ -163,7 +167,7 @@ function remove_unwanted_kernels() {
   # userspace API package glibc-devel depends on, not a second kernel.
   log_info "Keeping the running kernel ${current_kernel}"
 
-{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   # Find all installed kernel packages that don't match our target version
   PACKAGES_TO_REMOVE=$(rpm -qa kernel kernel-core kernel-devel kernel-headers | grep -v "${target_base}" | tr '\n' ' ')
 
@@ -183,9 +187,9 @@ function install_target_kernel() {
 
   log_info "Installing target kernel ${target_version}"
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Update package cache
-  apt-get -o DPkg::Lock::Timeout=300 update
+  apt_update || exit 1
 
   # Exact ABI, not the linux-aws-<series> meta-package: the meta-package resolves to
   # whatever Ubuntu published last, which the FSx repo may not have modules for yet
@@ -215,7 +219,7 @@ function install_target_kernel() {
     return 1
   fi
 
-{% elif context.base_os in ('rhel9', 'rocky9') %}
+{% elif context.base_os in ('rhel9', 'rhel10', 'rocky9', 'rocky10') %}
   # RHEL9/Rocky9 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
@@ -228,7 +232,7 @@ function install_target_kernel() {
 }
 
 function set_kernel_version() {
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}  [[ -n "${BAKE_STAGE:-}" ]] || return 0
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  [[ -n "${BAKE_STAGE:-}" ]] || return 0
 {% endif %}  # Skip kernel management on captured images that already went through bootstrap
   if [[ -n "${IDEA_MODULE_VERSION}" && "$(cat /var/lib/idea/baked-release 2>/dev/null)" == "${IDEA_MODULE_VERSION}" ]]; then
     log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping kernel management"
@@ -242,7 +246,7 @@ function set_kernel_version() {
   log_info "Current kernel: $current_kernel"
   log_info "Target kernel version: $target_version"
 
-{% if context.base_os not in ('ubuntu2204', 'ubuntu2404') %}  # Check if we're already running the target kernel series
+{% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  # Check if we're already running the target kernel series
   if [[ "$current_kernel" == "${target_base}"[.-]* ]]; then
     log_info "Confirmed running target kernel series $target_base - pinning current version"
     apply_kernel_holds
@@ -251,14 +255,14 @@ function set_kernel_version() {
   fi
 
 {% endif %}  # A second pass on the old kernel means the boot loader did not honor the requested kernel.
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}  if [[ "${current_kernel}" != "${TARGET_KERNEL_ABI}" ]] && [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  if [[ "${current_kernel}" != "${TARGET_KERNEL_ABI}" ]] && [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
 {% else %}  if [[ -f ${BOOTSTRAP_DIR}/reboot_history.log ]] && grep -Fq "kernel version change to ${target_version}" ${BOOTSTRAP_DIR}/reboot_history.log; then
 {% endif %}    fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${target_version} was installed, but the host is still running ${current_kernel} after reboot."
   fi
 
   # Check if target kernel is already installed
   local kernel_installed=false
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   if [[ "${current_kernel}" == "${TARGET_KERNEL_ABI}" ]]; then
     kernel_installed=true
   fi
@@ -267,7 +271,7 @@ function set_kernel_version() {
   if rpm -qa kernel | grep -q "${target_base}\."; then
     kernel_installed=true
   fi
-{% elif context.base_os in ('rhel9', 'rocky9') %}
+{% elif context.base_os in ('rhel9', 'rhel10', 'rocky9', 'rocky10') %}
   # For RHEL9/Rocky9, check for any kernel in the target series
   if rpm -qa kernel | grep -q "${target_base}\."; then
     kernel_installed=true
@@ -285,7 +289,7 @@ function set_kernel_version() {
   # Apply holds to prevent unwanted upgrades
   apply_kernel_holds
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   # Set default boot kernel
   if [[ -f /etc/default/grub ]]; then
     # Select by title because a positional entry changes as kernels are added or removed.
@@ -296,7 +300,7 @@ function set_kernel_version() {
   else
     fail_kernel_bootstrap kernel-boot-mismatch "Missing /etc/default/grub; cannot select ${TARGET_KERNEL_ABI}."
   fi
-{% elif context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   local target_kernel
   target_kernel=$(find /boot -maxdepth 1 -type f -name "vmlinuz-*${target_base}.*" -print | sort -V | tail -1)
   if [[ -n "${target_kernel}" ]]; then
@@ -305,7 +309,7 @@ function set_kernel_version() {
   fi
 {% endif %}
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}  if [[ "${current_kernel}" != "${TARGET_KERNEL_ABI}" ]]; then
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  if [[ "${current_kernel}" != "${TARGET_KERNEL_ABI}" ]]; then
     [[ -f /boot/vmlinuz-${TARGET_KERNEL_ABI} ]] || fail_kernel_bootstrap kernel-install-failed "Kernel ${TARGET_KERNEL_ABI} not found in /boot after installation."
     set_reboot_required "Ubuntu kernel version change to ${target_version}"
   fi
@@ -315,7 +319,7 @@ function set_kernel_version() {
     # Verify target kernel will be available on next boot
     if ls /boot/vmlinuz-${target_base}[.-]* >/dev/null 2>&1; then
       log_info "Kernel ${target_version} found in /boot, rebooting to activate"
-{% if context.base_os in ('rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
       set_reboot_required "RHEL kernel version change to ${target_version}"
 {% endif %}
 
@@ -323,7 +327,7 @@ function set_kernel_version() {
       (crontab -l 2>/dev/null | grep -v 'setup.sh' || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
 
       check_reboot_loop "Kernel installation reboot"
-      reboot
+      reboot_after_cloud_init
       exit 0
     else
       log_error "Kernel ${target_version} not found in /boot after installation"
@@ -337,7 +341,7 @@ function set_kernel_version() {
 {% endif %}}
 
 # Execute kernel version management for all supported distributions
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604', 'amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 set_kernel_version
 {% endif %}
 {% else %}

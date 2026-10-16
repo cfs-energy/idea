@@ -1,2 +1,0 @@
-# EL10 has no Amazon DCV packages, so it cannot be combined with virtual-desktop-controller.
-base_os: rhel10

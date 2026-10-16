@@ -3,7 +3,7 @@ import {ReportingCoverage, ReportingNumber} from '../../client/reporting-model';
 
 export const numeric = (value: ReportingNumber | null | undefined): number | null => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
 export const money = (value: ReportingNumber | null | undefined, currency = 'USD') => numeric(value) == null ? '—' : new Intl.NumberFormat('en-US', {style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2}).format(Number(value));
-export const hours = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : new Intl.NumberFormat('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 1}).format(Number(value));
+export const hours = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : Number(value) > 0 && Number(value) < 0.05 ? '<0.1' : new Intl.NumberFormat('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 1}).format(Number(value));
 export const percent = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : Number(value) > 0 && Number(value) < 1 ? '<1%' : `${Math.round(Number(value))}%`;
 export const bytes = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : `${(Number(value) / (Number(value) >= 2 ** 40 ? 2 ** 40 : 2 ** 30)).toFixed(1)} ${Number(value) >= 2 ** 40 ? 'TiB' : 'GiB'}`;
 export function date(value: string, timezone: string, withTime = false): string {
@@ -68,12 +68,22 @@ export const budgetPresentation = {
     over: {type: 'error' as const, label: 'Over budget'}
 };
 // Low efficiency is something to act on, not a failure; red stays reserved for over-budget.
-export const efficiencyStatus = (value: number) => value >= 70 && value <= 100 ? 'success' : 'warning';
+// finishing early is not a problem for walltime (cost follows elapsed time), so only an overrun warns.
+export const efficiencyStatus = (value: number, metric = 'cpu_efficiency_pct') =>
+    value >= 70 && value <= 100 ? 'success' : metric === 'walltime_efficiency_pct' && value < 70 ? 'info' : 'warning';
 export const efficiencyLabel = (value: number, metric = 'cpu_efficiency_pct') => {
     if (value > 100 && metric === 'memory_efficiency_pct') return 'Used more than requested';
     if (value > 100 && metric === 'walltime_efficiency_pct') return 'Ran longer than requested';
     const labels = metric === 'memory_efficiency_pct' ? ['Well sized', 'Some memory unused', 'Most memory unused']
-        : metric === 'walltime_efficiency_pct' ? ['Close to requested', 'Finished well early', 'Finished far earlier than requested']
+        : metric === 'walltime_efficiency_pct' ? ['Close to requested', 'Finished early', 'Finished well under requested']
         : ['Well sized', 'Some cores sat idle', 'Most cores sat idle'];
     return labels[value >= 70 ? 0 : value >= 40 ? 1 : 2];
 };
+
+// compute is priced at the public on-demand rate, scaled by cluster.costs.compute_rate_multiplier
+// (ClusterSettingsService.getComputeRate) when an administrator sets one.
+export const computeRateNote = (rate = 1) => rate === 1 ? 'On-demand compute is priced at list rates.' : `On-demand compute is priced at list rates, adjusted (×${rate}).`;
+// a job's cost is stored with the rate in force when it finished, so a rate change only reaches later jobs
+export const jobRateNote = (rate = 1) => rate === 1 ? computeRateNote(rate) : `${computeRateNote(rate)} Each job keeps the rate in force when it finished, so jobs from before a rate change use the earlier rate.`;
+export const STORAGE_EXCLUSIONS = 'FSx backups and Lustre scratch are not included in storage cost.';
+export const costsDescription = (rate = 1) => `Estimated costs and resource use. ${computeRateNote(rate)}`;

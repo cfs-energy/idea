@@ -88,6 +88,19 @@
       ],
       "depNameTemplate": "public.ecr.aws/datadog/agent",
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Hadolint installer follows published releases, not tags without binaries",
+      "managerFilePatterns": [
+        "/^\\.github/actions/install-hadolint/action\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=github-releases depName=hadolint/hadolint\\s+default: \"(?<currentValue>[^\"\\s]+)\""
+      ],
+      "depNameTemplate": "hadolint/hadolint",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
     }
   ],
   "packageRules": [

@@ -1,0 +1,244 @@
+#!/usr/bin/python3
+"""Keep the DCV owner's locked Wayland screen visible using real pointer input."""
+
+import json
+import logging
+import os
+import pwd
+import shutil
+import signal
+import subprocess
+import xml.etree.ElementTree as ET
+
+LOG = logging.getLogger('idea-dcv-lock')
+
+REMOTE = 'org.gnome.Mutter.RemoteDesktop'
+ROOT = '/org/gnome/Mutter/RemoteDesktop'
+LOGIN = 'org.freedesktop.login1'
+PROPERTIES = 'org.freedesktop.DBus.Properties'
+INTERVAL = 5
+METHODS = {
+    REMOTE: {'CreateSession': ('', 'o')},
+    REMOTE + '.Session': {
+        'Start': ('', ''),
+        'NotifyPointerMotionRelative': ('dd', ''),
+        'Stop': ('', ''),
+    },
+}
+
+
+def validate_interface(xml, interface):
+    node = ET.fromstring(xml).find(f"interface[@name='{interface}']")
+    for method, expected in METHODS[interface].items():
+        element = None if node is None else node.find(f"method[@name='{method}']")
+        if element is None:
+            raise ValueError(f'{interface}.{method} is missing')
+        actual = tuple(
+            ''.join(arg.get('type', '') for arg in element.findall('arg')
+                    if arg.get('direction', 'in') == direction)
+            for direction in ('in', 'out')
+        )
+        if actual != expected:
+            raise ValueError(
+                f'{interface}.{method} signature {actual!r}; expected {expected!r}'
+            )
+
+
+def desktop_version():
+    command = (
+        ['rpm', '-q', 'gnome-shell', 'mutter'] if shutil.which('rpm') else
+        ['dpkg-query', '-W', '-f=${Package} ${Version}\\n', 'gnome-shell', 'mutter-common']
+    )
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        return '; '.join(result.stdout.splitlines()) or 'GNOME/mutter version unavailable'
+    except (OSError, subprocess.TimeoutExpired):
+        return 'GNOME/mutter version unavailable'
+
+
+def owner_session(sessions, username):
+    owned = [s for s in sessions if s['owner'] == username]
+    if len(owned) != 1:
+        raise ValueError('expected one DCV session for this owner')
+    session = owned[0]
+    if session['type'] != 'virtual' or session['user'] != username:
+        raise ValueError('not an owner virtual session')
+    return session['xdg-session-id']
+
+
+class Remote:
+    def __init__(self):
+        from gi.repository import Gio, GLib
+
+        self.Gio, self.GLib = Gio, GLib
+        self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        sessions = json.loads(
+            subprocess.check_output(['/usr/bin/dcv', 'list-sessions', '-j'], timeout=10)
+        )
+        sid = owner_session(sessions, pwd.getpwuid(os.getuid()).pw_name)
+        self.path = self.invoke(
+            self.system, LOGIN, '/org/freedesktop/login1', LOGIN + '.Manager',
+            'GetSession', '(s)', (sid,)
+        )[0]
+        self.is_locked()  # Validate the active owner Wayland session before changing settings.
+
+    def invoke(self, bus, name, path, interface, method, signature=None, args=()):
+        return bus.call_sync(
+            name, path, interface, method,
+            self.GLib.Variant(signature, args) if signature else None,
+            None, self.Gio.DBusCallFlags.NO_AUTO_START, 5000, None
+        ).unpack()
+
+    def is_locked(self):
+        props = self.invoke(
+            self.system, LOGIN, self.path, PROPERTIES, 'GetAll',
+            '(s)', (LOGIN + '.Session',)
+        )[0]
+        if not (
+            props['User'][0] == os.getuid() and props['Class'] == 'user'
+            and props['Type'] == 'wayland' and props['Remote']
+            and not props['Seat'][0] and props['State'] == 'active'
+        ):
+            raise ValueError('not an active remote owner Wayland session')
+        return props['LockedHint']
+
+    def call(self, path, method, signature=None, args=()):
+        interface = REMOTE if path == ROOT else REMOTE + '.Session'
+        return self.invoke(self.bus, REMOTE, path, interface, method, signature, args)
+
+    def check(self, path):
+        xml = self.invoke(
+            self.bus, REMOTE, path, 'org.freedesktop.DBus.Introspectable', 'Introspect'
+        )[0]
+        validate_interface(xml, REMOTE if path == ROOT else REMOTE + '.Session')
+
+    def close(self):
+        # Losing our bus name releases any session, even when Stop is incompatible.
+        self.bus.set_exit_on_close(False)
+        self.bus.close_sync(None)
+
+
+class Keeper:
+    def __init__(self, remote):
+        self.remote = remote
+        self.session = None
+        self.disabled = False
+
+    def startup(self):
+        try:
+            self.remote.check(ROOT)
+        except Exception as error:
+            self.disable(error)
+
+    def disable(self, error):
+        if self.disabled:
+            return
+        self.disabled = True
+        self.session = None
+        LOG.warning(
+            'DCV lock visibility disabled for this session (%s): %s; '
+            'GNOME lock/blanking behavior is unchanged', desktop_version(), error
+        )
+        try:
+            self.remote.close()
+        except Exception:
+            pass
+
+    def stop(self):
+        if self.session and not self.disabled:
+            session, self.session = self.session, None
+            try:
+                self.remote.call(session, 'Stop')
+            except Exception as error:
+                self.disable(error)
+
+    def tick(self):
+        if self.disabled:
+            return False
+        try:
+            self.nudge()
+        except Exception as error:
+            self.disable(error)
+        return not self.disabled
+
+    def nudge(self):
+        if not self.remote.is_locked():
+            self.stop()
+            return
+        if self.session is None:
+            self.remote.check(ROOT)
+            self.session = self.remote.call(ROOT, 'CreateSession')[0]
+            self.remote.check(self.session)
+            self.remote.call(self.session, 'Start')
+        # Nudge before GNOME's locked display can reblank.
+        # Recheck after Start and before each motion; never send keys or buttons.
+        for dx in (1.0, -1.0):
+            if not self.remote.is_locked():
+                self.stop()
+                return
+            self.remote.call(
+                self.session, 'NotifyPointerMotionRelative', '(dd)', (dx, 0.0)
+            )
+
+
+def run(keeper):
+    remote = keeper.remote
+    loop = remote.GLib.MainLoop()
+    timer = None
+
+    def tick():
+        nonlocal timer
+        if not keeper.tick():
+            if timer is not None:
+                remote.GLib.source_remove(timer)
+                timer = None
+            return False
+        return True
+
+    def changed(connection, sender, path, interface, name, parameters, user_data=None):
+        iface, props, invalidated = parameters.unpack()
+        if iface == LOGIN + '.Session' and (
+            'LockedHint' in props or 'LockedHint' in invalidated
+        ):
+            tick()
+
+    remote.system.signal_subscribe(
+        LOGIN, PROPERTIES, 'PropertiesChanged', remote.path, None,
+        remote.Gio.DBusSignalFlags.NONE, changed
+    )
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        remote.GLib.unix_signal_add(
+            remote.GLib.PRIORITY_DEFAULT, sig, lambda: (loop.quit(), False)[1]
+        )
+    try:
+        keeper.startup()
+        if tick():
+            timer = remote.GLib.timeout_add_seconds(INTERVAL, tick)
+        # A disabled helper stays idle until logout; it never re-enters initialization.
+        loop.run()
+    finally:
+        keeper.stop()
+    return 0
+
+
+def main():
+    keeper = None
+    try:
+        keeper = Keeper(Remote())
+        return run(keeper)
+    except Exception as error:
+        if keeper is not None:
+            keeper.disable(error)
+        else:
+            LOG.warning(
+                'DCV lock visibility disabled for this session (%s): %s',
+                desktop_version(), error
+            )
+        # If even the event loop cannot start, exit successfully without a restart.
+        return 0
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    raise SystemExit(main())

@@ -19,10 +19,13 @@ export type VirtualDesktopBaseOS =
   | "amazonlinux2023"
   | "rhel8"
   | "rhel9"
+  | "rhel10"
   | "rocky8"
   | "rocky9"
+  | "rocky10"
   | "ubuntu2204"
   | "ubuntu2404"
+  | "ubuntu2604"
   | "windows"
   | "windows2019"
   | "windows2022"
@@ -1498,6 +1501,7 @@ export interface MyCostsDesktops {
   hours?: number;
   cost?: number;
   unpriced_sessions?: number;
+  usage_unknown_sessions?: number;
   estimated?: boolean;
   sessions?: MyCostsDesktopSession[];
   is_unavailable?: boolean;
@@ -1515,6 +1519,7 @@ export interface MyCostsDesktopSession {
   estimated?: boolean;
   stop_time_estimated?: boolean;
   price_unavailable?: boolean;
+  usage_unknown?: boolean;
 }
 export interface GetMyCostsSummaryRequest {}
 export interface GetParamChoicesRequest {
@@ -2108,6 +2113,7 @@ export interface ListQueuesResult {
   listing?: QueueSummary[];
 }
 export interface QueueSummary {
+  instance_type_rules?: string;
   name?: string;
   queue_profile?: string;
   base_os?: string;

@@ -213,6 +213,7 @@ class InsightsService:
                 'walltime_efficiency_pct',
                 'wasted_core_hours',
                 'wasted_cost',
+                'efficiency_cost',
             )
         }
         rows, weighted, weights = [], 0, 0
@@ -247,6 +248,9 @@ class InsightsService:
                 wasted_cost=cost * (1 - Decimal(str(cpu)) / 100)
                 if cost is not None and cpu is not None
                 else None,
+                # spend of the jobs the unused-core estimate covers, so the sentence
+                # compares like with like
+                efficiency_cost=cost if cpu is not None else None,
             )
             for key in totals:
                 if values.get(key) is not None:
@@ -360,7 +364,10 @@ class InsightsService:
         )
         pricing = MyCostsService(self.context)
         pricing._ondemand_price = lru_cache(maxsize=128)(pricing._ondemand_price)
-        hours, sources = [], {}
+        hours, sources, priced = [], {}, []
+        runs = pricing._runs_by_session(data.get('desktops', []))
+        start_ms = int(timestamp(period.start) * 1000)
+        end_ms = int(timestamp(period.end) * 1000)
         for source in pricing._newest_per_session(data.get('desktops', [])):
             check_deadline(deadline)
             if not subject(source.get('owner')) or (
@@ -376,11 +383,19 @@ class InsightsService:
             if source.get('deleted_on'):
                 source['state'] = 'DELETED'
                 source['updated_on'] = source['deleted_on']
-            source.setdefault('server', dict(instance_type=source.get('instance_type')))
+            source.setdefault(
+                'server',
+                dict(
+                    instance_type=source.get('instance_type'),
+                    instance_id=source.get('instance_id'),
+                ),
+            )
+            priced.append(source)
+        pricing._prefetch_running_hours(priced, runs, start_ms, end_ms, deadline)
+        for source in priced:
+            check_deadline(deadline)
             session = pricing._desktop_session(
-                source,
-                int(timestamp(period.start) * 1000),
-                int(timestamp(period.end) * 1000),
+                source, start_ms, end_ms, runs.get(source.get('idea_session_id'))
             )
             if session:
                 hours.append(session.hours)

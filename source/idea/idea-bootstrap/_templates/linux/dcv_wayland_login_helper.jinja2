@@ -1,0 +1,360 @@
+#!/usr/bin/python3
+"""Authorize GDM owner login for IDEA's single-session Wayland desktop hosts."""
+
+import json
+import logging
+import os
+from pathlib import Path
+import pwd
+import re
+import secrets
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+SOCKET = '/run/idea-dcv-login/socket'
+FIRST_LOGIN = Path('/var/lib/idea-dcv-login/first-login-complete')
+INSTANCE_ID = Path('/var/lib/cloud/data/instance-id')
+SERVICE = 'idea-dcv-login'
+GDM = 'org.gnome.DisplayManager'
+REMOTE = GDM + '.RemoteDisplay'
+BASE = '/org/gnome/DisplayManager'
+
+
+def gdm_account():
+    for name in ('gdm', 'Debian-gdm'):
+        try:
+            return pwd.getpwnam(name)
+        except KeyError:
+            pass
+    raise ValueError('GDM account not found')
+
+
+def is_greeter(uid):
+    try:
+        user = pwd.getpwuid(uid)
+    except KeyError:
+        return False
+    gdm = gdm_account()
+    return user.pw_uid == gdm.pw_uid or (
+        re.fullmatch(r'gdm-greeter(?:-[0-9]+)?', user.pw_name) is not None
+        and user.pw_gid == gdm.pw_gid
+    )
+
+
+def authorized_owner(session_id, greeter_uid, sessions, logins, displays):
+    # IDEA provisions one DCV session per host. Ambiguity must never grant a login.
+    remote = [s for s in logins if s['Remote'] and s['Class'] == 'greeter']
+    if len(sessions) != 1 or len(remote) != 1:
+        raise ValueError('expected one DCV session and one remote greeter')
+    session, greeter = sessions[0], remote[0]
+    if not (
+        greeter['Id'] == session_id == session.get('xdg-session-id')
+        and greeter['User'] == greeter_uid
+        and is_greeter(greeter['User'])
+        and greeter['Class'] == 'greeter'
+        and greeter['Type'] == 'wayland'
+        and not greeter['Seat']
+        and session['type'] == 'virtual'
+        and session['owner'] == session['user']
+    ):
+        raise ValueError('not the DCV owner remote greeter')
+    remote_id = '/com/amazon/dcv/' + session['id'].encode().hex().upper()
+    matches = [d for d in displays.values() if d['SessionId'] == session_id]
+    if len(matches) != 1 or matches[0]['RemoteId'] != remote_id:
+        raise ValueError('GDM display does not belong to this DCV session')
+    return session['owner'], session['id'], session['creation-time']
+
+
+class System:
+    def __init__(self):
+        from gi.repository import Gio, GLib
+
+        self.Gio, self.GLib = Gio, GLib
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+
+    def call(self, name, path, interface, method, signature=None, args=(), bus=None):
+        return (
+            (bus or self.bus)
+            .call_sync(
+                name,
+                path,
+                interface,
+                method,
+                self.GLib.Variant(signature, args) if signature else None,
+                None,
+                self.Gio.DBusCallFlags.NONE,
+                10000,
+                None,
+            )
+            .unpack()
+        )
+
+    def properties(self, path):
+        props = self.call(
+            'org.freedesktop.login1',
+            path,
+            'org.freedesktop.DBus.Properties',
+            'GetAll',
+            '(s)',
+            ('org.freedesktop.login1.Session',),
+        )[0]
+        props['Seat'] = props['Seat'][0]
+        props['User'] = props['User'][0]
+        return props
+
+    def caller_session(self, pid, uid):
+        # Dynamic greeters run user services outside their logind session cgroup.
+        if uid != gdm_account().pw_uid and is_greeter(uid):
+            sessions = self.call(
+                'org.freedesktop.login1',
+                '/org/freedesktop/login1',
+                'org.freedesktop.login1.Manager',
+                'ListSessions',
+            )[0]
+            sessions = [self.properties(s[4]) for s in sessions if s[1] == uid]
+            greeters = [s for s in sessions if s['Class'] == 'greeter']
+            if len(greeters) != 1:
+                raise ValueError('expected one greeter session for dynamic GDM user')
+            return greeters[0]
+        path = self.call(
+            'org.freedesktop.login1',
+            '/org/freedesktop/login1',
+            'org.freedesktop.login1.Manager',
+            'GetSessionByPID',
+            '(u)',
+            (pid,),
+        )[0]
+        return self.properties(path)
+
+    def owner(self, session_id, greeter_uid):
+        sessions = json.loads(
+            subprocess.check_output(['/usr/bin/dcv', 'list-sessions', '-j'], timeout=10)
+        )
+        sessions = [
+            json.loads(
+                subprocess.check_output(
+                    ['/usr/bin/dcv', 'describe-session', s['id'], '-j'], timeout=10
+                )
+            )
+            for s in sessions
+        ]
+        logins = self.call(
+            'org.freedesktop.login1',
+            '/org/freedesktop/login1',
+            'org.freedesktop.login1.Manager',
+            'ListSessions',
+        )[0]
+        logins = [self.properties(s[4]) for s in logins]
+        objects = self.call(
+            GDM,
+            BASE + '/Displays',
+            'org.freedesktop.DBus.ObjectManager',
+            'GetManagedObjects',
+        )[0]
+        displays = {
+            path: props[REMOTE] for path, props in objects.items() if REMOTE in props
+        }
+        owner = authorized_owner(session_id, greeter_uid, sessions, logins, displays)
+        if pwd.getpwnam(owner[0]).pw_uid < 1000:
+            raise ValueError('system accounts cannot own an automatic login')
+        return owner
+
+
+def pam_worker(pid):
+    status = dict(
+        line.split(':', 1)
+        for line in Path(f'/proc/{pid}/status').read_text().splitlines()
+    )
+    parent = int(status['PPid'])
+    return Path(f'/proc/{parent}/exe').resolve().name == 'gdm-session-worker'
+
+
+class Grants:
+    def __init__(self, system):
+        self.system = system
+        self.tokens = {}
+        self.instance_id = INSTANCE_ID.read_text().strip()
+        if not re.fullmatch(r'i-[0-9a-f]+', self.instance_id):
+            raise ValueError('EC2 instance identity unavailable')
+        # Instance-specific filenames also keep an interrupted marker write fail-closed.
+        self.first_login = FIRST_LOGIN.with_name(FIRST_LOGIN.name + '-' + self.instance_id)
+
+    def handle(self, pid, uid, request):
+        now = time.monotonic()
+        self.tokens = {k: v for k, v in self.tokens.items() if v[0] > now}
+        if self.first_login.exists():
+            raise ValueError('automatic first login already completed')
+        if request['op'] == 'issue' and is_greeter(uid):
+            session_id = self.system.caller_session(pid, uid)['Id']
+            owner = self.system.owner(session_id, uid)
+            if len(self.tokens) >= 16:
+                raise ValueError('too many pending logins')
+            token = secrets.token_hex(32)
+            self.tokens[token] = (now + 30, session_id, uid, owner)
+            return {'owner': owner[0], 'token': token}
+        if request['op'] == 'redeem' and uid == 0 and pam_worker(pid):
+            grant = self.tokens.pop(request.get('token', ''), None)
+            if (
+                not grant
+                or not request.get('remote')
+                or request.get('tty')
+                or request.get('seat')
+            ):
+                raise ValueError('invalid or local PAM request')
+            _, session_id, greeter_uid, owner = grant
+            if (
+                request['user'] != owner[0]
+                or self.system.owner(session_id, greeter_uid) != owner
+            ):
+                raise ValueError('DCV owner/session changed')
+            # Consume the one-time privilege before PAM proceeds: later PAM failures
+            # require a password too, rather than reopening automatic authentication.
+            fd = os.open(self.first_login, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as marker:
+                marker.write(self.instance_id + '\n')
+                marker.flush()
+                os.fsync(marker.fileno())
+            directory = os.open(self.first_login.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            logging.info(
+                'Authorized owner %s on DCV session %s, GDM session %s',
+                owner[0],
+                owner[1],
+                session_id,
+            )
+            return {'ok': True}
+        raise ValueError('caller is not an authorized greeter or PAM worker')
+
+
+def request(message):
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(15)
+        client.connect(SOCKET)
+        client.sendall(json.dumps(message).encode() + b'\n')
+        response = json.loads(client.makefile('rb').readline(4096))
+        if 'error' in response:
+            raise ValueError(response['error'])
+        return response
+
+
+def serve():
+    greeter = gdm_account()
+    grants = Grants(System())
+    Path(SOCKET).unlink(missing_ok=True)
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(SOCKET)
+        os.chown(SOCKET, 0, greeter.pw_gid)
+        os.chmod(SOCKET, 0o660)
+        server.listen(8)
+        while True:
+            connection, _ = server.accept()
+            with connection:
+                connection.settimeout(15)
+                try:
+                    pid, uid, _ = struct.unpack(
+                        '3i',
+                        connection.getsockopt(
+                            socket.SOL_SOCKET, socket.SO_PEERCRED, 12
+                        ),
+                    )
+                    message = json.loads(connection.makefile('rb').readline(4096))
+                    response = grants.handle(pid, uid, message)
+                except Exception as error:
+                    response = {'error': str(error)}
+                try:
+                    connection.sendall(json.dumps(response).encode() + b'\n')
+                except OSError:
+                    pass
+
+
+def login():
+    system = System()
+    current = system.caller_session(os.getpid(), os.getuid())
+    if not current['Remote'] or current['Seat'] or current['Class'] != 'greeter':
+        return
+    # DCV publishes the XDG session after GDM starts its autostart applications.
+    for attempt in range(60):
+        try:
+            grant = request({'op': 'issue'})
+            break
+        except (OSError, ValueError):
+            time.sleep(1)
+    else:
+        raise ValueError('DCV owner authorization was not available')
+    address = system.call(GDM, BASE + '/Manager', GDM + '.Manager', 'OpenSession')[0]
+    bus = system.Gio.DBusConnection.new_for_address_sync(
+        address, system.Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT, None, None
+    )
+    path = BASE + '/Session'
+    loop = system.GLib.MainLoop()
+
+    def call(interface, method, signature, args):
+        return system.call(
+            None, path, GDM + '.' + interface, method, signature, args, bus=bus
+        )
+
+    def signal(
+        connection, sender, object_path, interface, name, parameters, user_data=None
+    ):
+        args = parameters.unpack()
+        if not args or args[0] != SERVICE:
+            return
+        if name == 'SecretInfoQuery':
+            call(
+                'UserVerifier', 'AnswerQuery', '(ss)', (SERVICE, grant.pop('token', ''))
+            )
+        elif name == 'SessionOpened':
+            call('Greeter', 'StartSessionWhenReady', '(sb)', (SERVICE, True))
+            loop.quit()
+        elif name in ('Problem', 'VerificationFailed'):
+            logging.error('GDM owner login failed')
+            loop.quit()
+
+    bus.signal_subscribe(
+        None, None, None, path, None, system.Gio.DBusSignalFlags.NONE, signal
+    )
+    call('UserVerifier', 'BeginVerificationForUser', '(ss)', (SERVICE, grant['owner']))
+    system.GLib.timeout_add_seconds(30, lambda: (loop.quit(), False)[1])
+    loop.run()
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    if sys.argv[1:] == ['serve']:
+        serve()
+    elif sys.argv[1:] == ['login']:
+        login()
+    elif sys.argv[1:] == ['pam']:
+        if (
+            os.environ.get('PAM_SERVICE') != SERVICE
+            or os.environ.get('PAM_TYPE') != 'auth'
+        ):
+            return 1
+        result = request(
+            {
+                'op': 'redeem',
+                'token': sys.stdin.buffer.read(512).rstrip(b'\0').decode(),
+                'user': os.environ.get('PAM_USER'),
+                'remote': os.environ.get('PAM_RHOST'),
+                'tty': os.environ.get('PAM_TTY'),
+                'seat': os.environ.get('XDG_SEAT'),
+            }
+        )
+        return 0 if result.get('ok') else 1
+    else:
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except Exception:
+        logging.error('DCV owner login denied', exc_info=False)
+        sys.exit(1)

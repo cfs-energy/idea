@@ -504,7 +504,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
     buildDirectivesSection() {
         return (
             <SpaceBetween size="m">
-            <QueueReference/>
+            <QueueReference queueName={this.state.jobScript.match(/^#PBS\s+-q\s+([^\s@]+)/m)?.[1]}/>
             <FormField label="Directives">
                 <SpaceBetween size="xxs" direction="vertical">
                     {DIRECTIVES.map(({directive, meaning}) => (

@@ -12,13 +12,13 @@ Use **Overview**, **Jobs**, **Desktops**, **Storage**, and **Breakdown**. Every 
 
 **Jobs** shows CPU, memory, and walltime efficiency, unused core-hours, and their cost. Percentage tiles average jobs with the needed measurements. CPU efficiency compares CPU time used with requested cores multiplied by elapsed time. Unused core-hours subtract CPU hours used from requested core-hours. Their cost is each measured job's cost multiplied by its unused share of requested core time. Both use requested cores rather than all instance vCPUs.
 
-Memory efficiency compares peak use with requested memory. Without a request, it uses the memory of the job's own instances only for single-job capacity that is not kept running for reuse. One known instance memory size is required. That size is multiplied by the node count. Walltime efficiency compares elapsed time with requested time.
+Memory efficiency compares peak use with requested memory. Without a request, it uses the memory of the job's own instances only for single-job capacity that is not kept running for reuse. One known instance memory size is required. That size is multiplied by the node count. Walltime efficiency compares elapsed time with requested time. Cost follows the time a job actually ran, not the time requested; the requested time is a limit that stops stuck jobs, and a closer one helps the scheduler.
 
 | Efficiency | 70% to 100% | 40% to below 70% | Below 40% |
 | --- | --- | --- | --- |
 | CPU | Well sized | Some cores sat idle | Most cores sat idle |
 | Memory | Well sized | Some memory unused | Most memory unused |
-| Walltime | Close to requested | Finished well early | Finished far earlier than requested |
+| Walltime | Close to requested | Finished early | Finished well under requested |
 
 Use the single **Top jobs** table to sort by **Highest cost** or **Most unused cores**. Job names link to completed-job records only with scheduler administration access; other Reporting readers see the names as text. Hints can suggest fewer cores, per node for multi-node jobs. Low memory use without a memory request can suggest a smaller instance type. **Find rows** searches the table. **Table preferences** controls columns and their order.
 
@@ -31,6 +31,8 @@ On **Breakdown**, switch between **User** and **Project** with **All users** sel
 Breakdown's **Export CSV** includes all pages for the selected user or **All users**, with the current sort and visible-column order. **Find on this page** does not limit that export. Other tables export all rows matching **Find rows**.
 
 An expired report reloads once automatically. **Reload** requests the report again. **Try again** retries a failed load. Retry a failed CSV download after the report loads. Newer stored records can change the values.
+
+Compute (job instance hours and desktop hours) is priced at the public on-demand rate, so it is an estimate that ignores savings plans and reserved instances. When an administrator sets an effective compute rate, the page header and the job and desktop figures say **adjusted (×0.72)** or similar, and compute is multiplied by that rate; storage, spot, and AI are not. A job keeps the rate in force when it finished, so jobs from before a rate change use the earlier rate. Desktop costs are recomputed at the current rate on each personal-cost collection run (every 15 minutes) for this month and last; a day whose source could not be read on that run keeps its earlier amount, and the rate it was collected at, until a later run succeeds. Storage cost leaves out FSx backups and Lustre scratch.
 
 Open the information buttons for definitions, missing data, and source dates. Missing or unavailable data is not zero. Stored estimates do not reconstruct missing history and are not a billing statement.
 

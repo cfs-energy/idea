@@ -23,6 +23,12 @@ rm -rf /var/lib/sss/db/* /var/lib/sss/mc/* /var/lib/sss/secrets/*
 
 # cloud-init and systemd regenerate these on the next boot; keep SSM running for read-back.
 cloud-init clean --logs --seed
+# Discard bake crashes so clones only report their own failures.
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+rm -f /var/crash/*.crash /var/crash/*.upload /var/crash/*.uploaded
+{% else %}
+rm -rf /var/spool/abrt/* /var/lib/systemd/coredump/*
+{% endif %}
 : > /etc/machine-id
 rm -f /var/lib/dbus/machine-id
 # dbus-broker hosts (EL9 and later, AL2023) have no /var/lib/dbus; they read /etc/machine-id
@@ -32,6 +38,10 @@ rm -f /etc/ssh/ssh_host_*
 # keyed by instance id, so a clone registers as itself
 {% if not compute %}
 rm -rf /var/lib/dcv/* /var/lib/dcv-session-manager-agent/*
+{% if context.base_os in ['rhel10', 'rocky10', 'ubuntu2604'] %}
+# Each clone gets its own first owner login; never inherit the builder's marker.
+rm -rf /var/lib/idea-dcv-login
+{% endif %}
 rm -f /etc/dcv/dcv.key /etc/dcv/dcv.pem /etc/dcv/dcv.conf
 rm -f /etc/dcv-session-manager-agent/agent.conf
 rm -rf /etc/dcv-session-manager-agent/tags/* /etc/dcv-session-manager-agent/archive-tags/*

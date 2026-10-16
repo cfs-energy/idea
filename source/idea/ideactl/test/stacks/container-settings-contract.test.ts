@@ -9,10 +9,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { after } from "node:test";
 import { byType, resourcesOf, synthBastion, synthEcs, cleanupWorkdirs } from "../support/ecs-harness.ts";
-import { applicationContainerSettings } from "../../src/cdk/constructs/container.ts";
+import { addLogTailContainer, applicationContainerSettings, applicationTargetGroup, buildEc2Service, buildExecutionRole, buildTaskDefinition, type ContainerScope } from "../../src/cdk/constructs/container.ts";
 
 after(cleanupWorkdirs);
 import { App, Aws, Fn, Stack } from "aws-cdk-lib";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import { ContainerImage } from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { Template } from "aws-cdk-lib/assertions";
 import { renderPolicy } from "../../src/cdk/policy.ts";
@@ -315,8 +317,8 @@ test("the ECS stack publishes every cutover setting by name", () => {
 });
 
 test("the host pool takes its bounds from the rows and drains managed instances", () => {
-  // Three hosts at rest, four at most: a surge that does not fit borrows the fourth for the
-  // length of the deployment and managed scaling gives it back.
+  // Four hosts at rest, five at most: a surge that does not fit borrows the fifth for the length
+  // of the deployment and managed scaling gives it back.
   const resources = resourcesOf(synthEcs(true));
   const group = byType(resources, "AWS::AutoScaling::AutoScalingGroup")[0]![1];
   assert.equal(group.Properties.MinSize, String(ECS_HOST_SETTINGS["ecs.hosts.min"]));
@@ -340,18 +342,20 @@ test("the host pool takes its bounds from the rows and drains managed instances"
   assert.equal(container.StopTimeout, 30);
 });
 
-test("bastion keeps one healthy task while an SSH replacement starts", () => {
+test("bastion keeps both healthy tasks while both SSH replacements start", () => {
   const resources = resourcesOf(synthBastion());
   const service = byType(resources, "AWS::ECS::Service")[0]![1].Properties;
   assert.equal(service.DesiredCount, 2);
   assert.deepEqual({ ...service.DeploymentConfiguration, Alarms: undefined }, {
     Alarms: undefined,
-    // One of two may stop before its replacement places: at 100 a one-per-host pair needs a third
-    // host with room, and the rollout waits until the stack times out when none has it.
-    MinimumHealthyPercent: 50, MaximumPercent: 150,
+    // Both replacements start at once and neither old task stops until a new one answers
+    // ssh-keyscan, so the login node never drops below two.
+    MinimumHealthyPercent: 100, MaximumPercent: 200,
     DeploymentCircuitBreaker: { Enable: true, Rollback: true },
   });
   assert.equal(service.HealthCheckGracePeriodSeconds, 270);
+  // One per host, on a directory-joined host.
+  assert.deepEqual(service.PlacementConstraints, [{ Type: "distinctInstance" }, { Type: "memberOf", Expression: "attribute:idea.directory == joined" }]);
   // Zone spread first, then pack by memory, so the borrowed host can empty and be returned.
   assert.deepEqual(service.PlacementStrategies, [
     { Type: "spread", Field: "attribute:ecs.availability-zone" },
@@ -378,7 +382,75 @@ test("readiness checks use the application endpoints on every role", () => {
   }
 });
 
-test("three resting hosts can borrow a fourth for each service surge", () => {
+test("replicated services surge in full, the scheduler stops first, and targets drain for the stop allowance", () => {
+  const config = ecsConfig();
+  config.setEntry("ecs.cluster_name", `${CLUSTER}-ecs`);
+  config.setEntry("ecs.capacity_provider", `${CLUSTER}-ecs-capacity-provider`);
+  config.setEntry("ecs.cpu_architecture", "ARM64");
+  const app = new App();
+  const stack = new Stack(app, "services", { env: { account: ACCOUNT, region: REGION } });
+  const vpc = new ec2.Vpc(stack, "vpc", { maxAzs: 2, natGateways: 0 });
+  const scope: ContainerScope = {
+    ctx: makeContext({ awsRegion: REGION, config, moduleId: "cluster-manager", releaseVersion: ideaVersion(), synthReads: SYNTH_READS }),
+    stack, vpc, privateSubnets: vpc.isolatedSubnets.length > 0 ? vpc.isolatedSubnets : vpc.publicSubnets,
+  };
+  const service = (id: string, desiredCount: number, singleWriter?: boolean) => {
+    const role = new iam.Role(stack, `${id}-role`, { assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com") });
+    const taskDefinition = buildTaskDefinition(scope, `${id}-task`, { executionRole: buildExecutionRole(scope, `${id}-execution`, `${id}-execution`), taskRole: role });
+    taskDefinition.addContainer(`${id}-container`, { image: ContainerImage.fromRegistry("registry.example.invalid/image:1"), memoryLimitMiB: 512, ...applicationContainerSettings("cluster-manager") });
+    buildEc2Service(scope, { constructId: id, serviceName: id, taskDefinition, desiredCount, securityGroups: [], singleWriter, distinctInstances: singleWriter !== true, dependencies: [] });
+    return taskDefinition;
+  };
+  const pair = service("pair", 2);
+  pair.addVolume({ name: "logs" });
+  addLogTailContainer(scope, pair, {
+    containerId: "pair-logs", directories: ["/logs"], logGroupName: "/pair", logGroupConstructId: "pair-log-group",
+    streamPrefix: "application", sourceVolume: "logs", containerPath: "/logs", readOnly: true,
+  });
+  service("trio", 3);
+  service("writer", 1, true);
+  applicationTargetGroup(scope, { constructId: "default-drain", targetGroupName: "default-drain", port: 8443, healthCheckPath: "/healthcheck" });
+
+  const resources = Template.fromStack(stack).toJSON().Resources as Record<string, Json>;
+  const services = Object.fromEntries(Object.values(resources)
+    .filter((resource) => resource["Type"] === "AWS::ECS::Service")
+    .map((resource) => {
+      const properties = resource["Properties"] as Record<string, any>;
+      return [properties["ServiceName"], properties];
+    }));
+  for (const name of ["pair", "trio"]) {
+    // A disruption budget of zero with a full surge: every replacement starts at once and no old
+    // task stops before a new one is healthy.
+    assert.equal(services[name].DeploymentConfiguration.MinimumHealthyPercent, 100, name);
+    assert.equal(services[name].DeploymentConfiguration.MaximumPercent, 200, name);
+    assert.deepEqual(services[name].DeploymentConfiguration.DeploymentCircuitBreaker, { Enable: true, Rollback: true }, name);
+    // One replica per host, mid-rollout too.
+    assert.deepEqual(services[name].PlacementConstraints, [{ Type: "distinctInstance" }], name);
+    assert.deepEqual(services[name].PlacementStrategies, [
+      { Type: "spread", Field: "attribute:ecs.availability-zone" },
+      { Type: "binpack", Field: "MEMORY" },
+    ], name);
+  }
+  // Two batch servers cannot hold the state directory at once: the old one stops first.
+  assert.equal(services["writer"].DeploymentConfiguration.MinimumHealthyPercent, 0);
+  assert.equal(services["writer"].DeploymentConfiguration.MaximumPercent, 100);
+  assert.deepEqual(services["writer"].PlacementConstraints ?? [], [], "the one batch server is not spread");
+  const group = Object.values(resources).find((resource) => resource["Type"] === "AWS::ElasticLoadBalancingV2::TargetGroup")!;
+  const drain = ((group["Properties"] as Json)["TargetGroupAttributes"] as Array<{Key: string, Value: string}>)
+    .find((entry) => entry.Key === "deregistration_delay.timeout_seconds")?.Value;
+  // The log follower is a bash loop: as PID 1 it ignored SIGTERM and every stop ended in SIGKILL.
+  // Docker's init takes PID 1 and passes the signal to the loop and its tails.
+  const follower = (Object.values(resources).find((resource) => resource["Type"] === "AWS::ECS::TaskDefinition"
+    && JSON.stringify(resource).includes("pair-logs"))!["Properties"] as Json)["ContainerDefinitions"] as Json[];
+  const logs = follower.find((container) => container["Name"] === "pair-logs")!;
+  assert.equal((logs["LinuxParameters"] as Json)["InitProcessEnabled"], true);
+  assert.ok((logs["Environment"] as Json[]).some((entry) => entry["Name"] === "TINI_KILL_PROCESS_GROUP" && entry["Value"] === "1"));
+  // A stopping task drains for as long as its container then gets to stop, not five minutes.
+  assert.equal(drain, "30");
+  assert.equal(applicationContainerSettings("cluster-manager").stopTimeout?.toSeconds(), 30);
+});
+
+test("four resting hosts hold every service's full surge at once, one replica per host", () => {
   const settings = ECS_TASK_SETTINGS as Record<string, number>;
   const roles = ["bastion-host", "cluster-manager", "vdc", "scheduler", "dcv-broker", "dcv-gateway"];
   const tasks = roles.map(role => ({
@@ -387,28 +459,48 @@ test("three resting hosts can borrow a fourth for each service surge", () => {
     desired: settings[`ecs.tasks.${role}.desired`]!,
   }));
   const minimum = ECS_HOST_SETTINGS["ecs.hosts.min"];
-  const maximum = ECS_HOST_SETTINGS["ecs.hosts.max"];
-  assert.equal(minimum, 3);
-  assert.equal(maximum, 4);
-  const usableMemory = 8192 - 512 - 512;
-  const hosts = Array.from({length: minimum}, () => ({memory: 0, cpu: 0, roles: new Set<string>()}));
-  const resting = tasks.flatMap(task => Array.from({length: task.desired}, () => task)).sort((a, b) => b.memory - a.memory);
-  function place(index: number): boolean {
-    const task = resting[index];
-    if (task === undefined) return true;
-    for (const host of hosts) {
-      if (host.roles.has(task.role) || host.memory + task.memory > usableMemory || host.cpu + task.cpu > 2046) continue;
-      host.roles.add(task.role); host.memory += task.memory; host.cpu += task.cpu;
-      if (place(index + 1)) return true;
-      host.roles.delete(task.role); host.memory -= task.memory; host.cpu -= task.cpu;
+  assert.equal(minimum, 4);
+  assert.equal(ECS_HOST_SETTINGS["ecs.hosts.max"], 5);
+  // the configured host type's capacity, less the agent and OS reserve the old fixed numbers kept
+  const capacity: Record<string, {memory: number, cpu: number}> = {
+    "m7g.large": {memory: 8192, cpu: 2048},
+    "m7g.xlarge": {memory: 16384, cpu: 4096},
+    "m7g.2xlarge": {memory: 32768, cpu: 8192},
+  };
+  const host = capacity[ECS_HOST_SETTINGS["ecs.hosts.instance_type"] as string];
+  assert.ok(host, "the default host type has a known capacity");
+  const usableMemory = host.memory - 512 - 512;
+  const usableCpu = host.cpu - 2;
+  type Slot = {role: string, cpu: number, memory: number};
+  // The distinct-instance constraint counts old and new tasks alike: no host may hold two tasks
+  // of one role, resting or mid-rollout.
+  function fits(slots: Slot[], hostCount: number): boolean {
+    const hosts = Array.from({length: hostCount}, () => ({memory: 0, cpu: 0, roles: new Set<string>()}));
+    const ordered = [...slots].sort((a, b) => b.memory - a.memory);
+    function place(index: number): boolean {
+      const task = ordered[index];
+      if (task === undefined) return true;
+      for (const host of hosts) {
+        if (host.roles.has(task.role) || host.memory + task.memory > usableMemory || host.cpu + task.cpu > usableCpu) continue;
+        host.roles.add(task.role); host.memory += task.memory; host.cpu += task.cpu;
+        if (place(index + 1)) return true;
+        host.roles.delete(task.role); host.memory -= task.memory; host.cpu -= task.cpu;
+      }
+      return false;
     }
-    return false;
+    return place(0);
   }
-  assert.ok(place(0), "the resting tasks fit the configured minimum");
-  for (const task of tasks.filter(task => task.role !== "scheduler")) {
-    assert.ok(maximum > minimum, "a surge can borrow a host outside the resting pool");
-    assert.ok(task.memory <= usableMemory && task.cpu <= 2046, task.role);
-  }
+  const resting: Slot[] = tasks.flatMap(task => Array.from({length: task.desired}, () => task));
+  assert.ok(fits(resting, minimum), "the resting tasks fit the configured minimum");
+  // An upgrade deploys the module stacks of one priority together, so every replicated service
+  // surges at once: each starts a full set of replacements beside its old tasks, all on distinct
+  // hosts. The scheduler stops before its replacement starts, so its one task is counted once.
+  // None of this may wait for the spare host: one that launches and joins takes minutes.
+  const surge: Slot[] = tasks.filter(task => task.role !== "scheduler")
+    .flatMap(task => Array.from({length: task.desired}, () => task));
+  assert.ok(fits([...resting, ...surge], minimum), "every surge fits the resting hosts at once");
+  // Three hosts cannot: a two-task service's surge needs four distinct hosts.
+  assert.equal(fits([...resting, ...surge], 3), false, "three hosts hold no full surge");
 });
 
 

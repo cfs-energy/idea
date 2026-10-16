@@ -39,7 +39,7 @@ export const SETTINGS_CARDS: Record<string, string[]> = {
     'ai-access': ['Amazon Bedrock'],
     email: ['Email delivery', 'Notifications', 'Email templates'],
     'sign-in': ['Account synchronization', 'Sign-in', 'Directory connection', 'Directory mapping', 'AD automation'],
-    'cost-collection': ['Collection', 'Storage measurement', 'Cost estimation', 'History backfill'],
+    'cost-collection': ['Collection', 'Storage measurement', 'Compute rate', 'Cost estimation', 'History backfill'],
     network: ['Encryption and access', 'Load balancers and certificates', 'Network and connectivity'],
     storage: ['File systems'], backup: ['Backup policy'], monitoring: ['Analytics', 'Logs', 'Metrics'],
     deployment: ['Installed deployment', 'Resource tags'],
@@ -181,6 +181,7 @@ export function SettingsGroups({cluster = EMPTY_SETTINGS, desktop = EMPTY_SETTIN
                 {label: 'Version', value: service.getModuleInfo('cluster-manager')?.version ?? 'Not available'},
             ]}/>}
             {title === 'Cost header' && <p>Show a cached cost total for the signed-in user in the portal header.</p>}
+            {title === 'Compute rate' && <p>Job and desktop compute is priced at the on-demand list rate. Set what the account pays as a share of it, for example 0.72 under savings plans; cost pages then show the adjusted figure and say so.</p>}
             {title === 'Dashboard link' && <p>The dashboard opens embedded in the portal. Its URL must allow framing by this portal.</p>}
             {title === 'Collection' && <p>Cost Explorer collection requires the commercial AWS partition and the dogstatsd metrics provider. The collection switch applies after restart and does not control all personal-cost sources.</p>}
         </Component>;

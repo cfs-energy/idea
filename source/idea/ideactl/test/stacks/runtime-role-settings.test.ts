@@ -126,3 +126,45 @@ esac`);
     });
   }
 }
+
+// the vendor logback.xml (broker 2024.0.504) logs health checks and agent heartbeats at INFO
+const VENDOR_LOGBACK = `<configuration>
+    <root level="INFO">
+        <appender-ref ref="STDOUT" />
+    </root>
+    <logger name="org.eclipse.jetty" level="INFO"/>
+    <logger name="dcv.sm.ignite" level="INFO" />
+</configuration>
+`;
+for (const [level, root] of [[undefined, "INFO"], ["debug", "DEBUG"], ["bogus", undefined]] as const) {
+  test(`broker log levels: DCV_BROKER_LOG_LEVEL=${level ?? "unset"}`, () => {
+    const work = mkdtempSync(join(tmpdir(), "broker-logback-"));
+    try {
+      const stub = (name: string, body: string) => writeFileSync(join(work, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+      stub("aws", "echo None");
+      for (const name of ["chown", "setpriv"]) stub(name, "exit 0");
+      stub("dcv-session-manager-broker", "echo registered");
+      const logback = join(work, "logback.xml");
+      writeFileSync(logback, VENDOR_LOGBACK);
+      const env = { ...process.env, PATH: `${work}:${process.env.PATH}`,
+        IDEA_CLUSTER_NAME: "sample-cluster", IDEA_MODULE_ID: "vdc", AWS_DEFAULT_REGION: "us-east-2",
+        IDEA_BROKER_DISCOVERY_ADDRESSES: "broker.example.invalid:47500", IDEA_COGNITO_PROVIDER_URL: "https://example.invalid",
+        IDEA_BROKER_CONF_FILE: join(work, "broker.properties"), IDEA_BROKER_LOGBACK_FILE: logback, IDEA_BROKER_REGISTER_INTERVAL: "0.1",
+        ...(level === undefined ? {} : { DCV_BROKER_LOG_LEVEL: level }) };
+      // twice: a restarted task must not stack duplicate loggers
+      const results = [0, 1].map(() => spawnSync("bash", [join(images, "idea-control-plane/roles/broker.sh")], { encoding: "utf8", timeout: 10_000, env }));
+      const text = readFileSync(logback, "utf8");
+      if (root === undefined) {
+        assert.notEqual(results[0]?.status, 0);
+        assert.equal(text, VENDOR_LOGBACK);
+        return;
+      }
+      for (const result of results) assert.equal(result.status, 0, result.stderr);
+      assert.match(text, new RegExp(`<root level="${root}">`));
+      for (const name of ["io.swagger.api.HealthApi", "dcv.sm.filters.LogRequestFilter"]) {
+        assert.equal(text.split(`<logger name="${name}" level="WARN" />`).length, 2, name);
+      }
+      assert.match(text, /<logger name="org.eclipse.jetty" level="INFO"\/>/);
+    } finally { rmSync(work, { recursive: true, force: true }); }
+  });
+}

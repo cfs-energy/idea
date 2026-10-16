@@ -54,6 +54,7 @@ from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_sessio
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_db import (
     VirtualDesktopSessionCounterDB,
 )
+from ideavirtualdesktopcontroller.app.sessions.desktop_launches import DesktopLaunches
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
@@ -347,6 +348,9 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         # Built on first use: the tables the sweep reads are created after this method runs.
         self._bootstrap_session_utils = None
         self._image_pipeline = None
+        self._runs_reconciled = False
+        self._history_backfilled = False
+        self._desktop_launches = None
         self.context.event_queue_monitor_service = EventsQueueMonitoringService(
             context=self.context
         )
@@ -385,6 +389,35 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             except Exception as e:
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Bootstrap failure sweep failed: {" ".join(str(e).splitlines())}'
+                )
+            # desktops already running when run recording began get an open run, once
+            # per process on the leader (retried each minute until it completes); the
+            # cost pages estimate the time before it
+            try:
+                if not self._runs_reconciled and self.context.is_leader():
+                    opened = self._session_db.reconcile_runs()
+                    self._runs_reconciled = True
+                    self.context.logger('virtual-desktop-controller-app').info(
+                        f'opened {opened} desktop runs for desktops already running'
+                    )
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Desktop run reconcile failed: {" ".join(str(e).splitlines())}'
+                )
+            # history rows written before 26.10.6 get their instance id back from
+            # CloudTrail, a slice per minute, once per process on the leader
+            try:
+                if not self._history_backfilled and self.context.is_leader():
+                    if self._desktop_launches is None:
+                        self._desktop_launches = DesktopLaunches(self.context)
+                    if self._session_db.history_db.backfill_instance_ids(
+                        self._desktop_launches, self._session_db.instance_ids
+                    ):
+                        self._history_backfilled = True
+                        self._desktop_launches = None
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Desktop history backfill failed: {" ".join(str(e).splitlines())}'
                 )
             # desktop image pipeline: resume, triggers (release, monthly), start queued
             # rows, cleanup. bakes run in their own threads; this never waits on one

@@ -3,6 +3,7 @@
   "test/stacks/cutover-killers.test.ts": "A Java runtime is optional only in a checkout that declares it has no prerequisites.",
   "test/config/backup-continuity.test.ts": "Captured deployed templates are private and optional.",
   "test/parity/alternate-shapes.test.ts": "Private alternate-shape references are optional.",
+  "test/parity/flatten.test.ts": "Private generated configs and flat.json captures are optional; synthetic flattening tests always run and require PyYAML.",
   "test/cli/installer-params.test.ts": "Captured installer values are private and optional.",
   "test/config/jinja-branch-parity.test.ts": "The Python rendering oracle is optional only in a checkout that declares it has no prerequisites.",
   "test/stacks/retain-stateful.test.ts": "Captured deployed templates are private and optional; with none present there is nothing to itemise.",

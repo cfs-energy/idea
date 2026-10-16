@@ -4,13 +4,15 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { test } from 'node:test';
-import { requireCapture, requiredService } from '../support/fixtures.ts';
+import { before, test } from 'node:test';
+import { optionalFixtures, requiredService } from '../support/fixtures.ts';
 
 const PKG = resolve(import.meta.dirname, '../..');
 const FLATTEN = join(PKG, 'tools/parity/flatten.py');
 const hasYaml = spawnSync('python3', ['-c', 'import yaml'], { encoding: 'utf8' }).status === 0;
-if (!hasYaml) requiredService("python3 with PyYAML", "python3 -m pip install PyYAML");
+before(() => {
+  if (!hasYaml) requiredService("python3 with PyYAML", "python3 -m pip install 'PyYAML==6.0.3'");
+});
 
 function flatten(configDir: string, ...args: string[]): { code: number; flat: unknown; err: string } {
   const r = spawnSync('python3', [FLATTEN, configDir, ...args], { encoding: 'utf8' });
@@ -97,9 +99,7 @@ test('a key with a dot or colon is rejected, and --key-prefix filters', () => {
 // The captured oracles the config generator port is measured against. Cluster names
 // live in the gitignored fixture tree, never in this file.
 const FIXTURES = join(PKG, 'tools/parity/fixtures');
-requireCapture([FIXTURES], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures");
-const clusters = readdirSync(FIXTURES).filter((c) => existsSync(join(FIXTURES, c, 'flat.json'))).sort();
-if (clusters.length === 0) throw new Error(`Required fixture directory has no flat.json oracles: ${FIXTURES}`);
+const hasCaptures = optionalFixtures([FIXTURES], "node tools/parity/capture.ts --from-raw SOURCE --out tools/parity/fixtures");
 
 /**
  * Locate the generated config that produced a captured flat map.
@@ -127,7 +127,11 @@ function expectedFlatKeyCount(flat: Record<string, unknown>): number {
   return flat["shared-storage.data.provider"] === "fsx_netapp_ontap" ? 713 : 722;
 }
 
-test("every captured flat.json exactly matches a regenerated sorted flat map", () => {
+test("every captured flat.json exactly matches a regenerated sorted flat map", {
+  skip: !hasCaptures && "private generated configs and flat.json captures are absent",
+}, () => {
+  const clusters = readdirSync(FIXTURES).filter((c) => existsSync(join(FIXTURES, c, 'flat.json'))).sort();
+  if (clusters.length === 0) throw new Error(`Required fixture directory has no flat.json oracles: ${FIXTURES}`);
   for (const cluster of clusters) {
     const flat: unknown = JSON.parse(readFileSync(join(FIXTURES, cluster, "flat.json"), "utf8"));
     if (!isObject(flat)) throw new Error(`${cluster}: flat.json is not an object`);

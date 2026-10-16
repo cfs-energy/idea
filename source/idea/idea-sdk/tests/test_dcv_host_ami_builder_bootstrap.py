@@ -87,7 +87,9 @@ def test_rocky9_kernel_reboot_selects_the_installed_kernel_once():
     assert rendered.index(retry_check) < rendered.index(
         '# Check if target kernel is already installed'
     )
-    assert rendered.index('grubby --set-default') < rendered.index('      reboot')
+    assert rendered.index('grubby --set-default') < rendered.index(
+        '      reboot_after_cloud_init'
+    )
 
 
 def test_build_post_reboot_installs_dcv_but_never_registers():
@@ -136,7 +138,17 @@ rpm() {
     *) : ;;
   esac
 }
-dnf() { echo "dnf $*" >> "$CALLS"; [[ "$1 $2" != "install -y" || "$*" == *versionlock* ]]; }
+dnf() {
+  echo "dnf $*" >> "$CALLS"
+  while (( $# )); do
+    case "$1" in
+      --setopt=*) shift ;;
+      -o|--setopt) shift 2 ;;
+      *) break ;;
+    esac
+  done
+  [[ "$1 $2" != "install -y" || "$*" == *versionlock* ]]
+}
 aws() { echo "aws $*" >> "$CALLS"; }
 apt-get() { echo "apt-get $*" >> "$CALLS"; }
 apt-mark() {
@@ -201,7 +213,7 @@ update-grub() { echo update-grub >> "$CALLS"; }
 set_reboot_required() { echo "reboot_required $*" >> "$CALLS"; }
 check_reboot_loop() { :; }
 crontab() { :; }
-reboot() { echo reboot >> "$CALLS"; }
+reboot_after_cloud_init() { echo reboot >> "$CALLS"; }
 """
 
 STORAGE_STUBS = r"""
@@ -280,7 +292,9 @@ def run_set_kernel(
             'RUNNING_KERNEL': running_kernel,
             'KERNEL_PACKAGE': kernel_package,
             'NO_LUSTRE_MODULE': '' if lustre_module else '1',
-            'VERSION_CODENAME': 'jammy' if base_os == 'ubuntu2204' else 'noble',
+            'VERSION_CODENAME': {'ubuntu2204': 'jammy', 'ubuntu2604': 'resolute'}.get(
+                base_os, 'noble'
+            ),
             **environment,
         },
         capture_output=True,
@@ -381,7 +395,7 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
         'Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}' in kernel
     )
     assert 'set_reboot_required "Ubuntu kernel version change' in kernel
-    assert '\n      reboot\n' not in kernel
+    assert '\n      reboot_after_cloud_init\n' not in kernel
     assert text.index('apt-mark hold') < text.index('# Begin: Mount Shared Storage')
     assert 'lustre-client-modules-$(uname -r)' not in text
     assert (
@@ -411,18 +425,18 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
     assert 'findmnt -rn -t lustre --mountpoint "/lustre"' in checks
 
 
-# Byte-for-byte kernel renders from 81d856e9; Ubuntu changes must not alter EL behavior.
+# EL kernel snapshots from 81d856e9, updated only to defer reboot until cloud-final exits.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
         (
             'amazonlinux2023',
-            'd95315ace72b9a513b5eb20c47ab9c6f9c72e8caa0ad015867768a79ce22b80a',
+            '36c9f9c95552f62ae279ca039d96f72f74f91d2990e827d384c01c903efcd292',
         ),
-        ('rhel8', 'f7db0745b0302ea6f37efa8b790b2fa92cb97f4408ff573d04341559d53f4471'),
-        ('rocky8', 'f7db0745b0302ea6f37efa8b790b2fa92cb97f4408ff573d04341559d53f4471'),
-        ('rhel9', '4fb6bbfdf1639f3a0a0feac788edefc44626636b9066d92b5beb8dbac803b604'),
-        ('rocky9', '4fb6bbfdf1639f3a0a0feac788edefc44626636b9066d92b5beb8dbac803b604'),
+        ('rhel8', '9d74e3bb04021634acf1796ac5af170a4b9574f028a81b4c3cc291a9b6f2d53f'),
+        ('rocky8', '9d74e3bb04021634acf1796ac5af170a4b9574f028a81b4c3cc291a9b6f2d53f'),
+        ('rhel9', '04c17982890718982d8e4b6a8bc7e1cc87341c36b0999e31951e26d0c66e2b47'),
+        ('rocky9', '04c17982890718982d8e4b6a8bc7e1cc87341c36b0999e31951e26d0c66e2b47'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
@@ -761,3 +775,25 @@ uname() { echo 6.8.0-1057-aws; }
         text=True,
     )
     assert result.returncode == (1 if missing else 0), result.stderr
+
+
+@pytest.mark.parametrize(
+    'base_os', ['rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10']
+)
+def test_el_fsx_lustre_imports_a_key_the_os_accepts_and_logs_a_failed_import(base_os):
+    # rpm-sequoia on EL10 refuses fsx-rpm-public-key.asc (SHA-1 binding signature only);
+    # the el/10 packages are signed by fsx-rpm-public-key-2.asc instead
+    rendered = render('_templates/linux/fsx_lustre_client.jinja2', base_os=base_os)
+    key = 'https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/'
+    if base_os.endswith('10'):
+        assert f'{key}fsx-rpm-public-key-2.asc ' in rendered
+        assert f'{key}fsx-rpm-public-key.asc ' not in rendered
+    else:
+        assert f'{key}fsx-rpm-public-key.asc ' in rendered
+        assert f'{key}fsx-rpm-public-key-2.asc ' not in rendered
+    imports = [line for line in rendered.splitlines() if 'rpm --import' in line]
+    assert imports
+    for line in imports:
+        assert (
+            '|| log_error "Failed to import the FSx for Lustre RPM signing key' in line
+        )

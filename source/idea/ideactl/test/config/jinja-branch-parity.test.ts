@@ -24,12 +24,15 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, it } from "node:test";
+
+import { runOracleProcess } from "../support/oracle-process.ts";
 
 import { jinjaEnv, renderTemplate } from "../../src/config/jinja.ts";
 import { BRANCH_FAMILIES } from "./jinja-branch-context-table.ts";
@@ -342,14 +345,12 @@ function oracleRequest(family: BranchFamily): string {
 }
 
 /** Run the real Python renderer with the python3 on this machine. */
-function runLocalOracle(family: BranchFamily): Map<string, OracleResult> {
+async function runLocalOracle(family: BranchFamily): Promise<Map<string, OracleResult>> {
   const scratch = mkdtempSync(join(tmpdir(), "jinja-branches-"));
   try {
-    const output = execFileSync("python3", [PYTHON_ORACLE], {
-      encoding: "utf8",
+    const output = await runOracleProcess("python3", [PYTHON_ORACLE], {
       env: { ...process.env, JINJA_BRANCH_SCRATCH: scratch },
       input: oracleRequest(family),
-      maxBuffer: 64 * 1024 * 1024,
     });
     return parseOracleResponse(output, family.templates);
   } finally {
@@ -358,7 +359,7 @@ function runLocalOracle(family: BranchFamily): Map<string, OracleResult> {
 }
 
 /** Run the real Python renderer in a transient remote scratch directory. */
-function runRemoteOracle(family: BranchFamily): Map<string, OracleResult> {
+async function runRemoteOracle(family: BranchFamily): Promise<Map<string, OracleResult>> {
   assert.ok(ORACLE_HOST !== undefined && ORACLE_HOST !== "", "JINJA_BRANCH_ORACLE_HOST is required");
   assert.ok(existsSync(ORACLE_IDENTITY), `SSH identity is absent: ${ORACLE_IDENTITY}`);
   const oracleProgram = readFileSync(PYTHON_ORACLE).toString("base64");
@@ -371,7 +372,7 @@ function runRemoteOracle(family: BranchFamily): Map<string, OracleResult> {
     'export JINJA_BRANCH_SCRATCH="$scratch"',
     `python3 -c "$(printf %s '${oracleProgram}' | base64 -d)"`,
   ].join("; ");
-  const output = execFileSync(
+  const output = await runOracleProcess(
     "ssh",
     [
       "-o",
@@ -384,9 +385,7 @@ function runRemoteOracle(family: BranchFamily): Map<string, OracleResult> {
       `bash -lc ${shellQuote(command)}`,
     ],
     {
-      encoding: "utf8",
       input: oracleRequest(family),
-      maxBuffer: 64 * 1024 * 1024,
     },
   );
   return parseOracleResponse(output, family.templates);
@@ -395,7 +394,7 @@ function runRemoteOracle(family: BranchFamily): Map<string, OracleResult> {
 /** Whether the python3 on PATH can import Jinja2, which is all the oracle program needs. */
 function localOracleAvailable(): boolean {
   try {
-    execFileSync("python3", ["-c", "import jinja2"], { stdio: "ignore" });
+    execFileSync("python3", ["-c", "import jinja2"], { stdio: "ignore", timeout: 10_000, killSignal: "SIGKILL" });
     return true;
   } catch {
     return false;
@@ -436,7 +435,13 @@ function recordDigests(family: BranchFamily, results: Map<string, OracleResult>)
   }
   table[family.name] = row;
   const ordered = Object.fromEntries(Object.keys(table).sort().map((key) => [key, table[key]]));
-  writeFileSync(DIGESTS, `${JSON.stringify(ordered, null, 2)}\n`);
+  const temporary = `${DIGESTS}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(ordered, null, 2)}\n`);
+    renameSync(temporary, DIGESTS);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 // While the digests are being rewritten from Python output there is nothing to compare against.
@@ -474,12 +479,11 @@ describe("every branch family matches the recorded Python digests", { skip: reco
   });
 });
 
-describe("bootstrap branches match the Python renderer", () => {
+describe("bootstrap branches match the Python renderer", { concurrency: false }, () => {
   for (const family of BRANCH_FAMILIES) {
-    it(`${family.name} matches the Python renderer`, { skip: !oracleReachable }, () => {
+    it(`${family.name} matches the Python renderer`, { skip: !oracleReachable }, async () => {
       const environment = jinjaEnv(sourceDirectory(family));
-      const expected = runOracle(family);
-      if (recording) recordDigests(family, expected);
+      const expected = await runOracle(family);
       const differences: string[] = [];
       for (const name of family.templates) {
         const result = expected.get(name);
@@ -499,6 +503,7 @@ describe("bootstrap branches match the Python renderer", () => {
       }
       console.log(`jinja branches ${family.name}: rendered ${family.templates.length}; differences ${differences.length}`);
       assert.deepEqual(differences, []);
+      if (recording) recordDigests(family, expected);
     });
   }
 });

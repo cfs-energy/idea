@@ -533,7 +533,8 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--force-build-bootstrap` | no | none | no |
 | `--rollback` | no | `true` | no |
 | `--no-rollback` | no | none | no |
-| `--optimize-deployment` | no | none | no |
+| `--optimize-deployment` | no | `true` | no |
+| `--no-optimize-deployment` | no | none | no |
 | `--module-set <module-set>` | yes | `"default"` | no |
 | `--force` | no | none | no |
 | `--accept-config-drift` | no | none | no |
@@ -544,6 +545,8 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--drain` | no | none | no |
 | `--drain-timeout-minutes <minutes>` | yes | 240 minutes (effective) | no |
 | `--skip-drain-check` | no | none | no |
+
+Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. `--no-optimize-deployment` deploys one stack at a time.
 
 Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move.
 

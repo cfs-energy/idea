@@ -4,7 +4,8 @@ inputs:
   version:
     description: Hadolint version to install
     required: false
-    default: "2.12.0"
+    # renovate: datasource=github-releases depName=hadolint/hadolint
+    default: "2.15.1"
 runs:
   using: composite
   steps:
@@ -17,7 +18,7 @@ runs:
         shopt -s nullglob globstar
 
         CI=${GITHUB_ACTIONS:-}
-        VERSION=${{ inputs.version }}
+        VERSION="$HADOLINT_VERSION"
         EXTRACT_VERSION_CMD="hadolint --version | sed 's/-no-git//' | cut -d ' ' -f 4"
 
         [[ -z ${CI} ]] && echo "Will only run in Github Actions" && exit 1
@@ -39,8 +40,8 @@ runs:
         # Download hadolint if necessary
         if [ "${DOWNLOAD}" == "true" ]; then
           echo "::debug::Downloading Hadolint ${VERSION}"
-          curl -s -L --fail -w 1 -o /tmp/hadolint \
-            "https://github.com/hadolint/hadolint/releases/download/v${VERSION}/hadolint-Linux-x86_64" ||
+          curl --silent --show-error --location --fail --retry 3 -o /tmp/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/v${VERSION}/hadolint-linux-x86_64" ||
             (echo "::error::Hadolint (version: ${VERSION}) could not be found. Exiting." && exit 1)
           chmod +x /tmp/hadolint
           # https://github.com/actions/runner-images/issues/3727
@@ -51,5 +52,8 @@ runs:
         fi
 
         new_version=$(eval "${EXTRACT_VERSION_CMD}" 2>&1)
+        test "$new_version" = "$VERSION"
         echo "::debug::Hadolint ${new_version} installed successfully"
       shell: bash
+      env:
+        HADOLINT_VERSION: ${{ inputs.version }}

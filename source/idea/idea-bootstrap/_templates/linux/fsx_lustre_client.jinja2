@@ -2,9 +2,66 @@
 
 # Kernel management is handled separately by set_kernel.jinja2.
 
+# Hosts that mount Lustre (in scope here, job scratch, image bakes) cannot work without it.
+# Every other host installs the client only because the cluster has Lustre: it logs and goes on.
+LUSTRE_REQUIRED=no
+{% if lustre_required | default(false) or compute_image_bake | default(false) %}
+LUSTRE_REQUIRED=yes
+{% endif %}
+{% for name, storage in context.config.get_config('shared-storage').items() %}
+{% if storage['provider'] in ('fsx_lustre', 'fsx_cache') and context.eval_shared_storage_scope(shared_storage=storage) %}
+LUSTRE_REQUIRED=yes
+{% endif %}
+{% endfor %}
+
+# A reboot cannot install a package or add a module that does not exist: a host that needs
+# Lustre stops with the reason instead of rebooting until check_reboot_loop gives up.
+function fail_lustre_client () {
+  local reason="${1}"
+  local message="${2} Lustre filesystems cannot be mounted on this node (reason code: ${1})."
+  log_error "${message}"
+  [[ "${LUSTRE_REQUIRED}" == yes ]] || return 0
+  echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+  # desktops: set_kernel tags idea:BootstrapStatus so the controller releases the host
+  ! declare -F fail_kernel_bootstrap >/dev/null || fail_kernel_bootstrap "${reason}" "${message}"
+{% if compute_image_bake | default(false) %}
+  # compute bakes have no ERR trap: record the reason and tag the builder failed now
+  echo "lustre: ${message}" >> /var/lib/idea/bake-failed
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh"
+  exit 1
+{% else %}
+  # as for EFA: a compute node that exits here never joins, and the scheduler holds its job
+  exit_fail "Aborting bootstrap, this node will not join the cluster."
+{% endif %}
+}
+
+# EL: only a successful install reboots, so the client module loads
+function lustre_client_installed () {
+  if [[ "${1}" -eq 0 ]]; then
+    set_reboot_required "FSx for Lustre client installed"
+  else
+    fail_lustre_client lustre-client-install-failed "Unable to install the FSx for Lustre client for kernel $(uname -r)."
+  fi
+}
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+
+# No client build for the running kernel. Reboot only if the default boot kernel differs
+# (the kernel update above just installed one); otherwise no reboot can change the answer.
+function lustre_kernel_unsupported () {
+  local default_kernel
+  default_kernel=$(grubby --default-kernel 2>/dev/null)
+  if [[ -n "${default_kernel}" && "${default_kernel}" != "/boot/vmlinuz-$(uname -r)" ]]; then
+    log_info "Booting ${default_kernel##*/vmlinuz-} to retry the FSx for Lustre client install"
+    set_reboot_required "Kernel installed for FSx for Lustre client"
+  else
+    fail_lustre_client lustre-module-missing "${1}"
+  fi
+}
+{% endif %}
+
 {% if context.base_os == 'amazonlinux2023' %}
 if [[ -z "$(rpm -qa lustre-client)" ]]; then
-  package_transaction dnf install -y lustre-client
+  package_transaction dnf install -y lustre-client || fail_lustre_client lustre-client-install-failed "Unable to install the FSx for Lustre client for kernel $(uname -r)."
 fi
 {% endif %}
 {% if context.base_os in ('rhel8', 'rocky8') %}
@@ -28,69 +85,60 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
   log_info "Found kernel version: $kernel running on: $machine"
   if [[ $kernel == *"4.18.0-477"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.8#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-425"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.7#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-372"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.6#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-348"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.5#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-305"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.4#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-240"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.3#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-193"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.2#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-513"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.9#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"4.18.0-553"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      rpm --import /tmp/fsx-rpm-public-key.asc
+      rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/8/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sed -i 's#8#8.10#' /etc/yum.repos.d/aws-fsx.repo
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     else
-      log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 4.18.0-193, -240, -305, -348, -372, -425, -477, -513, -553)!"
+      lustre_kernel_unsupported "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 4.18.0-193, -240, -305, -348, -372, -425, -477, -513, -553)!"
     fi
 fi
 {% endif %}
@@ -98,7 +146,10 @@ fi
 {# The FSx for Lustre repo publishes el/10 (=10.2) and el/10.1 for x86_64 and aarch64
    (lustre client 2.15.6). EL 10.0 (kernel 6.12.0-55*) has no client build. The el/10
    .repo file sets gpgcheck=1 but carries no gpgkey= line, so the explicit rpm --import
-   below is required even though the AWS install doc omits it. Note: EL10 clients cannot
+   below is required even though the AWS install doc omits it. The el/10 and el/10.1 packages
+   are signed by "Simba RPM Signing Key 2" (E2162C13D7C7B2CE, fsx-rpm-public-key-2.asc); the
+   original fsx-rpm-public-key.asc (6D68E4B6C3FAD391) that el/8 and el/9 still use has only a
+   SHA-1 binding signature, which rpm-sequoia on EL10 refuses to import. Note: EL10 clients cannot
    mount Lustre 2.10/2.12 filesystems - new scratch filesystems default to 2.15, but an
    imported pre-2.15 filesystem will not mount from these nodes. #}
 if [[ -z "$(rpm -qa lustre-client)" ]]; then
@@ -106,18 +157,17 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
   machine=$(uname -m)
   log_info "Found kernel version: $kernel running on: $machine"
   if [[ $kernel == 6.12.0-211* || $kernel == 6.12.0-124* ]]; then
-    curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-    sudo rpm --import /tmp/fsx-rpm-public-key.asc
+    curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key-2.asc -o /tmp/fsx-rpm-public-key-2.asc
+    sudo rpm --import /tmp/fsx-rpm-public-key-2.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
     sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/10/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
     if [[ $kernel == 6.12.0-124* ]]; then
       # 6.12.0-124* is the EL 10.1 kernel series; el/10 targets 10.2 (6.12.0-211*)
       sudo sed -i 's#10#10.1#' /etc/yum.repos.d/aws-fsx.repo
     fi
     sudo yum clean all
-    package_transaction yum install -y kmod-lustre-client lustre-client
-    set_reboot_required "FSx for Lustre client installed"
+    package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
   else
-    log_error "Can't install FSx for Lustre client: kernel version $kernel does not match a supported series (6.12.0-211* for EL 10.2, 6.12.0-124* for EL 10.1). EL 10.0 has no FSx Lustre client - use a 10.1 or 10.2 AMI."
+    lustre_kernel_unsupported "Can't install FSx for Lustre client: kernel version $kernel does not match a supported series (6.12.0-211* for EL 10.2, 6.12.0-124* for EL 10.1). EL 10.0 has no FSx Lustre client - use a 10.1 or 10.2 AMI."
   fi
 fi
 {% endif %}
@@ -141,74 +191,63 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
     log_info "Found kernel version: $kernel running on: $machine"
     if [[ $kernel == *"5.14.0-427"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.4#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-362"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.3#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-70"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.0#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-503"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.5#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-570"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.6#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-611"*$machine ]]; then
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.7#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-687"*$machine ]]; then
       # EL 9.8 kernel series; ami_update.py's de-staled RHEL-9.*/Rocky-9.* patterns
       # resolve to 9.8 AMIs once published, so this arm must exist before they do
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
-      sudo rpm --import /tmp/fsx-rpm-public-key.asc
+      sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo
       sudo sed -i 's#9#9.8#' /etc/yum.repos.d/aws-fsx.repo
       sudo yum clean all
-      package_transaction yum install -y kmod-lustre-client lustre-client
-      set_reboot_required "FSx for Lustre client installed"
+      package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     else
-      log_error "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-70, -362, -427, -503, -570, -611, -687)!"
+      lustre_kernel_unsupported "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-70, -362, -427, -503, -570, -611, -687)!"
     fi
 fi
 {% endif %}
-{% if context.base_os == 'ubuntu2604' %}
-{# The FSx for Lustre ubuntu repo publishes no 'resolute' suite and no lustre-client-modules
-   for the 7.0.0-*-aws ABI, so adding ubuntu2604 below would write a permanently 404ing apt
-   source. Re-add it only once that suite carries modules for the resolute linux-aws ABI. #}
-log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx client repo publishes no 'resolute' suite and no modules for the 7.0 kernel. Lustre filesystems will NOT be mounted on this node."
-{% endif %}
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{# ubuntu2604: the FSx repo's 'resolute' suite carries modules for one 7.0.0-*-aws ABI at a time;
+   bakes pick that kernel in set_kernel.jinja2 and unbaked hosts need their image to boot it #}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 {% if ubuntu_desktop_bake | default(false) %}
   if [[ "${BAKE_STAGE}" == setup ]]; then
     # setup selected the ABI before this include; the builder owns the reboot.
@@ -230,12 +269,12 @@ log_error "FSx for Lustre client is not available for Ubuntu 26.04: the FSx clie
     else
       # no top-level `return`: this template is included at script scope, where
       # bash rejects `return` with an error and continues anyway
-      log_error "Failed to install FSx Lustre client - dpkg may be interrupted. Lustre filesystems will NOT be mounted on this node."
+      fail_lustre_client lustre-client-install-failed "Unable to install the FSx for Lustre client for kernel $(uname -r) - dpkg may be interrupted."
     fi
   elif modinfo -n lustre >/dev/null 2>&1; then
     log_info "Lustre Client Already Installed"
   else
-    log_error "FSx for Lustre client is installed but has no module for kernel $(uname -r). Lustre filesystems will NOT be mounted on this node."
+    fail_lustre_client lustre-module-missing "FSx for Lustre client is installed but has no module for kernel $(uname -r)."
   fi
 {% endif %}
 {% endif %}

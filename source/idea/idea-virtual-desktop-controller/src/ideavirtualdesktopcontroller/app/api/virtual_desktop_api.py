@@ -753,6 +753,16 @@ class VirtualDesktopAPI(BaseAPI):
             session.failure_reason = f'Instance type: {session.server.instance_type} with GPU {gpu_manufacturer} does not support Virtual Sessions'
             return session, False
 
+        # DCV runs these on Wayland, which has virtual sessions only
+        if (
+            session.type is VirtualDesktopSessionType.CONSOLE
+            and session.software_stack.base_os in constants.WAYLAND_DESKTOP_BASEOS
+        ):
+            session.failure_reason = (
+                f'{session.software_stack.base_os} does not support Console Sessions'
+            )
+            return session, False
+
         architecture = self.controller_utils.get_architecture(
             session.server.instance_type
         )

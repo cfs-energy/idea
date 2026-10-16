@@ -25,12 +25,22 @@ from ideadatamodel import (
 import arrow
 import pytest
 
+from ideaclustermanager.app.costs import my_costs_service
+
 USER = 'user-a'
 OTHER_USER = 'user-b'
 PROJECT_ID = 'a1b2c3d4-0000-4000-8000-000000000001'
 PROJECT_NAME = 'project-a'
 MODEL_A = 'vendor-a.model-1'
 MODEL_B = 'vendor-b.model-9'
+
+
+@pytest.fixture(autouse=True)
+def empty_running_hours_cache():
+    # the CloudWatch hours are cached for the process; no test may see another's
+    getattr(my_costs_service, '_cpu_hours_cache', {}).clear()
+    yield
+    getattr(my_costs_service, '_cpu_hours_cache', {}).clear()
 
 
 @pytest.fixture(autouse=True)
@@ -201,22 +211,37 @@ class FakeDynamoDB:
 
 
 class FakeAws:
-    def __init__(self, rows):
+    def __init__(self, rows, cloudwatch=None):
         self._rows = rows
+        self._cloudwatch = cloudwatch
 
     def dynamodb_table(self):
         return FakeDynamoDB(self._rows)
 
+    def cloudwatch(self):
+        # unwired, as on a cluster manager role without cloudwatch:GetMetricData
+        if self._cloudwatch is None:
+            raise RuntimeError('AccessDenied')
+        return self._cloudwatch
+
 
 class FakeContext:
     def __init__(
-        self, projects, config, analytics_service, aws_util, history_rows=None
+        self,
+        projects,
+        config,
+        analytics_service,
+        aws_util,
+        history_rows=None,
+        cloudwatch=None,
     ):
         self.projects = projects
         self._config = config
         self._analytics_service = analytics_service
         self._aws_util = aws_util
-        self._aws = FakeAws(history_rows if history_rows is not None else [])
+        self._aws = FakeAws(
+            history_rows if history_rows is not None else [], cloudwatch=cloudwatch
+        )
 
     def aws(self):
         return self._aws
@@ -258,6 +283,7 @@ def build_service(
     config_values=None,
     scheduler_enabled=True,
     history_rows=None,
+    cloudwatch=None,
 ):
     usage_dao = usage_dao if usage_dao is not None else FakeUsageDAO()
     projects = projects if projects is not None else [build_project()]
@@ -275,6 +301,7 @@ def build_service(
         analytics_service=FakeAnalyticsService(os_client),
         aws_util=FakeAwsUtil(prices or {}),
         history_rows=history_rows,
+        cloudwatch=cloudwatch,
     )
     return MyCostsService(context), os_client
 
@@ -929,7 +956,8 @@ def test_desktop_bills_to_the_recorded_stop_time_not_the_last_write():
 
     # one day of running, not the twenty four days of sitting stopped
     assert session.hours == pytest.approx(24.0, abs=0.1)
-    assert session.stop_time_estimated is None
+    # no recorded runs: the one interval is an estimate now, and says so
+    assert session.stop_time_estimated is True
     assert session.cost == pytest.approx(2.4, abs=0.05)
 
 
@@ -953,7 +981,8 @@ def test_live_desktop_still_bills_to_now():
 
     # a running desktop has no stop time and must not be cut short by one
     assert session.hours == pytest.approx(3.0, abs=0.01)
-    assert session.stop_time_estimated is None
+    # no recorded runs: the one interval is an estimate now, and says so
+    assert session.stop_time_estimated is True
 
 
 def test_legacy_desktop_falls_back_to_the_last_write_and_says_so():
@@ -1048,7 +1077,8 @@ def test_terminated_desktop_inside_the_window_is_billed_to_its_stop_time():
     assert desktops.session_count == 1
     assert session.hours == pytest.approx(24.0, abs=0.1)
     assert session.cost == pytest.approx(2.4, abs=0.05)
-    assert session.stop_time_estimated is None
+    # no recorded runs: the one interval is an estimate now, and says so
+    assert session.stop_time_estimated is True
     # the controller's word is DELETED; what a cost reader wants is Terminated
     assert session.state == 'Terminated'
 
@@ -1176,7 +1206,7 @@ def test_a_session_indexed_under_two_generations_is_counted_once():
     assert desktops.session_count == 1
     # the newer document wins, so the recorded stop time is the one that counts
     assert desktops.sessions[0].hours == pytest.approx(2.0, abs=0.01)
-    assert desktops.sessions[0].stop_time_estimated is None
+    assert desktops.sessions[0].stop_time_estimated is True
 
 
 # terminated desktops kept as history
@@ -1224,7 +1254,8 @@ def test_a_terminated_desktop_is_costed_from_its_history_record():
     assert session.state == 'Terminated'
     assert session.hours == pytest.approx(2.0, abs=0.01)
     assert session.cost == pytest.approx(0.2, abs=0.01)
-    assert session.stop_time_estimated is None
+    # no recorded runs: the one interval is an estimate now, and says so
+    assert session.stop_time_estimated is True
 
 
 def test_an_estimated_history_stop_is_reported_as_estimated():
@@ -1395,7 +1426,7 @@ def test_cleanup_warning_live_cost_matches_controller_history(real_stop_hours):
         **dict(hit['_source'], owner=USER, project=None, hibernation_enabled=False)
     )
     session.cleanup_warning_stop_time = real_stop
-    session.server = SimpleNamespace(instance_type='m5.large')
+    session.server = SimpleNamespace(instance_type='m5.large', instance_id='i-0abc')
     history = module.VirtualDesktopSessionHistoryDB(None, logger=object())
     history.get_retention_days = lambda: 400
     row = history.build_entry(session, deleted_on=deleted)
@@ -1407,3 +1438,545 @@ def test_cleanup_warning_live_cost_matches_controller_history(real_stop_hours):
     assert live.hours == saved.hours == min(real_stop_hours or 72, 72)
     assert live.cost == saved.cost
     assert live.stop_time_estimated == saved.stop_time_estimated
+
+
+# recorded runs
+
+
+def run_row(session_id, owner, started_on, stopped_on=None, reconciled=False):
+    row = {
+        'owner': owner,
+        'idea_session_id': f'{session_id}#run#{started_on}',
+        'run_of': session_id,
+        'instance_id': 'i-0abc',
+        'instance_type': 'm5.large',
+        'started_on': started_on,
+    }
+    if stopped_on is not None:
+        row['stopped_on'] = stopped_on
+    if reconciled:
+        row['reconciled'] = True
+    return row
+
+
+def live_hit(session_id, state, created, updated, instance_id=None, **kwargs):
+    hit = session_hit(session_id, state, 'm5.large', created, updated, **kwargs)
+    if instance_id is not None:
+        hit['_source']['server']['instance_id'] = instance_id
+    return hit
+
+
+def ms(moment):
+    return moment.int_timestamp * 1000
+
+
+def summary_session(hits, history_rows, cloudwatch=None):
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': hits}}},
+        prices={'m5.large': 0.1},
+        history_rows=history_rows,
+        cloudwatch=cloudwatch,
+    )
+    sessions = service.get_summary(USER).desktops.sessions
+    return sessions[0] if sessions else None
+
+
+def test_a_desktop_with_two_runs_in_the_window_bills_only_the_run_time():
+    now = arrow.utcnow()
+    created = now.shift(days=-10)
+    first = created.shift(seconds=1)
+    second = now.shift(days=-2)
+    session = summary_session(
+        [
+            live_hit(
+                'sess-1',
+                'STOPPED',
+                ms(created),
+                ms(second.shift(hours=3)),
+                stopped_on=ms(second.shift(hours=3)),
+            )
+        ],
+        [
+            run_row('sess-1', USER, ms(first), ms(first.shift(hours=2))),
+            run_row('sess-1', USER, ms(second), ms(second.shift(hours=3))),
+        ],
+    )
+
+    # five hours of running, not eight days from creation to the last stop
+    assert session.hours == pytest.approx(5.0, abs=0.01)
+    assert session.cost == pytest.approx(0.5, abs=0.01)
+    assert session.stop_time_estimated is None
+
+
+def test_a_live_desktop_bills_its_open_run_to_now():
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    started = now.shift(hours=-1)
+    session = summary_session(
+        [live_hit('sess-1', 'READY', ms(created), ms(started))],
+        [
+            run_row('sess-1', USER, ms(created), ms(created.shift(hours=2))),
+            run_row('sess-1', USER, ms(started)),
+        ],
+    )
+
+    # started an hour ago after sitting stopped: three hours, not twenty days
+    assert session.hours == pytest.approx(3.0, abs=0.01)
+    assert session.stop_time_estimated is None
+
+
+def test_a_desktop_stopped_all_window_bills_nothing():
+    now = arrow.utcnow()
+    created = now.shift(days=-60)
+    # renamed two days ago; the row was written before stops were stamped
+    session = summary_session(
+        [live_hit('sess-1', 'STOPPED', ms(created), ms(now.shift(days=-2)))],
+        [run_row('sess-1', USER, ms(created), ms(created.shift(days=1)))],
+    )
+
+    assert session is None
+
+
+class FakeCloudWatch:
+    def __init__(self, hours=None, raises=None):
+        self.hours = hours or {}
+        self.raises = raises
+        self.calls = []
+
+    def get_metric_data(self, **request):
+        self.calls.append(request)
+        if self.raises is not None:
+            raise self.raises
+        results = []
+        for query in request['MetricDataQueries']:
+            stat = query['MetricStat']
+            assert stat['Metric']['MetricName'] == 'CPUUtilization'
+            assert stat['Period'] == 3600 and stat['Stat'] == 'SampleCount'
+            instance_id = stat['Metric']['Dimensions'][0]['Value']
+            stamps = self.hours.get(instance_id, [])
+            results.append(
+                {
+                    'Id': query['Id'],
+                    'Timestamps': [stamp.datetime for stamp in stamps],
+                    'Values': [12.0 for _ in stamps],
+                }
+            )
+        return {'MetricDataResults': results}
+
+
+def test_a_desktop_from_before_runs_were_recorded_is_estimated_from_cloudwatch():
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    ran = now.shift(days=-5).floor('hour')
+    cloudwatch = FakeCloudWatch(
+        hours={
+            'i-0abc': [ran.shift(hours=n) for n in range(4)],
+            'i-0def': [ran.shift(hours=1)],
+        }
+    )
+    service, _ = build_service(
+        os_responses={
+            'user_sessions': {
+                'hits': {
+                    'hits': [
+                        live_hit('sess-1', 'READY', ms(created), ms(created), 'i-0abc'),
+                        live_hit('sess-2', 'READY', ms(created), ms(created), 'i-0def'),
+                    ]
+                }
+            }
+        },
+        prices={'m5.large': 0.1},
+        cloudwatch=cloudwatch,
+    )
+    sessions = {
+        s.idea_session_id: s for s in service.get_summary(USER).desktops.sessions
+    }
+
+    # the hours CloudWatch saw the instance report, not twenty days, and said to be estimated
+    assert sessions['sess-1'].hours == pytest.approx(4.0, abs=0.01)
+    assert sessions['sess-1'].stop_time_estimated is True
+    assert sessions['sess-2'].hours == pytest.approx(1.0, abs=0.01)
+    # one batched read for both desktops
+    assert len(cloudwatch.calls) == 1
+    assert len(cloudwatch.calls[0]['MetricDataQueries']) == 2
+
+    # cached: a second page does not read CloudWatch again
+    service.get_summary(USER)
+    assert len(cloudwatch.calls) == 1
+
+
+def test_an_unreadable_cloudwatch_falls_back_to_the_whole_interval_and_says_so():
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    session = summary_session(
+        [live_hit('sess-1', 'READY', ms(created), ms(created), 'i-0abc')],
+        [],
+        cloudwatch=FakeCloudWatch(raises=RuntimeError('AccessDenied')),
+    )
+
+    assert session.hours == pytest.approx(20 * 24, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_only_the_time_before_the_first_run_is_estimated():
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    started = now.shift(days=-2)
+    ran = now.shift(days=-10).floor('hour')
+    session = summary_session(
+        [live_hit('sess-1', 'READY', ms(created), ms(started), 'i-0abc')],
+        [run_row('sess-1', USER, ms(started))],
+        cloudwatch=FakeCloudWatch(hours={'i-0abc': [ran, ran.shift(hours=1)]}),
+    )
+
+    # two hours seen before the upgrade plus the two days running since
+    assert session.hours == pytest.approx(2 + 48, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_the_admin_listing_bills_the_recorded_runs():
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    started = now.shift(hours=-2)
+    service, _ = build_service(
+        os_responses={
+            'user_sessions': {
+                'hits': {
+                    'hits': [
+                        {
+                            '_source': dict(
+                                live_hit('sess-1', 'READY', ms(created), ms(started))[
+                                    '_source'
+                                ],
+                                owner=OTHER_USER,
+                            )
+                        }
+                    ]
+                }
+            },
+            '_scheduler_jobs': {
+                'hits': {'total': {'value': 0}, 'hits': []},
+                'aggregations': {'by_user': {'buckets': []}},
+            },
+        },
+        prices={'m5.large': 0.1},
+        history_rows=[
+            run_row('sess-1', OTHER_USER, ms(created), ms(created.shift(hours=1))),
+            run_row('sess-1', OTHER_USER, ms(started)),
+        ],
+    )
+    rows = {row.username: row for row in service.list_user_costs().listing}
+
+    assert rows[OTHER_USER].desktop_hours == pytest.approx(3.0, abs=0.01)
+
+
+def test_the_time_before_a_reconciled_run_is_still_estimated():
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    first = now.shift(days=-15)
+    # the controller found the desktop running with no open run an hour ago
+    reconciled = now.shift(hours=-1)
+    ran = now.shift(days=-5).floor('hour')
+    session = summary_session(
+        [live_hit('sess-1', 'READY', ms(created), ms(reconciled), 'i-0abc')],
+        [
+            run_row('sess-1', USER, ms(created.shift(seconds=1)), ms(first)),
+            run_row('sess-1', USER, ms(reconciled), reconciled=True),
+        ],
+        cloudwatch=FakeCloudWatch(hours={'i-0abc': [ran, ran.shift(hours=1)]}),
+    )
+
+    # five days of the first run, the two hours CloudWatch saw in the unrecorded gap,
+    # and the hour since the reconciliation; not the fifteen days of the gap
+    assert session.hours == pytest.approx(5 * 24 + 2 + 1, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_two_runs_closed_together_bill_their_union_not_their_sum():
+    now = arrow.utcnow()
+    created = now.shift(days=-3)
+    first = created.shift(seconds=1)
+    # running, to ERROR, back to READY: a second run opens while the first is still
+    # open, and the stop closes both at once
+    second = first.shift(hours=2)
+    stop = first.shift(hours=5)
+    session = summary_session(
+        [live_hit('sess-1', 'STOPPED', ms(created), ms(stop), stopped_on=ms(stop))],
+        [
+            run_row('sess-1', USER, ms(first), ms(stop)),
+            run_row('sess-1', USER, ms(second), ms(stop)),
+        ],
+    )
+
+    assert session.hours == pytest.approx(5.0, abs=0.01)
+
+
+def test_a_report_past_its_deadline_reads_no_cloudwatch_and_flags_the_fallback():
+    import time
+
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    cloudwatch = FakeCloudWatch(hours={'i-0abc': [now.shift(days=-5).floor('hour')]})
+    service, _ = build_service(prices={'m5.large': 0.1}, cloudwatch=cloudwatch)
+    source = live_hit('sess-1', 'READY', ms(created), ms(created), 'i-0abc')['_source']
+
+    service._prefetch_running_hours(
+        [source], {}, ms(created), ms(now), deadline=time.monotonic() - 1
+    )
+    session = service._desktop_session(source, ms(created), ms(now))
+
+    assert cloudwatch.calls == []
+    assert session.hours == pytest.approx(20 * 24, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_time_older_than_cloudwatch_retention_is_unknown_not_idle():
+    now = arrow.utcnow()
+    created = now.shift(days=-500)
+    ran = now.shift(days=-5).floor('hour')
+    service, _ = build_service(
+        prices={'m5.large': 0.1},
+        cloudwatch=FakeCloudWatch(hours={'i-0abc': [ran]}),
+    )
+    source = live_hit('sess-1', 'READY', ms(created), ms(created), 'i-0abc')['_source']
+    start = ms(now.shift(days=-460))
+    service._prefetch_running_hours([source], {}, start, ms(now))
+    session = service._desktop_session(source, start, ms(now))
+
+    # the five days CloudWatch no longer holds count whole, flagged; the rest is
+    # the one hour it saw
+    assert session.hours == pytest.approx(5 * 24 + 1, abs=0.05)
+    assert session.stop_time_estimated is True
+
+
+# window on cluster time zone days
+
+
+def jobs_range(os_client):
+    index, body = next(
+        (index, body) for index, body in os_client.queries if '_scheduler_jobs' in index
+    )
+    return body['query']['bool']['filter'][0]['range']['end_time']
+
+
+def test_listing_window_starts_at_local_midnight_in_the_cluster_time_zone(monkeypatch):
+    """
+    10 pm on 12 october in new york is already 13 october in utc. reporting draws days in
+    the cluster time zone, so the listing's 30 days are 13 september..12 october, from new
+    york midnight, not the utc days 14 september..13 october.
+    """
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get('2026-10-13T02:00:00Z'))
+    service, os_client = build_service(
+        config_values={
+            'cluster.timezone': 'America/New_York',
+            'virtual-desktop-controller.opensearch.dcv_session.alias': 'idea-test_vdc_user_sessions',
+        },
+    )
+
+    result = service.list_user_costs()
+
+    assert result.start_date == '2026-09-13'
+    assert result.end_date == '2026-10-12'
+    window = jobs_range(os_client)
+    assert arrow.get(window['gte']) == arrow.get('2026-09-13T04:00:00Z')
+    assert arrow.get(window['lte']) == arrow.get('2026-10-13T02:00:00Z')
+
+
+def test_summary_window_uses_the_cluster_time_zone_too(monkeypatch):
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get('2026-10-13T02:00:00Z'))
+    service, _ = build_service(
+        config_values={'cluster.timezone': 'America/New_York'},
+    )
+
+    result = service.get_summary(USER)
+
+    assert (result.start_date, result.end_date) == ('2026-09-13', '2026-10-12')
+
+
+def test_bedrock_usage_window_stays_on_utc_days(monkeypatch):
+    """the bedrock day rows are keyed by utc date; the time zone change leaves them alone"""
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get('2026-10-13T02:00:00Z'))
+    assert usage_window_dates() == ('2026-09-14', '2026-10-13')
+
+
+# effective compute rate
+
+
+class RateConfig(FakeConfig):
+    def get(self, key, default=None, required=False, module_id=None):
+        return self.values.get(key, default)
+
+
+def priced_session_service(multiplier):
+    now = arrow.utcnow()
+    created = now.shift(hours=-4).int_timestamp * 1000
+    updated = now.shift(hours=-2).int_timestamp * 1000
+    values = {
+        'virtual-desktop-controller.opensearch.dcv_session.alias': 'idea-test_vdc_user_sessions',
+    }
+    if multiplier is not None:
+        values['cluster.costs.compute_rate_multiplier'] = multiplier
+    service, _ = build_service(
+        os_responses={
+            'user_sessions': {
+                'hits': {
+                    'hits': [
+                        {
+                            '_source': dict(
+                                session_hit(
+                                    'sess-1', 'STOPPED', 'm5.large', created, updated
+                                )['_source'],
+                                owner=USER,
+                            )
+                        }
+                    ]
+                }
+            }
+        },
+        prices={'m5.large': 0.1},
+    )
+    service.context._config = RateConfig(values)
+    return service
+
+
+@pytest.mark.parametrize(
+    'multiplier,expected',
+    [
+        (None, 0.2),  # unset: list rate
+        (1.0, 0.2),
+        (0.72, 0.144),
+        ('0.72', 0.144),
+        (0, 0.2),  # invalid values are ignored, not applied
+        (-1, 0.2),
+        (1.6, 0.2),
+        ('cheap', 0.2),
+    ],
+)
+def test_desktop_hours_are_priced_at_the_effective_compute_rate(multiplier, expected):
+    session = priced_session_service(multiplier).get_summary(USER).desktops.sessions[0]
+    assert session.cost == pytest.approx(expected, abs=0.002)
+
+
+def test_the_listing_applies_the_rate_once():
+    service = priced_session_service(0.5)
+    rows = {row.username: row for row in service.list_user_costs().listing}
+    # 2 hours x 0.1 x 0.5, not x 0.25
+    assert rows[USER].desktop_cost == pytest.approx(0.1, abs=0.002)
+
+
+# desktops deleted before runs were recorded
+
+
+def test_a_backfilled_deleted_desktop_bills_what_cloudwatch_saw():
+    now = arrow.utcnow()
+    created = now.shift(days=-25)
+    deleted = now.shift(days=-9)
+    ran = now.shift(days=-20).floor('hour')
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['instance_id'] = 'i-0abc'
+    session = summary_session(
+        [],
+        [row],
+        cloudwatch=FakeCloudWatch(hours={'i-0abc': [ran, ran.shift(hours=1)]}),
+    )
+
+    # two hours, not the sixteen days from creation to deletion
+    assert session.hours == pytest.approx(2.0, abs=0.01)
+    assert session.stop_time_estimated is True
+
+
+def test_a_deleted_desktop_with_unknown_usage_is_counted_not_priced():
+    now = arrow.utcnow()
+    created = now.shift(days=-25)
+    deleted = now.shift(days=-9)
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['instance_unknown'] = True
+    service, _ = build_service(
+        os_responses={'user_sessions': {'hits': {'hits': []}}},
+        prices={'m5.large': 0.1},
+        history_rows=[row],
+    )
+    desktops = service.get_summary(USER).desktops
+
+    assert desktops.session_count == 1
+    assert desktops.cost == 0.0
+    assert desktops.hours == 0.0
+    assert desktops.unpriced_sessions == 1
+    assert desktops.usage_unknown_sessions == 1
+    assert desktops.sessions[0].usage_unknown is True
+    assert desktops.sessions[0].cost is None
+
+
+def test_an_unknown_desktop_deleted_before_the_window_is_left_out():
+    now = arrow.utcnow()
+    created = now.shift(days=-80)
+    deleted = now.shift(days=-60)
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['instance_unknown'] = True
+    assert summary_session([], [row]) is None
+
+
+def test_a_desktop_deleted_before_it_had_an_instance_never_ran():
+    now = arrow.utcnow()
+    created = now.shift(days=-3)
+    deleted = now.shift(days=-2)
+    row = history_row('sess-1', USER, ms(created), ms(deleted), ms(deleted))
+    row['never_ran'] = True
+    # the provisioning run the controller opened at creation is not billed either
+    session = summary_session(
+        [], [row, run_row('sess-1', USER, ms(created), ms(deleted))]
+    )
+    assert session is None
+
+
+@pytest.mark.parametrize('timeout', [False, True])
+def test_admin_prefetch_is_batched_across_owners_with_one_deadline(
+    monkeypatch, timeout
+):
+    from unittest.mock import Mock
+    from ideadatamodel import UserCosts
+
+    now = arrow.utcnow()
+    created = now.shift(days=-20)
+    hits = []
+    for index, owner in enumerate((USER, OTHER_USER)):
+        hit = live_hit(f'sess-{index}', 'READY', ms(created), ms(created), f'i-{index}')
+        hit['_source']['owner'] = owner
+        hits.append(hit)
+    cloudwatch = FakeCloudWatch()
+    service, _ = build_service(prices={'m5.large': 0.1}, cloudwatch=cloudwatch)
+    service._desktop_hits = lambda *args, **kwargs: hits
+    service._history_hits = lambda *args, **kwargs: []
+    clock = [100.0]
+    monkeypatch.setattr(my_costs_service.time, 'monotonic', lambda: clock[0])
+    read = cloudwatch.get_metric_data
+
+    def page(**request):
+        result = read(**request)
+        if len(cloudwatch.calls) > 1:
+            raise RuntimeError('unexpected read after deadline')
+        if timeout:
+            clock[0] += 6
+            result['NextToken'] = 'more'
+        return result
+
+    cloudwatch.get_metric_data = page
+    prefetch = Mock(wraps=service._prefetch_running_hours)
+    service._prefetch_running_hours = prefetch
+    rows = {
+        owner: UserCosts(
+            username=owner,
+            desktop_session_count=0,
+            desktop_hours=0.0,
+            desktop_cost=0.0,
+            desktop_unpriced_sessions=0,
+        )
+        for owner in (USER, OTHER_USER)
+    }
+    assert service._desktops_by_user(rows.__getitem__, ms(created), ms(now)) is False
+    assert prefetch.call_count == 1
+    assert prefetch.call_args.args[-1] == 105.0
+    assert len(cloudwatch.calls) == 1
+    assert len(cloudwatch.calls[0]['MetricDataQueries']) == 2
+    if timeout:
+        assert all(row.desktop_hours == pytest.approx(480) for row in rows.values())

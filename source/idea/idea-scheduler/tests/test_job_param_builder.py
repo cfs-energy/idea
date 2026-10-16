@@ -49,6 +49,7 @@ def build_and_validate(
     queue_profile: Optional[HpcQueueProfile] = None,
     stack_uuid: str = None,
     job_id: Optional[str] = None,
+    queue_name: Optional[str] = None,
 ) -> BuildAndValidateResult:
     print()
 
@@ -58,6 +59,7 @@ def build_and_validate(
         queue_profile=queue_profile,
         stack_uuid=stack_uuid,
         job_id=job_id,
+        queue_name=queue_name,
     )
 
     validation_result = builder.validate()
@@ -2928,3 +2930,111 @@ def test_compute_image_canary_defaults_pass_queue_profile_validation(context):
     params.instance_types = ['c5.large']  # the mock region's small x86_64 size
     result = SocaJobBuilder(context=context, params=Utils.to_dict(params)).validate()
     assert result.results == [], [e.message for e in result.results]
+
+
+@pytest.mark.parametrize(
+    'allowed,excluded,requested,rules',
+    [
+        (
+            ['c5.large', 'c5.xlarge', 'm5'],
+            [],
+            't3.micro',
+            'Allowed instance types: c5 (large, xlarge); m5 (all sizes).',
+        ),
+        (
+            ['c5'],
+            ['c5.xlarge'],
+            'c5.xlarge',
+            'Allowed instance types: c5 (all sizes). Excluded: c5 (xlarge).',
+        ),
+        (
+            [],
+            ['t3'],
+            't3.micro',
+            'Allowed instance types: all types. Excluded: t3 (all sizes).',
+        ),
+        (
+            ['c5.large'],
+            ['t3'],
+            't3.micro',
+            'Allowed instance types: c5 (large). Excluded: t3 (all sizes).',
+        ),
+    ],
+)
+def test_instance_type_refusal_explains_queue_rules(
+    context, allowed, excluded, requested, rules
+):
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': requested},
+        queue_profile=HpcQueueProfile(
+            name='compute-profile',
+            queues=['normal'],
+            queue_management_params=SocaQueueManagementParams(
+                allowed_instance_types=allowed,
+                excluded_instance_types=excluded,
+            ),
+        ),
+    )
+    assert not result.success
+    assert get_validation_messages(result)[0] == (
+        f'Instance types not allowed for queue "normal": [{requested}]. {rules}'
+    )
+
+
+def test_instance_type_refusal_names_actual_queue_not_profile(context):
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro'},
+        queue_name='high',
+        queue_profile=HpcQueueProfile(
+            name='compute-profile',
+            queues=['normal', 'high'],
+            queue_management_params=SocaQueueManagementParams(
+                allowed_instance_types=['c5']
+            ),
+        ),
+    )
+    assert get_validation_messages(result)[0] == (
+        'Instance types not allowed for queue "high": [t3.micro]. '
+        'Allowed instance types: c5 (all sizes).'
+    )
+
+
+def test_unknown_instance_type_includes_queue_rules(context):
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 'not-an-instance.medium'},
+        queue_name='normal',
+        queue_profile=HpcQueueProfile(
+            name='compute-profile',
+            queues=['normal'],
+            queue_management_params=SocaQueueManagementParams(
+                allowed_instance_types=['c5']
+            ),
+        ),
+    )
+    assert get_validation_messages(result)[0] == (
+        'Instance types invalid or not found: [not-an-instance.medium]. '
+        'Queue "normal". Allowed instance types: c5 (all sizes).'
+    )
+
+
+def test_instance_type_refusal_reaches_qsub_hook(context, monkeypatch):
+    from test_job_project_default import _hook, _projects, _use_queue, _validate_hook
+
+    _use_queue(context, monkeypatch, _projects('project-a'))
+    profile = context.queue_profiles.get_queue_profile.return_value
+    profile.name = 'compute-profile'
+    profile.queues = ['normal', 'high']
+    profile.queue_management_params = SocaQueueManagementParams(
+        allowed_instance_types=['c5.large', 'c5.xlarge'],
+    )
+    hook = _hook(context, project='project-a')
+    hook.event.job.queue = 'high'
+    result = _validate_hook(context, monkeypatch, hook)
+    assert result.accept is False
+    assert (
+        'Instance types not allowed for queue "high": [t3.micro]. '
+        'Allowed instance types: c5 (large, xlarge).'
+    ) in result.formatted_user_message

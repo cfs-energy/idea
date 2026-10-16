@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,68 @@ from test_bootstrap_shell_syntax import Config, DESKTOP_BASE_OS, IDEA_BOOTSTRAP_
 
 LINUX = [os for os in DESKTOP_BASE_OS if not os.startswith('windows')]
 WINDOWS = [os for os in DESKTOP_BASE_OS if os.startswith('windows')]
+
+MUTTER_SYMBOLS = [
+    'org.gnome.Mutter.RemoteDesktop',
+    'org.gnome.Mutter.RemoteDesktop.Session',
+    'CreateSession',
+    'NotifyPointerMotionRelative',
+]
+
+
+@pytest.mark.parametrize('base_os', ['rhel10', 'rocky10', 'ubuntu2604'])
+@pytest.mark.parametrize('missing', [None, 'library', *MUTTER_SYMBOLS])
+def test_mutter_contract_is_advisory_and_publishes(tmp_path, base_os, missing):
+    library = tmp_path / 'libmutter-18.so.0'
+    if missing != 'library':
+        # Synthetic binary data; omit the longer interface too when its prefix is missing.
+        library.write_bytes(
+            b'\x00'.join(
+                s.encode()
+                for s in MUTTER_SYMBOLS
+                if missing is None or missing not in s
+            )
+        )
+    script = render('dcv-host-ami-builder/image_checks.sh.jinja2', base_os)
+    assert 'check --warning mutter-lock ' in script
+    script = script.replace('source /etc/environment', ':')
+    script = script.replace('/var/lib/idea', str(tmp_path))
+    script = script.replace('/usr/lib64/libmutter-*.so.*', str(library))
+    script = script.replace('/usr/lib/*/libmutter-*.so.*', str(library))
+    script = script.replace(
+        'BAKE_PYTHON=$(command -v python3 || command -v /usr/libexec/platform-python)',
+        f'BAKE_PYTHON={sys.executable}',
+    )
+    # Exercise the actual reporter and publish path; all unrelated checks are out of scope.
+    script = re.sub(r'^check (?!--warning mutter-lock).*$', ':', script, flags=re.M)
+    script = (
+        'aws() { echo "stub aws $*"; }\nrpm() { echo "mutter 48.2-test"; }\ndpkg-query() { echo "mutter-common 48.2-test"; }\n'
+        + script
+    )
+    path = tmp_path / 'checks.sh'
+    path.write_text(script)
+    (tmp_path / 'baked-release').write_text('test-release')
+    env = {**os.environ, 'IDEA_MODULE_VERSION': 'test-release'}
+    result = subprocess.run(
+        ['bash', str(path)], env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    checks = json.loads((tmp_path / 'image-checks.json').read_text())['checks']
+    assert len(checks) == 1
+    check = checks[0]
+    assert check['name'] == 'mutter-lock' and check['ok'] is True
+    assert check['level'] == ('warning' if missing else 'pass')
+    if missing:
+        assert 'WARNING' in result.stdout and '48.2-test' in check['detail']
+        for symbol in MUTTER_SYMBOLS if missing == 'library' else [missing]:
+            assert symbol in check['detail']
+    published = subprocess.run(
+        ['bash', str(path), '--publish'], env=env, capture_output=True, text=True
+    )
+    assert published.returncode == 0, published.stderr
+    assert 'Value=complete' in published.stdout
+    if missing:
+        assert 'WARNING' in published.stdout
 
 
 def render(
@@ -159,7 +222,10 @@ rpm() {
   [[ "$FAIL" != dcv || "$*" != *nice-dcv-server* ]] &&
   [[ "$FAIL" != ssm || "$*" != *amazon-ssm-agent* ]]
 }
-systemctl() { [[ "$*" != *LoadState* ]] || echo loaded; }
+systemctl() {
+  [[ "$*" != *LoadState* ]] || echo loaded
+  [[ "$FAIL" != dcv-launcher || "$*" != 'is-active --quiet dcvsessionlauncher.service' ]]
+}
 modprobe() { [[ "$FAIL" != lustre ]]; }
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
 # like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
@@ -259,7 +325,17 @@ def run_checks(
 
 @pytest.mark.parametrize(
     'failed',
-    ['bootstrap', 'kernel', 'lustre', 'dcv', 'directory', 'scheduler', 'ssm', 'gpu'],
+    [
+        'bootstrap',
+        'kernel',
+        'lustre',
+        'dcv',
+        'dcv-launcher',
+        'directory',
+        'scheduler',
+        'ssm',
+        'gpu',
+    ],
 )
 def test_failed_check_writes_json_and_never_tags_complete(tmp_path, failed):
     result, report, calls = run_checks(tmp_path, failed)
@@ -750,6 +826,46 @@ def test_templates_tolerate_the_builder_environment():
     assert 'foreach ($Attempt in 1..5)' in windows
 
 
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', LINUX)
+def test_scrub_removes_bake_crash_reports(tmp_path, builder, base_os):
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    paths = ['/var/crash', '/var/spool/abrt', '/var/lib/systemd/coredump']
+    block = '\n'.join(
+        line
+        for line in scrub.splitlines()
+        if line.startswith('rm ') and any(path in line for path in paths)
+    )
+    for path in paths:
+        block = block.replace(path, str(tmp_path / path.lstrip('/')))
+    # Missing optional spools must not fail a set -e scrub.
+    subprocess.run(['bash', '-ec', block], check=True)
+    crash = tmp_path / 'var/crash'
+    crash.mkdir(parents=True)
+    keep = crash / 'unrelated.txt'
+    keep.write_text('keep')
+    if base_os.startswith('ubuntu'):
+        reports = [
+            crash / f'_usr_bin_cloud-init.0.{ext}'
+            for ext in ('crash', 'upload', 'uploaded')
+        ]
+        for report in reports:
+            report.write_text('bake crash')
+    else:
+        abrt = tmp_path / 'var/spool/abrt/ccpp-bake'
+        abrt.mkdir(parents=True)
+        (abrt / 'reason').write_text('bake crash')
+        core = tmp_path / 'var/lib/systemd/coredump/core.bake.zst'
+        core.parent.mkdir(parents=True)
+        core.write_text('bake core')
+        reports = [abrt, core]
+    subprocess.run(['bash', '-ec', block], check=True)
+    assert all(not report.exists() for report in reports)
+    assert keep.read_text() == 'keep'
+    # Cleanup stays repeatable once the reports have gone.
+    subprocess.run(['bash', '-ec', block], check=True)
+
+
 @pytest.mark.parametrize('has_dbus_dir', [False, True])
 def test_scrub_machine_id_works_with_and_without_var_lib_dbus(tmp_path, has_dbus_dir):
     """dbus-broker images (EL9 and later, AL2023) have no /var/lib/dbus"""
@@ -1001,7 +1117,13 @@ def test_ubuntu_host_refreshes_apt_only_without_a_current_baked_release(
         '/usr/share/keyrings/', f'{tmp_path}/'
     )
     result = subprocess.run(
-        ['bash', '-c', stubs + block],
+        [
+            'bash',
+            '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
+            + stubs
+            + block,
+        ],
         env={**os.environ, 'IDEA_MODULE_VERSION': 'current'},
         capture_output=True,
         text=True,
@@ -1117,8 +1239,8 @@ def test_the_compute_bake_drops_slow_rocky_mirrors_before_its_first_install(base
     # the compute builder installs ~930 MB from the public mirrorlist; on one ~130 kB/s
     # mirror it missed its hour. it gets the same mirror settings as the hosts
     setup = render('compute-node-ami-builder/setup.sh.jinja2', base_os, config=Config())
-    assert 'minrate=512k' in setup
-    assert setup.index('minrate=512k') < setup.index('epel')
+    assert 'minrate=64k' in setup
+    assert setup.index('minrate=64k') < setup.index('epel')
 
 
 @pytest.mark.parametrize('base_os', WINDOWS)
@@ -1380,3 +1502,15 @@ def test_dcv_missing_config_and_docs_are_optional(tmp_path, monkeypatch, marker,
     dcv = next(check for check in report['checks'] if check['name'] == 'dcv')
     assert dcv['ok'] is ok, dcv['detail']
     assert result.returncode == (0 if ok else 1)
+
+
+@pytest.mark.parametrize(
+    'base_os,unit',
+    [('rocky10', 'firewalld'), ('rhel10', 'firewalld'), ('ubuntu2604', 'ufw')],
+)
+def test_host_firewall_is_masked_before_it_is_installed(base_os, unit):
+    # fail2ban-firewalld installs and enables firewalld after this step runs on EL10, which
+    # blocked DCV on 8443; masking a unit that is not installed yet still keeps it from starting
+    script = render('_templates/linux/disable_firewall.jinja2', base_os=base_os)
+    assert f'systemctl mask {unit}' in script
+    assert 'LoadState' not in script

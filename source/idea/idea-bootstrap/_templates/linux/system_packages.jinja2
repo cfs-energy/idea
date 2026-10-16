@@ -94,7 +94,7 @@ EXCLUDE=()
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   {# compute-node-ami-builder reaches this include with the index baked into the AMI, which can be
      too old for the running kernel headers; the other deb node types run universe.jinja2 first #}
-  apt update || log_warning "apt update failed, installing system packages from the existing index"
+  apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
   DEBIAN_FRONTEND=noninteractive apt install -yq $DEFAULT_PACKAGES_FOR_DEB
 {% endif %}
 # End: System Packages Install

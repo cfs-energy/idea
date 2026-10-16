@@ -61,13 +61,18 @@ it('coaches memory only with both values and low use', () => {
     expect(jobHint({...exampleJob, used_cores: null, requested_memory_gib: null, instance_memory_gib: 4})).toBeNull();
 });
 it('leads with money and hides coaching without efficiency data', () => {
-    const jobs = {...insightsFixture().jobs, cost: '3.46', wasted_cost: '2.23'};
+    const jobs = {...insightsFixture().jobs, count: 2, cost: '3.46', wasted_cost: '2.23'};
     const {rerender} = render(<Coaching jobs={jobs} currency="USD" personal/>);
     expect(screen.getByText("About $2.23 of the $3.46 estimated for your jobs that finished in this period paid for unused cores.")).toBeInTheDocument();
     rerender(<Coaching jobs={jobs} currency="USD"/>);
     expect(screen.getByText('About $2.23 of the $3.46 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
     rerender(<Coaching jobs={{...jobs, jobs_with_efficiency: 0}} currency="USD"/>);
     expect(screen.queryByText(/About/)).toBeNull();
+});
+it('compares unused-core spend with the jobs that were measured', () => {
+    const jobs = {...insightsFixture().jobs, count: 2, jobs_with_efficiency: 1, cost: '2.96', efficiency_cost: '0.48', wasted_cost: '0.48', wasted_core_hours: 0.03};
+    render(<Coaching jobs={jobs} currency="USD" personal/>);
+    expect(screen.getByText('About $0.48 of the $0.48 estimated for your jobs with CPU measurements that finished in this period paid for unused cores.')).toBeInTheDocument();
 });
 it('uses a heading for the tile label and ordinary text for its value', () => {
     render(<MetricTile title="Job spend" value="$3.46" info="Costs for this period."/>);
@@ -123,11 +128,16 @@ it('compares peak memory with total instance memory across nodes', () => {
 });
 it.each([
     [70, 'Well sized', 'Well sized', 'Close to requested'],
-    [40, 'Some cores sat idle', 'Some memory unused', 'Finished well early'],
-    [0, 'Most cores sat idle', 'Most memory unused', 'Finished far earlier than requested']
+    [40, 'Some cores sat idle', 'Some memory unused', 'Finished early'],
+    [0, 'Most cores sat idle', 'Most memory unused', 'Finished well under requested']
 ])('uses metric-specific efficiency labels at %s percent', (value, cpu, memory, walltime) => {
     render(<EfficiencyTiles jobs={{...insightsFixture().jobs, cpu_efficiency_pct: Number(value), memory_efficiency_pct: Number(value), walltime_efficiency_pct: Number(value)}} currency="USD"/>);
     for (const label of [cpu, memory, walltime]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+});
+it('says cost follows elapsed time, not the requested time', async () => {
+    render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
+    await userEvent.click(screen.getByRole('button', {name: 'About Walltime efficiency'}));
+    expect(screen.getByText(/Cost follows the time a job actually ran, not the time requested\. A closer time limit helps the scheduler and stops stuck jobs sooner\./)).toBeInTheDocument();
 });
 it('defines unused cost against requested cores', async () => {
     render(<EfficiencyTiles jobs={insightsFixture().jobs} currency="USD"/>);
@@ -152,7 +162,7 @@ it('labels memory and walltime overruns separately', () => {
 it('distinguishes stored desktop costs from session hours', async () => {
     render(<InsightTab tab="desktops" insights={insightsFixture()} timezone="UTC"/>);
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop spend'}));
-    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period.')).toBeInTheDocument();
+    expect(screen.getByText('Recorded desktop costs from stored daily costs for this period. On-demand compute is priced at list rates.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', {name: 'About Desktop hours'}));
     expect(screen.getByText('Estimated desktop hours from sessions overlapping this period.')).toBeInTheDocument();
 });
@@ -203,4 +213,21 @@ it('personal job spend shows no on-demand comparison, even from a snapshot that 
     render(<InsightTab tab="overview" insights={{...insightsFixture(), jobs: {...insightsFixture().jobs, savings: '200.00'}}} timezone="UTC" personal/>);
     expect(screen.getByRole('heading', {name: /Job spend/})).toBeInTheDocument();
     expect(screen.queryByText(/less than on-demand/)).toBeNull();
+});
+
+it.each(['jobs', 'desktops'])('labels %s compute as on-demand, and says when it is adjusted', tab => {
+    const {rerender} = render(<InsightTab tab={tab} insights={insightsFixture()} timezone="UTC"/>);
+    expect(screen.getByText('On-demand compute is priced at list rates.')).toBeInTheDocument();
+    rerender(<InsightTab tab={tab} insights={insightsFixture()} timezone="UTC" computeRate={0.72}/>);
+    expect(screen.getByText(/^On-demand compute is priced at list rates, adjusted \(×0\.72\)\./)).toBeInTheDocument();
+    expect(screen.queryByText('On-demand compute is priced at list rates.')).toBeNull();
+});
+it('says what storage cost leaves out', () => {
+    render(<InsightTab tab="storage" insights={insightsFixture()} timezone="UTC"/>);
+    expect(screen.getByText('FSx backups and Lustre scratch are not included in storage cost.')).toBeInTheDocument();
+});
+
+it('says adjusted job costs keep the rate in force when each job finished', () => {
+    render(<InsightTab tab="jobs" insights={insightsFixture()} timezone="UTC" computeRate={0.72}/>);
+    expect(screen.getByText('On-demand compute is priced at list rates, adjusted (×0.72). Each job keeps the rate in force when it finished, so jobs from before a rate change use the earlier rate.')).toBeInTheDocument();
 });

@@ -7,7 +7,7 @@
     if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
       (crontab -l 2>/dev/null || true; echo "@reboot /bin/bash ${SCRIPT_DIR}/setup.sh crontab >> ${BOOTSTRAP_DIR}/logs/userdata_post_reboot.log 2>&1") | crontab -
       check_reboot_loop "FSx storage mount reboot"
-      reboot
+      reboot_after_cloud_init
       exit 0
     fi
     {% endif %}

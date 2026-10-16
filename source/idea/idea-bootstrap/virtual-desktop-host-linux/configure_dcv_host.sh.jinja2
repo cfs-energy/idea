@@ -44,15 +44,15 @@ IDEA_SESSION_ID="{{ context.vars.idea_session_id }}"
 IDEA_SESSION_OWNER="{{ context.vars.session_owner }}"
 
 function install_microphone_redirect() {
-  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
-  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+  {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
   if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
   {% endif %}
     echo "Installing microphone redirect..."
-    {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+    {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
     package_transaction yum install -y pulseaudio-utils
-    {% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+    {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
     apt install -y pulseaudio-utils
     {% endif %}
   else
@@ -65,8 +65,11 @@ function install_usb_support() {
   # and dcvserver loads it (ExecStartPre modprobe); rebuilding it through DKMS cost ~90 s
   if ! modinfo eveusb >/dev/null 2>&1; then
     echo "Installing usb support..."
-    DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
-    $DCV_USB_DRIVER_INSTALLER --quiet
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+    install_matching_kernel_devel || { log_warning "Matching kernel-devel unavailable; skipping optional USB redirection."; return 0; }
+{% endif %}
+    DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller) || { log_warning "USB driver installer unavailable; skipping optional USB redirection."; return 0; }
+    "$DCV_USB_DRIVER_INSTALLER" --quiet || { log_warning "USB driver installation failed; skipping optional USB redirection."; return 0; }
   else
     log_info "Found eveusb kernel module installed... skipping installation..."
   fi
@@ -189,7 +192,7 @@ function restart_x_server() {
 }
 
 function configure_gl() {
-  {% if context.base_os == 'amazonlinux2023' %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel10', 'rocky10', 'ubuntu2604') %}
     echo "OS is {{ context.base_os }}, no need for this configuration. NO-OP..."
   {% elif context.is_gpu_instance_type() %}
     if [[ $machine == "x86_64" ]]; then
@@ -224,6 +227,8 @@ function start_and_validate_x_server() {
 function start_and_configure_dcv_service() {
   echo "# start dcv server ..."
   sudo systemctl enable dcvserver
+  # DCV 2026.0 owns its runtime directories and sandbox; only older releases need this unit.
+  if ! systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
   echo """
 #  This file is part of systemd.
 #  AGENT
@@ -251,12 +256,17 @@ Group=dcv
 [Install]
 WantedBy=multi-user.target
 """ > /usr/lib/systemd/system/dcvserver.service
+  fi
 
   # Because we have modified the .service file we need to tell systemctl to reload and recreate the dependency tree again.
   # This is necessary because we are introducing a dependency on network.targets.
   # Refer - https://serverfault.com/questions/700862/do-systemd-unit-files-have-to-be-reloaded-when-modified
   sudo systemctl daemon-reload
   sudo systemctl restart dcvserver
+  if systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
+    sudo systemctl start dcvsessionlauncher.service || exit 1
+    sudo systemctl is-active --quiet dcvsessionlauncher.service || exit 1
+  fi
 }
 
 function start_and_configure_dcv_agent_service() {
@@ -414,7 +424,7 @@ systemctl restart NetworkManager
 {# 22.04: NetworkManager now owns the interface, so networkd-wait-online waits its full
    120 s on every later boot (the reboot below included); NetworkManager-wait-online still
    gates network-online.target. #}
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 systemctl disable systemd-networkd-wait-online.service
 {% endif %}
 
@@ -425,7 +435,7 @@ REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/configure_dcv_host_post_reboot.sh crontab") | crontab -
   check_reboot_loop "Reboot after DCV host configuration"
-  reboot
+  reboot_after_cloud_init
   exit 0
 else
   /bin/bash ${SCRIPT_DIR}/configure_dcv_host_post_reboot.sh

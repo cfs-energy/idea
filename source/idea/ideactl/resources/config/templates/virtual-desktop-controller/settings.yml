@@ -302,7 +302,7 @@ software_stacks:
     day: first sunday # <first|second|third|fourth|last> <weekday>
     hour: 2
   image_pipeline:
-    max_concurrent_bakes: 4
+    max_concurrent_bakes: 32
     keep_generations: 2 # current + previous validated; older managed images are removed
     # seconds from request acceptance to READY for a test launch; slower fails the bake
     ready_gate_seconds_linux: 600

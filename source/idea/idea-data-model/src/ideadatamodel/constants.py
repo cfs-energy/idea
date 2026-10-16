@@ -280,8 +280,8 @@ OS_ROCKY9 = 'rocky9'
 OS_ROCKY10 = 'rocky10'
 OS_UBUNTU2204 = 'ubuntu2204'
 OS_UBUNTU2404 = 'ubuntu2404'
-# OS_UBUNTU2604 is deliberately absent from the os allowlists: DCV, the FSx Lustre client and
-# the pinned EFA installer publish nothing for it yet. enabling it means adding AMIs too.
+# OS_UBUNTU2604 is a desktop OS only: it stays out of ALLOWED_BASEOS (compute) because the
+# pinned EFA installer publishes nothing for it and no compute AMIs are shipped.
 OS_UBUNTU2604 = 'ubuntu2604'
 OS_WINDOWS = 'windows'
 OS_WINDOWS2019 = 'windows2019'
@@ -301,6 +301,7 @@ SUPPORTED_OS = (
     OS_ROCKY10,
     OS_UBUNTU2204,
     OS_UBUNTU2404,
+    OS_UBUNTU2604,
 )
 SUPPORTED_LINUX_OS = (
     OS_AMAZONLINUX2023,
@@ -312,6 +313,7 @@ SUPPORTED_LINUX_OS = (
     OS_ROCKY10,
     OS_UBUNTU2204,
     OS_UBUNTU2404,
+    OS_UBUNTU2604,
 )
 
 # EOL base_os values mapped to their replacement. existing clusters may still reference these;
@@ -319,6 +321,14 @@ SUPPORTED_LINUX_OS = (
 EOL_BASEOS = {
     OS_AMAZONLINUX2: OS_AMAZONLINUX2023,
 }
+
+# desktop OSes whose DCV server runs on Wayland: virtual sessions only (no console sessions,
+# no Xdcv, no DCV GL). DCV 2026.0 introduced them.
+WAYLAND_DESKTOP_BASEOS = (
+    OS_RHEL10,
+    OS_ROCKY10,
+    OS_UBUNTU2604,
+)
 
 # Processor architectures. these are the EC2 spellings, as reported by
 # DescribeImages.Architecture and DescribeInstanceTypes.ProcessorInfo.SupportedArchitectures.

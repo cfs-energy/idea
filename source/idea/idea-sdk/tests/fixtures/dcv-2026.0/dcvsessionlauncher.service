@@ -1,0 +1,51 @@
+[Unit]
+Description=Amazon DCV session launcher daemon
+BindsTo=dcvserver.service
+IgnoreOnIsolate=yes
+
+[Service]
+ExecStart=/usr/bin/dcvsessionlauncher -d
+BusName=com.nicesoftware.DcvSessionLauncher
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateMounts=yes
+ReadWritePaths=/var/log/dcv /run/dcv
+# Used by SetupVirtualSmartcard/DeleteVirtualSmartcard
+ReadWritePaths=-/var/lib/softhsm
+# Used by EnforceSystemPasswordAuthentication/EnforceSystemSmartCardAuthentication
+ReadWritePaths=-/etc/sssd -/etc/krb5.conf -/etc/dconf -/etc/authselect -/etc/pam.d -/etc/nsswitch.conf -/usr/share/pam-configs
+
+# Log files must be world-readable
+UMask=0022
+
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+
+PrivateDevices=yes
+
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+ProtectProc=invisible
+ProcSubset=pid
+
+# CAP_SYS_PTRACE: GetProcessInfo reads /proc/<pid>/exe across SELinux domains
+# CAP_DAC_OVERRIDE: smartcard/EUC scripts write to files owned by other users
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_OVERRIDE
+
+SystemCallFilter=~@clock @cpu-emulation @debug @module @mount @obsolete @raw-io @reboot @resources @swap
+SystemCallErrorNumber=EPERM

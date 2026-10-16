@@ -1455,6 +1455,25 @@ class SocaQueueManagementParams(SocaBaseModel):
     allowed_security_groups: Optional[List[str]] = Field(default=None)
     allowed_instance_profiles: Optional[List[str]] = Field(default=None)
 
+    def instance_type_rules(self) -> str:
+        """Describe the policy without expanding families into the EC2 catalog."""
+
+        def compact(instance_types):
+            families = {}
+            for instance_type in instance_types or []:
+                family, _, size = instance_type.partition('.')
+                families.setdefault(family, set()).add(size)
+            return '; '.join(
+                f'{family} ({"all sizes" if "" in sizes else ", ".join(sorted(sizes))})'
+                for family, sizes in sorted(families.items())
+            )
+
+        allowed = compact(self.allowed_instance_types) or 'all types'
+        message = f'Allowed instance types: {allowed}.'
+        if self.excluded_instance_types:
+            message += f' Excluded: {compact(self.excluded_instance_types)}.'
+        return message
+
     def is_allowed_security_group(self, security_group: str) -> bool:
         if (
             self.allowed_security_groups is None

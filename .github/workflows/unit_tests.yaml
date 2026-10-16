@@ -10,24 +10,27 @@ on:
       - 'docs/**'
   workflow_dispatch:
 jobs:
-  test:
+  suites:
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [sdk, cluster-manager, scheduler, virtual-desktop-controller, web-portal]
     runs-on: ubuntu-large
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Setup Development Environment
         uses: ./.github/actions/setup_dev_environment
-      - name: SDK Tests
-        run: |
-          invoke tests.sdk
-      - name: Cluster Manager Tests
-        run: |
-          invoke tests.cluster-manager
-      - name: Scheduler Tests
-        run: |
-          invoke tests.scheduler
-      - name: Virtual Desktop Controller Tests
-        run: |
-          invoke tests.virtual-desktop-controller
-      - name: Web Portal Tests
-        run: |
-          invoke tests.web-portal
+      - name: Run ${{ matrix.suite }} tests
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: invoke "tests.$SUITE"
+  # Keep the required "test" check stable while suites run in parallel.
+  test:
+    if: always()
+    needs: suites
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every suite to pass
+        env:
+          RESULT: ${{ needs.suites.result }}
+        run: test "$RESULT" = success

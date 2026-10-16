@@ -18,8 +18,10 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 BAKE_STAGE=dcv
 source "${SCRIPT_DIR}/image_bake_stage.sh"
 
-{% if context.base_os in ('ubuntu2204', 'ubuntu2404') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
 {% set ubuntu_desktop_bake = true %}
+{# this host mounts Lustre, so a failed client install stops it #}
+{% set lustre_required = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 {% endif %}
 
@@ -38,6 +40,9 @@ source "${SCRIPT_DIR}/image_bake_stage.sh"
   # and dcvserver loads it (ExecStartPre modprobe); rebuilding it through DKMS cost ~90 s
   if ! modinfo eveusb >/dev/null 2>&1; then
   echo "Installing usb support..."
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+  install_matching_kernel_devel || exit 1
+{% endif %}
   DCV_USB_DRIVER_INSTALLER=$(which dcvusbdriverinstaller)
   $DCV_USB_DRIVER_INSTALLER --quiet
 else
@@ -45,10 +50,10 @@ else
 fi
 
 # microphone redirect: same guarded install the session bootstrap performs
-{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 if [[ -z "$(rpm -qa pulseaudio-utils)" ]]; then
   package_transaction yum install -y pulseaudio-utils
-{% elif context.base_os in ('ubuntu2204', 'ubuntu2404') %}
+{% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 if [[ -z "$(dpkg -l pulseaudio-utils | grep ^ii)" ]]; then
   apt install -y pulseaudio-utils
 {% endif %}
@@ -66,7 +71,7 @@ fi
 # a reboot may be required if GPU drivers were installed
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
-  reboot
+  reboot_after_cloud_init
   exit 0
 else
   # user data customizations

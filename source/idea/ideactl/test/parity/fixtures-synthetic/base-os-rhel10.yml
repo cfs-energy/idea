@@ -1,4 +1,4 @@
-# rhel10 hosts. virtual-desktop-controller is omitted: Amazon DCV publishes no EL10 packages.
+# rhel10 hosts.
 base_os: rhel10
 enabled_modules:
   - metrics

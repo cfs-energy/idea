@@ -48,15 +48,18 @@ DEFAULT_INSTANCE_TYPE = 'm7i.large'
 # the builder disk is the request or the base AMI root, whichever is larger.
 # no request uses the base-stack floor, which leaves room for the GUI group.
 
-# the eVDI base OS set: EL10 has no DCV packages
+# the eVDI base OS set
 BUILD_SUPPORTED_BASE_OS = (
     'amazonlinux2023',
     'rhel8',
     'rhel9',
+    'rhel10',
     'rocky8',
     'rocky9',
+    'rocky10',
     'ubuntu2204',
     'ubuntu2404',
+    'ubuntu2604',
     'windows2019',
     'windows2022',
     'windows2025',
@@ -707,6 +710,11 @@ class DcvHostImageBuilder:
         results), then refuse anything but 'complete'. a Windows builder generalizes and
         shuts itself down after reporting, and is snapshotted only once stopped.
         """
+        if status.startswith('failed:userdata-'):
+            raise exceptions.general_exception(
+                f'{status} on builder {instance_id}; '
+                'see /root/bootstrap/logs/userdata.log; nothing was snapshotted'
+            )
         if self.before_snapshot is not None:
             self.before_snapshot(instance_id, status)
         if status != AMI_BUILDER_STATUS_COMPLETE:

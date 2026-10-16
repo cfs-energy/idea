@@ -91,11 +91,11 @@ export class EcsStack extends IdeaBaseStack {
       env: props.env,
     });
 
-    const minHosts = this.context.config.getInt("ecs.hosts.min", 3);
-    const maxHosts = this.context.config.getInt("ecs.hosts.max", 4);
+    const minHosts = this.context.config.getInt("ecs.hosts.min", 4);
+    const maxHosts = this.context.config.getInt("ecs.hosts.max", 5);
     const surgeRoles = ["cluster-manager", "vdc", "dcv-broker", "dcv-gateway", "bastion-host"];
     if (maxHosts <= minHosts && surgeRoles.some(role => this.context.config.getInt(`ecs.tasks.${role}.desired`, 2) > 0)) {
-      throw new Error("ecs.hosts.max must exceed ecs.hosts.min: distinct-instance service surges require a spare host (defaults: min 3, max 4).");
+      throw new Error("ecs.hosts.max must exceed ecs.hosts.min: distinct-instance service surges require a spare host (defaults: min 4, max 5).");
     }
 
     this.cluster = new ExistingSocaCluster(this.context, this.stack);
@@ -460,8 +460,8 @@ export class EcsStack extends IdeaBaseStack {
     const autoScalingGroup = new autoscaling.AutoScalingGroup(this.stack, "ecs-host-auto-scaling-group", {
       autoScalingGroupName: this.buildResourceName("ecs-hosts"),
       launchTemplate,
-      maxCapacity: this.context.config.getInt("ecs.hosts.max", 4),
-      minCapacity: this.context.config.getInt("ecs.hosts.min", 3),
+      maxCapacity: this.context.config.getInt("ecs.hosts.max", 5),
+      minCapacity: this.context.config.getInt("ecs.hosts.min", 4),
       newInstancesProtectedFromScaleIn: true,
       vpc: this.cluster.vpc,
       vpcSubnets: { subnets: this.cluster.privateSubnets },

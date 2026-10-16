@@ -24,6 +24,7 @@ from ideadatamodel.scheduler import (
     ListQueuesRequest,
     ListQueuesResult,
     QueueSummary,
+    SocaQueueManagementParams,
     GetJobRequest,
     GetJobResult,
     DeleteJobRequest,
@@ -623,6 +624,10 @@ class SchedulerAPI(BaseAPI):
                 listing.append(
                     QueueSummary(
                         name=queue,
+                        instance_type_rules=(
+                            profile.queue_management_params
+                            or SocaQueueManagementParams()
+                        ).instance_type_rules(),
                         queue_profile=profile.name,
                         base_os=(params.base_os if params else None) or default_os,
                         architecture=architecture or None,
