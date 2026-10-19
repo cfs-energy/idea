@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from test_dcv_host_ami_builder_bootstrap import render, run_set_kernel
 
 WAYLAND = ['rhel10', 'rocky10', 'ubuntu2604']
@@ -31,6 +30,88 @@ X11 = [
     'ubuntu2204',
     'ubuntu2404',
 ]
+
+
+@pytest.mark.parametrize('base_os', WAYLAND + X11)
+def test_only_el10_disables_gdm_local_displays(base_os):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    assert ('# Begin: DCV headless GDM' in text) == (base_os in WAYLAND[:2])
+    if base_os in WAYLAND[:2]:
+        assert text.index('Found window manager pre-installed') < text.index(
+            '# Begin: DCV headless GDM'
+        )
+        assert 'WaylandEnable=false' not in text
+        assert 'RemoteLoginEnable=false' not in text
+        assert 'ShowLocalGreeter' not in text
+        assert '[xdmcp]' not in text
+
+
+@pytest.mark.parametrize('base_os', ['rhel10', 'rocky10'])
+def test_headless_gdm_preserves_config_and_reapplies_seat_rules(tmp_path, base_os):
+    conf = tmp_path / 'custom.conf'
+    original = '[daemon]\nWaylandEnable=true\n[debug]\nEnable=true\n'
+    conf.write_text(original)
+    rules = tmp_path / 'rules.d'
+    script = render('_templates/linux/dcv_gdm_headless.jinja2', base_os).replace(
+        '/etc/udev/rules.d', str(rules)
+    )
+    for _ in range(2):
+        result = subprocess.run(
+            [
+                'bash',
+                '-c',
+                f'GDM_CONFIG_RHEL_PATH={conf}\n'
+                'udevadm() { echo "udevadm $*"; }\n'
+                'systemctl() { echo "systemctl $*"; }\n' + script,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert conf.read_text() == original
+        assert result.stdout.splitlines() == [
+            'udevadm control --reload-rules',
+            (
+                'udevadm trigger --action=change --subsystem-match=pci '
+                '--attr-match=vendor=0x1d0f --attr-match=device=0x1111'
+            ),
+            (
+                'udevadm trigger --action=change --subsystem-match=drm '
+                '--subsystem-match=graphics'
+            ),
+            'udevadm settle',
+            'systemctl restart systemd-logind',
+            'systemctl restart gdm',
+        ]
+        entries = (rules / '99-idea-dcv-headless.rules').read_text().splitlines()
+        assert len(entries) == 2
+        for rule, attribute in zip(entries, ['ATTR', 'ATTRS']):
+            assert f'{attribute}{{vendor}}=="0x1d0f"' in rule
+            assert f'{attribute}{{device}}=="0x1111"' in rule
+            assert 'TAG-="seat", TAG-="master-of-seat"' in rule
+        assert entries[0].startswith('SUBSYSTEM=="pci",')
+        assert entries[1].startswith('SUBSYSTEM=="drm|graphics",')
+
+
+@pytest.mark.parametrize('failed_command', ['control', 'trigger', 'settle'])
+def test_headless_gdm_does_not_restart_after_udev_failure(tmp_path, failed_command):
+    script = render('_templates/linux/dcv_gdm_headless.jinja2', 'rocky10').replace(
+        '/etc/udev/rules.d', str(tmp_path / 'rules.d')
+    )
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            f'udevadm() {{ [[ "$1" != "{failed_command}" ]]; }}\n'
+            'systemctl() { echo "restart gdm"; }\n' + script,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert 'restart gdm' not in result.stdout
 
 
 @pytest.mark.parametrize('base_os', WAYLAND)
@@ -188,7 +269,7 @@ def test_desktop_polish_is_targeted_and_idempotent(
     )
     for _ in range(2):
         result = subprocess.run(
-            ['bash', '-eu', '-c', script], capture_output=True, text=True
+            ['bash', '-eu', '-c', script], check=False, capture_output=True, text=True
         )
         assert result.returncode == 0, result.stderr
     assert unrelated.read_text() == desktop
@@ -306,6 +387,7 @@ def test_host_preserves_the_2026_vendor_unit(tmp_path, base_os, launcher_install
             + function.replace('/usr/lib/systemd/system/dcvserver.service', str(unit))
             + '\nstart_and_configure_dcv_service',
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -345,6 +427,7 @@ def test_bake_checks_the_launcher_when_installed(tmp_path, state, active, ok):
             + function
             + '\ndcv_launcher_ok',
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -369,22 +452,30 @@ def test_dcv_2026_orders_launcher_after_runtime_directory_creation(
     assert 'dcvsessionlauncher.service.d/idea.conf' in setup
     assert 'After=dcvserver.service' in setup
     assert 'systemctl daemon-reload' in setup
+    assert 'install -d -o dcv -g dcv -m 3777 /var/log/dcv' in setup
     assert 'ProtectSystem=' not in setup and 'ReadWritePaths=' not in setup
     units = tmp_path / 'units'
     result = subprocess.run(
         [
             'bash',
             '-c',
+            'install() { echo "install $*"; }\n'
             'systemctl() { if [[ "$1" == cat ]]; then return '
             + ('0' if launcher_installed else '1')
             + '; else echo "$*"; fi; }\n'
-            + setup.replace('/etc/systemd/system', str(units)),
+            + setup.replace('/etc/systemd/system', str(units)).replace(
+                '/etc/tmpfiles.d/idea-dcv.conf', str(tmp_path / 'tmpfiles.conf')
+            ),
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
     if launcher_installed:
+        assert (
+            tmp_path / 'tmpfiles.conf'
+        ).read_text() == 'd /var/log/dcv 3777 dcv dcv -\n'
         assert (units / 'dcvserver.service.d/idea.conf').read_text() == (
             '[Unit]\nAfter=network-online.target remote-fs.target\n'
             'Wants=dcvsessionlauncher.service\n'
@@ -395,7 +486,36 @@ def test_dcv_2026_orders_launcher_after_runtime_directory_creation(
         assert 'daemon-reload' in result.stdout
     else:
         assert not units.exists()
+        assert not (tmp_path / 'tmpfiles.conf').exists()
         assert result.stdout == ''
+
+
+@pytest.mark.parametrize('base_os', WAYLAND + X11)
+def test_only_ubuntu2604_pins_migration_to_system_python(base_os):
+    text = render('_templates/linux/dcv_server.jinja2', base_os)
+    assert ('user-session-migration.service.d/idea.conf' in text) == (
+        base_os == 'ubuntu2604'
+    )
+
+
+def test_ubuntu2604_keeps_gi_and_system_python_for_migration(tmp_path):
+    text = render('_templates/linux/dcv_wayland_login.jinja2', 'ubuntu2604')
+    setup = text.split('install -d -m 755 /usr/local/libexec')[0]
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'apt() { echo "apt $*"; }\n' + setup.replace('/etc/', f'{tmp_path}/'),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'apt install -y python3-gi' in result.stdout
+    settings = configparser.ConfigParser()
+    settings.read(tmp_path / 'systemd/user/user-session-migration.service.d/idea.conf')
+    assert settings['Service']['Environment'] == 'PATH=/usr/bin:/bin'
 
 
 DCV_TARBALL = {
@@ -519,6 +639,7 @@ def test_wayland_check_rejects_a_disabled_wayland(tmp_path):
                 + '\nwayland_ok',
             ],
             env={'PATH': os.environ['PATH'], 'TARGET': target},
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -618,3 +739,50 @@ def test_el10_desktop_keeps_and_locks_the_kernel_its_image_boots(
     assert 'reboot' not in calls
     assert 'dnf install -y kernel' not in calls
     assert f'dnf versionlock kernel-{running} kernel-core-{running}' in calls
+
+
+@pytest.mark.parametrize('base_os', WAYLAND + X11)
+def test_wait_online_fix_is_baked_and_applied_only_on_ubuntu2604(base_os):
+    from test_image_bake_bootstrap import render as render_host
+
+    for entrypoint in [
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+        'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+    ]:
+        text = render_host(entrypoint, base_os)
+        assert ('# Begin: Ubuntu Network Wait Online' in text) == (
+            base_os == 'ubuntu2604'
+        )
+
+
+@pytest.mark.parametrize(
+    'renderer, networkd, masked',
+    [
+        ('NetworkManager', False, True),
+        ('NetworkManager', True, False),
+        ('networkd', True, False),
+        ('networkd', False, False),
+    ],
+)
+def test_wait_online_preserves_the_configured_renderer(
+    tmp_path, renderer, networkd, masked
+):
+    text = render('_templates/linux/ubuntu_network_wait_online.jinja2', 'ubuntu2604')
+    if networkd:
+        (tmp_path / '10-netplan-ens5.network').touch()
+    text = text.replace('/run/systemd/network', str(tmp_path))
+    calls = tmp_path / 'calls'
+    script = (
+        f"""netplan() {{
+  if [[ "$1" == get ]]; then echo {renderer}; else echo generate >> {calls}; fi
+}}
+systemctl() {{ echo "$*" >> {calls}; }}
+"""
+        + text
+    )
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    commands = calls.read_text().splitlines()
+    assert commands[0] == 'generate'
+    assert ('mask systemd-networkd-wait-online.service' in commands) == masked
+    assert ('enable NetworkManager-wait-online.service' in commands) == masked

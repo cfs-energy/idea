@@ -1,0 +1,15 @@
+# Begin: DCV headless GDM
+# Keep the EC2 virtual console off logind seats so only DCV starts a greeter.
+install -d -m 755 /etc/udev/rules.d || exit 1
+cat > /etc/udev/rules.d/99-idea-dcv-headless.rules <<'EOF' || exit 1
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1d0f", ATTR{device}=="0x1111", TAG-="seat", TAG-="master-of-seat"
+SUBSYSTEM=="drm|graphics", ATTRS{vendor}=="0x1d0f", ATTRS{device}=="0x1111", TAG-="seat", TAG-="master-of-seat"
+EOF
+udevadm control --reload-rules || exit 1
+udevadm trigger --action=change --subsystem-match=pci --attr-match=vendor=0x1d0f --attr-match=device=0x1111 || exit 1
+udevadm trigger --action=change --subsystem-match=drm --subsystem-match=graphics || exit 1
+udevadm settle || exit 1
+# Refresh logind's device cache before GDM checks seat0.
+systemctl restart systemd-logind || exit 1
+systemctl restart gdm || exit 1
+# End: DCV headless GDM
