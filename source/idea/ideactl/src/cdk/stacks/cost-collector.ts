@@ -64,6 +64,11 @@ export class CostCollectorStack extends Stack {
     const task = new ecs.FargateTaskDefinition(this, "task", {
       cpu: 256,
       memoryLimitMiB: 1024,
+      // The control-plane image is published for arm64 only; Fargate defaults to X86_64.
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
       executionRole,
       taskRole,
     });
