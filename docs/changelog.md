@@ -6,6 +6,17 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.7] - 2026-10-19
+
+**Highlights for users**
+
+* A stopped desktop no longer shows its last screen in My desktops; the card shows its state until the desktop runs again.
+* The "Preview not captured yet" box connects to a ready desktop when clicked, like the preview does.
+
+* **Desktop card preview**: the card shows a capture only while the desktop is ready and otherwise falls back to the state placeholder.
+* **Cost-only collector**: the Fargate task runs on arm64 like the control-plane image. It previously defaulted to x86_64 and could not start.
+* **Dependencies**: all dependencies updated, including undici 8 for ideactl.
+
 ## [26.10.6] - 2026-10-14
 
 **Highlights for users**

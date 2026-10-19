@@ -12,4 +12,4 @@
 # pkgconfig for ideascheduler. no dependencies # noqa
 
 __name__ = 'idea-scheduler'
-__version__ = '26.10.6'
+__version__ = '26.10.7'
