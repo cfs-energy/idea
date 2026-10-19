@@ -207,6 +207,10 @@ export interface BatchCreateSessionRequest {
 }
 export interface VirtualDesktopSession {
   recovering?: boolean;
+  recovery_attempts?: number;
+  recovery_next_attempt_at?: number;
+  recovery_deadline?: number;
+  recovery_pending_create?: boolean;
   dcv_session_id?: string;
   idea_session_id?: string;
   base_os?: VirtualDesktopBaseOS;
