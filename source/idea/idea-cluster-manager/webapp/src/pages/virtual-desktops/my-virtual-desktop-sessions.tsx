@@ -667,12 +667,23 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     }
 
     onDownloadDcvSessionFile = (session: VirtualDesktopSession): Promise<boolean> => {
+        if (session.recovering) {
+            this.setFlashMessage('Your desktop session is restarting. Try connecting again in a few minutes.', 'info')
+            return Promise.resolve(false)
+        }
         return this.getVirtualDesktopClient().getSessionConnectionInfo({
             connection_info: {
                 idea_session_id: session.idea_session_id,
+                idea_session_owner: session.owner,
                 dcv_session_id: session.dcv_session_id
             }
         }).then(result => {
+            if (result.connection_info?.failure_reason) {
+                throw new Error(result.connection_info.failure_reason)
+            }
+            if (!result.connection_info?.access_token) {
+                throw new Error('Connection details are unavailable. Try again in a few minutes.')
+            }
             let endpoint = result.connection_info?.endpoint
             if (endpoint === undefined) {
                 endpoint = AppContext.get().getAlbEndpoint()
@@ -682,7 +693,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             sessionFileContent += 'format=1.0\n'
             sessionFileContent += '[connect]\n'
             sessionFileContent += `user=${AppContext.get().auth().getUsername()}\n`
-            sessionFileContent += `sessionid=${session.dcv_session_id}\n`
+            sessionFileContent += `sessionid=${result.connection_info?.dcv_session_id ?? session.dcv_session_id}\n`
             sessionFileContent += `host=${url.host}\n`
             sessionFileContent += `port=443\n`
             sessionFileContent += `webport=443\n`
@@ -698,21 +709,36 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             element.click()
             document.body.removeChild(element)
             return true
+        }).catch(error => {
+            this.displayActionError(error, 'download the DCV client file for')
+            return false
         })
     }
 
     onLaunchSession = (session: VirtualDesktopSession): Promise<boolean> => {
+        if (session.recovering) {
+            this.setFlashMessage('Your desktop session is restarting. Try connecting again in a few minutes.', 'info')
+            return Promise.resolve(false)
+        }
         return this.getVirtualDesktopClient().getSessionConnectionInfo({
             connection_info: {
+                idea_session_id: session.idea_session_id,
+                idea_session_owner: session.owner,
                 dcv_session_id: session.dcv_session_id
             }
         }).then(result => {
+            if (result.connection_info?.failure_reason) {
+                throw new Error(result.connection_info.failure_reason)
+            }
+            if (!result.connection_info?.access_token) {
+                throw new Error('Connection details are unavailable. Try again in a few minutes.')
+            }
             return `${result.connection_info?.endpoint}${result.connection_info?.web_url_path}?authToken=${result.connection_info?.access_token}#${result.connection_info?.dcv_session_id}`
         }).then(url => {
             window.open(url);
             return true
         }).catch(error => {
-            console.error(error)
+            this.displayActionError(error, 'connect to')
             return false
         })
     }

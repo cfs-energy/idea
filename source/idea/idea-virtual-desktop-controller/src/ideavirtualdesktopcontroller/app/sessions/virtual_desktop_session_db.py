@@ -182,6 +182,13 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             return None
 
         return VirtualDesktopSession(
+            recovering=bool(db_entry.get('recovering', False)),
+            recovery_attempts=int(db_entry.get('recovery_attempts', 0)),
+            recovery_next_attempt_at=int(db_entry.get('recovery_next_attempt_at', 0)),
+            recovery_deadline=int(db_entry.get('recovery_deadline', 0)),
+            recovery_pending_create=bool(
+                db_entry.get('recovery_pending_create', False)
+            ),
             owner=Utils.get_value_as_string(
                 sessions_constants.USER_SESSION_DB_HASH_KEY, db_entry
             ),
@@ -365,6 +372,11 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             session.schedule = VirtualDesktopWeekSchedule()
 
         db_dict = {
+            'recovering': session.recovering,
+            'recovery_attempts': session.recovery_attempts,
+            'recovery_next_attempt_at': session.recovery_next_attempt_at,
+            'recovery_deadline': session.recovery_deadline,
+            'recovery_pending_create': session.recovery_pending_create,
             sessions_constants.USER_SESSION_DB_HASH_KEY: session.owner,
             sessions_constants.USER_SESSION_DB_RANGE_KEY: session.idea_session_id,
             sessions_constants.USER_SESSION_DB_CREATED_ON_KEY: Utils.to_milliseconds(
@@ -591,7 +603,12 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             # running again: the next stop records its own time
             session.stopped_on = None
 
-    def update(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
+    def update(
+        self, session: VirtualDesktopSession, *, expected_updated_on=None
+    ) -> VirtualDesktopSession:
+        if session.state != VirtualDesktopSessionState.INITIALIZING:
+            session.recovering = False
+            session.recovery_pending_create = False
         self._stamp_stopped_on(session)
         db_entry = self.convert_session_object_to_db_dict(session)
         db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = (
@@ -612,7 +629,19 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             expression_attr_names[f'#{key}'] = key
             expression_attr_values[f':{key}'] = value
 
+        condition = {}
+        if expected_updated_on is not None:
+            expression_attr_values[':expected_updated_on'] = Utils.to_milliseconds(
+                expected_updated_on
+            )
+            condition['ConditionExpression'] = '#updated_on = :expected_updated_on'
+            db_entry['updated_on'] = max(
+                db_entry['updated_on'], Utils.to_milliseconds(expected_updated_on) + 1
+            )
+            expression_attr_values[':updated_on'] = db_entry['updated_on']
+
         result = self._table.update_item(
+            **condition,
             Key={
                 sessions_constants.USER_SESSION_DB_HASH_KEY: db_entry[
                     sessions_constants.USER_SESSION_DB_HASH_KEY
@@ -749,7 +778,8 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                     Key={
                         sessions_constants.USER_SESSION_DB_HASH_KEY: idea_session_owner,
                         sessions_constants.USER_SESSION_DB_RANGE_KEY: idea_session_id,
-                    }
+                    },
+                    ConsistentRead=True,
                 )
                 session_db_entry = Utils.get_value_as_dict('Item', result)
             except self._ddb_client.exceptions.ResourceNotFoundException as _:

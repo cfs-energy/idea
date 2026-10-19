@@ -285,6 +285,14 @@ const COST_POLICY = JSON.parse(readFileSync(new URL('./fixtures/cluster-manager-
 };
 
 function expectedPolicy(templateName: string, captured: unknown): unknown {
+  if (templateName === 'virtual-desktop-controller.yml') {
+    const document = structuredClone(captured) as { Statement: { Action: string | string[] }[] };
+    const inventory = document.Statement.find(statement => Array.isArray(statement.Action) && statement.Action.includes('ec2:DescribeInstances'));
+    assert.ok(inventory && Array.isArray(inventory.Action));
+    inventory.Action = inventory.Action.filter(action => action !== 'ec2:DescribeInstanceStatus');
+    inventory.Action.splice(inventory.Action.indexOf('ec2:DescribeInstances') + 1, 0, 'ec2:DescribeInstanceStatus');
+    return document;
+  }
   if (templateName !== 'cluster-manager.yml') return captured;
   const document = structuredClone(captured) as { Statement: { Action: string | string[]; Resource: string | string[]; Effect: string }[] };
   const actions = (statement: { Action: string | string[] }) => Array.isArray(statement.Action) ? statement.Action : [statement.Action];

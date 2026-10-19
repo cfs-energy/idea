@@ -9,6 +9,10 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
+    DcvSessionRecovery,
+)
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSessionState
 from ideasdk.utils import Utils
@@ -82,6 +86,10 @@ class DCVHostRebootCompleteEventHandler(BaseVirtualDesktopControllerEventHandler
             message_id=message_id,
             message=f'Idea session {session.idea_session_id}:{session.name} is in state {session.state}. Handling reboot complete event',
         )
+
+        if not session.hibernation_enabled:
+            DcvSessionRecovery(self).check(session, resume=True)
+            return
 
         # ALWAYS reset counters on reboot, regardless of session state
         # This ensures we give the session another chance after reboot

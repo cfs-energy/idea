@@ -266,6 +266,11 @@ class VirtualDesktopSessionPermission(SocaBaseModel):
 
 
 class VirtualDesktopSession(SocaBaseModel):
+    recovering: bool = Field(default=False)
+    recovery_attempts: int = Field(default=0)
+    recovery_next_attempt_at: int = Field(default=0)
+    recovery_deadline: int = Field(default=0)
+    recovery_pending_create: bool = Field(default=False)
     dcv_session_id: Optional[str] = Field(default=None)
     idea_session_id: Optional[str] = Field(default=None)
     base_os: Optional[VirtualDesktopBaseOS] = Field(default=None)

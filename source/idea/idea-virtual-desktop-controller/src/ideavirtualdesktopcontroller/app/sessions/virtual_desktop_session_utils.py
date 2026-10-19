@@ -199,6 +199,23 @@ class VirtualDesktopSessionUtils:
         )
         self._logger = context.logger('virtual-desktop-session-utils')
 
+    _dcv_health_cursor = None
+
+    def check_dcv_session_health(self):
+        result = self._session_db.list_all_from_db(
+            ListSessionsRequest(paginator=SocaPaginator(cursor=self._dcv_health_cursor))
+        )
+        for session in result.listing:
+            if session.state == VirtualDesktopSessionState.READY or (
+                session.recovering
+                and session.state == VirtualDesktopSessionState.INITIALIZING
+            ):
+                self.events_utils.publish_validate_dcv_session_creation_event(
+                    idea_session_id=session.idea_session_id,
+                    idea_session_owner=session.owner,
+                )
+        self._dcv_health_cursor = result.cursor
+
     def create_session(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
         # request has been validated and everything.
         try:

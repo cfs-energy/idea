@@ -228,6 +228,22 @@ class DCVBrokerClient(DCVClientProtocol):
         api_response = self._get_sessions_api().describe_sessions(body=request)
         return api_response.to_dict()
 
+    def describe_sessions_for_host(self, session: VirtualDesktopSession) -> List[Dict]:
+        sessions = []
+        token = None
+        while True:
+            response = self._describe_sessions(owner=session.owner, next_token=token)
+            for entry in response.get('sessions', []):
+                tags = {
+                    tag['key']: tag['value']
+                    for tag in (entry.get('server') or {}).get('tags', [])
+                }
+                if tags.get('idea_session_id') == session.idea_session_id:
+                    sessions.append(entry)
+            token = response.get('next_token')
+            if not token:
+                return sessions
+
     def resume_session(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
         try:
             # Simplified Windows detection to match all Windows variations

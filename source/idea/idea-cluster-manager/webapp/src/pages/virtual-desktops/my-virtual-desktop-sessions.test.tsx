@@ -141,7 +141,7 @@ describe('my virtual desktop sessions', () => {
     });
 });
 
-async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/') {
+async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/', state = 'STOPPED') {
     const context = initTestAppContext();
 
     const clusterSettings = context.getClusterSettingsService();
@@ -163,6 +163,7 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
     vi.spyOn(virtualDesktop, 'listSessions').mockResolvedValue({
         listing: [{
             ...STOPPED_SESSION,
+            state,
             idle_autostop_delay: 30,
             schedule: {
                 monday: daySchedule,
@@ -176,6 +177,8 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
         }]
     } as any);
 
+    vi.spyOn(virtualDesktop, 'getSessionScreenshot').mockResolvedValue({ screenshots: [] } as any);
+    const flashbarItems: any[] = [];
     render(
         <MemoryRouter initialEntries={[path]}>
             <MyVirtualDesktopSessions
@@ -187,13 +190,14 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
                 sideNavHeader={{ text: 'IDEA', href: '#/' }}
                 sideNavItems={[]}
                 onSideNavChange={() => {}}
-                onFlashbarChange={() => {}}
+                onFlashbarChange={(event: any) => flashbarItems.push(...event.items)}
                 flashbarItems={[]}
             />
         </MemoryRouter>
     );
 
     await screen.findByText('my-desktop', {}, { timeout: 10000 });
+    return { virtualDesktop, flashbarItems };
 }
 
 describe('my virtual desktop sessions idle badge', () => {
@@ -301,5 +305,33 @@ describe('my virtual desktop sessions project ai access', () => {
         await renderSessionsInBedrockProject([SHARED_INSTANCE_PROFILE_ARN, PROJECT_INSTANCE_PROFILE_ARN]);
         expect(await screen.findByText(AI_ACCESS_PENDING_TEXT)).toBeInTheDocument();
         expect(screen.getAllByText(AI_ACCESS_PENDING_TEXT)).toHaveLength(1);
+    });
+});
+
+
+describe('desktop connection failures', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it.each(['connect', 'download'])('shows a rejected %s request in the flashbar', async (action) => {
+        const { virtualDesktop, flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'READY');
+        const request = vi.spyOn(virtualDesktop, 'getSessionConnectionInfo').mockRejectedValue(new Error('Your desktop session is restarting.'));
+        const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+        const user = userEvent.setup();
+        if (action === 'connect') {
+            await user.click(screen.getByRole('button', { name: 'Connect' }));
+        } else {
+            await user.click(screen.getByRole('button', { name: /Actions/i }));
+            await user.click(screen.getByText('DCV client file'));
+        }
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes('Your desktop session is restarting.'))).toBe(true));
+        expect(request).toHaveBeenCalledWith({ connection_info: { idea_session_id: 'session-1', idea_session_owner: 'someuser', dcv_session_id: 'dcv-1' } });
+        expect(open).not.toHaveBeenCalled();
+    });
+
+    it('shows a failure reason returned in a successful response', async () => {
+        const { virtualDesktop, flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'READY');
+        vi.spyOn(virtualDesktop, 'getSessionConnectionInfo').mockResolvedValue({ connection_info: { failure_reason: 'The session could not restart after 3 attempts.' } });
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Connect' }));
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes('could not restart after 3 attempts'))).toBe(true));
     });
 });

@@ -189,3 +189,19 @@ describe('virtual desktop session card', () => {
         expect(screen.getByText('10.0.0.5')).toBeInTheDocument();
     });
 });
+
+
+describe('desktop recovery', () => {
+    it('explains why Connect is unavailable while the session restarts', () => {
+        renderCard('INITIALIZING', { session: { ...BASE, state: 'INITIALIZING', recovering: true } });
+        expect(screen.getByText('Your desktop session is restarting. Connect will be available when it is ready.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Session restarting' })).toBeDisabled();
+        expect(screen.queryByText('Preview not captured yet')).not.toBeInTheDocument();
+    });
+
+    it('keeps the READY placeholder clickable', async () => {
+        const handlers = renderCard('READY');
+        await userEvent.setup().click(screen.getByText('Preview not captured yet'));
+        expect(handlers.onLaunchSession).toHaveBeenCalled();
+    });
+});

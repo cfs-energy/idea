@@ -123,6 +123,7 @@ export interface PrimaryAction {
 
 /** The one button a card leads with: what the user can do next, or what is happening right now. */
 export function primaryAction(session: VirtualDesktopSession, canStart: boolean, infoShown: boolean): PrimaryAction {
+    if (session.recovering) return {label: 'Session restarting'}
     switch (session.state) {
         case 'READY':
             return {label: 'Connect', action: 'connect'}
@@ -158,9 +159,9 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         return this.props.session
     }
 
-    canConnect = (): boolean => this.props.session.state === 'READY'
+    canConnect = (): boolean => this.props.session.state === 'READY' && !this.props.session.recovering
 
-    canDownloadDcvSessionFile = () => this.getSession().state === 'READY'
+    canDownloadDcvSessionFile = () => this.canConnect()
 
     canUpdateSession = () => this.getSession().state === 'STOPPED'
 
@@ -299,7 +300,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                     this.props.onLaunchSession(this.getSession()).finally()
                 }
             }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
-                {placeholders[session.state ?? ''] ?? 'No preview'}
+                {session.recovering ? 'Your desktop session is restarting. Connect will be available when it is ready.' : placeholders[session.state ?? ''] ?? 'No preview'}
             </div>
         }
         return <img alt="Desktop preview" src={imageUrl} onLoad={(event) => {
