@@ -30,6 +30,8 @@ test("one Fargate service has two containers sharing a socket and an injected ag
   assert.equal(task.Cpu, "256");
   assert.equal(task.Memory, "1024");
   assert.deepEqual(task.RequiresCompatibilities, ["FARGATE"]);
+  // The control-plane image is arm64-only; Fargate's default platform would be X86_64.
+  assert.deepEqual(task.RuntimePlatform, { CpuArchitecture: "ARM64", OperatingSystemFamily: "LINUX" });
   assert.deepEqual(task.Volumes, [{ Name: "datadog" }]);
   assert.equal(task.ContainerDefinitions.length, 2);
   const [agent, collector] = task.ContainerDefinitions;

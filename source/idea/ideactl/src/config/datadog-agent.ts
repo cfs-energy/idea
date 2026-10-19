@@ -3,7 +3,7 @@
  *
  * IDEA publishes no agent image of its own. The default is Datadog's official image from their
  * public ECR gallery, pinned to the multi-architecture index digest of one agent version so the
- * same reference serves the Graviton host pool and an x86_64 cost-only task. An operator may
+ * same reference serves the Graviton host pool and the arm64 cost-only task. An operator may
  * point `datadog_agent_image` (values) or `ecs.datadog.image` (settings) at any other
  * digest-pinned reference, at their own risk; a tag is never accepted because the agent runs with
  * the host's Docker socket and process namespace.
