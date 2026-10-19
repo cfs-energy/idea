@@ -12,8 +12,15 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 * A stopped desktop no longer shows its last screen in My desktops; the card shows its state until the desktop runs again.
 * The "Preview not captured yet" box connects to a ready desktop when clicked, like the preview does.
+* If a desktop's session stops responding, IDEA restarts the session for you. Connect and the DCV client file now say what went wrong instead of doing nothing.
+* Ubuntu 26.04 desktops used only over SSH are no longer stopped as idle.
 
 * **Desktop card preview**: the card shows a capture only while the desktop is ready and otherwise falls back to the state placeholder.
+* **Desktop session recovery**: when a desktop's DCV session disappears while its instance is healthy, the controller recreates it after 1, 5 and 15 minutes, then marks the desktop Error with a reason. The controller role gains `ec2:DescribeInstanceStatus`.
+* **Idle detection**: SSH logins are counted through logind, so desktops without `last` (Ubuntu 26.04) are not stopped while in use. Empty or malformed results are logged and never stop a desktop.
+* **Ubuntu 26.04 first boot**: the unused networkd wait is masked, which saves about 1m40s per boot. Rebake Ubuntu 26.04 images to pick it up.
+* **EL10 x86 desktops**: the virtual display stays off the console seat, so only the DCV login screen runs.
+* **DCV logs**: server, session launcher and agent logs reach the desktop hosts' CloudWatch log group.
 * **Cost-only collector**: the Fargate task runs on arm64 like the control-plane image. It previously defaulted to x86_64 and could not start.
 * **Dependencies**: all dependencies updated, including undici 8 for ideactl.
 
