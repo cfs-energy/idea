@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from math import isfinite
 from typing import Dict, Optional, Tuple
 
 import ideavirtualdesktopcontroller
@@ -48,9 +49,9 @@ def evaluate_session_idle(
     """
     Decide whether a session is idle, and say why.
     A session is idle only when every activity signal is quiet; a signal that is
-    missing or unreadable counts as active, so a blind spot never stops a session.
+    missing or unreadable is unknown, so a blind spot never stops a session.
     """
-    if Utils.is_empty(ssm_output):
+    if not isinstance(ssm_output, dict) or not ssm_output:
         return False, 'the activity sample is empty'
 
     dcv = Utils.get_value_as_dict('DCV', ssm_output, None)
@@ -60,7 +61,7 @@ def evaluate_session_idle(
     cpu_utilization = Utils.get_value_as_float(
         'CPUAveragePerformanceLast10Secs', ssm_output, None
     )
-    if cpu_utilization is None:
+    if cpu_utilization is None or not isfinite(cpu_utilization) or cpu_utilization < 0:
         return False, 'the activity sample carries no CPU utilization'
     if cpu_utilization >= cpu_utilization_threshold:
         return (
@@ -68,15 +69,31 @@ def evaluate_session_idle(
             f'CPU utilization: {cpu_utilization} is not below threshold: {cpu_utilization_threshold}',
         )
 
-    connection_count = Utils.get_value_as_int('num-of-connections', dcv, None)
-    if connection_count is None:
+    connection_count = Utils.get_value_as_float('num-of-connections', dcv, None)
+    if (
+        connection_count is None
+        or not isfinite(connection_count)
+        or connection_count < 0
+        or not connection_count.is_integer()
+    ):
         return False, 'the activity sample carries no connection count'
     if connection_count > 0:
         return False, f'{connection_count} connection(s) are still open'
 
     # a user working over ssh with no DCV client attached is not idle; Windows
     # hosts report no login sessions and fall back to the DCV signals alone
-    login_session_count = Utils.get_value_as_int('SSH_Connection_Count', ssm_output, 0)
+    login_session_count = Utils.get_value_as_float(
+        'SSH_Connection_Count',
+        ssm_output,
+        None if 'SSH_Connection_Count' in ssm_output else 0,
+    )
+    if (
+        login_session_count is None
+        or not isfinite(login_session_count)
+        or login_session_count < 0
+        or not login_session_count.is_integer()
+    ):
+        return False, 'the activity sample carries an unreadable SSH connection count'
     if login_session_count > 0:
         return (
             False,
@@ -165,7 +182,14 @@ class IDEASessionCPUUtilizationCommandProgressEventHandler(
                 standard_output_content = Utils.get_value_as_string(
                     'StandardOutputContent', ssm_command_output, ''
                 )
-                ssm_output = Utils.from_json(standard_output_content)
+                try:
+                    ssm_output = Utils.from_json(standard_output_content)
+                except (ValueError, TypeError):
+                    self.log_warning(
+                        message_id=message_id,
+                        message=f'Activity is unknown for session {idea_session_id}: empty or malformed command output. Will not stop the session.',
+                    )
+                    return
                 cpu_utilization_threshold = self.context.config().get_float(
                     'virtual-desktop-controller.dcv_session.cpu_utilization_threshold',
                     required=True,
