@@ -183,7 +183,10 @@ else
   log_info "Found window manager pre-installed... skipping dcv prereq installation..."
 fi
 
-{% if context.base_os == 'ubuntu2604' %}{% include '_templates/linux/ubuntu_network_wait_online.jinja2' %}{% endif %}{% if context.base_os in ('rhel10', 'rocky10') %}
+{% if context.base_os == 'ubuntu2604' %}
+{% include '_templates/linux/ubuntu_network_wait_online.jinja2' %}
+{% endif %}
+{% if context.base_os in ('rhel10', 'rocky10') %}
 {% include '_templates/linux/dcv_gdm_headless.jinja2' %}
 {% endif %}
 {% include '_templates/linux/gnome_online_accounts.jinja2' %}
