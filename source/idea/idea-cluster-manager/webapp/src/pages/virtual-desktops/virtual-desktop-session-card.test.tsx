@@ -140,6 +140,22 @@ describe('virtual desktop session card', () => {
         expect(screen.getByText('Preview not captured yet')).toBeInTheDocument();
     });
 
+    it('connects from the not-captured placeholder like the preview', async () => {
+        const handlers = renderCard('READY');
+        const placeholder = screen.getByText('Preview not captured yet');
+        expect(placeholder).toHaveStyle({cursor: 'pointer'});
+        await userEvent.setup().click(placeholder);
+        expect(handlers.onLaunchSession).toHaveBeenCalled();
+    });
+
+    it('drops the last capture once the desktop stops', () => {
+        const card = renderCard('READY', { screenshot: 'running' });
+        expect(screen.getByAltText('Desktop preview')).toBeInTheDocument();
+        card.rerender({ session: { ...BASE, state: 'STOPPED' } });
+        expect(screen.queryByAltText('Desktop preview')).not.toBeInTheDocument();
+        expect(screen.getAllByText('Stopped').length).toBe(2);
+    });
+
     it('shows a stopped placeholder for a stopped desktop', () => {
         renderCard('STOPPED');
         // status indicator and preview both say it

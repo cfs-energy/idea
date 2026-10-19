@@ -260,7 +260,8 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
     }
 
     getScreenshotImageUrl(): string {
-        if (!this.props.screenshot) {
+        // The page caches the last capture per session; only a running desktop's capture is current.
+        if (!this.props.screenshot || !this.canConnect()) {
             return ''
         }
         return `data:image/jpeg;base64,${this.props.screenshot}`
@@ -293,7 +294,11 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 DELETING: 'Terminating',
                 DELETED: 'Terminating'
             }
-            return <div className="virtual-desktop-placeholder-image">
+            return <div className="virtual-desktop-placeholder-image" onClick={() => {
+                if (this.canConnect()) {
+                    this.props.onLaunchSession(this.getSession()).finally()
+                }
+            }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
                 {placeholders[session.state ?? ''] ?? 'No preview'}
             </div>
         }
