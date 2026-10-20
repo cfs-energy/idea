@@ -22,6 +22,7 @@ from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
     RESTARTING_MESSAGE,
     RECOVERY_FAILED_MESSAGE,
     SESSION_UNAVAILABLE_MESSAGE,
+    INSTANCE_UNHEALTHY_MESSAGE,
     REBOOT_SECONDS,
 )
 from ideavirtualdesktopcontroller.app.events.handlers.validate_dcv_session_event_handlers.validate_dcv_session_creation_event_handler import (
@@ -110,6 +111,7 @@ def test_detects_missing_or_unready_session(recovery, state):
         'sessions': {'old-dcv': {'state': state}}
     }
     recovery.check()
+    recovery.check()
     session = recovery.store[0]
     assert session.state == 'INITIALIZING'
     assert session.recovering
@@ -132,6 +134,7 @@ def test_healthy_session_and_broker_outage_do_not_recreate(recovery):
 
 
 def test_backoff_and_three_failed_recoveries_survive_new_handlers(recovery):
+    recovery.check()
     recovery.check()
     for attempt, delay in enumerate([60, 300, 900], 1):
         before = recovery.now[0]
@@ -156,6 +159,7 @@ def test_backoff_and_three_failed_recoveries_survive_new_handlers(recovery):
 
 
 def test_lost_create_response_is_adopted_after_restart(recovery):
+    recovery.check()
     recovery.check()
     recovery.now[0] += 60000
     recovery.broker.create_session.side_effect = RuntimeError('response lost')
@@ -187,6 +191,7 @@ def test_stale_validation_cannot_restart_inactive_session(recovery, state):
 
 def test_unhealthy_instance_does_not_spend_an_attempt(recovery):
     recovery.check()
+    recovery.check()
     recovery.now[0] += 60000
     recovery.handler.context.aws().ec2().describe_instance_status.return_value = {
         'InstanceStatuses': []
@@ -197,6 +202,7 @@ def test_unhealthy_instance_does_not_spend_an_attempt(recovery):
 
 
 def test_failed_claim_or_lost_lock_never_creates(recovery):
+    recovery.check()
     recovery.check()
     recovery.now[0] += 60000
     recovery.db.update.side_effect = ClientError(
@@ -222,15 +228,16 @@ def test_unready_session_never_deletes_or_recreates_and_times_out(
     recovery, state, healthy
 ):
     if not healthy:
-        recovery.handler.context.aws().ec2().describe_instance_status.return_value = {
-            'InstanceStatuses': []
-        }
+        recovery.handler.context.aws().ec2().describe_instance_status.return_value[
+            'InstanceStatuses'
+        ][0]['InstanceStatus']['Status'] = 'impaired'
     recovery.broker.describe_sessions.return_value = {
         'sessions': {'old-dcv': {'state': state}}
     }
     recovery.broker.describe_sessions_for_host.return_value = [
         {'id': 'old-dcv', 'state': state}
     ]
+    recovery.check()
     recovery.check()
     for delay in [60, 300, 900]:
         recovery.now[0] += delay * 1000
@@ -242,7 +249,9 @@ def test_unready_session_never_deletes_or_recreates_and_times_out(
     assert recovery.store[0].state == 'ERROR'
     assert not recovery.store[0].recovering
     assert recovery.store[0].dcv_session_id == 'old-dcv'
-    assert recovery.store[0].failure_reason == SESSION_UNAVAILABLE_MESSAGE
+    assert recovery.store[0].failure_reason == (
+        SESSION_UNAVAILABLE_MESSAGE if healthy else INSTANCE_UNHEALTHY_MESSAGE
+    )
     recovery.now[0] += 9999999
     recovery.check()
     recovery.broker.delete_sessions.assert_not_called()
@@ -250,6 +259,7 @@ def test_unready_session_never_deletes_or_recreates_and_times_out(
 
 
 def test_unknown_recovers_in_place_when_broker_contact_returns(recovery):
+    recovery.check()
     recovery.check()
     recovery.now[0] += 60000
     recovery.broker.describe_sessions_for_host.return_value = [
@@ -269,6 +279,7 @@ def test_unknown_recovers_in_place_when_broker_contact_returns(recovery):
 @pytest.mark.parametrize('entries', [[], [{'id': 'old-dcv', 'state': 'DELETED'}]])
 def test_only_missing_or_deleted_sessions_are_recreated(recovery, entries):
     recovery.check()
+    recovery.check()
     recovery.now[0] += 60000
     recovery.broker.describe_sessions_for_host.return_value = entries
     recovery.check()
@@ -276,8 +287,9 @@ def test_only_missing_or_deleted_sessions_are_recreated(recovery, entries):
     recovery.broker.delete_sessions.assert_not_called()
 
 
-def test_resume_waits_for_live_broker_session(recovery):
-    recovery.store[0].state = 'RESUMING'
+@pytest.mark.parametrize('state', ['RESUMING', 'STOPPED'])
+def test_resume_waits_for_live_broker_session(recovery, state):
+    recovery.store[0].state = state
     recovery.check(resume=True)
     assert recovery.store[0].state == 'INITIALIZING'
     assert recovery.store[0].recovering
@@ -485,6 +497,7 @@ def test_conditional_update_uses_read_version(recovery):
 
 def test_unknown_session_that_disappears_can_be_recreated(recovery):
     recovery.check()
+    recovery.check()
     recovery.now[0] += 60000
     recovery.broker.describe_sessions_for_host.return_value = [
         {'id': 'old-dcv', 'state': 'UNKNOWN'}
@@ -523,6 +536,8 @@ def test_recovery_fields_round_trip_through_database(recovery):
     session.recovery_next_attempt_at = 2000988
     session.recovery_deadline = 3000989
     session.recovery_pending_create = True
+    session.recovery_health_deadline = 5000000
+    session.recovery_unready_observed = True
     session.reboot_deadline = 4000000
     db = VirtualDesktopSessionDB.__new__(VirtualDesktopSessionDB)
     db._server_db = Mock()
@@ -544,6 +559,8 @@ def test_recovery_fields_round_trip_through_database(recovery):
         'recovery_next_attempt_at',
         'recovery_deadline',
         'recovery_pending_create',
+        'recovery_health_deadline',
+        'recovery_unready_observed',
         'reboot_deadline',
     ):
         assert getattr(restored, field) == getattr(session, field)
@@ -636,6 +653,8 @@ def test_create_request_cannot_supply_recovery_state():
         recovery_next_attempt_at=9999999,
         recovery_deadline=9999999,
         recovery_pending_create=True,
+        recovery_health_deadline=9999999,
+        recovery_unready_observed=True,
         reboot_deadline=9999999,
     )
     api.validate_create_session_request(session)
@@ -648,6 +667,8 @@ def test_create_request_cannot_supply_recovery_state():
     )
     assert not session.recovery_pending_create
     assert session.reboot_deadline == 0
+    assert session.recovery_health_deadline == 0
+    assert not session.recovery_unready_observed
 
 
 @pytest.fixture
@@ -732,6 +753,7 @@ def test_millisecond_timestamp_survives_read_and_conditional_update(persisted_re
 def test_dead_session_makes_first_attempt_with_stored_milliseconds(persisted_recovery):
     recovery = persisted_recovery
     recovery.check()
+    recovery.check()
     assert recovery.row['state'] == 'INITIALIZING'
     recovery.now[0] += 60000
     recovery.check()
@@ -801,6 +823,8 @@ def test_planned_reboot_completes_through_normal_resume_and_validation(
     recovery.broker.delete_sessions.assert_not_called()
 
     recovery.broker.describe_sessions.return_value = {'sessions': {}}
+    recovery.check()
+    assert not recovery.row['recovering']
     recovery.check()
     assert recovery.row['recovering']
     assert recovery.row['recovery_next_attempt_at'] == recovery.now[0] + 60000
@@ -918,6 +942,7 @@ def test_recovery_conflict_retries_from_current_state(persisted_recovery, state)
     recovery.broker.create_session.assert_not_called()
     recovery.check()
     if state == 'READY':
+        recovery.check()
         recovery.now[0] += 60000
         recovery.check()
         assert recovery.row['recovery_attempts'] == 1
@@ -983,3 +1008,183 @@ def test_failed_resume_explains_the_error(persisted_recovery):
     progress.handle_event('resume', 'controller', event)
     assert recovery.row['state'] == 'ERROR'
     assert recovery.row['failure_reason'] == RESUME_FAILED_MESSAGE
+
+
+def assert_recovery_cleared(session):
+    assert not session.recovering
+    assert not session.recovery_pending_create
+    assert not session.recovery_unready_observed
+    assert session.recovery_attempts == 0
+    assert session.recovery_deadline == 0
+    assert session.recovery_next_attempt_at == 0
+    assert session.recovery_health_deadline == 0
+    assert session.reboot_deadline == 0
+
+
+@pytest.mark.parametrize(
+    'instance_state', ['stopped', 'stopping', 'terminated', 'shutting-down']
+)
+@pytest.mark.parametrize('path', ['resume', 'crash', 'reconcile', 'planned-reboot'])
+def test_inactive_instance_leaves_recovery(recovery, instance_state, path):
+    if path == 'reconcile':
+        recovery.check(resume=True)
+        # State changes must bypass even the first backoff interval.
+        assert recovery.store[0].recovering
+    elif path == 'resume':
+        recovery.store[0].state = 'STOPPED'
+    elif path == 'planned-reboot':
+        recovery.store[0].state = 'RESUMING'
+        recovery.store[0].reboot_deadline = recovery.now[0] + REBOOT_SECONDS * 1000
+    recovery.handler.context.aws().ec2().describe_instance_status.return_value[
+        'InstanceStatuses'
+    ][0]['InstanceState']['Name'] = instance_state
+    recovery.check(resume=path == 'resume')
+    if path == 'crash':
+        recovery.check()
+    session = recovery.store[0]
+    assert_recovery_cleared(session)
+    if instance_state in {'stopped', 'stopping'}:
+        assert session.state == 'STOPPED'
+        assert session.failure_reason is None
+    else:
+        assert session.state == 'ERROR'
+        assert instance_state in session.failure_reason
+    recovery.broker.create_session.assert_not_called()
+    recovery.broker.delete_sessions.assert_not_called()
+
+
+@pytest.mark.parametrize('status', [{}, {'InstanceState': {'Name': 'pending'}}])
+@pytest.mark.parametrize('resume', [False, True])
+def test_recovery_never_starts_without_a_running_instance(recovery, status, resume):
+    recovery.handler.context.aws().ec2().describe_instance_status.return_value = {
+        'InstanceStatuses': [status]
+    }
+    if resume:
+        recovery.store[0].state = 'STOPPED'
+    recovery.check(resume=resume)
+    recovery.check(resume=resume)
+    assert not recovery.store[0].recovering
+    assert recovery.store[0].state == ('STOPPED' if resume else 'READY')
+    recovery.broker.create_session.assert_not_called()
+
+
+@pytest.mark.parametrize('health_check', ['InstanceStatus', 'SystemStatus'])
+@pytest.mark.parametrize('live', [[], [{'id': 'old-dcv', 'state': 'UNKNOWN'}]])
+def test_unhealthy_running_instance_has_a_durable_deadline(
+    persisted_recovery, health_check, live
+):
+    recovery = persisted_recovery
+    recovery.row['state'] = 'RESUMING'
+    recovery.handler.context.aws().ec2().describe_instance_status.return_value[
+        'InstanceStatuses'
+    ][0][health_check]['Status'] = 'impaired'
+    recovery.broker.describe_sessions_for_host.return_value = live
+    recovery.check(resume=True)
+    deadline = recovery.now[0] + REBOOT_SECONDS * 1000
+    assert recovery.row['recovery_health_deadline'] == deadline
+    recovery.now[0] = deadline - 1
+    recovery.check()
+    assert recovery.row['recovering']
+    assert recovery.row['recovery_health_deadline'] == deadline
+    recovery.now[0] += 1
+    recovery.check()
+    session = recovery.db.get_from_db('someuser', 'desktop')
+    assert session.state == 'ERROR'
+    assert session.failure_reason == INSTANCE_UNHEALTHY_MESSAGE
+    assert_recovery_cleared(session)
+    recovery.broker.create_session.assert_not_called()
+    recovery.broker.delete_sessions.assert_not_called()
+
+
+def test_legacy_recovery_gets_a_deadline_once(persisted_recovery):
+    recovery = persisted_recovery
+    recovery.row['state'] = 'INITIALIZING'
+    recovery.row['recovering'] = True
+    recovery.row.pop('recovery_health_deadline')
+    recovery.handler.context.aws().ec2().describe_instance_status.return_value = {
+        'InstanceStatuses': []
+    }
+    recovery.check()
+    deadline = recovery.row['recovery_health_deadline']
+    recovery.now[0] += 60000
+    recovery.check()
+    assert recovery.row['recovery_health_deadline'] == deadline
+    recovery.now[0] = deadline
+    recovery.check()
+    assert recovery.row['state'] == 'ERROR'
+    assert not recovery.row['recovering']
+
+
+def test_instance_healthy_before_deadline_can_recover(recovery):
+    status = (
+        recovery.handler.context.aws()
+        .ec2()
+        .describe_instance_status.return_value['InstanceStatuses'][0]
+    )
+    status['InstanceStatus']['Status'] = 'impaired'
+    recovery.check(resume=True)
+    recovery.now[0] += REBOOT_SECONDS * 1000 - 1
+    recovery.check()
+    recovery.broker.create_session.assert_not_called()
+    status['InstanceStatus']['Status'] = 'ok'
+    recovery.check()
+    recovery.broker.create_session.assert_called_once()
+    recovery.broker.describe_sessions_for_host.return_value = [
+        {'id': 'new-dcv', 'state': 'READY'}
+    ]
+    recovery.now[0] += 180000
+    recovery.check()
+    assert recovery.store[0].state == 'READY'
+    assert_recovery_cleared(recovery.store[0])
+
+
+def test_single_unknown_does_not_start_recovery_and_ready_resets_it(persisted_recovery):
+    recovery = persisted_recovery
+
+    def observe(state):
+        recovery.broker.describe_sessions.return_value = {
+            'sessions': {'old-dcv': {'state': state}}
+        }
+        recovery.check()
+
+    for state in ['UNKNOWN', 'READY', 'UNKNOWN']:
+        observe(state)
+        assert recovery.row['state'] == 'READY'
+        assert not recovery.row['recovering']
+        assert recovery.row['failure_reason'] is None
+        assert recovery.row['recovery_unready_observed'] == (state != 'READY')
+    observe('UNKNOWN')
+    assert recovery.row['state'] == 'INITIALIZING'
+    assert recovery.row['recovering']
+    assert not recovery.row['recovery_unready_observed']
+    recovery.now[0] += 60000
+    recovery.check()
+    recovery.broker.create_session.assert_called_once()
+    recovery.broker.delete_sessions.assert_not_called()
+
+
+def test_delayed_reboot_complete_cannot_recover_stopped_instance(persisted_recovery):
+    from ideavirtualdesktopcontroller.app.events.handlers.dcv_host_event_handlers.dcv_host_reboot_complete_event_handler import (
+        DCVHostRebootCompleteEventHandler,
+    )
+
+    recovery = persisted_recovery
+    recovery.row['state'] = 'STOPPED'
+    recovery.handler.context.aws().ec2().describe_instance_status.return_value[
+        'InstanceStatuses'
+    ][0]['InstanceState']['Name'] = 'stopped'
+    handler = DCVHostRebootCompleteEventHandler.__new__(
+        DCVHostRebootCompleteEventHandler
+    )
+    handler.context = recovery.handler.context
+    handler.session_db = recovery.db
+    handler._logger = Mock()
+    handler.get_dcv_instance_id_from_sender_id = lambda sender: 'i-test'
+    event = SimpleNamespace(
+        detail={'idea_session_id': 'desktop', 'idea_session_owner': 'someuser'}
+    )
+    handler.handle_event('delayed-message', 'host', event)
+    assert recovery.row['state'] == 'STOPPED'
+    assert_recovery_cleared(recovery.db.get_from_db('someuser', 'desktop'))
+    recovery.broker.resume_session.assert_not_called()
+    recovery.broker.create_session.assert_not_called()

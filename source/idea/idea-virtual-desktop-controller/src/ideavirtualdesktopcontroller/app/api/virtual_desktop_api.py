@@ -602,6 +602,8 @@ class VirtualDesktopAPI(BaseAPI):
         session.recovery_next_attempt_at = 0
         session.recovery_deadline = 0
         session.recovery_pending_create = False
+        session.recovery_health_deadline = 0
+        session.recovery_unready_observed = False
         session.reboot_deadline = 0
         if Utils.is_empty(session.project) or Utils.is_empty(
             session.project.project_id

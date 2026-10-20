@@ -9,6 +9,7 @@ RESTARTING_MESSAGE = (
 )
 RECOVERY_FAILED_MESSAGE = 'Your desktop session could not restart after 3 attempts. Stop and start the desktop to try again, or contact your administrator.'
 SESSION_UNAVAILABLE_MESSAGE = 'The broker could not confirm that your desktop session is ready within the recovery window. The session has been preserved because your applications may still be running. Contact your administrator.'
+INSTANCE_UNHEALTHY_MESSAGE = 'Your desktop instance did not become healthy within 15 minutes of session recovery. Reboot the desktop to try again, or contact your administrator.'
 RETRY_SECONDS = (60, 300, 900)
 VALIDATION_SECONDS = 180
 REBOOT_SECONDS = 900
@@ -42,11 +43,14 @@ class DcvSessionRecovery:
                 VirtualDesktopSessionState.CREATING,
                 VirtualDesktopSessionState.INITIALIZING,
             }:
+                status = self.instance_status(session)
+                if self.leave_inactive_instance(session, status):
+                    return True
                 if Utils.current_time_ms() >= session.reboot_deadline:
-                    if self.healthy_instance(session):
+                    if self.healthy_instance(status):
                         self.start(session)
                     else:
-                        session.reboot_deadline = 0
+                        self.clear_recovery(session)
                         session.state = VirtualDesktopSessionState.ERROR
                         session.failure_reason = 'Your desktop did not become healthy within 15 minutes of rebooting. Stop and start the desktop to try again.'
                         self.save(session)
@@ -71,8 +75,15 @@ class DcvSessionRecovery:
             elif session.state == VirtualDesktopSessionState.READY:
                 response = self.broker.describe_sessions([session])
                 current = response.get('sessions', {}).get(session.dcv_session_id, {})
-                if current.get('state') != 'READY':
+                if current.get('state') == 'READY':
+                    if session.recovery_unready_observed:
+                        session.recovery_unready_observed = False
+                        self.save(session)
+                elif session.recovery_unready_observed:
                     self.start(session)
+                else:
+                    session.recovery_unready_observed = True
+                    self.save(session)
             return True
         except ClientError as error:
             if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
@@ -84,19 +95,28 @@ class DcvSessionRecovery:
             lock.release(key=self.key)
 
     def start(self, session):
+        status = self.instance_status(session)
+        if self.leave_inactive_instance(session, status):
+            return
+        if status.get('InstanceState', {}).get('Name') != 'running':
+            return
         session.reboot_deadline = 0
         session.state = VirtualDesktopSessionState.INITIALIZING
         session.recovering = True
         session.recovery_attempts = 0
         session.recovery_deadline = 0
         session.recovery_pending_create = False
+        session.recovery_unready_observed = False
+        session.recovery_health_deadline = (
+            Utils.current_time_ms() + REBOOT_SECONDS * 1000
+        )
         session.recovery_next_attempt_at = (
             Utils.current_time_ms() + RETRY_SECONDS[0] * 1000
         )
         session.failure_reason = RESTARTING_MESSAGE
         self.save(session)
 
-    def healthy_instance(self, session):
+    def instance_status(self, session):
         statuses = (
             self.context.aws()
             .ec2()
@@ -105,16 +125,59 @@ class DcvSessionRecovery:
             )
             .get('InstanceStatuses', [])
         )
-        return len(statuses) == 1 and all(
+        return statuses[0] if len(statuses) == 1 else {}
+
+    @staticmethod
+    def healthy_instance(status):
+        return all(
             (
-                statuses[0].get('InstanceState', {}).get('Name') == 'running',
-                statuses[0].get('InstanceStatus', {}).get('Status') == 'ok',
-                statuses[0].get('SystemStatus', {}).get('Status') == 'ok',
+                status.get('InstanceState', {}).get('Name') == 'running',
+                status.get('InstanceStatus', {}).get('Status') == 'ok',
+                status.get('SystemStatus', {}).get('Status') == 'ok',
             )
         )
 
+    @staticmethod
+    def clear_recovery(session):
+        session.recovering = False
+        session.recovery_attempts = 0
+        session.recovery_deadline = 0
+        session.recovery_next_attempt_at = 0
+        session.recovery_pending_create = False
+        session.recovery_health_deadline = 0
+        session.recovery_unready_observed = False
+        session.reboot_deadline = 0
+
+    def leave_inactive_instance(self, session, status):
+        state = status.get('InstanceState', {}).get('Name')
+        if state not in {'stopped', 'stopping', 'terminated', 'shutting-down'}:
+            return False
+        self.clear_recovery(session)
+        if state in {'stopped', 'stopping'}:
+            session.state = VirtualDesktopSessionState.STOPPED
+            session.failure_reason = None
+        else:
+            session.state = VirtualDesktopSessionState.ERROR
+            session.failure_reason = f'Your desktop instance is {state} and its session cannot be recovered. Contact your administrator.'
+        self.save(session)
+        return True
+
     def reconcile(self, session):
         now = Utils.current_time_ms()
+        status = self.instance_status(session)
+        if self.leave_inactive_instance(session, status):
+            return
+        # Bound recoveries already in progress when this deadline was introduced.
+        if not session.recovery_health_deadline:
+            session.recovery_health_deadline = now + REBOOT_SECONDS * 1000
+            self.save(session)
+        healthy = self.healthy_instance(status)
+        if not healthy and now >= session.recovery_health_deadline:
+            self.clear_recovery(session)
+            session.state = VirtualDesktopSessionState.ERROR
+            session.failure_reason = INSTANCE_UNHEALTHY_MESSAGE
+            self.save(session)
+            return
         if now < session.recovery_next_attempt_at or (
             now < session.recovery_deadline and not session.recovery_pending_create
         ):
@@ -122,7 +185,7 @@ class DcvSessionRecovery:
         # Discover an accepted create even if the controller died before saving its id.
         entries = self.broker.describe_sessions_for_host(session)
         live = [entry for entry in entries if entry.get('state') != 'DELETED']
-        if not live and not self.healthy_instance(session):
+        if not live and not healthy:
             return
         ready = [entry for entry in live if entry.get('state') == 'READY']
         if len(live) == 1 and len(ready) == 1:
@@ -133,11 +196,7 @@ class DcvSessionRecovery:
                 constants.IDEA_TAG_DCV_SESSION_ID,
                 session.dcv_session_id,
             )
-            session.recovering = False
-            session.recovery_pending_create = False
-            session.recovery_attempts = 0
-            session.recovery_deadline = 0
-            session.recovery_next_attempt_at = 0
+            self.clear_recovery(session)
             session.failure_reason = None
             self.context.distributed_lock().assert_held(key=self.key)
             self.handler.mark_ready(session, check_version=True)
@@ -155,7 +214,7 @@ class DcvSessionRecovery:
             session.recovery_deadline = 0
             if session.recovery_attempts >= len(RETRY_SECONDS):
                 session.state = VirtualDesktopSessionState.ERROR
-                session.recovering = False
+                self.clear_recovery(session)
                 session.failure_reason = (
                     SESSION_UNAVAILABLE_MESSAGE if live else RECOVERY_FAILED_MESSAGE
                 )
