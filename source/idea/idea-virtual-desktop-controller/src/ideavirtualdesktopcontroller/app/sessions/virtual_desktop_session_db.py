@@ -190,6 +190,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             recovery_pending_create=bool(
                 db_entry.get('recovery_pending_create', False)
             ),
+            reboot_deadline=int(db_entry.get('reboot_deadline', 0)),
             owner=Utils.get_value_as_string(
                 sessions_constants.USER_SESSION_DB_HASH_KEY, db_entry
             ),
@@ -383,6 +384,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             'recovery_next_attempt_at': session.recovery_next_attempt_at,
             'recovery_deadline': session.recovery_deadline,
             'recovery_pending_create': session.recovery_pending_create,
+            'reboot_deadline': session.reboot_deadline,
             sessions_constants.USER_SESSION_DB_HASH_KEY: session.owner,
             sessions_constants.USER_SESSION_DB_RANGE_KEY: session.idea_session_id,
             sessions_constants.USER_SESSION_DB_CREATED_ON_KEY: Utils.to_milliseconds(
@@ -619,6 +621,13 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         if session.state != VirtualDesktopSessionState.INITIALIZING:
             session.recovering = False
             session.recovery_pending_create = False
+        if session.state in STOP_TIME_STATES or session.state in {
+            VirtualDesktopSessionState.READY,
+            VirtualDesktopSessionState.ERROR,
+            VirtualDesktopSessionState.STOPPING,
+            VirtualDesktopSessionState.DELETING,
+        }:
+            session.reboot_deadline = 0
         self._stamp_stopped_on(session)
         db_entry = self.convert_session_object_to_db_dict(session)
         db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = max(

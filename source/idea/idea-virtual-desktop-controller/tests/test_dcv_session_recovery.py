@@ -21,6 +21,7 @@ from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
     DcvSessionRecovery,
     RESTARTING_MESSAGE,
     RECOVERY_FAILED_MESSAGE,
+    REBOOT_SECONDS,
 )
 from ideavirtualdesktopcontroller.app.events.handlers.validate_dcv_session_event_handlers.validate_dcv_session_creation_event_handler import (
     ValidateDCVSessionCreationEventHandler,
@@ -234,6 +235,95 @@ def test_resume_waits_for_live_broker_session(recovery):
     assert recovery.store[0].state != 'READY'
 
 
+@pytest.mark.parametrize('validation', [False, True])
+def test_planned_reboot_does_not_start_recovery(recovery, validation):
+    from ideavirtualdesktopcontroller.app.sessions.image_validation import (
+        ImageTestLauncher,
+    )
+
+    utils = VirtualDesktopSessionUtils.__new__(VirtualDesktopSessionUtils)
+    utils.context = recovery.handler.context
+    utils._session_db = recovery.db
+    utils._server_utils = Mock()
+    utils._server_utils.reboot_dcv_hosts.return_value = {}
+    utils._logger = Mock()
+    recovery.broker.get_active_counts_for_sessions.return_value = []
+
+    def reboot(servers):
+        stored = recovery.store[0]
+        assert stored.state == 'RESUMING'
+        assert stored.reboot_deadline == recovery.now[0] + REBOOT_SECONDS * 1000
+        recovery.check()
+        assert not recovery.store[0].recovering
+        return {}
+
+    utils._server_utils.reboot_dcv_hosts.side_effect = reboot
+    session = deepcopy(recovery.store[0])
+    session.force = True
+    if validation:
+        launcher = ImageTestLauncher.__new__(ImageTestLauncher)
+        launcher.api = SimpleNamespace(session_utils=utils)
+        launcher.clock = lambda: recovery.now[0] / 1000
+        launcher._wait_ready = Mock()
+        launcher._reboot(session, 900)
+    else:
+        success, failed = utils.reboot_sessions([session])
+        assert len(success) == 1
+        assert failed == []
+    recovery.db.update.reset_mock()
+    recovery.check()
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'RESUMING'
+    assert not recovery.store[0].recovering
+    recovery.db.update.assert_not_called()
+    recovery.broker.create_session.assert_not_called()
+
+
+@pytest.mark.parametrize('state', ['RESUMING', 'CREATING', 'INITIALIZING'])
+def test_planned_reboot_deadline_starts_recovery(recovery, state):
+    recovery.store[0].state = state
+    recovery.store[0].reboot_deadline = recovery.now[0] + 900000
+    recovery.now[0] += 899999
+    recovery.check()
+    recovery.db.update.assert_not_called()
+    recovery.now[0] += 1
+    recovery.check()
+    assert recovery.store[0].recovering
+    assert recovery.store[0].reboot_deadline == 0
+    assert recovery.store[0].recovery_next_attempt_at == recovery.now[0] + 60000
+    recovery.now[0] += 60000
+    recovery.check()
+    recovery.broker.create_session.assert_called_once()
+
+
+def test_planned_reboot_that_never_becomes_healthy_ends_in_error(recovery):
+    recovery.store[0].state = 'RESUMING'
+    recovery.store[0].reboot_deadline = recovery.now[0]
+    recovery.handler.context.aws().ec2().describe_instance_status.return_value = {
+        'InstanceStatuses': []
+    }
+    recovery.check()
+    assert recovery.store[0].state == 'ERROR'
+    assert recovery.store[0].reboot_deadline == 0
+    assert '15 minutes' in recovery.store[0].failure_reason
+    recovery.broker.create_session.assert_not_called()
+
+
+@pytest.mark.parametrize('state', ['RESUMING', 'CREATING'])
+def test_planned_reboot_ignores_stale_broker_readiness(recovery, state):
+    recovery.store[0].state = state
+    recovery.store[0].reboot_deadline = recovery.now[0] + REBOOT_SECONDS * 1000
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': 'READY'}}
+    }
+    event = SimpleNamespace(
+        detail={'idea_session_id': 'desktop', 'idea_session_owner': 'someuser'}
+    )
+    recovery.handler.handle_event('validation', 'controller', event)
+    recovery.db.update.assert_not_called()
+    assert recovery.store[0].state == state
+
+
 def test_connection_failure_uses_authenticated_owner_and_queues_recovery(recovery):
     api = VirtualDesktopAPI.__new__(VirtualDesktopAPI)
     api.context = recovery.handler.context
@@ -296,12 +386,18 @@ def test_periodic_scan_schedules_only_active_sessions(recovery):
                 owner='someuser',
                 idea_session_id='recovering',
             ),
+            VirtualDesktopSession(
+                state='RESUMING',
+                reboot_deadline=2000000,
+                owner='someuser',
+                idea_session_id='rebooting',
+            ),
         ],
         cursor='next-page',
     )
     utils.check_dcv_session_health()
     assert (
-        utils.events_utils.publish_validate_dcv_session_creation_event.call_count == 2
+        utils.events_utils.publish_validate_dcv_session_creation_event.call_count == 3
     )
     assert utils._dcv_health_cursor == 'next-page'
 
@@ -375,6 +471,7 @@ def test_recovery_fields_round_trip_through_database(recovery):
     session.recovery_next_attempt_at = 2000988
     session.recovery_deadline = 3000989
     session.recovery_pending_create = True
+    session.reboot_deadline = 4000000
     db = VirtualDesktopSessionDB.__new__(VirtualDesktopSessionDB)
     db._server_db = Mock()
     db._server_db.convert_server_object_to_db_dict.return_value = {}
@@ -395,6 +492,7 @@ def test_recovery_fields_round_trip_through_database(recovery):
         'recovery_next_attempt_at',
         'recovery_deadline',
         'recovery_pending_create',
+        'reboot_deadline',
     ):
         assert getattr(restored, field) == getattr(session, field)
 
@@ -486,6 +584,7 @@ def test_create_request_cannot_supply_recovery_state():
         recovery_next_attempt_at=9999999,
         recovery_deadline=9999999,
         recovery_pending_create=True,
+        reboot_deadline=9999999,
     )
     api.validate_create_session_request(session)
     assert not session.recovering
@@ -496,6 +595,7 @@ def test_create_request_cannot_supply_recovery_state():
         == 0
     )
     assert not session.recovery_pending_create
+    assert session.reboot_deadline == 0
 
 
 @pytest.fixture
@@ -586,6 +686,101 @@ def test_dead_session_makes_first_attempt_with_stored_milliseconds(persisted_rec
     assert recovery.row['recovery_attempts'] == 1
     assert recovery.row['dcv_session_id'] == 'new-dcv'
     recovery.broker.create_session.assert_called_once()
+
+
+def test_planned_reboot_completes_through_normal_resume_and_validation(
+    persisted_recovery,
+):
+    from ideavirtualdesktopcontroller.app.events.handlers.dcv_host_event_handlers.dcv_host_reboot_complete_event_handler import (
+        DCVHostRebootCompleteEventHandler,
+    )
+    from ideavirtualdesktopcontroller.app.events.handlers.ssm_commands_progress_event_handlers.idea_resume_session_command_progress_event_handler import (
+        IDEAResumeSessionCommandProgressEventHandler,
+    )
+
+    recovery = persisted_recovery
+    recovery.row['state'] = 'RESUMING'
+    recovery.row['reboot_deadline'] = recovery.now[0] + REBOOT_SECONDS * 1000
+    event = SimpleNamespace(
+        detail={
+            'idea_session_id': 'desktop',
+            'idea_session_owner': 'someuser',
+            'status': 'Success',
+            'command_id': 'resume-command',
+        }
+    )
+    handler = DCVHostRebootCompleteEventHandler.__new__(
+        DCVHostRebootCompleteEventHandler
+    )
+    handler.context = recovery.handler.context
+    handler.session_db = recovery.db
+    handler.session_counter_db = Mock()
+    handler.session_counter_db.get.return_value = SimpleNamespace(counter=0)
+    handler.server_db = Mock()
+    handler._logger = Mock()
+    handler.get_dcv_instance_id_from_sender_id = lambda sender: 'i-test'
+    recovery.broker.resume_session.side_effect = lambda session: session
+    handler.handle_event('reboot', 'host', event)
+    recovery.broker.resume_session.assert_called_once()
+    assert recovery.row['state'] == 'RESUMING'
+    assert not recovery.row['recovering']
+
+    progress = IDEAResumeSessionCommandProgressEventHandler.__new__(
+        IDEAResumeSessionCommandProgressEventHandler
+    )
+    progress.session_db = recovery.db
+    progress.ssm_commands_db = Mock()
+    progress.events_utils = Mock()
+    progress._logger = Mock()
+    progress.is_sender_controller_role = lambda sender: True
+    progress.handle_event('resume', 'controller', event)
+    assert recovery.row['state'] == 'INITIALIZING'
+    assert recovery.row['reboot_deadline']
+    assert not recovery.row['recovering']
+    recovery.handler.session_counter_db = handler.session_counter_db
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': 'READY'}}
+    }
+    recovery.handler.handle_event('validation', 'controller', event)
+    assert recovery.row['state'] == 'READY'
+    assert recovery.row['reboot_deadline'] == 0
+    assert not recovery.row['recovering']
+    recovery.broker.create_session.assert_not_called()
+    recovery.broker.delete_sessions.assert_not_called()
+
+    recovery.broker.describe_sessions.return_value = {'sessions': {}}
+    recovery.check()
+    assert recovery.row['recovering']
+    assert recovery.row['recovery_next_attempt_at'] == recovery.now[0] + 60000
+
+
+def test_reboot_deadline_survives_unrelated_writes_and_controller_restarts(
+    persisted_recovery,
+):
+    recovery = persisted_recovery
+    recovery.row['state'] = 'RESUMING'
+    deadline = recovery.now[0] + REBOOT_SECONDS * 1000
+    recovery.row['reboot_deadline'] = deadline
+    recovery.now[0] = deadline - 1
+    session = recovery.db.get_from_db('someuser', 'desktop')
+    session.name = 'renamed'
+    recovery.db.update(session)
+    recovery.check()
+    assert recovery.row['reboot_deadline'] == deadline
+    assert not recovery.row['recovering']
+    recovery.now[0] = deadline
+    recovery.check()
+    assert recovery.row['recovering']
+
+
+@pytest.mark.parametrize('state', ['READY', 'ERROR', 'STOPPING', 'STOPPED', 'DELETING'])
+def test_reboot_deadline_clears_when_the_reboot_ends(persisted_recovery, state):
+    recovery = persisted_recovery
+    recovery.row['reboot_deadline'] = recovery.now[0] + REBOOT_SECONDS * 1000
+    session = recovery.db.get_from_db('someuser', 'desktop')
+    session.state = state
+    recovery.db.update(session)
+    assert recovery.row['reboot_deadline'] == 0
 
 
 @pytest.mark.parametrize('conflict', [None, 'start', 'ready'])

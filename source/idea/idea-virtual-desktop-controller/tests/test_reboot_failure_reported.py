@@ -1,9 +1,7 @@
 """
 A reboot that EC2 refuses.
 
-The state write and the success list both wait on the reboot result, so a refused
-reboot is reported as a failure and the row still describes the state the desktop
-is actually in.
+The reboot intent is saved before EC2 is called and rolled back if EC2 refuses.
 """
 
 from unittest.mock import Mock
@@ -29,8 +27,9 @@ class FakeSessionDB:
     ):
         return self._rows.get(idea_session_id)
 
-    def update(self, session):
+    def update(self, session, **kwargs):
         self.updates.append((session.idea_session_id, session.state))
+        self._rows[session.idea_session_id] = session
         return session
 
 
@@ -56,7 +55,7 @@ class FakeContext:
         self.dcv_broker_client = FakeBrokerClient()
 
 
-def a_session(session_id='sess-1', owner='alice', instance_id='i-1'):
+def a_session(session_id='sess-1', owner='someuser', instance_id='i-1'):
     return VirtualDesktopSession(
         idea_session_id=session_id,
         name='desktop',
@@ -87,13 +86,15 @@ def test_a_refused_reboot_is_reported_as_a_failure():
     assert 'Client.UnsupportedOperation' in failed[0].failure_reason
 
 
-def test_a_refused_reboot_does_not_write_resuming():
+def test_a_refused_reboot_restores_the_original_state():
     row = a_session()
     utils = build_utils({'sess-1': row}, {'ERROR': 'Client.UnsupportedOperation'})
 
     utils.reboot_sessions([a_session()])
 
-    assert utils._session_db.updates == [], 'state must not advance on a refused reboot'
+    stored = utils._session_db._rows['sess-1']
+    assert stored.state == VirtualDesktopSessionState.READY
+    assert stored.reboot_deadline == 0
 
 
 def test_an_accepted_reboot_still_succeeds():

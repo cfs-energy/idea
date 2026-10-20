@@ -10,6 +10,7 @@ RESTARTING_MESSAGE = (
 RECOVERY_FAILED_MESSAGE = 'Your desktop session could not restart after 3 attempts. Stop and start the desktop to try again, or contact your administrator.'
 RETRY_SECONDS = (60, 300, 900)
 VALIDATION_SECONDS = 180
+REBOOT_SECONDS = 900
 
 
 class DcvSessionRecovery:
@@ -26,13 +27,32 @@ class DcvSessionRecovery:
         session._updated_on_ms = updated._updated_on_ms
 
     def check(self, session, resume=False):
+        """Return False when a planned reboot needs the normal resume or validation flow."""
         self.key = 'dcv-session-' + session.idea_session_id
         lock = self.context.distributed_lock()
         lock.acquire(key=self.key)
         try:
             session = self.db.get_from_db(session.owner, session.idea_session_id)
             if session is None:
-                return
+                return True
+            if session.reboot_deadline and session.state in {
+                VirtualDesktopSessionState.READY,
+                VirtualDesktopSessionState.RESUMING,
+                VirtualDesktopSessionState.CREATING,
+                VirtualDesktopSessionState.INITIALIZING,
+            }:
+                if Utils.current_time_ms() >= session.reboot_deadline:
+                    if self.healthy_instance(session):
+                        self.start(session)
+                    else:
+                        session.reboot_deadline = 0
+                        session.state = VirtualDesktopSessionState.ERROR
+                        session.failure_reason = 'Your desktop did not become healthy within 15 minutes of rebooting. Stop and start the desktop to try again.'
+                        self.save(session)
+                    return True
+                if resume:
+                    return session.state != VirtualDesktopSessionState.RESUMING
+                return session.state != VirtualDesktopSessionState.INITIALIZING
             if resume:
                 if session.state not in {
                     VirtualDesktopSessionState.READY,
@@ -40,7 +60,7 @@ class DcvSessionRecovery:
                     VirtualDesktopSessionState.STOPPED,
                     VirtualDesktopSessionState.ERROR,
                 }:
-                    return
+                    return True
                 self.start(session)
             elif (
                 session.recovering
@@ -52,6 +72,7 @@ class DcvSessionRecovery:
                 current = response.get('sessions', {}).get(session.dcv_session_id, {})
                 if current.get('state') != 'READY':
                     self.start(session)
+            return True
         except ClientError as error:
             if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
                 raise
@@ -62,6 +83,7 @@ class DcvSessionRecovery:
             lock.release(key=self.key)
 
     def start(self, session):
+        session.reboot_deadline = 0
         session.state = VirtualDesktopSessionState.INITIALIZING
         session.recovering = True
         session.recovery_attempts = 0

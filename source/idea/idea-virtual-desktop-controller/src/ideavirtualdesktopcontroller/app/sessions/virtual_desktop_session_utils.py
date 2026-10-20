@@ -49,6 +49,9 @@ from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_sessio
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
+from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
+    REBOOT_SECONDS,
+)
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_db import (
     VirtualDesktopSSMCommandsDB,
 )
@@ -206,9 +209,13 @@ class VirtualDesktopSessionUtils:
             ListSessionsRequest(paginator=SocaPaginator(cursor=self._dcv_health_cursor))
         )
         for session in result.listing:
-            if session.state == VirtualDesktopSessionState.READY or (
-                session.recovering
-                and session.state == VirtualDesktopSessionState.INITIALIZING
+            if (
+                session.reboot_deadline
+                or session.state == VirtualDesktopSessionState.READY
+                or (
+                    session.recovering
+                    and session.state == VirtualDesktopSessionState.INITIALIZING
+                )
             ):
                 self.events_utils.publish_validate_dcv_session_creation_event(
                     idea_session_id=session.idea_session_id,
@@ -1065,7 +1072,6 @@ class VirtualDesktopSessionUtils:
     ) -> tuple[List[VirtualDesktopSession], List[VirtualDesktopSession]]:
         success_response_list: List[VirtualDesktopSession] = []
         fail_response_list: List[VirtualDesktopSession] = []
-        servers_to_reboot: List[VirtualDesktopServer] = []
         sessions_to_reboot: List[VirtualDesktopSession] = []
         sessions_to_reboot_pending_validation: List[VirtualDesktopSession] = []
 
@@ -1114,29 +1120,24 @@ class VirtualDesktopSessionUtils:
 
             sessions_to_reboot.append(session)
 
-        session_server_map: Dict[str, VirtualDesktopSession] = {}
         for session in sessions_to_reboot:
-            servers_to_reboot.append(session.server)
-            session_server_map[session.server.instance_id] = session
-
-        response = self._server_utils.reboot_dcv_hosts(servers_to_reboot)
-
-        # the reboot call can fail after the sessions were picked, so the state write and
-        # the success list both wait on its result.
-        for server in servers_to_reboot:
-            session = session_server_map[server.instance_id]
+            original = session.model_copy(deep=True)
+            session.state = VirtualDesktopSessionState.RESUMING
+            session.failure_reason = None
+            session.reboot_deadline = Utils.current_time_ms() + REBOOT_SECONDS * 1000
+            # Save intent before EC2 can remove the session from the broker.
+            session = self._session_db.update(session, check_version=True)
+            response = self._server_utils.reboot_dcv_hosts([session.server])
             if 'ERROR' in response:
+                original._updated_on_ms = session._updated_on_ms
+                session = self._session_db.update(original, check_version=True)
                 session.failure_reason = Utils.get_value_as_string(
                     'ERROR', response, 'There is an error, please check with Admin.'
                 )
                 self._logger.error(session.failure_reason)
                 fail_response_list.append(session)
             else:
-                session.state = VirtualDesktopSessionState.RESUMING
-                # rebooting is how a desktop comes back from ERROR, and the recorded
-                # reason is persisted: leaving it would misreport the next failure.
-                session.failure_reason = None
-                success_response_list.append(self._session_db.update(session))
+                success_response_list.append(session)
 
         return success_response_list, fail_response_list
 

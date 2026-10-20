@@ -211,6 +211,7 @@ export interface VirtualDesktopSession {
   recovery_next_attempt_at?: number;
   recovery_deadline?: number;
   recovery_pending_create?: boolean;
+  reboot_deadline?: number;
   dcv_session_id?: string;
   idea_session_id?: string;
   base_os?: VirtualDesktopBaseOS;

@@ -65,8 +65,11 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
             self.log_error(message_id=message_id, message='Invalid IDEA SESSION ID.')
             return
 
-        if session.state == VirtualDesktopSessionState.READY or session.recovering:
-            DcvSessionRecovery(self).check(session)
+        if (
+            session.state == VirtualDesktopSessionState.READY
+            or session.recovering
+            or session.reboot_deadline
+        ) and DcvSessionRecovery(self).check(session):
             return
         counter_db_entry = self.session_counter_db.get(
             session.idea_session_id,

@@ -273,6 +273,7 @@ class VirtualDesktopSession(SocaBaseModel):
     recovery_next_attempt_at: int = Field(default=0)
     recovery_deadline: int = Field(default=0)
     recovery_pending_create: bool = Field(default=False)
+    reboot_deadline: int = Field(default=0)
     dcv_session_id: Optional[str] = Field(default=None)
     idea_session_id: Optional[str] = Field(default=None)
     base_os: Optional[VirtualDesktopBaseOS] = Field(default=None)

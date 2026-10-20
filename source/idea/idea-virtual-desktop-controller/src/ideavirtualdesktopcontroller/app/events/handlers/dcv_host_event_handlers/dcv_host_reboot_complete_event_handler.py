@@ -87,8 +87,9 @@ class DCVHostRebootCompleteEventHandler(BaseVirtualDesktopControllerEventHandler
             message=f'Idea session {session.idea_session_id}:{session.name} is in state {session.state}. Handling reboot complete event',
         )
 
-        if not session.hibernation_enabled:
-            DcvSessionRecovery(self).check(session, resume=True)
+        if (
+            not session.hibernation_enabled or session.reboot_deadline
+        ) and DcvSessionRecovery(self).check(session, resume=True):
             return
 
         # ALWAYS reset counters on reboot, regardless of session state
