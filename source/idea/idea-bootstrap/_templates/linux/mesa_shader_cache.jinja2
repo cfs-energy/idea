@@ -1,0 +1,15 @@
+{% if context.base_os == 'ubuntu2604' %}
+# Begin: Mesa shader cache
+{% if not context.is_gpu_instance_type() %}
+if [[ "$(uname -m)" == "aarch64" ]]; then
+  # Shared homes can contain llvmpipe machine code for a different ARM CPU.
+  install -d -m 755 /etc/environment.d || exit 1
+  printf 'MESA_SHADER_CACHE_DISABLE=true\n' > /etc/environment.d/90-idea-mesa.conf || exit 1
+else
+  rm -f /etc/environment.d/90-idea-mesa.conf || exit 1
+fi
+{% else %}
+rm -f /etc/environment.d/90-idea-mesa.conf || exit 1
+{% endif %}
+# End: Mesa shader cache
+{% endif %}

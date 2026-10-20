@@ -191,6 +191,7 @@ fi
 {% endif %}
 {% include '_templates/linux/gnome_online_accounts.jinja2' %}
 {% include '_templates/linux/gnome_desktop_polish.jinja2' %}
+{% include '_templates/linux/mesa_shader_cache.jinja2' %}
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}

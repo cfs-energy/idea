@@ -33,6 +33,54 @@ X11 = [
 
 
 @pytest.mark.parametrize('base_os', WAYLAND + X11)
+def test_mesa_shader_cache_setting_reaches_host_and_image_bootstrap(base_os):
+    from test_image_bake_bootstrap import render as render_host
+
+    for template in (
+        'virtual-desktop-host-linux/configure_dcv_host.sh.jinja2',
+        'dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2',
+    ):
+        text = render_host(template, base_os)
+        assert ('# Begin: Mesa shader cache' in text) == (base_os == 'ubuntu2604')
+
+
+@pytest.mark.parametrize(
+    'machine,instance_type,disabled',
+    [
+        ('aarch64', 'm6g.xlarge', True),
+        ('aarch64', 'r8g.large', True),
+        ('x86_64', 'm7i.large', False),
+        ('aarch64', 'g5g.xlarge', False),
+    ],
+)
+def test_mesa_shader_cache_setting_is_scoped_and_idempotent(
+    tmp_path, machine, instance_type, disabled
+):
+    directory = tmp_path / 'environment.d'
+    directory.mkdir()
+    unrelated = directory / '10-custom.conf'
+    unrelated.write_text('OTHER_SETTING=true\n')
+    setting = directory / '90-idea-mesa.conf'
+    setting.write_text('MESA_SHADER_CACHE_DISABLE=false\n')
+    script = render(
+        '_templates/linux/mesa_shader_cache.jinja2',
+        'ubuntu2604',
+        instance_type=instance_type,
+    ).replace('/etc/environment.d', str(directory))
+    for _ in range(2):
+        subprocess.run(
+            ['bash', '-eu', '-c', f'uname() {{ echo {machine}; }}\n' + script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert unrelated.read_text() == 'OTHER_SETTING=true\n'
+        assert setting.exists() == disabled
+        if disabled:
+            assert setting.read_text() == 'MESA_SHADER_CACHE_DISABLE=true\n'
+
+
+@pytest.mark.parametrize('base_os', WAYLAND + X11)
 def test_only_el10_disables_gdm_local_displays(base_os):
     text = render('_templates/linux/dcv_server.jinja2', base_os)
     assert ('# Begin: DCV headless GDM' in text) == (base_os in WAYLAND[:2])
