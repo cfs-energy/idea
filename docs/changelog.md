@@ -12,7 +12,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 * A stopped desktop no longer shows its last screen in My desktops; the card shows its state until the desktop runs again.
 * The "Preview not captured yet" box connects to a ready desktop when clicked, like the preview does.
-* If a desktop's session stops responding, IDEA restarts the session for you. Connect and the DCV client file now say what went wrong instead of doing nothing.
+* If a desktop's session disappears, IDEA restarts the session for you; a temporary connection loss preserves your running applications. Connect and the DCV client file now say what went wrong instead of doing nothing.
 * Ubuntu 26.04 desktops used only over SSH are no longer stopped as idle.
 * A desktop's preview appears within seconds of it becoming ready, and a desktop that restarts never shows its old screen.
 * Ubuntu 26.04 desktops on Arm instances no longer crash at login when your home folder was used on a different kind of Arm instance.
@@ -20,6 +20,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Desktop card preview**: the card shows a capture only while the desktop is ready and otherwise falls back to the state placeholder.
 * **Desktop previews**: My desktops checks every 5 seconds while a desktop is changing state or is ready without a first preview (up to a minute), then returns to every 30 seconds, and drops a cached preview when the desktop leaves Ready.
 * **Desktop session recovery**: when a desktop's DCV session disappears while its instance is healthy, the controller recreates it after 1, 5 and 15 minutes, then marks the desktop Error with a reason. The controller role gains `ec2:DescribeInstanceStatus`.
+* **Preserve sessions during broker outages**: recovery recreates only missing or DELETED broker sessions. UNKNOWN and other transient states wait through the existing recovery window, then show Error with a reason without deleting the session or its running applications.
 * **Idle detection**: SSH logins are counted through logind, so desktops without `last` (Ubuntu 26.04) are not stopped while in use. Empty or malformed results are logged and never stop a desktop.
 * **Ubuntu 26.04 Arm desktops**: Mesa's on-disk shader cache is turned off on Arm hosts without a GPU (`MESA_SHADER_CACHE_DISABLE=true` in `/etc/environment.d`). Its cache key ignores the Arm CPU model, so llvmpipe code compiled with SVE on Graviton4 and saved in a shared home crashed gnome-shell with SIGILL on Graviton2. Shaders are still compiled at runtime. Rebake Ubuntu 26.04 images to pick it up.
 * **Ubuntu 26.04 first boot**: the unused networkd wait is masked, which saves about 1m40s per boot. Rebake Ubuntu 26.04 images to pick it up.

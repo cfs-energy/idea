@@ -21,6 +21,7 @@ from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
     DcvSessionRecovery,
     RESTARTING_MESSAGE,
     RECOVERY_FAILED_MESSAGE,
+    SESSION_UNAVAILABLE_MESSAGE,
     REBOOT_SECONDS,
 )
 from ideavirtualdesktopcontroller.app.events.handlers.validate_dcv_session_event_handlers.validate_dcv_session_creation_event_handler import (
@@ -213,15 +214,66 @@ def test_failed_claim_or_lost_lock_never_creates(recovery):
     recovery.broker.create_session.assert_not_called()
 
 
-def test_existing_unready_session_is_deleted_before_create(recovery):
+@pytest.mark.parametrize(
+    'state', ['UNKNOWN', 'CREATING', 'DELETING', None, 'FUTURE_STATE']
+)
+@pytest.mark.parametrize('healthy', [False, True])
+def test_unready_session_never_deletes_or_recreates_and_times_out(
+    recovery, state, healthy
+):
+    if not healthy:
+        recovery.handler.context.aws().ec2().describe_instance_status.return_value = {
+            'InstanceStatuses': []
+        }
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': state}}
+    }
+    recovery.broker.describe_sessions_for_host.return_value = [
+        {'id': 'old-dcv', 'state': state}
+    ]
+    recovery.check()
+    for delay in [60, 300, 900]:
+        recovery.now[0] += delay * 1000
+        recovery.check()
+        recovery.now[0] += 180000
+        recovery.check()
+        recovery.broker.delete_sessions.assert_not_called()
+        recovery.broker.create_session.assert_not_called()
+    assert recovery.store[0].state == 'ERROR'
+    assert not recovery.store[0].recovering
+    assert recovery.store[0].dcv_session_id == 'old-dcv'
+    assert recovery.store[0].failure_reason == SESSION_UNAVAILABLE_MESSAGE
+    recovery.now[0] += 9999999
+    recovery.check()
+    recovery.broker.delete_sessions.assert_not_called()
+    recovery.broker.create_session.assert_not_called()
+
+
+def test_unknown_recovers_in_place_when_broker_contact_returns(recovery):
     recovery.check()
     recovery.now[0] += 60000
     recovery.broker.describe_sessions_for_host.return_value = [
         {'id': 'old-dcv', 'state': 'UNKNOWN'}
     ]
     recovery.check()
-    recovery.broker.delete_sessions.assert_called_once()
+    recovery.now[0] += 60000
+    recovery.broker.describe_sessions_for_host.return_value[0]['state'] = 'READY'
+    recovery.check()
+    assert recovery.store[0].state == 'READY'
+    assert recovery.store[0].dcv_session_id == 'old-dcv'
+    assert recovery.store[0].failure_reason is None
+    recovery.broker.delete_sessions.assert_not_called()
     recovery.broker.create_session.assert_not_called()
+
+
+@pytest.mark.parametrize('entries', [[], [{'id': 'old-dcv', 'state': 'DELETED'}]])
+def test_only_missing_or_deleted_sessions_are_recreated(recovery, entries):
+    recovery.check()
+    recovery.now[0] += 60000
+    recovery.broker.describe_sessions_for_host.return_value = entries
+    recovery.check()
+    recovery.broker.create_session.assert_called_once()
+    recovery.broker.delete_sessions.assert_not_called()
 
 
 def test_resume_waits_for_live_broker_session(recovery):
@@ -431,7 +483,7 @@ def test_conditional_update_uses_read_version(recovery):
     )
 
 
-def test_async_deletion_and_creation_share_one_attempt(recovery):
+def test_unknown_session_that_disappears_can_be_recreated(recovery):
     recovery.check()
     recovery.now[0] += 60000
     recovery.broker.describe_sessions_for_host.return_value = [
@@ -441,7 +493,7 @@ def test_async_deletion_and_creation_share_one_attempt(recovery):
     assert recovery.store[0].recovery_pending_create
     recovery.now[0] += 60000
     recovery.check()
-    recovery.broker.delete_sessions.assert_called_once()
+    recovery.broker.delete_sessions.assert_not_called()
     recovery.broker.create_session.assert_not_called()
     recovery.broker.describe_sessions_for_host.return_value = []
     recovery.check()

@@ -8,6 +8,7 @@ RESTARTING_MESSAGE = (
     'Your desktop session is restarting. Try connecting again in a few minutes.'
 )
 RECOVERY_FAILED_MESSAGE = 'Your desktop session could not restart after 3 attempts. Stop and start the desktop to try again, or contact your administrator.'
+SESSION_UNAVAILABLE_MESSAGE = 'The broker could not confirm that your desktop session is ready within the recovery window. The session has been preserved because your applications may still be running. Contact your administrator.'
 RETRY_SECONDS = (60, 300, 900)
 VALIDATION_SECONDS = 180
 REBOOT_SECONDS = 900
@@ -118,11 +119,11 @@ class DcvSessionRecovery:
             now < session.recovery_deadline and not session.recovery_pending_create
         ):
             return
-        if not self.healthy_instance(session):
-            return
         # Discover an accepted create even if the controller died before saving its id.
         entries = self.broker.describe_sessions_for_host(session)
         live = [entry for entry in entries if entry.get('state') != 'DELETED']
+        if not live and not self.healthy_instance(session):
+            return
         ready = [entry for entry in live if entry.get('state') == 'READY']
         if len(live) == 1 and len(ready) == 1:
             self.context.distributed_lock().assert_held(key=self.key)
@@ -155,7 +156,9 @@ class DcvSessionRecovery:
             if session.recovery_attempts >= len(RETRY_SECONDS):
                 session.state = VirtualDesktopSessionState.ERROR
                 session.recovering = False
-                session.failure_reason = RECOVERY_FAILED_MESSAGE
+                session.failure_reason = (
+                    SESSION_UNAVAILABLE_MESSAGE if live else RECOVERY_FAILED_MESSAGE
+                )
             else:
                 session.recovery_next_attempt_at = (
                     now + RETRY_SECONDS[session.recovery_attempts] * 1000
@@ -167,16 +170,8 @@ class DcvSessionRecovery:
         session.recovery_deadline = now + VALIDATION_SECONDS * 1000
         self.save(session)
         self.context.distributed_lock().assert_held(key=self.key)
-        if ready:
-            return
         if live:
-            # Deletion is asynchronous; the next check must confirm the host is empty.
-            for entry in live:
-                stale = session.model_copy(deep=True)
-                stale.dcv_session_id = entry['id']
-                stale.force = True
-                self.context.distributed_lock().assert_held(key=self.key)
-                self.broker.delete_sessions([stale])
+            # Broker contact loss does not mean the user's applications have stopped.
             return
         self.create(session)
 
