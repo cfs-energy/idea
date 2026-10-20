@@ -13,6 +13,8 @@ from ideadatamodel import (
     VirtualDesktopSessionState,
     VirtualDesktopSessionConnectionInfo,
 )
+from ideadatamodel import errorcodes
+from ideadatamodel.exceptions import SocaException
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
 from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
@@ -43,20 +45,22 @@ def recovery(monkeypatch):
         server=VirtualDesktopServer(instance_id='i-test'),
         updated_on=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
+    row._updated_on_ms = Utils.to_milliseconds(row.updated_on)
     db = Mock()
     store = [row]
     db.get_from_db.side_effect = lambda *args, **kwargs: deepcopy(store[0])
 
     def update(session, **kwargs):
         if (
-            kwargs.get('expected_updated_on', store[0].updated_on)
-            != store[0].updated_on
+            kwargs.get('check_version')
+            and session._updated_on_ms != store[0]._updated_on_ms
         ):
             raise ClientError(
                 {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
             )
         store[0] = deepcopy(session)
         store[0].updated_on += timedelta(milliseconds=1)
+        store[0]._updated_on_ms += 1
         return deepcopy(store[0])
 
     db.update.side_effect = update
@@ -196,7 +200,9 @@ def test_failed_claim_or_lost_lock_never_creates(recovery):
     recovery.db.update.side_effect = ClientError(
         {'Error': {'Code': 'ConditionalCheckFailedException'}}, 'UpdateItem'
     )
-    recovery.check()
+    with pytest.raises(SocaException) as error:
+        recovery.check()
+    assert error.value.error_code == errorcodes.DO_NOT_DELETE_MESSAGE
     recovery.broker.create_session.assert_not_called()
     recovery.handler.context.distributed_lock().acquire.side_effect = RuntimeError(
         'held by another worker'
@@ -317,7 +323,7 @@ def test_conditional_update_uses_read_version(recovery):
     )
     db.convert_db_dict_to_session_object = Mock()
     db._table_obj.update_item.return_value = {'Attributes': {}}
-    db.update(row, expected_updated_on=row.updated_on)
+    db.update(row, check_version=True)
     request = db._table_obj.update_item.call_args.kwargs
     assert request['ConditionExpression'] == '#updated_on = :expected_updated_on'
     assert request['ExpressionAttributeValues'][
@@ -366,8 +372,8 @@ def test_recovery_fields_round_trip_through_database(recovery):
     session.type = VirtualDesktopSessionType.VIRTUAL
     session.recovering = True
     session.recovery_attempts = 2
-    session.recovery_next_attempt_at = 2000000
-    session.recovery_deadline = 3000000
+    session.recovery_next_attempt_at = 2000988
+    session.recovery_deadline = 3000989
     session.recovery_pending_create = True
     db = VirtualDesktopSessionDB.__new__(VirtualDesktopSessionDB)
     db._server_db = Mock()
@@ -490,3 +496,213 @@ def test_create_request_cannot_supply_recovery_state():
         == 0
     )
     assert not session.recovery_pending_create
+
+
+@pytest.fixture
+def persisted_recovery(recovery):
+    from ideadatamodel import (
+        Project,
+        VirtualDesktopSoftwareStack,
+        VirtualDesktopSessionType,
+    )
+
+    session = recovery.store[0]
+    session.type = VirtualDesktopSessionType.VIRTUAL
+    session.software_stack = VirtualDesktopSoftwareStack(base_os='ubuntu2604')
+    session.project = Project(project_id='project')
+    db = VirtualDesktopSessionDB.__new__(VirtualDesktopSessionDB)
+    db._logger = Mock()
+    db._record_run = Mock()
+    db.trigger_update_event = Mock()
+    db._server_db = Mock()
+    db._server_db.convert_server_object_to_db_dict.return_value = {}
+    db._server_db.convert_db_entry_to_server_object.return_value = session.server
+    db._software_stack_db = Mock()
+    db._software_stack_db.convert_software_stack_object_to_db_dict.return_value = {}
+    db._software_stack_db.convert_db_dict_to_software_stack_object.return_value = (
+        session.software_stack
+    )
+    db._schedule_db = Mock()
+    db._schedule_db.convert_schedule_object_to_db_dict.return_value = {}
+    db._schedule_db.convert_db_dict_to_schedule_object.return_value = None
+    row = db.convert_session_object_to_db_dict(session)
+    row['updated_on'] = 1792453594988
+    recovery.now[0] = row['updated_on']
+    table = Mock()
+    table.get_item.side_effect = lambda **kwargs: {'Item': deepcopy(row)}
+
+    def update_item(**request):
+        values = request['ExpressionAttributeValues']
+        if (
+            request.get('ConditionExpression')
+            and values[':expected_updated_on'] != row['updated_on']
+        ):
+            raise ClientError(
+                {
+                    'Error': {
+                        'Code': 'ConditionalCheckFailedException',
+                        'Message': f'stored {row["updated_on"]} != expected {values[":expected_updated_on"]}',
+                    }
+                },
+                'UpdateItem',
+            )
+        old = deepcopy(row)
+        row.update(
+            {
+                name: values[':' + name]
+                for name in request['ExpressionAttributeNames'].values()
+            }
+        )
+        return {'Attributes': old}
+
+    table.update_item.side_effect = update_item
+    db._table_obj = table
+    recovery.handler.session_db = db
+    recovery.db = db
+    recovery.row = row
+    recovery.check = lambda **kwargs: DcvSessionRecovery(recovery.handler).check(
+        db.get_from_db('someuser', 'desktop'), **kwargs
+    )
+    return recovery
+
+
+def test_millisecond_timestamp_survives_read_and_conditional_update(persisted_recovery):
+    recovery = persisted_recovery
+    session = recovery.db.get_from_db('someuser', 'desktop')
+    worker = DcvSessionRecovery(recovery.handler)
+    worker.key = 'dcv-session-desktop'
+    worker.save(session)
+    assert recovery.row['updated_on'] == 1792453594989
+    worker.save(session)
+    assert recovery.row['updated_on'] == 1792453594990
+
+
+def test_dead_session_makes_first_attempt_with_stored_milliseconds(persisted_recovery):
+    recovery = persisted_recovery
+    recovery.check()
+    assert recovery.row['state'] == 'INITIALIZING'
+    recovery.now[0] += 60000
+    recovery.check()
+    assert recovery.row['recovery_attempts'] == 1
+    assert recovery.row['dcv_session_id'] == 'new-dcv'
+    recovery.broker.create_session.assert_called_once()
+
+
+@pytest.mark.parametrize('conflict', [None, 'start', 'ready'])
+def test_reboot_complete_resumes_through_ready_with_stored_milliseconds(
+    persisted_recovery, conflict
+):
+    from ideavirtualdesktopcontroller.app.events.handlers.dcv_host_event_handlers.dcv_host_reboot_complete_event_handler import (
+        DCVHostRebootCompleteEventHandler,
+    )
+
+    recovery = persisted_recovery
+    recovery.row['state'] = 'RESUMING'
+    handler = DCVHostRebootCompleteEventHandler.__new__(
+        DCVHostRebootCompleteEventHandler
+    )
+    handler.context = recovery.handler.context
+    handler.session_db = recovery.db
+    handler._logger = Mock()
+    handler.get_dcv_instance_id_from_sender_id = lambda sender: 'i-test'
+    event = SimpleNamespace(
+        detail={'idea_session_id': 'desktop', 'idea_session_owner': 'someuser'}
+    )
+    update = recovery.db._table_obj.update_item.side_effect
+
+    def concurrent_write(**request):
+        recovery.row['updated_on'] += 1
+        recovery.db._table_obj.update_item.side_effect = update
+        return update(**request)
+
+    if conflict == 'start':
+        recovery.db._table_obj.update_item.side_effect = concurrent_write
+        with pytest.raises(SocaException) as error:
+            handler.handle_event('message', 'host', event)
+        assert error.value.error_code == errorcodes.DO_NOT_DELETE_MESSAGE
+        assert recovery.row['state'] == 'RESUMING'
+        recovery.db._logger.warning.assert_called_once()
+        assert 'desktop' in recovery.db._logger.warning.call_args.args[0]
+        recovery.handler.context.distributed_lock().release.assert_called_with(
+            key='dcv-session-desktop'
+        )
+    handler.handle_event('message', 'host', event)
+    assert recovery.row['state'] == 'INITIALIZING'
+    recovery.now[0] += 60000
+    recovery.handler.handle_event('validation', 'controller', event)
+    assert recovery.row['recovery_attempts'] == 1
+    recovery.broker.create_session.assert_called_once()
+    recovery.broker.describe_sessions_for_host.return_value = [
+        {'id': 'new-dcv', 'state': 'READY'}
+    ]
+    recovery.now[0] += 180000
+    if conflict == 'ready':
+        recovery.db._table_obj.update_item.side_effect = concurrent_write
+        with pytest.raises(SocaException) as error:
+            recovery.handler.handle_event('validation', 'controller', event)
+        assert error.value.error_code == errorcodes.DO_NOT_DELETE_MESSAGE
+        assert recovery.row['state'] == 'INITIALIZING'
+        recovery.db._logger.warning.assert_called_once()
+        recovery.handler.session_utils.refresh_bootstrap_on_ready.assert_not_called()
+    recovery.handler.handle_event('validation', 'controller', event)
+    assert recovery.row['state'] == 'READY'
+    assert not recovery.row['recovering']
+    assert recovery.row['failure_reason'] is None
+    recovery.handler.session_utils.refresh_bootstrap_on_ready.assert_called_once()
+
+
+@pytest.mark.parametrize('state', ['READY', 'STOPPING', 'DELETING'])
+def test_recovery_conflict_retries_from_current_state(persisted_recovery, state):
+    recovery = persisted_recovery
+    update = recovery.db._table_obj.update_item.side_effect
+
+    def concurrent_write(**request):
+        recovery.row['state'] = state
+        recovery.row['updated_on'] += 1
+        recovery.db._table_obj.update_item.side_effect = update
+        return update(**request)
+
+    recovery.db._table_obj.update_item.side_effect = concurrent_write
+    with pytest.raises(SocaException) as error:
+        recovery.check()
+    assert error.value.error_code == errorcodes.DO_NOT_DELETE_MESSAGE
+    recovery.db._logger.warning.assert_called_once()
+    assert 'desktop' in recovery.db._logger.warning.call_args.args[0]
+    recovery.broker.create_session.assert_not_called()
+    recovery.check()
+    if state == 'READY':
+        recovery.now[0] += 60000
+        recovery.check()
+        assert recovery.row['recovery_attempts'] == 1
+        recovery.broker.create_session.assert_called_once()
+    else:
+        assert recovery.row['state'] == state
+        recovery.broker.create_session.assert_not_called()
+
+
+def test_stale_session_version_cannot_overwrite_a_newer_write(persisted_recovery):
+    recovery = persisted_recovery
+    stale = recovery.db.get_from_db('someuser', 'desktop')
+    current = recovery.db.get_from_db('someuser', 'desktop')
+    recovery.db.update(current)
+    with pytest.raises(ClientError):
+        recovery.db.update(stale, check_version=True)
+    assert recovery.row['updated_on'] == 1792453594989
+    recovery.db.trigger_update_event.assert_called_once()
+    recovery.db._logger.warning.assert_called_once()
+
+
+def test_session_version_is_private_and_required_for_conditional_writes(
+    persisted_recovery,
+):
+    recovery = persisted_recovery
+    session = recovery.db.get_from_db('someuser', 'desktop')
+    assert session.model_copy(deep=True)._updated_on_ms == 1792453594988
+    assert '_updated_on_ms' not in session.model_dump()
+    supplied = VirtualDesktopSession(
+        **session.model_dump(), _updated_on_ms=1792453594988
+    )
+    assert supplied._updated_on_ms is None
+    with pytest.raises(ValueError, match='stored session version'):
+        recovery.db.update(supplied, check_version=True)
+    recovery.db._table_obj.update_item.assert_not_called()

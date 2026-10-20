@@ -10,8 +10,9 @@
 #  and limitations under the License.
 from typing import Union, Dict, List, Optional
 
-import ideavirtualdesktopcontroller
 from botocore.exceptions import ClientError
+
+import ideavirtualdesktopcontroller
 from ideadatamodel import (
     VirtualDesktopSession,
     VirtualDesktopBaseOS,
@@ -181,7 +182,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         if Utils.is_empty(db_entry):
             return None
 
-        return VirtualDesktopSession(
+        session = VirtualDesktopSession(
             recovering=bool(db_entry.get('recovering', False)),
             recovery_attempts=int(db_entry.get('recovery_attempts', 0)),
             recovery_next_attempt_at=int(db_entry.get('recovery_next_attempt_at', 0)),
@@ -363,6 +364,11 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                 ),
             ),
         )
+
+        session._updated_on_ms = Utils.get_value_as_int(
+            sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY, db_entry
+        )
+        return session
 
     def convert_session_object_to_db_dict(self, session: VirtualDesktopSession) -> Dict:
         if Utils.is_empty(session):
@@ -604,15 +610,19 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             session.stopped_on = None
 
     def update(
-        self, session: VirtualDesktopSession, *, expected_updated_on=None
+        self, session: VirtualDesktopSession, *, check_version: bool = False
     ) -> VirtualDesktopSession:
+        if check_version and session._updated_on_ms is None:
+            raise ValueError(
+                'A stored session version is required for a conditional update'
+            )
         if session.state != VirtualDesktopSessionState.INITIALIZING:
             session.recovering = False
             session.recovery_pending_create = False
         self._stamp_stopped_on(session)
         db_entry = self.convert_session_object_to_db_dict(session)
-        db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = (
-            Utils.current_time_ms()
+        db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = max(
+            Utils.current_time_ms(), (session._updated_on_ms or 0) + 1
         )
         update_expression_tokens = []
         expression_attr_names = {}
@@ -630,31 +640,32 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             expression_attr_values[f':{key}'] = value
 
         condition = {}
-        if expected_updated_on is not None:
-            expression_attr_values[':expected_updated_on'] = Utils.to_milliseconds(
-                expected_updated_on
-            )
+        if check_version:
+            expression_attr_values[':expected_updated_on'] = session._updated_on_ms
             condition['ConditionExpression'] = '#updated_on = :expected_updated_on'
-            db_entry['updated_on'] = max(
-                db_entry['updated_on'], Utils.to_milliseconds(expected_updated_on) + 1
-            )
-            expression_attr_values[':updated_on'] = db_entry['updated_on']
 
-        result = self._table.update_item(
-            **condition,
-            Key={
-                sessions_constants.USER_SESSION_DB_HASH_KEY: db_entry[
-                    sessions_constants.USER_SESSION_DB_HASH_KEY
-                ],
-                sessions_constants.USER_SESSION_DB_RANGE_KEY: db_entry[
-                    sessions_constants.USER_SESSION_DB_RANGE_KEY
-                ],
-            },
-            UpdateExpression='SET ' + ', '.join(update_expression_tokens),
-            ExpressionAttributeNames=expression_attr_names,
-            ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_OLD',
-        )
+        try:
+            result = self._table.update_item(
+                **condition,
+                Key={
+                    sessions_constants.USER_SESSION_DB_HASH_KEY: db_entry[
+                        sessions_constants.USER_SESSION_DB_HASH_KEY
+                    ],
+                    sessions_constants.USER_SESSION_DB_RANGE_KEY: db_entry[
+                        sessions_constants.USER_SESSION_DB_RANGE_KEY
+                    ],
+                },
+                UpdateExpression='SET ' + ', '.join(update_expression_tokens),
+                ExpressionAttributeNames=expression_attr_names,
+                ExpressionAttributeValues=expression_attr_values,
+                ReturnValues='ALL_OLD',
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                self._logger.warning(
+                    f'Conditional update failed for session {session.idea_session_id}; re-read before retrying'
+                )
+            raise
 
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
         self._record_run(

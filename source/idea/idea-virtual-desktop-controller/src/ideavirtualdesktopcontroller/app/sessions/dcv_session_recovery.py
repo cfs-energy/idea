@@ -21,8 +21,9 @@ class DcvSessionRecovery:
 
     def save(self, session):
         self.context.distributed_lock().assert_held(key=self.key)
-        updated = self.db.update(session, expected_updated_on=session.updated_on)
+        updated = self.db.update(session, check_version=True)
         session.updated_on = updated.updated_on
+        session._updated_on_ms = updated._updated_on_ms
 
     def check(self, session, resume=False):
         self.key = 'dcv-session-' + session.idea_session_id
@@ -54,6 +55,9 @@ class DcvSessionRecovery:
         except ClientError as error:
             if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
                 raise
+            raise self.handler.do_not_delete_message_exception(
+                f'Session {session.idea_session_id} changed during recovery; re-read and retry'
+            ) from error
         finally:
             lock.release(key=self.key)
 
@@ -113,7 +117,7 @@ class DcvSessionRecovery:
             session.recovery_next_attempt_at = 0
             session.failure_reason = None
             self.context.distributed_lock().assert_held(key=self.key)
-            self.handler.mark_ready(session, expected_updated_on=session.updated_on)
+            self.handler.mark_ready(session, check_version=True)
             return
         if session.recovery_pending_create and not live:
             session.recovery_pending_create = False
