@@ -14,8 +14,10 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * The "Preview not captured yet" box connects to a ready desktop when clicked, like the preview does.
 * If a desktop's session stops responding, IDEA restarts the session for you. Connect and the DCV client file now say what went wrong instead of doing nothing.
 * Ubuntu 26.04 desktops used only over SSH are no longer stopped as idle.
+* A desktop's preview appears within seconds of it becoming ready, and a desktop that restarts never shows its old screen.
 
 * **Desktop card preview**: the card shows a capture only while the desktop is ready and otherwise falls back to the state placeholder.
+* **Desktop previews**: My desktops checks every 5 seconds while a desktop is changing state or is ready without a first preview (up to a minute), then returns to every 30 seconds, and drops a cached preview when the desktop leaves Ready.
 * **Desktop session recovery**: when a desktop's DCV session disappears while its instance is healthy, the controller recreates it after 1, 5 and 15 minutes, then marks the desktop Error with a reason. The controller role gains `ec2:DescribeInstanceStatus`.
 * **Idle detection**: SSH logins are counted through logind, so desktops without `last` (Ubuntu 26.04) are not stopped while in use. Empty or malformed results are logged and never stop a desktop.
 * **Ubuntu 26.04 first boot**: the unused networkd wait is masked, which saves about 1m40s per boot. Rebake Ubuntu 26.04 images to pick it up.

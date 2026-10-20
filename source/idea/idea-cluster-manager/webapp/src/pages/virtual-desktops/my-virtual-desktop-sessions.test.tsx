@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import MyVirtualDesktopSessions from './my-virtual-desktop-sessions';
+import MyVirtualDesktopSessions, { needsQuickRefresh } from './my-virtual-desktop-sessions';
 import { initTestAppContext } from '../../test-support';
 
 const STOPPED_SESSION = {
@@ -333,5 +333,25 @@ describe('desktop connection failures', () => {
         vi.spyOn(virtualDesktop, 'getSessionConnectionInfo').mockResolvedValue({ connection_info: { failure_reason: 'The session could not restart after 3 attempts.' } });
         await userEvent.setup().click(screen.getByRole('button', { name: 'Connect' }));
         await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes('could not restart after 3 attempts'))).toBe(true));
+    });
+});
+
+describe('needsQuickRefresh', () => {
+    const desktops = (...states: string[]) => new Map(states.map((state, i) => [`s${i}`, { idea_session_id: `s${i}`, dcv_session_id: `d${i}`, state } as any]));
+
+    it('refreshes quickly while a desktop is changing state', () => {
+        expect(needsQuickRefresh(desktops('RESUMING'), {}, {}, 0)).toBe(true);
+        expect(needsQuickRefresh(desktops('STOPPED'), {}, {}, 0)).toBe(false);
+    });
+
+    it('refreshes quickly for a minute after a desktop is ready without a preview', () => {
+        const readySince: { [k: string]: number } = {};
+        expect(needsQuickRefresh(desktops('READY'), {}, readySince, 1000)).toBe(true);
+        expect(needsQuickRefresh(desktops('READY'), {}, readySince, 60_999)).toBe(true);
+        expect(needsQuickRefresh(desktops('READY'), {}, readySince, 61_000)).toBe(false);
+    });
+
+    it('stops once the preview has arrived', () => {
+        expect(needsQuickRefresh(desktops('READY'), { d0: { data: 'x' } }, {}, 0)).toBe(false);
     });
 });
