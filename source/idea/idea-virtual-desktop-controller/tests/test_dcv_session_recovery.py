@@ -901,3 +901,33 @@ def test_session_version_is_private_and_required_for_conditional_writes(
     with pytest.raises(ValueError, match='stored session version'):
         recovery.db.update(supplied, check_version=True)
     recovery.db._table_obj.update_item.assert_not_called()
+
+
+def test_failed_resume_explains_the_error(persisted_recovery):
+    from ideavirtualdesktopcontroller.app.events.handlers.ssm_commands_progress_event_handlers.idea_resume_session_command_progress_event_handler import (
+        RESUME_FAILED_MESSAGE,
+        IDEAResumeSessionCommandProgressEventHandler,
+    )
+
+    recovery = persisted_recovery
+    recovery.row['state'] = 'RESUMING'
+    recovery.row['reboot_deadline'] = recovery.now[0] + REBOOT_SECONDS * 1000
+    event = SimpleNamespace(
+        detail={
+            'idea_session_id': 'desktop',
+            'idea_session_owner': 'someuser',
+            'status': 'Failed',
+            'command_id': 'resume-command',
+        }
+    )
+    progress = IDEAResumeSessionCommandProgressEventHandler.__new__(
+        IDEAResumeSessionCommandProgressEventHandler
+    )
+    progress.session_db = recovery.db
+    progress.ssm_commands_db = Mock()
+    progress.events_utils = Mock()
+    progress._logger = Mock()
+    progress.is_sender_controller_role = lambda sender: True
+    progress.handle_event('resume', 'controller', event)
+    assert recovery.row['state'] == 'ERROR'
+    assert recovery.row['failure_reason'] == RESUME_FAILED_MESSAGE

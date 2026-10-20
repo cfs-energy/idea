@@ -20,6 +20,9 @@ from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import 
 )
 
 
+RESUME_FAILED_MESSAGE = 'This desktop restarted but its remote display service did not start. Stop and start the desktop to try again, or contact your administrator.'
+
+
 class IDEAResumeSessionCommandProgressEventHandler(
     BaseVirtualDesktopControllerEventHandler
 ):
@@ -60,6 +63,7 @@ class IDEAResumeSessionCommandProgressEventHandler(
             else:
                 # FAILED
                 session.state = VirtualDesktopSessionState.ERROR
+                session.failure_reason = RESUME_FAILED_MESSAGE
                 self.log_error(
                     message_id=message_id,
                     message=f'Session: {session.idea_session_id}:{session.name} moved to Error state',
