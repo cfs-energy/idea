@@ -51,7 +51,8 @@ echo -e "
 " > /var/spool/pbs/mom_priv/config
 
 # MoM passes these defaults to batch and interactive jobs without sourcing login profiles.
-echo -e "PATH=/opt/idea/openmpi5/bin:/bin:/usr/bin
+# The compute OpenMPI step prepends OpenMPI 5 here on nodes with EFA.
+echo -e "PATH=/bin:/usr/bin
 IDEA_CLUSTER_NAME=${IDEA_CLUSTER_NAME}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 IDEA_JOB_STATUS_SQS_QUEUE_URL={{ context.config.get_string('scheduler.job_status_sqs_queue_url') }}

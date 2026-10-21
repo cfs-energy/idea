@@ -47,13 +47,23 @@ def mpi(prefix, version):
 
 
 def sandbox(text, root):
-    for path in ('/opt/idea', '/opt/amazon', '/root/bootstrap', '/etc/profile.d'):
+    for path in (
+        '/opt/idea',
+        '/opt/amazon',
+        '/root/bootstrap',
+        '/etc/profile.d',
+        '/var/spool/pbs',
+    ):
         text = text.replace(path, str(root) + path)
     return text
 
 
 def prepare(root, efa=True):
     (root / 'etc/profile.d').mkdir(parents=True)
+    (root / 'var/spool/pbs').mkdir(parents=True)
+    (root / 'var/spool/pbs/pbs_environment').write_text(
+        'PATH=/bin:/usr/bin\nIDEA_CLUSTER_NAME=test\n'
+    )
     if efa:
         mpi(root / 'opt/amazon/openmpi', '4.1.8')
         mpi(root / 'opt/amazon/openmpi5', '5.0.8')
@@ -187,7 +197,7 @@ def test_no_build_or_fatal_commands():
 
 def test_non_efa_pbs_keeps_system_path():
     defaults = re.search(r'echo -e "PATH=([^\n]+)', render(PBS_TEMPLATE)).group(1)
-    assert defaults == '/opt/idea/openmpi5/bin:/bin:/usr/bin'
+    assert defaults == '/bin:/usr/bin'
     # Library paths stay per-job: a global default could shadow non-MPI applications.
     assert 'LD_LIBRARY_PATH' not in render(PBS_TEMPLATE)
 
@@ -196,9 +206,10 @@ def test_non_efa_pbs_keeps_system_path():
 def test_default_environment_and_documented_opt_out(tmp_path, kind):
     env = prepare(tmp_path)
     assert bootstrap(tmp_path, env).returncode == 0
-    # Use the actual rendered MoM environment, not a test copy of its defaults.
-    pbs = sandbox(render(PBS_TEMPLATE), tmp_path)
-    defaults = re.search(r'echo -e "(PATH=[^\n]+)', pbs).group(1)
+    # Use the MoM environment the bootstrap left behind, not a test copy of its defaults.
+    # The bootstrap ran sandboxed, so the file already holds sandboxed paths.
+    pbs = (tmp_path / 'var/spool/pbs/pbs_environment').read_text()
+    defaults = re.search(r'^(PATH=[^\n]+)', pbs, re.M).group(1)
     job_env = dict(line.split('=', 1) for line in defaults.splitlines())
     command = ''
     if kind == 'login':
@@ -230,3 +241,14 @@ def test_default_environment_and_documented_opt_out(tmp_path, kind):
     if kind == 'login':
         assert lines[1] == '/custom/lib'
     assert 'Open MPI) 4.' in lines[2]
+
+
+@pytest.mark.parametrize('efa', [True, False])
+def test_pbs_path_gets_openmpi5_only_with_efa(tmp_path, efa):
+    env = prepare(tmp_path, efa)
+    for _ in range(2):
+        bootstrap(tmp_path, env)
+        lines = (tmp_path / 'var/spool/pbs/pbs_environment').read_text().splitlines()
+        expected = '/opt/idea/openmpi5/bin:/bin:/usr/bin' if efa else '/bin:/usr/bin'
+        assert lines[0] == sandbox(f'PATH={expected}', tmp_path)
+        assert lines[1] == 'IDEA_CLUSTER_NAME=test'

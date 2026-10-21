@@ -14,12 +14,20 @@ case "${PATH:-}" in
 esac
 IDEA_OPENMPI_PROFILE
 chmod 0644 /etc/profile.d/zz_idea_openmpi.sh
+  idea_pbs_path='/opt/idea/openmpi5/bin:/bin:/usr/bin'
 else
+  idea_pbs_path='/bin:/usr/bin'
   rm -f /etc/profile.d/zz_idea_openmpi.sh
   for link in /opt/idea/openmpi{4,5}; do
     if [[ -L "${link}" ]]; then
       rm -f "${link}"
     fi
   done
+fi || true
+# MoM reads this file at start; rewrite only its PATH line, leaving the rest as written.
+if [[ -f /var/spool/pbs/pbs_environment ]]; then
+  awk -v path="PATH=${idea_pbs_path:-/bin:/usr/bin}" '/^PATH=/ { print path; next } { print }' /var/spool/pbs/pbs_environment > /var/spool/pbs/pbs_environment.idea \
+    && cat /var/spool/pbs/pbs_environment.idea > /var/spool/pbs/pbs_environment
+  rm -f /var/spool/pbs/pbs_environment.idea
 fi || true
 # End: Compute OpenMPI
