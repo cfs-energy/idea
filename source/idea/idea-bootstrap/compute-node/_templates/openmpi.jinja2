@@ -1,0 +1,29 @@
+# Begin: Compute OpenMPI
+if [[ -x /opt/amazon/openmpi5/bin/mpirun ]]; then
+  mkdir -p /opt/idea
+  ln -sfn /opt/amazon/openmpi5 /opt/idea/openmpi5
+  if [[ -x /opt/amazon/openmpi/bin/mpirun ]]; then
+    ln -sfn /opt/amazon/openmpi /opt/idea/openmpi4
+  fi
+
+# Sort after EFA's zippy_efa.sh, which selects OpenMPI 4.
+cat > /etc/profile.d/zz_idea_openmpi.sh <<'IDEA_OPENMPI_PROFILE'
+case "${PATH:-}" in
+  /opt/idea/openmpi5/bin:*) ;;
+  *) export PATH="/opt/idea/openmpi5/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}" ;;
+esac
+case "${LD_LIBRARY_PATH:-}" in
+  /opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib:*) ;;
+  *) export LD_LIBRARY_PATH="/opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib:/opt/amazon/efa/lib64:/opt/amazon/efa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" ;;
+esac
+IDEA_OPENMPI_PROFILE
+chmod 0644 /etc/profile.d/zz_idea_openmpi.sh
+else
+  rm -f /etc/profile.d/zz_idea_openmpi.sh
+  for link in /opt/idea/openmpi{4,5}; do
+    if [[ -L "${link}" ]]; then
+      rm -f "${link}"
+    fi
+  done
+fi || true
+# End: Compute OpenMPI
