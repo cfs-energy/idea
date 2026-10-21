@@ -313,7 +313,7 @@ def test_hook_writes_project_only_when_needed(
 
     event = SimpleNamespace(
         type=event_type,
-        job=HookJob(project=changed_project, Resource_List={}),
+        job=HookJob(project=changed_project, Resource_List={}, interactive=False),
         accept=Mock(),
         reject=Mock(),
     )
