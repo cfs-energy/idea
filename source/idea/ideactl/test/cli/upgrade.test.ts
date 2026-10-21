@@ -1470,7 +1470,7 @@ for (const failure of ["version", "setting", "published"]) {
   });
 }
 
-for (const scenario of ["promoted", "arm64", "missing", "failed", "wrong OS", "wrong AMI", "custom row", "desktop row", "operator write", "other setting"]) {
+for (const scenario of ["promoted", "requeued", "arm64", "missing", "failed", "wrong OS", "wrong AMI", "custom row", "desktop row", "operator write", "other setting"]) {
   test(`completion scopes the compute pipeline promotion exception: ${scenario}`, async () => {
     await withFixture(async ({ deps, rows, events }) => {
       const deploy = deps.deploy;
@@ -1484,14 +1484,15 @@ for (const scenario of ["promoted", "arm64", "missing", "failed", "wrong OS", "w
           base_os: scenario === "wrong OS" ? "rocky9" : "amazonlinux2023",
           architecture: scenario === "custom row" ? "x86_64#custom" : scenario === "arm64" ? "arm64" : "x86_64",
           kind: scenario === "desktop row" ? "desktop" : "compute",
-          status: scenario === "failed" ? "failed" : "current",
+          // A refresh after promotion requeues the row but keeps the active image.
+          status: scenario === "failed" ? "failed" : scenario === "requeued" ? "queued" : "current",
           current_image_id: scenario === "wrong AMI" ? "ami-other" : "ami-promoted",
         }];
         // The pipeline's atomic promotion also moves queue profiles referencing the old AMI.
         rows[`${clusterName}.scheduler.queue-profiles`] = [{ queue_profile_id: "compute", param_instance_ami: "ami-promoted" }];
       };
       const run = upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true });
-      if (["promoted", "arm64"].includes(scenario)) {
+      if (["promoted", "requeued", "arm64"].includes(scenario)) {
         await run;
         assert.ok(events.some((event) => event.startsWith("Completion verified pipeline promotion for scheduler.compute_node_ami")));
       } else {

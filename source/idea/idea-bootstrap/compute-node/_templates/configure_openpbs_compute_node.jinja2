@@ -52,7 +52,6 @@ echo -e "
 
 # MoM passes these defaults to batch and interactive jobs without sourcing login profiles.
 echo -e "PATH=/opt/idea/openmpi5/bin:/bin:/usr/bin
-LD_LIBRARY_PATH=/opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib
 IDEA_CLUSTER_NAME=${IDEA_CLUSTER_NAME}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 IDEA_JOB_STATUS_SQS_QUEUE_URL={{ context.config.get_string('scheduler.job_status_sqs_queue_url') }}

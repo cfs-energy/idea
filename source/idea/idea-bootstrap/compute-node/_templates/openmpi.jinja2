@@ -12,10 +12,6 @@ case "${PATH:-}" in
   /opt/idea/openmpi5/bin:*) ;;
   *) export PATH="/opt/idea/openmpi5/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}" ;;
 esac
-case "${LD_LIBRARY_PATH:-}" in
-  /opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib:*) ;;
-  *) export LD_LIBRARY_PATH="/opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib:/opt/amazon/efa/lib64:/opt/amazon/efa/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" ;;
-esac
 IDEA_OPENMPI_PROFILE
 chmod 0644 /etc/profile.d/zz_idea_openmpi.sh
 else

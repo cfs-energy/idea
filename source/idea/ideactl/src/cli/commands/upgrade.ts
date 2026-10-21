@@ -1732,7 +1732,7 @@ async function verifyUpgradeCompletion(
         const builds = await scanModuleTable(deps, `${options.clusterName}.${scheduler.module_id}.image-builds`);
         if (builds.some((row) => row["base_os"] === expected.get(`${scheduler.module_id}.compute_node_os`)
           && ["x86_64", "arm64"].includes(String(row["architecture"]))
-          && row["kind"] === "compute" && row["status"] === "current"
+          && row["kind"] === "compute" && row["status"] !== "failed"
           && row["current_image_id"] === current.get(key))) {
           deps.out(`Completion verified pipeline promotion for ${key}: ${String(current.get(key))}`);
           continue;

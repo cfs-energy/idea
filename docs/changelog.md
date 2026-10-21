@@ -14,7 +14,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * Interactive jobs (`qsub -I`) start again; they had been ending right after starting with "job apparently deleted".
 * MPI jobs on EFA nodes use OpenMPI 5 by default. To use OpenMPI 4, see [OpenMPI 4 vs 5](modules/hpc-workloads/user-documentation/submit-a-job.md#openmpi-4-vs-5).
 
-* **OpenMPI default**: on nodes where the EFA installer provides OpenMPI 5 (`efa_support=true` jobs or images baked with EFA), login shells and PBS jobs get `/opt/idea/openmpi5` first; OpenMPI 4 stays at `/opt/idea/openmpi4`. Nodes without EFA are unchanged.
+* **OpenMPI default**: on nodes where the EFA installer provides OpenMPI 5 (`efa_support=true` jobs or images baked with EFA), login shells and PBS jobs get `/opt/idea/openmpi5/bin` first on `PATH` (library paths stay per job); OpenMPI 4 stays at `/opt/idea/openmpi4`. Nodes without EFA are unchanged.
 * **Existing data file system**: `use_existing_data_fs` no longer requires `use_existing_vpc`, so a cluster-owned VPC can keep an existing FSx for ONTAP file system.
 * **GovCloud images**: Ubuntu 26.04 and RHEL 10 base AMIs for x86_64 and arm64 in us-gov-west-1.
 * **Upgrade completion**: a compute AMI promoted by the image pipeline during the run passes verification.

@@ -188,8 +188,8 @@ def test_no_build_or_fatal_commands():
 def test_non_efa_pbs_keeps_system_path():
     defaults = re.search(r'echo -e "PATH=([^\n]+)', render(PBS_TEMPLATE)).group(1)
     assert defaults == '/opt/idea/openmpi5/bin:/bin:/usr/bin'
-    libraries = re.search(r'LD_LIBRARY_PATH=([^\n]+)', render(PBS_TEMPLATE)).group(1)
-    assert libraries == '/opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib'
+    # Library paths stay per-job: a global default could shadow non-MPI applications.
+    assert 'LD_LIBRARY_PATH' not in render(PBS_TEMPLATE)
 
 
 @pytest.mark.parametrize('kind', ['login', 'pbs-batch', 'pbs-interactive'])
@@ -198,9 +198,7 @@ def test_default_environment_and_documented_opt_out(tmp_path, kind):
     assert bootstrap(tmp_path, env).returncode == 0
     # Use the actual rendered MoM environment, not a test copy of its defaults.
     pbs = sandbox(render(PBS_TEMPLATE), tmp_path)
-    defaults = re.search(r'echo -e "(PATH=[^\n]+\nLD_LIBRARY_PATH=[^\n]+)', pbs).group(
-        1
-    )
+    defaults = re.search(r'echo -e "(PATH=[^\n]+)', pbs).group(1)
     job_env = dict(line.split('=', 1) for line in defaults.splitlines())
     command = ''
     if kind == 'login':
@@ -228,10 +226,7 @@ def test_default_environment_and_documented_opt_out(tmp_path, kind):
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
     assert 'Open MPI) 5.' in lines[0]
-    assert lines[1].startswith(
-        f'{tmp_path}/opt/idea/openmpi5/lib64:{tmp_path}/opt/idea/openmpi5/lib'
-    )
-    assert lines[1].count(f'{tmp_path}/opt/idea/openmpi5/lib64') == 1
+    assert 'openmpi5' not in lines[1]
     if kind == 'login':
-        assert lines[1].endswith(':/custom/lib')
+        assert lines[1] == '/custom/lib'
     assert 'Open MPI) 4.' in lines[2]

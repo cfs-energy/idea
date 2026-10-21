@@ -6,6 +6,8 @@ OpenMPI 5 is the default in login shells, PBS batch jobs and `qsub -I` on nodes 
 
 Non-EFA nodes are unchanged.
 
+Only `PATH` changes by default. If your binary was built against another OpenMPI 5 install, also add `/opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib` to `LD_LIBRARY_PATH` in your job script.
+
 To select OpenMPI 4 on an EFA node, add these lines to your job script or interactive compute shell:
 
 ```bash
