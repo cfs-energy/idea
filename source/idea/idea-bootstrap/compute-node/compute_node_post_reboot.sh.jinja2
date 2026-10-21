@@ -35,6 +35,8 @@ done
   {% include 'compute-node/_templates/efa.jinja2' %}
 {% endif %}
 
+{% include 'compute-node/_templates/openmpi.jinja2' %}
+
 {% with node_type = 'compute' %}
   {% include '_templates/linux/gpu_drivers.jinja2' %}
 {% endwith %}

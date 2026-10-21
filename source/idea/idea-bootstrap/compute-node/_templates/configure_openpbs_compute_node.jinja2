@@ -50,6 +50,8 @@ echo -e "
 \$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
 " > /var/spool/pbs/mom_priv/config
 
+# MoM passes these defaults to batch and interactive jobs without sourcing login profiles.
+# The compute OpenMPI step prepends OpenMPI 5 here on nodes with EFA.
 echo -e "PATH=/bin:/usr/bin
 IDEA_CLUSTER_NAME=${IDEA_CLUSTER_NAME}
 AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}

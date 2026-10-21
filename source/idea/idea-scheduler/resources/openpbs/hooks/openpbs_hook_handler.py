@@ -1537,6 +1537,15 @@ try:
                         else:
                             job.Resource_List[name] = value
 
+                if event_type == HOOK_EVENT_QUEUEJOB and e.job.interactive:
+                    # Tagged OpenPBS clients omit fields required by newer MoMs.
+                    for name, value in (
+                        ('PBS_O_INTERACTIVE_AUTH_METHOD', 'resvport'),
+                        ('PBS_O_INTERACTIVE_ENCRYPT_METHOD', ''),
+                    ):
+                        if name not in e.job.Variable_List:
+                            e.job.Variable_List[name] = value
+
                 e.accept(formatted_user_message)
 
     elif event_type in EXECUTION_HOOKS:

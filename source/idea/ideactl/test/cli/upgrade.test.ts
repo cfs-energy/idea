@@ -1470,6 +1470,68 @@ for (const failure of ["version", "setting", "published"]) {
   });
 }
 
+for (const scenario of ["promoted", "requeued", "arm64", "missing", "failed", "wrong OS", "wrong AMI", "custom row", "desktop row", "operator write", "other setting"]) {
+  test(`completion scopes the compute pipeline promotion exception: ${scenario}`, async () => {
+    await withFixture(async ({ deps, rows, events }) => {
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        const key = scenario === "other setting" ? "scheduler.instance_ami" : "scheduler.compute_node_ami";
+        const settingRow = rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!;
+        settingRow["value"] = "ami-promoted";
+        settingRow["source"] = scenario === "operator write" ? "user" : "sdk";
+        rows[`${clusterName}.scheduler.image-builds`] = scenario === "missing" ? [] : [{
+          base_os: scenario === "wrong OS" ? "rocky9" : "amazonlinux2023",
+          architecture: scenario === "custom row" ? "x86_64#custom" : scenario === "arm64" ? "arm64" : "x86_64",
+          kind: scenario === "desktop row" ? "desktop" : "compute",
+          // A refresh after promotion requeues the row but keeps the active image.
+          status: scenario === "failed" ? "failed" : scenario === "requeued" ? "queued" : "current",
+          current_image_id: scenario === "wrong AMI" ? "ami-other" : "ami-promoted",
+        }];
+        // The pipeline's atomic promotion also moves queue profiles referencing the old AMI.
+        rows[`${clusterName}.scheduler.queue-profiles`] = [{ queue_profile_id: "compute", param_instance_ami: "ami-promoted" }];
+      };
+      const run = upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true });
+      if (["promoted", "requeued", "arm64"].includes(scenario)) {
+        await run;
+        assert.ok(events.some((event) => event.startsWith("Completion verified pipeline promotion for scheduler.compute_node_ami")));
+      } else {
+        await assert.rejects(run, /Completion verification failed for setting scheduler\./);
+        assert.ok(!events.includes("All upgrade phases completed successfully"));
+      }
+    });
+  });
+}
+
+for (const scenario of ["operator", "legacy", "mixed", "missing managed"]) {
+  test(`historical completion checks IDEA's inline policy and warns about operator policies: ${scenario}`, async () => {
+    await withFixture(async (state) => {
+      historicalReplay(state);
+      const { deps, rows, events } = state;
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`]!.push(setting("vdc.dcv_host_policy_arn", "arn:aws:iam::sample:policy/host-policy"));
+        // CDK PolicyName for idea-test1-vdc-host-policy/Resource in the 25.11 stack.
+        const legacy = "ideatest1vdchostpolicy26C9FF68";
+        deps.historicalIam = async () => ({
+          attached: scenario === "missing managed" ? [] : ["host-policy"],
+          inline: scenario === "legacy" ? [legacy] : scenario === "mixed" ? [legacy, "operator_storage"] : ["operator_storage"],
+          collision: false, available: 10,
+        });
+      };
+      const run = upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true });
+      if (scenario === "operator") {
+        await run;
+        assert.ok(events.includes("warning: operator inline policies remain on DCV host role sample-host: operator_storage"));
+      } else {
+        await assert.rejects(run, /Completion verification failed for DCV policy attachment: vdc/);
+        assert.ok(!events.includes("All upgrade phases completed successfully"));
+      }
+    });
+  });
+}
+
 test("each scheduler keeps its newer built compute image", async () => {
   await withFixture(async ({ deps, rows }) => {
     rows[`${clusterName}.modules`]!.push(moduleRow("batch", "scheduler"));

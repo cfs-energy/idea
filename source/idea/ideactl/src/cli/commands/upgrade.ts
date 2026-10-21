@@ -6,6 +6,7 @@
 import { liveContainerHosts } from "../live-operator-adapters.ts";
 import { refreshHostsCommand } from "../host-pool.ts";
 
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1706,7 +1707,8 @@ async function verifyUpgradeCompletion(
   deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[], expected: Map<string, unknown>,
   drift: UpgradeDriftInput, historical: boolean, schedulerCutover: boolean,
 ): Promise<void> {
-  const current = new Map((await scanAll(deps, `${options.clusterName}.cluster-settings`)).map((row) => [String(row["key"]), row["value"]]));
+  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  const current = new Map(settings.map((row) => [String(row["key"]), row["value"]]));
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
   const checkpoints = new Set([
     ...modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
@@ -1722,7 +1724,22 @@ async function verifyUpgradeCompletion(
   for (const [key, value] of expected) {
     // Application checkpoints can advance while deployment runs; configuration cannot.
     if (!published.has(key) && checkpoints.has(key)) continue;
-    if (!published.has(key) && !isDeepStrictEqual(current.get(key), value)) throw new ClusterConfigError(`Completion verification failed for setting ${key}`);
+    if (!published.has(key) && !isDeepStrictEqual(current.get(key), value)) {
+      const scheduler = modules.find((module) => module.name === "scheduler" && key === `${module.module_id}.compute_node_ami`);
+      if (scheduler !== undefined && typeof current.get(key) === "string" && current.get(key) !== ""
+        && settings.find((row) => row["key"] === key)?.["source"] === "sdk") {
+        // Promotion atomically updates the default AMI and this row after validation.
+        const builds = await scanModuleTable(deps, `${options.clusterName}.${scheduler.module_id}.image-builds`);
+        if (builds.some((row) => row["base_os"] === expected.get(`${scheduler.module_id}.compute_node_os`)
+          && ["x86_64", "arm64"].includes(String(row["architecture"]))
+          && row["kind"] === "compute" && row["status"] !== "failed"
+          && row["current_image_id"] === current.get(key))) {
+          deps.out(`Completion verified pipeline promotion for ${key}: ${String(current.get(key))}`);
+          continue;
+        }
+      }
+      throw new ClusterConfigError(`Completion verification failed for setting ${key}`);
+    }
   }
   for (const stack of drift.stacks ?? []) {
     if (!stack.selected) continue;
@@ -1762,7 +1779,12 @@ async function verifyUpgradeCompletion(
         if (previous !== undefined && current.get(key) !== previous.value) throw new ClusterConfigError(`Completion verification failed for DCV identity: ${key}`);
       }
       const inventory = await deps.historicalIam!(role, `${options.clusterName}-${options.awsRegion}-${module.module_id}-host`, options);
-      if (!inventory.attached.includes(arn.split("/").at(-1)!) || inventory.inline.length > 0) throw new ClusterConfigError(`Completion verification failed for DCV policy attachment: ${module.module_id}`);
+      // Releases before the managed-policy migration used this CDK logical ID as PolicyName.
+      const legacyConstruct = `${options.clusterName}-${module.module_id}-host-policy`;
+      const legacyPolicy = legacyConstruct.replace(/[^A-Za-z0-9]/g, "").slice(0, 240)
+        + createHash("md5").update(`${legacyConstruct}/Resource`).digest("hex").slice(0, 8).toUpperCase();
+      if (!inventory.attached.includes(arn.split("/").at(-1)!) || inventory.inline.includes(legacyPolicy)) throw new ClusterConfigError(`Completion verification failed for DCV policy attachment: ${module.module_id}`);
+      if (inventory.inline.length > 0) deps.out(`warning: operator inline policies remain on DCV host role ${role}: ${inventory.inline.join(", ")}`);
     }
   }
   deps.out("Completion verified: settings and deployed module versions read back");

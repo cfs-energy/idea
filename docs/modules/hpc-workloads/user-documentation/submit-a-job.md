@@ -1,5 +1,23 @@
 # Submit a job
 
+## OpenMPI 4 vs 5
+
+OpenMPI 5 is the default in login shells, PBS batch jobs and `qsub -I` on nodes with EFA, from jobs with `efa_support=true` or images baked with EFA. The EFA installs are available at `/opt/idea/openmpi5` and `/opt/idea/openmpi4`.
+
+Non-EFA nodes are unchanged.
+
+Only `PATH` changes by default. If your binary was built against another OpenMPI 5 install, also add `/opt/idea/openmpi5/lib64:/opt/idea/openmpi5/lib` to `LD_LIBRARY_PATH` in your job script.
+
+To select OpenMPI 4 on an EFA node, add these lines to your job script or interactive compute shell:
+
+```bash
+export PATH="/opt/idea/openmpi4/bin:$PATH"
+export LD_LIBRARY_PATH="/opt/idea/openmpi4/lib64:/opt/idea/openmpi4/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+mpirun --version
+```
+
+Use matching MPI compiler wrappers, launcher and libraries. Replace `openmpi4` with `openmpi5` to select 5 again. `qsub -V` or `-v PATH=...,LD_LIBRARY_PATH=...` can override PBS defaults; select MPI inside the job script to make it explicit.
+
 {% hint style="info" %}
 Things to know before you start
 

@@ -6,7 +6,24 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.10.7] - 2026-10-19
+## [26.10.8] - 2026-10-21
+
+**Highlights for users**
+
+* Ubuntu 26.04 and RHEL 10 desktops are available in GovCloud (us-gov-west-1) on x86 and Arm.
+* Interactive jobs (`qsub -I`) start again; they had been ending right after starting with "job apparently deleted".
+* MPI jobs on EFA nodes use OpenMPI 5 by default. To use OpenMPI 4, see [OpenMPI 4 vs 5](modules/hpc-workloads/user-documentation/submit-a-job.md#openmpi-4-vs-5).
+
+* **OpenMPI default**: on nodes where the EFA installer provides OpenMPI 5 (`efa_support=true` jobs or images baked with EFA), login shells and PBS jobs get `/opt/idea/openmpi5/bin` first on `PATH` (library paths stay per job); OpenMPI 4 stays at `/opt/idea/openmpi4`. Nodes without EFA are unchanged.
+* **Existing data file system**: `use_existing_data_fs` no longer requires `use_existing_vpc`, so a cluster-owned VPC can keep an existing FSx for ONTAP file system.
+* **GovCloud images**: Ubuntu 26.04 and RHEL 10 base AMIs for x86_64 and arm64 in us-gov-west-1.
+* **Upgrade completion**: a compute AMI promoted by the image pipeline during the run passes verification.
+* **DCV host role**: operator-added inline policies on the role are a warning, not a failed upgrade; IDEA's legacy inline policy still fails.
+* **Desktop image pipeline**: skips OS and architecture pairs with no base stack in the region instead of failing them.
+* **Interactive jobs**: `qsub -I` works again from the containerized bastion and older clients. The queuejob hook fills in the interactive auth settings newer MoMs require, and compute nodes can reach the bastion's qsub port.
+* **Cost-only collector**: the standalone collector gets its Datadog key from the container, so spend reaches Datadog; in 26.10.7 every run failed before delivery.
+
+## [26.10.7] - 2026-10-21
 
 **Highlights for users**
 

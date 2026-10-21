@@ -31,6 +31,10 @@ class EnvironmentConfig:
         self.values['metrics.dogstatsd.url'] = environ.get(
             'DD_DOGSTATSD_URL', 'udp://127.0.0.1:8125'
         )
+        if environ.get('DD_SITE'):
+            self.values['ecs.datadog.site'] = environ['DD_SITE']
+        # ECS injects the key itself; there is no settings table to resolve an ARN from.
+        self.secrets = {'ecs.datadog.api_key_secret_arn': environ.get('DD_API_KEY')}
 
     def get_string(self, key, default=None):
         return self.values.get(key, default)
@@ -38,6 +42,14 @@ class EnvironmentConfig:
     def get_int(self, key, default=None):
         value = self.values.get(key)
         return int(value) if value is not None else default
+
+    def get_secret(self, key, default=None, required=False):
+        value = self.secrets.get(key) or default
+        if value is None and required:
+            raise ValueError(
+                f'{key} is required: set DD_API_KEY on the cost-metrics container'
+            )
+        return value
 
     def get_bool(self, key, default=None):
         value = self.values.get(key)

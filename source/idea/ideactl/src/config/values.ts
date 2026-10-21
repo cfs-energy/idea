@@ -583,11 +583,9 @@ function getters(values: UserValues, options: BuildContextOptions) {
     },
 
     useExistingDataFs(): boolean {
-      const value = getBool('use_existing_data_fs', values, false);
-      if (value && !g.useExistingVpc()) {
-        throw new InvalidParams('use_existing_data_fs cannot be True if use_existing_vpc = False');
-      }
-      return value;
+      // An existing data file system can live in a VPC the cluster stack owns (idea-gov: FSx ONTAP in the IDEA VPC).
+      // Flipping use_existing_vpc to satisfy a check would drop that VPC from the cluster stack.
+      return getBool('use_existing_data_fs', values, false);
     },
 
     existingDataFsId(): string | null {

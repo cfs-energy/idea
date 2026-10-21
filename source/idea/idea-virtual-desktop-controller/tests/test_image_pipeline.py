@@ -15,6 +15,7 @@ import pytest
 from ideadatamodel import (
     ImageBuildRecord,
     ImageCheck,
+    ImageKind,
     ImageRefreshSchedule,
     ImageRowFilter,
     ImageRowKey,
@@ -1377,6 +1378,49 @@ def test_refresh_takes_exactly_one_selector_and_reports_each_row():
         h.pipeline.refresh(
             RefreshImagesRequest(filter=ImageRowFilter(kind='compute')), 'admin'
         )
+
+
+@pytest.mark.parametrize('base_os', ['rhel10', 'rocky8', 'rocky9', 'rocky10'])
+def test_os_without_a_regional_base_stack_is_not_listed_or_queued(base_os):
+    h = Harness([base_stack('ubuntu2604')])
+    h.stack_db.config[base_os] = {'x86-64': {}, 'arm64': {}}
+    h.stack_db.stacks['custom'] = VirtualDesktopSoftwareStack(
+        stack_id='custom',
+        base_os=base_os,
+        architecture='x86_64',
+        gpu=VirtualDesktopGPU.NVIDIA,
+        ami_id='ami-custom',
+    )
+    assert [(r.base_os, r.architecture) for r in h.pipeline.list_rows()] == [
+        ('ubuntu2604', 'x86_64')
+    ]
+    results = h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')
+    assert [(r.row.base_os, r.outcome) for r in results] == [('ubuntu2604', 'queued')]
+    assert all(r.base_os == 'ubuntu2604' for r in h.pipeline.managed())
+    assert any(
+        f'Skipping desktop image {base_os} x86_64 cpu: no ss-base stack' in str(call)
+        for call in h.pipeline._logger.debug.call_args_list
+    )
+
+
+def test_missing_base_stack_is_checked_per_architecture_and_hides_old_failed_rows():
+    h = Harness([base_stack('rocky9')])
+    h.stack_db.config['rocky9']['arm64'] = {}
+    h.records.put(
+        ImageBuildRecord(
+            kind=ImageKind.DESKTOP,
+            base_os='rocky9',
+            architecture='arm64',
+            status='failed',
+            error='no ss-base stack',
+        )
+    )
+    assert [(r.base_os, r.architecture) for r in h.pipeline.list_rows()] == [
+        ('rocky9', 'x86_64')
+    ]
+    queue_and_run(h)
+    assert h.row().status == 'current'
+    assert h.row(arch='arm64').status == 'failed'
 
 
 def test_gpu_rows_exist_only_where_a_gpu_stack_does():

@@ -405,6 +405,16 @@ export class SchedulerStack extends IdeaBaseStack {
       this.stack,
       this.cluster.vpc,
     );
+
+    // Interactive MoMs connect back to qsub's ephemeral port on the submit host.
+    new ec2.CfnSecurityGroupIngress(this.stack, 'bastion-interactive-ingress', {
+      groupId: (this.cluster.getSecurityGroup('bastion-host') as ec2.ISecurityGroup).securityGroupId,
+      sourceSecurityGroupId: this.computeNodeSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 1024,
+      toPort: 65535,
+      description: 'OpenPBS interactive sessions from compute nodes to bastion',
+    });
   }
 
   private removeBastionHostIngressRule(securityGroup: ec2.SecurityGroup): void {
