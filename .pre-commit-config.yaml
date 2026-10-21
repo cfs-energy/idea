@@ -45,7 +45,7 @@ repos:
         args: [--config, .github/.gitleaks.toml]
   # Upstream repo rather than a local hook, so pre-commit builds the binary itself
   - repo: https://github.com/trufflesecurity/trufflehog
-    rev: v3.90.8
+    rev: v3.97.9
     hooks:
       - id: trufflehog
         name: TruffleHog

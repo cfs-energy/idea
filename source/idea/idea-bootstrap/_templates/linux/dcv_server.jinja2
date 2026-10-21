@@ -140,7 +140,6 @@ EOF
   package_transaction dnf groupinstall "Server with GUI" -y --skip-broken --disablerepo=epel-cisco-openh264
 
   systemctl set-default graphical.target
-  systemctl restart gdm
   # "Authentication required to refresh system repositories" pop-up (bugzilla 1857654).
   # polkit dropped .pkla support, so the rule is javascript here
   mkdir -p /etc/polkit-1/rules.d
@@ -184,8 +183,15 @@ else
   log_info "Found window manager pre-installed... skipping dcv prereq installation..."
 fi
 
+{% if context.base_os == 'ubuntu2604' %}
+{% include '_templates/linux/ubuntu_network_wait_online.jinja2' %}
+{% endif %}
+{% if context.base_os in ('rhel10', 'rocky10') %}
+{% include '_templates/linux/dcv_gdm_headless.jinja2' %}
+{% endif %}
 {% include '_templates/linux/gnome_online_accounts.jinja2' %}
 {% include '_templates/linux/gnome_desktop_polish.jinja2' %}
+{% include '_templates/linux/mesa_shader_cache.jinja2' %}
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 rpm --import ${DCV_GPG_KEY_DCV_SERVER}
@@ -317,6 +323,9 @@ fi
 {% endif %}
 # DCV 2026.0 service dependencies (also needed on preinstalled images).
 if systemctl cat dcvsessionlauncher.service >/dev/null 2>&1; then
+  # Greeter launchers write here before dcvserver creates its LogsDirectory.
+  install -d -o dcv -g dcv -m 3777 /var/log/dcv || exit 1
+  printf 'd /var/log/dcv 3777 dcv dcv -\n' > /etc/tmpfiles.d/idea-dcv.conf || exit 1
   # Keep the vendor unit: RuntimeDirectory creates dcv and dcvlogon as dcv:dcv, mode 0755.
   mkdir -p /etc/systemd/system/dcvserver.service.d /etc/systemd/system/dcvsessionlauncher.service.d || exit 1
   cat > /etc/systemd/system/dcvserver.service.d/idea.conf <<'EOF' || exit 1

@@ -95,6 +95,28 @@ const INDEX_LAG_GRACE_MS = 2 * 60 * 1000
  * within the grace window (a desktop just created), and drops one the session table already
  * deleted even while the listing still returns it.
  */
+const QUICK_REFRESH_MS = 5000
+const FIRST_PREVIEW_WINDOW_MS = 60 * 1000
+const CHANGING_STATES = new Set(['CREATING', 'PROVISIONING', 'INITIALIZING', 'RESUMING', 'STOPPING'])
+
+/**
+ * True while a desktop is changing state, or is ready without a first preview for up to a minute.
+ * `readySince` remembers when each preview-less ready desktop was first seen.
+ */
+export function needsQuickRefresh(sessions: Map<string, VirtualDesktopSession>, screenshots: { [k: string]: unknown }, readySince: { [k: string]: number }, now: number = Date.now()): boolean {
+    let quick = false
+    sessions.forEach((session) => {
+        const id = session.dcv_session_id
+        if (CHANGING_STATES.has(session.state ?? '')) {
+            quick = true
+        } else if (session.state === 'READY' && id && screenshots[id] === undefined) {
+            readySince[id] = readySince[id] ?? now
+            quick = quick || now - readySince[id] < FIRST_PREVIEW_WINDOW_MS
+        }
+    })
+    return quick
+}
+
 export function mergeSessions(current: Map<string, VirtualDesktopSession>, incoming: VirtualDesktopSession[], complete: boolean, now: number = Date.now()): Map<string, VirtualDesktopSession> {
     const next = new Map<string, VirtualDesktopSession>(complete ? [] : current.entries())
     incoming.forEach(session => {
@@ -127,6 +149,8 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     activeConnectionConfirmModal: RefObject<IdeaConfirm | null>
     scheduleModal: RefObject<VirtualDesktopScheduleModal | null>
     refreshInterval: any
+    quickRefresh: any
+    readySince: { [k: string]: number } = {}
     virtualDesktopSettings: any
     componentMounted: boolean
 
@@ -205,7 +229,8 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             }
 
             return this.fetchSessions().then(() => {
-                this.fetchSessionScreenshots().finally()
+                this.dropStalePreviews()
+                this.fetchSessionScreenshots().finally(() => this.scheduleQuickRefresh(refresh))
             })
         }
 
@@ -218,6 +243,34 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     componentWillUnmount() {
         this.componentMounted = false
         clearInterval(this.refreshInterval)
+        clearTimeout(this.quickRefresh)
+    }
+
+    // A desktop that left READY gets a fresh preview when it comes back, never its old screen.
+    dropStalePreviews() {
+        const screenshots = this.state.screenshots
+        let changed = false
+        this.state.sessions.forEach((session) => {
+            const id = session.dcv_session_id
+            if (id && session.state !== 'READY' && screenshots[id] !== undefined) {
+                delete screenshots[id]
+                delete this.readySince[id]
+                changed = true
+            }
+        })
+        if (changed) {
+            this.setState({screenshots})
+        }
+    }
+
+    scheduleQuickRefresh(refresh: () => Promise<unknown>) {
+        if (this.quickRefresh || !this.componentMounted || !needsQuickRefresh(this.state.sessions, this.state.screenshots, this.readySince)) {
+            return
+        }
+        this.quickRefresh = setTimeout(() => {
+            this.quickRefresh = undefined
+            refresh().finally()
+        }, QUICK_REFRESH_MS)
     }
 
     getProjectsClient(): ProjectsClient {
@@ -667,12 +720,23 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     }
 
     onDownloadDcvSessionFile = (session: VirtualDesktopSession): Promise<boolean> => {
+        if (session.recovering) {
+            this.setFlashMessage('Your desktop session is restarting. Try connecting again in a few minutes.', 'info')
+            return Promise.resolve(false)
+        }
         return this.getVirtualDesktopClient().getSessionConnectionInfo({
             connection_info: {
                 idea_session_id: session.idea_session_id,
+                idea_session_owner: session.owner,
                 dcv_session_id: session.dcv_session_id
             }
         }).then(result => {
+            if (result.connection_info?.failure_reason) {
+                throw new Error(result.connection_info.failure_reason)
+            }
+            if (!result.connection_info?.access_token) {
+                throw new Error('Connection details are unavailable. Try again in a few minutes.')
+            }
             let endpoint = result.connection_info?.endpoint
             if (endpoint === undefined) {
                 endpoint = AppContext.get().getAlbEndpoint()
@@ -682,7 +746,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             sessionFileContent += 'format=1.0\n'
             sessionFileContent += '[connect]\n'
             sessionFileContent += `user=${AppContext.get().auth().getUsername()}\n`
-            sessionFileContent += `sessionid=${session.dcv_session_id}\n`
+            sessionFileContent += `sessionid=${result.connection_info?.dcv_session_id ?? session.dcv_session_id}\n`
             sessionFileContent += `host=${url.host}\n`
             sessionFileContent += `port=443\n`
             sessionFileContent += `webport=443\n`
@@ -698,21 +762,36 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             element.click()
             document.body.removeChild(element)
             return true
+        }).catch(error => {
+            this.displayActionError(error, 'download the DCV client file for')
+            return false
         })
     }
 
     onLaunchSession = (session: VirtualDesktopSession): Promise<boolean> => {
+        if (session.recovering) {
+            this.setFlashMessage('Your desktop session is restarting. Try connecting again in a few minutes.', 'info')
+            return Promise.resolve(false)
+        }
         return this.getVirtualDesktopClient().getSessionConnectionInfo({
             connection_info: {
+                idea_session_id: session.idea_session_id,
+                idea_session_owner: session.owner,
                 dcv_session_id: session.dcv_session_id
             }
         }).then(result => {
+            if (result.connection_info?.failure_reason) {
+                throw new Error(result.connection_info.failure_reason)
+            }
+            if (!result.connection_info?.access_token) {
+                throw new Error('Connection details are unavailable. Try again in a few minutes.')
+            }
             return `${result.connection_info?.endpoint}${result.connection_info?.web_url_path}?authToken=${result.connection_info?.access_token}#${result.connection_info?.dcv_session_id}`
         }).then(url => {
             window.open(url);
             return true
         }).catch(error => {
-            console.error(error)
+            this.displayActionError(error, 'connect to')
             return false
         })
     }

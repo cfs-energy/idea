@@ -123,6 +123,7 @@ export interface PrimaryAction {
 
 /** The one button a card leads with: what the user can do next, or what is happening right now. */
 export function primaryAction(session: VirtualDesktopSession, canStart: boolean, infoShown: boolean): PrimaryAction {
+    if (session.recovering) return {label: 'Session restarting'}
     switch (session.state) {
         case 'READY':
             return {label: 'Connect', action: 'connect'}
@@ -158,9 +159,9 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         return this.props.session
     }
 
-    canConnect = (): boolean => this.props.session.state === 'READY'
+    canConnect = (): boolean => this.props.session.state === 'READY' && !this.props.session.recovering
 
-    canDownloadDcvSessionFile = () => this.getSession().state === 'READY'
+    canDownloadDcvSessionFile = () => this.canConnect()
 
     canUpdateSession = () => this.getSession().state === 'STOPPED'
 
@@ -260,7 +261,8 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
     }
 
     getScreenshotImageUrl(): string {
-        if (!this.props.screenshot) {
+        // The page caches the last capture per session; only a running desktop's capture is current.
+        if (!this.props.screenshot || !this.canConnect()) {
             return ''
         }
         return `data:image/jpeg;base64,${this.props.screenshot}`
@@ -293,8 +295,12 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 DELETING: 'Terminating',
                 DELETED: 'Terminating'
             }
-            return <div className="virtual-desktop-placeholder-image">
-                {placeholders[session.state ?? ''] ?? 'No preview'}
+            return <div className="virtual-desktop-placeholder-image" onClick={() => {
+                if (this.canConnect()) {
+                    this.props.onLaunchSession(this.getSession()).finally()
+                }
+            }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
+                {session.recovering ? 'Your desktop session is restarting. Connect will be available when it is ready.' : placeholders[session.state ?? ''] ?? 'No preview'}
             </div>
         }
         return <img alt="Desktop preview" src={imageUrl} onLoad={(event) => {

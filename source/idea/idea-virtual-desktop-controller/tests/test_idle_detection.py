@@ -2,11 +2,17 @@
 unit tests for the virtual desktop idleness decision
 """
 
+import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 from typing import Dict, Optional
 
 from ideavirtualdesktopcontroller.app.events.handlers.ssm_commands_progress_event_handlers.idea_session_cpu_utilization_command_progress_event_handler import (
     evaluate_session_idle,
+    IDEASessionCPUUtilizationCommandProgressEventHandler,
 )
 
 NOW = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -197,3 +203,68 @@ def test_reporting_idle_rule_agrees_with_the_idle_stop():
     for unreadable in (None, {}, {'DCV': {}}, activity_sample(cpu_utilization=None)):
         assert evaluate(unreadable)[0] is False
         assert desktop_check_idle(unreadable, CPU_UTILIZATION_THRESHOLD) is not True
+
+
+@pytest.mark.parametrize(
+    'output', ['', '  \n', '{bad json', '{"DCV":', 'null', '[]', '"text"', '42']
+)
+def test_handler_discards_unknown_output_without_stopping(output):
+    handler, event = command_handler(output)
+    handler.handle_event('message', 'controller', event)
+    handler.session_utils.stop_sessions.assert_not_called()
+    assert handler.log_warning.called or handler.log_info.called
+
+
+def test_handler_stops_on_a_valid_idle_sample():
+    handler, event = command_handler(json.dumps(activity_sample()))
+    handler.handle_event('message', 'controller', event)
+    handler.session_utils.stop_sessions.assert_called_once_with(
+        [handler.session_db.get_from_db.return_value]
+    )
+
+
+def test_handler_keeps_an_open_ssh_session():
+    handler, event = command_handler(json.dumps(activity_sample(login_sessions=1)))
+    handler.handle_event('message', 'controller', event)
+    handler.session_utils.stop_sessions.assert_not_called()
+
+
+def command_handler(output):
+    handler = object.__new__(IDEASessionCPUUtilizationCommandProgressEventHandler)
+    handler.is_sender_controller_role = Mock(return_value=True)
+    handler.session_db = Mock()
+    handler.session_utils = Mock()
+    handler.session_utils.stop_sessions.return_value = ([], [])
+    handler._ssm_client = Mock()
+    handler._ssm_client.get_command_invocation.return_value = {
+        'StandardOutputContent': output
+    }
+    handler.context = Mock()
+    handler.context.config().get_float.return_value = CPU_UTILIZATION_THRESHOLD
+    handler._get_idle_autostop_delay = Mock(return_value=IDLE_AUTOSTOP_DELAY)
+    handler.log_warning = Mock()
+    handler.log_info = Mock()
+    event = SimpleNamespace(
+        detail={
+            'status': 'Success',
+            'instance_id': 'i-test',
+            'idea_session_id': 'session',
+            'idea_session_owner': 'someuser',
+            'command_id': 'command',
+        }
+    )
+    return handler, event
+
+
+@pytest.mark.parametrize(
+    'field',
+    ['CPUAveragePerformanceLast10Secs', 'SSH_Connection_Count', 'num-of-connections'],
+)
+@pytest.mark.parametrize(
+    'value', [None, 'invalid', -1, float('nan'), float('inf'), {}, []]
+)
+def test_unreadable_activity_is_not_idle(field, value):
+    sample = activity_sample()
+    target = sample['DCV'] if field == 'num-of-connections' else sample
+    target[field] = value
+    assert evaluate(sample)[0] is False

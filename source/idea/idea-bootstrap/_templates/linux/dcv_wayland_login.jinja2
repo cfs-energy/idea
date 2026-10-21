@@ -1,13 +1,19 @@
 # Begin: DCV Wayland owner login
 # DCV's documented GNOME SSO needs system credentials; IDEA authenticates with broker tokens.
 # https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-linux-wayland-installation.html
-if ! /usr/bin/python3 -c 'from gi.repository import Gio, GLib' >/dev/null 2>&1; then
 {% if context.base_os == 'ubuntu2604' %}
-  DEBIAN_FRONTEND=noninteractive apt install -y python3-gi || exit 1
+# Keep the system binding installed even when a user selects another Python.
+DEBIAN_FRONTEND=noninteractive apt install -y python3-gi || exit 1
+install -d -m 755 /etc/systemd/user/user-session-migration.service.d || exit 1
+cat > /etc/systemd/user/user-session-migration.service.d/idea.conf <<'EOF_MIGRATION' || exit 1
+[Service]
+Environment=PATH=/usr/bin:/bin
+EOF_MIGRATION
 {% else %}
+if ! /usr/bin/python3 -c 'from gi.repository import Gio, GLib' >/dev/null 2>&1; then
   package_transaction dnf install -y python3-gobject-base || exit 1
-{% endif %}
 fi
+{% endif %}
 install -d -m 755 /usr/local/libexec /usr/share/gdm/greeter/autostart || exit 1
 cat > /usr/local/libexec/idea-dcv-login <<'PYCODE' || exit 1
 {% include '_templates/linux/dcv_wayland_login_helper.jinja2' %}

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Authorize GDM owner login for IDEA's single-session Wayland desktop hosts."""
 
+import hashlib
 import json
 import logging
 import os
@@ -180,16 +181,25 @@ class Grants:
         if not re.fullmatch(r'i-[0-9a-f]+', self.instance_id):
             raise ValueError('EC2 instance identity unavailable')
         # Instance-specific filenames also keep an interrupted marker write fail-closed.
-        self.first_login = FIRST_LOGIN.with_name(FIRST_LOGIN.name + '-' + self.instance_id)
+        self.first_login = FIRST_LOGIN.with_name(
+            FIRST_LOGIN.name + '-' + self.instance_id
+        )
+
+    def marker(self, owner):
+        identity = json.dumps([self.instance_id, *owner], separators=(',', ':'))
+        digest = hashlib.sha256(identity.encode()).hexdigest()
+        return self.first_login.with_name('session-login-' + digest)
 
     def handle(self, pid, uid, request):
         now = time.monotonic()
         self.tokens = {k: v for k, v in self.tokens.items() if v[0] > now}
-        if self.first_login.exists():
-            raise ValueError('automatic first login already completed')
         if request['op'] == 'issue' and is_greeter(uid):
             session_id = self.system.caller_session(pid, uid)['Id']
             owner = self.system.owner(session_id, uid)
+            if self.marker(owner).exists():
+                raise ValueError(
+                    'automatic first login already completed for this DCV session'
+                )
             if len(self.tokens) >= 16:
                 raise ValueError('too many pending logins')
             token = secrets.token_hex(32)
@@ -210,14 +220,20 @@ class Grants:
                 or self.system.owner(session_id, greeter_uid) != owner
             ):
                 raise ValueError('DCV owner/session changed')
+            if self.marker(owner).exists():
+                raise ValueError(
+                    'automatic first login already completed for this DCV session'
+                )
             # Consume the one-time privilege before PAM proceeds: later PAM failures
             # require a password too, rather than reopening automatic authentication.
-            fd = os.open(self.first_login, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            fd = os.open(
+                self.marker(owner), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
             with os.fdopen(fd, 'w') as marker:
                 marker.write(self.instance_id + '\n')
                 marker.flush()
                 os.fsync(marker.fileno())
-            directory = os.open(self.first_login.parent, os.O_RDONLY | os.O_DIRECTORY)
+            directory = os.open(self.marker(owner).parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(directory)
             finally:

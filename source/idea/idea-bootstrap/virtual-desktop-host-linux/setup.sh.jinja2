@@ -81,7 +81,16 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 # Start the CloudWatch agent before kernel management, which may reboot or abort, so the
 # bootstrap log of a host that fails reaches CloudWatch before the host is released.
+{% set dcv_log_group = '/' + context.cluster_name + '/' + context.module_id + '/dcv-host' %}
+{% with additional_log_files = [
+  {'file_path': '/var/log/dcv/server.log', 'log_group_name': dcv_log_group, 'log_stream_name': 'dcv-server_{ip_address}'},
+  {'file_path': '/var/log/dcv/sessionlauncher.log', 'log_group_name': dcv_log_group, 'log_stream_name': 'dcv-sessionlauncher_{ip_address}'},
+  {'file_path': '/var/log/dcv/agent.*.log', 'log_group_name': dcv_log_group, 'log_stream_name': 'dcv-agent_{ip_address}', 'publish_multi_logs': true},
+  {'file_path': '/var/log/dcv/agentlauncher.*.log', 'log_group_name': dcv_log_group, 'log_stream_name': 'dcv-agentlauncher_{ip_address}', 'publish_multi_logs': true},
+  {'file_path': '/var/log/dcv-session-manager-agent/agent.log', 'log_group_name': dcv_log_group, 'log_stream_name': 'dcv-session-manager-agent_{ip_address}'}
+] %}
 {% include '_templates/linux/cloudwatch_agent.jinja2' %}
+{% endwith %}
 
 {% include '_templates/linux/set_kernel.jinja2' %}
 

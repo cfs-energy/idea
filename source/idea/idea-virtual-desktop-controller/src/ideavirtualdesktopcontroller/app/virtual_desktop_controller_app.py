@@ -428,6 +428,13 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Image pipeline tick failed: {" ".join(str(e).splitlines())}'
                 )
+            try:
+                if self.context.is_leader():
+                    self._bootstrap_session_utils.check_dcv_session_health()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Desktop session health check failed: {e}'
+                )
             self._bootstrap_exit.wait(60)
 
     def _desktop_image_pipeline(self):

@@ -10,8 +10,9 @@
 #  and limitations under the License.
 from typing import Union, Dict, List, Optional
 
-import ideavirtualdesktopcontroller
 from botocore.exceptions import ClientError
+
+import ideavirtualdesktopcontroller
 from ideadatamodel import (
     VirtualDesktopSession,
     VirtualDesktopBaseOS,
@@ -181,7 +182,19 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         if Utils.is_empty(db_entry):
             return None
 
-        return VirtualDesktopSession(
+        session = VirtualDesktopSession(
+            recovering=bool(db_entry.get('recovering', False)),
+            recovery_attempts=int(db_entry.get('recovery_attempts', 0)),
+            recovery_next_attempt_at=int(db_entry.get('recovery_next_attempt_at', 0)),
+            recovery_deadline=int(db_entry.get('recovery_deadline', 0)),
+            recovery_pending_create=bool(
+                db_entry.get('recovery_pending_create', False)
+            ),
+            recovery_health_deadline=int(db_entry.get('recovery_health_deadline', 0)),
+            recovery_unready_observed=bool(
+                db_entry.get('recovery_unready_observed', False)
+            ),
+            reboot_deadline=int(db_entry.get('reboot_deadline', 0)),
             owner=Utils.get_value_as_string(
                 sessions_constants.USER_SESSION_DB_HASH_KEY, db_entry
             ),
@@ -357,6 +370,11 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             ),
         )
 
+        session._updated_on_ms = Utils.get_value_as_int(
+            sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY, db_entry
+        )
+        return session
+
     def convert_session_object_to_db_dict(self, session: VirtualDesktopSession) -> Dict:
         if Utils.is_empty(session):
             return {}
@@ -365,6 +383,14 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             session.schedule = VirtualDesktopWeekSchedule()
 
         db_dict = {
+            'recovering': session.recovering,
+            'recovery_attempts': session.recovery_attempts,
+            'recovery_next_attempt_at': session.recovery_next_attempt_at,
+            'recovery_deadline': session.recovery_deadline,
+            'recovery_pending_create': session.recovery_pending_create,
+            'recovery_health_deadline': session.recovery_health_deadline,
+            'recovery_unready_observed': session.recovery_unready_observed,
+            'reboot_deadline': session.reboot_deadline,
             sessions_constants.USER_SESSION_DB_HASH_KEY: session.owner,
             sessions_constants.USER_SESSION_DB_RANGE_KEY: session.idea_session_id,
             sessions_constants.USER_SESSION_DB_CREATED_ON_KEY: Utils.to_milliseconds(
@@ -591,11 +617,33 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             # running again: the next stop records its own time
             session.stopped_on = None
 
-    def update(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
+    def update(
+        self, session: VirtualDesktopSession, *, check_version: bool = False
+    ) -> VirtualDesktopSession:
+        if check_version and session._updated_on_ms is None:
+            raise ValueError(
+                'A stored session version is required for a conditional update'
+            )
+        if session.state != VirtualDesktopSessionState.INITIALIZING:
+            session.recovering = False
+            session.recovery_pending_create = False
+            session.recovery_attempts = 0
+            session.recovery_deadline = 0
+            session.recovery_next_attempt_at = 0
+            session.recovery_health_deadline = 0
+        if session.state != VirtualDesktopSessionState.READY:
+            session.recovery_unready_observed = False
+        if session.state in STOP_TIME_STATES or session.state in {
+            VirtualDesktopSessionState.READY,
+            VirtualDesktopSessionState.ERROR,
+            VirtualDesktopSessionState.STOPPING,
+            VirtualDesktopSessionState.DELETING,
+        }:
+            session.reboot_deadline = 0
         self._stamp_stopped_on(session)
         db_entry = self.convert_session_object_to_db_dict(session)
-        db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = (
-            Utils.current_time_ms()
+        db_entry[sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY] = max(
+            Utils.current_time_ms(), (session._updated_on_ms or 0) + 1
         )
         update_expression_tokens = []
         expression_attr_names = {}
@@ -612,20 +660,33 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             expression_attr_names[f'#{key}'] = key
             expression_attr_values[f':{key}'] = value
 
-        result = self._table.update_item(
-            Key={
-                sessions_constants.USER_SESSION_DB_HASH_KEY: db_entry[
-                    sessions_constants.USER_SESSION_DB_HASH_KEY
-                ],
-                sessions_constants.USER_SESSION_DB_RANGE_KEY: db_entry[
-                    sessions_constants.USER_SESSION_DB_RANGE_KEY
-                ],
-            },
-            UpdateExpression='SET ' + ', '.join(update_expression_tokens),
-            ExpressionAttributeNames=expression_attr_names,
-            ExpressionAttributeValues=expression_attr_values,
-            ReturnValues='ALL_OLD',
-        )
+        condition = {}
+        if check_version:
+            expression_attr_values[':expected_updated_on'] = session._updated_on_ms
+            condition['ConditionExpression'] = '#updated_on = :expected_updated_on'
+
+        try:
+            result = self._table.update_item(
+                **condition,
+                Key={
+                    sessions_constants.USER_SESSION_DB_HASH_KEY: db_entry[
+                        sessions_constants.USER_SESSION_DB_HASH_KEY
+                    ],
+                    sessions_constants.USER_SESSION_DB_RANGE_KEY: db_entry[
+                        sessions_constants.USER_SESSION_DB_RANGE_KEY
+                    ],
+                },
+                UpdateExpression='SET ' + ', '.join(update_expression_tokens),
+                ExpressionAttributeNames=expression_attr_names,
+                ExpressionAttributeValues=expression_attr_values,
+                ReturnValues='ALL_OLD',
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                self._logger.warning(
+                    f'Conditional update failed for session {session.idea_session_id}; re-read before retrying'
+                )
+            raise
 
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
         self._record_run(
@@ -749,7 +810,8 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                     Key={
                         sessions_constants.USER_SESSION_DB_HASH_KEY: idea_session_owner,
                         sessions_constants.USER_SESSION_DB_RANGE_KEY: idea_session_id,
-                    }
+                    },
+                    ConsistentRead=True,
                 )
                 session_db_entry = Utils.get_value_as_dict('Item', result)
             except self._ddb_client.exceptions.ResourceNotFoundException as _:

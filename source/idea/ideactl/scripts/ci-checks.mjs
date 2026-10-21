@@ -58,6 +58,7 @@ const ALLOWED_TICKET_LIKE_PREFIXES = new Set([
   "BSD",
   "FS",
   "GPL",
+  "PSF",
   "SHA",
   "UTF",
 ]);

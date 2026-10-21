@@ -9,6 +9,10 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
+    DcvSessionRecovery,
+)
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSessionState
 from ideasdk.utils import Utils
@@ -61,6 +65,12 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
             self.log_error(message_id=message_id, message='Invalid IDEA SESSION ID.')
             return
 
+        if (
+            session.state == VirtualDesktopSessionState.READY
+            or session.recovering
+            or session.reboot_deadline
+        ) and DcvSessionRecovery(self).check(session):
+            return
         counter_db_entry = self.session_counter_db.get(
             session.idea_session_id,
             VirtualDesktopSessionCounterType.VALIDATE_DCV_SESSION_CREATED_COUNTER,
@@ -75,6 +85,13 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
                 message=f'Idea session {session.idea_session_id}:{session.name} is being deleted; state: {session.state}. Ignoring Validation.',
             )
             self.session_counter_db.delete(counter_db_entry)
+            return
+
+        if session.state not in {
+            VirtualDesktopSessionState.CREATING,
+            VirtualDesktopSessionState.INITIALIZING,
+            VirtualDesktopSessionState.RESUMING,
+        }:
             return
 
         response = self.context.dcv_broker_client.describe_sessions([session])
@@ -94,12 +111,8 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
                 message_id=message_id,
                 message=f'Idea session {session.idea_session_id}:{session.name} is stable with state: {state}. Validation complete. Moving to ready state',
             )
-            session.state = VirtualDesktopSessionState.READY
-            _ = self.session_db.update(session)
+            self.mark_ready(session)
             self.session_counter_db.delete(counter_db_entry)
-            # create and resume both arrive here; a desktop from before a scheduler move
-            # must not wait for the six-hourly sweep to learn the new scheduler name.
-            self.session_utils.refresh_bootstrap_on_ready(session)
         elif (
             counter_db_entry.counter > self.SESSION_DELETED_THRESHOLD
             and state == 'DELETED'
@@ -119,11 +132,6 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
                 message_id=message_id,
                 message=f'Idea session {session.idea_session_id}:{session.name} is not stable with state: {state}. Validation ERROR. count: {counter_db_entry.counter}',
             )
-        elif session.state is VirtualDesktopSessionState.STOPPING:
-            self.log_error(
-                message_id=message_id,
-                message=f'Idea session {session.idea_session_id}:{session.name} is currently stopping. IGNORING the validation',
-            )
         else:
             counter_db_entry.counter = counter_db_entry.counter + 1
             if session.state != VirtualDesktopSessionState.INITIALIZING:
@@ -135,3 +143,9 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
 
         if not should_delete_message:
             raise self.do_not_delete_message_exception(should_not_delete_message_text)
+
+    def mark_ready(self, session, **kwargs):
+        session.state = VirtualDesktopSessionState.READY
+        session.failure_reason = None
+        self.session_db.update(session, **kwargs)
+        self.session_utils.refresh_bootstrap_on_ready(session)

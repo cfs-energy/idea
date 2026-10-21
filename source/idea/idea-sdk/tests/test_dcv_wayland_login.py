@@ -48,7 +48,7 @@ def login(monkeypatch, tmp_path):
         42: SimpleNamespace(pw_name='gdm', pw_uid=42, pw_gid=43),
         60578: SimpleNamespace(pw_name='gdm-greeter', pw_uid=60578, pw_gid=43),
         60579: SimpleNamespace(pw_name='gdm-greeter-2', pw_uid=60579, pw_gid=43),
-        99: SimpleNamespace(pw_name='mallory', pw_uid=99, pw_gid=43),
+        99: SimpleNamespace(pw_name='untrusted', pw_uid=99, pw_gid=43),
     }
 
     def getpwnam(name):
@@ -63,17 +63,15 @@ def login(monkeypatch, tmp_path):
 
 
 def first_login(login):
-    return login.FIRST_LOGIN.with_name(
-        login.FIRST_LOGIN.name + '-' + login.INSTANCE_ID.read_text().strip()
-    )
+    return login.Grants(System()).marker(System().owner('c2', 42))
 
 
 def fixture_state():
     sid = 'test-session'
     dcv = {
         'id': sid,
-        'owner': 'alice',
-        'user': 'alice',
+        'owner': 'someuser',
+        'user': 'someuser',
         'type': 'virtual',
         'creation-time': 'today',
         'xdg-session-id': 'c2',
@@ -98,7 +96,7 @@ def fixture_state():
 
 def test_owner_requires_matching_dcv_and_gdm_session(login):
     assert login.authorized_owner('c2', 42, *fixture_state()) == (
-        'alice',
+        'someuser',
         'test-session',
         'today',
     )
@@ -127,7 +125,7 @@ def test_scope_fails_closed(login, change):
         logins[0]['Seat'] = 'seat0'
         logins[0]['Remote'] = False
     if change == 'different-user':
-        sessions[0]['user'] = 'bob'
+        sessions[0]['user'] = 'otheruser'
     if change == 'different-greeter':
         logins[0]['User'] = 99
     if change == 'wrong-remote-id':
@@ -152,7 +150,7 @@ class System:
 
     def owner(self, session_id, uid):
         assert (session_id, uid) == ('c2', 42)
-        return ('alice', 'test-session', 'today')
+        return ('someuser', 'test-session', 'today')
 
 
 class DynamicSystem:
@@ -190,8 +188,8 @@ def test_dynamic_greeter_can_issue_and_redeem_for_own_remote_session(
     monkeypatch.setattr(login, 'pam_worker', lambda pid: pid == 200)
     grants = login.Grants(DynamicSystem(login))
     issued = grants.handle(100, 60578, {'op': 'issue'})
-    assert issued['owner'] == 'alice'
-    redeem = dict(op='redeem', user='alice', remote='0.0.0.0', token=issued['token'])
+    assert issued['owner'] == 'someuser'
+    redeem = dict(op='redeem', user='someuser', remote='0.0.0.0', token=issued['token'])
     assert grants.handle(200, 0, redeem) == {'ok': True}
     with pytest.raises(ValueError):
         grants.handle(200, 0, redeem)
@@ -210,7 +208,7 @@ def test_dynamic_seat0_greeter_cannot_request_remote_owner(login):
 @pytest.mark.parametrize(
     'name,gid',
     [
-        ('mallory', 43),
+        ('untrusted', 43),
         ('gdm-greeter-extra', 43),
         ('gdm-greeter-2-extra', 43),
         ('gdm-greeter', 44),
@@ -231,8 +229,8 @@ def test_gdm_group_member_is_not_a_greeter(login, name, gid):
 def test_static_gdm_account_can_request_owner(login, gdm_name):
     login.pwd.getpwuid(42).pw_name = gdm_name
     issued = login.Grants(System()).handle(100, 42, {'op': 'issue'})
-    assert issued['owner'] == 'alice'
-    assert login.authorized_owner('c2', 42, *fixture_state())[0] == 'alice'
+    assert issued['owner'] == 'someuser'
+    assert login.authorized_owner('c2', 42, *fixture_state())[0] == 'someuser'
 
 
 @pytest.mark.parametrize('uid,expected', [(60578, 'c2'), (60579, 'c3')])
@@ -287,7 +285,7 @@ def test_dynamic_greeter_identity_is_rechecked_at_redeem(login, monkeypatch, cha
         grants.handle(
             200,
             0,
-            dict(op='redeem', user='alice', remote='0.0.0.0', token=issued['token']),
+            dict(op='redeem', user='someuser', remote='0.0.0.0', token=issued['token']),
         )
 
 
@@ -297,7 +295,7 @@ def test_credentials_are_one_use_and_bound_to_owner(login, monkeypatch):
     issued = grants.handle(100, 42, {'op': 'issue'})
     redeem = {
         'op': 'redeem',
-        'user': 'alice',
+        'user': 'someuser',
         'remote': '0.0.0.0',
         'token': issued['token'],
     }
@@ -318,13 +316,13 @@ def test_credential_cannot_authorize_another_login(login, monkeypatch, change):
     issued = grants.handle(100, 42, {'op': 'issue'})
     redeem = {
         'op': 'redeem',
-        'user': 'alice',
+        'user': 'someuser',
         'remote': '0.0.0.0',
         'token': issued['token'],
     }
     pid, uid = 200, 0
     if change == 'user':
-        redeem['user'] = 'bob'
+        redeem['user'] = 'otheruser'
     if change == 'remote':
         redeem['remote'] = ''
     if change == 'seat':
@@ -336,7 +334,7 @@ def test_credential_cannot_authorize_another_login(login, monkeypatch, change):
     if change == 'worker':
         pid = 201
     if change == 'session':
-        system.owner = lambda *args: ('alice', 'test-session', 'tomorrow')
+        system.owner = lambda *args: ('someuser', 'test-session', 'tomorrow')
     if change == 'expired':
         now[0] = 41
     with pytest.raises(ValueError):
@@ -356,12 +354,30 @@ def test_first_login_privilege_is_consumed_at_validated_pam_redemption(
     monkeypatch.setattr(login, 'pam_worker', lambda pid: 123 if pid == 200 else None)
     grants = login.Grants(System())
     issued = grants.handle(100, 42, {'op': 'issue'})
-    pam = {'user': 'alice', 'remote': '0.0.0.0', 'token': issued['token']}
+    pam = {'user': 'someuser', 'remote': '0.0.0.0', 'token': issued['token']}
     assert grants.handle(200, 0, dict(pam, op='redeem')) == {'ok': True}
     assert first_login(login).stat().st_mode & 0o777 == 0o600
-    # Recreating both service and DCV session must not grant a second automatic login.
+    with pytest.raises(ValueError, match='first login'):
+        login.Grants(System()).handle(100, 42, {'op': 'issue'})
+
+
+@pytest.mark.parametrize(
+    'owner',
+    [
+        ('someuser', 'new-session', 'tomorrow'),
+        ('someuser', 'test-session', 'tomorrow'),
+    ],
+)
+def test_recreated_session_gets_one_new_login(login, monkeypatch, owner):
+    monkeypatch.setattr(login, 'pam_worker', lambda pid: pid == 200)
+    first_login(login).touch()
     system = System()
-    system.owner = lambda *args: ('alice', 'new-session', 'tomorrow')
+    system.owner = lambda *args: owner
+    grants = login.Grants(system)
+    issued = grants.handle(100, 42, {'op': 'issue'})
+    assert grants.handle(
+        200, 0, dict(op='redeem', user=owner[0], remote='remote', token=issued['token'])
+    ) == {'ok': True}
     with pytest.raises(ValueError, match='first login'):
         login.Grants(system).handle(100, 42, {'op': 'issue'})
 
@@ -375,7 +391,7 @@ def test_outstanding_credential_cannot_bypass_completed_first_login(login, monke
         grants.handle(
             200,
             0,
-            dict(op='redeem', user='alice', remote='remote', token=issued['token']),
+            dict(op='redeem', user='someuser', remote='remote', token=issued['token']),
         )
 
 
@@ -390,7 +406,7 @@ def test_first_login_fails_closed_if_state_cannot_be_persisted(
         grants.handle(
             200,
             0,
-            dict(op='redeem', user='alice', remote='remote', token=issued['token']),
+            dict(op='redeem', user='someuser', remote='remote', token=issued['token']),
         )
 
 
@@ -513,7 +529,9 @@ def test_live_session_image_marker_does_not_consume_new_instance_login(
     grants = login.Grants(System())
     issued = grants.handle(100, 42, {'op': 'issue'})
     assert grants.handle(
-        200, 0, dict(op='redeem', user='alice', remote='remote', token=issued['token'])
+        200,
+        0,
+        dict(op='redeem', user='someuser', remote='remote', token=issued['token']),
     ) == {'ok': True}
     assert (
         first_login(login).read_text().strip() == login.INSTANCE_ID.read_text().strip()
@@ -525,7 +543,7 @@ def test_live_session_image_marker_does_not_consume_new_instance_login(
 def test_ssh_session_does_not_block_remote_greeter(login):
     sessions, logins, displays = fixture_state()
     logins.append(dict(logins[0], Id='ssh', User=1000, Class='user', Type='tty'))
-    assert login.authorized_owner('c2', 42, sessions, logins, displays)[0] == 'alice'
+    assert login.authorized_owner('c2', 42, sessions, logins, displays)[0] == 'someuser'
 
 
 @pytest.mark.parametrize('identity', ['', 'not-an-instance'])

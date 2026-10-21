@@ -140,6 +140,22 @@ describe('virtual desktop session card', () => {
         expect(screen.getByText('Preview not captured yet')).toBeInTheDocument();
     });
 
+    it('connects from the not-captured placeholder like the preview', async () => {
+        const handlers = renderCard('READY');
+        const placeholder = screen.getByText('Preview not captured yet');
+        expect(placeholder).toHaveStyle({cursor: 'pointer'});
+        await userEvent.setup().click(placeholder);
+        expect(handlers.onLaunchSession).toHaveBeenCalled();
+    });
+
+    it('drops the last capture once the desktop stops', () => {
+        const card = renderCard('READY', { screenshot: 'running' });
+        expect(screen.getByAltText('Desktop preview')).toBeInTheDocument();
+        card.rerender({ session: { ...BASE, state: 'STOPPED' } });
+        expect(screen.queryByAltText('Desktop preview')).not.toBeInTheDocument();
+        expect(screen.getAllByText('Stopped').length).toBe(2);
+    });
+
     it('shows a stopped placeholder for a stopped desktop', () => {
         renderCard('STOPPED');
         // status indicator and preview both say it
@@ -171,5 +187,21 @@ describe('virtual desktop session card', () => {
         }
         expect(screen.getByText('session-1')).toBeInTheDocument();
         expect(screen.getByText('10.0.0.5')).toBeInTheDocument();
+    });
+});
+
+
+describe('desktop recovery', () => {
+    it('explains why Connect is unavailable while the session restarts', () => {
+        renderCard('INITIALIZING', { session: { ...BASE, state: 'INITIALIZING', recovering: true } });
+        expect(screen.getByText('Your desktop session is restarting. Connect will be available when it is ready.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Session restarting' })).toBeDisabled();
+        expect(screen.queryByText('Preview not captured yet')).not.toBeInTheDocument();
+    });
+
+    it('keeps the READY placeholder clickable', async () => {
+        const handlers = renderCard('READY');
+        await userEvent.setup().click(screen.getByText('Preview not captured yet'));
+        expect(handlers.onLaunchSession).toHaveBeenCalled();
     });
 });

@@ -44,7 +44,7 @@ from ideadatamodel import (
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 
 class VirtualDesktopSessionState(str, Enum):
@@ -266,6 +266,16 @@ class VirtualDesktopSessionPermission(SocaBaseModel):
 
 
 class VirtualDesktopSession(SocaBaseModel):
+    # Keep the database version out of API input and datetime conversions.
+    _updated_on_ms: Optional[int] = PrivateAttr(default=None)
+    recovering: bool = Field(default=False)
+    recovery_attempts: int = Field(default=0)
+    recovery_next_attempt_at: int = Field(default=0)
+    recovery_deadline: int = Field(default=0)
+    recovery_pending_create: bool = Field(default=False)
+    recovery_health_deadline: int = Field(default=0)
+    recovery_unready_observed: bool = Field(default=False)
+    reboot_deadline: int = Field(default=0)
     dcv_session_id: Optional[str] = Field(default=None)
     idea_session_id: Optional[str] = Field(default=None)
     base_os: Optional[VirtualDesktopBaseOS] = Field(default=None)

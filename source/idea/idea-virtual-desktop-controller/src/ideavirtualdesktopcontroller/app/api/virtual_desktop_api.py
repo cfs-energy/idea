@@ -11,6 +11,10 @@
 from abc import abstractmethod
 from typing import List, Optional
 
+from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
+    RESTARTING_MESSAGE,
+)
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
     ListSoftwareStackRequest,
@@ -593,6 +597,14 @@ class VirtualDesktopAPI(BaseAPI):
         # admin-only, set through VirtualDesktopAdmin.SetSessionCleanupExemption
         session.cleanup_exempt = None
         session.cleanup_exempt_reason = None
+        session.recovering = False
+        session.recovery_attempts = 0
+        session.recovery_next_attempt_at = 0
+        session.recovery_deadline = 0
+        session.recovery_pending_create = False
+        session.recovery_health_deadline = 0
+        session.recovery_unready_observed = False
+        session.reboot_deadline = 0
         if Utils.is_empty(session.project) or Utils.is_empty(
             session.project.project_id
         ):
@@ -1381,19 +1393,22 @@ class VirtualDesktopAPI(BaseAPI):
         is_valid_idea_session = True
         session = None
 
-        if Utils.is_empty(connection_info_request.dcv_session_id):
+        if connection_info_request.idea_session_id:
             session = self.session_db.get_from_db(
                 idea_session_id=connection_info_request.idea_session_id,
-                idea_session_owner=connection_info_request.idea_session_owner,
+                idea_session_owner=connection_info_request.idea_session_owner
+                or context.get_username(),
             )
-            if Utils.is_empty(session):
-                connection_info.failure_reason = f'Invalid IDEA session id: {connection_info_request.idea_session_id} for user: {context.get_username()}.'
+            if session is None:
+                connection_info.failure_reason = 'The desktop could not be found.'
                 is_valid_idea_session = False
-            elif (
-                VirtualDesktopSessionState[session.state]
-                != VirtualDesktopSessionState.READY
-            ):
-                connection_info.failure_reason = f'session {connection_info_request.idea_session_id} status is {session.state}'
+            elif session.recovering:
+                connection_info.failure_reason = RESTARTING_MESSAGE
+                is_valid_idea_session = False
+            elif session.state != VirtualDesktopSessionState.READY:
+                connection_info.failure_reason = (
+                    session.failure_reason or f'The desktop is {session.state}.'
+                )
                 is_valid_idea_session = False
             else:
                 connection_info_request.dcv_session_id = session.dcv_session_id
@@ -1406,26 +1421,19 @@ class VirtualDesktopAPI(BaseAPI):
                 )
             )
             if Utils.is_not_empty(connection_info.failure_reason):
-                # Invalid connection
-                self._logger.error(
-                    f'Error in getting connection info data for DCV Session: {connection_info_request.dcv_session_id}, Trying to switch to error state.'
-                )
-                if Utils.is_empty(session) and Utils.is_not_empty(
-                    connection_info_request.idea_session_id
-                ):
-                    self._logger.error(
-                        f'We have idea session ID {connection_info_request.idea_session_id}, using it to get session db entry...'
+                if session is not None:
+                    response = self.context.dcv_broker_client.describe_sessions(
+                        [session]
                     )
-                    session = self.session_db.get_from_db(
-                        idea_session_id=connection_info_request.idea_session_id,
-                        idea_session_owner=connection_info_request.idea_session_owner,
+                    current = response.get('sessions', {}).get(
+                        session.dcv_session_id, {}
                     )
-
-                if Utils.is_not_empty(session):
-                    # we had a valid session, but we were unable to connect because DCV Broker denied. Need to error the session out.
-                    self._logger.error('Identified the DB entry, error-ing it out.')
-                    session.state = VirtualDesktopSessionState.ERROR
-                    _ = self.session_db.update(session)
+                    if current.get('state') != 'READY':
+                        self.events_utils.publish_validate_dcv_session_creation_event(
+                            idea_session_id=session.idea_session_id,
+                            idea_session_owner=session.owner,
+                        )
+                        connection_info.failure_reason = RESTARTING_MESSAGE
             else:
                 # Valid connection
                 custom_certificate_provided = self.context.config().get_bool(

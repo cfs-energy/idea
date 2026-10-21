@@ -1,0 +1,10 @@
+{% if context.base_os == 'ubuntu2604' %}
+# Begin: Ubuntu Network Wait Online
+# Bake the renderer's wait service into the image before a desktop's first boot.
+netplan generate || exit 1
+if [[ "$(netplan get network.renderer)" == NetworkManager ]] && ! compgen -G '/run/systemd/network/*.network' >/dev/null; then
+  systemctl enable NetworkManager-wait-online.service || exit 1
+  systemctl mask systemd-networkd-wait-online.service || exit 1
+fi
+# End: Ubuntu Network Wait Online
+{% endif %}
