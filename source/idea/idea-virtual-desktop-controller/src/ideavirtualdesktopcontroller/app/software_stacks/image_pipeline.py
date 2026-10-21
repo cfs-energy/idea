@@ -267,9 +267,19 @@ class DesktopImagePipeline:
                 architecture=architecture,
                 variant=variant,
             )
+            targets = self.targets_for(key, stacks)
+            if not targets and not self.targets_for(
+                ImageRowKey(
+                    base_os=base_os, architecture=architecture, variant=ImageVariant.CPU
+                ),
+                stacks,
+            ):
+                self._logger.debug(
+                    f'Skipping desktop image {base_os} {architecture} {variant}: no ss-base stack'
+                )
+                continue
             record = stored.get(row_id(key))
             if record is None:
-                targets = self.targets_for(key, stacks)
                 record = ImageBuildRecord(
                     kind=ImageKind.DESKTOP,
                     base_os=base_os,

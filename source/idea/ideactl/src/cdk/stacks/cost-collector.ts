@@ -101,6 +101,7 @@ export class CostCollectorStack extends Stack {
         IDEA_COST_METRICS_OWNER_TAG: props.ownerTag ?? "idea:JobOwner",
         IDEA_COST_METRICS_BY_ACCOUNT: String(props.byAccount ?? false),
       },
+      secrets: { DD_API_KEY: ecs.Secret.fromSecretsManager(secret) },
       logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: "cost-metrics" }),
     });
     collector.addContainerDependencies({ container: agent, condition: ecs.ContainerDependencyCondition.HEALTHY });

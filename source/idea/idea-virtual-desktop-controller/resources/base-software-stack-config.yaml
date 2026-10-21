@@ -1230,6 +1230,9 @@ rhel10:
     us-west-2:
       - ami-id: ami-085db5b67022b90dc
         ss-id-suffix: base
+    us-gov-west-1:
+      - ami-id: ami-0263483150a3c0777
+        ss-id-suffix: base
   x86-64:
     default-description: 'RHEL 10 - x86_64'
     default-min-ram-unit: gb
@@ -1317,6 +1320,9 @@ rhel10:
         ss-id-suffix: base
     us-west-2:
       - ami-id: ami-0dfb1e7a5a62899ce
+        ss-id-suffix: base
+    us-gov-west-1:
+      - ami-id: ami-0a63681c24ba50852
         ss-id-suffix: base
 rocky10:
   arm64:
@@ -1545,6 +1551,9 @@ ubuntu2604:
     us-west-2:
       - ami-id: ami-02f57221be89a6ab3
         ss-id-suffix: base
+    us-gov-west-1:
+      - ami-id: ami-0dd0708078022e29b
+        ss-id-suffix: base
   x86-64:
     default-description: 'Ubuntu 26.04 - x86_64'
     default-min-ram-unit: gb
@@ -1599,6 +1608,9 @@ ubuntu2604:
         ss-id-suffix: base
     us-west-2:
       - ami-id: ami-0337853c7b367b041
+        ss-id-suffix: base
+    us-gov-west-1:
+      - ami-id: ami-06b6d0b42e84f9d65
         ss-id-suffix: base
 windows2019:
   x86-64:

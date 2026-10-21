@@ -6,7 +6,20 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.10.7] - 2026-10-19
+## [26.10.8] - 2026-10-21
+
+**Highlights for users**
+
+* Ubuntu 26.04 and RHEL 10 desktops are available in GovCloud (us-gov-west-1) on x86 and Arm.
+
+* **Existing data file system**: `use_existing_data_fs` no longer requires `use_existing_vpc`, so a cluster-owned VPC can keep an existing FSx for ONTAP file system.
+* **GovCloud images**: Ubuntu 26.04 and RHEL 10 base AMIs for x86_64 and arm64 in us-gov-west-1.
+* **Upgrade completion**: a compute AMI promoted by the image pipeline during the run passes verification.
+* **DCV host role**: operator-added inline policies on the role are a warning, not a failed upgrade; IDEA's legacy inline policy still fails.
+* **Desktop image pipeline**: skips OS and architecture pairs with no base stack in the region instead of failing them.
+* **Cost-only collector**: the standalone collector gets its Datadog key from the container, so spend reaches Datadog; in 26.10.7 every run failed before delivery.
+
+## [26.10.7] - 2026-10-21
 
 **Highlights for users**
 

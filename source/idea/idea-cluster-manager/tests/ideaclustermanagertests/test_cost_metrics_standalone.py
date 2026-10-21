@@ -167,3 +167,30 @@ def test_container_role_needs_no_cluster_settings(tmp_path, argument):
         '-m',
         'ideaclustermanager.app.metrics.standalone',
     ]
+
+
+def test_datadog_api_reads_key_from_container_environment():
+    from ideasdk.metrics.datadog_api import DatadogAPI
+
+    context = standalone.StandaloneContext(
+        {
+            'IDEA_CLUSTER_NAME': 'idea-gov',
+            'AWS_DEFAULT_REGION': 'us-east-2',
+            'DD_API_KEY': 'key-1',
+            'DD_SITE': 'ddog-gov.com',
+        }
+    )
+    api = DatadogAPI.from_context(context)
+    assert api.api_key == 'key-1'
+    config = standalone.EnvironmentConfig(
+        {'DD_API_KEY': 'key-1', 'DD_SITE': 'ddog-gov.com'}
+    )
+    assert config.get_secret('ecs.datadog.api_key_secret_arn', required=True) == 'key-1'
+    assert config.get_string('ecs.datadog.site', 'datadoghq.com') == 'ddog-gov.com'
+
+
+def test_missing_datadog_key_is_named():
+    with pytest.raises(ValueError, match='DD_API_KEY'):
+        standalone.EnvironmentConfig({}).get_secret(
+            'ecs.datadog.api_key_secret_arn', required=True
+        )

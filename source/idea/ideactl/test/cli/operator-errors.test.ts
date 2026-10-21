@@ -248,6 +248,19 @@ describe("values.yml messages (R8, R9, R10, R11)", () => {
     );
   });
 
+  it("accepts an existing data file system in a VPC the cluster stack owns", () => {
+    const context = buildContext(
+      requiredValues({
+        use_existing_vpc: false,
+        use_existing_data_fs: true,
+        existing_data_fs_id: "fs-000000000000000e1",
+      }),
+    );
+    assert.equal(context.use_existing_vpc, false);
+    assert.equal(context.use_existing_data_fs, true);
+    assert.equal(context.existing_data_fs_id, "fs-000000000000000e1");
+  });
+
   it("says both subnet lists are empty when an existing VPC has neither (R11)", () => {
     assert.throws(
       () =>
