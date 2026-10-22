@@ -4,7 +4,7 @@
 #
 #    pip-compile --no-emit-index-url --output-file=idea-dev-lambda.txt --strip-extras idea-dev-lambda.in
 #
-certifi==2026.7.22
+certifi==2026.10.19
     # via
     #   opensearch-py
     #   requests

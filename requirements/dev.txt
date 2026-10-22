@@ -38,7 +38,7 @@ cacheout==0.17.0
     # via -r idea-sdk.in
 cachetools==7.2.1
     # via -r idea-scheduler.in
-certifi==2026.7.22
+certifi==2026.10.19
     # via
     #   -r idea-sdk.in
     #   opensearch-py
