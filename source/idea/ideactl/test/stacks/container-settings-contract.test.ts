@@ -367,7 +367,8 @@ test("bastion keeps both healthy tasks while both SSH replacements start", () =>
   const group = byType(resources, "AWS::ElasticLoadBalancingV2::TargetGroup")[0]![1].Properties;
   assert.equal(group.HealthCheckProtocol, "TCP");
   assert.equal(group.HealthCheckPort, "22");
-  assert.equal(group.HealthCheckIntervalSeconds, 5);
+  // 30s keeps sshd logs quiet; a new target turns healthy after ~60s, inside the 270s grace.
+  assert.equal(group.HealthCheckIntervalSeconds, 30);
   assert.equal(group.HealthyThresholdCount, 2);
   assert.equal(group.TargetGroupAttributes.find((entry: { Key: string }) => entry.Key === "deregistration_delay.timeout_seconds").Value, "30");
 });
