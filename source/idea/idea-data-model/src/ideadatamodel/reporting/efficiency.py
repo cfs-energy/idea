@@ -157,6 +157,10 @@ def job_efficiency(job):
     # samples add up, but only when every allocated host reported one.
     if job_cpu_times:
         cpu_times = [max(job_cpu_times)]
+        # PBS counts only processes it launched: MPI ranks started over ssh on the other hosts
+        # are missing, so a multi-node total no larger than one host's cores proves nothing.
+        if nodes and nodes > 1 and elapsed and cpus and cpu_times[0] <= elapsed * cpus / nodes * CPU_EFFICIENCY_MAX:
+            cpu_times = []
     elif local_cpu_times and (not nodes or nodes <= 1 or cpu_hosts == nodes):
         cpu_times = local_cpu_times
     else:

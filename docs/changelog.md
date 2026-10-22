@@ -16,6 +16,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Software stack index**: the controller rebuilds once when it becomes leader, including delayed elections and failover.
 * **Application CLIs**: distinct module commands avoid installation-order collisions in the shared image.
 * **Cluster-manager IAM**: task permissions use three customer-managed policies to fit GovCloud limits with Bedrock enabled.
+* **Job CPU efficiency**: multi-node jobs whose CPU total fits on one host show no efficiency, since ranks launched outside PBS (for example Intel MPI over ssh) are not counted.
 
 ## [26.10.8] - 2026-10-21
 

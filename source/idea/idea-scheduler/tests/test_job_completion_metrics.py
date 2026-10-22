@@ -322,9 +322,9 @@ def test_finished_job_processor_publishes_one_counter_per_second(context, monkey
 
 
 def test_cpu_efficiency_normalizes_select_chunks():
-    job = _job(cpu_time_secs=14400)
+    job = _job(cpu_time_secs=9 * 3600)
     job.params.custom_params = {'select': '2:ncpus=4+1:ncpus=8'}
-    assert JobCompletionMetrics.cpu_efficiency(job) == 0.25
+    assert JobCompletionMetrics.cpu_efficiency(job) == 0.5625
 
 
 def test_cpu_efficiency_uses_job_wide_cpu_request_without_select():
@@ -344,12 +344,12 @@ def test_multi_node_resource_list_ncpus_is_job_wide(select):
     params = OpenPBSJob(Resource_List=resources).get_soca_job_params()
     assert int(params['cpus']) == 8
     assert int(params['nodes']) == 2
-    job = _job(cpu_time_secs=14400)
+    job = _job(cpu_time_secs=6 * 3600)
     job.params.cpus = int(params['cpus'])
     job.params.nodes = int(params['nodes'])
     assert not (job.params.custom_params or {}).get('select')
-    assert JobCompletionMetrics.cpu_efficiency(job) == 0.5
+    assert JobCompletionMetrics.cpu_efficiency(job) == 0.75
     result = job_efficiency(job)
     assert result['requested_cores'] == 8
     assert result['core_hours'] == 8
-    assert result['wasted_core_hours'] == 4
+    assert result['wasted_core_hours'] == 2
