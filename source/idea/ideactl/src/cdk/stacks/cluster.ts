@@ -148,6 +148,7 @@ export class ClusterStack extends IdeaBaseStack {
 
   privateHostedZone: PrivateHostedZone | undefined;
   clusterPrefixList: ec2.CfnPrefixList | undefined;
+  bastionPrefixList: ec2.CfnPrefixList | undefined;
   readonly securityGroups: Record<string, SecurityGroup> = {};
   readonly roles: Record<string, Role> = {};
   amazonSsmManagedInstanceCorePolicy: ManagedPolicy | undefined;
@@ -525,6 +526,18 @@ export class ClusterStack extends IdeaBaseStack {
       prefixListName: `${this.clusterName}-prefix-list`,
     });
     this.addCommonTags(this.clusterPrefixList);
+    // SSH sources of their own, so the bastion can be narrower than the portal and DCV gateway.
+    const sshCidrs = [...new Set(this.config.getList<string>('cluster.network.ssh_client_ip', [])
+      .filter((ip) => !isEmpty(ip)).map((ip) => (ip.includes('/') ? ip : `${ip}/32`)))];
+    if (sshCidrs.length > 0) {
+      this.bastionPrefixList = new ec2.CfnPrefixList(this.stack, 'bastion-prefix-list', {
+        addressFamily: 'IPv4',
+        maxEntries: Math.max(10, sshCidrs.length),
+        prefixListName: `${this.clusterName}-bastion-prefix-list`,
+        entries: sshCidrs.map((cidr) => ({ cidr, description: 'SSH to the bastion' })),
+      });
+      this.addCommonTags(this.bastionPrefixList);
+    }
   }
 
   buildSecurityGroups(): void {
@@ -543,6 +556,7 @@ export class ClusterStack extends IdeaBaseStack {
       this.stack,
       this.vpc,
       prefixList.attrPrefixListId,
+      this.bastionPrefixList?.attrPrefixListId,
     );
     this.securityGroups['bastion-host'] = bastionHostSecurityGroup;
 

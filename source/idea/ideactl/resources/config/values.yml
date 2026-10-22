@@ -18,6 +18,8 @@ data_mount_dir: /data
 # Network Settings
 prefix_list_ids: []
 client_ip: []
+# SSH to the bastion only from these CIDRs (own prefix list); empty keeps client_ip / prefix_list_ids
+ssh_client_ip: []
 ssh_key_pair_name: my-ec2-key-pair
 vpc_cidr_block: 10.0.0.0/16
 use_vpc_endpoints: false

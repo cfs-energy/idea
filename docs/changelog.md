@@ -19,6 +19,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Job CPU efficiency**: multi-node jobs whose CPU total fits on one host show no efficiency, since ranks launched outside PBS (for example Intel MPI over ssh) are not counted.
 * **certifi 2026.10.19**: drops the emSign ECC root whose revoked intermediates had compromised keys (GHSA-6q48-6c7w-9gw2).
 * **Bastion health checks**: the load balancer checks every 30 seconds instead of 5 and the container check asks for the ed25519 key only, so sshd logs far fewer health check connections.
+* **Bastion SSH sources**: `ssh_client_ip` in values.yml gives the bastion its own prefix list for SSH, replacing the cluster and operator prefix lists for port 22 only; the portal and DCV gateway keep theirs. Empty keeps today's behavior.
 
 ## [26.10.8] - 2026-10-21
 

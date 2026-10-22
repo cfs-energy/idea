@@ -1221,6 +1221,7 @@ _ROWS = [
     ),
     ('cluster.logging.audit_logs.tags', 'list', 'restart', 'monitoring', True, False),
     ('cluster.network.client_ip', 'list', 'deployment', 'network', False, False),
+    ('cluster.network.ssh_client_ip', 'list', 'deployment', 'network', False, False),
     (
         'cluster.network.cluster_prefix_list_max_entries',
         'integer',
@@ -6371,6 +6372,7 @@ _READ_ONLY_KEYS = {
     'cluster.encoding',
     'cluster.load_balancers.external_alb.public',
     'cluster.network.client_ip',
+    'cluster.network.ssh_client_ip',
     'cluster.network.max_azs',
     'cluster.network.nat_gateways',
     'cluster.network.private_subnets',

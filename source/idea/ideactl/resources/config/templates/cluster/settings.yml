@@ -43,6 +43,9 @@ network:
     {{ utils.to_yaml(prefix_list_ids) | indent(4) }}
   client_ip:
     {{ utils.to_yaml(client_ip) | indent(4) }}
+  # set: SSH to the bastion only from these, through the bastion prefix list
+  ssh_client_ip:
+    {{ utils.to_yaml(ssh_client_ip) | indent(4) }}
   ssh_key_pair: "{{ssh_key_pair_name}}"
 
   # subnet in the availability zone of a single-AZ shared filesystem, for example an FSx

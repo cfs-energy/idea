@@ -372,6 +372,7 @@ function getters(values: UserValues, options: BuildContextOptions) {
     dataMountDir: () => getString('data_mount_dir', values, '/data') as string,
     prefixListIds: () => getList('prefix_list_ids', values, []) as unknown[],
     clientIp: () => getList('client_ip', values, []) as unknown[],
+    sshClientIp: () => getList('ssh_client_ip', values, []) as unknown[],
 
     sshKeyPairName(): string {
       const value = getString('ssh_key_pair_name', values);
@@ -722,6 +723,7 @@ export function buildContext(
     data_mount_dir: g.dataMountDir(),
     prefix_list_ids: g.prefixListIds(),
     client_ip: g.clientIp(),
+    ssh_client_ip: g.sshClientIp(),
     ssh_key_pair_name: g.sshKeyPairName(),
     vpc_cidr_block: g.vpcCidrBlock(),
     use_vpc_endpoints: g.useVpcEndpoints(),
