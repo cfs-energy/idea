@@ -272,7 +272,7 @@ class SshdConfig(unittest.TestCase):
             'KbdInteractiveAuthentication': 'no',
             'UsePAM': 'yes',
             'LoginGraceTime': '30',
-            'MaxAuthTries': '3',
+            'MaxAuthTries': '6',
         }.items():
             self.assertEqual(settings[key], value)
 

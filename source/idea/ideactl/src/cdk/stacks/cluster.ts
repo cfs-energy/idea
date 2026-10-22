@@ -530,9 +530,12 @@ export class ClusterStack extends IdeaBaseStack {
     const sshCidrs = [...new Set(this.config.getList<string>('cluster.network.ssh_client_ip', [])
       .filter((ip) => !isEmpty(ip)).map((ip) => (ip.includes('/') ? ip : `${ip}/32`)))];
     if (sshCidrs.length > 0) {
+      // fixed capacity: CloudFormation cannot change MaxEntries and Entries in one update, and each
+      // unit of capacity counts as a rule against the bastion security group's quota
+      if (sshCidrs.length > 20) throw new Error(`cluster.network.ssh_client_ip holds ${sshCidrs.length} CIDRs; the bastion prefix list allows 20`);
       this.bastionPrefixList = new ec2.CfnPrefixList(this.stack, 'bastion-prefix-list', {
         addressFamily: 'IPv4',
-        maxEntries: Math.max(10, sshCidrs.length),
+        maxEntries: 20,
         prefixListName: `${this.clusterName}-bastion-prefix-list`,
         entries: sshCidrs.map((cidr) => ({ cidr, description: 'SSH to the bastion' })),
       });

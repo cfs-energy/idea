@@ -22,7 +22,7 @@ StrictModes yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 LoginGraceTime 30
-MaxAuthTries 3
+MaxAuthTries 6
 PermitUserEnvironment no
 UseDNS no
 ClientAliveInterval 60

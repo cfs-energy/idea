@@ -24,9 +24,25 @@ test('host bastion writes key-only SSH settings before distro defaults, idempote
     run();
     assert.equal(readFileSync(config, 'utf8'), written);
     const global = written.split('Include ')[0]!;
-    for (const line of ['PasswordAuthentication no', 'KbdInteractiveAuthentication no', 'UsePAM yes', 'PubkeyAuthentication yes', 'LoginGraceTime 30', 'MaxAuthTries 3']) {
+    for (const line of ['PasswordAuthentication no', 'KbdInteractiveAuthentication no', 'UsePAM yes', 'PubkeyAuthentication yes', 'LoginGraceTime 30', 'MaxAuthTries 6']) {
       assert.ok(global.split('\n').includes(line), line);
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('host bastion keeps the working config and sshd running when validation fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bastion-ssh-'));
+  try {
+    const config = join(dir, 'sshd_config');
+    const original = 'AuthenticationMethods publickey,keyboard-interactive\nPasswordAuthentication yes\n';
+    writeFileSync(config, original);
+    const script = renderTemplate(jinjaEnv(bootstrap), '_templates/linux/bastion_ssh.jinja2', {}).replaceAll('/etc/ssh/sshd_config', config);
+    // no -e, as the host setup runs; sshd -t rejects the candidate, a restart would be recorded
+    const out = execFileSync('bash', ['-c', `restarted=no; sshd() { return 1; }; systemctl() { restarted=yes; };\n${script}\necho "restarted=$restarted"`], { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+    assert.match(out, /restarted=no/);
+    assert.equal(readFileSync(config, 'utf8'), original);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

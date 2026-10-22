@@ -183,12 +183,13 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             leader = None
         if not leader:
             return
-        self._software_stacks_reindexed = True
         try:
             VirtualDesktopSoftwareStackUtils(
                 context=self.context, db=self._software_stack_db
             ).reindex_from_db()
+            self._software_stacks_reindexed = True
         except Exception as e:
+            # the minute loop tries again; a failed rebuild must not count as done
             logger.error(f'failed to rebuild the software stack index at startup: {e}')
 
     def _initialize_session_template(self):

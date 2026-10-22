@@ -270,3 +270,26 @@ def test_startup_rewrites_rows_present_in_both_stores_so_dynamodb_edits_reach_th
         if entry.entry_action == EntryAction.UPDATE_ENTRY
     )
     assert update.entry_content.entry_record == {'stack_id': 'ss-1', 'enabled': False}
+
+
+def test_failed_rebuild_is_retried_on_the_next_leader_tick(monkeypatch):
+    context = FakeContext(leader=True)
+    db = FakeSoftwareStackDB(pages=[[a_stack('ss-1')]])
+    app = build_app(db, context, monkeypatch)
+    real = app_module.VirtualDesktopSoftwareStackUtils(context, db)
+    rebuild = real.reindex_from_db
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError('index unavailable')
+        return rebuild()
+
+    monkeypatch.setattr(real, 'reindex_from_db', flaky)
+    app._reindex_software_stacks()
+    assert not app._software_stacks_reindexed
+    app._reindex_software_stacks()
+    assert app._software_stacks_reindexed
+    assert len(calls) == 2
+    assert entry_ids(context, EntryAction.CREATE_ENTRY) == ['ss-1']
