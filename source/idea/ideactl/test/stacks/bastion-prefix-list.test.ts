@@ -30,11 +30,15 @@ function build(bastionPrefixListId?: string) {
       .filter((rule) => JSON.stringify(rule.GroupId).includes(groupId(group)));
     return [...inline, ...standalone].map((rule) => [rule.FromPort, rule.SourcePrefixListId ?? rule.CidrIp ?? "group"]);
   };
-  return { bastion: ingress(bastion), external: ingress(external), clusterListRef: { "Fn::GetAtt": [stack.getLogicalId(clusterList), "PrefixListId"] } };
+  const ruleIds = Object.keys(template.findResources("AWS::EC2::SecurityGroupIngress"));
+  return { bastion: ingress(bastion), external: ingress(external), ruleIds, clusterListRef: { "Fn::GetAtt": [stack.getLogicalId(clusterList), "PrefixListId"] } };
 }
 
 test("ssh_client_ip moves bastion SSH onto its own prefix list and leaves the portal alone", () => {
-  const { bastion, external, clusterListRef } = build("pl-bbbbbbbbbbbbbbbbb");
+  const { bastion, external, ruleIds, clusterListRef } = build("pl-bbbbbbbbbbbbbbbbb");
+  // a new logical id, so an upgrade removes the old token-named SSH rule instead of replacing it
+  assert.ok(ruleIds.some((id) => id.includes("sshfrombastionprefixlist")));
+  assert.ok(!ruleIds.some((id) => id.startsWith("bastionfromIndirectPeer22")));
   const ssh = bastion.filter(([port]) => port === 22).map(([, source]) => JSON.stringify(source));
   assert.equal(ssh.length, 2);
   assert.ok(ssh.includes(JSON.stringify("pl-bbbbbbbbbbbbbbbbb")));
@@ -46,7 +50,9 @@ test("ssh_client_ip moves bastion SSH onto its own prefix list and leaves the po
 });
 
 test("without ssh_client_ip the bastion keeps the cluster and operator prefix lists", () => {
-  const { bastion, clusterListRef } = build();
+  const { bastion, ruleIds, clusterListRef } = build();
+  // the control for the id check above: without the bastion list the token-named rule exists
+  assert.ok(ruleIds.some((id) => id.startsWith("bastionfromIndirectPeer22")), ruleIds.join(","));
   const ssh = bastion.filter(([port]) => port === 22).map(([, source]) => JSON.stringify(source));
   assert.ok(ssh.includes(JSON.stringify(clusterListRef)));
   assert.ok(ssh.includes(JSON.stringify("pl-11111111111111111")));
