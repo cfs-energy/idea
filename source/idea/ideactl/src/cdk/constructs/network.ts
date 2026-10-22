@@ -222,9 +222,12 @@ export class SecurityGroup extends ec2.SecurityGroup {
 export class BastionHostSecurityGroup extends SecurityGroup {
   readonly clusterPrefixListId: string;
 
-  constructor(ctx: IdeaContext, name: string, scope: Construct, vpc: ec2.IVpc, clusterPrefixListId: string) {
+  readonly bastionPrefixListId: string | undefined;
+
+  constructor(ctx: IdeaContext, name: string, scope: Construct, vpc: ec2.IVpc, clusterPrefixListId: string, bastionPrefixListId?: string) {
     super(ctx, name, scope, vpc, 'Bastion host security group');
     this.clusterPrefixListId = clusterPrefixListId;
+    this.bastionPrefixListId = bastionPrefixListId;
     this.setupIngress();
     this.setupEgress();
 
@@ -234,6 +237,21 @@ export class BastionHostSecurityGroup extends SecurityGroup {
   }
 
   setupIngress(): void {
+    if (this.bastionPrefixListId) {
+      // ssh_client_ip replaces the cluster and operator lists for SSH; the portal keeps them.
+      // a fixed construct id: the token-named `from {IndirectPeer}:22` rule would be replaced in place,
+      // which the change-set guard refuses; a new id is an add plus a plain remove of the old rule
+      new ec2.CfnSecurityGroupIngress(this, 'ssh-from-bastion-prefix-list', {
+        groupId: this.securityGroupId,
+        ipProtocol: 'tcp',
+        fromPort: 22,
+        toPort: 22,
+        sourcePrefixListId: this.bastionPrefixListId,
+        description: 'Allow SSH access from Bastion Prefix List to Bastion Host',
+      });
+      this.addIngressRule(ec2.Peer.ipv4(this.vpc.vpcCidrBlock), ec2.Port.tcp(22), 'Allow SSH traffic from all VPC nodes');
+      return;
+    }
     this.addIngressRule(
       ec2.Peer.prefixList(this.clusterPrefixListId),
       ec2.Port.tcp(22),

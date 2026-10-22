@@ -262,6 +262,19 @@ class SshdConfig(unittest.TestCase):
         self.assertNotIn('StrictModes no', block)
         self.assertIn('PubkeyAuthentication yes', block)
         self.assertIn('AuthorizedKeysFile .ssh/authorized_keys', block)
+        settings = dict(
+            line.split(None, 1)
+            for line in block.splitlines()
+            if line and not line.startswith('#')
+        )
+        for key, value in {
+            'PasswordAuthentication': 'no',
+            'KbdInteractiveAuthentication': 'no',
+            'UsePAM': 'yes',
+            'LoginGraceTime': '30',
+            'MaxAuthTries': '6',
+        }.items():
+            self.assertEqual(settings[key], value)
 
 
 class PbsServerSuffix(unittest.TestCase):

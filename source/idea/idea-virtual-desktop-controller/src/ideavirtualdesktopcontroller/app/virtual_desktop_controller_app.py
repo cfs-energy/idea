@@ -110,8 +110,6 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         )
         self.context = context
         self._software_stacks_reindexed = False
-        # leadership may not be settled when the app initializes; one deferred retry
-        self._reindex_retries = 1
 
     def app_initialize(self):
         self._initialize_templates()
@@ -119,7 +117,6 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._initialize_dbs()
         self._initialize_services()
         switch_dcv_broker_tables_to_on_demand(self.context)
-        self._reindex_software_stacks()
 
     def _initialize_dbs(self):
         # Keep the objects: initialize() creates the tables and returns nothing.
@@ -185,24 +182,14 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             logger.warning(f'leader status unknown ({e})')
             leader = None
         if not leader:
-            if self._reindex_retries > 0:
-                self._reindex_retries -= 1
-                logger.info(
-                    'not the leader yet; the software stack index rebuild is checked again in 60 seconds'
-                )
-                threading.Timer(60, self._reindex_software_stacks).start()
-            else:
-                self._software_stacks_reindexed = True
-                logger.info(
-                    'not the leader; the software stack index rebuild runs on the leader task'
-                )
             return
-        self._software_stacks_reindexed = True
         try:
             VirtualDesktopSoftwareStackUtils(
                 context=self.context, db=self._software_stack_db
             ).reindex_from_db()
+            self._software_stacks_reindexed = True
         except Exception as e:
+            # the minute loop tries again; a failed rebuild must not count as done
             logger.error(f'failed to rebuild the software stack index at startup: {e}')
 
     def _initialize_session_template(self):
@@ -363,6 +350,8 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         # command limit. Waiting here leaves desktop provisioning off this path.
         next_refresh = 0
         while not self._bootstrap_exit.is_set():
+            # Reuse the minute loop so a later election or failover still rebuilds once.
+            self._reindex_software_stacks()
             try:
                 if time.monotonic() >= next_refresh and self.context.is_leader():
                     next_refresh = time.monotonic() + 6 * 60 * 60

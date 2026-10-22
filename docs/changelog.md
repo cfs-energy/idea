@@ -6,6 +6,21 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.9] - 2026-10-22
+
+**Highlights for users**
+
+* SSH to the bastion uses your key only; download it from SSH access.
+
+* **Bastion SSH**: container and host bastions disable password and keyboard-interactive authentication, retain PAM account checks, and limit login grace to 30 seconds.
+* **Software stack index**: the controller rebuilds once when it becomes leader, including delayed elections and failover.
+* **Application CLIs**: distinct module commands avoid installation-order collisions in the shared image.
+* **Cluster-manager IAM**: task permissions use three customer-managed policies to fit GovCloud limits with Bedrock enabled.
+* **Job CPU efficiency**: multi-node jobs whose CPU total fits on one host show no efficiency, since ranks launched outside PBS (for example Intel MPI over ssh) are not counted.
+* **certifi 2026.10.19**: drops the emSign ECC root whose revoked intermediates had compromised keys (GHSA-6q48-6c7w-9gw2).
+* **Bastion health checks**: the load balancer checks every 30 seconds instead of 5 and the container check asks for the ed25519 key only, so sshd logs far fewer health check connections.
+* **Bastion SSH sources**: `ssh_client_ip` in values.yml gives the bastion its own prefix list for SSH, replacing the cluster and operator prefix lists for port 22 only; the portal and DCV gateway keep theirs. Empty keeps today's behavior.
+
 ## [26.10.8] - 2026-10-21
 
 **Highlights for users**

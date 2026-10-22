@@ -1,0 +1,21 @@
+# sshd uses the first value, including values from distro and directory drop-ins.
+# Validate a candidate first: a bad config must never replace the working one or restart sshd.
+IDEA_SSH_CANDIDATE=$(mktemp)
+cat > "${IDEA_SSH_CANDIDATE}" <<'EOF'
+# BEGIN IDEA BASTION SSH
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM yes
+PubkeyAuthentication yes
+LoginGraceTime 30
+MaxAuthTries 6
+# END IDEA BASTION SSH
+EOF
+sed '/^# BEGIN IDEA BASTION SSH$/,/^# END IDEA BASTION SSH$/d' /etc/ssh/sshd_config >> "${IDEA_SSH_CANDIDATE}"
+if sshd -t -f "${IDEA_SSH_CANDIDATE}"; then
+  cat "${IDEA_SSH_CANDIDATE}" > /etc/ssh/sshd_config
+  systemctl restart sshd || systemctl restart ssh
+else
+  echo "sshd rejected the key-only bastion config, keeping the current one" >&2
+fi
+rm -f "${IDEA_SSH_CANDIDATE}"

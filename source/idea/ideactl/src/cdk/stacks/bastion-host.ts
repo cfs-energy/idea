@@ -114,7 +114,7 @@ export class BastionHostStack extends IdeaBaseStack {
     const targetGroup = new elbv2.NetworkTargetGroup(this.stack, 'bastion-target-group', {
       vpc: this.cluster.vpc, port: 22, protocol: elbv2.Protocol.TCP,
       targetType: elbv2.TargetType.IP, preserveClientIp: true,
-      healthCheck: { protocol: elbv2.Protocol.TCP, port: '22', interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
+      healthCheck: { protocol: elbv2.Protocol.TCP, port: '22', interval: Duration.seconds(30), timeout: Duration.seconds(10), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
       deregistrationDelay: Duration.seconds(30), connectionTermination: true,
     });
     const listener = nlb.addListener('ssh', { port: 22, protocol: elbv2.Protocol.TCP, defaultTargetGroups: [targetGroup] });

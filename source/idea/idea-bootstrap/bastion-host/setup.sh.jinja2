@@ -135,6 +135,8 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 {% include '_templates/linux/join_directoryservice.jinja2' %}
 
+{% include '_templates/linux/bastion_ssh.jinja2' %}
+
 {% if context.config.get_string('scheduler.private_dns_name') %}
      {% include '_templates/linux/openpbs_client.jinja2' %}
 {% endif %}

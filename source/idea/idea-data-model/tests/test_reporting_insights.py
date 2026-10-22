@@ -68,6 +68,18 @@ def test_multi_node_without_select():
     assert result['wasted_core_hours'] == 4
 
 
+@pytest.mark.parametrize(
+    'used,expected',
+    # 10 nodes x 64 cores for an hour: one host's worth of job-wide cpu time can be ranks
+    # launched outside PBS, so no number; more than one host's worth is real.
+    [(64 * 3600, None), (32 * 3600, None), (320 * 3600, 50)],
+)
+def test_multi_node_job_wide_cpu_from_one_host_is_unknown(used, expected):
+    result = job_efficiency(job(cpus=640, nodes=10, used=used))
+    assert result['cpu_efficiency_pct'] == expected
+    assert (result['wasted_core_hours'] is None) == (expected is None)
+
+
 def test_select_heterogeneous_chunks_and_multiple_runs():
     value = job()
     value['params']['custom_params'] = {
@@ -270,10 +282,10 @@ def test_resource_hints_keep_unknown_values_null():
             'peak_memory_gib',
         )
     )
-    result = job_efficiency(job(nodes=2))
+    result = job_efficiency(job(nodes=2, used=3 * 3600))
     assert result['requested_cores'] == 4
-    # One job-wide PBS total is a complete measurement for a multi-node job.
-    assert result['used_cores'] == 2
+    # A job-wide PBS total above one host's cores is a complete measurement for a multi-node job.
+    assert result['used_cores'] == 3
 
 
 def test_summary_rows_round_nested_money_and_float_measurements():
@@ -381,12 +393,12 @@ def test_dict_memory_units_ignore_case(unit, factor):
 def test_job_wide_cpu_total_is_not_summed_across_hosts():
     import copy
 
-    value = job(cpus=8, nodes=2)
+    value = job(cpus=8, nodes=2, used=6 * 3600)
     value['execution_hosts'].append(copy.deepcopy(value['execution_hosts'][0]))
     result = job_efficiency(value)
     # The same job-wide total repeated on each host end event counts once.
-    assert result['used_cores'] == 2
-    assert result['cpu_efficiency_pct'] == 25
+    assert result['used_cores'] == 6
+    assert result['cpu_efficiency_pct'] == 75
 
 
 @pytest.mark.parametrize(

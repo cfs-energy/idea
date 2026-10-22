@@ -239,6 +239,7 @@ def refresh_loop(monkeypatch, refresh):
         app_module.VirtualDesktopControllerApp
     )
     app.context = refresh.context
+    app._software_stacks_reindexed = True
     app._bootstrap_session_utils = Mock()
     # the image pipeline tick shares the loop; tests of it live in test_image_pipeline.py
     app._image_pipeline = Mock()

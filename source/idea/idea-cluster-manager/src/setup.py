@@ -24,6 +24,7 @@ setup(
     entry_points="""
         [console_scripts]
         ideactl=ideaclustermanager.cli.cli_main:main
+        idea-cluster-manager-cli=ideaclustermanager.cli.cli_main:main
         ideaserver=ideaclustermanager.app.app_main:main
     """,
 )

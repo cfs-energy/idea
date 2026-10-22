@@ -533,7 +533,7 @@ export function applicationContainerSettings(role: ContainerRole, brokerPorts = 
       // The gateway exposes a dedicated TCP readiness listener, not an HTTP endpoint.
       ? "timeout 4 bash -c '</dev/tcp/127.0.0.1/8989'"
       : role === "bastion-host"
-        ? "timeout 4 ssh-keyscan -p 22 127.0.0.1 >/dev/null 2>&1"
+        ? "timeout 4 ssh-keyscan -t ed25519 -p 22 127.0.0.1 >/dev/null 2>&1"
         : http("https://localhost:8443/healthcheck");
   return {
     healthCheck: {
