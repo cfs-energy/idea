@@ -49,3 +49,22 @@ test('neither argument nor env is an error', () => {
   assert.notEqual(status, 0);
   assert.match(out, /IDEA_CONTAINER_ROLE is required/);
 });
+
+test('each installed application exposes a distinct CLI independent of install order', () => {
+  for (const [module, command, target] of [
+    ['idea-cluster-manager', 'idea-cluster-manager-cli', 'ideaclustermanager'],
+    ['idea-scheduler', 'idea-scheduler-cli', 'ideascheduler'],
+    ['idea-virtual-desktop-controller', 'idea-vdc-cli', 'ideavirtualdesktopcontroller'],
+  ]) {
+    // Execute setup.py with setuptools stubbed: inspect the actual registration pip installs.
+    const registration = execFileSync('python3', ['-c', `
+import runpy, sys, types
+from pathlib import Path
+setup = Path(sys.argv[1])
+sys.path.insert(0, str(setup.parent))
+sys.modules['setuptools'] = types.SimpleNamespace(find_packages=lambda: [], setup=lambda **kw: print(kw['entry_points']))
+runpy.run_path(str(setup))
+`, join(repoRoot, 'source/idea', module!, 'src/setup.py')], { encoding: 'utf8' });
+    assert.ok(registration.includes(`${command}=${target}.cli.cli_main:main`), registration);
+  }
+});

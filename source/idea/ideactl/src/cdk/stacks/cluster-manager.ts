@@ -26,7 +26,8 @@ import { ArnBuilder } from '../../config/arn-builder.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
-import { IDEA_TAG_NAME, IDEA_TAG_NODE_TYPE, kmsKeyArn, acknowledgeForScan } from '../constructs/base.ts';
+import { renderPolicy } from '../policy.ts';
+import { IDEA_TAG_NAME, IDEA_TAG_NODE_TYPE, kmsKeyArn, acknowledgeForScan, addCommonTags, addNagSuppression } from '../constructs/base.ts';
 import {
   CustomResourceProvider,
   LOG_RETENTION_DAYS,
@@ -45,7 +46,8 @@ import {
   buildEc2Service,
   buildExecutionRole,
   buildTaskDefinition,
-  buildTaskRole,
+  ecsTasksPrincipal,
+  taskRoleName,
   grantInjectedSecret,
   commonEnvironment,
   containerImage,
@@ -454,14 +456,37 @@ export class ClusterManagerStack extends IdeaBaseStack {
     if (!this.ecsEnabled) return;
     const scope = this.containerScope;
     const sizing = roleSizing(scope, 'cluster-manager');
-    const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
-      constructId: 'cluster-manager-task-role',
-      name: `${this.moduleId}-task-role`,
+    const taskRole = new iam.Role(this.stack, 'cluster-manager-task-role', {
+      assumedBy: ecsTasksPrincipal(scope),
+      roleName: taskRoleName(scope, `${this.moduleId}-task-role`),
       description: 'IAM role assigned to the cluster-manager ECS task',
-      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
-      policyConstructId: 'cluster-manager-task-policy',
-      policyTemplateName: 'cluster-manager.yml',
-      policyModuleId: this.moduleId,
+      managedPolicies: this.getEc2InstanceManagedPolicies().map((arn, index) =>
+        iam.ManagedPolicy.fromManagedPolicyArn(this.stack, `cluster-manager-task-role-managed-policy-${index}`, arn),
+      ),
+    });
+    addCommonTags(this.context, taskRole, this.moduleId);
+    addNagSuppression(taskRole, [{ rule_id: 'AwsSolutions-IAM5', reason: 'CDK grants use per-resource wildcards.' }], true);
+    const document = renderPolicy('cluster-manager.yml', {
+      config: this.context.config,
+      moduleId: this.moduleId,
+      vars: { role_arn: taskRole.roleArn },
+    });
+    // Preserve every statement; separate the large table and project grants to stay below 6 KiB.
+    const groups: Record<string, iam.PolicyStatement[]> = { application: [], tables: [], projects: [] };
+    for (const statement of (document as { Statement: Record<string, any>[] }).Statement) {
+      const actions = [statement.Action].flat() as string[];
+      const group = actions.some((action) => action.startsWith('dynamodb:')) ? 'tables'
+        : actions.some((action) => /^(iam|bedrock):/.test(action)) ? 'projects' : 'application';
+      groups[group]!.push(iam.PolicyStatement.fromJson(statement));
+    }
+    const taskPolicies = Object.entries(groups).filter(([, statements]) => statements.length > 0).map(([group, statements]) => {
+      const policy = new iam.ManagedPolicy(this.stack, `cluster-manager-task-${group}-policy`, {
+        description: `Cluster-manager task ${group} permissions`,
+        statements,
+      });
+      taskRole.addManagedPolicy(policy);
+      addNagSuppression(policy, [{ rule_id: 'AwsSolutions-IAM5', reason: 'Wild-card policies are scoped with conditions and/or applicable prefixes.' }]);
+      return policy;
     });
     // The cost history backfill posts to the Datadog API with the daemon's key.
     const datadogSecretArn = this.context.config.getString('ecs.datadog.api_key_secret_arn');
@@ -521,7 +546,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       healthCheckGracePeriod: healthCheckGrace('cluster-manager'),
       dependencies: [
         taskRole,
-        taskPolicy,
+        ...taskPolicies,
         executionRole,
         this.externalEndpoint,
         this.internalEndpoint,

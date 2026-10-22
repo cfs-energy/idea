@@ -13,6 +13,7 @@ setup(
     entry_points="""
         [console_scripts]
         ideactl=ideavirtualdesktopcontroller.cli.cli_main:main
+        idea-vdc-cli=ideavirtualdesktopcontroller.cli.cli_main:main
         ideaserver=ideavirtualdesktopcontroller.app.app_main:main
     """,
 )

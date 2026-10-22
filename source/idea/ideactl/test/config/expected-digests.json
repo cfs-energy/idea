@@ -1,6 +1,6 @@
 {
   "base-os-amazonlinux2023": {
-    "bastion-host/setup.sh.jinja2": "0ed9e68427920ad290cc532e2702254b0c01c2fd4bca8ee5e3e48f58080b33ce",
+    "bastion-host/setup.sh.jinja2": "cce3dce976bd9d745cbab75e9e8b38aa031724408e50cf8d0b0e2e592c53c1c8",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "f8c05eee665d5b0ea11f4111db971c9ad3fa5b6caec32970bc654798fdd81b76",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "076c5b9b517864493bcc122a7b6479822a50c4fd8f316b7cee941d0ce7bd5b84",
@@ -30,7 +30,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-rhel10": {
-    "bastion-host/setup.sh.jinja2": "e531dfdb3a1f6d9977d806cb6c3e99bd5eb8eb5dc16823f690f128028354541f",
+    "bastion-host/setup.sh.jinja2": "c74ef286298264c52b5d074a4f17bd71ee54d23a5d97cd6702dbb579a3583c69",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "db71fa44f20097b7e1e4db8709ef70d145f0cb1457c407b4545fc6a65977408c",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "372fe7e70799a81979c2eb61967bd1071d495a8ce2529706612d5dc431727696",
@@ -60,7 +60,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-rhel8": {
-    "bastion-host/setup.sh.jinja2": "fd8a0843f748cf602ab9f676c0e4153c832227ba50a164b1deba90fa5c026042",
+    "bastion-host/setup.sh.jinja2": "a7ba5ab27c3e30956d938967dd9b39654412992c51b0fce2a54bb85bf008bf6b",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "b6ce9005266030494132f788c1e888e30677039621557791a6a3f78153c091a6",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "f65c5f5f2968acadfd9cdf7e497323b37133523dfd8c4c02d025707a65e101da",
@@ -90,7 +90,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-rhel9": {
-    "bastion-host/setup.sh.jinja2": "5c024f7d8df03a46b4e772cbf3e331f43b4ae67fb44544fd3aaca341f6e44b31",
+    "bastion-host/setup.sh.jinja2": "c815441d6f609d4d847cec1dd88cd7a40cc38d7acf801b08659cafeac7bf0c6d",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "7fcf36e8bcf80a7e28ebe2fc8d194f932dc8e627f25502576f7f1e6a3466358f",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "dcb599a997f9c9dc0d3c4e087c6e05ea760f128e7b49474b38c50901928ab762",
@@ -120,7 +120,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-rocky10": {
-    "bastion-host/setup.sh.jinja2": "7b36b452274781f307ab76b9a576708b0719c82ed5cd7dbfe43498758e075f11",
+    "bastion-host/setup.sh.jinja2": "bc6c0795c69460d0787e61003f2fa0943a10611fc130cf6b50cdd83775449561",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "70f358e46d657e06e270b77877d777d873fb5be6e7f8d000bb22d9a07c77c74f",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "43ea947b886f652ecc5245068e1769afda36bf681de2eec680cb9b0651bd3b18",
@@ -150,7 +150,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-rocky8": {
-    "bastion-host/setup.sh.jinja2": "70ec105cc1141a3ba64999d83f6bedc05ea7546977fbe350309bf866c467eb06",
+    "bastion-host/setup.sh.jinja2": "5f7b5b4ab611f01486813614d64e4ea671fd65afc90b36bb0da86eded698ba0a",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "fe7bee90b9f50c59030f35126ca066c5de474110a17c2cbef69f59c70981f2a1",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "09e4441db9012f7e3f30071c262ac44f4ec122143f2a3ff9db83b97dd9382185",
@@ -180,7 +180,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-rocky9": {
-    "bastion-host/setup.sh.jinja2": "313b779092f906a85818b4b18bfd4d00e17acc49d4616f8ae345bbff10ab9e65",
+    "bastion-host/setup.sh.jinja2": "d974f8ae7a31262e7c752f297031c291ce438b4c2393fc011222f1a528166e30",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "1fa1268d7cea195f1503f071e9391f3984c9e4fee3e748f932ffd60d2d70e274",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "f25bf474e9515bbd0e9bbdf8be8de19faaa665afb7660b5fade27e945dd9a186",
@@ -210,7 +210,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-ubuntu2204": {
-    "bastion-host/setup.sh.jinja2": "d2ed8be7f1189dfb1db0afcd0281fff97a58854267effe50cff55f2807f95d79",
+    "bastion-host/setup.sh.jinja2": "8c019c3adb01407503ad6ee28c5f4cfdb53804e873cecd6222286603b51c19e8",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "7ef8693bdd8a4884885ba875676470cfd0cb05242125de26a93e9d99a6f2cc49",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "d4cc4d7a3bcaa3397092ffbebfa59f98ae17de68a00ab3130559eb1c1a8eae32",
@@ -240,7 +240,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-ubuntu2404": {
-    "bastion-host/setup.sh.jinja2": "ef517c71c66fd1a40da017c8283aa3ef7a505abb1d48f6fb836716a36f55bef8",
+    "bastion-host/setup.sh.jinja2": "ff8cbd6f2e44ced3c4cf843645390c9b2323e803ba257f1b537379528f0b812a",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "72865bbfdca3b4e037cab7abd0e3624e42942037be409d5e8253375aea4a6fc6",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "4c607166ec824cf847048762e6aa9f96a9d592c133c271fdfd7a2efc88ef4fc8",
@@ -270,7 +270,7 @@
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
   "base-os-ubuntu2604": {
-    "bastion-host/setup.sh.jinja2": "17fbe4a8adea5d74544867c6e9ca8dc8573edd4a80a01a8155414d855b1ab3c8",
+    "bastion-host/setup.sh.jinja2": "becbc8dba5e3496d30e7d66b4d53f8ae30cc22f42f74a55148fd101be94ff364",
     "cluster-manager/install_app.sh.jinja2": "61fc030291a87287b66393b5f05c6d5b0d422050f496dea234723d067f3647ae",
     "cluster-manager/setup.sh.jinja2": "121811167f0617cc4b0a398290c80c608129b7706b983d2049da7efeaac3e26f",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "0fbb239574710845d2fb4fa3d0bcf5eaefafb75ea69ff84aed23e3384837b7ac",
@@ -348,7 +348,7 @@
     "compute-node/compute_node.sh.jinja2": "720622c8994b8197c31a298db72c249cc70451a741ff292c66378732dbdb4c3f",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "e91e08a1bf4b37d68af6c9639d0295c84ef9955d1e5728a3a7dbfc277108b644",
     "cluster-manager/setup.sh.jinja2": "89d484ba242df4c320436305637a5b0993d6b8064e90d30d0acd245d07067551",
-    "bastion-host/setup.sh.jinja2": "666e2f9edf77affeed913ae6049c8874731fd7feb1738605af5e50839cd39422"
+    "bastion-host/setup.sh.jinja2": "8e2b643ffeecebd5e7effda566e77d966ea8a2f498cf435df6c83e428a4a9a4a"
   },
   "metrics-amp-settings": {
     "metrics/settings.yml": "bed70e57c024941f9615c4b6557d918d858e4e642d75a003c33db00a48031de5"

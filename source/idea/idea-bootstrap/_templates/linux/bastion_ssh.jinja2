@@ -1,0 +1,16 @@
+# sshd uses the first value, including values from distro and directory drop-ins.
+sed -i '/^# BEGIN IDEA BASTION SSH$/,/^# END IDEA BASTION SSH$/d' /etc/ssh/sshd_config
+IDEA_SSH_CONFIG=$(cat /etc/ssh/sshd_config)
+cat > /etc/ssh/sshd_config <<'EOF'
+# BEGIN IDEA BASTION SSH
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+UsePAM yes
+PubkeyAuthentication yes
+LoginGraceTime 30
+MaxAuthTries 3
+# END IDEA BASTION SSH
+EOF
+printf '%s\n' "${IDEA_SSH_CONFIG}" >> /etc/ssh/sshd_config
+sshd -t
+systemctl restart sshd || systemctl restart ssh

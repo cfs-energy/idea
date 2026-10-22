@@ -14,5 +14,6 @@ setup(
         [console_scripts]
         ideaserver=ideascheduler.app.app_main:main
         ideactl=ideascheduler.cli.cli_main:main
+        idea-scheduler-cli=ideascheduler.cli.cli_main:main
     """,
 )

@@ -251,7 +251,10 @@ does not change.
 A stack is disabled in DynamoDB, while the portal lists software stacks from the search index, so it
 keeps reading as enabled until the index catches up. The virtual-desktop-controller redeploy later in
 the same upgrade reconciles the index at startup. To reindex sooner, run
-`ideactl reindex-software-stacks --reset` on a host deployment. For containers, use ECS Exec in the VDC application container to invoke its application CLI.
+`ideactl reindex-software-stacks --reset` on a host deployment. For containers, use ECS Exec in the VDC application container and run
+`idea-vdc-cli reindex-software-stacks --reset`. The shared image also provides
+`idea-cluster-manager-cli` and `idea-scheduler-cli` for their respective modules; these commands
+are independent of package installation order.
 
 ### Examples
 

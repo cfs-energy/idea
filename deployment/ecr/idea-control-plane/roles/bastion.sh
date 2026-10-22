@@ -19,7 +19,10 @@ AuthorizedKeysFile .ssh/authorized_keys
 # accounts service wrote and this check holds. (An unjoined host maps every owner to nobody and
 # would refuse each authorized_keys file.)
 StrictModes yes
-PasswordAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+LoginGraceTime 30
+MaxAuthTries 3
 PermitUserEnvironment no
 UseDNS no
 ClientAliveInterval 60

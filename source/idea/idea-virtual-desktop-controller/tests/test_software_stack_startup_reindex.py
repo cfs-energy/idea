@@ -125,7 +125,6 @@ def build_app(db: FakeSoftwareStackDB, context: FakeContext, monkeypatch):
     app.context = context
     app._software_stack_db = db
     app._software_stacks_reindexed = False
-    app._reindex_retries = 1
     return app
 
 
@@ -206,58 +205,44 @@ def test_the_index_is_read_before_the_table_so_a_gap_never_drops_a_stack(monkeyp
     assert entry_ids(context, EntryAction.DELETE_ENTRY) == []
 
 
-def test_only_the_leader_rebuilds_and_a_follower_never_does(monkeypatch):
+def test_follower_and_unknown_status_do_not_mark_rebuild_complete(monkeypatch):
     context = FakeContext(leader=False)
     db = FakeSoftwareStackDB(pages=[[a_stack('ss-1')]])
     app = build_app(db, context, monkeypatch)
-    timers = []
-    monkeypatch.setattr(
-        app_module.threading,
-        'Timer',
-        lambda seconds, fn: timers.append((seconds, fn)) or Mock(),
-    )
-
-    app._reindex_software_stacks()
-    assert entry_ids(context, EntryAction.CREATE_ENTRY) == []
-    assert timers and timers[0][0] == 60
-
-    # still a follower on the retry: give up for this process
-    timers[0][1]()
-    assert entry_ids(context, EntryAction.CREATE_ENTRY) == []
-    assert app._software_stacks_reindexed is True
-    assert len(timers) == 1
-
-
-def test_a_task_that_becomes_leader_by_the_retry_rebuilds(monkeypatch):
-    context = FakeContext(leader=False)
-    db = FakeSoftwareStackDB(pages=[[a_stack('ss-1')]])
-    app = build_app(db, context, monkeypatch)
-    timers = []
-    monkeypatch.setattr(
-        app_module.threading, 'Timer', lambda seconds, fn: timers.append(fn) or Mock()
-    )
-
-    app._reindex_software_stacks()
-    context.leader = True
-    timers[0]()
-
-    assert entry_ids(context, EntryAction.CREATE_ENTRY) == ['ss-1']
-
-
-def test_an_unknown_leader_status_is_treated_as_not_leader(monkeypatch):
-    context = FakeContext(leader=RuntimeError('election not started'))
-    db = FakeSoftwareStackDB(pages=[[a_stack('ss-1')]])
-    app = build_app(db, context, monkeypatch)
-    timers = []
-    monkeypatch.setattr(
-        app_module.threading, 'Timer', lambda seconds, fn: timers.append(fn) or Mock()
-    )
-
-    app._reindex_software_stacks()
-
-    assert entry_ids(context, EntryAction.CREATE_ENTRY) == []
+    for leader in [False, RuntimeError('election not started'), False]:
+        context.leader = leader
+        app._reindex_software_stacks()
+        assert not app._software_stacks_reindexed
+        assert not db.reads
     assert context.logs.warning.called
-    assert len(timers) == 1
+
+
+def test_leader_loop_rebuilds_once_after_delayed_election_or_failover(
+    monkeypatch, refresh_loop
+):
+    loop_app, _ = refresh_loop
+    context = FakeContext(leader=False)
+    db = FakeSoftwareStackDB(pages=[[a_stack('ss-1')]])
+    app = build_app(db, context, monkeypatch)
+    loop_app.__dict__.update(app.__dict__)
+    ticks = 0
+
+    def wait(seconds):
+        nonlocal ticks
+        assert seconds == 60
+        ticks += 1
+        # Election can settle after ten minutes; another task can lead until then.
+        context.leader = ticks in [12, 13, 15]
+        if ticks == 16:
+            loop_app._bootstrap_exit.stopped = True
+
+    loop_app._bootstrap_exit.wait = wait
+    loop_app._refresh_bootstrap_loop()
+
+    assert ticks == 16
+    assert entry_ids(context, EntryAction.CREATE_ENTRY) == ['ss-1']
+    assert db.scanned_cursors == [None]
+    assert loop_app._software_stacks_reindexed
 
 
 def test_startup_rewrites_rows_present_in_both_stores_so_dynamodb_edits_reach_the_portal(

@@ -6,6 +6,17 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.10.9] - 2026-10-22
+
+**Highlights for users**
+
+* SSH to the bastion uses your key only; download it from SSH access.
+
+* **Bastion SSH**: container and host bastions disable password and keyboard-interactive authentication, retain PAM account checks, and limit login grace to 30 seconds and attempts to three.
+* **Software stack index**: the controller rebuilds once when it becomes leader, including delayed elections and failover.
+* **Application CLIs**: distinct module commands avoid installation-order collisions in the shared image.
+* **Cluster-manager IAM**: task permissions use three customer-managed policies to fit GovCloud limits with Bedrock enabled.
+
 ## [26.10.8] - 2026-10-21
 
 **Highlights for users**
