@@ -4,7 +4,7 @@
 #
 #    pip-compile --no-emit-index-url --output-file=tests.txt --strip-extras tests.in
 #
-coverage==7.16.2
+coverage==7.17.0
     # via pytest-cov
 iniconfig==2.3.1
     # via pytest
@@ -12,7 +12,7 @@ memory-profiler==0.61.0
     # via -r tests.in
 packaging==26.3
     # via pytest
-pluggy==1.6.0
+pluggy==1.7.0
     # via
     #   pytest
     #   pytest-cov
@@ -27,5 +27,5 @@ pytest==9.1.1
     #   pytest-mock
 pytest-cov==7.1.0
     # via -r tests.in
-pytest-mock==3.16.0
+pytest-mock==3.17.0
     # via -r tests.in

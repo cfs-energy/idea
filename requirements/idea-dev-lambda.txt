@@ -4,7 +4,7 @@
 #
 #    pip-compile --no-emit-index-url --output-file=idea-dev-lambda.txt --strip-extras idea-dev-lambda.in
 #
-certifi==2026.10.19
+certifi==2026.10.23
     # via
     #   opensearch-py
     #   requests
@@ -16,7 +16,7 @@ cryptography==50.0.2
     # via -r idea-dev-lambda.in
 events==0.5
     # via opensearch-py
-grpcio==1.84.0
+grpcio==1.85.0
     # via opensearch-protobufs
 idna==3.20
     # via requests
@@ -26,9 +26,9 @@ opensearch-py==3.2.0
     # via -r idea-dev-lambda.in
 protobuf==7.36.2
     # via opensearch-protobufs
-pycparser==3.11
+pycparser==3.12
     # via cffi
-python-dateutil==2.9.0.post0
+python-dateutil==3.0.0
     # via opensearch-py
 requests==2.34.2
     # via opensearch-py
@@ -36,6 +36,8 @@ six==1.17.0
     # via python-dateutil
 typing-extensions==4.16.0
     # via grpcio
+tzdata==2026.5
+    # via python-dateutil
 urllib3==2.8.0
     # via
     #   opensearch-py
