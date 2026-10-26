@@ -8,10 +8,6 @@
  * an upgrade has never replaced is the backstop under that, for a deploy that reaches
  * CloudFormation by some other route.
  *
- * Two components here, the jump host and the scheduler host, are replaced by an ordinary upgrade
- * already and carry no retain policy. They are listed because an operator may want to replace one
- * on purpose, and the consequence is worth reading either way.
- *
  * This command does not invent a replacement. CloudFormation replaces a resource when a property
  * that cannot be changed in place changes, and `forcedBy` below names those properties for each
  * component. The operator changes the setting, then runs this, and this permits the replacement the
@@ -39,19 +35,6 @@ export interface ReplaceableComponent {
 }
 
 export const REPLACEABLE_COMPONENTS: readonly ReplaceableComponent[] = [
-  {
-    component: 'jump-host',
-    moduleName: 'bastion-host',
-    resourceType: 'AWS::EC2::Instance',
-    consequence:
-      'The jump host is rebuilt with a new host identity, so every operator who has connected to it ' +
-      'before finds their stored host key no longer matches and is asked to accept a new one, and ' +
-      'automation that pins the old key stops working until it is updated. An ordinary upgrade ' +
-      'already replaces this host, about twenty times over the life of a cluster, so the new key ' +
-      'is a familiar interruption rather than a rare one. Keeping the identity across a ' +
-      'replacement is being designed separately; until that lands, expect the prompt.',
-    forcedBy: 'ImageId, KeyName, LaunchTemplate or NetworkInterfaces, from bastion-host.instance_ami and cluster.network.ssh_key_pair',
-  },
   {
     component: 'search-domain',
     moduleName: 'analytics',
@@ -85,18 +68,6 @@ export const REPLACEABLE_COMPONENTS: readonly ReplaceableComponent[] = [
     forcedBy:
       'no property of a user pool is marked replacing in the CloudFormation resource specification, ' +
       'so a replacement here comes from the resource moving or being rebuilt rather than from a setting',
-  },
-  {
-    component: 'scheduler-host',
-    moduleName: 'scheduler',
-    resourceType: 'AWS::EC2::Instance',
-    consequence:
-      'The machine the batch server runs on is rebuilt, and whatever the server holds locally goes ' +
-      'with it. Execution nodes configured with the current server name stop finding the server, ' +
-      'so work in flight is lost rather than requeued. An ordinary upgrade already replaces this ' +
-      'host, which is why an upgrade is drained and announced; running it on its own needs the ' +
-      'same drain and the same announcement.',
-    forcedBy: 'ImageId, KeyName, LaunchTemplate or NetworkInterfaces, from scheduler.instance_ami and cluster.network.ssh_key_pair',
   },
   {
     component: 'shared-file-system',

@@ -1126,6 +1126,22 @@ class VirtualDesktopAPI(BaseAPI):
             self._logger.error(new_session.failure_reason)
             return new_session
 
+        if new_session.server and (
+            new_session.server.instance_id or new_session.server.instance_type
+        ):
+            if (
+                not old_session.server
+                or not old_session.server.instance_id
+                or (
+                    new_session.server.instance_id
+                    and new_session.server.instance_id != old_session.server.instance_id
+                )
+            ):
+                new_session.failure_reason = (
+                    'Instance does not match the stored session.'
+                )
+                return new_session
+
         operation_failed = False
         is_session_updated = False
         is_server_updated = False
@@ -1151,7 +1167,7 @@ class VirtualDesktopAPI(BaseAPI):
             and Utils.is_not_empty(new_session.server)
             and Utils.is_not_empty(new_session.server.instance_type)
         ):
-            old_server = self.server_db.get(instance_id=new_session.server.instance_id)
+            old_server = self.server_db.get(instance_id=old_session.server.instance_id)
             if (
                 Utils.is_not_empty(old_server)
                 and old_server.instance_type != new_session.server.instance_type
@@ -1161,7 +1177,7 @@ class VirtualDesktopAPI(BaseAPI):
                     success = False
                 else:
                     error, success = self.controller_utils.change_instance_type(
-                        instance_id=new_session.server.instance_id,
+                        instance_id=old_session.server.instance_id,
                         instance_type_name=new_session.server.instance_type,
                     )
 

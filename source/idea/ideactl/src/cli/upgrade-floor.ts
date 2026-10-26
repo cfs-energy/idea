@@ -1,13 +1,18 @@
 /**
- * Direct upgrades need a known baseline for historical configuration and policy changes.
- * Older releases must reach that baseline before this migration can validate them.
+ * Direct upgrades require the supported ECS configuration baseline.
+ * Older releases must reach it with their published administrator first.
  */
 
 import { ideaVersion } from "../version.ts";
 
-// The historical plan covers this baseline and every subsequent supported release.
+// ECS deployments from this release onward share the supported configuration baseline.
 // Lower versions need their published upgrade instructions first.
-export const UPGRADE_FLOOR_VERSION = "25.11.0";
+export const UPGRADE_FLOOR_VERSION = "26.10.0";
+
+export const RECOVERY_COMMAND = "IDEA_REVISION=v26.10.9 ./idea-admin.sh upgrade-cluster --cluster-name <name> --aws-region <region>";
+export const HOST_CONTROL_PLANE_REFUSAL =
+  "Host control-plane deployments and upgrades were removed in 26.11. Complete the ECS migration with the 26.10.9 administrator first.\n" +
+  `Run from the checkout with your cluster name and region: ${RECOVERY_COMMAND}`;
 
 /** The module-table fields the floor reads; a `ModuleInfo` row satisfies it. */
 export interface FloorModule {
@@ -80,7 +85,8 @@ export function upgradeFloorMessage(
   }
   lines.push(
     "",
-    `Upgrade this cluster to ${floor} using the ${floor} administrator, then re-run this command.`,
+    `Upgrade this cluster to 26.10.9 using the 26.10.9 administrator, then re-run this command.`,
+    `Run from the checkout with your cluster name and region: ${RECOVERY_COMMAND}`,
     "",
     `If the cluster is older than ${floor}, upgrade one published release at a time with that release's administrator, following that release's Upgrade Instructions.`,
   );

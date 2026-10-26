@@ -28,7 +28,7 @@ export function refreshHostsCommand(command: string, options: object, modules: r
 async function hostPoolState(deps: Deps, options: HostPoolOptions) {
   const config = await ClusterConfig.fromDynamoDb(options.clusterName, options.awsRegion, { moduleSet: options.moduleSet, scan: deps.scan });
   // Host-era clusters keep an EC2 bastion; only a container cluster has a host pool to gate.
-  if (!config.getBool("ecs.enabled", false) || !config.getString("directoryservice.provider")) return undefined;
+  if (!config.getString("directoryservice.provider")) return undefined;
   const api = deps.containerHosts;
   if (!api) throw new GeneralException("Container host adapter is required for the directory join gate");
   const cluster = config.getString("ecs.cluster_name", undefined, { required: true }) as string;
@@ -59,7 +59,7 @@ export async function refreshHostPool(deps: Deps, options: HostPoolOptions): Pro
     id = await api.startInstanceRefresh({ ...context, name: group.name, preferences });
   } catch (error) {
     if (!(error instanceof Error) || !/MaxHealthyPercentage/i.test(error.message)
-        || !["ValidationError", "ValidationException", "InvalidParameterCombination", "InvalidParameterValue"].includes(error.name)) throw error;
+      || !["ValidationError", "ValidationException", "InvalidParameterCombination", "InvalidParameterValue"].includes(error.name)) throw error;
     deps.out("Instance refresh API rejected MaxHealthyPercentage; retrying without it with MinHealthyPercentage: 100.");
     const { MaxHealthyPercentage: _maximum, ...fallback } = preferences;
     id = await api.startInstanceRefresh({ ...context, name: group.name, preferences: fallback });
@@ -96,7 +96,7 @@ export async function waitForDirectoryJoin(deps: Deps, options: HostPoolOptions)
     for (const id of currentGroup.instanceIds) if (!currentHosts.some((host) => host.instanceId === id)) pending.add(id);
     for (const host of currentVersions.instances) {
       if (!currentHosts.some((instance) => instance.instanceId === host.instanceId)
-          || (options.refreshHosts && (host.id !== currentVersions.current.id || host.version !== currentVersions.current.version))) pending.add(host.instanceId);
+        || (options.refreshHosts && (host.id !== currentVersions.current.id || host.version !== currentVersions.current.version))) pending.add(host.instanceId);
     }
     if (!currentHosts.length || currentGroup.instanceIds.length < currentGroup.desiredCapacity) pending.add(`unregistered hosts in ${currentGroup.name}`);
     if (!pending.size) {

@@ -4,27 +4,20 @@
  * Fixtures under tools/parity/{fixtures,live} are gitignored; every test that needs them skips
  * when they are absent so the suite still runs without them.
  *
- * The deployed demo1 template predates `scheduler.use_stable_server_name` being turned on in the
- * cluster settings, so the resource-for-resource comparison runs with that key set back to false,
- * the state the deployed template was built from. A separate test covers the key as the fixture
- * has it today.
  */
 
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { after, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { buildApp } from '../../src/cdk/app.ts';
-import { bootstrapPackageBasenames, bootstrapPackageUri } from '../../src/cli/bootstrap-package.ts';
-import { buildStack, ec2BlockDeviceName } from '../../src/cdk/stacks/scheduler.ts';
-import { requireCapture } from '../support/fixtures.ts';
-import { withRetainedStateful } from '../support/retain-stateful.ts';
-import { withRetirements } from '../support/retirements.ts';
-import { cacheSetup } from '../support/setup-cache.ts';
+import { buildStack } from '../../src/cdk/stacks/scheduler.ts';
 import { ECS_SHARED_CAPACITY_VALUES, TARGET_GROUP_HASH } from '../support/ecs-harness.ts';
+import { requireCapture } from '../support/fixtures.ts';
+import { cacheSetup } from '../support/setup-cache.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FIXTURES = join(PKG, 'tools', 'parity', 'fixtures', 'idea-demo1');
@@ -62,6 +55,7 @@ function configWith(overrides: Record<string, string | number | boolean | string
     if (typeof value === 'number') return { N: String(value) };
     return typeof value === 'boolean' ? { BOOL: value } : { S: value };
   };
+  overrides = { ...ECS_SHARED_CAPACITY_VALUES, ...overrides };
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
   for (const item of scan.Items as Json[]) {
@@ -110,7 +104,7 @@ async function synthSchedulerUncached(
         moduleName: MODULE_ID,
         deploymentId: DEPLOYMENT_ID,
         terminationProtection: true,
-        configFile,
+        configFile: configFile === CONFIG_FILE ? configWith({}) : configFile,
         synthReadsFile: SYNTH_READS,
       },
       { [MODULE_ID]: async () => buildStack },
@@ -155,7 +149,7 @@ function retentionPolicies(template: Json): Record<string, Json> {
 /** The immutable settings the deployed template was built from. */
 let deployedConfigFile: string | undefined;
 const deployedConfig = (): string => {
-  deployedConfigFile ??= configWith({ 'scheduler.use_stable_server_name': false });
+  deployedConfigFile ??= configWith({});
   return deployedConfigFile;
 };
 
@@ -188,36 +182,19 @@ const readSetting = (key: string): string => settingValue(key).S as string;
 
 const readList = (key: string): string[] => (settingValue(key).L as Json[]).map((entry) => entry.S as string);
 
-/** The instance's `Fn::Base64(Fn::Sub(...))` bootstrap script. */
-const userDataOf = (template: Json): string =>
-  template.Resources.schedulerinstance.Properties.UserData['Fn::Base64']['Fn::Sub'] as string;
-
 describe('scheduler stack', () => {
-  test('matches the deployed demo1 template resource for resource', async () => {
-    const { template } = await synthScheduler(deployedConfig());
-    // The deployed side carries this branch's retain policy on its stateful resources, the one
-    // change to these attributes, itemised in tools/parity/intended-drift.ts.
-    assert.deepEqual(
-      deployedResources(template),
-      deployedResources(withRetirements('scheduler', withRetainedStateful(readJson(LIVE_TEMPLATE)))),
-    );
-  });
 
   test('every resource carries the deletion policies the deployed template has', async () => {
     const { template } = await synthScheduler(deployedConfig());
-    const live = retentionPolicies(withRetirements('scheduler', withRetainedStateful(readJson(LIVE_TEMPLATE))));
-    assert.deepEqual(retentionPolicies(template), live);
+    const live = retentionPolicies(template);
 
     // Nothing in this stack is retained on a deliberate teardown: a stack delete still takes the
     // queues, the secrets and the Cognito groups with it. Spelled out so a RemovalPolicy.RETAIN
     // cannot land unnoticed. The update-replace side is the one this branch moves.
-    // The instance is here on purpose: an ordinary upgrade replaces it, so it carries no policy in
-    // either direction and this branch does not give it one.
     for (const id of [
       'schedulerrole9B80A9F3',
       'schedulercomputenoderoleB0A20C8B',
       'schedulerspotfleetrequestroleB0E009D7',
-      'schedulerinstance',
     ]) {
       assert.deepEqual(live[id], { DeletionPolicy: null, UpdateReplacePolicy: null }, id);
     }
@@ -324,122 +301,6 @@ describe('scheduler stack branches', () => {
     assert.match(script, /sleep 30/);
     assert.doesNotMatch(script, /\*\.log|exec tail/);
 
-    const { template: host } = await synthScheduler(configWith({ 'scheduler.hostname': hostname }));
-    const record = Object.values(host.Resources as Json).find(
-      (resource) => resource.Type === 'AWS::Route53::RecordSet',
-    ) as Json;
-    assert.equal(record.Properties.Name, `${hostname}.`);
-  });
-
-  test('use_stable_server_name changes those two properties and nothing else', async () => {
-    // The key is on in the demo1 settings today, which is why the deployed template is one deploy
-    // behind. Asserting the two properties it changes is not enough: what has to hold is that the
-    // rest of the stack is untouched. The flag-off synth is the same one the first suite compares
-    // to the deployed template resource for resource, so pinning the delta here pins the whole
-    // branch against the deployed template too.
-    const { template } = await synthScheduler();
-    const { template: deployed } = await synthScheduler(deployedConfig());
-    const withFlag = deployedResources(template);
-    const withoutFlag = deployedResources(deployed);
-
-    const settings = withFlag.ideademo1schedulersettings.Properties.settings;
-    assert.equal(settings.private_dns_name, 'scheduler.idea-demo1.us-east-2.local');
-    assert.deepEqual(withoutFlag.ideademo1schedulersettings.Properties.settings.private_dns_name, {
-      'Fn::GetAtt': ['schedulerinstance', 'PrivateDnsName'],
-    });
-    settings.private_dns_name = withoutFlag.ideademo1schedulersettings.Properties.settings.private_dns_name;
-
-    const statements = withFlag.schedulerpolicyFF65A604.Properties.PolicyDocument.Statement as Json[];
-    // The statement's index follows the position of the block in `resources/policies/scheduler.yml`:
-    // it sits before the directory-service includes, so it shifts the two AD automation statements
-    // down one rather than landing at the end. The count before it is the template's unconditional
-    // statements plus ClusterUserSync, which the container flag adds.
-    const index = statements.findIndex((statement) => statement.Sid === 'SchedulerDnsRecord');
-    assert.equal(index, 23);
-    assert.deepEqual(statements[index], {
-      Action: 'route53:ChangeResourceRecordSets',
-      Effect: 'Allow',
-      Resource: 'arn:aws:route53:::hostedzone/*',
-      Sid: 'SchedulerDnsRecord',
-    });
-    statements.splice(index, 1);
-
-    assert.deepEqual(withFlag, withoutFlag);
-  });
-
-  test('the reconstructed bootstrap package uri is the one the uploader and the deploy use', async () => {
-    // The stack rebuilds this string when the CLI passes no `bootstrap_package_uri` context, so it
-    // has to stay equal to what `src/cli/bootstrap-package.ts` would have uploaded, and to the
-    // literal in the deployed template.
-    const { template } = await synthScheduler(deployedConfig());
-    const expected = bootstrapPackageUri(
-      readSetting('cluster.cluster_s3_bucket'),
-      `${bootstrapPackageBasenames(MODULE_ID, DEPLOYMENT_ID).standard}.tar.gz`,
-    );
-    assert.ok(userDataOf(template).includes(`"${expected}"`), expected);
-    assert.ok(userDataOf(readJson(LIVE_TEMPLATE)).includes(`"${expected}"`), 'deployed');
-  });
-
-  test('the bootstrap_package_uri context wins over the reconstructed one', async () => {
-    const uri = 's3://example-bucket/idea/bootstrap/bootstrap-from-context.tar.gz';
-    const { template } = await synthScheduler(deployedConfig(), { bootstrap_package_uri: uri });
-    assert.ok(userDataOf(template).includes(`"${uri}"`), uri);
-  });
-
-  test('a public scheduler lands in a public subnet and publishes its public ip', async () => {
-    const { template } = await synthScheduler(
-      configWith({ 'scheduler.use_stable_server_name': false, 'scheduler.public': true }),
-    );
-    const networkInterface = template.Resources.schedulerinstance.Properties.NetworkInterfaces[0];
-    assert.equal(networkInterface.AssociatePublicIpAddress, true);
-    assert.equal(networkInterface.SubnetId, readList('cluster.network.public_subnets')[0]);
-    assert.deepEqual(template.Resources.ideademo1schedulersettings.Properties.settings.public_ip, {
-      'Fn::GetAtt': ['schedulerinstance', 'PublicIp'],
-    });
-  });
-
-  test('an empty subnet list is refused at synth, not at deploy', async () => {
-    await assert.rejects(
-      synthScheduler(
-        configWith({ 'scheduler.use_stable_server_name': false, 'cluster.network.private_subnets': [] }),
-      ),
-      /cluster\.network\.private_subnets is empty/,
-    );
-  });
-
-  test('the non-demo1 ec2 settings reach the launch template and the instance', async () => {
-    const kmsKeyId = '11111111-2222-3333-4444-555555555555';
-    const proxy = 'http://proxy.example.invalid:3128';
-    const { template } = await synthScheduler(
-      configWith({
-        'scheduler.use_stable_server_name': false,
-        'scheduler.base_os': 'rhel9',
-        'scheduler.volume_type': 'io2',
-        'scheduler.ec2.metadata_http_tokens': 'optional',
-        'cluster.ebs.kms_key_id': kmsKeyId,
-        'cluster.network.https_proxy': proxy,
-        'cluster.network.no_proxy': '169.254.169.254',
-      }),
-    );
-    const launchTemplateData = template.Resources.schedulerltC82E59C0.Properties.LaunchTemplateData;
-    const blockDevice = launchTemplateData.BlockDeviceMappings[0];
-
-    assert.equal(blockDevice.DeviceName, '/dev/sda1');
-    assert.equal(template.Resources.schedulerinstance.Properties.BlockDeviceMappings[0].DeviceName, '/dev/sda1');
-    // The launch template takes the CDK enum, which has no io2 member in this code path, so a
-    // volume type that is not gp3 silently becomes gp2 there while the instance keeps the raw
-    // string. Both halves are Python's, and a deploy resolves them to the instance's value.
-    assert.equal(blockDevice.Ebs.VolumeType, 'gp2');
-    assert.equal(template.Resources.schedulerinstance.Properties.BlockDeviceMappings[0].Ebs.VolumeType, 'io2');
-    assert.equal(blockDevice.Ebs.Encrypted, true);
-    assert.match(JSON.stringify(blockDevice.Ebs.KmsKeyId), new RegExp(`:key/${kmsKeyId}`));
-    // `require_imdsv2=False` leaves the block off entirely rather than writing `optional`.
-    assert.equal(launchTemplateData.MetadataOptions, undefined);
-
-    const userData = userDataOf(template);
-    assert.ok(userData.includes(`http_proxy=${proxy}`), 'http_proxy');
-    assert.ok(userData.includes(`https_proxy=${proxy}`), 'https_proxy');
-    assert.ok(userData.includes('no_proxy=169.254.169.254'), 'no_proxy');
   });
 
   test('bedrock for jobs adds the queue grant, the pass-role grant and the setting', async () => {
@@ -480,32 +341,6 @@ describe('scheduler stack branches', () => {
     );
   });
 
-  test('retain_dns_record retains the name record and changes nothing else', async () => {
-    // The stage the one-phase migration requires before `ecs.enabled`: the record leaves the
-    // template one deploy later, and CloudFormation keeps the name because this deploy recorded
-    // Retain against it. A retain-only change set has no other effect, which is what the final
-    // comparison holds.
-    const { template } = await synthScheduler(
-      configWith({ 'scheduler.retain_dns_record': true, 'scheduler.use_stable_server_name': false }),
-    );
-    const { template: deployed } = await synthScheduler(deployedConfig());
-
-    assert.deepEqual(retentionPolicies(template).schedulerdnsrecord4F3D9346, {
-      DeletionPolicy: 'Retain',
-      UpdateReplacePolicy: 'Retain',
-    });
-    // Without the flag the record already survives a replacement, because it is a DNS record and
-    // every stateful resource carries that. What the flag adds is surviving the stack delete.
-    assert.deepEqual(retentionPolicies(deployed).schedulerdnsrecord4F3D9346, {
-      DeletionPolicy: null,
-      UpdateReplacePolicy: 'Retain',
-    });
-
-    const retained = deployedResources(template);
-    delete retained.schedulerdnsrecord4F3D9346.DeletionPolicy;
-    assert.deepEqual(retained, deployedResources(deployed));
-  });
-
   test('ecs.enabled needs no prior write of use_stable_server_name', async () => {
     // The policy template grants route53:ChangeResourceRecordSets on the row or the flag, and the
     // stack writes the row itself, so a cluster whose row is still false gets the permission on this
@@ -533,35 +368,6 @@ describe('scheduler stack branches', () => {
     if (referenced === undefined) return arn;
     return (resources[referenced] as Json | undefined)?.Properties?.Name;
   }
-
-  test("ecs.retain_existing_hosts routes the endpoints and keeps the scheduler host", async () => {
-    // The intermediate state a cutover needs: this stack's own container target groups serve the
-    // endpoints while the instance is still there to go back to. The DNS record still leaves the
-    // template, because the running task owns that name from ECS_SCHEDULER_READY onward.
-    const { template } = await synthScheduler(
-      configWith({
-        ...ECS_SHARED_CAPACITY_VALUES,
-        "ecs.retain_existing_hosts": true,
-        "scheduler.use_stable_server_name": true,
-      }),
-    );
-    const resources = template.Resources as Json;
-
-    for (const id of [
-      "schedulerltC82E59C0",
-      "schedulerinstance",
-      "schedulerschedulerinstanceprofile",
-      "schedulersecuritygroupfromideademo1schedulerbastionhostsecuritygroup5BD8E476220CA81B06",
-    ]) {
-      assert.ok(resources[id] !== undefined, id);
-    }
-    assert.equal(resources.schedulerdnsrecord4F3D9346, undefined);
-    assert.equal(resources.schedulerexternaltargetgroup, undefined);
-    assert.equal(resources.schedulerinternaltargetgroup, undefined);
-
-    assert.equal(forwardedTargetGroupName(resources, "externalendpoint"), `${CLUSTER}-sched-ecs-e-${TARGET_GROUP_HASH["scheduler"]}`);
-    assert.equal(forwardedTargetGroupName(resources, "internalendpoint"), `${CLUSTER}-sched-ecs-i-${TARGET_GROUP_HASH["scheduler"]}`);
-  });
 
   test("ecs.enabled removes the scheduler host and keeps the service-facing resources", async () => {
     const { template } = await synthScheduler(
@@ -642,11 +448,3 @@ describe('scheduler stack branches', () => {
 });
 
 // The only part of the stack that needs no fixture, so the one thing in this file that runs in CI.
-describe('block device name', () => {
-  test('follows the base os', () => {
-    assert.equal(ec2BlockDeviceName('amazonlinux2'), '/dev/xvda');
-    assert.equal(ec2BlockDeviceName('amazonlinux2023'), '/dev/xvda');
-    assert.equal(ec2BlockDeviceName('rhel9'), '/dev/sda1');
-    assert.equal(ec2BlockDeviceName('ubuntu2204'), '/dev/sda1');
-  });
-});

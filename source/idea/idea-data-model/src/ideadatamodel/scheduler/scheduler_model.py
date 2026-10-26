@@ -1212,7 +1212,11 @@ class SocaJob(SocaBaseModel):
         if ModelUtils.is_not_empty(fsx_lustre_config.export_path):
             return fsx_lustre_config.export_path
         if self.is_ephemeral_capacity():
-            export_path = f'{fsx_lustre_config.s3_backend}/{self.cluster_name}-fsxoutput/job-{self.job_id}'
+            if not self.job_uid:
+                raise exceptions.invalid_job(
+                    'job_uid is required for ephemeral job resources'
+                )
+            export_path = f'{fsx_lustre_config.s3_backend}/{self.cluster_name}-fsxoutput/job-{self.job_id}-{self.job_uid}'
         else:
             export_path = f'{fsx_lustre_config.s3_backend}/{self.cluster_name}-fsxoutput/job-{self.job_group}'
         return export_path

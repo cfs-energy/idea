@@ -27,7 +27,7 @@ test("calendar and legacy three-part releases compare numerically", () => {
 test("the floor ignores config rows and undeployed rows", () => {
   const modules: FloorModule[] = [
     { module_id: "global-settings", type: "config", status: "deployed", version: null },
-    { module_id: "cluster", type: "stack", status: "deployed", version: "26.09.0" },
+    { module_id: "cluster", type: "stack", status: "deployed", version: "26.10.9" },
     { module_id: "metrics", type: "stack", status: "not-deployed", version: null },
   ];
   assert.deepEqual(modulesBelowFloor(modules, UPGRADE_FLOOR_VERSION), []);
@@ -36,7 +36,7 @@ test("the floor ignores config rows and undeployed rows", () => {
 test("deployed modules older than the floor, missing, or unparsable fail it", () => {
   const modules: FloorModule[] = [
     { module_id: "cluster", type: "stack", status: "deployed", version: "25.10.0" },
-    { module_id: "scheduler", type: "app", status: "deployed", version: "26.09.0" },
+    { module_id: "scheduler", type: "app", status: "deployed", version: "26.10.9" },
     { module_id: "vdc", type: "app", status: "deployed", version: null },
     { module_id: "analytics", type: "stack", status: "deployed", version: "not-a-version" },
   ];
@@ -53,10 +53,11 @@ test("the refusal names the floor, the below-floor modules, and the operator pat
   ];
   const message = upgradeFloorMessage("sample-cluster", "26.09.1", UPGRADE_FLOOR_VERSION, below);
   assert.match(message, /Cluster sample-cluster is below the supported upgrade floor/);
-  assert.match(message, /already at 25\.11\.0 or newer/);
+  assert.match(message, /already at 26\.10\.0 or newer/);
   assert.match(message, /cluster {3}25\.10\.0/);
   assert.match(message, /scheduler {3}25\.10\.0/);
-  assert.match(message, /Upgrade this cluster to 25\.11\.0 using the 25\.11\.0 administrator/);
+  assert.match(message, /Upgrade this cluster to 26\.10\.9 using the 26\.10\.9 administrator/);
+  assert.match(message, /IDEA_REVISION=v26\.10\.9 \.\/idea-admin\.sh upgrade-cluster --cluster-name <name> --aws-region <region>/);
   assert.doesNotMatch(message, /--force/);
 });
 
@@ -81,9 +82,43 @@ test("upgrade-cluster refuses a below-floor cluster before touching anything els
   assert.deepEqual(scanned, ["sample-cluster.modules"]);
 });
 
-test("25.11 and later deployed releases clear the direct upgrade floor", () => {
-  assert.equal(UPGRADE_FLOOR_VERSION, "25.11.0");
-  for (const version of ["25.11.0", "25.12.0", "26.08.0", "26.09.0"]) {
+test("26.10 and later deployed releases clear the direct upgrade floor", () => {
+  assert.equal(UPGRADE_FLOOR_VERSION, "26.10.0");
+  for (const version of ["26.10.0", "26.10.9", "26.11.1"]) {
     assert.deepEqual(modulesBelowFloor([{ module_id: "scheduler", type: "app", status: "deployed", version }], UPGRADE_FLOOR_VERSION), []);
   }
 });
+
+for (const settings of [[], [{ key: 'ecs.enabled', value: false }], [{ key: 'ecs.enabled', value: true }, { key: 'ecs.retain_existing_hosts', value: true }]]) {
+  test(`refuses an unsupported host mode before writes: ${JSON.stringify(settings)}`, async () => {
+    const deps = {
+      scan: async ({ TableName }: { TableName: string }) => ({
+        Items: TableName.endsWith('.modules')
+          ? [{ module_id: 'cluster', name: 'cluster', type: 'stack', status: 'deployed', version: '26.10.0' }]
+          : settings
+      }),
+    } as unknown as Parameters<typeof upgradeCluster>[0];
+    await assert.rejects(upgradeCluster(deps, { clusterName: 'sample-cluster', awsRegion: 'us-east-2', moduleSet: 'default' }), /Complete the ECS migration with the 26.10.9 administrator/);
+  });
+}
+
+for (const marker of [
+  { key: 'cluster.upgrade_historical_pending', value: true },
+  { key: 'cluster-manager.maintenance.upgrade_baseline', value: { enabled: false, message: '' } },
+  { key: 'custom-manager.maintenance.upgrade_baseline', value: { enabled: true } },
+]) {
+  test(`A-3: refuses unfinished migration marker ${marker.key} before any other effects`, async () => {
+    const deps = {
+      scan: async ({ TableName }: { TableName: string }) => ({ Items: TableName.endsWith('.modules')
+        ? [{ module_id: 'cluster', name: 'cluster', type: 'stack', status: 'deployed', version: '26.10.9' }]
+        : [{ key: 'ecs.enabled', value: true }, marker]
+      }),
+    } as unknown as Parameters<typeof upgradeCluster>[0];
+    await assert.rejects(upgradeCluster(deps, { clusterName: 'sample-cluster', awsRegion: 'us-east-2', moduleSet: 'default' }), (error: Error) => {
+      assert.match(error.message, /Incomplete migration.*26\.10\.9 administrator/);
+      assert.ok(error.message.includes(marker.key));
+      assert.match(error.message, /IDEA_REVISION=v26\.10\.9/);
+      return true;
+    });
+  });
+}

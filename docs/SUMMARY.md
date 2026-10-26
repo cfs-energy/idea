@@ -23,7 +23,7 @@
   * [Metrics history](first-time-users/cluster-operations/metrics-history.md)
   * [Update IDEA cluster](first-time-users/cluster-operations/update-idea-cluster/README.md)
     * [Update a module's code (idea-admin.sh deploy)](first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md)
-    * [Move the control plane to containers](first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md)
+    * [ECS control-plane operations](first-time-users/cluster-operations/update-idea-cluster/ecs-control-plane.md)
     * [Update IDEA configuration (idea-admin.sh config)](first-time-users/cluster-operations/update-idea-cluster/update-idea-configuration.md)
     * [Update IDEA backend resource (idea-admin.sh deploy)](first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource.md)
     * [Full IDEA Upgrade (idea-admin.sh upgrade-cluster)](first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md)
@@ -108,3 +108,6 @@
 
 * [FAQ](help-and-support/faq.md)
 * [Raise a bug](help-and-support/raise-a-bug.md)
+
+* [Browser Terminal](first-time-users/terminal.md)
+* [Operating browser terminals](modules/cluster-manager/web-terminal.md)

@@ -15,15 +15,14 @@
 
 import { CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import type * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import * as iam from 'aws-cdk-lib/aws-iam';
 
+import { isEmpty } from '../../config/cluster-config.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
-import { buildBootstrapUserData } from '../userdata.ts';
-import { isEmpty } from '../../config/cluster-config.ts';
 import {
   DIRECTORYSERVICE_ACTIVE_DIRECTORY,
   DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
@@ -35,6 +34,7 @@ import { InstanceProfile, Policy, Role, SQSQueue } from '../constructs/common.ts
 import { ActiveDirectory, DirectoryServiceCredentials, MODULE_DIRECTORYSERVICE } from '../constructs/directory-service.ts';
 import { ExistingSocaCluster, lookupClusterDns, lookupEbsKmsKey } from '../constructs/existing-resources.ts';
 import { OpenLDAPServerSecurityGroup } from '../constructs/network.ts';
+import { buildBootstrapUserData } from '../userdata.ts';
 
 /** `constants.NODE_TYPE_INFRA`. */
 const NODE_TYPE_INFRA = 'infra';
@@ -376,7 +376,7 @@ export class DirectoryServiceStack extends IdeaBaseStack {
       fifo: true,
       contentBasedDeduplication: true,
       encryptionMasterKey: kmsKeyId,
-      encryption: this.context.config.getBool("ecs.enabled", false) ? sqs.QueueEncryption.SQS_MANAGED : undefined,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
       visibilityTimeout: Duration.seconds(SQS_VISIBILITY_TIMEOUT_AD_AUTOMATION),
       deadLetterQueue: {
         maxReceiveCount: SQS_MAX_RECEIVE_COUNT_AD_AUTOMATION,

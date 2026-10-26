@@ -26,6 +26,9 @@ from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
 from typing import Optional
 
 
+CAPACITY_UNAVAILABLE = 'EC2 capacity is unavailable'
+
+
 class VirtualDesktopServerUtils:
     def __init__(
         self,
@@ -119,13 +122,57 @@ class VirtualDesktopServerUtils:
                 self._server_db.update(server)
 
     def start_dcv_hosts(self, servers: List[VirtualDesktopServer]) -> dict:
-        instance_ids = []
-        for server in servers:
-            instance_ids.append(server.instance_id)
+        if not servers:
+            return {}
+        instance_ids = [server.instance_id for server in servers]
+        session_ids = [server.idea_session_id for server in servers]
         try:
             response = self.ec2_client.start_instances(InstanceIds=instance_ids)
         except ClientError as e:
-            self._logger.error(e)
+            self._logger.error(
+                f'failed to resume instances {instance_ids}, sessions {session_ids}: {e}'
+            )
+            if e.response['Error']['Code'] == 'InsufficientInstanceCapacity':
+                locations = []
+                try:
+                    result = self.ec2_client.describe_instances(
+                        InstanceIds=instance_ids
+                    )
+                    for reservation in result.get('Reservations', []):
+                        for instance in reservation.get('Instances', []):
+                            zone = instance.get('Placement', {}).get(
+                                'AvailabilityZone', 'its current AZ'
+                            )
+                            locations.append(
+                                f'{instance.get("InstanceType", "this instance type")} in {zone}'
+                            )
+                except Exception as lookup_error:
+                    self._logger.warning(
+                        f'could not locate instances {instance_ids}: {lookup_error}'
+                    )
+                location = (
+                    ', '.join(locations)
+                    or 'this instance type in its current Availability Zone'
+                )
+                families = sorted(
+                    {
+                        server.instance_type.split('.')[0]
+                        for server in servers
+                        if server.instance_type
+                    }
+                )
+                resize = (
+                    f'an allowed size in the {" / ".join(families)} family'
+                    if families
+                    else 'an allowed size in the same instance family'
+                )
+                return {
+                    'ERROR': (
+                        f'{CAPACITY_UNAVAILABLE} for {location}. Your desktop remains stopped. '
+                        f'Retry Resume in a few minutes, or ask your administrator to resize it to {resize}. '
+                        'Its existing disks stay in the current Availability Zone.'
+                    )
+                }
             return {'ERROR': str(e)}
         return Utils.to_dict(response)
 

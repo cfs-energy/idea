@@ -16,14 +16,14 @@ function context(admin = false) {
 
 describe('portal navigation', () => {
     it('puts personal destinations first and has no administrative boundary for a plain user', () => {
-        expect(IdeaSideNavItems(context()).map(item => 'text' in item && item.text)).toEqual(['My desktops', 'My jobs', 'Files', 'SSH access', 'My costs']);
+        expect(IdeaSideNavItems(context()).map(item => 'text' in item && item.text)).toEqual(['My desktops', 'My jobs', 'Files', 'Terminal', 'SSH access', 'My costs']);
     });
     it('has one collapsible Administration boundary with tasks in order', () => {
         const items = IdeaSideNavItems(context(true));
-        expect(items.slice(0, 5).map(item => 'text' in item && item.text)).toEqual(['My desktops', 'My jobs', 'Files', 'SSH access', 'My costs']);
-        expect(items[5]).toMatchObject({type: 'section', text: 'Administration', defaultExpanded: true});
-        expect((items[5] as any).items.map((item: any) => item.text)).toEqual(['Manage desktops', 'Manage jobs', 'Images and applications', 'Projects', 'People and access', 'Costs and usage', 'Operations', 'Settings']);
-        expect(items).toHaveLength(6);
+        expect(items.slice(0, 6).map(item => 'text' in item && item.text)).toEqual(['My desktops', 'My jobs', 'Files', 'Terminal', 'SSH access', 'My costs']);
+        expect(items[6]).toMatchObject({type: 'section', text: 'Administration', defaultExpanded: true});
+        expect((items[6] as any).items.map((item: any) => item.text)).toEqual(['Manage desktops', 'Manage jobs', 'Images and applications', 'Projects', 'People and access', 'Costs and usage', 'Operations', 'Settings']);
+        expect(items).toHaveLength(7);
     });
     it('uses Reports only when a usable dashboard URL is configured, ignoring its custom title', () => {
         const ctx = context();

@@ -13,5 +13,10 @@
     "Action": "s3:DeleteObject",
     "Effect": "Allow",
     "Resource": "metrics/outbox/*"
-  }
+  },
+  "costReadActions": [
+    "ce:GetCostAndUsage",
+    "ce:GetTags",
+    "ce:GetDimensionValues"
+  ]
 }

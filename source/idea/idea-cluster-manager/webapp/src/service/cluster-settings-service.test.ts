@@ -170,3 +170,8 @@ describe('fetchMaintenance', () => {
         expect(await service.fetchMaintenance()).toEqual({enabled: false, message: '', ends_at: ''})
     })
 })
+
+it('makes the default maintenance end time a separate sentence', () => {
+    expect(maintenanceBannerText({enabled: true, message: '', ends_at: '2026-09-15T18:00:00Z'}))
+        .toMatch(/^This cluster is undergoing maintenance\. Expected to end .+\.$/)
+})

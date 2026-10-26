@@ -12,6 +12,9 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
 
 import { validateDeploymentDependencies } from "../../tools/day-zero/rehearse.ts";
 
@@ -69,4 +72,21 @@ test("the ordering check rejects a setting source deployed after its consumer", 
   });
 
   assert.deepEqual(problems, ["consumer: setting source provider is not deployed before its consumer"]);
+});
+
+test("the shipped sample rehearses without the retired enable_ecs switch", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "idea-sample-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const sample = readFileSync(join(PKG, "resources/config/values.yml"), "utf8");
+  // Select the application modules for this rehearsal, as an operator does at install time.
+  const valuesFile = join(directory, "values.yml");
+  writeFileSync(valuesFile, sample.replace('enabled_modules: []', 'enabled_modules: [scheduler, virtual-desktop-controller, bastion-host]'));
+  const result = spawnSync(process.execPath, [REHEARSAL, "--values-file", valuesFile], {
+    cwd: PKG,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^INSTALL_INTENT containers=true$/m);
+  assert.match(result.stdout, /^GENERATED_STATE valid$/m);
+  assert.match(result.stdout, /^STACK ecs SYNTHESIZED /m);
 });

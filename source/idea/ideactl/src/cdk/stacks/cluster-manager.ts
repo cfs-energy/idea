@@ -8,13 +8,12 @@
  * The bedrock block (managed policy, two custom resources with their lambdas, the delivery role)
  * is gated on `cluster-manager.bedrock.enabled`.
  *
- * Under the container flag the stack also runs the cluster-manager as a task on the container
+ * The stack runs the cluster-manager as a task on the container
  * stack's capacity. The task is built here because the application reads this module's own
  * settings rows at boot, so it must not start before this stack has written them.
  */
 
-import { CustomResource, Duration, Fn, Tags } from 'aws-cdk-lib';
-import * as asg from 'aws-cdk-lib/aws-autoscaling';
+import { CustomResource, Duration } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -26,8 +25,7 @@ import { ArnBuilder } from '../../config/arn-builder.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
-import { renderPolicy } from '../policy.ts';
-import { IDEA_TAG_NAME, IDEA_TAG_NODE_TYPE, kmsKeyArn, acknowledgeForScan, addCommonTags, addNagSuppression } from '../constructs/base.ts';
+import { acknowledgeForScan, addCommonTags, addNagSuppression, kmsKeyArn } from '../constructs/base.ts';
 import {
   CustomResourceProvider,
   LOG_RETENTION_DAYS,
@@ -40,69 +38,55 @@ import {
   STREAM_PREFIX_APPLICATION,
   addStorageMounts,
   adoptedLogDriver,
-  applicationTargetGroup,
   applicationContainerSettings,
+  applicationTargetGroup,
   attachApplicationFileLogs,
   buildEc2Service,
   buildExecutionRole,
   buildTaskDefinition,
-  ecsTasksPrincipal,
-  taskRoleName,
-  grantInjectedSecret,
   commonEnvironment,
   containerImage,
   dockerLabels,
+  ecsTasksPrincipal,
+  grantInjectedSecret,
   healthCheckGrace,
   roleSizing,
   serviceArn,
+  taskRoleName,
   type ContainerScope,
 } from '../constructs/container.ts';
 import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
-  ExistingSocaCluster,
-  lookupEbsKmsKey,
-  lookupKeyPair,
+  ExistingSocaCluster
 } from '../constructs/existing-resources.ts';
 import { WebPortalSecurityGroup } from '../constructs/network.ts';
-import { buildBootstrapUserData } from '../userdata.ts';
+import { renderPolicy } from '../policy.ts';
 
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
-const NODE_TYPE_APP = 'app';
-const OS_AMAZONLINUX2 = 'amazonlinux2';
-const OS_AMAZONLINUX2023 = 'amazonlinux2023';
 /** `constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS` / `SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS`. */
 const SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS = 16;
 const SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS = 3;
 /** `constants.SQS_VISIBILITY_TASKS` / `SQS_VISIBILITY_NOTIFICATIONS`. */
 const SQS_VISIBILITY_SECONDS = 30;
 
-/** `Utils.get_ec2_block_device_name`. */
-export function ec2BlockDeviceName(baseOs: string): string {
-  return baseOs === OS_AMAZONLINUX2 || baseOs === OS_AMAZONLINUX2023 ? '/dev/xvda' : '/dev/sda1';
-}
-
 export class ClusterManagerStack extends IdeaBaseStack {
   readonly cluster: ExistingSocaCluster;
   readonly arnBuilder: ArnBuilder;
-  readonly bootstrapPackageUri: string;
   readonly userPool: cognito.IUserPool;
-  private readonly ecsEnabled: boolean;
-  private readonly hostsPresent: boolean;
 
   oauth2ClientSecret!: OAuthClientIdAndSecret;
   jwtSigningSecret!: secretsmanager.CfnSecret;
+  terminalCA!: secretsmanager.CfnSecret;
   clusterTasksSqsQueue!: SQSQueue;
   notificationsSqsQueue!: SQSQueue;
-  clusterManagerRole!: Role;
   projectRoleBoundary: ManagedPolicy | undefined;
   bedrockInvocationLogGroupName: string | undefined;
   bedrockInvocationLogRole: Role | undefined;
   clusterManagerSecurityGroup!: WebPortalSecurityGroup;
-  autoScalingGroup!: asg.AutoScalingGroup;
   webPortalEndpoint!: CustomResource;
   externalEndpoint!: CustomResource;
   internalEndpoint!: CustomResource;
-  /** Present under the container flag: the cluster-manager task service and its target groups. */
+  /** The ECS service: the cluster-manager task service and its target groups. */
   containerService: ecs.Ec2Service | undefined;
   private containerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
 
@@ -115,18 +99,8 @@ export class ClusterManagerStack extends IdeaBaseStack {
       terminationProtection: props.terminationProtection,
       env: props.env,
     });
-
-    this.bootstrapPackageUri = this.lookupBootstrapPackageUri();
     this.cluster = new ExistingSocaCluster(this.context, this.stack);
     this.arnBuilder = new ArnBuilder(this.context.config);
-    this.ecsEnabled = this.context.config.getBool("ecs.enabled", false);
-    // `ecs.enabled` alone routes the endpoints to the container services and deletes the hosts that
-    // serve them in one change set, so nothing proves the new target before the old one is gone.
-    // With `ecs.retain_existing_hosts` the same deploy routes the endpoints and keeps the hosts,
-    // idle and unregistered, so a later deploy removes them once the containers are serving and
-    // turning the flag off puts the hosts back in service.
-    this.hostsPresent =
-      !this.ecsEnabled || this.context.config.getBool("ecs.retain_existing_hosts", false);
 
     this.userPool = this.lookupUserPool();
 
@@ -134,15 +108,16 @@ export class ClusterManagerStack extends IdeaBaseStack {
     this.buildJwtSigningSecret();
     this.buildAccessControlGroups(this.userPool);
     this.buildSqsQueues();
-    this.buildIamRoles();
+    this.buildTerminalCA();
     this.buildProjectRoleBoundary();
     this.buildBedrockInvocationLogging();
     this.buildSecurityGroups();
-    if (this.hostsPresent) this.buildAutoScalingGroup();
+
     this.buildContainerTargetGroups();
     this.buildEndpoints();
     this.buildContainerService();
     this.buildClusterSettings();
+    this.containerService?.node.addDependency(this.terminalCA);
   }
 
   /** The input the shared container helpers take. */
@@ -158,20 +133,6 @@ export class ClusterManagerStack extends IdeaBaseStack {
   /** The service name, fixed so the settings resource can publish it without a reference. */
   private get containerServiceName(): string {
     return `${this.clusterName}-${this.moduleId}`;
-  }
-
-  /**
-   * The bootstrap package is not a CDK asset: the CLI uploads it and passes its location as the
-   * `bootstrap_package_uri` context parameter. When absent, the deployment identifier derives
-   * the package name for a standalone synth.
-   */
-  private lookupBootstrapPackageUri(): string {
-    const fromContext: unknown = this.stack.node.tryGetContext('bootstrap_package_uri');
-    if (typeof fromContext === 'string' && fromContext !== '') return fromContext;
-    const bucket = this.context.config.getString('cluster.cluster_s3_bucket', undefined, {
-      required: true,
-    }) as string;
-    return `s3://${bucket}/idea/bootstrap/bootstrap-${this.moduleId}-${this.deploymentId}.tar.gz`;
   }
 
   buildOauth2Client(): void {
@@ -294,18 +255,29 @@ export class ClusterManagerStack extends IdeaBaseStack {
     this.addCommonTags(notificationsDlq);
   }
 
-  buildIamRoles(): void {
-    this.clusterManagerRole = new Role(this.context, `${this.moduleId}-role`, this.stack, {
-      description: 'IAM role assigned to the cluster-manager',
-      assumedBy: ['ssm', 'ec2'],
-      managedPolicies: this.getEc2InstanceManagedPolicies(),
+  buildTerminalCA(): void {
+    const kmsKeyId = this.context.config.getString('cluster.secretsmanager.kms_key_id');
+    const secret = this.terminalCA = new secretsmanager.CfnSecret(this.stack, 'terminal-user-ca', {
+      name: `${this.clusterName}-${this.moduleId}-terminal-ca`,
+      description: 'OpenSSH user CA for browser terminals', secretString: '{"schema":1}',
+      kmsKeyId: kmsKeyId ? kmsKeyArn(this.context, kmsKeyId) : undefined,
+      tags: [{ key: 'idea:ClusterName', value: this.clusterName }, { key: 'idea:ModuleName', value: this.moduleId }],
     });
-    this.clusterManagerRole.attachInlinePolicy(
-      new Policy(this.context, 'cluster-manager-policy', this.stack, {
-        policyTemplateName: 'cluster-manager.yml',
-        moduleId: this.moduleId,
-      }),
-    );
+    const signer = this.stack.formatArn({ service: 'iam', region: '', resource: 'role', resourceName: taskRoleName(this.containerScope, `${this.moduleId}-task-role`) });
+    new secretsmanager.CfnResourcePolicy(this.stack, 'terminal-user-ca-access', {
+      secretId: secret.ref, blockPublicPolicy: true,
+      resourcePolicy: { Version: '2012-10-17', Statement: [{
+        Effect: 'Deny', Principal: '*', Resource: '*',
+        Action: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue', 'secretsmanager:UpdateSecretVersionStage', 'secretsmanager:RestoreSecret', 'secretsmanager:RotateSecret', 'secretsmanager:CancelRotateSecret'],
+        Condition: { ArnNotEquals: { 'aws:PrincipalArn': signer } },
+      }, {
+        // CloudFormation must be able to update or remove the secret and its resource policy.
+        Effect: 'Deny', Principal: '*', Resource: '*',
+        Action: ['secretsmanager:UpdateSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:PutResourcePolicy', 'secretsmanager:DeleteResourcePolicy'],
+        Condition: { ArnNotEquals: { 'aws:PrincipalArn': [signer, this.stack.synthesizer.cloudFormationExecutionRole] } },
+      }] },
+    });
+    acknowledgeForScan(secret, [{ rule_id: 'AwsSolutions-SMG4', reason: 'SSH CA rotation requires coordinated trust distribution; see the terminal operator guide.' }]);
   }
 
   isBedrockEnabled(): boolean {
@@ -359,8 +331,8 @@ export class ClusterManagerStack extends IdeaBaseStack {
     if (!validRetention) {
       console.warn(
         `invalid bedrock.invocation_logging.log_retention_in_days: ${retentionInDays}. ` +
-          `valid values: ${Object.keys(LOG_RETENTION_DAYS).join(', ')}. ` +
-          'leaving the retention of the log group unchanged.',
+        `valid values: ${Object.keys(LOG_RETENTION_DAYS).join(', ')}. ` +
+        'leaving the retention of the log group unchanged.',
       );
     }
     this.bedrockInvocationLogGroupName = this.arnBuilder.bedrockInvocationLogGroupName;
@@ -405,7 +377,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       this.cluster.getSecurityGroup('external-load-balancer') as ec2.ISecurityGroup,
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
-    if (!this.hostsPresent) this.removeBastionHostIngressRule(this.clusterManagerSecurityGroup);
+    this.removeBastionHostIngressRule(this.clusterManagerSecurityGroup);
   }
 
   private removeBastionHostIngressRule(securityGroup: ec2.SecurityGroup): void {
@@ -425,7 +397,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
    * the stack that owns the endpoints routing to them.
    */
   private buildContainerTargetGroups(): void {
-    if (!this.ecsEnabled) return;
+
     const scope = this.containerScope;
     this.containerTargetGroups = (["e", "i", "w"] as const).map((suffix) =>
       applicationTargetGroup(scope, {
@@ -453,7 +425,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
    * security group, so the task holds the network position the host holds.
    */
   private buildContainerService(): void {
-    if (!this.ecsEnabled) return;
+
     const scope = this.containerScope;
     const sizing = roleSizing(scope, 'cluster-manager');
     const taskRole = new iam.Role(this.stack, 'cluster-manager-task-role', {
@@ -557,164 +529,6 @@ export class ClusterManagerStack extends IdeaBaseStack {
     this.containerService = service;
   }
 
-  buildAutoScalingGroup(): void {
-    const config = this.context.config;
-    const keyPair = lookupKeyPair(this.context, this.stack);
-    const isPublic =
-      config.getBool('cluster-manager.ec2.autoscaling.public', false) &&
-      this.cluster.publicSubnets.length > 0;
-    const baseOs = config.getString('cluster-manager.ec2.autoscaling.base_os', undefined, {
-      required: true,
-    }) as string;
-    const instanceAmi = config.getString('cluster-manager.ec2.autoscaling.instance_ami', undefined, {
-      required: true,
-    }) as string;
-    const instanceType = config.getString('cluster-manager.ec2.autoscaling.instance_type', undefined, {
-      required: true,
-    }) as string;
-    const volumeSize = config.getInt('cluster-manager.ec2.autoscaling.volume_size', 200);
-    const enableDetailedMonitoring = config.getBool(
-      'cluster-manager.ec2.autoscaling.enable_detailed_monitoring',
-      false,
-    );
-    const minCapacity = config.getInt('cluster-manager.ec2.autoscaling.min_capacity', 1);
-    const maxCapacity = config.getInt('cluster-manager.ec2.autoscaling.max_capacity', 3);
-    const cooldownMinutes = config.getInt('cluster-manager.ec2.autoscaling.cooldown_minutes', 5);
-    const newInstancesProtectedFromScaleIn = config.getBool(
-      'cluster-manager.ec2.autoscaling.new_instances_protected_from_scale_in',
-      true,
-    );
-    const elbHealthcheckGraceTimeMinutes = config.getInt(
-      'cluster-manager.ec2.autoscaling.elb_healthcheck.grace_time_minutes',
-      15,
-    );
-    const scalingPolicyTargetUtilizationPercent = config.getInt(
-      'cluster-manager.ec2.autoscaling.cpu_utilization_scaling_policy.target_utilization_percent',
-      80,
-    );
-    const scalingPolicyEstimatedInstanceWarmupMinutes = config.getInt(
-      'cluster-manager.ec2.autoscaling.cpu_utilization_scaling_policy.estimated_instance_warmup_minutes',
-      15,
-    );
-    const rollingUpdateMaxBatchSize = config.getInt(
-      'cluster-manager.ec2.autoscaling.rolling_update_policy.max_batch_size',
-      1,
-    );
-    const rollingUpdateMinInstancesInService = config.getInt(
-      'cluster-manager.ec2.autoscaling.rolling_update_policy.min_instances_in_service',
-      1,
-    );
-    const rollingUpdatePauseTimeMinutes = config.getInt(
-      'cluster-manager.ec2.autoscaling.rolling_update_policy.pause_time_minutes',
-      15,
-    );
-    const metadataHttpTokens = config.getString(
-      'cluster-manager.ec2.autoscaling.metadata_http_tokens',
-      undefined,
-      { required: true },
-    ) as string;
-    const httpsProxy = config.getString('cluster.network.https_proxy', '');
-    const noProxy = config.getString('cluster.network.no_proxy', '');
-    const proxyConfig: Record<string, string> =
-      httpsProxy === '' ? {} : { http_proxy: httpsProxy, https_proxy: httpsProxy, no_proxy: noProxy };
-    const ebsKmsKey = lookupEbsKmsKey(this.context, this.stack);
-
-    const vpcSubnets: ec2.SubnetSelection = {
-      subnets: isPublic ? this.cluster.publicSubnets : this.cluster.privateSubnets,
-    };
-
-    const blockDeviceName = ec2BlockDeviceName(baseOs);
-    const blockDeviceTypeString = config.getString('cluster-manager.ec2.autoscaling.volume_type', 'gp3');
-    const blockDeviceVolumeType =
-      blockDeviceTypeString === 'gp3' ? ec2.EbsDeviceVolumeType.GP3 : ec2.EbsDeviceVolumeType.GP2;
-
-    const userData = buildBootstrapUserData({
-      awsRegion: this.awsRegion,
-      bootstrapPackageUri: this.bootstrapPackageUri,
-      installCommands: ['/bin/bash cluster-manager/setup.sh'],
-      proxyConfig,
-      baseOs,
-    });
-
-    const launchTemplate = new ec2.LaunchTemplate(this.stack, `${this.moduleId}-lt`, {
-      instanceType: new ec2.InstanceType(instanceType),
-      machineImage: ec2.MachineImage.genericLinux({ [this.awsRegion]: instanceAmi }),
-      securityGroup: this.clusterManagerSecurityGroup,
-      userData: ec2.UserData.custom(Fn.sub(userData)),
-      keyPair,
-      blockDevices: [
-        {
-          deviceName: blockDeviceName,
-          volume: ec2.BlockDeviceVolume.ebs(volumeSize, {
-            encrypted: true,
-            kmsKey: ebsKmsKey,
-            volumeType: blockDeviceVolumeType,
-          }),
-        },
-      ],
-      role: this.clusterManagerRole,
-      requireImdsv2: metadataHttpTokens === 'required',
-    });
-
-    this.autoScalingGroup = new asg.AutoScalingGroup(this.stack, 'cluster-manager-asg', {
-      vpc: this.cluster.vpc,
-      vpcSubnets,
-      autoScalingGroupName: `${this.clusterName}-${this.moduleId}-asg`,
-      launchTemplate,
-      // Monitoring.BASIC is the zero value, which the L2 reads as "not set" and therefore
-      // accepts alongside a launch template.
-      instanceMonitoring: enableDetailedMonitoring ? asg.Monitoring.DETAILED : asg.Monitoring.BASIC,
-      groupMetrics: [asg.GroupMetrics.all()],
-      minCapacity,
-      maxCapacity,
-      newInstancesProtectedFromScaleIn,
-      cooldown: Duration.minutes(cooldownMinutes),
-      healthChecks: asg.HealthChecks.withAdditionalChecks({
-        additionalTypes: [asg.AdditionalHealthCheckType.ELB],
-        gracePeriod: Duration.minutes(elbHealthcheckGraceTimeMinutes),
-      }),
-      updatePolicy: asg.UpdatePolicy.rollingUpdate({
-        maxBatchSize: rollingUpdateMaxBatchSize,
-        minInstancesInService: rollingUpdateMinInstancesInService,
-        pauseTime: Duration.minutes(rollingUpdatePauseTimeMinutes),
-      }),
-      terminationPolicies: [asg.TerminationPolicy.DEFAULT],
-    });
-
-    this.autoScalingGroup.scaleOnCpuUtilization('cpu-utilization-scaling-policy', {
-      targetUtilizationPercent: scalingPolicyTargetUtilizationPercent,
-      estimatedInstanceWarmup: Duration.minutes(scalingPolicyEstimatedInstanceWarmupMinutes),
-    });
-
-    Tags.of(this.autoScalingGroup).add(IDEA_TAG_NODE_TYPE, NODE_TYPE_APP);
-    Tags.of(this.autoScalingGroup).add(IDEA_TAG_NAME, `${this.clusterName}-${this.moduleId}`);
-    this.autoScalingGroup.node.addDependency(this.clusterTasksSqsQueue);
-    this.autoScalingGroup.node.addDependency(this.notificationsSqsQueue);
-
-    if (!enableDetailedMonitoring) {
-      this.addNagSuppression(
-        [
-          {
-            rule_id: 'AwsSolutions-EC28',
-            reason: 'detailed monitoring is a configurable option to save costs',
-          },
-        ],
-        this.autoScalingGroup,
-        true,
-      );
-    }
-
-    this.addNagSuppression(
-      [
-        {
-          rule_id: 'AwsSolutions-AS3',
-          reason: 'ASG notifications scaling notifications can be managed via AWS Console',
-        },
-      ],
-      this.autoScalingGroup,
-    );
-  }
-
   buildEndpoints(): void {
     const config = this.context.config;
     const clusterEndpointsLambdaArn = config.getString('cluster.cluster_endpoints_lambda_arn', undefined, {
@@ -727,16 +541,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
     ) as string;
 
     // web portal endpoint: no conditions, it rewrites the external listener's default action
-    const defaultTargetGroupArn = this.ecsEnabled
-      ? this.containerTargetGroupArn(2)
-      : new elbv2.CfnTargetGroup(this.stack, 'web-portal-target-group', {
-          port: 8443,
-          protocol: 'HTTPS',
-          targetType: 'instance',
-          vpcId: this.cluster.vpc.vpcId,
-          name: this.getTargetGroupName('web-portal'),
-          healthCheckPath: '/healthcheck',
-        }).ref;
+    const defaultTargetGroupArn = this.containerTargetGroupArn(2);
 
     this.webPortalEndpoint = new CustomResource(this.stack, 'web-portal-endpoint', {
       serviceToken: clusterEndpointsLambdaArn,
@@ -760,20 +565,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       [],
       { required: true },
     );
-    const externalTargetGroupArn = this.ecsEnabled
-      ? this.containerTargetGroupArn(0)
-      : new elbv2.CfnTargetGroup(
-          this.stack,
-          `${this.moduleId}-external-target-group`,
-          {
-            port: 8443,
-            protocol: 'HTTPS',
-            targetType: 'instance',
-            vpcId: this.cluster.vpc.vpcId,
-            name: this.getTargetGroupName('cm-ext'),
-            healthCheckPath: '/healthcheck',
-          },
-        ).ref;
+    const externalTargetGroupArn = this.containerTargetGroupArn(0);
     this.externalEndpoint = new CustomResource(this.stack, 'external-endpoint', {
       serviceToken: clusterEndpointsLambdaArn,
       properties: {
@@ -801,20 +593,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       [],
       { required: true },
     );
-    const internalTargetGroupArn = this.ecsEnabled
-      ? this.containerTargetGroupArn(1)
-      : new elbv2.CfnTargetGroup(
-          this.stack,
-          `${this.moduleId}-internal-target-group`,
-          {
-            port: 8443,
-            protocol: 'HTTPS',
-            targetType: 'instance',
-            vpcId: this.cluster.vpc.vpcId,
-            name: this.getTargetGroupName('cm-int'),
-            healthCheckPath: '/healthcheck',
-          },
-        ).ref;
+    const internalTargetGroupArn = this.containerTargetGroupArn(1);
     this.internalEndpoint = new CustomResource(this.stack, 'internal-endpoint', {
       serviceToken: clusterEndpointsLambdaArn,
       properties: {
@@ -829,14 +608,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
 
     // Under the container flag these ARNs are the container target groups, which take IP targets,
     // so a retained group registers with nothing and stands idle until a rollback recreates its own.
-    if (!this.ecsEnabled) {
-      // registered on the L1, and in an order of their own: web-portal, internal, external
-      (this.autoScalingGroup.node.defaultChild as asg.CfnAutoScalingGroup).targetGroupArns = [
-        defaultTargetGroupArn,
-        internalTargetGroupArn,
-        externalTargetGroupArn,
-      ];
-    }
+
   }
 
   buildClusterSettings(): void {
@@ -845,17 +617,14 @@ export class ClusterManagerStack extends IdeaBaseStack {
       client_id: this.oauth2ClientSecret.clientId.ref,
       client_secret: this.oauth2ClientSecret.clientSecret.ref,
       security_group_id: this.clusterManagerSecurityGroup.securityGroupId,
-      iam_role_arn: this.clusterManagerRole.roleArn,
       task_queue_url: this.clusterTasksSqsQueue.queueUrl,
       task_queue_arn: this.clusterTasksSqsQueue.queueArn,
       notifications_queue_url: this.notificationsSqsQueue.queueUrl,
       notifications_queue_arn: this.notificationsSqsQueue.queueArn,
       // Literals under the container flag: the service has to start after this resource, because
       // the application reads its own rows from it, so this resource must not reference the service.
-      asg_name: this.ecsEnabled ? this.containerServiceName : this.autoScalingGroup.autoScalingGroupName,
-      asg_arn: this.ecsEnabled
-        ? serviceArn(this.containerScope, this.containerServiceName)
-        : this.autoScalingGroup.autoScalingGroupArn,
+      asg_name: this.containerServiceName,
+      asg_arn: serviceArn(this.containerScope, this.containerServiceName),
     };
 
     if (this.bedrockInvocationLogGroupName !== undefined) {

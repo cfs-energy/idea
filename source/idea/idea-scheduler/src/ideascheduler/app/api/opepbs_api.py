@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 from ideascheduler.app.accounts_guard import require_enabled
+from ideascheduler.app.api.scheduler_api import maintenance_message, maintenance_exempt
 import ideascheduler
 
 from ideadatamodel import exceptions, errorcodes, constants
@@ -44,6 +45,21 @@ class OpenPBSAPI(BaseAPI):
             )
 
     def hook_validate_job(self, pbs_context: OpenPBSAPIInvocationContext):
+        # Read the subscribed config on every submission; modify/move events keep draining.
+        if pbs_context.event.type == 'queuejob' and self.context.config().get_bool(
+            'cluster-manager.maintenance.enabled', default=False
+        ):
+            # The socket caller is always root. Exempt the PBS submitter, not the transport.
+            requestor = pbs_context.event.requestor
+            if not maintenance_exempt(self.context, requestor, self.logger):
+                return pbs_context.api_context.success(
+                    OpenPBSHookResult(
+                        accept=False,
+                        formatted_user_message=maintenance_message(
+                            self.context.config()
+                        ),
+                    )
+                )
         try:
             if not self.context.is_ready():
                 raise exceptions.soca_exception(

@@ -1,6 +1,6 @@
 // Assert image properties that require CI build inputs:
 //   1. nothing arch-dependent falls back to a hardcoded architecture, and
-//   2. the release bundle stays in ~/.idea/downloads, where upload-packages/patch read it.
+//   2. release archives are temporary build inputs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -10,23 +10,8 @@ const DOCKERFILE = new URL(
   import.meta.url,
 );
 const text = readFileSync(DOCKERFILE, 'utf8');
-const downloadsDirectory = "/root/.idea/downloads";
-
-/** Return whether a removal target is the downloads directory, an ancestor, or a descendant. */
-function removalTouchesDownloads(rawTarget: string): boolean {
-  const target = rawTarget
-    .replace(/^(['"])(.*)\1$/, "$2")
-    .replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, "/root")
-    .replace(/\/+$/, "");
-  return (
-    target === downloadsDirectory ||
-    downloadsDirectory.startsWith(`${target}/`) ||
-    target.startsWith(`${downloadsDirectory}/`)
-  );
-}
-
 test('OpenPBS is compiled from pinned source inside the control-plane build', () => {
-  const stage = text.match(/^FROM public\.ecr\.aws\/amazonlinux\/amazonlinux:2023 AS pbs\n([\s\S]*?)(?=^FROM )/m)?.[1];
+  const stage = text.match(/^FROM public\.ecr\.aws\/amazonlinux\/amazonlinux:2023@sha256:[a-f0-9]{64} AS pbs\n([\s\S]*?)(?=^FROM )/m)?.[1];
   assert.ok(stage, 'no local OpenPBS build stage');
   assert.match(stage, /^ARG OPENPBS_VERSION=23\.06\.06$/m);
   assert.match(stage, /^ARG OPENPBS_URL=https:\/\/github\.com\/openpbs\/openpbs\/archive\/v23\.06\.06\.tar\.gz$/m);
@@ -51,19 +36,38 @@ test('no arch-dependent step defaults to an architecture when TARGETARCH is unse
   for (const [, body] of arms) assert.match(body, /\*\)[^\n]*exit 1/);
 });
 
-test('the release bundle lands in ~/.idea/downloads and is never deleted', () => {
-  assert.match(
-    text,
-    /^ADD \S*all-\$\{IDEA_VERSION\}\.tar\.gz \/root\/\.idea\/downloads\/$/m,
-    'the release bundle is not ADDed to /root/.idea/downloads/',
-  );
-  for (const m of text.matchAll(/rm -rf ([^;\n]*)/g)) {
-    const targets = m[1].match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-    for (const target of targets) {
-      assert.ok(
-        !removalTouchesDownloads(target),
-        `an rm -rf touches the downloads tree: rm -rf ${m[1]}`,
-      );
-    }
-  }
+test('the release bundle is mounted and removed in the install layer', () => {
+  assert.doesNotMatch(text, /\/root\/\.idea\/downloads/);
+  assert.match(text, /RUN --mount=type=bind,source=deployment\/ecr\/idea-control-plane\/all-\$\{IDEA_VERSION\}\.tar\.gz,target=\/tmp\/release\.tar\.gz/);
+  const install = text.split('target=/tmp/release.tar.gz')[1]?.split('\n\n')[0] ?? '';
+  assert.match(install, /tar -xzf \/tmp\/release\.tar\.gz -C \/tmp\/release/);
+  assert.match(install, /rm -rf \/tmp\/release \/tmp\/idea/);
+});
+
+test('base images and both Node archives are integrity pinned', () => {
+  const bases = text.match(/^FROM public\.ecr\.aws\/amazonlinux\/amazonlinux:[^\n]+/gm) ?? [];
+  assert.equal(bases.length, 2);
+  for (const base of bases) assert.match(base, /:2023@sha256:[a-f0-9]{64} AS /);
+  const node = text.split('ARG NODE_VERSION=')[1]!.split('\nENV PATH=')[0]!;
+  for (const arch of ['amd64', 'arm64']) assert.match(node, new RegExp(`${arch}\\) N=\\w+; SUM=[a-f0-9]{64}`));
+  assert.ok(node.includes('sha256sum -c /tmp/node.sha256'));
+  assert.ok(node.indexOf('sha256sum -c') < node.indexOf('tar -xzf'));
+});
+
+
+test('S-38: Node checksums belong to the pinned version and automatic bumps are disabled', () => {
+  const version = text.match(/^ARG NODE_VERSION=(\S+)$/m)?.[1];
+  assert.equal(text.match(/^# Node archive checksums for (\S+)$/m)?.[1], version);
+  const renovate = JSON.parse(readFileSync(new URL('../../../../../.github/renovate.json', import.meta.url), 'utf8'));
+  assert.ok(renovate.packageRules.some((rule: any) => rule.enabled === false &&
+    rule.matchDepNames?.includes('node') && !rule.matchUpdateTypes && !rule.matchFileNames));
+});
+
+test('S-39: the image uv pin follows the toolchain through Renovate', () => {
+  const renovate = JSON.parse(readFileSync(new URL('../../../../../.github/renovate.json', import.meta.url), 'utf8'));
+  const manager = renovate.customManagers.find((entry: any) => entry.depNameTemplate === 'uv');
+  assert.equal(manager?.datasourceTemplate, 'pypi');
+  const match = text.match(new RegExp(manager.matchStrings[0]));
+  const mise = readFileSync(new URL('../../../../../mise.toml', import.meta.url), 'utf8');
+  assert.equal(match?.groups?.currentValue, mise.match(/^uv = "([^"]+)"$/m)?.[1]);
 });

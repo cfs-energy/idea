@@ -383,13 +383,13 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     type: "relative"
                 },
                 {
-                    key: "previous-1-day",
+                    key: "previous-1-day", // gitleaks:allow
                     amount: 1,
                     unit: "day",
                     type: "relative"
                 },
                 {
-                    key: "previous-1-month",
+                    key: "previous-1-month", // gitleaks:allow
                     amount: 1,
                     unit: "month",
                     type: "relative"

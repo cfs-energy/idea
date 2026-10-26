@@ -11,10 +11,9 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
-import { BastionHostStack } from "../../src/cdk/stacks/bastion-host.ts";
-import { synthBastion, cleanupWorkdirs } from "../support/ecs-harness.ts";
 import { CdkInvoker } from "../../src/cli/cdk-invoker.ts";
 import { fakeDeps, moduleRow, withTempIdeaHome } from "../support/deploy-harness.ts";
+import { cleanupWorkdirs, synthBastion } from "../support/ecs-harness.ts";
 
 const CLUSTER = "sample-cluster";
 const REGION = "us-east-2";
@@ -69,36 +68,12 @@ describe("a module that runs as container tasks", () => {
     assert.equal(deps.spawns.length, 1);
   });
 
-  it("still publishes them when the run keeps the hosts", async () => {
-    const { invoker, deps } = await open([
-      { key: "ecs.enabled", value: true },
-      { key: "ecs.retain_existing_hosts", value: true },
-    ]);
-    await assert.rejects(() => invoker.invoke(), /package not found: .*idea-scheduler-/);
-    assert.deepEqual(deps.spawns, []);
-  });
-
-  it("still publishes them when the cluster has no container control plane", async () => {
-    const { invoker, deps } = await open([]);
-    await assert.rejects(() => invoker.invoke(), /package not found: .*idea-scheduler-/);
-    assert.deepEqual(deps.spawns, []);
-  });
 });
 
-for (const retainHosts of [false, true]) {
-  it(`container bastion skips bootstrap publishing and lookup with retained hosts=${retainHosts}`, async () => {
-    const { invoker, deps } = await open([
-      { key: "ecs.enabled", value: true },
-      { key: "ecs.retain_existing_hosts", value: retainHosts },
-    ], "bastion-host");
-    await invoker.invoke();
-    assert.equal(deps.puts.size, 0);
-    assert.equal(deps.spawns.length, 1);
-    class NoBootstrapLookup extends BastionHostStack {
-      override getBootstrapPackageUri(): string {
-        throw new Error("container synthesis must not read a bootstrap URI");
-      }
-    }
-    assert.doesNotThrow(() => synthBastion({ "ecs.retain_existing_hosts": retainHosts }, NoBootstrapLookup));
-  });
-}
+it("container bastion skips bootstrap publishing and lookup", async () => {
+  const { invoker, deps } = await open([{ key: "ecs.enabled", value: true }], "bastion-host");
+  await invoker.invoke();
+  assert.equal(deps.puts.size, 0);
+  assert.equal(deps.spawns.length, 1);
+  assert.doesNotThrow(() => synthBastion({}));
+});

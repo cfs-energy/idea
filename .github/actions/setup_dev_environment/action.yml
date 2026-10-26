@@ -1,5 +1,5 @@
 name: 'Setup Development Environment'
-description: 'Sets up Python, Node.js and development dependencies from software_versions.yml'
+description: 'Sets up Python, Node.js and development dependencies from mise.toml'
 outputs:
   python-version:
     description: 'The Python version that was installed'
@@ -10,22 +10,22 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Read software versions
+    - name: Install pinned development tools
+      uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+      with:
+        # renovate: datasource=github-releases depName=jdx/mise
+        version: 2026.10.19
+      env:
+        MISE_ENV: legacy
+    - name: Read installed versions
       id: versions
       shell: bash
       run: |
-        python_version=$(grep '^python_version:' software_versions.yml | cut -d' ' -f2)
-        node_version=$(grep '^node_version:' software_versions.yml | cut -d' ' -f2)
-        echo "python_version=$python_version" >> $GITHUB_OUTPUT
-        echo "node_version=$node_version" >> $GITHUB_OUTPUT
-    - name: Install Python
-      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-      with:
-        python-version: '${{ steps.versions.outputs.python_version }}'
-    - name: Install Node.js
-      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-      with:
-        node-version: '${{ steps.versions.outputs.node_version }}'
+        echo "python_version=$(python -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+        echo "node_version=$(node --version)" >> "$GITHUB_OUTPUT"
+        echo "MISE_ENV=legacy" >> "$GITHUB_ENV"
+    - name: Setup DynamoDB Local
+      uses: ./.github/actions/setup_dynamodb_local
     - name: Install AWS CLI
       shell: bash
       # Unpack outside the checkout: the installer expands to an aws/ directory of about
@@ -47,9 +47,6 @@ runs:
         echo "LC_ALL=en_US.UTF-8" >> $GITHUB_ENV
         echo "LC_CTYPE=en_US.UTF-8" >> $GITHUB_ENV
         echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
-    - name: Install Yarn
-      shell: bash
-      run: npm install -g yarn
     - name: Locate Yarn cache
       id: yarn-cache
       shell: bash
@@ -61,29 +58,18 @@ runs:
         key: yarn-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.node_version }}-${{ hashFiles('source/idea/idea-cluster-manager/webapp/yarn.lock') }}
         restore-keys: |
           yarn-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.node_version }}-
-    - name: Install json2ts
-      shell: bash
-      run: npm install -g json-schema-to-typescript
-    - name: Install Java
-      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
-      with:
-        distribution: 'corretto'
-        java-version: '17'
     - name: Cache virtual environment
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       id: cache-venv
       with:
         path: venv
-        key: venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.python_version }}-${{ hashFiles('requirements/dev.txt') }}
-        restore-keys: |
-          venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.python_version }}-
+        key: venv-clean-${{ runner.os }}-${{ runner.arch }}-${{ steps.versions.outputs.python_version }}-${{ hashFiles('requirements/dev.txt') }}
     - name: Create virtual environment
       if: steps.cache-venv.outputs.cache-hit != 'true'
       shell: bash
       run: |
         python -m venv venv
         source venv/bin/activate
-        python -m pip install --upgrade pip
         python -m pip install -r requirements/dev.txt
     - name: Activate virtual environment
       shell: bash

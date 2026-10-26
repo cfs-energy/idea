@@ -8,4 +8,3 @@ aws_region: us-east-2
 ssh_key_pair_name: idea-test1-key
 vpc_cidr_block: 203.0.113.0/24
 base_os: amazonlinux2023
-enable_ecs: true

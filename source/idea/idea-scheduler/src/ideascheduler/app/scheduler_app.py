@@ -154,9 +154,7 @@ class SchedulerApp(ideasdk.app.SocaApp):
         )
         self.context.scheduler = SocaScheduler(context=self.context)
 
-        # wait for scheduler to start
-        # this happens when scheduler is restarted and there's race condition between supervisord and pbs
-        # ideally, should be managed using system service dependencies, but below work around also works
+        # The container starts PBS before this app; wait until PBS accepts requests.
         scheduler_ready = False
         while not scheduler_ready:
             scheduler_ready = self.context.scheduler.is_ready()

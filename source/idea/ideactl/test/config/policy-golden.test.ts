@@ -84,7 +84,7 @@ const ATTRIBUTED: Attribution[] = [
     generatedBy: 'lambda.add_event_source(KinesisEventSource) (analytics_stack.py:271) grants read on the stream',
   },
   // bastion_host_stack.py:96
-  { stack: 'bastion-host', path: 'bastion-host-policy/Resource', demo1Id: 'bastionhostpolicy211766EC', template: 'bastion-host.yml' },
+  { stack: 'bastion-host', path: 'bastion-host-policy/Resource', demo1Id: 'bastionhostpolicy211766EC', template: 'bastion-host.yml', retired: 'the bastion runs as an ECS task with inline task-role grants' },
   // cluster_manager_stack.py:225, :245, :261, :306, :331 (the last four only when bedrock is on)
   { stack: 'cluster-manager', path: 'cluster-manager-policy/Resource', demo1Id: 'clustermanagerpolicyEF9BA73D', template: 'cluster-manager.yml', moduleOf: 'cluster-manager' },
   { stack: 'cluster-manager', path: 'project-role-boundary/Resource', demo1Id: 'projectroleboundaryD13C6967', template: 'project-role-boundary.yml', moduleOf: 'cluster-manager', conditional: true },
@@ -281,6 +281,7 @@ function varsFor(entry: Attribution, template: Template, cluster: string): Recor
 const COST_POLICY = JSON.parse(readFileSync(new URL('./fixtures/cluster-manager-cost-policy.json', import.meta.url), 'utf-8')) as {
   requiredReadActions: string[];
   storageReadActions: string[];
+  costReadActions: string[];
   outboxDelete: { Action: string; Effect: string; Resource: string };
 };
 
@@ -304,6 +305,8 @@ function expectedPolicy(templateName: string, captured: unknown): unknown {
   assert.ok(inventory && inventory.Effect === 'Allow' && inventory.Resource === '*');
   inventory.Action = actions(inventory).filter(action => !COST_POLICY.storageReadActions.includes(action));
   inventory.Action.splice(inventory.Action.indexOf('ec2:DescribeInstanceTypes') + 1, 0, ...COST_POLICY.storageReadActions);
+  inventory.Action = inventory.Action.filter(action => !COST_POLICY.costReadActions.includes(action));
+  inventory.Action.push(...COST_POLICY.costReadActions);
   if (!document.Statement.some(statement => actions(statement).includes(COST_POLICY.outboxDelete.Action))) {
     const storageIndex = document.Statement.findIndex(statement => actions(statement).includes('s3:PutObject'));
     assert.ok(storageIndex >= 0, 'cluster object write statement is required');

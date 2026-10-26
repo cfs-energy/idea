@@ -1,4 +1,2 @@
-[allowlist]
-regexes = [
-  "square-access-token"
-]
+[extend]
+useDefault = true

@@ -91,16 +91,42 @@
     },
     {
       "customType": "regex",
-      "description": "Hadolint installer follows published releases, not tags without binaries",
+      "description": "Keep the hk Pkl schema at the same release as the mise tool",
       "managerFilePatterns": [
-        "/^\\.github/actions/install-hadolint/action\\.yml$/"
+        "/^hk\\.pkl$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=github-releases depName=hadolint/hadolint\\s+default: \"(?<currentValue>[^\"\\s]+)\""
+        "package://github.com/jdx/hk/releases/download/v(?<currentValue>[^/]+)/hk@[^#]+#/Config\\.pkl"
       ],
-      "depNameTemplate": "hadolint/hadolint",
+      "depNameTemplate": "jdx/hk",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$",
+      "autoReplaceStringTemplate": "package://github.com/jdx/hk/releases/download/v{{newValue}}/hk@{{newValue}}#/Config.pkl"
+    },
+    {
+      "customType": "regex",
+      "description": "Pin the mise bootstrap used by CI",
+      "managerFilePatterns": [
+        "/^\\.github/(?:workflows/[^/]+\\.yaml|actions/[^/]+/action\\.yml)$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=github-releases depName=jdx/mise\\s+version: (?<currentValue>[^\\s]+)"
+      ],
+      "depNameTemplate": "jdx/mise",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Keep the image uv version aligned with the mise toolchain",
+      "managerFilePatterns": [
+        "/^deployment/ecr/idea-control-plane/Dockerfile$/"
+      ],
+      "matchStrings": [
+        "ARG UV_VERSION=(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "uv",
+      "datasourceTemplate": "pypi"
     }
   ],
   "packageRules": [
@@ -178,6 +204,16 @@
       ],
       "groupName": "all dependencies",
       "groupSlug": "all-dependencies"
+    },
+    {
+      "description": "Node moves by hand: update mise.toml, software_versions.yml and the Dockerfile together, verifying both architecture checksums from SHASUMS256.txt",
+      "matchDepNames": [
+        "node"
+      ],
+      "enabled": false
     }
-  ]
+  ],
+  "mise": {
+    "enabled": true
+  }
 }

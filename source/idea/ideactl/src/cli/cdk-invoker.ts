@@ -19,27 +19,24 @@
 import type { ContainerHostsApi } from "./commands/upgrade.ts";
 
 import { spawn as spawnProcess, spawnSync } from 'node:child_process';
-import { retryDelayMs } from './aws-client-options.ts';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { retryDelayMs } from './aws-client-options.ts';
 
 import { STATEFUL_TYPE_PREFIXES, isStatefulType } from '../cdk/stateful.ts';
+import type { ConfigEntry, ModuleSpec } from '../config/cluster-config-db.ts';
 import { ClusterConfig, GeneralException, type ModuleInfo, type TableScanner } from '../config/cluster-config.ts';
 import type { VpcEndpointServices } from '../config/vpc-endpoints.ts';
-import type { ConfigEntry, ModuleSpec } from '../config/cluster-config-db.ts';
-import type { CertificateDeps } from './certificates.ts';
-import type { PrefixListApi } from './commands/utils.ts';
 import {
   bootstrapPackagePlans,
   bootstrapPackageUri,
   buildAndUploadBootstrapPackage,
-  releasePackageNames,
-  releasePackageUri,
-  type BootstrapPackagePlan,
+  type BootstrapPackagePlan
 } from './bootstrap-package.ts';
-import { ideaVersion } from '../version.ts';
+import type { CertificateDeps } from './certificates.ts';
+import type { PrefixListApi } from './commands/utils.ts';
 
 /** Modules the container stack runs as tasks, which therefore need no host packages. */
 const CONTAINER_SERVED_MODULES = ['cluster-manager', 'scheduler', 'virtual-desktop-controller', 'bastion-host'];
@@ -82,11 +79,6 @@ export function valuesFilePath(clusterName: string, awsRegion: string): string {
 
 /** `ValuesDiff.get_values_file_s3_key()`. */
 export const VALUES_FILE_S3_KEY = 'values/values.yml';
-
-/** `~/.idea/downloads`: where the image leaves the release archives. */
-export function downloadsDir(): string {
-  return ensureDir(join(ideaUserHome(), 'downloads'));
-}
 
 /**
  * The bundled CDK CLI. `IDEA_CDK_BIN` wins, then the CLI's own `node_modules`, then the image's
@@ -317,7 +309,6 @@ export interface BootstrapContextInput {
   instanceType: string;
   plan: BootstrapPackagePlan;
   /** Release archives already uploaded for this module, keyed by archive name. */
-  releasePackageUris: Record<string, string>;
   config: ClusterConfig;
 }
 
@@ -380,19 +371,6 @@ export interface ChangeSetVerdict {
  * override.
  */
 /**
- * Custom resource types this release retires from every stack. Removing one sends Delete to the
- * Python handler still deployed on the cluster, and each of these answers SUCCESS without acting
- * (`update_cluster_prefix_list` "will not remove IP addresses from the cluster prefix list";
- * `get_user_pool_client_secret` returns at once on Delete), so the removal is safe on every
- * cluster and no operator is asked to override it. Empty this set once every cluster has
- * deployed this release.
- */
-export const RETIRED_CUSTOM_RESOURCE_TYPES: ReadonlySet<string> = new Set([
-  'Custom::ClusterPrefixList',
-  'Custom::GetOAuthCredentials',
-]);
-
-/**
  * Resource types CloudFormation "replaces" on every routine change because they are immutable
  * revisions: a new task definition is a new revision, the service rolls to it, and the previous
  * revision stays ACTIVE under its Retain policy for a rollback. Nothing is lost, and refusing it
@@ -427,26 +405,6 @@ export function conditionalOnUnreplacedAttributes(change: ResourceChange, change
   });
 }
 
-/**
- * Logical IDs whose deployed definition carries `DeletionPolicy: Retain`. CDK templates are JSON;
- * anything unparsable yields the empty set, which is the conservative reading.
- */
-export function retainedResources(templateBody: string | undefined): Set<string> {
-  const retained = new Set<string>();
-  if (templateBody === undefined) return retained;
-  let template: unknown;
-  try {
-    template = JSON.parse(templateBody);
-  } catch {
-    return retained;
-  }
-  const resources = (template as { Resources?: Record<string, { DeletionPolicy?: unknown }> } | null)?.Resources ?? {};
-  for (const [logicalId, resource] of Object.entries(resources)) {
-    if (resource?.DeletionPolicy === 'Retain') retained.add(logicalId);
-  }
-  return retained;
-}
-
 /** True when CloudFormation created the change set but found nothing to do. */
 export function isEmptyChangeSet(description: ChangeSetDescription): boolean {
   if (description.Status !== 'FAILED') return false;
@@ -467,7 +425,6 @@ export function evaluateChangeSet(
   allowReplacement: readonly string[] = [],
   builtIn: ReadonlyMap<string, string> = new Map(),
   allowReplacementOfType: ReadonlyMap<string, string> = new Map(),
-  retainedByPolicy: ReadonlySet<string> = new Set(),
 ): ChangeSetVerdict {
   const changes = description.Changes ?? [];
   const verdict: ChangeSetVerdict = { refusals: [], allowed: [], empty: isEmptyChangeSet(description) };
@@ -542,16 +499,6 @@ export function evaluateChangeSet(
         verdict.allowed.push({ ...finding, allowedBy: 'built-in allow list' });
       } else if (finding.refusal === 'replacement' && REVISIONED_TYPES.has(resourceType)) {
         verdict.allowed.push({ ...finding, allowedBy: 'a new revision; the previous one is retained' });
-      } else if (
-        finding.refusal === 'stateful-remove' &&
-        resourceType === 'AWS::Route53::RecordSet' &&
-        retainedByPolicy.has(logicalId)
-      ) {
-        // The scheduler hands its existing DNS record to runtime management during cutover.
-        // Retaining storage instead can leave applications attached to an empty replacement.
-        verdict.allowed.push({ ...finding, allowedBy: 'DeletionPolicy Retain on the deployed resource' });
-      } else if (finding.refusal === 'custom-resource-remove' && RETIRED_CUSTOM_RESOURCE_TYPES.has(resourceType)) {
-        verdict.allowed.push({ ...finding, allowedBy: 'retired custom resource; its Delete handler is a no-op' });
       } else if (namedComponent !== undefined && finding.refusal === 'replacement') {
         // Only the replacement class, and only the one resource type the operator named. A remove
         // is a different intent and the replace verb never permits it.
@@ -811,17 +758,11 @@ export class CdkInvoker {
     }
 
     const description = await this.describeChangeSetFully();
-    const removes = (description.Changes ?? []).some((change) => change.ResourceChange?.Action === 'Remove');
-    const retained =
-      removes && this.deps.cfn.getTemplate !== undefined
-        ? retainedResources(await this.deps.cfn.getTemplate(this.stackName))
-        : new Set<string>();
     const verdict = evaluateChangeSet(
       description,
       this.allowReplacement,
       builtInAllowedReplacements(this.clusterName),
       this.allowReplacementOfType,
-      retained,
     );
 
     for (const allowed of verdict.allowed) {
@@ -835,8 +776,8 @@ export class CdkInvoker {
       }
       this.deps.err(
         'no change was applied. review the change set, then re-run with ' +
-          `--allow-replacement ${verdict.refusals.map((refusal) => refusal.logicalId).join(' --allow-replacement ')}` +
-          ' for each resource you have decided to lose.',
+        `--allow-replacement ${verdict.refusals.map((refusal) => refusal.logicalId).join(' --allow-replacement ')}` +
+        ' for each resource you have decided to lose.',
       );
       throw new ChangeSetRefused(
         `change-set guard refused ${verdict.refusals.length} change(s) on stack ${this.stackName}`,
@@ -892,7 +833,7 @@ export class CdkInvoker {
   private async waitUntilSettled(): Promise<boolean> {
     const startedAt = this.deps.now();
     let announced = false;
-    for (;;) {
+    for (; ;) {
       let status: string;
       try {
         status = (await this.deps.cfn.describeStack(this.stackName)).StackStatus ?? '';
@@ -917,7 +858,7 @@ export class CdkInvoker {
   private async waitForStack(): Promise<StackDescription> {
     const startedAt = this.deps.now();
     let reportedAt = startedAt;
-    for (;;) {
+    for (; ;) {
       const stack = await this.deps.cfn.describeStack(this.stackName);
       const status = stack.StackStatus ?? '';
       if (STACK_STATUS_IN_PROGRESS.test(status)) {
@@ -996,31 +937,16 @@ export class CdkInvoker {
    * deploy. Modules with no host have neither, and get an empty object.
    */
   private async publishPackages(config: ClusterConfig, forceBuildBootstrap: boolean): Promise<Record<string, string>> {
-    if (this.runsAsContainerTasks(config)) return {};
+    if (this.runsAsContainerTasks()) return {};
     const provider = config.getString('directoryservice.provider');
     const plans = bootstrapPackagePlans(this.moduleName, this.moduleId, this.deploymentId, provider);
-    const releaseNames = releasePackageNames(this.moduleName, ideaVersion());
-    if (plans.length === 0 && releaseNames.length === 0) return {};
+    if (plans.length === 0) return {};
 
     const clusterS3Bucket = config.getString('cluster.cluster_s3_bucket', undefined, { required: true }) as string;
 
-    const releasePackageUris: Record<string, string> = {};
-    for (const packageName of releaseNames) {
-      const file = join(downloadsDir(), packageName);
-      if (!existsSync(file)) throw new GeneralException(`package not found: ${file}`);
-      const uri = releasePackageUri(clusterS3Bucket, packageName);
-      this.deps.out(`uploading release package: ${uri} ...`);
-      await this.deps.s3.putObject({
-        Bucket: clusterS3Bucket,
-        Key: `idea/releases/${packageName}`,
-        Body: readFileSync(file),
-      });
-      releasePackageUris[packageName] = uri;
-    }
-
     const contextParams: Record<string, string> = {};
     for (const plan of plans) {
-      const uri = await this.publishBootstrapPackage(config, plan, releasePackageUris, clusterS3Bucket, forceBuildBootstrap);
+      const uri = await this.publishBootstrapPackage(config, plan, clusterS3Bucket, forceBuildBootstrap);
       contextParams[plan.contextParameter] = uri;
     }
     return contextParams;
@@ -1029,20 +955,15 @@ export class CdkInvoker {
   /**
    * Whether this module's processes run as container tasks rather than on hosts. The image
    * carries their packages, so nothing downloads a bootstrap archive or a release archive. The
-   * condition is the one the module stacks build their host resources from, so a run that retains
-   * hosts still publishes what those hosts read.
+   * module stacks always deploy these services on ECS.
    */
-  private runsAsContainerTasks(config: ClusterConfig): boolean {
-    if (!CONTAINER_SERVED_MODULES.includes(this.moduleName)) return false;
-    if (!config.getBool('ecs.enabled', false)) return false;
-    if (this.moduleName === 'bastion-host') return true;
-    return !config.getBool('ecs.retain_existing_hosts', false);
+  private runsAsContainerTasks(): boolean {
+    return CONTAINER_SERVED_MODULES.includes(this.moduleName);
   }
 
   private async publishBootstrapPackage(
     config: ClusterConfig,
     plan: BootstrapPackagePlan,
-    releasePackageUris: Record<string, string>,
     clusterS3Bucket: string,
     forceBuild: boolean,
   ): Promise<string> {
@@ -1063,7 +984,6 @@ export class CdkInvoker {
       baseOs,
       instanceType,
       plan,
-      releasePackageUris,
       config,
     });
     const uri = await buildAndUploadBootstrapPackage({
@@ -1086,15 +1006,11 @@ export class CdkInvoker {
 
   /** `AMI_UPDATE_KEYS`-shaped: where each module keeps the base OS of its host. */
   private baseOsKey(): string {
-    if (this.moduleName === 'cluster-manager') return `${this.moduleId}.ec2.autoscaling.base_os`;
-    if (this.moduleName === 'virtual-desktop-controller') return `${this.moduleId}.controller.autoscaling.base_os`;
     return `${this.moduleId}.base_os`;
   }
 
   private instanceTypeKey(): string {
     if (this.moduleName === 'ecs') return 'ecs.hosts.instance_type';
-    if (this.moduleName === 'cluster-manager') return `${this.moduleId}.ec2.autoscaling.instance_type`;
-    if (this.moduleName === 'virtual-desktop-controller') return `${this.moduleId}.controller.autoscaling.instance_type`;
     return `${this.moduleId}.instance_type`;
   }
 

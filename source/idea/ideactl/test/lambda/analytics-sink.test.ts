@@ -97,7 +97,7 @@ test("the three actions render their exact bulk lines", async () => {
         '{"create":{"_index":"idea-jobs","_id":"job-1"}}',
         '{"job_id":"job-1","state":"queued"}',
         '{"update":{"_index":"idea-jobs","_id":"job-2"}}',
-        '{"doc":{"state":"running"}}',
+        '{"doc":{"state":"running"},"doc_as_upsert":true}',
         '{"delete":{"_index":"idea-jobs","_id":"job-3"}}',
         "",
     ]);
@@ -182,4 +182,22 @@ test("an empty batch posts nothing", async () => {
 test("an endpoint that already carries a scheme is not given a second one", () => {
     assert.equal(bulkUrl(ENDPOINT), `https://${ENDPOINT}/_bulk`);
     assert.equal(bulkUrl(`https://${ENDPOINT}`), `https://${ENDPOINT}/_bulk`);
+});
+
+
+test("an update recreates a missing software stack document", async () => {
+    const stack = {
+        stack_id: "ss-base-rocky9-x86-64-base", name: "Rocky Linux 9",
+        base_os: "rocky9", architecture: "x86_64", ami_id: "ami-example",
+        enabled: true, projects: [{ project_id: "research", name: "research" }],
+    };
+    const { calls } = await run([{
+        document_id: stack.stack_id, index_id: "idea-software-stacks",
+        action: "UPDATE_ENTRY", entry: stack, timestamp: 1,
+    }]);
+    const lines = calls[0]!.body.trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(lines, [
+        { update: { _index: "idea-software-stacks", _id: stack.stack_id } },
+        { doc: stack, doc_as_upsert: true },
+    ]);
 });

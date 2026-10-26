@@ -1,0 +1,38 @@
+@use '@cloudscape-design/design-tokens/index' as tokens;
+
+.terminal-panel {
+    font-family: tokens.$font-family-base;
+    font-size: tokens.$font-size-body-m;
+    display: flex;
+    flex-direction: column;
+    min-height: 220px;
+    min-width: 0;
+    gap: tokens.$space-scaled-xs;
+    .terminal-mobile-heading {display: none;}
+    .terminal-controls {display: flex; flex-wrap: wrap; gap: tokens.$space-scaled-xs; align-items: center;}
+    .terminal-controls > :first-child {min-width: 180px; flex: 1;}
+    .terminal-status {font-size: tokens.$font-size-body-s; color: tokens.$color-text-body-secondary;}
+    .terminal-surface {position: relative; flex: 1; min-height: 80px; min-width: 0; overflow: hidden; overscroll-behavior: contain; padding: 4px; border-radius: tokens.$border-radius-container;}
+    .terminal-keys {display: flex; flex-wrap: wrap; gap: 4px; padding-bottom: env(safe-area-inset-bottom);}
+    .terminal-keys button {
+        min-width: 44px; min-height: 44px; flex: 1;
+        font: inherit; color: tokens.$color-text-body-default;
+        border: 1px solid tokens.$color-border-button-normal-default;
+        background: tokens.$color-background-button-normal-default;
+        border-radius: tokens.$border-radius-button;
+        touch-action: manipulation;
+        &:focus-visible {outline: 2px solid tokens.$color-border-item-focused; outline-offset: 2px;}
+        &[aria-pressed='true'] {background: tokens.$color-background-button-primary-default; color: tokens.$color-text-button-primary-default;}
+        &:disabled {opacity: 0.5;}
+    }
+}
+@media (max-width: 600px) {
+    .terminal-panel {position: fixed; inset: 0; z-index: 1001; box-sizing: border-box; padding: 8px; background: tokens.$color-background-layout-main; min-height: 0;}
+    .terminal-panel .terminal-mobile-heading {display: flex; justify-content: space-between; align-items: center;}
+    .terminal-panel .terminal-mobile-heading a {color: tokens.$color-text-link-default; padding: 8px;}
+    .terminal-panel .terminal-surface {min-height: 32px;}
+
+    .terminal-panel .terminal-controls {gap: 4px;}
+    .terminal-panel .terminal-keys button {flex: 1 0 12%;}
+    .terminal-panel .terminal-surface textarea {font-size: 16px !important;}
+}

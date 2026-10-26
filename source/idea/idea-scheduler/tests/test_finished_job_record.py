@@ -762,7 +762,7 @@ def test_index_retry_reuses_finished_record(
     )
     assert len(pricing_spy.calls) == int(provisioned)
     assert len(fake_context.lifecycle_events.dispositions) == 1
-    assert cache.get_job_execution_hosts.call_count == int(provisioned)
+    assert cache.get_job_execution_hosts.call_count == 1
 
 
 @pytest.fixture()
@@ -1022,3 +1022,200 @@ def test_cached_completion_never_prices_to_now(
     assert pricing_spy.calls == ([(cached.job_id, 120)] if has_cached_end else [])
     if not has_cached_end:
         assert recorded.estimated_bom_cost is None
+
+
+@pytest.mark.parametrize('source', ['cache', 'hook', 'history'])
+@pytest.mark.parametrize('job_id', ['42', '42[1]'])
+def test_completion_recovers_duration_before_persisting_and_publishing(
+    fake_context, pricing_spy, monkeypatch, source, job_id
+):
+    from unittest.mock import Mock
+    from ideadatamodel import SocaJobExecution, SocaJobExecutionRun
+    from ideascheduler.app.metrics.job_completion_metrics import JobCompletionMetrics
+
+    start = arrow.get('2026-08-01T00:00:00Z')
+    end = start.shift(seconds=120).datetime
+    cached = make_job(
+        job_id=job_id, job_uid=job_id, provisioned=True, state=SocaJobState.FINISHED
+    )
+    fresh = cached.model_copy(deep=True)
+    if source == 'cache':
+        cached.start_time, cached.end_time = start.datetime, end
+    elif source == 'history':
+        fresh.start_time, fresh.end_time = start.datetime, end
+    else:
+        fake_context.job_cache.get_job_execution_hosts = Mock(
+            return_value=[
+                SocaJobExecutionHost(
+                    execution=SocaJobExecution(
+                        runs=[SocaJobExecutionRun(start=start.datetime, end=end)]
+                    )
+                )
+            ]
+        )
+    fake_context.scheduler.jobs_by_id[job_id] = fresh
+    published = []
+    monkeypatch.setattr(
+        ProcessFinishedJob,
+        'publish_job_metrics',
+        lambda self: published.append(JobCompletionMetrics.wall_seconds(self.job)),
+    )
+    build_poller(fake_context)._process_finished_jobs([cached])
+    assert fresh.start_time == start.datetime
+    assert fresh.end_time == end
+    assert fresh.total_time_secs == 120
+    assert published == [120]
+    assert fake_context.job_cache.finished_jobs == [fresh]
+
+
+@pytest.mark.parametrize('state', [SocaJobState.HELD, SocaJobState.QUEUED])
+def test_previously_run_job_is_not_unprovisioned(fake_context, pricing_spy, state):
+    start = arrow.get('2026-08-01T00:00:00Z')
+    job = make_job(
+        provisioned=False,
+        state=state,
+        start_time=start.datetime,
+        end_time=start.shift(seconds=120).datetime,
+    )
+    build_poller(fake_context)._process_unprovisioned_jobs([job])
+    assert job.total_time_secs == 120
+    assert pricing_spy.calls == [(job.job_id, 120)]
+
+
+def test_hook_recovery_survives_scheduler_restart(fake_context, pricing_spy, tmp_path):
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+    from ideadatamodel import SocaJobExecution, SocaJobExecutionRun
+
+    start = arrow.get('2026-08-01T00:00:00Z')
+    db_context = FakeSchedulerContext(str(tmp_path))
+    cache = JobCache(db_context)
+    job = make_job(job_uid='finished', provisioned=True, state=SocaJobState.FINISHED)
+    cache.sync([job])
+    cache.log_job_execution(
+        job.job_id,
+        SocaJobExecutionHost(
+            host='compute',
+            execution=SocaJobExecution(
+                runs=[
+                    SocaJobExecutionRun(
+                        start=start.datetime, end=start.shift(seconds=120).datetime
+                    )
+                ]
+            ),
+        ),
+    )
+    cache.get_connection().close()
+    fake_context.job_cache = JobCache(db_context)
+    build_poller(fake_context)._process_finished_jobs(
+        [fake_context.job_cache.get_job(job.job_id)]
+    )
+    recorded = fake_context.job_cache.get_completed_job_by_uid(job.job_uid)
+    assert recorded.total_time_secs == 120
+    assert recorded.end_time == start.shift(seconds=120).datetime
+
+
+@pytest.mark.parametrize('history_end', [True, False])
+def test_completion_uses_current_attempt_history_before_old_hook(
+    fake_context, pricing_spy, history_end
+):
+    from unittest.mock import Mock
+    from ideadatamodel import SocaJobExecution, SocaJobExecutionRun
+
+    start = arrow.get('2026-08-01T00:00:00Z')
+    job = make_job(
+        provisioned=True,
+        state=SocaJobState.FINISHED,
+        start_time=start.datetime,
+        end_time=start.shift(seconds=120).datetime if history_end else None,
+    )
+    fake_context.job_cache.get_job_execution_hosts = Mock(
+        return_value=[
+            SocaJobExecutionHost(
+                execution=SocaJobExecution(
+                    runs=[
+                        SocaJobExecutionRun(
+                            start=start.shift(hours=-2).datetime,
+                            end=start.shift(hours=-1).datetime,
+                        )
+                    ]
+                )
+            )
+        ]
+    )
+    build_poller(fake_context)._process_finished_jobs([job])
+    assert job.start_time == start.datetime
+    assert job.total_time_secs == (120 if history_end else None)
+
+
+def test_failed_record_write_retains_hook_timestamps_for_retry(
+    fake_context, pricing_spy
+):
+    from unittest.mock import Mock
+    from ideadatamodel import SocaJobExecution, SocaJobExecutionRun
+
+    start = arrow.get('2026-08-01T00:00:00Z')
+    job = make_job(provisioned=True, state=SocaJobState.FINISHED)
+    cache = fake_context.job_cache
+    cache.get_job_execution_hosts = Mock(
+        return_value=[
+            SocaJobExecutionHost(
+                execution=SocaJobExecution(
+                    runs=[
+                        SocaJobExecutionRun(
+                            start=start.datetime, end=start.shift(seconds=120).datetime
+                        )
+                    ]
+                )
+            )
+        ]
+    )
+    cache.delete_job_execution_hosts = Mock()
+    cache.add_finished_job = Mock(side_effect=RuntimeError('unavailable'))
+    assert build_poller(fake_context)._process_finished_jobs([job]) == []
+    cache.delete_job_execution_hosts.assert_not_called()
+
+
+@pytest.mark.parametrize('same_host', [False, True])
+@pytest.mark.parametrize('latest_has_end', [False, True])
+def test_recovery_uses_latest_real_pbs_attempt_after_restart(
+    fake_context, pricing_spy, tmp_path, same_host, latest_has_end
+):
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+    from ideascheduler.app.scheduler.openpbs.openpbs_model import (
+        OpenPBSEvent,
+        OpenPBSJob,
+    )
+
+    db_context = FakeSchedulerContext(str(tmp_path))
+    cache = JobCache(db_context)
+    job = make_job(job_uid='rerun', provisioned=True, state=SocaJobState.FINISHED)
+    cache.sync([job])
+    start = arrow.get('2026-08-01T00:00:00Z')
+    for count, offset in [(2, 0), (10, 7200)]:
+        host = 'compute-a' if same_host or count == 2 else 'compute-b'
+        for event_type, seconds in [
+            ('execjob_begin', offset),
+            ('execjob_end', offset + 120),
+        ]:
+            if count == 10 and event_type == 'execjob_end' and not latest_has_end:
+                continue
+            event = OpenPBSEvent(
+                type=event_type,
+                timestamp=int(start.shift(seconds=seconds).float_timestamp * 1000),
+                node_name=host,
+            )
+            pbs_job = OpenPBSJob(exec_host=f'{host}/0', run_count=count)
+            cache.log_job_execution(
+                job.job_id, pbs_job.get_soca_execution_hosts(event)[0]
+            )
+    cache.get_connection().close()
+    fake_context.job_cache = JobCache(db_context)
+    build_poller(fake_context)._process_finished_jobs(
+        [fake_context.job_cache.get_job(job.job_id)]
+    )
+    recorded = fake_context.job_cache.get_completed_job_by_uid(job.job_uid)
+    assert recorded.start_time == start.shift(seconds=7200).datetime
+    assert recorded.total_time_secs == (120 if latest_has_end else None)
+    assert pricing_spy.calls == ([(job.job_id, 120)] if latest_has_end else [])

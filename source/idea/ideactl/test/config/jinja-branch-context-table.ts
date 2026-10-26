@@ -40,28 +40,16 @@ export const BASE_OS_VALUES: readonly string[] = [
 
 /** The component entry points a bootstrap package renders. */
 export const COMPONENT_ENTRY_POINTS: readonly string[] = [
-  "bastion-host/setup.sh.jinja2",
-  "cluster-manager/install_app.sh.jinja2",
-  "cluster-manager/setup.sh.jinja2",
   "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2",
   "compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2",
   "compute-node-ami-builder/setup.sh.jinja2",
   "compute-node/compute_node.sh.jinja2",
   "compute-node/compute_node_post_reboot.sh.jinja2",
   "compute-node/setup.sh.jinja2",
-  "dcv-broker/install_app.sh.jinja2",
-  "dcv-broker/setup.sh.jinja2",
-  "dcv-connection-gateway/install_app.sh.jinja2",
-  "dcv-connection-gateway/setup.sh.jinja2",
   "dcv-host-ami-builder/dcv_host_ami_builder.sh.jinja2",
   "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2",
   "dcv-host-ami-builder/setup.sh.jinja2",
   "openldap-server/setup.sh.jinja2",
-  "scheduler/install_app.sh.jinja2",
-  "scheduler/scheduler_post_reboot.sh.jinja2",
-  "scheduler/setup.sh.jinja2",
-  "virtual-desktop-controller/install_app.sh.jinja2",
-  "virtual-desktop-controller/setup.sh.jinja2",
   "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2",
   "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2",
   "virtual-desktop-host-linux/setup.sh.jinja2",
@@ -81,8 +69,6 @@ const disabled: BranchFlags = {
 const directoryTemplates = [
   "_templates/linux/join_directoryservice.jinja2",
   "virtual-desktop-host-linux/setup.sh.jinja2",
-  "virtual-desktop-controller/setup.sh.jinja2",
-  "scheduler/setup.sh.jinja2",
   "compute-node/compute_node.sh.jinja2",
   "virtual-desktop-host-windows/Configure.ps1.jinja2",
   "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2",
@@ -90,15 +76,9 @@ const directoryTemplates = [
 
 const metricsTemplates = [
   "virtual-desktop-host-linux/setup.sh.jinja2",
-  "virtual-desktop-controller/setup.sh.jinja2",
-  "scheduler/setup.sh.jinja2",
   "openldap-server/setup.sh.jinja2",
-  "dcv-connection-gateway/setup.sh.jinja2",
-  "dcv-broker/setup.sh.jinja2",
   "compute-node/compute_node.sh.jinja2",
   "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2",
-  "cluster-manager/setup.sh.jinja2",
-  "bastion-host/setup.sh.jinja2",
 ];
 
 const gpuTemplates = [
@@ -116,8 +96,6 @@ const storageTemplates = [
   "_templates/windows/mount_shared_storage.jinja2",
   "virtual-desktop-host-linux/setup.sh.jinja2",
   "virtual-desktop-host-windows/Configure.ps1.jinja2",
-  "virtual-desktop-controller/setup.sh.jinja2",
-  "scheduler/setup.sh.jinja2",
   "compute-node/compute_node.sh.jinja2",
   "dcv-host-ami-builder/setup.sh.jinja2",
   "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2",

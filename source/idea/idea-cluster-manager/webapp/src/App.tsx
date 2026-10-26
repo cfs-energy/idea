@@ -33,6 +33,7 @@ import {Navigate} from "react-router-dom";
 import UpdateHpcApplication from "./pages/hpc/update-hpc-application";
 import SubmitJob from "./pages/hpc/submit-job";
 import AccountSettings from "./pages/account/account-settings";
+import TerminalPage from "./pages/home/terminal";
 import SSHAccess from "./pages/home/ssh-access";
 import MyCosts from "./pages/home/my-costs";
 import CustomDashboard from "./pages/home/custom-dashboard";
@@ -509,6 +510,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <MyCosts
                             ideaPageId="my-costs"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/home/terminal" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <TerminalPage
+                            ideaPageId="terminal"
                             toolsOpen={this.state.toolsOpen}
                             tools={this.state.tools}
                             onToolsChange={this.onToolsChange}

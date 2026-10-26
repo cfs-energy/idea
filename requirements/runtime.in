@@ -1,0 +1,43 @@
+# Shared Python runtime for the three control-plane services.
+semver
+pytz
+arrow
+pydantic
+PyYAML
+orjson
+Click
+botocore
+boto3
+requests
+requests-unixsocket
+questionary
+rich
+pyhocon
+sh
+cacheout
+validators
+fastcounter
+blinker
+troposphere
+# opensearch-py>=3.1 hard-depends on opensearch-protobufs, pulling grpcio+protobuf
+# (measured +21MB unzipped) for a gRPC transport this codebase never constructs;
+# aws_opensearch_client.py uses only the HTTP client and helpers.bulk.
+opensearch-py<3.1
+Jinja2
+certifi
+cryptography
+PyJWT
+random-password-generator
+shortuuid
+dataset
+prometheus-client
+python-dynamodb-lock
+supervisor
+sanic
+websockets
+python-ldap
+ldappool
+passlib
+cachetools
+prettytable
+asyncssh==2.24.1

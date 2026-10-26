@@ -54,6 +54,7 @@ BASTION_SETTINGS = {
 }
 
 CLUSTER_MANAGER_SETTINGS = {
+    'web_terminal': {'enabled': True, 'ca_public_key': 'ssh-ed25519 example'},
     'client_id': 'cluster-manager-client-id',
     'client_secret': 'cluster-manager-client-secret',
     'ec2': {'autoscaling': {'instance_type': 'm5.large'}},

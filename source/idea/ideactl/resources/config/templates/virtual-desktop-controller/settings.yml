@@ -16,30 +16,6 @@ server:
 
 
 controller:
-  autoscaling:
-    public: false
-    instance_type: {{instance_type}}
-    base_os: {{base_os}}
-    instance_ami: {{instance_ami}}
-    volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
-    enabled_detailed_monitoring: false
-    min_capacity: 1
-    max_capacity: 3
-    cooldown_minutes: 5
-    new_instances_protected_from_scale_in: false
-    elb_healthcheck:
-      # Specifies the time in minutes Auto Scaling waits before checking the health status of an EC2 instance that has come into service.
-      grace_time_minutes: 15
-    cpu_utilization_scaling_policy:
-      target_utilization_percent: 80
-      estimated_instance_warmup_minutes: 15
-    rolling_update_policy:
-      max_batch_size: 1
-      min_instances_in_service: 1
-      pause_time_minutes: 15
-    # instance metadata access method
-    metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
   # if true (default), blocks new eVDI sessions on projects that have exceeded their budget.
   enforce_project_budgets: true  # True or False
   #
@@ -60,30 +36,6 @@ events:
   max_receive_count: 3
 
 dcv_broker:
-  autoscaling:
-    public: false
-    instance_type: {{instance_type}}
-    base_os: {{base_os}}
-    instance_ami: {{instance_ami}}
-    volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
-    enabled_detailed_monitoring: false
-    min_capacity: 1
-    max_capacity: 3
-    cooldown_minutes: 5
-    new_instances_protected_from_scale_in: false
-    elb_healthcheck:
-      # Specifies the time in minutes Auto Scaling waits before checking the health status of an EC2 instance that has come into service.
-      grace_time_minutes: 15
-    cpu_utilization_scaling_policy:
-      target_utilization_percent: 80
-      estimated_instance_warmup_minutes: 15
-    rolling_update_policy:
-      max_batch_size: 1
-      min_instances_in_service: 1
-      pause_time_minutes: 15
-    # instance metadata access method
-    metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
   client_communication_port: 8444 # DO NOT CHANGE
   agent_communication_port: 8445 # DO NOT CHANGE
   gateway_communication_port: 8446 # DO NOT CHANGE
@@ -112,30 +64,6 @@ dcv_broker:
       scale_out_cooldown: 60 # in seconds
 
 dcv_connection_gateway:
-  autoscaling:
-    public: false
-    instance_type: {{instance_type}}
-    base_os: {{base_os}}
-    instance_ami: {{instance_ami}}
-    volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
-    enabled_detailed_monitoring: false
-    min_capacity: 1
-    max_capacity: 3
-    cooldown_minutes: 5
-    new_instances_protected_from_scale_in: false
-    elb_healthcheck:
-      # Specifies the time in minutes Auto Scaling waits before checking the health status of an EC2 instance that has come into service.
-      grace_time_minutes: 15
-    cpu_utilization_scaling_policy:
-      target_utilization_percent: 80
-      estimated_instance_warmup_minutes: 15
-    rolling_update_policy:
-      max_batch_size: 1
-      min_instances_in_service: 1
-      pause_time_minutes: 15
-    # instance metadata access method
-    metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
   certificate:
     provided: {{ dcv_connection_gateway_custom_certificate_provided | lower }}
     custom_dns_name: {{ dcv_connection_gateway_custom_dns_hostname if dcv_connection_gateway_custom_dns_hostname else '~' }}

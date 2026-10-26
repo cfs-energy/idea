@@ -11,6 +11,9 @@ from pyhocon import ConfigFactory
 from ideadatamodel import exceptions
 from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
 from ideaclustermanager.app.settings_catalog import (
+    _HIDDEN_PREFIXES,
+    _LABELS,
+    _READ_ONLY_KEYS,
     ADVANCED_SETTINGS_LABEL,
     CATALOG,
     DESTINATION_SECTIONS,
@@ -206,16 +209,14 @@ def test_known_effects_cover_live_startup_and_deployment_readers():
     )
     assert BY_KEY['cluster.backups.enabled']['effect'] == 'deployment'
     assert BY_KEY['cluster.network.client_ip']['effect'] == 'deployment'
-    assert (
-        BY_KEY['virtual-desktop-controller.controller.autoscaling.instance_type'][
-            'effect'
-        ]
-        == 'deployment'
-    )
 
 
 def test_catalog_count_contract_and_explicit_dispositions():
     post_review_keys = {
+        'cluster-manager.web_terminal.enabled',
+        'cluster-manager.web_terminal.idle_timeout_seconds',
+        'cluster-manager.web_terminal.max_duration_seconds',
+        'cluster-manager.web_terminal.max_sessions_per_user',
         'cluster.logging.default_log_level',
         'cluster-manager.logging.default_log_level',
         'scheduler.logging.default_log_level',
@@ -230,11 +231,11 @@ def test_catalog_count_contract_and_explicit_dispositions():
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
     assert len(DESTINATION_SECTIONS) == 37
-    assert len(baseline) == 775
+    assert len(baseline) == 694
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == 'f7f02747b841ef42e6b3e3e9fe52753527bb645f621f9e61ca3a8ffa68216f18'
+        == '4a391d3dafb0a8b8ee2c73f085046ab777cb08bcff3518b26354f49eb3ec0296'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -325,15 +326,15 @@ def test_read_only_hidden_and_service_write_metadata():
     assert BY_KEY['cluster-manager.web_portal.default_log_level']['hidden'] is True
 
     service_key = 'virtual-desktop-controller.controller.autoscaling.max_capacity'
-    assert BY_KEY[service_key]['hidden'] is True
-    with pytest.raises(exceptions.SocaException, match='not editable'):
+    assert service_key not in BY_KEY
+    with pytest.raises(exceptions.SocaException, match='not in the settings catalog'):
         coerce_settings(
             'virtual-desktop-controller',
             {'controller': {'autoscaling': {'max_capacity': '4'}}},
         )
 
 
-def test_service_autoscaling_blocks_are_hidden_and_refused():
+def test_removed_service_autoscaling_blocks_are_absent_and_refused():
     prefixes = (
         'cluster-manager.ec2.autoscaling.',
         'virtual-desktop-controller.controller.autoscaling.',
@@ -344,11 +345,8 @@ def test_service_autoscaling_blocks_are_hidden_and_refused():
         [item for item in CATALOG if item['key'].startswith(prefix)]
         for prefix in prefixes
     ]
-    assert [len(block) for block in blocks] == [18, 18, 18, 18]
-    assert sum(len(block) for block in blocks) == 72
-    assert all(item['hidden'] for block in blocks for item in block)
-    # the services page displays these; a manager must not point a control plane at an image.
-    with pytest.raises(exceptions.SocaException, match='not editable'):
+    assert blocks == [[], [], [], []]
+    with pytest.raises(exceptions.SocaException, match='not in the settings catalog'):
         coerce_settings(
             'cluster-manager',
             {'ec2': {'autoscaling': {'instance_ami': 'ami-0123456789abcdef0'}}},
@@ -358,6 +356,37 @@ def test_service_autoscaling_blocks_are_hidden_and_refused():
     ]
     assert broker_table['hidden'] is True
     assert broker_table['read_only'] is False
+
+
+def test_removed_host_settings_have_no_residual_catalog_metadata():
+    prefixes = (
+        'cluster-manager.ec2.',
+        'virtual-desktop-controller.controller.autoscaling.',
+        'virtual-desktop-controller.dcv_broker.autoscaling.',
+        'virtual-desktop-controller.dcv_connection_gateway.autoscaling.',
+        'scheduler.ec2.',
+    )
+    removed_keys = {
+        f'scheduler.{leaf}'
+        for leaf in (
+            'base_os',
+            'instance_ami',
+            'instance_type',
+            'volume_size',
+            'volume_type',
+            'public',
+        )
+    }
+    for metadata in (_LABELS, _READ_ONLY_KEYS, _HIDDEN_PREFIXES):
+        assert not removed_keys.intersection(metadata)
+        assert not [key for key in metadata if (key + '.').startswith(prefixes)]
+    for leaf in (
+        'enable_detailed_monitoring',
+        'enable_termination_protection',
+        'metadata_http_tokens',
+    ):
+        assert BY_KEY[f'directoryservice.ec2.{leaf}']['read_only'] is True
+    assert 'directoryservice.ec2.enable_detailed_monitoring' in _LABELS
 
 
 def test_opensearch_indices_remain_distinct_and_shards_are_read_only():
@@ -855,7 +884,6 @@ def test_read_only_and_hidden_rows_are_refused_by_the_server():
             {'package_config': {'aws_ssm': {'x86_64': 'https://example.invalid/ssm'}}},
         ),
         ('cluster-manager', {'server': {'port': '8443'}}),
-        ('cluster-manager', {'ec2': {'autoscaling': {'max_capacity': '3'}}}),
     ):
         with pytest.raises(exceptions.SocaException, match='not editable'):
             coerce_settings(module, settings)
@@ -950,3 +978,43 @@ def test_compute_rate_multiplier_refuses_values_the_runtime_would_ignore(value):
 def test_compute_rate_multiplier_accepts_valid_rates(value, expected):
     setting = BY_KEY['cluster.costs.compute_rate_multiplier']
     assert coerce_value(setting, value) == expected
+
+
+def test_terminal_controls_are_discoverable_and_writable():
+    values = {
+        'enabled': False,
+        'idle_timeout_seconds': 60,
+        'max_duration_seconds': 600,
+        'max_sessions_per_user': 10,
+    }
+    for name in values:
+        setting = BY_KEY['cluster-manager.web_terminal.' + name]
+        assert not setting['hidden'] and not setting['read_only']
+        assert setting['effect'] == 'runtime'
+        assert setting['section'] == 'Portal'
+    result, _ = coerce_settings('cluster-manager', {'web_terminal': values})
+    assert result == {'web_terminal': values}
+    api = object.__new__(ClusterSettingsAPI)
+    api.catalog_module_name = lambda module: module
+    api.settings_catalog = lambda: CATALOG
+    api.validate_settings_allowed('cluster-manager', result)
+    with pytest.raises(exceptions.SocaException):
+        api.validate_settings_allowed(
+            'cluster-manager', {'web_terminal': {'ca_public_key': 'key'}}
+        )
+    with pytest.raises(exceptions.SocaException):
+        coerce_settings('cluster-manager', {'web_terminal': {'ca_public_key': 'key'}})
+
+
+@pytest.mark.parametrize(
+    'name,value',
+    [
+        ('max_sessions_per_user', 0),
+        ('max_sessions_per_user', 11),
+        ('idle_timeout_seconds', 0),
+        ('max_duration_seconds', -1),
+    ],
+)
+def test_terminal_controls_reject_out_of_range_values(name, value):
+    with pytest.raises(exceptions.SocaException):
+        coerce_value(BY_KEY['cluster-manager.web_terminal.' + name], value)

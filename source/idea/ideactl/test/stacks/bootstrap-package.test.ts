@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -8,7 +9,6 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -17,18 +17,14 @@ import {
   BootstrapPackageBuilder,
   BootstrapPackageError,
   type BootstrapPackageUploadClient,
-  bootstrapContextParameterArgs,
   bootstrapPackageBasenames,
   bootstrapPackagePlans,
   bootstrapPackageUri,
   buildAndUploadBootstrapPackage,
-  releasePackageUri,
-  releasePackageNames,
-  uploadBootstrapPackage,
-  uploadReleasePackage,
+  uploadBootstrapPackage
 } from "../../src/cli/bootstrap-package.ts";
-import { BOOTSTRAP_SOURCE, templateContext } from "./bootstrap-oracle-context.ts";
 import { requireCapture } from "../support/fixtures.ts";
+import { BOOTSTRAP_SOURCE, templateContext } from "./bootstrap-oracle-context.ts";
 import { readRawTarArchive, readTarArchive } from "./tar.ts";
 
 requireCapture(
@@ -57,52 +53,6 @@ class FakeS3Client implements BootstrapPackageUploadClient {
     return {};
   }
 }
-
-test(
-  "builds the exact rendered archive layout from the real bootstrap tree",
-  {},
-  () => {
-    const workDirectory = mkdtempSync(join(tmpdir(), "bootstrap-package-test-"));
-    try {
-      const archiveFile = new BootstrapPackageBuilder({
-        sourceDirectory: BOOTSTRAP_SOURCE,
-        targetPackageBasename: "bootstrap-vdc-dcv-connection-gateway-deployment",
-        components: ["dcv-connection-gateway"],
-        context: templateContext(),
-        tmpDir: workDirectory,
-        baseOs: "amazonlinux2023",
-      }).build();
-      const archive = readTarContents(archiveFile);
-
-      assert.deepEqual([...archive.keys()], [
-        "./",
-        "./common/",
-        "./common/bootstrap_common.sh",
-        "./dcv-connection-gateway/",
-        "./dcv-connection-gateway/install_app.sh",
-        "./dcv-connection-gateway/setup.sh",
-      ]);
-      assert.match(
-        archive.get("./dcv-connection-gateway/setup.sh") ?? "",
-        /AWS_DEFAULT_REGION=us-east-2[\s\S]*IDEA_CLUSTER_NAME=sample-cluster/,
-      );
-      assert.match(
-        archive.get("./dcv-connection-gateway/install_app.sh") ?? "",
-        /INTERNAL_ALB_ENDPOINT="https:\/\/example\.invalid"[\s\S]*GATEWAY_TO_BROKER_PORT="8445"/,
-      );
-      assert.match(
-        archive.get("./dcv-connection-gateway/install_app.sh") ?? "",
-        /url = \\"\$\{INTERNAL_ALB_ENDPOINT\}:\$\{GATEWAY_TO_BROKER_PORT\}\\"/,
-      );
-      assert.equal(
-        archive.get("./dcv-connection-gateway/setup.sh")?.includes(".jinja2"),
-        false,
-      );
-    } finally {
-      rmSync(workDirectory, { recursive: true, force: true });
-    }
-  },
-);
 
 test("renders join_activedirectory.jinja2 unknown escape through the shared environment", () => {
   const workDirectory = mkdtempSync(join(tmpdir(), "bootstrap-shared-jinja-test-"));
@@ -145,15 +95,6 @@ test("renders join_activedirectory.jinja2 unknown escape through the shared envi
 
 for (const [name, components, variables] of [
   ["directoryservice", ["openldap-server"], {}],
-  ["cluster-manager", ["cluster-manager"], { app_package_uri: "s3://sample-bucket/release.tar.gz" }],
-  ["scheduler", ["scheduler"], { app_package_uri: "s3://sample-bucket/release.tar.gz" }],
-  ["bastion-host", ["bastion-host"], {}],
-  [
-    "virtual-desktop-controller",
-    ["virtual-desktop-controller"],
-    { controller_package_uri: "s3://sample-bucket/release.tar.gz" },
-  ],
-  ["dcv-broker", ["dcv-broker"], {}],
 ] as Array<[string, string[], Record<string, string>]>) {
   test(`renders the ${name} deployment component`, () => {
     const workDirectory = mkdtempSync(join(tmpdir(), "bootstrap-package-component-test-"));
@@ -316,9 +257,6 @@ test("requires at least one requested component", () => {
 test("uses the expected bootstrap names, URIs, and CDK context argument layout", () => {
   assert.deepEqual(bootstrapPackageBasenames("vdc", "deployment"), {
     standard: "bootstrap-vdc-deployment",
-    controller: "bootstrap-vdc-controller-deployment",
-    dcvBroker: "bootstrap-vdc-dcv-broker-deployment",
-    dcvConnectionGateway: "bootstrap-vdc-dcv-connection-gateway-deployment",
   });
   assert.deepEqual(
     bootstrapPackagePlans("directoryservice", "directoryservice", "deployment", "openldap"),
@@ -338,60 +276,14 @@ test("uses the expected bootstrap names, URIs, and CDK context argument layout",
     bootstrapPackagePlans("directoryservice", "directoryservice", "deployment", "activedirectory"),
     [],
   );
-  assert.deepEqual(
-    bootstrapPackagePlans("virtual-desktop-controller", "vdc", "deployment"),
-    [
-      {
-        basename: "bootstrap-vdc-controller-deployment",
-        components: ["virtual-desktop-controller"],
-        contextParameter: "controller_bootstrap_package_uri",
-      },
-      {
-        basename: "bootstrap-vdc-dcv-broker-deployment",
-        components: ["dcv-broker"],
-        contextParameter: "dcv_broker_bootstrap_package_uri",
-      },
-      {
-        basename: "bootstrap-vdc-dcv-connection-gateway-deployment",
-        components: ["dcv-connection-gateway"],
-        contextParameter: "dcv_connection_gateway_package_uri",
-      },
-    ],
-  );
-  assert.deepEqual(releasePackageNames("virtual-desktop-controller", "26.09.0"), [
-    "idea-virtual-desktop-controller-26.09.0.tar.gz",
-    "idea-dcv-connection-gateway-26.09.0.tar.gz",
-  ]);
+  assert.deepEqual(bootstrapPackagePlans("virtual-desktop-controller", "vdc", "deployment"), []);
   assert.equal(
     bootstrapPackageUri("sample-bucket", "/tmp/bootstrap-vdc-deployment.tar.gz"),
     "s3://sample-bucket/idea/bootstrap/bootstrap-vdc-deployment.tar.gz",
   );
-  assert.equal(
-    releasePackageUri("sample-bucket", "idea-scheduler-26.09.0.tar.gz"),
-    "s3://sample-bucket/idea/releases/idea-scheduler-26.09.0.tar.gz",
-  );
-  assert.deepEqual(
-    bootstrapContextParameterArgs({
-      bootstrapPackageUri: "s3://sample-bucket/idea/bootstrap/bootstrap-scheduler-deployment.tar.gz",
-    }),
-    ["-c bootstrap_package_uri=s3://sample-bucket/idea/bootstrap/bootstrap-scheduler-deployment.tar.gz"],
-  );
-  assert.deepEqual(
-    bootstrapContextParameterArgs({
-      controllerBootstrapPackageUri: "s3://sample-bucket/idea/bootstrap/bootstrap-vdc-controller-deployment.tar.gz",
-      dcvBrokerBootstrapPackageUri: "s3://sample-bucket/idea/bootstrap/bootstrap-vdc-dcv-broker-deployment.tar.gz",
-      dcvConnectionGatewayPackageUri:
-        "s3://sample-bucket/idea/bootstrap/bootstrap-vdc-dcv-connection-gateway-deployment.tar.gz",
-    }),
-    [
-      "-c controller_bootstrap_package_uri=s3://sample-bucket/idea/bootstrap/bootstrap-vdc-controller-deployment.tar.gz",
-      "-c dcv_broker_bootstrap_package_uri=s3://sample-bucket/idea/bootstrap/bootstrap-vdc-dcv-broker-deployment.tar.gz",
-      "-c dcv_connection_gateway_package_uri=s3://sample-bucket/idea/bootstrap/bootstrap-vdc-dcv-connection-gateway-deployment.tar.gz",
-    ],
-  );
 });
 
-test("uploads bootstrap and release packages through an injected S3 client", async () => {
+test("uploads bootstrap packages through an injected S3 client", async () => {
   const workDirectory = mkdtempSync(join(tmpdir(), "bootstrap-package-upload-test-"));
   const archiveFile = join(workDirectory, "bootstrap-scheduler-deployment.tar.gz");
   const releaseName = "idea-scheduler-26.09.0.tar.gz";
@@ -405,32 +297,19 @@ test("uploads bootstrap and release packages through an injected S3 client", asy
       await uploadBootstrapPackage({ client, clusterS3Bucket: "sample-bucket", archiveFile }),
       "s3://sample-bucket/idea/bootstrap/bootstrap-scheduler-deployment.tar.gz",
     );
-    assert.equal(
-      await uploadReleasePackage({
-        client,
-        clusterS3Bucket: "sample-bucket",
-        packageDistDir: workDirectory,
-        packageName: releaseName,
-      }),
-      "s3://sample-bucket/idea/releases/idea-scheduler-26.09.0.tar.gz",
-    );
     assert.deepEqual(client.commands, [
       {
         bucket: "sample-bucket",
         key: "idea/bootstrap/bootstrap-scheduler-deployment.tar.gz",
         body: Buffer.from("bootstrap-data"),
       },
-      {
-        bucket: "sample-bucket",
-        key: `idea/releases/${releaseName}`,
-        body: Buffer.from("release-data"),
-      },
+
     ]);
 
     const unuploaded = await buildAndUploadBootstrapPackage({
       sourceDirectory: BOOTSTRAP_SOURCE,
       targetPackageBasename: "bootstrap-local-deployment",
-      components: ["dcv-connection-gateway"],
+      components: ["openldap-server"],
       context: templateContext(),
       tmpDir: workDirectory,
       baseOs: "amazonlinux2023",
@@ -439,7 +318,7 @@ test("uploads bootstrap and release packages through an injected S3 client", asy
       upload: false,
     });
     assert.equal(unuploaded, undefined);
-    assert.equal(client.commands.length, 2);
+    assert.equal(client.commands.length, 1);
     assert.equal(
       client.commands[0]?.key,
       "idea/bootstrap/bootstrap-scheduler-deployment.tar.gz",
@@ -487,7 +366,7 @@ for (const provider of ["openldap", "activedirectory", "aws_managed_activedirect
       const getString = context.config.get_string;
       context.config.get_string = (key: string, ...args: unknown[]) => key === "directoryservice.provider" ? provider : getString(key, ...args);
       const archive = readTarContents(new BootstrapPackageBuilder({ sourceDirectory: BOOTSTRAP_SOURCE, targetPackageBasename: plans[0].basename, components: plans[0].components, context, tmpDir: directory }).build());
-      assert.deepEqual([...archive.keys()], ["./", "./common/", "./common/bootstrap_common.sh", "./ecs-host/", "./ecs-host/directory_join.sh"]);
+      assert.deepEqual([...archive.keys()], ["./", "./common/", "./common/bootstrap_common.sh", "./common/terminal_host.py", "./ecs-host/", "./ecs-host/directory_join.sh"]);
       const script = archive.get("./ecs-host/directory_join.sh")!;
       assert.match(script, /source \/etc\/environment/);
       assert.match(script, /source "\$\{SCRIPT_DIR\}\/..\/common\/bootstrap_common.sh"/);

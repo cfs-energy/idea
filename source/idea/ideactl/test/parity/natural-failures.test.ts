@@ -17,16 +17,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
+import { Command } from "commander";
+import type { ConfigWriter } from "../../src/cli/cdk-invoker.ts";
 import { CdkInvoker, type Deps, type StackDescription } from "../../src/cli/cdk-invoker.ts";
-import { DeploymentHelper } from "../../src/cli/deployment-helper.ts";
-import { run } from "../../src/cli/main.ts";
 import {
   registerUpgradeCommands,
   upgradeCluster,
   type UpgradeDeps,
 } from "../../src/cli/commands/upgrade.ts";
-import type { ConfigWriter } from "../../src/cli/cdk-invoker.ts";
-import { Command } from "commander";
+import { DeploymentHelper } from "../../src/cli/deployment-helper.ts";
+import { run } from "../../src/cli/main.ts";
 import { ideaVersion } from "../../src/version.ts";
 
 const CLUSTER = "sample-cluster";
@@ -104,7 +104,7 @@ interface Replay {
 }
 
 function moduleRow(moduleId: string, name: string, status = "deployed"): Record<string, unknown> {
-  return { module_id: moduleId, name, type: "app", status, stack_name: `${CLUSTER}-${moduleId}`, version: "26.09.0" };
+  return { module_id: moduleId, name, type: "app", status, stack_name: `${CLUSTER}-${moduleId}`, version: "26.10.0" };
 }
 
 function replay(options: ReplayOptions = {}): Replay {
@@ -117,7 +117,7 @@ function replay(options: ReplayOptions = {}): Replay {
   const inProgressPolls = options.inProgressPolls ?? 0;
 
   const modules = options.modules ?? [moduleRow("analytics", "analytics")];
-  const settings = options.settings ?? [{ key: "cluster.cluster_s3_bucket", value: BUCKET }];
+  const settings = [{ key: "ecs.enabled", value: true }, ...(options.settings ?? [{ key: "cluster.cluster_s3_bucket", value: BUCKET }])];
 
   const deps: Deps = {
     async spawn() {
@@ -150,7 +150,7 @@ function replay(options: ReplayOptions = {}): Replay {
       },
     },
     s3: {
-      async putObject() {},
+      async putObject() { },
       async getObject() {
         return "";
       },
@@ -171,10 +171,10 @@ function replay(options: ReplayOptions = {}): Replay {
     },
     async configWriter() {
       return {
-        async syncModulesInDb() {},
-        async syncClusterSettingsInDb() {},
-        async setConfigEntry() {},
-        async deleteConfigEntries() {},
+        async syncModulesInDb() { },
+        async syncClusterSettingsInDb() { },
+        async setConfigEntry() { },
+        async deleteConfigEntries() { },
       };
     },
     async accountId() {
@@ -186,7 +186,7 @@ function replay(options: ReplayOptions = {}): Replay {
     async httpStatus() {
       return 200;
     },
-    async sleep() {},
+    async sleep() { },
     now() {
       return Date.UTC(2026, 8, 10, 12, 0, 0);
     },
@@ -469,8 +469,8 @@ function upgradeReplay(input: {
   const modifies: Array<{ instanceId: string; protected: boolean }> = [];
   const protectionTags = input.protectionTags ?? new Set<string>();
   const writer: ConfigWriter = {
-    async syncModulesInDb() {},
-    async syncClusterSettingsInDb() {},
+    async syncModulesInDb() { },
+    async syncClusterSettingsInDb() { },
     async setConfigEntry(key, value) {
       events.push(`set:${key}=${String(value)}`);
       const table = rows[`${CLUSTER}.cluster-settings`]!;
@@ -478,12 +478,13 @@ function upgradeReplay(input: {
       if (row === undefined) table.push({ key, value });
       else row["value"] = value;
     },
-    async deleteConfigEntries() {},
+    async deleteConfigEntries() { },
   };
   const rows: Record<string, Array<Record<string, unknown>>> = {
     // Recovery needs the module-set owner even when only the scheduler is upgraded.
     // Include the deployed mapping so both runs reach the durable protection baseline.
     [`${CLUSTER}.cluster-settings`]: [
+      { key: "ecs.enabled", value: true },
       { key: "global-settings.module_sets.default.cluster-manager.module_id", value: "cluster-manager" },
       ...input.settings,
     ],
@@ -498,7 +499,7 @@ function upgradeReplay(input: {
       async describeChangeSet() {
         return {};
       },
-      async executeChangeSet() {},
+      async executeChangeSet() { },
       async describeStack() {
         return {};
       },
@@ -523,7 +524,7 @@ function upgradeReplay(input: {
     async httpStatus() {
       return 200;
     },
-    async sleep() {},
+    async sleep() { },
     now() {
       return Date.UTC(2026, 8, 10, 12, 0, 0);
     },
@@ -577,8 +578,8 @@ function upgradeReplay(input: {
       },
     },
     eolSoftwareStacks: {
-      async setEnabled() {},
-      async delete() {},
+      async setEnabled() { },
+      async delete() { },
     },
     async deploy() {
       events.push("deploy");

@@ -6,6 +6,42 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.11.1] - 2026-10-26
+
+> **Upgrade floor: 26.10.0.** 26.11.1 upgrades only clusters whose modules are all on 26.10.0 or later, and refuses before changing anything otherwise. A cluster on an older release upgrades to 26.10.9 first (that release also completes the move to ECS), then to 26.11.1.
+
+**Highlights for users**
+
+* Open **Terminal** to check jobs from your phone or use your own running Linux desktop. Reconnect to the same tmux shell after sleep or a network interruption. Desktops launched before the upgrade are not listed; launch a new desktop to use it here.
+* During maintenance, new job submissions from `qsub` or the portal are refused with the maintenance notice and its planned end time in UTC when one is set; running and queued jobs continue.
+* When AWS has no capacity to resume your desktop, the message now names the availability zone and suggests a retry or a resize within the same instance family. Your desktop stays stopped.
+
+* IDEA-263: a scheduled resume that hits InsufficientInstanceCapacity leaves the desktop stopped and is not retried immediately; the message names the availability zone and same-family sizes.
+* IDEA-273: new ephemeral jobs use their unique id in log groups, metrics namespaces, job directories and default FSx Lustre output prefixes (`job-<job_id>-<job_uid>`); explicit FSx export paths and running nodes retain their existing paths.
+* IDEA-299: software stack index updates create missing documents immediately, alongside the existing leader reindex.
+* IDEA-298: new base desktop stacks inherit the union of same-architecture base stack projects, with default-project fallback only when none exist.
+* IDEA-297: new desktop OS and architecture rows are queued for baking even when the release was already marked baked.
+* IDEA-285: cluster settings keep streaming across shard closes and splits, with child updates replayed after their parent drains.
+
+* **Host deployment removed**: cluster-manager, scheduler, virtual-desktop-controller, DCV broker, connection gateway and bastion run only on ECS. Compute nodes, desktop hosts, image builders and the ECS container hosts stay on EC2, and so does the OpenLDAP directory server.
+* **Upgrade floor 26.10.0**: every deployed module must meet it; migration paths for older releases are removed.
+* **idea-cli removed**: the unused Python package; administrator commands stay in ideactl and the three service CLIs stay in their packages.
+* **Python dependencies**: consolidated into runtime and development locks; unused direct dependencies and unreferenced SDK and data-model modules are removed.
+* **Dependencies**: AWS SDK for JavaScript 3.1156.0, CDK CLI 2.1146.1 / library 2.274.0, Cloudscape components 3.0.1404 / design tokens 3.0.116, Vite 8.3.5, Sass 1.106.1, undici 8.12.3, and the setup-python action refresh. Python locks recompiled.
+* Contributors use mise tasks for builds, tests, schema generation and requirements locks, replacing Invoke and unused Python maintenance scripts; run `mise install` and `hk install` after updating the checkout, and use `mise run <task>` for development commands.
+* **Maintenance admission**: the queuejob hook reads `cluster-manager.maintenance.enabled` on each submission. Non-admin submissions are refused while it is on; root and cluster administrators can still submit. Clearing the flag restores submission after config propagation without a restart. No queue enable/disable commands are needed for drains.
+* **Cost collection toggle**: after upgrading, `cluster-manager.metrics.cost.enabled` is checked every collection cycle, so enabling or disabling takes effect without a restart or redeploy. The task role always includes the collector's three read-only Cost Explorer actions.
+* **Native metrics environment tag**: native runtime Datadog series other than `job.*` include `env:<cluster name>` alongside `idea_cluster`. Cost and storage collectors retain their historical `idea_cluster` tags so replaying points does not duplicate series; filter these metrics by `idea_cluster`. Job series also retain all their historical tags without `env` for live sends and backfills. No environment-tag cutover is scheduled for existing replayable series; a future migration must explicitly separate old and new series.
+* **Measured CPU efficiency**: dashboards can select `idea.job.cpu_efficiency.measured`. Both CPU efficiency series omit missing or invalid measurements and include measured zero CPU; the existing series keeps its behavior and tags.
+* **Native job duration**: completion records recover missing timestamps from cached jobs and execution hooks, including expired array subjobs and jobs completed during scheduler restarts. Runs shorter than one second retain a zero duration; jobs that never started emit no duration. Missing execution evidence is logged instead of using restart time. Rerun history retains every attempt; recovered duration and efficiency use only the latest attempt, excluding waits between attempts.
+* **Job CPU efficiency**: heterogeneous multi-node allocations use the largest chunk for the one-host CPU bound. A `select=1:ncpus=64+1:ncpus=4` job with only 64 cores of reported CPU time now shows unknown efficiency instead of 94%.
+* **GovCloud release image**: upgrades use the public release repository when `ecs.image_repositories.aws-us-gov` is unset. The public fallback is resolved to a manifest digest before any writes. Mirror users must set both the repository key and `ecs.image`; non-ECR-Public mirrors require `--skip-release-image-check`.
+* **Bastion SSH sources**: upgrades restore `cluster.network.ssh_client_ip` from `ssh_client_ip` in values.yml, including removed entries and empty lists. Preview identifies the values.yml update.
+* **Browser SSH**: single-use 30-second tickets, strict portal Origin checks, verified host keys, and five-minute user certificates with PTY permission only.
+* **Operations**: `cluster-manager.web_terminal.enabled` defaults to true. Cluster-manager holds a per-cluster encrypted CA; bastion and desktop bootstrap install public trust and tmux. Existing desktops require updated bootstrap trust.
+* **Limits and audit**: three connections per user across replicas, configurable 30-minute idle and 12-hour duration limits, bounded transport, and session metadata logging without terminal content.
+* **Terminal renderer**: pinned ghostty-web 0.4.0 with portal-hosted, lazy-loaded WASM, mobile key controls, and keyboard-aware resizing. Screen-reader terminal output is out of scope; log-tail retains xterm.js. See the [operator guide](modules/cluster-manager/web-terminal.md) for deployment and CA rotation.
+
 ## [26.10.9] - 2026-10-22
 
 **Highlights for users**
@@ -305,7 +341,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 ### **🐛 Bug Fixes**
 * **Datadog agent image**: The host-pool daemon and the cost-only collector run Datadog's official image from Datadog's public ECR gallery, pinned by digest to agent 7.83.2, instead of requiring a copy in a private ECR repository of every account. `datadog_agent_image` (values) and `--agent-image` (cost collector) are now optional overrides and accept any digest-pinned image reference at the operator's own risk; a tag is still refused because the agent holds the host's Docker socket
 * **Metrics provider cutover in one run**: With `metrics_provider: dogstatsd` in `values.yml`, `upgrade-cluster` writes `metrics.provider` and `metrics.dogstatsd.url` after Phase 3 instead of leaving them on the previous provider through the add-only sync; the preview lists both under `PROVIDER_CUTOVER` and they never count as operator drift. The runbook's separate `config set` step and the five-row container path are gone
-([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
+([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/ecs-control-plane))
 
 ## [26.09.1] - 2026-09-17
 
@@ -313,13 +349,13 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * Clusters on 25.11.0 or newer upgrade directly in one run of `upgrade-cluster`. Below 26.09.0, the read-only historical plan requires complete module coverage, global replacement, full settings sync, interval-key migration, AMI/settings updates and all deployed modules; completion requires settings and version readback
 * The administrator is now `ideactl`, a Node tool that `idea-admin.sh` runs inside the `idea-control-plane` image, or from source with `IDEA_DEV_MODE=true`. Every command keeps its name and flags; `patch` is removed (see the updated documentation)
 * Existing clusters opt in to containers; the interactive installer initializes new clusters with `enable_ecs: true`. For an existing cluster: set `enable_ecs: true` in `values.yml` and run `upgrade-cluster --drain` once. Without it the upgrade redeploys the host shape as before
-* Before turning containers on: the account's `awsvpcTrunking` ECS setting must be enabled, `ecs.hosts.instance_type` (default `m7g.large`) must be offered in the cluster's subnets, and a GovCloud cluster needs the image pushed to a repository in its account with `ecs.image` pointing at it
+* Before turning containers on: the account's `awsvpcTrunking` ECS setting must be enabled, `ecs.hosts.instance_type` (default `m7g.large`) must be offered in the cluster's subnets, and, for this historical release, a GovCloud cluster needs the image pushed to a repository in its account with `ecs.image` pointing at it (26.11.1 defaults fresh installs and upgrades to the public release repository; an explicit `ecs.image_repositories.aws-us-gov` overrides that fallback)
 * The move makes the cluster manager, the scheduler, and the virtual desktop controller, DCV broker and DCV connection gateway ECS services on a Graviton host pool. Job submission is closed for the run and the host scheduler is drained first; job ids start again from zero, once; the portal is unavailable for a few minutes while the cluster-manager stack cuts over; the bastion host is recreated once, with a new public address
 * Every Lambda handler is now Node 22. The self-signed certificate custom resources remain in the templates as retained no-ops and the solution-metrics function is neutered; both are removed in the next release
 ```bash
 ./idea-admin.sh upgrade-cluster --aws-region $IDEA_AWS_REGION --cluster-name $IDEA_CLUSTER_NAME --drain
 ```
-([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/move-to-containers))
+([Move the control plane to containers](https://docs.idea-hpc.com/first-time-users/cluster-operations/update-idea-cluster/ecs-control-plane))
 
 ### **✨ New Features**
 * **Cost-only deployment**: `ideactl cost-collector deploy|destroy` runs account spend collection and a Datadog sidecar in one Fargate task in a commercial billing account, including bills for GovCloud clusters, without cluster settings tables
@@ -878,7 +914,7 @@ Added [Script Workbench](https://docs.idea-hpc.com/modules/hpc-workloads/user-do
   * Unit Tests
   * Build Tests
   * Production Build & Push
-* Implemented `pre-commit` checks & linting
+* Implemented commit checks & linting
   * Updated codebase to satisfy `ruff`, `j2lint`, `typos` and more
 
 ## **🔄 Changes**

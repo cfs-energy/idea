@@ -66,7 +66,12 @@ class DynamoDBStreamSubscription:
 
         self._shard_iterator_lock = threading.RLock()
         self._exit = threading.Event()
-        self.shard_iterators_map: Dict[str, str] = {}
+        self.shard_iterators_map: Dict[str, Optional[str]] = {}
+        self._shard_sequence_numbers: Dict[str, Optional[str]] = {}
+        self._resync_required = False
+        self._initialized = False
+        self._drained_shards = set()
+        self._skipped_shards = set()
         self.shard_initializer_thread = threading.Thread(
             name=f'{self.table_name}.shard-iterator-initializer',
             target=self.shard_iterator_initializer,
@@ -125,48 +130,133 @@ class DynamoDBStreamSubscription:
                             else:
                                 raise e
 
-                    describe_stream_result = (
-                        self.dynamodb_streams_client.describe_stream(
-                            StreamArn=self.stream_arn
-                        )
+                    shards = []
+                    request = {'StreamArn': self.stream_arn}
+                    while True:
+                        description = self.dynamodb_streams_client.describe_stream(
+                            **request
+                        )['StreamDescription']
+                        shards.extend(description['Shards'])
+                        last_shard = description.get('LastEvaluatedShardId')
+                        if not last_shard:
+                            break
+                        request['ExclusiveStartShardId'] = last_shard
+
+                    shard_ids = {shard['ShardId'] for shard in shards}
+                    active_shards = {
+                        shard_id
+                        for shard_id, iterator in self.shard_iterators_map.items()
+                        if iterator is not None
+                    } | (self._shard_sequence_numbers.keys() - self._drained_shards)
+                    # A baseline parent can be listed before its child. Rebaseline
+                    # from fresh cursors so neither post-snapshot writes nor stale
+                    # child history can leave the cache behind the table.
+                    late_baseline_child = any(
+                        shard['ShardId'] not in self.shard_iterators_map
+                        and shard.get('ParentShardId') in self._skipped_shards
+                        for shard in shards
                     )
-                    shards = describe_stream_result['StreamDescription']['Shards']
+                    if active_shards - shard_ids or late_baseline_child:
+                        self._resync_required = True
+                    if self._resync_required:
+                        # Missing history cannot be reconstructed by replaying descendants.
+                        self.shard_iterators_map.clear()
+                        self._shard_sequence_numbers.clear()
+                        self._drained_shards.clear()
+                        self._skipped_shards.clear()
+                        self._initialized = False
+
+                    if not self._initialized:
+                        self._resync_required = True
+                        # The consistent snapshot below includes retained, closed history.
+                        for shard in shards:
+                            if 'EndingSequenceNumber' in shard.get(
+                                'SequenceNumberRange', {}
+                            ):
+                                self.shard_iterators_map.setdefault(
+                                    shard['ShardId'], None
+                                )
+                                self._skipped_shards.add(shard['ShardId'])
+                        self._initialized = True
+
                     for shard in shards:
                         shard_id = shard['ShardId']
-                        shard_iterator = self.shard_iterators_map.get(shard_id)
-                        if shard_iterator is None:
-                            success = False
-                            while not success:
-                                try:
-                                    get_shard_iterator_result = (
-                                        self.dynamodb_streams_client.get_shard_iterator(
-                                            StreamArn=self.stream_arn,
-                                            ShardId=shard_id,
-                                            ShardIteratorType='LATEST',
-                                        )
+                        # Skipped history and drained shards both have no live iterator.
+                        if shard_id in self.shard_iterators_map:
+                            continue
+                        parent = shard.get('ParentShardId')
+                        if self.shard_iterators_map.get(parent) is not None or (
+                            parent not in self.shard_iterators_map
+                            and (
+                                parent in shard_ids
+                                or parent in self._shard_sequence_numbers
+                            )
+                        ):
+                            continue
+                        if (
+                            'EndingSequenceNumber'
+                            in shard.get('SequenceNumberRange', {})
+                            and parent not in self._drained_shards
+                            and shard_id not in self._shard_sequence_numbers
+                        ):
+                            self.shard_iterators_map[shard_id] = None
+                            self._skipped_shards.add(shard_id)
+                            continue
+                        iterator_request = {
+                            'StreamArn': self.stream_arn,
+                            'ShardId': shard_id,
+                            'ShardIteratorType': 'TRIM_HORIZON'
+                            if parent in self._drained_shards
+                            else 'LATEST',
+                        }
+                        sequence = self._shard_sequence_numbers.get(shard_id)
+                        if sequence is not None:
+                            iterator_request.update(
+                                ShardIteratorType='AFTER_SEQUENCE_NUMBER',
+                                SequenceNumber=sequence,
+                            )
+                        while not self._exit.is_set():
+                            try:
+                                result = (
+                                    self.dynamodb_streams_client.get_shard_iterator(
+                                        **iterator_request
                                     )
-                                    self.shard_iterators_map[shard_id] = (
-                                        get_shard_iterator_result['ShardIterator']
-                                    )
-                                    success = True
-                                except botocore.exceptions.ClientError as e:
-                                    if (
-                                        e.response['Error']['Code']
-                                        == 'ProvisionedThroughputExceededException'
-                                    ):
-                                        time.sleep(1)
-                                        continue
-                                    else:
-                                        raise e
+                                )
+                                self.shard_iterators_map[shard_id] = result[
+                                    'ShardIterator'
+                                ]
+                                break
+                            except botocore.exceptions.ClientError as e:
+                                code = e.response['Error']['Code']
+                                if code == 'ProvisionedThroughputExceededException':
+                                    time.sleep(1)
+                                    continue
+                                if code in (
+                                    'TrimmedDataAccessException',
+                                    'ResourceNotFoundException',
+                                ):
+                                    self._resync_required = True
+                                raise
 
-                    # clean up closed shards
-                    shards_closed = []
-                    for shard_id in self.shard_iterators_map.keys():
-                        shard_iterator = self.shard_iterators_map.get(shard_id)
-                        if shard_iterator is None:
-                            shards_closed.append(shard_id)
-                    for shard_id in shards_closed:
-                        del self.shard_iterators_map[shard_id]
+                    if self._resync_required and not self._exit.is_set():
+                        # Acquire LATEST cursors before scanning so concurrent writes remain visible.
+                        self.log_info(
+                            f'{self.table_name} snapshot resync started; stream processing paused',
+                            logger=self.logger,
+                        )
+                        try:
+                            self.stream_subscriber.on_reset()
+                        except Exception:
+                            self.log_exception(
+                                f'{self.table_name} snapshot resync failed; stream processing remains paused',
+                                logger=self.logger,
+                            )
+                            raise
+                        self._resync_required = False
+                        self.log_info(
+                            f'{self.table_name} snapshot resync finished; stream processing resumed',
+                            logger=self.logger,
+                        )
 
             except Exception as e:
                 self.log_exception(
@@ -187,11 +277,12 @@ class DynamoDBStreamSubscription:
         while not self._exit.is_set():
             try:
                 with self._shard_iterator_lock:
-                    # randomize polling for shards so to avoid polling limit conflicts across servers
+                    # Children are admitted only after their parent has drained.
                     shard_ids = list(self.shard_iterators_map.keys())
-                    random.shuffle(shard_ids)
 
                     for shard_id in shard_ids:
+                        if self._resync_required:
+                            break
                         shard_iterator = self.shard_iterators_map[shard_id]
 
                         # shard is closed. skip
@@ -216,8 +307,17 @@ class DynamoDBStreamSubscription:
                                 elif e.response['Error']['Code'] in (
                                     'ExpiredIteratorException',
                                     'TrimmedDataAccessException',
+                                    'ResourceNotFoundException',
                                 ):
-                                    next_shard_iterator = None
+                                    if (
+                                        e.response['Error']['Code']
+                                        != 'ExpiredIteratorException'
+                                        or not self._shard_sequence_numbers.get(
+                                            shard_id
+                                        )
+                                    ):
+                                        self._resync_required = True
+                                    del self.shard_iterators_map[shard_id]
                                     break
                                 else:
                                     raise e
@@ -279,12 +379,17 @@ class DynamoDBStreamSubscription:
                                         f'failed to process {self.table_name} stream update: {e}, record: {record}'
                                     )
 
-                            if len(records) == 0:
+                            if records:
+                                self._shard_sequence_numbers[shard_id] = records[-1][
+                                    'dynamodb'
+                                ]['SequenceNumber']
+                            self.shard_iterators_map[shard_id] = next_shard_iterator
+                            if next_shard_iterator is None:
+                                self._drained_shards.add(shard_id)
+                            if next_shard_iterator is None or len(records) == 0:
                                 break
                             else:
                                 time.sleep(1)
-
-                        self.shard_iterators_map[shard_id] = next_shard_iterator
 
             except Exception as e:
                 self.log_exception(f'failed to process {self.table_name} update: {e}')

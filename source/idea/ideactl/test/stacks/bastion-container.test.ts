@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { byType, cleanupWorkdirs, onlyOne, resourcesOf, synthBastion } from '../support/ecs-harness.ts';
 import { evaluateChangeSet } from '../../src/cli/cdk-invoker.ts';
+import { byType, cleanupWorkdirs, onlyOne, resourcesOf, synthBastion } from '../support/ecs-harness.ts';
 
 after(cleanupWorkdirs);
 
@@ -91,46 +91,21 @@ test('unsupported directories and zero desired tasks fail synthesis', () => {
 });
 
 test('host retirement and subsequent task revisions need no replacement override', () => {
-  const verdict = evaluateChangeSet({ Changes: [
-    { ResourceChange: { Action: 'Remove', LogicalResourceId: 'bastionhostinstance', ResourceType: 'AWS::EC2::Instance' } },
-    { ResourceChange: { Action: 'Modify', LogicalResourceId: 'bastionTask', ResourceType: 'AWS::ECS::TaskDefinition', Replacement: 'True' } },
-    { ResourceChange: { Action: 'Modify', LogicalResourceId: 'bastionRecord', ResourceType: 'AWS::Route53::RecordSet', Replacement: 'False' } },
-  ] });
+  const verdict = evaluateChangeSet({
+    Changes: [
+      { ResourceChange: { Action: 'Remove', LogicalResourceId: 'bastionhostinstance', ResourceType: 'AWS::EC2::Instance' } },
+      { ResourceChange: { Action: 'Modify', LogicalResourceId: 'bastionTask', ResourceType: 'AWS::ECS::TaskDefinition', Replacement: 'True' } },
+      { ResourceChange: { Action: 'Modify', LogicalResourceId: 'bastionRecord', ResourceType: 'AWS::Route53::RecordSet', Replacement: 'False' } },
+    ]
+  });
   assert.deepEqual(verdict.refusals, []);
 });
 
-test('cutover updates the existing DNS and settings resources and deletion releases endpoints and keys', () => {
-  const host = resourcesOf(synthBastion({
-    'ecs.enabled': false,
-    'bastion-host.base_os': 'amazonlinux2023',
-    'bastion-host.instance_ami': 'ami-0123456789abcdef0',
-    'bastion-host.instance_type': 'm7i.large',
-    'bastion-host.ec2.metadata_http_tokens': 'required',
-    'cluster.network.ssh_key_pair': 'sample-key',
-    'global-settings.module_sets.default.bastion-host.module_id': 'bastion-host',
-  }));
+test('deletion releases bastion endpoints and keys', () => {
   const container = resourcesOf(synthBastion());
-  for (const type of ['AWS::Route53::RecordSet', 'Custom::ClusterSettings']) {
-    assert.equal(one(host, type)[0], one(container, type)[0]);
-  }
   for (const type of ['AWS::EC2::EIP', 'AWS::SecretsManager::Secret', 'AWS::ElasticLoadBalancingV2::LoadBalancer', 'AWS::ECS::Service']) {
     for (const [, resource] of byType(container, type)) assert.notEqual(resource.DeletionPolicy, 'Retain', type);
   }
-  const removals = Object.entries(host).filter(([id]) => container[id] === undefined).map(([id, resource]) => ({
-    ResourceChange: { Action: 'Remove', LogicalResourceId: id, ResourceType: resource.Type },
-  }));
-  assert.deepEqual(evaluateChangeSet({ Changes: removals }).refusals, []);
-});
-
-test('the container bastion synthesizes while the upgrade holds the ecs module-set row', () => {
-  // An upgrade deletes global-settings.module_sets.*.ecs.module_id in Phase 2 and writes it back
-  // only after the last stack has deployed, so the old portal keeps working through the window.
-  // The bastion stack must not resolve the ecs module through that row: the first live run of this
-  // stack stopped at synthesis on exactly that lookup.
-  const template = synthBastion({ 'global-settings.module_sets.default.ecs.module_id': null });
-  const service = one(resourcesOf(template), 'AWS::ECS::Service');
-  assert.ok(service, 'the service still synthesizes');
-  assert.match(JSON.stringify(template), /\/ecs\/exec/);
 });
 
 test('the container bastion publishes no boolean and never its own public flag', () => {

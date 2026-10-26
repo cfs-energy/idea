@@ -1,0 +1,209 @@
+amends "package://github.com/jdx/hk/releases/download/v2.8.1/hk@2.8.1#/Config.pkl"
+
+// Fail after fixing so contributors can review and stage the changes.
+mise = true
+fail_fast = false
+hooks {
+  ["pre-commit"] {
+    stage = false
+    fail_on_fix = true
+  }
+}
+
+steps {
+  ["trailing-whitespace"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("package\\.json$")
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "trailing-whitespace", "{{files}}") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "trailing-whitespace", "--fix", "{{files}}") }
+  }
+  ["end-of-file-fixer"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("^(/docs)")
+    depends = "trailing-whitespace"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "end-of-file-fixer", "{{files}}") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "end-of-file-fixer", "--fix", "{{files}}") }
+  }
+  ["check-added-large-files"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "end-of-file-fixer"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "file", "--check", "check-added-large-files", "{{files}}") }
+  }
+  ["check-json"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "check-added-large-files"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "json", "--check", "check-json", "{{files}}") }
+  }
+  ["pretty-format-json"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("package\\.json$")
+    depends = "check-json"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "json", "--check", "pretty-format-json", "{{files}}") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "json", "--check", "pretty-format-json", "--fix", "{{files}}") }
+  }
+  ["check-toml"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "pretty-format-json"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "toml", "--check", "check-toml", "{{files}}") }
+  }
+  ["no-commit-to-branch"] {
+    depends = "check-toml"
+    check = "hk util no-commit-to-branch"
+  }
+  ["fix-byte-order-marker"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "no-commit-to-branch"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "fix-byte-order-marker", "{{files}}") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "fix-byte-order-marker", "--fix", "{{files}}") }
+  }
+  ["check-merge-conflict"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "fix-byte-order-marker"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "check-merge-conflict", "{{files}}") }
+  }
+  ["forbid-crlf"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "check-merge-conflict"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "forbid-crlf", "{{files}}") }
+  }
+  ["remove-crlf"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "forbid-crlf"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "remove-crlf", "{{files}}") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "remove-crlf", "--fix", "{{files}}") }
+  }
+  ["forbid-tabs"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("^source/idea/idea-sdk/tests/fixtures/")
+    depends = "remove-crlf"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "forbid-tabs", "{{files}}") }
+  }
+  ["remove-tabs"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("^source/idea/idea-sdk/tests/fixtures/")
+    depends = "forbid-tabs"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "remove-tabs", "{{files}}") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--check", "remove-tabs", "--fix", "{{files}}") }
+  }
+  ["alphabetize-codeowners"] {
+    glob = Regex("^(CODEOWNERS|docs/CODEOWNERS|\\.(github|gitlab|gitea)/CODEOWNERS)$")
+    allow_binary = true
+    depends = "remove-tabs"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--copy-check", "{{files}}", "--", "alphabetize-codeowners") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "{{files}}", "--", "alphabetize-codeowners") }
+  }
+  ["fix-smartquotes"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "alphabetize-codeowners"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--copy-check", "{{files}}", "--", "fix-smartquotes") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "{{files}}", "--", "fix-smartquotes") }
+  }
+  ["fix-ligatures"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "fix-smartquotes"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--copy-check", "{{files}}", "--", "fix-ligatures") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "{{files}}", "--", "fix-ligatures") }
+  }
+  ["fix-spaces"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "fix-ligatures"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--copy-check", "{{files}}", "--", "fix-spaces") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "{{files}}", "--", "fix-spaces") }
+  }
+  ["gitleaks"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "fix-spaces"
+    check = new Command { argv = List("gitleaks", "git", "--pre-commit", "--redact", "--staged", "--verbose", "--config", ".github/.gitleaks.toml") }
+  }
+  ["trufflehog"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "gitleaks"
+    check = new Command { argv = List("trufflehog", "filesystem", "--no-update", "--log-level=-1", "--config=.github/trufflehog-config.yaml", "--exclude-paths=.github/trufflehog-exclude-paths.txt", "--exclude-detectors=jdbc", "--results=verified,unknown,unverified", "--filter-entropy=3.0", "--fail", ".") }
+  }
+  ["yamllint"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("(?x)^(\n  .*/templates/.*\\.ya?ml$|\n  .*/_templates/.*\\.ya?ml$|\n  source/idea/idea-test-utils/src/ideatestutils/config/templates/.*\\.ya?ml$|\n  source/idea/idea-sdk/src/ideasdk/metrics/.*/templates/.*\\.ya?ml$|\n  source/idea/idea-cluster-manager/resources/defaults/email_templates\\.yml$|\n  source/idea/ideactl/resources/policies/.*\\.yml$|\n  source/idea/ideactl/resources/cdk/.*\\.yml$\n)$\n")
+    depends = "trufflehog"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "yaml", "{{files}}", "--", "yamllint", "--format", "parsable", "-d", "{extends: relaxed, rules: {line-length: disable}}", "-s") }
+  }
+  ["yamlfmt"] {
+    glob = Regex("")
+    allow_binary = true
+    exclude = Regex("(?x)^(\n  .*/templates/.*\\.ya?ml$|\n  .*/_templates/.*\\.ya?ml$|\n  source/idea/idea-test-utils/src/ideatestutils/config/templates/.*\\.ya?ml$|\n  source/idea/idea-sdk/src/ideasdk/metrics/.*/templates/.*\\.ya?ml$|\n  source/idea/idea-cluster-manager/resources/defaults/email_templates\\.yml$|\n  source/idea/ideactl/resources/policies/.*\\.yml$|\n  source/idea/ideactl/resources/cdk/.*\\.yml$\n)$\n")
+    depends = "yamllint"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "yaml", "{{files}}", "--", "yamlfmt", "-lint") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "yaml", "{{files}}", "--", "yamlfmt") }
+  }
+  ["ruff"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "yamlfmt"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "python", "--type", "pyi", "--type", "jupyter", "{{files}}", "--", "ruff", "check", "--force-exclude") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "python", "--type", "pyi", "--type", "jupyter", "{{files}}", "--", "ruff", "check", "--force-exclude", "--fix") }
+  }
+  ["ruff-format"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "ruff"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "python", "--type", "pyi", "--type", "jupyter", "{{files}}", "--", "ruff", "format", "--force-exclude", "--check") }
+    fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "python", "--type", "pyi", "--type", "jupyter", "{{files}}", "--", "ruff", "format", "--force-exclude") }
+  }
+  ["j2lint"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "ruff-format"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "jinja", "{{files}}", "--", "j2lint", "--ignore", "jinja-statements-indentation", "--") }
+  }
+  ["hadolint"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "j2lint"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "dockerfile", "{{files}}", "--", "hadolint", "--config", ".github/.hadolint.yaml") }
+  }
+  ["shellcheck"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "hadolint"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "shell", "{{files}}", "--", "shellcheck") }
+  }
+  ["actionlint"] {
+    glob = Regex("^\\.github/workflows/")
+    allow_binary = true
+    depends = "shellcheck"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "yaml", "{{files}}", "--", "actionlint") }
+  }
+  ["repository-hygiene"] {
+    depends = "actionlint"
+    check = new Command { argv = List("node", "source/idea/ideactl/scripts/ci-checks.mjs", "hygiene") }
+  }
+  ["lint-cloudscape-usage"] {
+    glob = Regex("^source/idea/idea-cluster-manager/webapp/src/.*\\.(ts|tsx|js|jsx|css|scss)$")
+    allow_binary = true
+    depends = "repository-hygiene"
+    check = "NODE_PATH=$(mise where npm:typescript)/node_modules node source/idea/idea-cluster-manager/webapp/build-support/lint-cloudscape-usage.mjs {{files}}"
+  }
+  ["typos"] {
+    glob = Regex("")
+    allow_binary = true
+    depends = "lint-cloudscape-usage"
+    check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "{{files}}", "--", "typos", "--config", ".github/_typos.toml") }
+  }
+}

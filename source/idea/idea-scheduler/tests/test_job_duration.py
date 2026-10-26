@@ -7,6 +7,7 @@ import logging
 from typing import List, Optional
 
 import arrow
+import pytest
 from ideadatamodel import (
     CloudFormationStack,
     EC2InstanceUnitPrice,
@@ -484,3 +485,142 @@ def test_every_price_property_survives_an_unavailable_price():
     assert helper.ec2_ondemand_price == 0
     assert helper.ec2_reserved_price == 0
     assert helper.ec2_spot_unit_price == 0.0
+
+
+@pytest.mark.parametrize('state', ['F', 'X'])
+@pytest.mark.parametrize(
+    'used', [{'walltime': '00:02:00'}, 'cput=00:00:00,walltime=00:02:00']
+)
+def test_terminal_job_shapes_keep_measured_walltime(context, state, used):
+    start = arrow.get('2026-08-01T00:00:00Z')
+    job = build_pbs_job(
+        id='42[1].scheduler',
+        job_state=state,
+        stime=str(start.int_timestamp),
+        resources_used=used,
+    ).as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+    assert job.end_time == start.shift(seconds=120).datetime
+
+
+def test_zero_stime_is_not_a_started_job(context):
+    job = build_pbs_job(stime='0', mtime='1785542400').as_soca_job(
+        context=context, queue_profile=QUEUE_PROFILE
+    )
+    assert job.start_time is None
+    assert job.end_time is None
+
+
+@pytest.mark.parametrize('history_available', [False, True])
+@pytest.mark.parametrize(
+    'order', [('begin', 'end'), ('end', 'begin'), ('begin', 'end', 'end')]
+)
+def test_serialized_hooks_recover_duration_without_pbs_history(
+    context, monkeypatch, tmp_path, order, history_available
+):
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+    from test_job_cache import FakeSchedulerContext
+    from test_finished_job_record import build_poller, FakeScheduler, PricingSpy
+    from ideascheduler.app.provisioning.job_monitor.job_monitor import JobMonitor
+    from ideascheduler.app.provisioning.job_monitor import finished_job_processor
+
+    # PBS's extension only runs inside PBS; keep its attribute surface, but execute
+    # the production serializer, consumer models, SQLite cache and recovery method.
+    class PBSObject(SimpleNamespace):
+        def __getattr__(self, name):
+            return None
+
+    hook = Path(__file__).parents[1] / 'resources/openpbs/hooks/openpbs_hook_handler.py'
+    monkeypatch.setitem(sys.modules, 'pbs', Mock())
+    serializer = {}
+    exec(
+        compile(hook.read_text().split('\ne = pbs.event()\n', 1)[0], str(hook), 'exec'),
+        serializer,
+    )
+    serializer.update(
+        get_instance_id=lambda: None,
+        get_instance_type=lambda: 'c5.large',
+        get_local_node_name=lambda: 'compute',
+    )
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+    start = arrow.get('2026-08-01T02:00:00Z')
+    context.job_cache = cache
+    context.config().put('scheduler.job_status_sqs_queue_url', 'unused')
+    monitor = JobMonitor(context)
+    cached = build_pbs_job(
+        job_state='R', stime=str(start.shift(hours=-2).int_timestamp), run_count=1
+    ).as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+    cached.job_uid = 'rerun-job'
+    cache.sync([cached])
+    PricingSpy.reset()
+    monkeypatch.setattr(finished_job_processor, 'PricingHelper', PricingSpy)
+    context.metrics = Mock()
+    context.job_notifications = Mock()
+    context.document_store = Mock()
+    context.lifecycle_events = None
+    try:
+        for phase in order:
+            serializer['start_time'] = (
+                start.shift(seconds=120 if phase == 'end' else 0).int_timestamp * 1000
+            )
+            payload = serializer['OpenPBSEvent'](
+                PBSObject(
+                    type=0x200 if phase == 'end' else 0x40,
+                    requestor_host='compute',
+                    hook_name='job_status',
+                    job=PBSObject(
+                        **build_pbs_job(
+                            job_state='E' if phase == 'end' else 'R',
+                            exec_host='compute/0',
+                            stime=str(start.int_timestamp),
+                            run_count=2,
+                            Exit_status=0,
+                            resources_used='cput=00:01:00,ncpus=1',
+                        ).model_dump()
+                    ),
+                )
+            ).build()
+            assert 'stime' not in payload['job']
+            event = OpenPBSEvent(**payload)
+            job = event.job.as_soca_job(
+                context=context, queue_profile=QUEUE_PROFILE, event=event
+            )
+            monitor.job_status_update(job)
+
+        # Reopen SQLite: recovery must use persisted hook data, not the last object.
+        cache.stop()
+        cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+        context.job_cache = cache
+        cached = cache.get_job(cached.job_id)
+        assert cached.start_time == start.shift(hours=-2).datetime
+        # Fresh history remains authoritative even when hooks disagree by a second.
+        fresh = cached.model_copy(
+            update={
+                'start_time': start.shift(seconds=1).datetime,
+                'end_time': start.shift(seconds=120).datetime,
+            }
+        )
+        context.scheduler = FakeScheduler(
+            {cached.job_id: fresh} if history_available else {}
+        )
+        assert build_poller(context)._process_finished_jobs([cached]) == [cached.job_id]
+        finished = cache.get_completed_job_by_uid(cached.job_uid)
+        seconds = 119 if history_available else 120
+        assert finished.start_time == (
+            fresh.start_time if history_available else start.datetime
+        )
+        assert finished.end_time == start.shift(seconds=120).datetime
+        assert finished.total_time_secs == seconds
+        assert PricingSpy.calls == [(cached.job_id, seconds)]
+        assert not ProcessFinishedJob.never_started(finished)
+        run = finished.execution_hosts[0].execution.runs[0]
+        assert run.run_id == '2'
+        assert run.status == 'success'
+        assert run.resources_used.cpu_time_secs == 60
+    finally:
+        cache.stop()

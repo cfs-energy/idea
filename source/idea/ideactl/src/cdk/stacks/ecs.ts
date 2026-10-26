@@ -566,7 +566,7 @@ export class EcsStack extends IdeaBaseStack {
     );
     grantInjectedSecret(scope, executionRole, apiKey.secretArn);
     // The module's own id, not the module-set row: an upgrade announces this module in the
-    // module set only after every stack has deployed (see `heldModuleSetEntries`).
+    // module set only after every stack has deployed.
     const datadogLogGroupName = `/${this.clusterName}/${this.moduleId}/datadog`;
     const container = taskDefinition.addContainer("datadog-container", {
       // The agent listens on UDP by default; the tasks send to the socket they mount, so the

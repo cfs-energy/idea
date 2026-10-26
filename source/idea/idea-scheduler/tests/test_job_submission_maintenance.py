@@ -1,9 +1,8 @@
 """
 Test Cases for the maintenance window gate on Scheduler.SubmitJob.
 
-The gate lives in submit_job rather than the OpenPBS submit hook: the hook runs inside the
-PBS server, so once the scheduler is stopped nothing runs it and qsub fails with a generic
-connection error instead.
+The API explains maintenance before contacting PBS. The queuejob admission path separately
+blocks direct qsub while PBS is running.
 """
 
 from ideadatamodel import constants, errorcodes, exceptions

@@ -316,9 +316,6 @@ class CostMetricsService(SocaService):
         )
 
     def start(self):
-        if not self.is_enabled():
-            self.logger.debug('cost metrics are disabled. skip.')
-            return
         self._thread.start()
 
     def stop(self):
@@ -343,6 +340,9 @@ class CostMetricsService(SocaService):
         return today.shift(days=-self.get_lookback_days()), today
 
     def run_once(self):
+        if not self.is_enabled():
+            self.logger.debug('cost metrics are disabled. skip.')
+            return
         lock_key = f'{self.context.module_id()}-cost-metrics'
         try:
             self.context.distributed_lock().acquire(key=lock_key)

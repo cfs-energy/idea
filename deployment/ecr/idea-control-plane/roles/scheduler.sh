@@ -21,7 +21,7 @@ SERVER_NAME="${IDEA_SCHEDULER_DNS_NAME%%.*}"
 TASK_IP=""
 if [[ -n "${ECS_CONTAINER_METADATA_URI_V4:-}" ]]; then
   TASK_IP="$(curl -fsS --max-time 3 "${ECS_CONTAINER_METADATA_URI_V4}/task" \
-    | python3 -c 'import json,sys; t=json.load(sys.stdin); print(t["Containers"][0]["Networks"][0]["IPv4Addresses"][0])' 2>/dev/null || true)"
+    | jq -er '.Containers[0].Networks[0].IPv4Addresses[0] // empty' 2>/dev/null || true)"
 fi
 if [[ -z "${TASK_IP}" ]]; then
   TASK_IP="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -v '^169\.254\.' | head -1)"
@@ -308,8 +308,8 @@ shutdown() {
 # Synchronize cluster users before starting the scheduler module. The sync itself defers a fresh
 # cluster's not-yet-created tables to its background pass and fails on anything else.
 log "syncing cluster users and groups into the resolver"
-python3.13 /opt/idea/sync_users.py --once
-python3.13 /opt/idea/sync_users.py &
+python3.13 -m ideascheduler.app.sync_users --once
+python3.13 -m ideascheduler.app.sync_users &
 SYNC_PID=$!
 
 # Containers have no cron; supervise the same daily archive alongside the app.

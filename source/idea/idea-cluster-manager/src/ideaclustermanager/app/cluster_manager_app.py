@@ -59,6 +59,8 @@ from ideaclustermanager.app.notifications.notifications_service import (
 from ideaclustermanager.app.costs.personal_costs_store import PersonalCostsStore
 from ideaclustermanager.app.costs.personal_costs_collector import PersonalCostsCollector
 
+from ideaclustermanager.app.terminal.service import TerminalService
+
 from typing import Optional
 
 
@@ -229,6 +231,10 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             accounts=self.context.accounts,
             email_templates=self.context.email_templates,
         )
+
+        self.context.terminal = TerminalService(self.context)
+        self.context.terminal.initialize()
+        self.context.terminal.register(self.server)
 
         # web portal
         self.web_portal = WebPortal(context=self.context, server=self.server)

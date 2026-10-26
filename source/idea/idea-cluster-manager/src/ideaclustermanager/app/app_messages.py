@@ -68,8 +68,8 @@ DEV_MODE_INDEX_PAGE = """
   <main>
     <h3 class="title"> SOCA Web Portal (Dev Mode)</h3>
     <p> When using dev-mode, do not use the Web App served by the backend server.</p>
-    <p> Start local front-end server using invoke as shown below: </p>
-    <pre>$ invoke web-portal.serve-frontend</pre>
+    <p> Start local front-end server using mise as shown below: </p>
+    <pre>$ mise run web-portal:serve</pre>
 
     <br/>
     <p>If you've accidentally landed on this page, click below to open the dev-mode front end app:</p>

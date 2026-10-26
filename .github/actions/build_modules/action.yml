@@ -12,11 +12,13 @@ runs:
     - name: Generate TS Data Model
       shell: bash
       run: |
-        invoke web-portal.typings
+        mise run web-portal:typings
     - name: Build Modules
       shell: bash
       run: |
-        invoke clean build package
+        mise run clean
+        mise run build
+        mise run package
     - name: Check for changes to tracked files
       shell: bash
       run: |

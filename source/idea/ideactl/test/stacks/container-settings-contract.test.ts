@@ -2,30 +2,30 @@
  * Container module configuration and published settings contracts.
  */
 
+import { App, Aws, Fn, Stack } from "aws-cdk-lib";
+import { Template } from "aws-cdk-lib/assertions";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import { ContainerImage } from "aws-cdk-lib/aws-ecs";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as yaml from "js-yaml";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test, { after } from "node:test";
-import { byType, resourcesOf, synthBastion, synthEcs, cleanupWorkdirs } from "../support/ecs-harness.ts";
+import { fileURLToPath } from "node:url";
 import { addLogTailContainer, applicationContainerSettings, applicationTargetGroup, buildEc2Service, buildExecutionRole, buildTaskDefinition, type ContainerScope } from "../../src/cdk/constructs/container.ts";
+import { renderPolicy } from "../../src/cdk/policy.ts";
+import { byType, cleanupWorkdirs, resourcesOf, synthBastion, synthEcs } from "../support/ecs-harness.ts";
 
 after(cleanupWorkdirs);
-import { App, Aws, Fn, Stack } from "aws-cdk-lib";
-import * as ec2 from "aws-cdk-lib/aws-ec2";
-import { ContainerImage } from "aws-cdk-lib/aws-ecs";
-import * as iam from "aws-cdk-lib/aws-iam";
-import { Template } from "aws-cdk-lib/assertions";
-import { renderPolicy } from "../../src/cdk/policy.ts";
-import * as yaml from "js-yaml";
 
-import { ClusterConfig, MODULE_METADATA } from "../../src/config/cluster-config.ts";
-import { jinjaEnv, renderTemplate } from "../../src/config/jinja.ts";
 import { makeContext } from "../../src/cdk/constructs/base.ts";
 import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
-import { loadValuesFile } from "../../src/config/values.ts";
+import { ClusterConfig, MODULE_METADATA } from "../../src/config/cluster-config.ts";
+import { jinjaEnv, renderTemplate } from "../../src/config/jinja.ts";
+import { buildContext, loadValuesFile } from "../../src/config/values.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "../support/ecs-settings.ts";
 
@@ -125,9 +125,8 @@ function renderSettings(enableEcs: boolean): Json {
     const value = values["enable_ecs"];
     if (typeof value !== "boolean") throw new TypeError("enable_ecs must parse as a Boolean");
 
-    const rendered = renderTemplate(jinjaEnv(templateDirectory), "ecs/settings.yml", {
-      enable_ecs: value,
-    });
+    const context = buildContext({ ...loadValuesFile(join(import.meta.dirname, "ecs-values.yml")), enable_ecs: value });
+    const rendered = renderTemplate(jinjaEnv(templateDirectory), "ecs/settings.yml", context);
     return requireRecord(yaml.load(rendered), "ECS settings template must render a YAML mapping");
   } finally {
     rmSync(workdir, { force: true, recursive: true });
@@ -300,8 +299,7 @@ test("the ECS module resolves by name and id at priority 4.5", () => {
   assert.equal(config.modules()[0]?.deployment_priority, 4.5);
 });
 
-test("enable_ecs switches the rendered ECS setting on and off", () => {
-  assert.equal(renderSettings(false)["enabled"], false);
+test("the generated ECS module is always enabled", () => {
   assert.equal(renderSettings(true)["enabled"], true);
 });
 
@@ -437,7 +435,7 @@ test("replicated services surge in full, the scheduler stops first, and targets 
   assert.equal(services["writer"].DeploymentConfiguration.MaximumPercent, 100);
   assert.deepEqual(services["writer"].PlacementConstraints ?? [], [], "the one batch server is not spread");
   const group = Object.values(resources).find((resource) => resource["Type"] === "AWS::ElasticLoadBalancingV2::TargetGroup")!;
-  const drain = ((group["Properties"] as Json)["TargetGroupAttributes"] as Array<{Key: string, Value: string}>)
+  const drain = ((group["Properties"] as Json)["TargetGroupAttributes"] as Array<{ Key: string, Value: string }>)
     .find((entry) => entry.Key === "deregistration_delay.timeout_seconds")?.Value;
   // The log follower is a bash loop: as PID 1 it ignored SIGTERM and every stop ended in SIGKILL.
   // Docker's init takes PID 1 and passes the signal to the loop and its tails.
@@ -463,20 +461,20 @@ test("four resting hosts hold every service's full surge at once, one replica pe
   assert.equal(minimum, 4);
   assert.equal(ECS_HOST_SETTINGS["ecs.hosts.max"], 5);
   // the configured host type's capacity, less the agent and OS reserve the old fixed numbers kept
-  const capacity: Record<string, {memory: number, cpu: number}> = {
-    "m7g.large": {memory: 8192, cpu: 2048},
-    "m7g.xlarge": {memory: 16384, cpu: 4096},
-    "m7g.2xlarge": {memory: 32768, cpu: 8192},
+  const capacity: Record<string, { memory: number, cpu: number }> = {
+    "m7g.large": { memory: 8192, cpu: 2048 },
+    "m7g.xlarge": { memory: 16384, cpu: 4096 },
+    "m7g.2xlarge": { memory: 32768, cpu: 8192 },
   };
   const host = capacity[ECS_HOST_SETTINGS["ecs.hosts.instance_type"] as string];
   assert.ok(host, "the default host type has a known capacity");
   const usableMemory = host.memory - 512 - 512;
   const usableCpu = host.cpu - 2;
-  type Slot = {role: string, cpu: number, memory: number};
+  type Slot = { role: string, cpu: number, memory: number };
   // The distinct-instance constraint counts old and new tasks alike: no host may hold two tasks
   // of one role, resting or mid-rollout.
   function fits(slots: Slot[], hostCount: number): boolean {
-    const hosts = Array.from({length: hostCount}, () => ({memory: 0, cpu: 0, roles: new Set<string>()}));
+    const hosts = Array.from({ length: hostCount }, () => ({ memory: 0, cpu: 0, roles: new Set<string>() }));
     const ordered = [...slots].sort((a, b) => b.memory - a.memory);
     function place(index: number): boolean {
       const task = ordered[index];
@@ -491,28 +489,27 @@ test("four resting hosts hold every service's full surge at once, one replica pe
     }
     return place(0);
   }
-  const resting: Slot[] = tasks.flatMap(task => Array.from({length: task.desired}, () => task));
+  const resting: Slot[] = tasks.flatMap(task => Array.from({ length: task.desired }, () => task));
   assert.ok(fits(resting, minimum), "the resting tasks fit the configured minimum");
   // An upgrade deploys the module stacks of one priority together, so every replicated service
   // surges at once: each starts a full set of replacements beside its old tasks, all on distinct
   // hosts. The scheduler stops before its replacement starts, so its one task is counted once.
   // None of this may wait for the spare host: one that launches and joins takes minutes.
   const surge: Slot[] = tasks.filter(task => task.role !== "scheduler")
-    .flatMap(task => Array.from({length: task.desired}, () => task));
+    .flatMap(task => Array.from({ length: task.desired }, () => task));
   assert.ok(fits([...resting, ...surge], minimum), "every surge fits the resting hosts at once");
   // Three hosts cannot: a two-task service's surge needs four distinct hosts.
   assert.equal(fits([...resting, ...surge], 3), false, "three hosts hold no full surge");
 });
 
-
 test("synthesized cluster-manager policy permits retirement only on the outbox prefix", () => {
   const stack = new Stack();
   new iam.ManagedPolicy(stack, "collector-policy", {
-    document: iam.PolicyDocument.fromJson(renderPolicy("cluster-manager.yml", {config: ecsConfig(), moduleId: "cluster-manager"})),
+    document: iam.PolicyDocument.fromJson(renderPolicy("cluster-manager.yml", { config: ecsConfig(), moduleId: "cluster-manager" })),
   });
   const policies = Template.fromStack(stack).findResources("AWS::IAM::ManagedPolicy");
   const policy = Object.values(policies)[0]!;
-  const statements = policy.Properties.PolicyDocument.Statement as Array<{Action: string | string[]; Resource: string | string[]; Effect: string}>;
+  const statements = policy.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: string | string[]; Effect: string }>;
   const deletes = statements.filter(statement => [statement.Action].flat().includes("s3:DeleteObject"));
   assert.equal(deletes.length, 1);
   assert.equal(deletes[0]!.Effect, "Allow");

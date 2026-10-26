@@ -164,6 +164,7 @@ def test_memory_units_and_implicit_select_count():
         4,
         8 * 1000**3,
         1,
+        4,
     )
 
 
@@ -460,3 +461,46 @@ def test_allocation_keeps_instance_type_alternatives_in_one_chunk():
         dict(custom_params={'select': '2:ncpus=4:mem=8gb'})
     )
     assert with_alternatives[0] == 8 and with_alternatives[2] == 2
+
+
+@pytest.mark.parametrize(
+    'select,used_cores,expected',
+    [
+        ('1:ncpus=64+1:ncpus=4', 64, None),
+        ('1:ncpus=4+1:ncpus=64', 64, None),
+        ('1:ncpus=64+1:ncpus=4', 64 * 1.05, None),
+        ('1:ncpus=64+1:ncpus=4', 68, 100),
+        ('2:ncpus=64+1:ncpus=4', 100, 100 * 100 / 132),
+        ('2:ncpus=64', 64, None),
+        ('2:ncpus=64', 128, 100),
+    ],
+)
+def test_multi_node_cpu_uses_largest_single_chunk(select, used_cores, expected):
+    value = job(used=used_cores * 3600)
+    value['params']['custom_params'] = {'select': select}
+    result = job_efficiency(value)
+    assert result['cpu_efficiency_pct'] == pytest.approx(expected)
+    assert (result['used_cores'] is None) == (expected is None)
+    assert (result['wasted_core_hours'] is None) == (expected is None)
+
+
+@pytest.mark.parametrize('same_host', [False, True])
+def test_efficiency_uses_latest_attempt_for_cpu_and_memory(same_host):
+    from copy import deepcopy
+    from ideadatamodel import SocaJob
+
+    value = job()
+    current = value['execution_hosts'][0]
+    current['execution']['runs'][0]['run_id'] = '10'
+    previous = deepcopy(current)
+    previous['execution']['runs'][0].update(
+        run_id='2',
+        resources_used=dict(cpu_time_secs=14400, memory=dict(value=8, unit='gib')),
+    )
+    if same_host:
+        current['execution']['runs'].extend(previous['execution']['runs'])
+    else:
+        value['execution_hosts'].append(previous)
+    result = job_efficiency(SocaJob(**value))
+    assert result['cpu_efficiency_pct'] == 50
+    assert result['memory_efficiency_pct'] == 50

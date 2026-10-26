@@ -15,6 +15,8 @@ class DatadogFormat:
         ):
             if Utils.is_not_empty(value):
                 self.base_tags.append(f'{key}:{self._tag_value(value)}')
+                if key == 'idea_cluster':
+                    self.base_tags.append(f'env:{self._tag_value(value)}')
 
     @staticmethod
     def _tag_value(value) -> str:
@@ -40,10 +42,12 @@ class DatadogFormat:
     def name_and_tags(self, entry):
         name = entry['MetricName']
         collector = name.startswith(('cost.', 'storage.'))
+        # Replayable series keep their historical identity for both live sends and backfills.
         tags = [
             tag
             for tag in self.base_tags
-            if not collector or tag.startswith('idea_cluster:')
+            if (not collector or tag.startswith('idea_cluster:'))
+            and not (name.startswith('job.') and tag.startswith('env:'))
         ]
         for dimension in Utils.get_value_as_list('Dimensions', entry, []):
             key = _TAG_UNSAFE.sub('_', str(dimension.get('Name', '')).strip().lower())

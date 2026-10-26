@@ -7,6 +7,63 @@ Please read through this document before submitting any issues or pull requests 
 information to effectively respond to your bug report or contribution.
 
 
+## Development setup
+
+Install [mise](https://mise.jdx.dev/getting-started.html) and activate it in your shell
+(for example, `eval "$(mise activate zsh)"` for zsh). From the checkout:
+
+```bash
+mise trust
+mise install
+hk install
+hk check --all
+```
+
+`mise.toml` pins the developer and CI tools. `hk install` installs the Git commit hook.
+It applies available fixes, stops the commit, and leaves those fixes for you to review and
+stage. Use `hk fix --all` to apply fixes manually, and `hk check --all` (or `mise run lint`)
+for a read-only check. To run without shell activation, use `mise exec -- hk check --all`.
+The branch guard rejects local commits to main and master; CI skips only that guard.
+
+Library dependencies still come from `requirements/*.txt`, `package-lock.json`, and
+`yarn.lock`. Install them as described in the
+[developer onboarding guide](docs/developer-portal/developer-onboarding.md).
+Use `mise run test:sdk` (or `test:cluster-manager`, `test:scheduler`,
+`test:virtual-desktop-controller`, `test:web-portal`) after installing the development
+requirements. The legacy module suites use Corretto 17: run `MISE_ENV=legacy mise install`
+and `MISE_ENV=legacy mise run test:sdk`. ideactl uses `mise run ideactl:build` and
+`mise run ideactl:checks`; install its dependencies with `npm ci` first.
+Keep the development venv's `bin` directory first on `PATH` inside the ideactl test
+process too: its Python oracles import Jinja2 and PyYAML from the dev requirements.
+
+The web portal uses Yarn: run `yarn install --frozen-lockfile` in
+`source/idea/idea-cluster-manager/webapp` before its tests. `npm ci` requires an npm
+lockfile and cannot install the portal's dependencies.
+
+On macOS, the Python bootstrap tests execute Linux shell fragments and need GNU sed
+and GNU date on `PATH`. With Homebrew's `gnu-sed` and `coreutils` installed:
+
+```bash
+export PATH="$(brew --prefix gnu-sed)/libexec/gnubin:$(brew --prefix coreutils)/libexec/gnubin:$PATH"
+```
+
+Run the Python suites with the mise Java environment active and local socket access:
+cluster-manager uses DynamoDB Local, and SDK and terminal tests start local listeners.
+Cluster-manager fails if DynamoDB Local cannot start, so its dependent tests cannot
+silently disappear from a passing run. Inspect pytest's skip summary (`-ra`) for
+platform prerequisites such as root access or PowerShell.
+
+Tool updates belong in mise configuration; Python and Node dependency updates belong in
+the existing manifests and lockfiles. `software_versions.yml` still selects deployed
+runtimes. Keep its Node and Python versions aligned with mise when changing those runtimes.
+
+Build and maintenance commands are listed in the
+[development command table](docs/developer-portal/developer-onboarding.md#development-commands).
+Use `mise run clean`, `mise run build`, and `mise run package` in that order.
+Refresh requirements with `mise run req:update`; verify a no-op compile with
+`mise run req:update --check`. Activate the development venv first so service tasks
+use its interpreter through `VIRTUAL_ENV`.
+
 ## Reporting Bugs/Feature Requests
 
 We welcome you to use the GitHub issue tracker to report bugs or suggest features.

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-python3.13 /opt/idea/roles/bastion.py
+node /opt/idea/ideactl/dist/src/container/bastion.js
 unset IDEA_LDAP_CERTIFICATE
 install -d -m 0755 /run/sshd
 # Container sessions have no host audit login UID to set.
@@ -66,6 +66,7 @@ EOF
   # shellcheck disable=SC2016  # expanded by the login shell, not here
   echo 'export PATH=/opt/pbs/bin:/opt/pbs/sbin:$PATH' > /etc/profile.d/pbs.sh
 fi
+timeout 300 python3.13 /opt/idea/roles/terminal_host.py || echo "Terminal trust not installed; continuing without browser terminal"
 # Site customizations, as compute nodes and desktops run theirs from the shared /apps file
 # system: tools users expect on the login node. It runs as root, so only a file root owns and
 # no one else can write (a desktop user with sudo can write to /apps); it gets two minutes,

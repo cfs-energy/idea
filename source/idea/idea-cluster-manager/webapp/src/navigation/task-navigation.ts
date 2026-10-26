@@ -10,6 +10,7 @@ export const PORTAL_TASKS: PortalTask[] = [
     {id: 'my-desktops', title: 'My desktops', views: [view('Owned', '/home/virtual-desktops', 'desktop'), view('Shared', '/home/shared-desktops', 'desktop')]},
     {id: 'my-jobs', title: 'My jobs', views: [view('Active', '/home/active-jobs', 'jobs'), view('Completed', '/home/completed-jobs', 'jobs'), view('Submit job', '/soca/jobs/submit-job', 'jobs', false), view('Write script', '/home/script-workbench', 'jobs', false)]},
     {id: 'files', title: 'Files', views: [view('Files', '/home/file-browser', 'cluster')]},
+    {id: 'terminal', title: 'Terminal', views: [view('Terminal', '/home/terminal', 'cluster')]},
     {id: 'ssh-access', title: 'SSH access', views: [view('SSH access', '/home/ssh-access', 'cluster')]},
     {id: 'my-costs', title: 'My costs', views: [view('My costs', '/home/my-costs', 'cluster')]},
     {id: 'reporting', title: 'Reporting', admin: false, views: [view('Reporting', '/reporting', 'reporting', false)]},
@@ -42,6 +43,7 @@ export function hasAccess(context: AppContext, access: Access): boolean {
 }
 
 export function permittedViews(task: PortalTask, context: AppContext): TaskView[] {
+    if (task.id === 'terminal' && (window as any).idea?.app?.web_terminal_enabled === false) return [];
     return task.views.filter(item => (Array.isArray(item.access) ? item.access : [item.access]).some(access => hasAccess(context, access)));
 }
 

@@ -1711,6 +1711,13 @@ class SocaServer(SocaService):
         # clear _is_running, so that no new client connections will be queued
         self._is_running.clear()
 
+        # Run application cleanup on the serving loop before closing its transports.
+        for server in (self._http_server, self._unix_server):
+            if server is not None and server.app.state.is_started:
+                asyncio.run_coroutine_threadsafe(
+                    server.before_stop(), self._server_loop
+                ).result(timeout=30)
+
         # shutdown executor and wait for current pending requests to complete and allow to respond back
         self._executor.shutdown(wait=True, cancel_futures=True)
 

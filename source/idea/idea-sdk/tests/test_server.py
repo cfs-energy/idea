@@ -27,10 +27,23 @@ from pydantic import Field
 from typing import Optional, List
 
 import http.client
+import socket
+import tempfile
 import pytest
 
-SERVER_PORT = 34567
-UNIX_SOCKET_FILE = '/tmp/soca/test_socket.sock'
+
+@pytest.fixture(scope='session')
+def server_port():
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        return listener.getsockname()[1]
+
+
+@pytest.fixture(scope='session')
+def unix_socket_file():
+    # Keep Unix paths short enough for macOS and unique across concurrent gate runs.
+    with tempfile.TemporaryDirectory(prefix='idea-server-', dir='/tmp') as directory:
+        yield f'{directory}/api.sock'
 
 
 # Create sample Calculator API Data Model
@@ -153,7 +166,7 @@ def context():
 
 
 @pytest.fixture(scope='session', autouse=True)
-def server(context):
+def server(context, server_port, unix_socket_file):
     # Initialize SocaServer: HTTP + UNIX Socket
     server = SocaServer(
         context=context,
@@ -161,9 +174,9 @@ def server(context):
         options=SocaServerOptions(
             enable_http=True,
             hostname='localhost',
-            port=SERVER_PORT,
+            port=server_port,
             enable_unix_socket=True,
-            unix_socket_file=UNIX_SOCKET_FILE,
+            unix_socket_file=unix_socket_file,
             graceful_shutdown_timeout=1,
             enable_openapi_spec=False,
             api_path_prefixes=['/test-server'],
@@ -175,28 +188,28 @@ def server(context):
     yield server
 
     server.stop()
-    assert Utils.is_socket(UNIX_SOCKET_FILE) is False
+    assert Utils.is_socket(unix_socket_file) is False
 
 
 @pytest.fixture(scope='session')
-def http_client(context):
+def http_client(context, server):
     return SocaClient(
         context=context,
         options=SocaClientOptions(
             enable_logging=True,
-            endpoint=f'http://localhost:{SERVER_PORT}/test-server/api/v1',
+            endpoint=f'http://localhost:{server.options.port}/test-server/api/v1',
         ),
     )
 
 
 @pytest.fixture(scope='session')
-def unix_client(context):
+def unix_client(context, server):
     return SocaClient(
         context=context,
         options=SocaClientOptions(
             enable_logging=True,
             endpoint='http://localhost/test-server/api/v1',
-            unix_socket=UNIX_SOCKET_FILE,
+            unix_socket=server.options.unix_socket_file,
         ),
     )
 
@@ -252,7 +265,7 @@ def invoke_listing(http_client, unix_client, logger, namespace: str, result_coun
     assert first.result is not None
 
 
-def test_server(monkeypatch, http_client, unix_client, logger):
+def test_server(monkeypatch, http_client, unix_client, logger, server):
     invoke(http_client, unix_client, logger, 'Calculator.Add', 10, 20, 30)
     invoke(http_client, unix_client, logger, 'Calculator.Subtract', 20, 10, 10)
     invoke(http_client, unix_client, logger, 'Calculator.Multiply', 20, 10, 200)
@@ -272,14 +285,16 @@ def test_server(monkeypatch, http_client, unix_client, logger):
         )
     assert divide_by_zero.value.error_code == errorcodes.INVALID_PARAMS
 
-    assert Utils.is_socket(UNIX_SOCKET_FILE) is True
+    assert Utils.is_socket(server.options.unix_socket_file) is True
 
 
-def test_cors_preflight(logger):
+def test_cors_preflight(logger, server):
     # OPTIONS routes are added after the app is finalized; this asserts they go through the
     # same registration path as ordinary routes, so request handling finds the middleware it expects.
     logger.info('cors preflight')
-    connection = http.client.HTTPConnection('localhost', SERVER_PORT, timeout=10)
+    connection = http.client.HTTPConnection(
+        'localhost', server.options.port, timeout=10
+    )
     try:
         connection.request(
             'OPTIONS',

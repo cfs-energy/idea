@@ -456,6 +456,7 @@ describe("every branch family matches the recorded Python digests", { skip: reco
       const environment = jinjaEnv(sourceDirectory(family));
       const row = expected[family.name];
       assert.ok(row !== undefined, `${family.name}: no recorded digests`);
+      assert.deepEqual(Object.keys(row).sort(), [...family.templates].sort(), `${family.name}: recorded keys must match live templates`);
       const differences: string[] = [];
       for (const name of family.templates) {
         assert.ok(row[name] !== undefined, `${family.name}/${name}: no recorded digest`);

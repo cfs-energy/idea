@@ -11,8 +11,8 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { CdkInvoker, DEPLOYABLE_MODULE_NAMES, type CdkInvokerOptions, type Deps } from '../../src/cli/cdk-invoker.ts';
 import { buildBootstrapContext } from "../../src/cli/bootstrap-context.ts";
+import { CdkInvoker, DEPLOYABLE_MODULE_NAMES, type CdkInvokerOptions, type Deps } from '../../src/cli/cdk-invoker.ts';
 import { BOOTSTRAP_SOURCE } from "../stacks/bootstrap-oracle-context.ts";
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 
@@ -268,19 +268,6 @@ describe('CdkInvoker.invoke', () => {
     await cdk.invoke();
     assert.deepEqual(deps.spawns, []);
     assert.ok(deps.stdout.some((line) => line.includes('module name not found: global-settings')));
-  });
-
-  it('stops before the deploy when the release archive is missing', async () => {
-    const deps = fakeDeps({ tables });
-    const cdk = await CdkInvoker.open({
-      clusterName: CLUSTER,
-      awsRegion: REGION,
-      moduleId: 'scheduler',
-      moduleSet: 'default',
-      deps,
-    });
-    await assert.rejects(() => cdk.invoke(), /package not found: .*idea-scheduler-/);
-    assert.deepEqual(deps.spawns, []);
   });
 
   it('stops rather than pointing a host at a bootstrap package it never uploaded', async () => {

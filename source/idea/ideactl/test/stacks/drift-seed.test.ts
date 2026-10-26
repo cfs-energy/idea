@@ -21,6 +21,7 @@ import {
   compareUpgradeDrift,
   dynamoValueType,
   UPGRADE_DRIFT_ACTIONS,
+  VALUES_OWNED_KEYS,
   type CurrentConfigRow,
   type UpgradeDriftAction,
   type UpgradeDriftEffect,
@@ -61,6 +62,7 @@ const SEQUENCE = [
   "write STACK_SEED with source=stack, then db.setConfigEntry for each seeded operator overlay",
   "db.syncClusterSettingsInDb(generated keys starting with global-settings., overwrite=true)",
   "db.syncClusterSettingsInDb(GENERATED, overwrite=false)",
+  "db.syncClusterSettingsInDb(values-owned keys, overwrite=true)",
   "db.setConfigEntry for each Phase 3 entry, then for the metrics provider cutover",
   `planUpgradePhase3Entries(..., amiId=${RELEASE_AMI}, baseOs=${BASE_OS}) then db.setConfigEntry for each planned row`,
   "Custom::ClusterSettings Update for selected module cluster-manager (not metrics)",
@@ -235,15 +237,15 @@ function phase3Deps(): UpgradeDeps {
     async httpStatus() {
       return 0;
     },
-    async sleep() {},
+    async sleep() { },
     now() {
       return 0;
     },
     uuid() {
       return "00000000-0000-0000-0000-000000000000";
     },
-    out() {},
-    err() {},
+    out() { },
+    err() { },
     async prompt() {
       return true;
     },
@@ -336,7 +338,7 @@ async function applySelectedStackUpdate(
     dynamoDb: () => ({
       send: async (command) => doc.send(command),
     }),
-    logger: { info() {}, error() {} },
+    logger: { info() { }, error() { } },
     responseSender: async (response) => {
       responses.push(response);
     },
@@ -350,13 +352,13 @@ async function applySelectedStackUpdate(
     ResourceProperties: {
       cluster_name: clusterName,
       module_id: SELECTED_STACK.moduleId,
-      version: "26.09.0",
+      version: "26.10.0",
       settings: jsonSettings(SELECTED_STACK.target ?? {}),
     },
     OldResourceProperties: {
       cluster_name: clusterName,
       module_id: SELECTED_STACK.moduleId,
-      version: "26.08.0",
+      version: "26.10.0",
       settings: jsonSettings(SELECTED_STACK.previous),
     },
   };
@@ -475,8 +477,7 @@ function renderReport(input: {
   ];
   for (const row of input.edits) {
     lines.push(
-      `| ${row.editClass} | \`${row.key}\` | ${row.predictedSurvive ? "survive" : "lost"} | ${
-        row.survived ? "survive" : "lost"
+      `| ${row.editClass} | \`${row.key}\` | ${row.predictedSurvive ? "survive" : "lost"} | ${row.survived ? "survive" : "lost"
       } | ${row.match ? "yes" : "NO"} | ${cell(row.before)} | ${cell(row.after)} | ${row.note} |`,
     );
   }
@@ -511,8 +512,7 @@ function renderReport(input: {
   );
   for (const row of input.preview) {
     lines.push(
-      `| ${row.action} | \`${row.key}\` | ${row.predictedEffect} | ${row.actualEffect} | ${
-        row.match ? "yes" : "NO"
+      `| ${row.action} | \`${row.key}\` | ${row.predictedEffect} | ${row.actualEffect} | ${row.match ? "yes" : "NO"
       } | ${row.note} |`,
     );
   }
@@ -551,8 +551,7 @@ function measureEdits(
     const match = survived === edit.predictedSurvive;
     if (!match) {
       mismatches.push(
-        `${edit.editClass} ${edit.key}: predicted ${edit.predictedSurvive ? "survive" : "lost"}, actual ${
-          survived ? "survive" : "lost"
+        `${edit.editClass} ${edit.key}: predicted ${edit.predictedSurvive ? "survive" : "lost"}, actual ${survived ? "survive" : "lost"
         }`,
       );
     }
@@ -650,14 +649,6 @@ test("upgrade settings sync matches the analysis prediction for every edit class
     "built compute image must be kept out of Phase 3",
   );
   assert.ok(
-    phase3.some((entry) => entry.key === "scheduler.instance_ami" && entry.value === RELEASE_AMI),
-    "unrecognised scheduler AMI must be in Phase 3",
-  );
-  assert.ok(
-    phase3.some((entry) => entry.key === "cluster-manager.ec2.autoscaling.instance_type" && entry.value === "m7i.large"),
-    "retained m6i.large must be in Phase 3",
-  );
-  assert.ok(
     phase3.some((entry) => entry.key === "analytics.opensearch.data_node_instance_type" && entry.value === "m7g.large.search"),
     "retained OpenSearch default must be in Phase 3",
   );
@@ -688,6 +679,7 @@ test("upgrade settings sync matches the analysis prediction for every edit class
     true,
   );
   await db.syncClusterSettingsInDb(GENERATED, false);
+  await db.syncClusterSettingsInDb(GENERATED.filter((entry) => VALUES_OWNED_KEYS.has(entry.key)), true);
   for (const entry of [...phase3, ...providerCutover]) {
     await db.setConfigEntry(entry.key, entry.value);
   }
@@ -746,8 +738,7 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   t.diagnostic(SEQUENCE);
   for (const row of measured.rows) {
     t.diagnostic(
-      `${row.match ? "ok" : "MISMATCH"} ${row.editClass} ${row.key} predicted=${
-        row.predictedSurvive ? "survive" : "lost"
+      `${row.match ? "ok" : "MISMATCH"} ${row.editClass} ${row.key} predicted=${row.predictedSurvive ? "survive" : "lost"
       } actual=${row.survived ? "survive" : "lost"}`,
     );
   }
@@ -778,17 +769,11 @@ test("upgrade settings sync matches the analysis prediction for every edit class
   assert.equal(locale?.value, "en_US.UTF-8");
   assert.equal(locale?.version, 2);
 
-  const rewrittenOs = after.get("cluster-manager.ec2.autoscaling.base_os");
-  assert.equal(rewrittenOs?.value, BASE_OS);
-  assert.equal(rewrittenOs?.version, 2);
-
   // The operator wrote this row (cli marker), so the template overwrite keeps it.
   assert.deepEqual(after.get("global-settings.custom_tags")?.value, ["Key=Owner,Value=ops"]);
   assert.equal(after.get("global-settings.custom_tags")?.source, "cli");
   assert.equal(after.has("global-settings.operator_only"), false);
-  assert.equal(after.get("scheduler.instance_ami")?.value, RELEASE_AMI);
   assert.equal(after.get("scheduler.compute_node_ami")?.value, BUILT_AMI);
-  assert.equal(after.get("cluster-manager.ec2.autoscaling.instance_type")?.value, "m7i.large");
   assert.equal(after.get("analytics.opensearch.data_node_instance_type")?.value, "m7g.large.search");
   assert.equal(after.get("cluster-manager.external_alb_dns")?.value, "stack.example.invalid");
   assert.equal(after.has("cluster-manager.removed_output"), false);

@@ -225,6 +225,11 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
     def _validate_get_session_screenshot_request(
         self, screenshot: VirtualDesktopSessionScreenshot, context: ApiInvocationContext
     ) -> tuple[VirtualDesktopSessionScreenshot, bool]:
+        # Only the stored, owned session may select the broker resource.
+        if Utils.is_empty(screenshot.idea_session_id):
+            screenshot.failure_reason = 'Provide idea_session_id'
+            return screenshot, False
+        screenshot.dcv_session_id = None
         screenshot, is_valid = self.validate_get_session_screenshot_request(screenshot)
         validation_response = True
         if not is_valid:
@@ -368,7 +373,13 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
             return
 
         session = self.complete_get_session_info_request(session, context)
-        session = self._get_session_info(session)
+        stored_session = self.get_session_if_owner(
+            context.get_username(), session.idea_session_id
+        )
+        if stored_session is None:
+            session.failure_reason = 'The desktop could not be found.'
+        else:
+            session = stored_session
 
         if Utils.is_empty(session.failure_reason):
             context.success(GetSessionInfoResponse(session=session))

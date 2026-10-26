@@ -33,16 +33,27 @@ jobs:
             exit 1
           fi
           echo "Version consistency check passed (${EXPECTED})"
-      - name: Pre-commit Linting
-        uses: ./.github/actions/pre-commit
+      - name: Set up pinned tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        with:
+          # renovate: datasource=github-releases depName=jdx/mise
+          version: 2026.10.19
+      - name: Scan checkout for secrets
+        run: gitleaks dir --redact --verbose --config .github/.gitleaks.toml .
+      - name: Lint
+        run: hk check --all
+        env:
+          # CI also runs on main; the branch guard is for local commits.
+          HK_SKIP_STEPS: no-commit-to-branch
       - name: Setup Development Environment
         uses: ./.github/actions/setup_dev_environment
       - name: Build Modules
         uses: ./.github/actions/build_modules
       - name: Verify Python locks by recompiling
         run: |
+          node --test scripts/tooling/*.test.mjs
           python -m unittest discover -s scripts -p 'test_*.py'
-          python scripts/requirements-locks.py --check
+          mise run req:update --check
       - name: Exercise runtime installer
         if: steps.inputs.outputs.runtimes == 'true'
         run: bash scripts/ci-runtime.sh
