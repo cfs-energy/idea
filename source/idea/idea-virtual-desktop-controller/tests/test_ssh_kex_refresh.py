@@ -488,8 +488,9 @@ def test_a_missing_private_zone_degrades_the_refresh(refresh):
         None if key == 'cluster.route53.private_hosted_zone_name' else key
     )
     logger = refresh.command_utils._logger
+    # without the zone the short name cannot resolve, so the full name is kept
     assert bootstrap_refresh_variables(config, logger) == {
-        'pbs_server_name': 'scheduler',
+        'pbs_server_name': 'scheduler.private_dns_name',
         'private_zone': None,
         'bootstrap_refresh': True,
     }
@@ -498,5 +499,5 @@ def test_a_missing_private_zone_degrades_the_refresh(refresh):
     refresh.command_utils.submit_ssm_command_to_refresh_bootstrap(session)
     payload = refresh.ssm.requests[0]['Parameters']['commands'][0]
     assert '/etc/ssh/sshd_config.d/10-idea-kex.conf' in payload
-    assert 's/^PBS_SERVER=.*/PBS_SERVER=scheduler/' in payload
+    assert 's/^PBS_SERVER=.*/PBS_SERVER=scheduler.private_dns_name/' in payload
     assert 'idea-scheduler.conf' not in payload

@@ -81,6 +81,17 @@ def test_the_desktop_refresh_uses_the_server_name(stable):
     assert variables['private_zone'] == (ZONE if stable else None)
 
 
+def test_the_refresh_keeps_the_full_name_without_a_private_zone():
+    # the short name resolves only through the zone in the search path; without it the
+    # refreshed pbs would fail check_hostname and stop the desktop's qsub
+    c = Config()
+    c.put('scheduler.use_stable_server_name', True)
+    c.put('scheduler.private_dns_name', STABLE_NAME)
+    variables = bootstrap_refresh_variables(c)
+    assert variables['pbs_server_name'] == STABLE_NAME
+    assert variables['private_zone'] is None
+
+
 def test_the_bastion_uses_the_server_name(tmp_path):
     text = (ROLES / 'bastion.sh').read_text()
     start = text.index('  cat > /etc/pbs.conf <<EOF')

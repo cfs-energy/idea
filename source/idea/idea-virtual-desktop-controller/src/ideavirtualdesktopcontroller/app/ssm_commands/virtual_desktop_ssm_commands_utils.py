@@ -34,8 +34,9 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
     what the refresh renders its templates with: the scheduler name a PBS client talks to
     and the zone it resolves it through, derived exactly as openpbs_client.jinja2 does at
     first bootstrap, so a desktop from before a scheduler move picks the current name up.
-    the name is always the first label, the server's own server_name: qsub completes a short
-    job id with it, and a dependency on any other spelling never releases.
+    the name is the first label, the server's own server_name: qsub completes a short job id
+    with it, and a dependency on any other spelling never releases. a stable cluster with no
+    private zone keeps the full name, since the short name cannot resolve there.
     bootstrap_refresh tells a template shared with first bootstrap which path it is on.
     """
     scheduler_dns_name = config.get_string('scheduler.private_dns_name')
@@ -51,14 +52,18 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
         if stable
         else None
     )
-    if stable and not private_zone and logger is not None:
-        # the rest of the refresh (ssh kex, online accounts) still goes out
-        logger.warning(
-            'cluster.route53.private_hosted_zone_name is not set: the refresh leaves the '
-            'scheduler search path alone'
-        )
+    pbs_server_name = scheduler_dns_name.split('.')[0]
+    if stable and not private_zone:
+        # without the zone in the search path the short name does not resolve and pbs would
+        # not start: keep the full name, which resolves as before the short-name fix
+        pbs_server_name = scheduler_dns_name
+        if logger is not None:
+            logger.warning(
+                'cluster.route53.private_hosted_zone_name is not set: the refresh keeps the '
+                'full scheduler name and leaves the search path alone'
+            )
     return {
-        'pbs_server_name': scheduler_dns_name.split('.')[0],
+        'pbs_server_name': pbs_server_name,
         'private_zone': private_zone or None,
         'bootstrap_refresh': True,
     }
