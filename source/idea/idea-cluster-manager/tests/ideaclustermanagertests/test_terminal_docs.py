@@ -180,7 +180,9 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
     import subprocess
     import time
 
-    lines = runbook_lines()
+    # Run every command in the documented block, not only the trust-unit lines.
+    block = DOC.read_text().split('refresh trust as root', 1)[1].split('```', 2)[1]
+    lines = [line for line in block.splitlines() if line.startswith('sudo ')]
     wait = next(line for line in lines if 'until test -f' in line)
     assert re.match(r"sudo timeout \d+ sh -c 'until test -f ", wait)
     bin_dir = tmp_path / 'bin'
@@ -188,6 +190,7 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
     for name, body in {
         'sudo': '#!/bin/sh\nexec "$@"\n',
         'journalctl': '#!/bin/sh\necho "journal $*"\n',
+        'sshd': '#!/bin/sh\nexit 0\n',
         'systemctl': STUB_SYSTEMCTL,
     }.items():
         (bin_dir / name).write_text(body)
@@ -204,8 +207,9 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
         for line in lines
     )
     began = time.monotonic()
+    # SSM Run Command runs the block with sh and no -e; the exit status must still fail.
     result = subprocess.run(
-        ['bash', '-e', '-c', script],
+        ['sh', '-c', script],
         capture_output=True,
         text=True,
         timeout=10,
@@ -233,7 +237,7 @@ def test_trust_refresh_runbook_leaves_sshd_reload_to_the_helper():
     block = DOC.read_text().split('refresh trust as root', 1)[1].split('```', 2)[1]
     commands = [line for line in block.splitlines() if line.startswith('sudo ')]
     assert commands[0] == 'sudo rm -f /run/idea-terminal-trust-ready'
-    assert commands[-1] == 'sudo sshd -t'
+    assert commands[-1] == 'sudo sshd -t && test -f /run/idea-terminal-trust-ready'
     assert not [line for line in commands if 'reload' in line]
 
 

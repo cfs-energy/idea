@@ -31,10 +31,10 @@ sudo rm -f /run/idea-terminal-trust-ready
 sudo systemctl reset-failed idea-terminal-trust.service
 sudo systemctl --no-block restart idea-terminal-trust.service
 sudo timeout 360 sh -c 'until test -f /run/idea-terminal-trust-ready || systemctl is-failed -q idea-terminal-trust.service; do sleep 5; done; test -f /run/idea-terminal-trust-ready' || { sudo journalctl -u idea-terminal-trust.service -n 50 --no-pager; false; }
-sudo sshd -t
+sudo sshd -t && test -f /run/idea-terminal-trust-ready
 ```
 
-Removing the previous ready marker and failed state first means only this refresh can satisfy the wait; IDEA certificates are already denied while the marker is absent. The restart returns at once. The wait ends when the marker appears, when the unit fails with status 78, or after six minutes; on failure it prints the service journal and exits non-zero. A refresh that keeps failing retries every 30 seconds and does not hang the command. Treat a missing ready marker as a failed refresh, even though the unit shows `active` while it retries. The helper reloads sshd itself; `sshd -t` is a final configuration check. Do not insert an unverified host key into the terminal table.
+Removing the previous ready marker and failed state first means only this refresh can satisfy the wait; IDEA certificates are already denied while the marker is absent. The restart returns at once. The wait ends when the marker appears, when the unit fails with status 78, or after six minutes; on failure it prints the service journal and exits non-zero. A refresh that keeps failing retries every 30 seconds and does not hang the command. Treat a missing ready marker as a failed refresh, even though the unit shows `active` while it retries. The helper reloads sshd itself; the last line checks the sshd configuration and the marker again, so the block exits non-zero on a failed refresh even when run as a script without `set -e` (for example through SSM Run Command). Do not insert an unverified host key into the terminal table.
 
 Host pins live in the terminal table under `host:bastion` or `host:<EC2 instance ARN>`. A desktop role can write only the row matching its own EC2 credential identity. The bastion role can write only its bastion row. Cluster-manager fails closed on missing or mismatched host keys. Container bastion connections use the private IP of a running task, selected deterministically while the task set stays unchanged. Different targets have separate tmux sessions. Container replacements do not preserve tmux processes.
 
