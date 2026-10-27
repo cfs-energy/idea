@@ -1202,7 +1202,14 @@ def test_whole_handshake_has_a_deadline(store, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    'mode', ['shutdown', 'oversized', 'slash-origin', 'slash-disabled']
+    'mode',
+    [
+        'shutdown',
+        'oversized',
+        'shutdown-during-release',
+        'slash-origin',
+        'slash-disabled',
+    ],
 )
 @pytest.mark.parametrize('unix_socket', [False, True])
 def test_real_soca_server_stop_drains_terminal(
@@ -1214,11 +1221,39 @@ def test_real_soca_server_stop_drains_terminal(
     from websockets.exceptions import ConnectionClosed, InvalidStatus
     from ideasdk.server.soca_server import SocaServer
     from tempfile import TemporaryDirectory
+    from threading import Event
 
     socket_directory = TemporaryDirectory(prefix='terminal-', dir='/tmp')
 
     service = TerminalService(MagicMock())
     service.store = store
+    completed = Event()
+    released = Event()
+    resume_release = Event()
+    websocket = service.websocket
+    shutdown = service.shutdown
+    release = store.release
+
+    async def observed_websocket(request, ws):
+        try:
+            await websocket(request, ws)
+        finally:
+            completed.set()
+
+    def held_release(*args):
+        release(*args)
+        released.set()
+        assert resume_release.wait(10)
+
+    async def observed_shutdown(*args):
+        # Resume the worker only once shutdown can cancel its awaiting handler.
+        resume_release.set()
+        await shutdown(*args)
+
+    monkeypatch.setattr(service, 'websocket', observed_websocket)
+    if mode == 'shutdown-during-release':
+        monkeypatch.setattr(store, 'release', held_release)
+        monkeypatch.setattr(service, 'shutdown', observed_shutdown)
     service.logger = logging.getLogger('terminal-soca-stop-test')
     service.context.config().get_cluster_external_endpoint.return_value = (
         'https://portal.example'
@@ -1302,12 +1337,12 @@ def test_real_soca_server_stop_drains_terminal(
             with pytest.raises(ConnectionClosed):
                 client.recv(timeout=5)
             assert client.close_code == (1012 if mode == 'shutdown' else 1009)
-            if mode == 'oversized':
-                import time
-
-                deadline = time.monotonic() + 5
-                while store.table.scan()['Count'] and time.monotonic() < deadline:
-                    time.sleep(0.01)
+            if mode == 'shutdown-during-release':
+                assert released.wait(10)
+                assert store.table.scan()['Count'] == 0
+                assert not completed.is_set()
+                server.stop()
+            assert completed.wait(10)
         assert store.table.scan()['Count'] == 0
         stops = [r.message for r in caplog.records if 'terminal stop ' in r.message]
         assert len(stops) == 1
@@ -1315,6 +1350,7 @@ def test_real_soca_server_stop_drains_terminal(
             'reason=' + ('server-shutdown' if mode == 'shutdown' else 'access-denied')
         )
     finally:
+        resume_release.set()
         if server.is_running():
             server.stop()
         Sanic.unregister_app(server.http_app)

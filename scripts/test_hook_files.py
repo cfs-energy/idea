@@ -1,6 +1,7 @@
 """Check byte-level formatting, classification, and index-sensitive hook behavior."""
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,25 @@ spec.loader.exec_module(hooks)
 
 
 class HookTests(unittest.TestCase):
+    def test_missing_identify_reports_how_to_install_and_activate_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for has_cli in (False, True):
+                with self.subTest(has_cli=has_cli):
+                    if has_cli:
+                        cli = Path(directory) / 'identify-cli'
+                        cli.write_text('#!/bin/sh\nexit 1\n')
+                        cli.chmod(0o755)
+                    result = subprocess.run(
+                        [sys.executable, '-S', str(SCRIPT)],
+                        env={**os.environ, 'PATH': directory},
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn('mise install pypi:identify', result.stderr)
+                    self.assertIn('mise exec --', result.stderr)
+                    self.assertNotIn('Traceback', result.stderr)
+
     def test_text_formatting_preserves_line_endings_and_empty_files(self):
         cases = [
             ('trailing-whitespace', b'a  \r\nb\t\n', b'a\r\nb\n'),

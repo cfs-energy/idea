@@ -52,7 +52,8 @@ jobs:
       - name: Verify Python locks by recompiling
         run: |
           node --test scripts/tooling/*.test.mjs
-          python -m unittest discover -s scripts -p 'test_*.py'
+          # Resolve the pinned identify executable, not mise-action's PATH shim.
+          mise exec pypi:identify -- "$VIRTUAL_ENV/bin/python" -m unittest discover -s scripts -p 'test_*.py'
           mise run req:update --check
       - name: Exercise runtime installer
         if: steps.inputs.outputs.runtimes == 'true'

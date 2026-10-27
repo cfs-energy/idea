@@ -124,6 +124,7 @@ class TerminalService:
         self.initialized = False
         self.stopping = False
         self._handlers = set()
+        self._closing_handlers = set()
         self._initialization_lock = threading.Lock()
         self._next_initialization = 0.0
 
@@ -452,7 +453,6 @@ class TerminalService:
         server.http_app.config.WEBSOCKET_MAX_SIZE = FRAME_LIMIT
         server.http_app.config.WEBSOCKET_PING_INTERVAL = 20
         server.http_app.config.WEBSOCKET_PING_TIMEOUT = 20
-        server.http_app.register_listener(self.shutdown, 'before_server_stop')
         for prefix in server.options.api_path_prefixes:
             path = prefix + '/terminal'
 
@@ -478,12 +478,16 @@ class TerminalService:
             server.http_app.add_websocket_route(
                 self.websocket, path, name='terminal-' + prefix
             )
+        # Stop listeners run in reverse order: drain before Sanic cancels WebSockets.
+        server.http_app.register_listener(self.shutdown, 'before_server_stop')
 
     async def shutdown(self, *_):
         self.stopping = True
         handlers = list(self._handlers)
         for task in handlers:
-            task.cancel()
+            # Cancelling a handler inside its finally block would skip audit/close.
+            if task not in self._closing_handlers:
+                task.cancel()
         if handlers:
             # SSH close, lease release and WebSocket close each have a bounded deadline.
             await asyncio.wait_for(
@@ -501,6 +505,7 @@ class TerminalService:
             await self._websocket(request, ws)
         finally:
             self._handlers.discard(task)
+            self._closing_handlers.discard(task)
 
     async def _websocket(self, request, ws):
         session_id = uuid.uuid4().hex
@@ -710,6 +715,7 @@ class TerminalService:
             error_type = type(error).__name__
             reason = 'connection-failed'
         finally:
+            self._closing_handlers.add(asyncio.current_task())
             protocol = getattr(ws, 'ws_proto', None)
             if (
                 protocol is not None

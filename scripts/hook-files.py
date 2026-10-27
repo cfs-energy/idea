@@ -18,8 +18,18 @@ def select_files(files, types):
     try:
         from identify.identify import tags_from_path
     except ImportError:
-        interpreter = Path(shutil.which('identify-cli')).resolve().with_name('python')
-        os.execv(interpreter, [str(interpreter), __file__, *sys.argv[1:]])
+        missing = (
+            'hook-files: identify is unavailable; run `mise install pypi:identify` '
+            'and invoke this command through `mise exec --`'
+        )
+        cli = shutil.which('identify-cli')
+        if cli is None:
+            raise SystemExit(missing) from None
+        interpreter = Path(cli).resolve().with_name('python')
+        try:
+            os.execv(interpreter, [str(interpreter), __file__, *sys.argv[1:]])
+        except OSError as error:
+            raise SystemExit(f'{missing} ({interpreter}: {error.strerror})') from None
     return [
         name
         for name in files
