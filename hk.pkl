@@ -125,17 +125,11 @@ steps {
     check = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "--copy-check", "{{files}}", "--", "fix-spaces") }
     fix = new Command { argv = List("python", "scripts/hook-files.py", "--type", "text", "{{files}}", "--", "fix-spaces") }
   }
-  ["gitleaks"] {
-    glob = Regex("")
-    allow_binary = true
-    depends = "fix-spaces"
-    check = new Command { argv = List("gitleaks", "git", "--pre-commit", "--redact", "--staged", "--verbose", "--config", ".github/.gitleaks.toml") }
-  }
   ["trufflehog"] {
     glob = Regex("")
     allow_binary = true
-    depends = "gitleaks"
-    check = new Command { argv = List("trufflehog", "filesystem", "--no-update", "--log-level=-1", "--config=.github/trufflehog-config.yaml", "--exclude-paths=.github/trufflehog-exclude-paths.txt", "--exclude-detectors=jdbc", "--results=verified,unknown,unverified", "--filter-entropy=3.0", "--fail", ".") }
+    depends = "fix-spaces"
+    check = new Command { argv = List("bash", "scripts/trufflehog-scan.sh") }
   }
   ["yamllint"] {
     glob = Regex("")

@@ -39,7 +39,7 @@ jobs:
           # renovate: datasource=github-releases depName=jdx/mise
           version: 2026.10.19
       - name: Scan checkout for secrets
-        run: gitleaks dir --redact --verbose --config .github/.gitleaks.toml .
+        run: bash scripts/trufflehog-scan.sh
       - name: Lint
         run: hk check --all
         env:

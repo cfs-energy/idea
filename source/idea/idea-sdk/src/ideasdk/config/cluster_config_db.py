@@ -381,7 +381,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         while True:
             if last_evaluated_key is not None:
                 result = self.cluster_settings_table.scan(
-                    ExclusiveStartKey=last_evaluated_key,  # gitleaks:allow
+                    ExclusiveStartKey=last_evaluated_key,
                     ReturnConsumedCapacity='TOTAL',
                     ConsistentRead=consistent_read,
                 )
