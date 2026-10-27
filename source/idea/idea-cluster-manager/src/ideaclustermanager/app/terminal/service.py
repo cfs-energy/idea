@@ -38,8 +38,6 @@ WRITE_TIMEOUT = 30
 SHUTDOWN_TIMEOUT = 5
 DRAIN_TIMEOUT = 3 * SHUTDOWN_TIMEOUT + 5
 PRE_READY_TIMEOUT = 40
-# An SSH refusal this soon after a target starts is boot/resume trust still landing.
-TRUST_SETTLE_SECONDS = {'bastion': 180, 'desktop': 600}
 LINUX = {
     'amazonlinux2',
     'amazonlinux2023',
@@ -398,7 +396,6 @@ class TerminalService:
                 ]
                 if len(addresses) == 1:
                     host = addresses[0]
-                    started = task.get('startedAt')
                     break
             else:
                 raise TerminalUnavailable('Bastion network is unavailable')
@@ -446,7 +443,6 @@ class TerminalService:
                 raise TerminalUnavailable('Desktop instance is not running')
             host = instance['PrivateIpAddress']
             host_id = self.instance_arn(instance_id)
-            started = instance.get('LaunchTime')
         else:
             raise TerminalDenied('Invalid target')
         pin = (
@@ -456,14 +452,8 @@ class TerminalService:
         )
         if not pin:
             raise TerminalUnavailable('Target SSH identity is not registered')
-        settle = TRUST_SETTLE_SECONDS['bastion' if host_id == 'bastion' else 'desktop']
-        # Unknown start time: keep retrying rather than blame the target.
-        settling = (
-            not hasattr(started, 'timestamp')
-            or time.time() - started.timestamp() < settle
-        )
         try:
-            return host, asyncssh.import_public_key(pin), settling
+            return host, asyncssh.import_public_key(pin)
         except asyncssh.KeyImportError:
             raise TerminalMisconfigured('Target SSH identity is invalid') from None
 
@@ -548,7 +538,6 @@ class TerminalService:
         error_type = None
         tasks = []
         conn = process = None
-        settling = True
         audited = False
         authenticated = False
         try:
@@ -581,7 +570,7 @@ class TerminalService:
                     10,
                 )
                 authenticated = True
-                host, pin, settling = await asyncio.wait_for(
+                host, pin = await asyncio.wait_for(
                     asyncio.to_thread(self.target, username, target), 10
                 )
                 # shortcut: a timed-out worker can still acquire a slot; its lease expires
@@ -739,10 +728,11 @@ class TerminalService:
             error_type = type(error).__name__
             reason = 'unavailable'
         except asyncssh.PermissionDenied as error:
-            # sshd accepts connections before boot/resume trust refresh completes; a
-            # refusal long after start is a site policy or trust failure, not a delay.
+            # sshd accepts connections before boot, reboot or resume trust refresh
+            # completes, and neither LaunchTime nor startedAt moves on an OS reboot.
+            # The client's attempt budget escalates a refusal that persists.
             error_type = type(error).__name__
-            reason = 'trust-not-ready' if settling else 'target-misconfigured'
+            reason = 'trust-not-ready'
         except (TerminalMisconfigured, asyncssh.HostKeyNotVerifiable) as error:
             error_type = type(error).__name__
             reason = 'target-misconfigured'

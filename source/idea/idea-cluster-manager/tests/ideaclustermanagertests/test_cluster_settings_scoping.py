@@ -3,6 +3,7 @@ Test Cases for ClusterSettingsAPI GetModuleSettings scoping
 """
 
 import json
+import re
 from pathlib import Path
 import unittest
 from unittest.mock import Mock
@@ -767,9 +768,14 @@ def test_maintenance_end_time_is_validated_before_persistence():
         api = ClusterSettingsAPI(app)
         if value in invalid:
             # Non-string values are rejected earlier by the settings catalog.
+            offset = isinstance(value, str) and re.search(
+                r'T18:00[+-]1[2-5]:?\d\d$', value
+            )
             with pytest.raises(
                 exceptions.SocaException,
-                match='maintenance.ends_at must be an ISO 8601 timestamp'
+                match='End time offset must be between -12:00 and \\+14:00'
+                if offset
+                else 'maintenance.ends_at must be an ISO 8601 timestamp'
                 if isinstance(value, str)
                 else 'must be a string',
             ):

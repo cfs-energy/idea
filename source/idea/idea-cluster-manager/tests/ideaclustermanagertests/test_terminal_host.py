@@ -490,7 +490,7 @@ def fake_host(tmp_path, monkeypatch, helper, reload_failures=0, units=None):
                 else (f'Id={args[-1]}.service\nLoadState=not-found\n')
             )
             return subprocess.CompletedProcess(args, 0, stdout=shown)
-        if args[:2] == ['systemctl', 'try-reload-or-restart'] and failures[0]:
+        if args[:2] == ['systemctl', 'reload-or-try-restart'] and failures[0]:
             failures[0] -= 1
             assert kwargs.get('check'), 'a failed reload must not mark trust ready'
             raise subprocess.CalledProcessError(1, args)
@@ -506,9 +506,9 @@ def test_configure_creates_privsep_before_sshd_and_reloads_only_changes(
     calls = fake_host(tmp_path, monkeypatch, helper)
     helper.configure('example', 'desktop', root=tmp_path)
     helper.configure('example', 'desktop', root=tmp_path)
-    reloads = [args for args in calls if args[1] == 'try-reload-or-restart']
+    reloads = [args for args in calls if args[1] == 'reload-or-try-restart']
     # The alias resolves to one unit, reloaded once, for the one change.
-    assert reloads == [['systemctl', 'try-reload-or-restart', 'sshd.service']]
+    assert reloads == [['systemctl', 'reload-or-try-restart', 'sshd.service']]
 
 
 def test_failed_sshd_reload_is_retried_before_trust_is_ready(
@@ -522,7 +522,7 @@ def test_failed_sshd_reload_is_retried_before_trust_is_ready(
     # sshd_config is already current, but the running daemon has not loaded it yet.
     helper.configure('example', 'desktop', root=tmp_path)
     assert ready.exists()
-    reloads = [args for args in calls if args[1] == 'try-reload-or-restart']
+    reloads = [args for args in calls if args[1] == 'reload-or-try-restart']
     assert len(reloads) == 2
 
 
@@ -755,7 +755,7 @@ def test_desktop_unit_never_holds_boot_targets():
     assert 'until ' in service['ExecStart'][0]
     # A start timeout is meaningless for simple; 'infinity' is unparsed on systemd 219.
     assert 'TimeoutStartSec' not in service
-    # Restart= on oneshot is unsupported on AL2/RHEL8; the shell loop retries instead.
+    # The shell loop retries and stops on status 78; there is no Restart= policy.
     assert 'Restart' not in service
     # The proxy profile holds shell exports systemd cannot parse; /etc/environment has IDEA_*.
     assert service['EnvironmentFile'] == ['/etc/environment']
@@ -817,27 +817,3 @@ def test_cli_receives_cluster_proxy_environment(helper, tmp_path, monkeypatch):
         'HTTPS_PROXY': 'http://proxy.example:3128',
         'NO_PROXY': '169.254.169.254,localhost',
     }
-
-
-def test_manual_reload_allows_socket_activated_ssh():
-    import shlex
-
-    guide = (ROOT / 'docs/modules/cluster-manager/web-terminal.md').read_text()
-    command = next(
-        line
-        for line in guide.splitlines()
-        if line.startswith('sudo ') and 'systemctl' in line and 'reload' in line
-    )
-    if command.startswith('sudo sh -c '):
-        command = shlex.split(command)[3]
-    result = subprocess.run(
-        [
-            'bash',
-            '-c',
-            'sudo() { "$@"; }\nsystemctl() { [[ $1 == try-reload-or-restart && $2 == ssh ]]; }\n'
-            + command,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr

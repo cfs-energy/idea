@@ -275,9 +275,14 @@ class DynamoDBStreamSubscription:
                                 if code == 'ProvisionedThroughputExceededException':
                                     time.sleep(1)
                                     continue
+                                # Any other rejection of a first-record request would
+                                # repeat on every pass; a resync restarts it from LATEST.
                                 if code in (
                                     'TrimmedDataAccessException',
                                     'ResourceNotFoundException',
+                                ) or (
+                                    iterator_request['ShardIteratorType']
+                                    == 'AT_SEQUENCE_NUMBER'
                                 ):
                                     self._resync_required = True
                                 raise

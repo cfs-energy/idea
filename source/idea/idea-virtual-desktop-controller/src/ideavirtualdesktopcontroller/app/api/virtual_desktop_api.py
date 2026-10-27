@@ -1224,6 +1224,9 @@ class VirtualDesktopAPI(BaseAPI):
                 f'{self.context.cluster_name()}-{new_session.name}-{new_session.owner}',
             )
             # The stored diagnostic describes the desktop, not the result of this edit.
+            # ponytail: failure_reason is both the stored diagnostic and this request's
+            # result, so the response omits a still-stored diagnostic and the card shows
+            # it again only on the next list refresh (30 s). Split the fields if that matters.
             new_session.failure_reason = None
 
         return new_session

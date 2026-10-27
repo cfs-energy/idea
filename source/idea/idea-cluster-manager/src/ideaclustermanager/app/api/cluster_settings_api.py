@@ -565,17 +565,17 @@ class ClusterSettingsAPI(BaseAPI):
                     end = datetime.fromisoformat(ends_at.strip().replace('Z', '+00:00'))
                     if end.tzinfo is not None:
                         end.astimezone(timezone.utc)
-                        # Moment rejects offsets outside real time zones.
-                        if not (
-                            timedelta(hours=-12)
-                            <= end.utcoffset()
-                            <= timedelta(hours=14)
-                        ):
-                            raise ValueError('Offset outside -12:00..+14:00')
                 except (ValueError, OverflowError):
                     raise exceptions.invalid_params(
                         'maintenance.ends_at must be an ISO 8601 timestamp'
                     ) from None
+                # Moment rejects offsets outside real time zones.
+                if end.tzinfo is not None and not (
+                    timedelta(hours=-12) <= end.utcoffset() <= timedelta(hours=14)
+                ):
+                    raise exceptions.invalid_params(
+                        'End time offset must be between -12:00 and +14:00'
+                    )
 
         self.validate_schedule_and_templates(module_id, request.settings)
         self.validate_bedrock_settings(module_id, request.settings)

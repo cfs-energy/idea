@@ -870,3 +870,36 @@ def test_drained_parent_child_with_trimmed_head_rescans_settings(live_config):
     assert not sub._resync_required
     assert streams.requests[-1]['ShardId'] == 'leaf'
     assert streams.requests[-1]['ShardIteratorType'] == 'LATEST'
+
+
+def test_rejected_child_first_record_request_rescans_settings(live_config):
+    config, sub, streams, stub = live_config
+    streams.shards['parent']['closed'] = True
+    once(sub, sub.shard_processor)
+    assert 'parent' in sub._drained_shards
+    streams.add('child', 'parent')
+    streams.shards['child']['records'] = [setting_record(True)]
+    issue = streams.get_shard_iterator
+
+    def reject_first_record(**request):
+        if request['ShardIteratorType'] == 'AT_SEQUENCE_NUMBER':
+            streams.requests.append(request)
+            raise error('ValidationException')
+        return issue(**request)
+
+    streams.get_shard_iterator = reject_first_record
+    once(sub, sub.shard_iterator_initializer)
+    assert streams.requests[-1]['ShardIteratorType'] == 'AT_SEQUENCE_NUMBER'
+    assert sub._resync_required
+    add_scan(stub, [{'key': 'maintenance', 'value': True}])
+    once(sub, sub.shard_iterator_initializer)
+    assert config.get_bool('maintenance') is True
+    assert not sub._resync_required
+    assert streams.requests[-1] == {
+        'StreamArn': 'stream',
+        'ShardId': 'child',
+        'ShardIteratorType': 'LATEST',
+    }
+    streams.shards['child']['records'].append(setting_record(False, '2'))
+    once(sub, sub.shard_processor)
+    assert config.get_bool('maintenance') is False

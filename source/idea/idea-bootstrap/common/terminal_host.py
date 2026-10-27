@@ -158,8 +158,9 @@ def reload_sshd():
             units.add(properties['Id'])
     if not units:
         raise RuntimeError('No sshd unit to reload')
+    # try-reload-or-restart is the same verb on systemd 229+; AL2 ships 219.
     subprocess.run(
-        ['systemctl', 'try-reload-or-restart'] + sorted(units), check=True, timeout=30
+        ['systemctl', 'reload-or-try-restart'] + sorted(units), check=True, timeout=30
     )
 
 

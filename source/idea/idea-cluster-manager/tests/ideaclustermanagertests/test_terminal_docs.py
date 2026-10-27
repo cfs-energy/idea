@@ -146,33 +146,95 @@ def test_trust_refresh_runbook_never_waits_on_the_retry_loop():
     assert not [line for line in lines if 'is-active' in line]
 
 
-@pytest.mark.parametrize('ready', [True, False])
-def test_trust_refresh_runbook_wait_is_bounded_and_reports_failure(tmp_path, ready):
-    import subprocess
+STUB_SYSTEMCTL = """#!/bin/sh
+echo "$*" >> "$LOG"
+case "$*" in
+  *reset-failed*) echo inactive > "$STATE" ;;
+  *restart*) (
+    # --no-block: the job runs after systemctl returns.
+    sleep 0.2; echo "$OUTCOME" > "$STATE"
+    if [ "$OUTCOME" = ready ]; then touch "$MARKER"; fi
+  ) & ;;
+  *is-failed*) [ "$(cat "$STATE")" = failed ] ;;
+esac
+"""
 
-    wait = next(
-        line for line in runbook_lines() if '/run/idea-terminal-trust-ready' in line
-    )
+
+@pytest.mark.parametrize(
+    'before, outcome, succeeds',
+    [
+        # A previous boot left the marker; this refresh never rewrites it.
+        ('ready', 'retrying', False),
+        ('ready', 'ready', True),
+        # The unit failed 78 earlier and the site policy is now integrated.
+        ('failed', 'ready', True),
+        # The unit exits 78 again: stop at once rather than wait out the bound.
+        ('failed', 'failed', False),
+        ('none', 'failed', False),
+    ],
+)
+def test_trust_refresh_runbook_waits_for_this_refresh(
+    tmp_path, before, outcome, succeeds
+):
+    import os
+    import subprocess
+    import time
+
+    lines = runbook_lines()
+    wait = next(line for line in lines if 'until test -f' in line)
     assert re.match(r"sudo timeout \d+ sh -c 'until test -f ", wait)
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    for name, body in {
+        'sudo': '#!/bin/sh\nexec "$@"\n',
+        'journalctl': '#!/bin/sh\necho "journal $*"\n',
+        'systemctl': STUB_SYSTEMCTL,
+    }.items():
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
     marker = tmp_path / 'ready'
-    if ready:
+    if before == 'ready':
         marker.touch()
-    # Shorten only the bound; run the documented command as written otherwise.
-    command = re.sub(r'timeout \d+ ', 'timeout 1 ', wait).replace(
-        '/run/idea-terminal-trust-ready', str(marker)
+    (tmp_path / 'state').write_text('failed\n' if before == 'failed' else 'active\n')
+    # Shorten only the bounds; run the documented commands as written otherwise.
+    script = '\n'.join(
+        re.sub(r'timeout \d+ ', 'timeout 3 ', line)
+        .replace('sleep 5', 'sleep 0.1')
+        .replace('/run/idea-terminal-trust-ready', str(marker))
+        for line in lines
     )
+    began = time.monotonic()
     result = subprocess.run(
-        [
-            'bash',
-            '-c',
-            'sudo() { "$@"; }\njournalctl() { echo "journal $*"; }\n' + command,
-        ],
+        ['bash', '-e', '-c', script],
         capture_output=True,
         text=True,
         timeout=10,
+        env=dict(
+            os.environ,
+            PATH=f'{bin_dir}:{os.environ["PATH"]}',
+            LOG=str(tmp_path / 'log'),
+            STATE=str(tmp_path / 'state'),
+            MARKER=str(marker),
+            OUTCOME=outcome,
+        ),
     )
-    assert result.returncode == 0, result.stderr
-    assert ('journal -u idea-terminal-trust.service' in result.stdout) is not ready
+    assert (result.returncode == 0) is succeeds, result.stderr
+    assert ('journal -u idea-terminal-trust.service' in result.stdout) is not succeeds
+    if outcome == 'failed':
+        assert time.monotonic() - began < 2
+    calls = (tmp_path / 'log').read_text().splitlines()
+    assert calls[:2] == [
+        'reset-failed idea-terminal-trust.service',
+        '--no-block restart idea-terminal-trust.service',
+    ]
+
+
+def test_trust_refresh_runbook_leaves_sshd_reload_to_the_helper():
+    block = DOC.read_text().split('refresh trust as root', 1)[1].split('```', 2)[1]
+    commands = [line for line in block.splitlines() if line.startswith('sudo ')]
+    assert commands[0] == 'sudo rm -f /run/idea-terminal-trust-ready'
+    assert commands[-1] == 'sudo sshd -t'
+    assert not [line for line in commands if 'reload' in line]
 
 
 def test_terminal_pages_sit_with_access_and_cluster_manager_docs():

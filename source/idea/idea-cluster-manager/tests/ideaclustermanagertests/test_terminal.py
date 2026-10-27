@@ -220,7 +220,6 @@ class Socket:
         'surrogate-input',
         'wrong-host-key',
         'trust-not-ready',
-        'trust-refused-settled',
         'disconnected',
         'socket-closed',
         'ack-timeout',
@@ -254,7 +253,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
 
         trusted_ca = (
             asyncssh.generate_private_key('ssh-ed25519')
-            if mode in {'trust-not-ready', 'trust-refused-settled'}
+            if mode == 'trust-not-ready'
             else ca
         )
         authorized = asyncssh.import_authorized_keys(
@@ -308,9 +307,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             if mode == 'wrong-host-key'
             else host_key.convert_to_public()
         )
-        # A refusal long after the target started is not trust still landing.
-        settling = mode != 'trust-refused-settled'
-        service.target = lambda *_: ('127.0.0.1', pin, settling)
+        service.target = lambda *_: ('127.0.0.1', pin)
         service.load_ca = lambda: ca
         service.user = lambda *_: True
         if mode == 'account-deleted':
@@ -407,7 +404,6 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             'wrong-host-key',
             'lease-login',
             'trust-not-ready',
-            'trust-refused-settled',
         }:
             assert b'private-terminal-output' in ws.sent
         assert ws.closed['reason'] == {
@@ -416,7 +412,6 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             'extra-resize-field': 'access-denied',
             'surrogate-input': 'shell-exited',
             'wrong-host-key': 'target-misconfigured',
-            'trust-refused-settled': 'target-misconfigured',
             'socket-closed': 'disconnected',
             'stalled-stdin': 'connection-failed',
             'lease-login': 'unavailable',
@@ -429,8 +424,6 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             assert ws.closed['code'] == 4002
         if mode == 'account-deleted':
             assert ws.closed['code'] == 4003
-        if mode == 'trust-refused-settled':
-            assert ws.closed['code'] == 4004
         if mode == 'ack-timeout':
             assert ws.closed['code'] == 4005
         assert store.table.scan()['Count'] == 0
@@ -445,7 +438,6 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
         'wrong-host-key',
         'lease-login',
         'trust-not-ready',
-        'trust-refused-settled',
     }
     assert ('terminal start user=alice' in caplog.text) == started
     assert ('terminal stop user=alice' in caplog.text) == started
@@ -960,7 +952,7 @@ def test_bastion_picker_skips_unready_tasks(store, unready):
     ecs.describe_tasks.return_value = {'tasks': [other, task]}
     key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
     store.table.put_item(Item={'pk': 'host:bastion', 'public_key': key})
-    host, _, _ = service.target('alice', 'bastion')
+    host, _ = service.target('alice', 'bastion')
     assert host == '10.0.0.2'
     assert ecs.describe_tasks.call_args.kwargs['tasks'] == ['a-unready', 'b-ready']
 
@@ -1035,7 +1027,7 @@ def test_real_sanic_disconnect_audit(store, monkeypatch, caplog, mode):
             'https://portal.example'
         )
         key = asyncssh.generate_private_key('ssh-ed25519')
-        service.target = lambda *_: ('127.0.0.1', key.convert_to_public(), True)
+        service.target = lambda *_: ('127.0.0.1', key.convert_to_public())
         service.load_ca = lambda: key
         process = MagicMock()
 
@@ -1312,7 +1304,7 @@ def test_real_soca_server_stop_drains_terminal(
     )
     service.context.config().get_int.side_effect = lambda _, default: default
     key = asyncssh.generate_private_key('ssh-ed25519')
-    service.target = lambda *_: ('127.0.0.1', key.convert_to_public(), True)
+    service.target = lambda *_: ('127.0.0.1', key.convert_to_public())
     service.load_ca = lambda: key
     process = MagicMock()
 
@@ -1720,68 +1712,101 @@ def test_targets_give_up_on_keys_that_stay_unprocessed(store, monkeypatch):
     assert batch.call_count == 3
 
 
-@pytest.mark.parametrize(
-    'age, settling', [(60, True), (599, True), (601, False), (None, True)]
-)
-def test_desktop_refusal_is_trust_settling_only_soon_after_start(store, age, settling):
+def refusing_target(store, monkeypatch, target):
     import datetime
 
+    day_old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
     service = target_service(store)
-    service.desktops = MagicMock()
-    service.desktops().get_item.return_value = {
-        'Item': {
-            'owner': 'alice',
-            'state': 'READY',
-            'base_os': 'ubuntu2404',
-            'server': {'instance_id': 'i-abc'},
-        }
-    }
-    instance = {
-        'State': {'Name': 'running'},
-        'PrivateIpAddress': '10.0.0.9',
-        'Tags': [{'Key': 'idea:ClusterName', 'Value': 'example'}],
-    }
-    if age is not None:
-        instance['LaunchTime'] = datetime.datetime.now(
-            datetime.timezone.utc
-        ) - datetime.timedelta(seconds=age)
-    service.context.aws().ec2().describe_instances.return_value = {
-        'Reservations': [{'Instances': [instance]}]
-    }
-    key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
-    store.table.put_item(
-        Item={
-            'pk': 'host:arn:aws-us-gov:ec2:us-gov-west-1:123456789012:instance/i-abc',
-            'public_key': key,
-        }
+    service.store = store
+    service.logger = logging.getLogger('terminal-refusal-test')
+    service.context.config().get_cluster_external_endpoint.return_value = (
+        'https://portal.example'
     )
-    assert service.target('alice', 'desktop:one')[2] is settling
-
-
-@pytest.mark.parametrize('age, settling', [(60, True), (181, False)])
-def test_bastion_refusal_is_trust_settling_only_for_a_new_task(store, age, settling):
-    import datetime
-
-    service = target_service(store)
-    ecs = service.context.aws().get_client()
-    ecs.list_tasks.return_value = {'taskArns': ['task']}
-    ecs.describe_tasks.return_value = {
-        'tasks': [
-            {
-                'taskArn': 'task',
-                'lastStatus': 'RUNNING',
-                'healthStatus': 'HEALTHY',
-                'startedAt': datetime.datetime.now(datetime.timezone.utc)
-                - datetime.timedelta(seconds=age),
-                'attachments': [
-                    {'details': [{'name': 'privateIPv4Address', 'value': '10.0.0.2'}]}
-                ],
+    service.context.config().get_int.side_effect = lambda _, default: default
+    key = asyncssh.generate_private_key('ssh-ed25519')
+    service.load_ca = lambda: key
+    pin = key.export_public_key().decode()
+    if target == 'bastion':
+        ecs = service.context.aws().get_client()
+        ecs.list_tasks.return_value = {'taskArns': ['task']}
+        ecs.describe_tasks.return_value = {
+            'tasks': [
+                {
+                    'taskArn': 'task',
+                    'lastStatus': 'RUNNING',
+                    'healthStatus': 'HEALTHY',
+                    'startedAt': day_old,
+                    'attachments': [
+                        {
+                            'details': [
+                                {'name': 'privateIPv4Address', 'value': '10.0.0.2'}
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+        store.table.put_item(Item={'pk': 'host:bastion', 'public_key': pin})
+    else:
+        service.desktops = MagicMock()
+        service.desktops().get_item.return_value = {
+            'Item': {
+                'owner': 'alice',
+                'state': 'READY',
+                'base_os': 'ubuntu2404',
+                'server': {'instance_id': 'i-abc'},
             }
-        ]
-    }
-    key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
-    store.table.put_item(Item={'pk': 'host:bastion', 'public_key': key})
-    assert service.target('alice', 'bastion')[2] is settling
+        }
+        # An OS reboot leaves LaunchTime unchanged while /run, and trust readiness, reset.
+        service.context.aws().ec2().describe_instances.return_value = {
+            'Reservations': [
+                {
+                    'Instances': [
+                        {
+                            'State': {'Name': 'running'},
+                            'PrivateIpAddress': '10.0.0.9',
+                            'LaunchTime': day_old,
+                            'Tags': [{'Key': 'idea:ClusterName', 'Value': 'example'}],
+                        }
+                    ]
+                }
+            ]
+        }
+        store.table.put_item(
+            Item={
+                'pk': 'host:arn:aws-us-gov:ec2:us-gov-west-1:123456789012:instance/i-abc',
+                'public_key': pin,
+            }
+        )
+
+    async def refuse(*_, **__):
+        raise asyncssh.PermissionDenied('refused')
+
+    monkeypatch.setattr(module.asyncssh, 'connect', refuse)
+    return service
+
+
+@pytest.mark.parametrize('target', ['desktop:one', 'bastion'])
+def test_refusal_long_after_launch_is_retryable_trust_not_ready(
+    store, monkeypatch, target
+):
+    async def run():
+        service = refusing_target(store, monkeypatch, target)
+        ticket = store.issue('alice', target, 'client')
+        socket = Socket(
+            dict(ticket=ticket, username='alice', target=target, client='client')
+        )
+        await service.websocket(
+            SimpleNamespace(
+                headers={'origin': 'https://portal.example'},
+                conn_info=SimpleNamespace(lost=False),
+            ),
+            socket,
+        )
+        # The client's eight-attempt budget, not a server clock, escalates persistence.
+        assert socket.closed == {'code': 4002, 'reason': 'trust-not-ready'}
+
+    asyncio.run(run())
 
 
 def test_stopped_desktop_has_actionable_final_reason():
