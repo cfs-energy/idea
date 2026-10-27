@@ -68,7 +68,7 @@ def test_ca_policy_documents_cloudformation_mutation_exception():
     ):
         assert f'`{action}`' in doc
     assert (
-        'anyone who can assume that role can replace the CA or remove its policy protections'
+        'anyone who can assume that role can read or replace the CA or remove its policy protections'
         in doc
     )
     assert 'The secret policy also blocks `UpdateSecret`' not in doc

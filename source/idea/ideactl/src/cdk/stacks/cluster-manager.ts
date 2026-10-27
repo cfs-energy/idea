@@ -13,7 +13,7 @@
  * settings rows at boot, so it must not start before this stack has written them.
  */
 
-import { CustomResource, Duration } from 'aws-cdk-lib';
+import { CustomResource, Duration, Fn } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -264,17 +264,23 @@ export class ClusterManagerStack extends IdeaBaseStack {
       tags: [{ key: 'idea:ClusterName', value: this.clusterName }, { key: 'idea:ModuleName', value: this.moduleId }],
     });
     const signer = this.stack.formatArn({ service: 'iam', region: '', resource: 'role', resourceName: taskRoleName(this.containerScope, `${this.moduleId}-task-role`) });
+    // The synthesizer's role ARN keeps CloudFormation placeholders such as ${AWS::Partition}, which
+    // only Fn::Sub resolves; as a literal it matches no principal and the policy locks CloudFormation out.
+    const cfnExecRole = this.stack.synthesizer.cloudFormationExecutionRole;
+    if (cfnExecRole === undefined) throw new Error('the terminal CA policy needs the CloudFormation execution role of the stack synthesizer');
     new secretsmanager.CfnResourcePolicy(this.stack, 'terminal-user-ca-access', {
       secretId: secret.ref, blockPublicPolicy: true,
       resourcePolicy: { Version: '2012-10-17', Statement: [{
         Effect: 'Deny', Principal: '*', Resource: '*',
-        Action: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue', 'secretsmanager:UpdateSecretVersionStage', 'secretsmanager:RestoreSecret', 'secretsmanager:RotateSecret', 'secretsmanager:CancelRotateSecret'],
+        Action: ['secretsmanager:PutSecretValue', 'secretsmanager:UpdateSecretVersionStage', 'secretsmanager:RestoreSecret', 'secretsmanager:RotateSecret', 'secretsmanager:CancelRotateSecret'],
         Condition: { ArnNotEquals: { 'aws:PrincipalArn': signer } },
       }, {
-        // CloudFormation must be able to update or remove the secret and its resource policy.
+        // CloudFormation must be able to update or remove the secret and its resource policy. Its
+        // secret handlers also read the value on update; the role can already replace this policy,
+        // so the read exemption grants it nothing new.
         Effect: 'Deny', Principal: '*', Resource: '*',
-        Action: ['secretsmanager:UpdateSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:PutResourcePolicy', 'secretsmanager:DeleteResourcePolicy'],
-        Condition: { ArnNotEquals: { 'aws:PrincipalArn': [signer, this.stack.synthesizer.cloudFormationExecutionRole] } },
+        Action: ['secretsmanager:GetSecretValue', 'secretsmanager:UpdateSecret', 'secretsmanager:DeleteSecret', 'secretsmanager:PutResourcePolicy', 'secretsmanager:DeleteResourcePolicy'],
+        Condition: { ArnNotEquals: { 'aws:PrincipalArn': [signer, Fn.sub(cfnExecRole)] } },
       }] },
     });
     acknowledgeForScan(secret, [{ rule_id: 'AwsSolutions-SMG4', reason: 'SSH CA rotation requires coordinated trust distribution; see the terminal operator guide.' }]);

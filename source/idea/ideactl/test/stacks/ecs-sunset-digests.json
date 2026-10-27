@@ -2,7 +2,7 @@
   "analytics": "974e599931ce644ad0daf4d47a0cf742cf01f5ec75c5ce8b0999cda78d26c0fc",
   "bastion-host": "224f956bcf67903ff5d86384c55659a7772598b80ea24735e8412592d11a04e7",
   "cluster": "a5b1cf65521dd2144298ac65a0cd6be8de0a98f18c92d42a5198214de7dc804e",
-  "cluster-manager": "6e9cca33c6c207aa77ab4de65002a9ab05e9f0d845e5277108e2f724bd5dfa0f",
+  "cluster-manager": "eea6883015fe4e5af5c7bc4d37f21cc6673b0af056b6ed3763238e79c73de372",
   "directoryservice": "a3520ed81aeaf8530dcf4e8d09821029edc9e045fcc3f7eb98813365b20e6cf7",
   "ecs": "3ac867be71c09dd7485a27780fb70bc08d463c9d9b852240dd6bfb1ee8d99963",
   "identity-provider": "1d9c69d4facc5d7da268f2a710dc6690c5ba4712fdf6fe11c0f3a69a8e800a10",

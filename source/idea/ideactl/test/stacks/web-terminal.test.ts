@@ -25,16 +25,16 @@ test('terminal deployment protects the CA, scopes host pins, and admits desktop 
     assert.equal(ca.Properties.SecretString, '{"schema":1}');
     const statement = byType(manager, 'AWS::SecretsManager::ResourcePolicy').flatMap(([, p]) => p.Properties.ResourcePolicy.Statement).find(s => s.Effect === 'Deny');
     assert.equal(statement.Principal, '*');
-    // secret data and version stages: the task role only (CloudFormation manages the secret through the second statement)
-    for (const action of ['GetSecretValue', 'PutSecretValue', 'UpdateSecretVersionStage', 'RestoreSecret', 'RotateSecret', 'CancelRotateSecret']) assert.ok(statement.Action.includes(`secretsmanager:${action}`), action);
-    for (const action of ['UpdateSecret', 'DeleteSecret', 'PutResourcePolicy', 'DeleteResourcePolicy']) assert.ok(!statement.Action.includes(`secretsmanager:${action}`), `${action} must not be task-role-only`);
+    // secret writes and version stages: the task role only (CloudFormation manages the secret through the second statement)
+    for (const action of ['PutSecretValue', 'UpdateSecretVersionStage', 'RestoreSecret', 'RotateSecret', 'CancelRotateSecret']) assert.ok(statement.Action.includes(`secretsmanager:${action}`), action);
+    for (const action of ['GetSecretValue', 'UpdateSecret', 'DeleteSecret', 'PutResourcePolicy', 'DeleteResourcePolicy']) assert.ok(!statement.Action.includes(`secretsmanager:${action}`), `${action} must not be task-role-only`);
     assert.match(JSON.stringify(statement.Condition), /cluster-manager-task-role/);
     const statements = byType(manager, 'AWS::SecretsManager::ResourcePolicy').flatMap(([, p]) => p.Properties.ResourcePolicy.Statement);
-    for (const action of ['UpdateSecret', 'DeleteSecret', 'PutResourcePolicy', 'DeleteResourcePolicy', 'RestoreSecret', 'RotateSecret', 'CancelRotateSecret']) {
+    for (const action of ['GetSecretValue', 'UpdateSecret', 'DeleteSecret', 'PutResourcePolicy', 'DeleteResourcePolicy', 'RestoreSecret', 'RotateSecret', 'CancelRotateSecret']) {
         const deny = statements.find(s => s.Effect === 'Deny' && s.Action.includes(`secretsmanager:${action}`));
         assert.ok(deny, `P-43: deny ${action} to other principals`);
         assert.match(JSON.stringify(deny.Condition), /cluster-manager-task-role/);
-        if (['UpdateSecret', 'DeleteSecret', 'PutResourcePolicy', 'DeleteResourcePolicy'].includes(action)) {
+        if (['GetSecretValue', 'UpdateSecret', 'DeleteSecret', 'PutResourcePolicy', 'DeleteResourcePolicy'].includes(action)) {
             assert.match(JSON.stringify(deny.Condition), /cfn-exec-role/);
         } else {
             assert.doesNotMatch(JSON.stringify(deny.Condition), /cfn-exec-role/);
