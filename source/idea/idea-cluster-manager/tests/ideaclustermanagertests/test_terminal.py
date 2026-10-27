@@ -117,8 +117,9 @@ def test_certificate_limits():
     'change',
     [
         {'owner': 'bob'},
-        {'state': 'STOPPED'},
-        {'state': 'PROVISIONING'},
+        {'state': 'ERROR'},
+        {'state': 'DELETING'},
+        {'state': 'DELETED'},
         {'base_os': 'windows2025'},
         {'server': {}},
     ],
@@ -233,6 +234,9 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             if mode == 'shell-exited':
                 assert await process.stdin.readline() == b'private-keystrokes\n'
                 process.exit(0)
+            elif mode == 'surrogate-input':
+                assert await process.stdin.readexactly(1) == b'?'
+                process.exit(0)
             elif mode == 'stalled-stdin':
                 process.channel.pause_reading()
                 await asyncio.Event().wait()
@@ -338,6 +342,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
                 }:
                     ws.incoming.put_nowait(json.dumps({'type': 'ack'}))
                 if mode == 'surrogate-input' and isinstance(value, bytes):
+                    ws.incoming.put_nowait(json.dumps({'type': 'ack'}))
                     ws.incoming.put_nowait(
                         json.dumps({'type': 'input', 'data': '\ud800'})
                     )
@@ -375,7 +380,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             assert b'private-terminal-output' in ws.sent
         assert ws.closed['reason'] == {
             'bad-frame': 'access-denied',
-            'surrogate-input': 'access-denied',
+            'surrogate-input': 'shell-exited',
             'wrong-host-key': 'target-misconfigured',
             'socket-closed': 'disconnected',
             'stalled-stdin': 'connection-failed',
@@ -1207,6 +1212,7 @@ def test_whole_handshake_has_a_deadline(store, monkeypatch):
         'shutdown',
         'oversized',
         'shutdown-during-release',
+        'shutdown-hook-error',
         'slash-origin',
         'slash-disabled',
     ],
@@ -1304,6 +1310,15 @@ def test_real_soca_server_stop_drains_terminal(
     asyncio.set_event_loop(mainloop)
     try:
         server.start()
+        server_type = type(server._http_server)
+        original_before_stop = server_type.before_stop
+        if mode == 'shutdown-hook-error':
+
+            async def failed_hook(listener):
+                await original_before_stop(listener)
+                raise TimeoutError('drain deadline expired')
+
+            monkeypatch.setattr(server_type, 'before_stop', failed_hook)
         if mode.startswith('slash-'):
             service.enabled = lambda: mode != 'slash-disabled'
             with pytest.raises(InvalidStatus) as caught:
@@ -1330,13 +1345,16 @@ def test_real_soca_server_stop_drains_terminal(
                 )
             )
             assert json.loads(client.recv(timeout=5)) == {'type': 'ready'}
-            if mode == 'shutdown':
+            if mode in {'shutdown', 'shutdown-hook-error'}:
                 server.stop()
+                assert not server._server_thread.is_alive()
             else:
                 client.send('x' * (module.FRAME_LIMIT + 1))
             with pytest.raises(ConnectionClosed):
                 client.recv(timeout=5)
-            assert client.close_code == (1012 if mode == 'shutdown' else 1009)
+            assert client.close_code == (
+                1012 if mode in {'shutdown', 'shutdown-hook-error'} else 1009
+            )
             if mode == 'shutdown-during-release':
                 assert released.wait(10)
                 assert store.table.scan()['Count'] == 0
@@ -1347,10 +1365,18 @@ def test_real_soca_server_stop_drains_terminal(
         stops = [r.message for r in caplog.records if 'terminal stop ' in r.message]
         assert len(stops) == 1
         assert stops[0].endswith(
-            'reason=' + ('server-shutdown' if mode == 'shutdown' else 'access-denied')
+            'reason='
+            + (
+                'server-shutdown'
+                if mode in {'shutdown', 'shutdown-hook-error'}
+                else 'access-denied'
+            )
         )
     finally:
         resume_release.set()
+        if mode == 'shutdown-hook-error' and server._server_thread.is_alive():
+            monkeypatch.setattr(server_type, 'before_stop', original_before_stop)
+            server._is_running.set()
         if server.is_running():
             server.stop()
         Sanic.unregister_app(server.http_app)
@@ -1450,7 +1476,13 @@ def test_ttl_failure_recovers_with_real_table_helpers(monkeypatch):
         assert len(calls) == 2
 
 
-def test_rejected_ticket_logs_claims_and_peer_not_authenticated_user(store, caplog):
+@pytest.mark.parametrize(
+    'forwarded, peer',
+    [(None, '192.0.2.5'), ('', '192.0.2.5'), ('spoofed, 198.51.100.7', '198.51.100.7')],
+)
+def test_rejected_ticket_logs_claims_and_peer_not_authenticated_user(
+    store, caplog, forwarded, peer
+):
     service = target_service(store)
     service.store = store
     service.logger = logging.getLogger('terminal-claims-test')
@@ -1461,7 +1493,11 @@ def test_rejected_ticket_logs_claims_and_peer_not_authenticated_user(store, capl
     asyncio.run(
         service.websocket(
             SimpleNamespace(
-                headers={'origin': 'https://portal.example'}, ip='192.0.2.5'
+                headers={
+                    'origin': 'https://portal.example',
+                    'x-forwarded-for': forwarded,
+                },
+                ip='192.0.2.5',
             ),
             Socket(
                 dict(
@@ -1474,6 +1510,75 @@ def test_rejected_ticket_logs_claims_and_peer_not_authenticated_user(store, capl
         )
     )
     assert "claimed_user='alice' claimed_target='bastion'" in caplog.text
-    assert "peer='192.0.2.5'" in caplog.text
+    assert f'peer={peer!r}' in caplog.text
     assert ' user=' not in caplog.text
     assert 'untrusted' not in caplog.text
+
+
+@pytest.mark.parametrize(
+    'state',
+    ['PROVISIONING', 'CREATING', 'INITIALIZING', 'RESUMING', 'STOPPING', 'STOPPED'],
+)
+def test_owned_desktop_transitions_are_retryable(state):
+    row = {'owner': 'alice', 'base_os': 'ubuntu2404', 'state': state}
+    with pytest.raises(module.TerminalUnavailable):
+        validate_desktop(row, 'alice')
+    with pytest.raises(TerminalDenied) as denied:
+        validate_desktop(row, 'bob')
+    assert not isinstance(denied.value, module.TerminalUnavailable)
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        TerminalDenied('Terminal CA reset to seed; restore the current CA'),
+        TerminalDenied('Invalid terminal CA'),
+        module.TerminalUnavailable('Terminal TTL is not configured for expires_at'),
+        module.TerminalMisconfigured('Target SSH identity is invalid'),
+        RuntimeError('private exception data'),
+    ],
+)
+def test_initialization_logs_only_safe_causes(error, caplog):
+    service = TerminalService(MagicMock())
+    service.logger = logging.getLogger('terminal-init-cause-test')
+    service.context.distributed_lock().acquire.side_effect = error
+    service.initialize()
+    assert not service.initialized
+    if isinstance(error, TerminalDenied):
+        assert str(error) in caplog.text
+    else:
+        assert str(error) not in caplog.text
+        assert type(error).__name__ in caplog.text
+
+
+def test_shutdown_deadline_does_not_recancel_cleanup(monkeypatch):
+    async def run():
+        service = TerminalService(MagicMock())
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        completed = []
+
+        async def handler():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                service._closing_handlers.add(asyncio.current_task())
+                entered.set()
+                await release.wait()
+                completed.append('audit-and-close')
+
+        task = asyncio.create_task(handler())
+        service._handlers.add(task)
+        await asyncio.sleep(0)
+        task.cancel()
+        await entered.wait()
+        monkeypatch.setattr(module, 'DRAIN_TIMEOUT', 0.02, raising=False)
+        try:
+            await service.shutdown()
+            assert not task.done()
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+        assert completed == ['audit-and-close']
+
+    asyncio.run(run())

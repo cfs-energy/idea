@@ -375,7 +375,7 @@ test("readiness checks use the application endpoints on every role", () => {
   for (const role of ["cluster-manager", "vdc", "dcv-broker", "dcv-gateway", "bastion-host"] as const) {
     const settings = applicationContainerSettings(role);
     assert.equal(settings.healthCheck?.interval?.toSeconds(), 5);
-    assert.equal(settings.stopTimeout?.toSeconds(), 30);
+    assert.equal(settings.stopTimeout?.toSeconds(), role === "cluster-manager" ? 60 : 30);
     const command = settings.healthCheck!.command.join(" ");
     assert.match(command, role === "dcv-broker" ? /8444\/health.*8445\/health.*8446\/health/ : role === "dcv-gateway" ? /8989/ : role === "bastion-host" ? /ssh-keyscan/ : /https:\/\/localhost:8443\/healthcheck/);
   }
@@ -446,7 +446,7 @@ test("replicated services surge in full, the scheduler stops first, and targets 
   assert.ok((logs["Environment"] as Json[]).some((entry) => entry["Name"] === "TINI_KILL_PROCESS_GROUP" && entry["Value"] === "1"));
   // A stopping task drains for as long as its container then gets to stop, not five minutes.
   assert.equal(drain, "30");
-  assert.equal(applicationContainerSettings("cluster-manager").stopTimeout?.toSeconds(), 30);
+  assert.equal(applicationContainerSettings("cluster-manager").stopTimeout?.toSeconds(), 60);
 });
 
 test("four resting hosts hold every service's full surge at once, one replica per host", () => {

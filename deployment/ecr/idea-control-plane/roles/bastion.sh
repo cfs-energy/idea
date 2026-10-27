@@ -87,7 +87,18 @@ fi
 sssd_pid=$!
 /usr/sbin/sshd -D -e &
 sshd_pid=$!
-trap 'kill "$sshd_pid" "$sssd_pid" 2>/dev/null || true; wait || true' EXIT
+# Retry terminal trust after transient startup failures without blocking ordinary SSH.
+(
+  if [[ ! -f /run/idea-terminal-trust-ready ]]; then
+    until timeout 300 python3.13 /opt/idea/roles/terminal_host.py; do
+      echo "Terminal trust not installed; retrying in 30 seconds"
+      sleep 30
+    done
+    kill -HUP "$sshd_pid"
+  fi
+) &
+trust_pid=$!
+trap 'kill "$trust_pid" "$sshd_pid" "$sssd_pid" 2>/dev/null || true; wait || true' EXIT
 trap 'exit 0' TERM INT
 # Losing directory authentication is a service failure, even if port 22 still answers.
 wait -n "$sshd_pid" "$sssd_pid"

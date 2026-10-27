@@ -182,8 +182,9 @@ it('selects an available desktop when the cluster has no bastion and disables Co
     unmount();
     render(<TerminalPanel client={{...client, listTargets: vi.fn().mockResolvedValue({targets: []})} as any} />);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('No terminal targets.'));
-    expect(screen.getByText(/To use an older desktop here, launch a new one/)).toBeInTheDocument();
-    expect(screen.queryByText(/26.11.1/)).not.toBeInTheDocument();
+    expect(screen.getByText(/No bastion or eligible Linux desktop is available/)).toBeInTheDocument();
+    expect(screen.getByText(/before this cluster ran 26.11.1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Targets include the bastion/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'Connect'})).toBeDisabled();
 });
 

@@ -746,3 +746,32 @@ def test_service_reads_deny_regular_users_and_require_app_read_scope():
             with pytest.raises(exceptions.SocaException):
                 api.list_cluster_services(invocation)
             app.aws.assert_not_called()
+
+
+def test_maintenance_end_time_is_validated_before_persistence():
+    import pytest
+    from ideadatamodel import exceptions
+    from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
+
+    for value in (
+        'tomorrow 18:00',
+        '2026-02-30T18:00:00Z',
+        '',
+        '2026-11-01T18:00:00Z',
+        '2026-11-01T18:00:00-05:00',
+    ):
+        app, invocation = scoped_invocation(role='administrator')
+        invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+            module_id='portal', settings={'maintenance': {'ends_at': value}}
+        )
+        api = ClusterSettingsAPI(app)
+        if value in ('tomorrow 18:00', '2026-02-30T18:00:00Z'):
+            with pytest.raises(
+                exceptions.SocaException,
+                match='maintenance.ends_at must be an ISO 8601 timestamp',
+            ):
+                api.update_module_settings(invocation)
+            app.config().db.sync_cluster_settings_in_db.assert_not_called()
+        else:
+            api.update_module_settings(invocation)
+            app.config().db.sync_cluster_settings_in_db.assert_called_once()

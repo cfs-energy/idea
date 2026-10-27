@@ -248,8 +248,10 @@ ECR Public, and otherwise refuses the move.
 When the GovCloud repository key is unset or empty, upgrades follow `ecs.image_repositories.aws`.
 For its public ECR release image, preview resolves the tag to a manifest digest and the upgrade
 writes that exact `tag@sha256:...` reference. `ecs.release_image` records the automatically
-selected reference so later upgrades can advance it. An operator-set digest that differs from
-that marker stays pinned. Digest resolution is required even with `--skip-release-image-check`
+selected reference so later upgrades can advance it. `ecs.previous_release_image` preserves
+ownership of the prior digest while the new marker is written before `ecs.image`, so an
+interruption between writes remains recoverable. An operator-set digest that differs from
+both markers stays pinned. Digest resolution is required even with `--skip-release-image-check`
 on this public fallback path. This protects task replacements from a release tag being moved.
 
 When `ecs.image` names this partition's release repository at an older release tag, the upgrade

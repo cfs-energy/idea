@@ -49,6 +49,7 @@ def test_operator_docs_match_ecs_trust_and_network():
         'host bastion using',
         'host bastion and',
         'SSH ingress is restricted',
+        'before sshd starts',
     ]:
         assert stale not in doc
     assert 'VPC CIDR' in doc
@@ -99,3 +100,29 @@ def test_license_instructions_use_persistent_ecs_scheduler():
     assert 'schedulerInstanceId' not in page
     assert 'getSessionManagerConnectionUrl' not in page
     assert 'server_priv/resourcedef' in doc and 'sched_priv/sched_config' in doc
+
+
+def test_terminal_api_documents_portal_internal_contract():
+    import yaml
+
+    doc = yaml.safe_load(
+        (
+            ROOT / 'source/idea/idea-cluster-manager/resources/api/api_doc.yml'
+        ).read_text()
+    )
+    description = doc['spec']['description']
+    assert 'portal-internal' in description
+    for name in (
+        'Terminal.ListTargets',
+        'Terminal.CreateTicket',
+        'TERMINAL_UNAVAILABLE',
+        'TERMINAL_TARGET_MISCONFIGURED',
+        'UNAUTHORIZED_ACCESS',
+    ):
+        assert name in description
+
+
+def test_user_docs_do_not_assume_a_bastion_or_upgrade():
+    doc = (ROOT / 'docs/first-time-users/terminal.md').read_text()
+    assert 'when the cluster has a bastion' in doc
+    assert 'since the cluster began running 26.11.1' in doc

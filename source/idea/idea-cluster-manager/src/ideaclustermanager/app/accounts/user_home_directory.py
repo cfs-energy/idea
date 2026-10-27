@@ -50,8 +50,8 @@ class UserHomeDirectory:
 
     def write_ppk(self, private_key_file: str, ppk_file: str) -> str:
         """
-        the user's key as a PuTTY file: puttygen where the host has it, as before, and in
-        process where it does not (the container image carries none). The server runs as
+        the user's key as a PuTTY file, in process in the shipped container. An
+        explicitly installed puttygen takes precedence. The server runs as
         root, so the key is read and the result written without following links in the
         user's directory; puttygen works in a private temporary directory.
         :returns: 'puttygen' or 'in-process'

@@ -121,7 +121,9 @@ class VirtualDesktopServerUtils:
                 server.state = 'HIBERNATED'
                 self._server_db.update(server)
 
-    def start_dcv_hosts(self, servers: List[VirtualDesktopServer]) -> dict:
+    def start_dcv_hosts(
+        self, servers: List[VirtualDesktopServer], hibernation_enabled: bool = False
+    ) -> dict:
         if not servers:
             return {}
         instance_ids = [server.instance_id for server in servers]
@@ -162,14 +164,17 @@ class VirtualDesktopServerUtils:
                     }
                 )
                 resize = (
-                    f'an allowed size in the {" / ".join(families)} family'
+                    f'allowed size in the {" / ".join(families)} family'
                     if families
-                    else 'an allowed size in the same instance family'
+                    else 'allowed size in the same instance family'
                 )
+                remedy = 'Select Start again in a few minutes'
+                if not hibernation_enabled:
+                    remedy += f', or use Update session to choose another {resize}'
                 return {
                     'ERROR': (
                         f'{CAPACITY_UNAVAILABLE} for {location}. Your desktop remains stopped. '
-                        f'Retry Resume in a few minutes, or ask your administrator to resize it to {resize}. '
+                        f'{remedy}. '
                         'Its existing disks stay in the current Availability Zone.'
                     )
                 }

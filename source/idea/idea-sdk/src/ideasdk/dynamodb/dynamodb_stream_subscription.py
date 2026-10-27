@@ -112,14 +112,17 @@ class DynamoDBStreamSubscription:
         while not self._exit.is_set():
             try:
                 with self._shard_iterator_lock:
-                    # lazy initialize stream arn - once
+                    # Resolve again after a stream is disabled or replaced.
                     if Utils.is_empty(self.stream_arn):
                         try:
                             describe_table_result = self.dynamodb_client.describe_table(
                                 TableName=self.table_name
                             )
                             table = describe_table_result['Table']
-                            self.stream_arn = table['LatestStreamArn']
+                            self.stream_arn = table.get('LatestStreamArn')
+                            if not self.stream_arn:
+                                self._resync_required = True
+                                raise RuntimeError('table has no enabled stream')
                         except botocore.exceptions.ClientError as e:
                             if (
                                 e.response['Error']['Code']
@@ -133,9 +136,24 @@ class DynamoDBStreamSubscription:
                     shards = []
                     request = {'StreamArn': self.stream_arn}
                     while True:
-                        description = self.dynamodb_streams_client.describe_stream(
-                            **request
-                        )['StreamDescription']
+                        try:
+                            description = self.dynamodb_streams_client.describe_stream(
+                                **request
+                            )['StreamDescription']
+                        except botocore.exceptions.ClientError as e:
+                            if (
+                                e.response['Error']['Code']
+                                == 'ResourceNotFoundException'
+                            ):
+                                self.stream_arn = None
+                                self._resync_required = True
+                            raise
+                        if description.get('StreamStatus') in ('DISABLED', 'DISABLING'):
+                            self.stream_arn = None
+                            self._resync_required = True
+                            raise RuntimeError(
+                                'stream is disabled; rediscovering table stream'
+                            )
                         shards.extend(description['Shards'])
                         last_shard = description.get('LastEvaluatedShardId')
                         if not last_shard:
@@ -153,6 +171,7 @@ class DynamoDBStreamSubscription:
                     # child history can leave the cache behind the table.
                     late_baseline_child = any(
                         shard['ShardId'] not in self.shard_iterators_map
+                        and shard['ShardId'] not in self._shard_sequence_numbers
                         and shard.get('ParentShardId') in self._skipped_shards
                         for shard in shards
                     )
@@ -228,6 +247,8 @@ class DynamoDBStreamSubscription:
                                 break
                             except botocore.exceptions.ClientError as e:
                                 code = e.response['Error']['Code']
+                                if code == 'ResourceNotFoundException':
+                                    self.stream_arn = None
                                 if code == 'ProvisionedThroughputExceededException':
                                     time.sleep(1)
                                     continue
@@ -317,6 +338,11 @@ class DynamoDBStreamSubscription:
                                         )
                                     ):
                                         self._resync_required = True
+                                    if (
+                                        e.response['Error']['Code']
+                                        == 'ResourceNotFoundException'
+                                    ):
+                                        self.stream_arn = None
                                     del self.shard_iterators_map[shard_id]
                                     break
                                 else:

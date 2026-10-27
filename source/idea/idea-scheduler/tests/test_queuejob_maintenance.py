@@ -16,7 +16,7 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api_invocation_context import (
 from ideasdk.config.cluster_config import ClusterConfig
 from ideasdk.config.soca_config import SocaConfig
 
-MESSAGE = 'Cluster is in maintenance: This cluster is undergoing maintenance.'
+MESSAGE = 'Cluster is in maintenance: No message was set.'
 HOOK = Path(__file__).parents[1] / 'resources/openpbs/hooks/openpbs_hook_handler.py'
 
 
@@ -202,10 +202,10 @@ def test_queuejob_maintenance_notice_survives_account_lookup_failure(
         (
             '',
             '2026-11-01T18:30:00Z',
-            'This cluster is undergoing maintenance. Expected to end 2026-11-01 18:30 UTC.',
+            'No message was set. Expected to end 2026-11-01 18:30 UTC.',
         ),
         ('Upgrade', 'invalid', 'Upgrade'),
-        ('   ', '', 'This cluster is undergoing maintenance.'),
+        ('   ', '', 'No message was set.'),
     ],
 )
 def test_portal_and_qsub_share_complete_notice(
@@ -383,3 +383,24 @@ def test_slow_real_accounts_client_returns_notice_before_hook_deadline(
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+@pytest.mark.parametrize('validation_user', ['idea-validate', 'custom-validator'])
+def test_queuejob_exempts_only_configured_validation_submitter(
+    context, monkeypatch, validation_user
+):
+    api, hook, config = admission(context, monkeypatch, requestor=validation_user)
+    if validation_user != 'idea-validate':
+        config.put(
+            'virtual-desktop-controller.software_stacks.image_pipeline',
+            {'validation_user': validation_user},
+        )
+    enabled(config, True)
+    with pytest.raises(ReachedValidation):
+        api.hook_validate_job(hook)
+    context.accounts_client.get_user.assert_not_called()
+    # A claimed validation owner cannot exempt an ordinary PBS submitter.
+    hook.event.requestor = 'ordinary-user'
+    hook.event.job.Job_Owner = validation_user + '@host'
+    api.hook_validate_job(hook)
+    assert hook.api_context.success.call_args.args[0].accept is False

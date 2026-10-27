@@ -30,8 +30,6 @@ botocore==1.43.111
     #   s3transfer
 cacheout==0.17.0
     # via -r runtime.in
-cachetools==7.2.1
-    # via -r runtime.in
 certifi==2026.10.19
     # via
     #   -r runtime.in
@@ -203,8 +201,6 @@ sqlalchemy==2.1.4
     # via
     #   alembic
     #   dataset
-supervisor==4.3.0
-    # via -r runtime.in
 tracerite==2.6.5
     # via sanic
 troposphere==4.11.0

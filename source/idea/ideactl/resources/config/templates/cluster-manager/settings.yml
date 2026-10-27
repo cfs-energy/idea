@@ -69,7 +69,9 @@ maintenance:
   # plain text shown to users. no markup, no links.
   message: ''
   # optional ISO 8601 timestamp, e.g. '2026-09-15T18:00:00Z'. when set, the banner adds
-  # "until <local time>". an offset-less value is read as UTC. left empty, no time is shown.
+  # "Expected to end <local time>."; portal and qsub rejections add
+  # "Expected to end <YYYY-MM-DD HH:MM> UTC." an offset-less value is read as UTC.
+  # left empty, no time is shown.
   ends_at: ''
 
 oauth2_client:

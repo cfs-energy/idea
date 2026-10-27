@@ -25,7 +25,10 @@ class ReleaseDocsTests(unittest.TestCase):
         self.assertIn('not retried immediately', operators)
         self.assertNotIn('Updated web portal components', highlights)
         self.assertNotIn('IDEA-', highlights)
-        self.assertIn('retry', highlights)
+        self.assertIn('Select **Start** again', highlights)
+        self.assertIn('If hibernation is disabled', highlights)
+        self.assertIn('**Update session**', highlights)
+        self.assertIn('same instance family', highlights)
         for ticket in (263, 273, 285, 297, 298, 299):
             self.assertIn(f'IDEA-{ticket}:', operators)
         self.assertNotIn('Open **Terminal**', operators)
@@ -60,6 +63,42 @@ class ReleaseDocsTests(unittest.TestCase):
         ).read_text()
         self.assertNotIn("Deploy uses this partition's repository", template)
         self.assertIn('Upgrade-only repository selection', template)
+
+    def test_maintenance_wording_matches_renderers(self):
+        for path in (
+            'docs/modules/cluster-manager/maintenance-banner.md',
+            'source/idea/ideactl/resources/config/templates/cluster-manager/settings.yml',
+        ):
+            text = (ROOT / path).read_text()
+            self.assertNotIn('"until', text)
+            self.assertIn('Expected to end <', text)
+            self.assertIn('YYYY-MM-DD HH:MM', text)
+            self.assertIn('UTC', text)
+
+    def test_operator_upgrade_remedies(self):
+        text = (ROOT / 'docs/changelog.md').read_text()
+        self.assertNotIn('Existing desktops require updated bootstrap trust', text)
+        self.assertIn('cannot be refreshed in place; launch a new desktop', text)
+        self.assertIn('`--accept-config-drift` for unattended runs', text)
+        self.assertIn('update `values.yml` first', text)
+
+    def test_command_reference_explains_mandatory_govcloud_digest(self):
+        text = (ROOT / 'source/idea/ideactl/docs/COMMANDS.md').read_text()
+        for section in text.split('`--skip-release-image-check` skips ')[1:]:
+            paragraph = section.split('\n\n', 1)[0]
+            self.assertIn('except on GovCloud', paragraph)
+            self.assertIn('tag@sha256:', paragraph)
+        self.assertEqual(text.count('except on GovCloud'), 2)
+
+    def test_fresh_govcloud_tag_limit_is_explicit(self):
+        for path in (
+            'docs/changelog.md',
+            'source/idea/ideactl/resources/config/templates/ecs/settings.yml',
+        ):
+            text = (ROOT / path).read_text()
+            self.assertIn('Fresh GovCloud installs', text)
+            self.assertIn('mutable public tag until', text)
+            self.assertIn('first upgrade', text)
 
     def test_install_has_one_upgrade_banner(self):
         install = (ROOT / 'docs/first-time-users/install-idea/README.md').read_text()

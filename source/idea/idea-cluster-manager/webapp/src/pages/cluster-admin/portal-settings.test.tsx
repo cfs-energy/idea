@@ -708,7 +708,6 @@ global-settings.package_config.linux_packages.openldap_server_7|17|Openldap serv
 global-settings.package_config.linux_packages.openldap_server_8|17|Openldap server 8|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.openldap_server_9|17|Openldap server 9|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.openldap_server|17|Openldap server|list|deployment|1|hidden|237
-global-settings.package_config.linux_packages.putty|17|Putty|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.sssd_7|17|SSSD 7|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.sssd_deb|17|SSSD deb|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.sssd|17|SSSD|list|deployment|1|hidden|237
@@ -718,14 +717,6 @@ global-settings.package_config.linux_packages.system_8|17|System 8|list|deployme
 global-settings.package_config.linux_packages.system_9|17|System 9|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.system_deb|17|System deb|list|deployment|1|hidden|237
 global-settings.package_config.linux_packages.system|17|System|list|deployment|1|hidden|237
-global-settings.package_config.nodejs.npm_version|17|Npm version|string|deployment|1|hidden|238
-global-settings.package_config.nodejs.nvm_version|17|Nvm version|string|deployment|1|hidden|238
-global-settings.package_config.nodejs.url|17|URL|string|deployment|1|hidden|238
-global-settings.package_config.nodejs.version|17|Version|string|deployment|1|hidden|238
-global-settings.package_config.openmpi.checksum_method|17|Checksum method|string|deployment|1|hidden|239
-global-settings.package_config.openmpi.checksum|17|Checksum|string|deployment|1|hidden|239
-global-settings.package_config.openmpi.url|17|URL|string|deployment|1|hidden|239
-global-settings.package_config.openmpi.version|17|Version|string|deployment|1|hidden|239
 global-settings.package_config.openpbs.checksum_method|17|Checksum method|string|deployment|1|hidden|240
 global-settings.package_config.openpbs.checksum|17|Checksum|string|deployment|1|hidden|240
 global-settings.package_config.openpbs.commit|17|Commit|string|deployment|1|hidden|240
@@ -740,14 +731,6 @@ global-settings.package_config.prometheus.installer.linux.aarch64|17|Aarch64|str
 global-settings.package_config.prometheus.installer.linux.x86_64|17|X86 64|string|deployment|1|hidden|242
 global-settings.package_config.prometheus.installer.windows.aarch64|17|Aarch64|string|deployment|1|hidden|243
 global-settings.package_config.prometheus.installer.windows.x86_64|17|X86 64|string|deployment|1|hidden|243
-global-settings.package_config.putty.checksum_method|17|Checksum method|string|deployment|1|hidden|244
-global-settings.package_config.putty.checksum|17|Checksum|string|deployment|1|hidden|244
-global-settings.package_config.putty.url|17|URL|string|deployment|1|hidden|244
-global-settings.package_config.putty.version|17|Version|string|deployment|1|hidden|244
-global-settings.package_config.python.checksum_method|17|Checksum method|string|deployment|1|hidden|245
-global-settings.package_config.python.checksum|17|Checksum|string|deployment|1|hidden|245
-global-settings.package_config.python.url|17|URL|string|deployment|1|hidden|245
-global-settings.package_config.python.version|17|Version|string|deployment|1|hidden|245
 identity-provider.cognito.administrators_group_name|29|Administrators group name|string|runtime|0|editable|185
 identity-provider.cognito.advanced_security_mode|29|Advanced security mode|enum|deployment|0|editable|185
 identity-provider.cognito.email_provider|29|Email provider|enum|deployment|0|editable|185
@@ -1134,9 +1117,9 @@ virtual-desktop-controller.volume_type|17|Volume type|enum|deployment|1|read_onl
 
 it('accounts for every baseline, later and dynamic field in one destination or hidden disposition', () => {
     const baseline = fieldManifest.filter(setting => setting.originalSection !== null);
-    expect(baseline).toHaveLength(753);
-    expect(new Set(baseline.map(setting => setting.key)).size).toBe(753);
-    expect(new Set(baseline.map(setting => setting.originalSection)).size).toBe(254);
+    expect(baseline).toHaveLength(736);
+    expect(new Set(baseline.map(setting => setting.key)).size).toBe(736);
+    expect(new Set(baseline.map(setting => setting.originalSection)).size).toBe(250);
     expect(fieldManifest.length).toBeGreaterThan(baseline.length);
     expect(new Set(fieldManifest.map(setting => setting.key)).size).toBe(fieldManifest.length);
     for (const setting of fieldManifest) {

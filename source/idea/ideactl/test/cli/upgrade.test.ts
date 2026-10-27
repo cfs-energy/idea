@@ -1476,8 +1476,8 @@ test("routine release moves the release image without accepting drift and preser
 test("template defaults update silently, operator rows keep their values, legacy and stack markers still require review", async () => {
   const defaults = [
     { key: "global-settings.gpu_settings.instance_families", value: ["g4dn", "g5"] },
-    { key: "global-settings.package_config.nodejs.version", value: "22.15.0" },
-    { key: "global-settings.package_config.nodejs.npm_version", value: "10.9.2" },
+    { key: "global-settings.package_config.efa.version", value: "1.0.0" },
+    { key: "global-settings.package_config.efs_utils.version", value: "v1.0.0" },
   ];
   for (const source of ["template", "cli", "api", "stack", undefined]) {
     await withFixture(async (state) => {

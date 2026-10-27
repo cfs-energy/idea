@@ -1018,9 +1018,10 @@ def test_cached_completion_never_prices_to_now(
         )
     build_poller(fake_context)._process_finished_jobs([cached])
     recorded = fake_context.job_cache.finished_jobs[0]
-    assert recorded.total_time_secs == (120 if has_cached_end else None)
-    assert pricing_spy.calls == ([(cached.job_id, 120)] if has_cached_end else [])
-    if not has_cached_end:
+    measured = has_cached_end and not scheduler_returns_job
+    assert recorded.total_time_secs == (120 if measured else None)
+    assert pricing_spy.calls == ([(cached.job_id, 120)] if measured else [])
+    if not measured:
         assert recorded.estimated_bom_cost is None
 
 
@@ -1053,7 +1054,10 @@ def test_completion_recovers_duration_before_persisting_and_publishing(
                 )
             ]
         )
-    fake_context.scheduler.jobs_by_id[job_id] = fresh
+    if source == 'cache':
+        fresh = cached
+    else:
+        fake_context.scheduler.jobs_by_id[job_id] = fresh
     published = []
     monkeypatch.setattr(
         ProcessFinishedJob,
@@ -1143,6 +1147,7 @@ def test_completion_uses_current_attempt_history_before_old_hook(
             )
         ]
     )
+    fake_context.scheduler.jobs_by_id[job.job_id] = job
     build_poller(fake_context)._process_finished_jobs([job])
     assert job.start_time == start.datetime
     assert job.total_time_secs == (120 if history_end else None)

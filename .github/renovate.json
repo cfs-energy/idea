@@ -42,7 +42,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "The Node line the tool and the image run; the Dockerfile ARG follows the same dependency so the two pins never drift",
+      "description": "Track Node pins in the Dependency Dashboard; approved patch changes still require manual verification of both architecture checksums",
       "managerFilePatterns": [
         "/^software_versions\\.yml$/",
         "/^deployment/ecr/idea-control-plane/Dockerfile$/"
@@ -178,7 +178,7 @@
       "groupSlug": "all-dependencies"
     },
     {
-      "description": "Platform pins move by hand in their own change: the Node line, Python line, the base image, the CI runner images and the JDK. Patch releases within the pinned line still flow; the next Node LTS, Amazon Linux 2027 and new runner images are deliberate",
+      "description": "Platform major and minor pins move by hand: Node, Python, the base image, CI runners and JDK. Other patches flow automatically; Node patches require separate dashboard approval and checksum verification.",
       "matchDepNames": [
         "node",
         "python",
@@ -206,11 +206,18 @@
       "groupSlug": "all-dependencies"
     },
     {
-      "description": "Node moves by hand: update mise.toml, software_versions.yml and the Dockerfile together, verifying both architecture checksums from SHASUMS256.txt",
+      "description": "Node patches await Dependency Dashboard approval: update mise.toml, software_versions.yml and the Dockerfile together, verifying both architecture checksums from SHASUMS256.txt",
       "matchDepNames": [
         "node"
       ],
-      "enabled": false
+      "enabled": true,
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "dependencyDashboardApproval": true,
+      "automerge": false,
+      "groupName": null,
+      "groupSlug": null
     }
   ],
   "mise": {

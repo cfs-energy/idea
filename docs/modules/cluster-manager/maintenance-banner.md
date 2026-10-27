@@ -6,7 +6,7 @@ description: Tell users what is happening during a maintenance window, from the 
 
 A maintenance window puts a warning banner on every page of the web portal, including the sign-in page, and refuses new portal and direct `qsub` submissions from non-admin users with the same configured message. It is off by default.
 
-Turn it on before draining for an upgrade. Running and already-queued jobs are untouched. Root and cluster administrators (accounts with sudo access) can still submit through the portal and `qsub`; the portal checks the authenticated user and the hook checks the PBS submitter rather than the privileged socket caller. If the account lookup fails, the admission path logs the failure and refuses submission with the maintenance message. Use maintenance instead of manually disabling queues with qmgr.
+Turn it on before draining for an upgrade. Running and already-queued jobs are untouched. Root and cluster administrators (accounts with sudo access) can still submit through the portal and `qsub`; the portal checks the authenticated user and the hook checks the PBS submitter rather than the privileged socket caller. If the account lookup fails, the admission path logs the failure and refuses submission with the maintenance message. The configured image-pipeline validation user (default `idea-validate`) is also exempt, so compute image canaries can validate upgrade images during maintenance. This exemption uses the PBS submitter identity and leaves normal job validation and enabled-account checks in place. Use maintenance instead of manually disabling queues with qmgr.
 
 ## Settings
 
@@ -18,9 +18,9 @@ Turn it on before draining for an upgrade. Running and already-queued jobs are u
 
 All three are read live from the config store. The queuejob admission path reads the current setting on every submission. Changing it needs no redeploy and no module restart; clearing `enabled` restores submission. Open portal pages pick a change up within a minute, and the scheduler within about half a minute.
 
-`ends_at` is optional. When it is set, the banner appends "until" and the time, rendered in each user's own timezone. A value with no offset is read as UTC, so `2026-09-15T18:00:00Z` and `2026-09-15T18:00:00` mean the same thing. A value that cannot be parsed is dropped and the rest of the banner still shows. Portal and `qsub` submission rejections append the same end time in UTC.
+`ends_at` is optional. When it is set, the banner adds "Expected to end <time>." in each user's own timezone (a period is added after the message unless it already ends in punctuation). A value with no offset is read as UTC, so `2026-09-15T18:00:00Z` and `2026-09-15T18:00:00` mean the same thing. A value that cannot be parsed is dropped and the rest of the banner still shows. Portal and `qsub` submission rejections add the same sentence as "Expected to end <YYYY-MM-DD HH:MM> UTC."
 
-If the window is turned on with no message, all paths use "This cluster is undergoing maintenance." Portal and `qsub` rejections prefix the notice with "Cluster is in maintenance: ".
+If the window is turned on with no message, the banner uses "This cluster is undergoing maintenance." Portal and `qsub` rejections use "Cluster is in maintenance: No message was set." Configured messages are prefixed with "Cluster is in maintenance: ".
 
 ## Setting it from the portal
 

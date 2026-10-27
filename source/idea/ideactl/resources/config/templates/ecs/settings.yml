@@ -3,6 +3,8 @@
 # The ECS stack writes service and target group settings after deployment.
 enabled: true
 # Fresh installs on every partition default to this image; set it explicitly to use a mirror.
+# Fresh GovCloud installs use the mutable public tag until their first upgrade pins it.
+# A re-pushed tag changes future tasks; set image to a digest to pin it from installation.
 image: public.ecr.aws/s5o2b4m0/idea-control-plane:{{ idea_release_version }}
 
 # Upgrade-only repository selection for images already using a release tag in that repository.

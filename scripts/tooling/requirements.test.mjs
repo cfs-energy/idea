@@ -36,3 +36,9 @@ test('lock checks accept identical bytes and reject output drift or orphan locks
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('T-21: runtime and development locks exclude retired host-only dependencies', () => {
+  for (const file of ['runtime.in', 'runtime.txt', 'dev.txt']) {
+    assert.doesNotMatch(readFileSync(join(root, 'requirements', file), 'utf8'), /^(supervisor|cachetools)(?:==|\s*$)/m, file);
+  }
+});

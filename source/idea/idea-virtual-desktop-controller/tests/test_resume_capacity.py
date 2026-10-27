@@ -1,6 +1,9 @@
 from unittest.mock import Mock
 
+import boto3
+import pytest
 from botocore.exceptions import ClientError
+from botocore.stub import Stubber
 
 from ideadatamodel import (
     VirtualDesktopServer,
@@ -69,8 +72,11 @@ def test_capacity_failure_is_actionable_persisted_and_can_resume_later():
     assert session.state == VirtualDesktopSessionState.STOPPED
     assert 'us-east-1a' in session.failure_reason
     assert 'g4dn.xlarge' in session.failure_reason
-    assert 'Retry Resume' in session.failure_reason
-    assert 'g4dn family' in session.failure_reason
+    assert 'Select Start again' in session.failure_reason
+    assert (
+        'Update session to choose another allowed size in the g4dn family'
+        in session.failure_reason
+    )
     sessions._session_db.update.assert_called_once_with(session)
     hosts.ec2_client.start_instances.assert_called_once_with(InstanceIds=['i-test'])
     logged = ' '.join(str(call) for call in hosts._logger.error.call_args_list)
@@ -92,8 +98,73 @@ def test_capacity_lookup_failure_still_returns_recoverable_error():
     hosts, sessions, session = setup_resume()
     hosts.ec2_client.describe_instances.side_effect = RuntimeError('lookup unavailable')
     _, failed = sessions.resume_sessions([session])
-    assert 'Retry Resume' in failed[0].failure_reason
+    assert 'Select Start again' in failed[0].failure_reason
     assert failed[0].state == VirtualDesktopSessionState.STOPPED
+
+
+@pytest.mark.parametrize('hibernation_enabled', [False, True])
+@pytest.mark.parametrize('lookup_fails', [False, True])
+def test_capacity_remedy_matches_stored_sessions_resize_permission(
+    hibernation_enabled, lookup_fails
+):
+    hosts, sessions, session = setup_resume()
+    session.hibernation_enabled = hibernation_enabled
+    # Read the saved flag, even when the request does not include it.
+    request = session.model_copy(deep=True)
+    request.hibernation_enabled = None
+    hosts.ec2_client = boto3.client(
+        'ec2',
+        region_name='us-east-1',
+        aws_access_key_id='testing',
+        aws_secret_access_key='testing',
+    )
+    params = {'InstanceIds': [session.server.instance_id]}
+    with Stubber(hosts.ec2_client) as ec2:
+        ec2.add_client_error(
+            'start_instances',
+            service_error_code='InsufficientInstanceCapacity',
+            expected_params=params,
+        )
+        if lookup_fails:
+            ec2.add_client_error(
+                'describe_instances',
+                service_error_code='UnauthorizedOperation',
+                expected_params=params,
+            )
+        else:
+            ec2.add_response(
+                'describe_instances',
+                {
+                    'Reservations': [
+                        {
+                            'Instances': [
+                                {
+                                    'InstanceId': session.server.instance_id,
+                                    'InstanceType': 'g4dn.xlarge',
+                                    'Placement': {'AvailabilityZone': 'us-east-1a'},
+                                }
+                            ]
+                        }
+                    ]
+                },
+                params,
+            )
+        success, failed = sessions.resume_sessions([request])
+        ec2.assert_no_pending_responses()
+    assert success == [] and failed == [session]
+    assert session.state == VirtualDesktopSessionState.STOPPED
+    assert 'Select Start again in a few minutes' in session.failure_reason
+    assert 'Resume' not in session.failure_reason
+    assert 'administrator' not in session.failure_reason
+    if hibernation_enabled:
+        assert 'Update session' not in session.failure_reason
+        assert 'size' not in session.failure_reason
+    else:
+        assert (
+            'Update session to choose another allowed size in the g4dn family'
+            in session.failure_reason
+        )
+    sessions._session_db.update.assert_called_once_with(session)
 
 
 def test_one_capacity_failure_does_not_prevent_other_desktops_resuming():

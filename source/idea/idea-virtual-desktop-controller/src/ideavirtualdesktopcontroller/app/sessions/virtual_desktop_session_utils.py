@@ -1042,7 +1042,12 @@ class VirtualDesktopSessionUtils:
             session_server_map[session.server.instance_id] = session
 
         for server in servers_to_start:
-            response = self._server_utils.start_dcv_hosts([server])
+            response = self._server_utils.start_dcv_hosts(
+                [server],
+                hibernation_enabled=bool(
+                    session_server_map[server.instance_id].hibernation_enabled
+                ),
+            )
             if 'ERROR' in response:
                 session_server_map[
                     server.instance_id

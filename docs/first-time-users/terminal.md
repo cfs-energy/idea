@@ -1,6 +1,6 @@
 # Terminal in your browser
 
-Open **Terminal** in the portal navigation after signing in. Choose **Bastion** to check jobs, or choose one of **My desktop** targets to use your own running Linux desktop. Select **Connect**. Targets include Linux desktops launched after the cluster was upgraded to 26.11.1. To use an older desktop here, launch a new one. Shared desktops, Windows desktops, and desktops that are still starting are not available here.
+Open **Terminal** in the portal navigation after signing in. Choose **Bastion**, when the cluster has a bastion, to check jobs, or choose one of **My desktop** targets to use your own running Linux desktop. Select **Connect**. Targets include Linux desktops launched since the cluster began running 26.11.1. To use an older desktop here, launch a new one. Shared desktops, Windows desktops, and desktops that are still starting are not available here.
 
 The shell runs as your cluster account. It opens the tmux session named `web`, so you can disconnect, put your phone to sleep, or open Terminal on another device and return to the same shell on that target. Multiple connections to the same target share that session and its screen size. A host restart, desktop termination, or bastion container replacement ends its tmux session.
 

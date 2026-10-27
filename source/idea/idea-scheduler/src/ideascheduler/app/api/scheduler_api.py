@@ -17,6 +17,7 @@ from ideadatamodel import (
     SocaPaginator,
     SocaFilter,
     GetUserRequest,
+    ImagePipelineSettings,
 )
 from ideadatamodel.scheduler import (
     SocaJob,
@@ -69,7 +70,7 @@ PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
 # submission, never cached, so closing the window takes effect straight away.
 MAINTENANCE_ENABLED_CONFIG_KEY = 'cluster-manager.maintenance.enabled'
 MAINTENANCE_MESSAGE_CONFIG_KEY = 'cluster-manager.maintenance.message'
-DEFAULT_MAINTENANCE_MESSAGE = 'This cluster is undergoing maintenance.'
+DEFAULT_MAINTENANCE_MESSAGE = 'No message was set.'
 # Leave time to return the notice inside the PBS hook's ten-second socket deadline.
 MAINTENANCE_LOOKUP_TIMEOUT_SECONDS = 2
 # Token retrieval can stall too; cap outstanding lookups without queuing more work.
@@ -103,6 +104,17 @@ def maintenance_message(config):
 
 def maintenance_exempt(context, username, logger):
     if username == 'root':
+        return True
+    # Upgrade image canaries run while ordinary submissions are closed.
+    settings = ImagePipelineSettings(
+        **dict(
+            context.config().get_config(
+                'virtual-desktop-controller.software_stacks.image_pipeline', default={}
+            )
+            or {}
+        )
+    )
+    if username and username == settings.validation_user:
         return True
     if not _maintenance_lookup_slots.acquire(blocking=False):
         return False

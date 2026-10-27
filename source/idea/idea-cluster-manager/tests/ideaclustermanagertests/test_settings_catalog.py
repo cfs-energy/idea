@@ -231,11 +231,11 @@ def test_catalog_count_contract_and_explicit_dispositions():
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
     assert len(DESTINATION_SECTIONS) == 37
-    assert len(baseline) == 694
+    assert len(baseline) == 677
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == '4a391d3dafb0a8b8ee2c73f085046ab777cb08bcff3518b26354f49eb3ec0296'
+        == '2b485d077403a5fc90404aa584851fe88b948f30e80a3249e11d587a6a2ef8d1'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -1018,3 +1018,18 @@ def test_terminal_controls_are_discoverable_and_writable():
 def test_terminal_controls_reject_out_of_range_values(name, value):
     with pytest.raises(exceptions.SocaException):
         coerce_value(BY_KEY['cluster-manager.web_terminal.' + name], value)
+
+
+def test_retired_host_package_settings_are_not_offered_or_writable():
+    prefixes = tuple(
+        'global-settings.package_config.' + name
+        for name in ('nodejs.', 'python.', 'putty.', 'openmpi.', 'linux_packages.putty')
+    )
+    assert not [key for key in BY_KEY if key.startswith(prefixes)]
+    for package in ('nodejs', 'python', 'putty', 'openmpi'):
+        with pytest.raises(
+            exceptions.SocaException, match='not in the settings catalog'
+        ):
+            coerce_settings(
+                'global-settings', {'package_config': {package: {'version': '1'}}}
+            )

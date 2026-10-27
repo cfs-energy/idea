@@ -88,38 +88,28 @@ class ProcessFinishedJob:
         # Duration and efficiency describe the latest attempt, excluding requeue waits.
         latest = latest_run_id(run.run_id for run in runs)
         runs = [run for run in runs if run.run_id == latest]
-        starts = [run.start for run in runs if run.start is not None]
-        if (
+        if runs and (
             self._cached_fallback
-            and starts
-            and (self.job.start_time is None or min(starts) > self.job.start_time)
+            or (self.job.start_time is None and self.job.end_time is None)
         ):
-            # Cached timestamps may describe an earlier attempt; recover the pair together.
-            self.job.start_time = min(starts)
-            self.job.end_time = None
-        if self.job.start_time is None and starts:
-            self.job.start_time = min(starts)
-        if self.job.end_time is None and self.job.start_time is not None:
-            ends = [
-                run.end
-                for run in runs
-                if run.end is not None and run.end >= self.job.start_time
-            ]
-            if ends:
-                self.job.end_time = max(ends)
+            # Select a pair, never fill an endpoint from another snapshot or attempt.
+            starts = [run.start for run in runs if run.start is not None]
+            ends = [run.end for run in runs if run.end is not None]
+            self.job.start_time = min(starts) if starts else None
+            self.job.end_time = max(ends) if ends else None
         try:
-            if self.job.start_time is None:
+            if self.never_started(self.job):
                 self._logger.info(
                     f'{self.job.log_tag} never started; no duration or estimated cost'
                 )
                 self.job.total_time_secs = 0
-            elif self.job.end_time is not None:
+            elif self.job.start_time is not None and self.job.end_time is not None:
                 seconds = (self.job.end_time - self.job.start_time).total_seconds()
                 self.job.total_time_secs = int(seconds) if seconds >= 0 else None
             else:
                 self.job.total_time_secs = None
                 self._logger.warning(
-                    f'{self.job.log_tag} missing execution end time; duration unavailable'
+                    f'{self.job.log_tag} missing execution timestamp; duration unavailable'
                 )
         except Exception as e:
             self._logger.exception(
@@ -128,11 +118,10 @@ class ProcessFinishedJob:
 
     @staticmethod
     def never_started(job: SocaJob) -> bool:
-        """
-        the scheduler stamps a start time only when a node begins executing the job.
-        a job that ran for less than a second still has one, so this does not catch it.
-        """
-        return job.start_time is None
+        """An end-only hook still proves execution, even if the begin hook was lost."""
+        return job.start_time is None and not any(
+            host.execution and host.execution.runs for host in job.execution_hosts or []
+        )
 
     def compute_and_apply_estimated_costs(self):
         try:
@@ -431,14 +420,6 @@ class FinishedJobProcessor:
                 if stored is not None:
                     recorded_jobs.append(stored)
                     continue
-                if finished_job.start_time is None:
-                    finished_job.start_time = cached.start_time
-                if finished_job.end_time is None and cached.end_time is not None:
-                    if (
-                        finished_job.start_time is None
-                        or cached.end_time >= finished_job.start_time
-                    ):
-                        finished_job.end_time = cached.end_time
                 if not finished_job.execution_hosts:
                     finished_job.execution_hosts = cached.execution_hosts
                 for field in (

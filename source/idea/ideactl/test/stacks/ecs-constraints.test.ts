@@ -570,7 +570,7 @@ test("application tasks use readiness checks and explicit shutdown allowances", 
     assert.equal(servicesByRole(resources)[role].Properties.DesiredCount, role === "scheduler" ? 1 : 2, role);
     const container = (task.Properties.ContainerDefinitions as Json[]).find((entry) => entry.HealthCheck !== undefined);
     assert.ok(container, `${role} readiness`);
-    assert.equal(container.StopTimeout, 30, role);
+    assert.equal(container.StopTimeout, role === "cluster-manager" ? 60 : 30, role);
     assert.equal(container.HealthCheck.Interval, 5, role);
     assert.equal(container.HealthCheck.StartPeriod, START_ALLOWANCE_SECONDS[role], role);
     const command = JSON.stringify(container.HealthCheck.Command);

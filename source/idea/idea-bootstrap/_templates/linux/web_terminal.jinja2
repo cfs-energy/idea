@@ -15,7 +15,6 @@ cat > /etc/systemd/system/idea-terminal-trust.service <<'UNIT'
 Description=Refresh IDEA terminal certificate trust on every boot
 Wants=network-online.target
 After=network-online.target
-Before=sshd.service ssh.service
 
 [Service]
 Type=oneshot
@@ -28,12 +27,7 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 UNIT
 for service in sshd ssh; do
-  mkdir -p "/etc/systemd/system/${service}.service.d"
-  cat > "/etc/systemd/system/${service}.service.d/idea-terminal-trust.conf" <<'UNIT'
-[Unit]
-Wants=idea-terminal-trust.service
-After=idea-terminal-trust.service
-UNIT
+  rm -f "/etc/systemd/system/${service}.service.d/idea-terminal-trust.conf"
 done
 mkdir -p /usr/lib/systemd/system-sleep
 cat > /usr/lib/systemd/system-sleep/idea-terminal-trust <<'SLEEP'

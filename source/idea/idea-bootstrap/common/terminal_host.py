@@ -90,36 +90,41 @@ def replace_public_keys(path, text):
 
 
 def replace_sshd_config(path, text):
-    replace_validated(path, text, ['sshd', '-t', '-f'])
+    return replace_validated(path, text, ['sshd', '-t', '-f'])
 
 
-def replace_validated(path, text, validator):
+def replace_validated(path, text, validator=None, mode=0o644):
     path = path.resolve()
+    if path.exists() and path.read_text() == text:
+        return False
     with tempfile.NamedTemporaryFile(
         mode='w', dir=path.parent, suffix='.tmp', delete=False
     ) as staged:
         temporary = Path(staged.name)
     try:
         temporary.write_text(text)
-        subprocess.run(
-            validator + [staged.name],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            timeout=5,
-        )
+        if validator:
+            subprocess.run(
+                validator + [staged.name],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                timeout=5,
+            )
         if path.exists():
             metadata = path.stat()
             os.chmod(staged.name, metadata.st_mode & 0o777)
             os.chown(staged.name, metadata.st_uid, metadata.st_gid)
         else:
-            os.chmod(staged.name, 0o644)
+            os.chmod(staged.name, mode)
         os.replace(staged.name, path)
+        return True
     finally:
         if temporary.exists():
             temporary.unlink()
 
 
 def configure(cluster, host_id, root=Path('/')):
+    (root / 'run/sshd').mkdir(mode=0o755, parents=True, exist_ok=True)
     ready = root / 'run/idea-terminal-trust-ready'
     if ready.exists():
         ready.unlink()
@@ -190,12 +195,15 @@ def configure(cluster, host_id, root=Path('/')):
     # Advance tracking only after effective trust no longer contains the old CA.
     replace_public_keys(path, ca + '\n')
     principals = ssh / 'idea_terminal_principals'
-    principals.write_text(PRINCIPALS_COMMAND)
-    principals.chmod(0o755)
+    replace_validated(principals, PRINCIPALS_COMMAND, mode=0o755)
     directive = 'AuthorizedPrincipalsCommand ' + command
     if directive not in text.splitlines():
         text = directive + '\nAuthorizedPrincipalsCommandUser root\n' + text
-    replace_sshd_config(config, text)
+    if replace_sshd_config(config, text) and host_id != 'bastion':
+        # Distributions provide either sshd or ssh; the other unit may not exist.
+        subprocess.run(
+            ['systemctl', 'try-reload-or-restart', 'sshd', 'ssh'], timeout=10
+        )
     public = (ssh / 'ssh_host_ed25519_key.pub').read_text().strip()
     dynamodb(
         'put-item',

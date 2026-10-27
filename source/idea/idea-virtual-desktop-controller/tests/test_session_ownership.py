@@ -179,6 +179,25 @@ def test_screenshot_cannot_target_another_users_dcv_id(api, session_id):
         )
 
 
+def test_ownership_api_changes_are_documented_for_upgrades():
+    from pathlib import Path
+
+    changelog = (Path(__file__).resolve().parents[4] / 'docs/changelog.md').read_text()
+    release_notes = changelog.split('## [26.11.1]', 1)[1].split('\n## [', 1)[0]
+    note = next(
+        (
+            line
+            for line in release_notes.splitlines()
+            if '**Desktop session ownership**' in line
+        ),
+        '',
+    )
+    assert 'UpdateSession' in note and 'stored session' in note
+    assert 'rejects a mismatched `server.instance_id`' in note
+    assert 'Screenshot requests require `idea_session_id`' in note
+    assert "session info returns only the caller's stored desktop" in note
+
+
 def test_screenshot_resolves_dcv_id_from_owned_session(api):
     context = invocation(
         api,

@@ -1712,11 +1712,20 @@ class SocaServer(SocaService):
         self._is_running.clear()
 
         # Run application cleanup on the serving loop before closing its transports.
+        deadline = time.monotonic() + 30
         for server in (self._http_server, self._unix_server):
             if server is not None and server.app.state.is_started:
-                asyncio.run_coroutine_threadsafe(
+                cleanup = asyncio.run_coroutine_threadsafe(
                     server.before_stop(), self._server_loop
-                ).result(timeout=30)
+                )
+                try:
+                    cleanup.result(timeout=max(0, deadline - time.monotonic()))
+                except Exception as error:
+                    cleanup.cancel()
+                    self._logger.error(
+                        'before_stop failed code=%s; continuing transport shutdown',
+                        type(error).__name__,
+                    )
 
         # shutdown executor and wait for current pending requests to complete and allow to respond back
         self._executor.shutdown(wait=True, cancel_futures=True)

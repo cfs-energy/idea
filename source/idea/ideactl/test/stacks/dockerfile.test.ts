@@ -55,12 +55,23 @@ test('base images and both Node archives are integrity pinned', () => {
 });
 
 
-test('S-38: Node checksums belong to the pinned version and automatic bumps are disabled', () => {
+test('T-11/T-30: Node patches are visible but require approval and manual checksum updates', () => {
   const version = text.match(/^ARG NODE_VERSION=(\S+)$/m)?.[1];
   assert.equal(text.match(/^# Node archive checksums for (\S+)$/m)?.[1], version);
   const renovate = JSON.parse(readFileSync(new URL('../../../../../.github/renovate.json', import.meta.url), 'utf8'));
-  assert.ok(renovate.packageRules.some((rule: any) => rule.enabled === false &&
-    rule.matchDepNames?.includes('node') && !rule.matchUpdateTypes && !rule.matchFileNames));
+  for (const update of ['major', 'minor', 'patch']) {
+    const effective = Object.assign({}, ...renovate.packageRules.filter((rule: any) =>
+      rule.matchDepNames?.includes('node') && (!rule.matchUpdateTypes || rule.matchUpdateTypes.includes(update))));
+    if (update === 'patch') {
+      assert.equal(effective.enabled, true);
+      assert.equal(effective.dependencyDashboardApproval, true);
+      assert.equal(effective.automerge, false);
+      assert.equal(effective.groupName, null);
+      assert.match(effective.description, /checksums/);
+    } else assert.equal(effective.enabled, false);
+  }
+  assert.match(renovate.customManagers.find((manager: any) => manager.depNameTemplate === 'node').description,
+    /Dependency Dashboard/);
 });
 
 test('S-39: the image uv pin follows the toolchain through Renovate', () => {

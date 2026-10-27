@@ -34,6 +34,7 @@ CHUNK_SIZE = 16384
 WATCHDOG_INTERVAL = 15
 WRITE_TIMEOUT = 30
 SHUTDOWN_TIMEOUT = 5
+DRAIN_TIMEOUT = 3 * SHUTDOWN_TIMEOUT + 5
 PRE_READY_TIMEOUT = 40
 LINUX = {
     'amazonlinux2',
@@ -70,12 +71,18 @@ def certificate(ca, username, session_id, now=None):
 
 
 def validate_desktop(row, username):
-    if (
-        not row
-        or row.get('owner') != username
-        or row.get('state') != 'READY'
-        or row.get('base_os') not in LINUX
-    ):
+    if not row or row.get('owner') != username or row.get('base_os') not in LINUX:
+        raise TerminalDenied('Desktop is not an owned, ready Linux session')
+    if row.get('state') in {
+        'PROVISIONING',
+        'CREATING',
+        'INITIALIZING',
+        'RESUMING',
+        'STOPPING',
+        'STOPPED',
+    }:
+        raise TerminalUnavailable('Desktop is not ready')
+    if row.get('state') != 'READY':
         raise TerminalDenied('Desktop is not an owned, ready Linux session')
     instance = row.get('server', {}).get('instance_id')
     if not isinstance(instance, str) or not re.fullmatch(r'i-[0-9a-f]+', instance):
@@ -181,6 +188,8 @@ class TerminalService:
                 code = (
                     error.response['Error']['Code']
                     if isinstance(error, ClientError)
+                    else str(error)
+                    if isinstance(error, TerminalDenied)
                     else type(error).__name__
                 )
                 self.logger.error(
@@ -490,10 +499,11 @@ class TerminalService:
                 task.cancel()
         if handlers:
             # SSH close, lease release and WebSocket close each have a bounded deadline.
-            await asyncio.wait_for(
-                asyncio.gather(*handlers, return_exceptions=True),
-                3 * SHUTDOWN_TIMEOUT + 5,
-            )
+            _, pending = await asyncio.wait(handlers, timeout=DRAIN_TIMEOUT)
+            if pending:
+                self.logger.warning(
+                    'terminal drain deadline reached pending=%d', len(pending)
+                )
 
     async def websocket(self, request, ws):
         if self.stopping:
@@ -623,7 +633,10 @@ class TerminalService:
             async def input_frames():
                 while True:
                     data = await ws.recv()
-                    if not isinstance(data, str) or len(data.encode()) > FRAME_LIMIT:
+                    if (
+                        not isinstance(data, str)
+                        or len(data.encode('utf-8', 'replace')) > FRAME_LIMIT
+                    ):
                         raise TerminalDenied('Invalid frame')
                     frame = json.loads(data)
                     if not isinstance(frame, dict):
@@ -639,10 +652,10 @@ class TerminalService:
                     elif (
                         frame.get('type') == 'input'
                         and isinstance(frame.get('data'), str)
-                        and len(frame['data'].encode()) <= CHUNK_SIZE
+                        and len(frame['data'].encode('utf-8', 'replace')) <= CHUNK_SIZE
                     ):
                         activity[0] = time.monotonic()
-                        process.stdin.write(frame['data'].encode())
+                        process.stdin.write(frame['data'].encode('utf-8', 'replace'))
                         await asyncio.wait_for(process.stdin.drain(), WRITE_TIMEOUT)
                     elif frame.get('type') == 'resize' and all(
                         type(frame.get(k)) is int and 1 <= frame[k] <= 500
@@ -731,7 +744,10 @@ class TerminalService:
                     username,
                     'target' if authenticated else 'claimed_target',
                     target,
-                    getattr(request, 'ip', ''),
+                    (request.headers.get('x-forwarded-for') or '')
+                    .split(',')[-1]
+                    .strip()
+                    or getattr(request, 'ip', ''),
                     session_id,
                     reason,
                     error_type,

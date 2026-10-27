@@ -329,7 +329,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     // The inventory counts key patterns: `<app>.server.port` is one entry there and three keys here, as are
     // `<day>`, `<state>`, `<os>`, `<family>` and the `<module>.module_id` mappings.
     const distinct = new Set(RUNTIME_KEY_GROUPS.flatMap((group) => runtimeKeys[group] as string[]));
-    assert.equal(distinct.size, 720);
+    assert.equal(distinct.size, 703);
     // Spot-check expanded key identities.
     for (const key of [
       'global-settings.module_sets.default.virtual-desktop-controller.module_id',
@@ -775,4 +775,11 @@ describe('cost settings keep shipped defaults', () => {
       assert.equal(flattenConfigDir(outDir)['scheduler.cost_estimation.provisioned_iops'], 0.075);
     });
   }
+});
+
+it('T-20: fresh settings omit retired host package configuration', () => {
+  const directory = tempDir();
+  generateConfig(join(here, 'ecs-values.yml'), directory);
+  const keys = Object.keys(flattenConfigDir(directory));
+  assert.deepEqual(keys.filter(key => /^global-settings\.package_config\.(nodejs\.|python\.|putty\.|openmpi\.|linux_packages\.putty$)/.test(key)), []);
 });

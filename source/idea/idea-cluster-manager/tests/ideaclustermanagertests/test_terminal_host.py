@@ -359,7 +359,9 @@ def test_desktop_installs_trust_refresh_on_every_boot():
     from jinja2 import Template
 
     rendered = Template(TEMPLATE.read_text()).render(context=MagicMock())
-    assert 'Before=sshd.service ssh.service' in rendered
+    assert 'Before=sshd.service ssh.service' not in rendered
+    assert 'After=idea-terminal-trust.service' not in rendered
+    assert 'sshd -t && (systemctl reload sshd || systemctl reload ssh)' in rendered
     assert 'After=network-online.target' in rendered
     assert (
         'ExecStart=/usr/bin/python3 /usr/local/libexec/idea-terminal-host.py'
@@ -435,3 +437,100 @@ def test_hibernate_clears_trust_and_schedules_refresh(tmp_path):
     assert not ready.exists(), (
         'only successful trust installation can mark this resume ready'
     )
+
+
+def test_configure_creates_privsep_before_sshd_and_reloads_only_changes(
+    helper, tmp_path, monkeypatch
+):
+    ssh = tmp_path / 'etc/ssh'
+    ssh.mkdir(parents=True)
+    (ssh / 'sshd_config').write_text('UsePAM yes\n')
+    (ssh / 'ssh_host_ed25519_key.pub').write_text('ssh-ed25519 host-key')
+    monkeypatch.setattr(
+        helper,
+        'dynamodb',
+        lambda *a, **k: {'Item': {'value': {'S': 'ssh-ed25519 ca-key'}}},
+    )
+    calls = []
+
+    def run(args, **kwargs):
+        if args[0] == 'sshd':
+            assert (tmp_path / 'run/sshd').is_dir()
+            assert (tmp_path / 'run/sshd').stat().st_mode & 0o777 == 0o755
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout='trustedusercakeys none\n')
+
+    monkeypatch.setattr(helper.subprocess, 'run', run)
+    helper.configure('example', 'desktop', root=tmp_path)
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert calls.count(['systemctl', 'try-reload-or-restart', 'sshd', 'ssh']) == 1
+
+
+def test_principals_are_published_atomically_and_unchanged_script_is_preserved(
+    helper, tmp_path, monkeypatch
+):
+    ssh = tmp_path / 'etc/ssh'
+    ssh.mkdir(parents=True)
+    (ssh / 'sshd_config').write_text('UsePAM yes\n')
+    (ssh / 'ssh_host_ed25519_key.pub').write_text('ssh-ed25519 host-key')
+    principals = ssh / 'idea_terminal_principals'
+    principals.write_text('old script')
+    principals.chmod(0o755)
+    monkeypatch.setattr(
+        helper,
+        'dynamodb',
+        lambda *a, **k: {'Item': {'value': {'S': 'ssh-ed25519 ca-key'}}},
+    )
+    monkeypatch.setattr(
+        helper.subprocess,
+        'run',
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout='trustedusercakeys none\n'
+        ),
+    )
+    replace = helper.os.replace
+    publications = []
+
+    def publish(src, dst):
+        if dst == principals:
+            assert principals.read_text() == 'old script'
+            assert Path(src).read_text() == helper.PRINCIPALS_COMMAND
+            assert Path(src).stat().st_mode & 0o777 == 0o755
+            publications.append(dst)
+        replace(src, dst)
+
+    monkeypatch.setattr(helper.os, 'replace', publish)
+    helper.configure('example', 'desktop', root=tmp_path)
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert publications == [principals]
+
+
+def test_bastion_retries_failed_trust_and_reloads_running_sshd(tmp_path):
+    import re
+
+    script = BASTION.read_text()
+    retry = re.search(r'(# Retry terminal trust.*?)(?=\ntrap )', script, re.S)
+    assert retry, 'a transient trust failure must recover without replacing the task'
+    calls = tmp_path / 'calls'
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'set -euo pipefail\n'
+            + 'sshd_pid=123\n'
+            + 'timeout() { echo attempt >> "$CALLS"; [[ $(wc -l < "$CALLS") -gt 1 ]]; }\n'
+            + 'sleep() { :; }\n'
+            + 'kill() { echo "$*"; }\n'
+            + retry[1].replace(
+                '/run/idea-terminal-trust-ready', str(tmp_path / 'ready')
+            )
+            + '\nwait "$trust_pid"\n',
+        ],
+        env={'CALLS': str(calls)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert len(calls.read_text().splitlines()) == 2
+    assert 'Terminal trust not installed; retrying in 30 seconds' in result.stdout
+    assert '-HUP 123' in result.stdout

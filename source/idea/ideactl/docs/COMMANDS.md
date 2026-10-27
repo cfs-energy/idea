@@ -231,7 +231,7 @@ Compare local `config/` files to the settings table as MODIFIED, DELETED, or ADD
 
 ## `config preview-upgrade`
 
-Print the configuration drift an upgrade would apply, without writing it. Missing or unverifiable release images appear as blocking findings; the complete preview is printed before exiting with code 1. `--skip-release-image-check` skips the registry lookup, logs that the image was not verified, and keeps the proposed image move.
+Print the configuration drift an upgrade would apply, without writing it. Missing or unverifiable release images appear as blocking findings; the complete preview is printed before exiting with code 1. `--skip-release-image-check` skips the registry lookup, logs that the image was not verified, and keeps the proposed image move, except on GovCloud when `ecs.image_repositories.aws-us-gov` is unset: the public fallback is always resolved to a manifest digest and written as `tag@sha256:...`.
 
 **Usage:** `ideactl config preview-upgrade [options] [modules...]`
 
@@ -543,7 +543,7 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 
 Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. `--no-optimize-deployment` deploys one stack at a time.
 
-Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move.
+Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move, except on GovCloud when `ecs.image_repositories.aws-us-gov` is unset: the public fallback is always resolved to a manifest digest and written as `tag@sha256:...`.
 
 A leftover `*.maintenance.upgrade_baseline` or `cluster.upgrade_historical_pending` row stops the upgrade. Recover and complete the previous upgrade with the 26.10.9 administrator first. See the [recovery command](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md#recovery-with-the-26109-administrator).
 

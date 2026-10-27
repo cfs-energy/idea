@@ -167,7 +167,7 @@ export function TerminalPanel({client}: {client: TerminalClient}) {
             <Button disabled={state !== 'connected'} onClick={() => {void navigator.clipboard.readText().then(text => terminal.current?.paste(text)).catch(() => setError('Paste was blocked. Use your keyboard or the browser paste action.'));}}>Paste</Button>
         </div>
         <div role="status" aria-live="polite" className="terminal-status">{ready ? targetsLoaded && !targets.length ? 'No terminal targets.' : reasonLabels[reason] ?? labels[state] : 'Loading terminal…'}</div>
-        {targetsLoaded && !targets.length && <div className="terminal-status">Targets include the bastion and your running Linux desktops launched after the cluster upgrade. To use an older desktop here, launch a new one.</div>}
+        {targetsLoaded && !targets.length && <div className="terminal-status">No bastion or eligible Linux desktop is available. Linux desktops launched before this cluster ran 26.11.1 are not listed; launch a new one to use it here.</div>}
         {error && <Alert type="error" dismissible onDismiss={() => setError('')}>{error}</Alert>}
         <div className="terminal-surface" ref={surface} aria-label="Shell. Shift Escape moves focus to the controls." />
         <KeyBar ctrl={ctrl} alt={alt} disabled={state !== 'connected'} modifier={key => {if (key === 'ctrl') setCtrl(value => !value); else setAlt(value => !value); terminal.current?.focus();}} send={data => {send(data); terminal.current?.focus();}} />

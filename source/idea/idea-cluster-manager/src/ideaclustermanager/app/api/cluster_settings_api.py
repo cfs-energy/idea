@@ -9,6 +9,8 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from datetime import datetime
+
 import math
 import re
 import time
@@ -538,6 +540,16 @@ class ClusterSettingsAPI(BaseAPI):
             and not context.is_administrator()
         ):
             raise exceptions.unauthorized_access()
+
+        if module_name == constants.MODULE_CLUSTER_MANAGER:
+            ends_at = request.settings.get('maintenance', {}).get('ends_at')
+            if ends_at:
+                try:
+                    datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
+                except ValueError:
+                    raise exceptions.invalid_params(
+                        'maintenance.ends_at must be an ISO 8601 timestamp'
+                    ) from None
 
         self.validate_schedule_and_templates(module_id, request.settings)
         self.validate_bedrock_settings(module_id, request.settings)

@@ -902,7 +902,15 @@ export async function verifyReleaseImage(
   onFailure?: (message: string) => void,
 ): Promise<ConfigEntry[]> {
   const move = entries.find((entry) => entry.key === "ecs.image");
-  if (move === undefined) return entries;
+  if (move === undefined) {
+    const rows = new Map(settings.map((row) => [row.key, row.value]));
+    const image = rows.get("ecs.image");
+    if (typeof image === "string" && image.includes("@sha256:") &&
+      image !== rows.get("ecs.release_image") && image !== rows.get("ecs.previous_release_image")) {
+      deps.out(`ecs.image stays ${image}; this digest is an operator pin and does not follow releases.`);
+    }
+    return entries;
+  }
   const target = String(move.value);
   const rows = new Map(settings.map((row) => [row.key, row.value]));
   const pinPublicFallback = rows.get("cluster.aws.partition") === "aws-us-gov" &&
@@ -941,8 +949,12 @@ export async function verifyReleaseImage(
     const pinned = `${target}@${digest}`;
     deps.out(`GovCloud public release image resolved to ${pinned}`);
     return [
-      ...entries.map((entry) => entry === move ? { ...entry, value: pinned } : entry),
+      // Preserve ownership of the current digest before replacing its marker.
+      ...(current.includes("@sha256:") &&
+        (current === rows.get("ecs.release_image") || current === rows.get("ecs.previous_release_image"))
+        ? [{ key: "ecs.previous_release_image", value: current }] : []),
       { key: "ecs.release_image", value: pinned },
+      ...entries.map((entry) => entry === move ? { ...entry, value: pinned } : entry),
     ];
   }
   return entries;
@@ -1058,7 +1070,8 @@ export function planEcsImageFollowsRelease(
   const rows = new Map(current.map((entry) => [entry.key, entry.value]));
   const storedImage = rows.get("ecs.image");
   // Only a digest recorded by this planner follows releases; operator pins remain untouched.
-  const image = typeof storedImage === "string" && storedImage === rows.get("ecs.release_image")
+  const image = typeof storedImage === "string" &&
+    (storedImage === rows.get("ecs.release_image") || storedImage === rows.get("ecs.previous_release_image"))
     ? storedImage.replace(/@sha256:[a-f0-9]{64}$/, "") : storedImage;
   const partition = rows.get("cluster.aws.partition") ?? "aws";
   const configured = rows.get(`ecs.image_repositories.${String(partition)}`);

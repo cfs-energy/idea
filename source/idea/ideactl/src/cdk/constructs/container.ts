@@ -542,7 +542,8 @@ export function applicationContainerSettings(role: ContainerRole, brokerPorts = 
     },
     // ECS deregisters the task and drains its target groups before entering STOPPING.
     // This is the separate allowance between SIGTERM and SIGKILL, not a drain timer.
-    stopTimeout: Duration.seconds(CONTAINER_STOP_SECONDS),
+    // Terminal cleanup gets 30s, leaving time for requests and graceful transport close.
+    stopTimeout: Duration.seconds(role === "cluster-manager" ? 60 : CONTAINER_STOP_SECONDS),
   };
 }
 

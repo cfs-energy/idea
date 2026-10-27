@@ -472,6 +472,24 @@ def test_history_loss_reloads_before_polling(live_config, code, operation):
     once(sub, method)
     assert sub._resync_required
     setattr(streams, operation, original)
+    if code == 'ResourceNotFoundException':
+        sub.dynamodb_client = boto3.client(
+            'dynamodb',
+            region_name='us-east-1',
+            aws_access_key_id='testing',
+            aws_secret_access_key='testing',
+        )
+        table_stub = Stubber(sub.dynamodb_client)
+        table_stub.add_response(
+            'describe_table',
+            {
+                'Table': {
+                    'LatestStreamArn': 'arn:aws:dynamodb:us-east-1:123456789012:table/test.cluster-settings/stream/replacement'
+                }
+            },
+            {'TableName': sub.table_name},
+        )
+        table_stub.activate()
     # The first refresh fails on page two: preserve the old complete snapshot,
     # keep polling paused, and retry from fresh cursors on the next pass.
     add_scan(stub, [{'key': 'maintenance', 'value': True}], last='maintenance')
@@ -703,3 +721,112 @@ def test_late_baseline_child_refreshes_without_replaying_stale_history(
         once(sub, sub.shard_iterator_initializer)
         once(sub, sub.shard_processor)
     assert config.on_update.call_count == 1
+
+
+def test_expired_baseline_child_reopens_checkpoint_without_reset(subscription):
+    streams = StreamSimulation()
+    streams.add('parent', closed=True)
+    streams.add('child', 'parent')
+    subscription.dynamodb_streams_client = streams
+    once(subscription, subscription.shard_iterator_initializer)
+    streams.shards['child']['records'].append(record('first', '1'))
+    once(subscription, subscription.shard_processor)
+    subscription.stream_subscriber.on_reset.reset_mock()
+    poll = streams.get_records
+
+    def expired(ShardIterator, Limit):
+        raise error('ExpiredIteratorException')
+
+    streams.get_records = expired
+    once(subscription, subscription.shard_processor)
+    streams.get_records = poll
+    streams.shards['child']['records'].append(record('second', '2'))
+    once(subscription, subscription.shard_iterator_initializer)
+    assert streams.requests[-1]['ShardIteratorType'] == 'AFTER_SEQUENCE_NUMBER'
+    assert streams.requests[-1]['SequenceNumber'] == '1'
+    subscription.stream_subscriber.on_reset.assert_not_called()
+    once(subscription, subscription.shard_processor)
+    assert delivered(subscription) == ['first', 'second']
+
+
+@pytest.mark.parametrize(
+    'failure',
+    ['describe_stream', 'get_shard_iterator', 'get_records', 'DISABLED', 'DISABLING'],
+)
+def test_replaced_stream_reloads_latest_arn_and_snapshot(live_config, failure):
+    config, sub, simulation, snapshot = live_config
+    old_arn = 'arn:aws:dynamodb:us-east-1:123456789012:table/test.cluster-settings/stream/2026-10-01T00:00:00.000'
+    new_arn = old_arn.replace('10-01', '10-27')
+    sub.stream_arn = old_arn
+    kwargs = dict(
+        region_name='us-east-1',
+        aws_access_key_id='testing',
+        aws_secret_access_key='testing',
+    )
+    sub.dynamodb_client = boto3.client('dynamodb', **kwargs)
+    sub.dynamodb_streams_client = boto3.client('dynamodbstreams', **kwargs)
+    with (
+        Stubber(sub.dynamodb_client) as tables,
+        Stubber(sub.dynamodb_streams_client) as streams,
+    ):
+        if failure == 'get_records':
+            streams.add_client_error('get_records', 'ResourceNotFoundException')
+            once(sub, sub.shard_processor)
+        elif failure == 'get_shard_iterator':
+            sub.shard_iterators_map.clear()
+            streams.add_response(
+                'describe_stream',
+                {
+                    'StreamDescription': {
+                        'StreamStatus': 'ENABLED',
+                        'Shards': [{'ShardId': 'shardId-000000000000000000000001'}],
+                    }
+                },
+                {'StreamArn': old_arn},
+            )
+            streams.add_client_error('get_shard_iterator', 'ResourceNotFoundException')
+            once(sub, sub.shard_iterator_initializer)
+        else:
+            if failure == 'describe_stream':
+                streams.add_client_error('describe_stream', 'ResourceNotFoundException')
+            else:
+                streams.add_response(
+                    'describe_stream',
+                    {'StreamDescription': {'StreamStatus': failure, 'Shards': []}},
+                    {'StreamArn': old_arn},
+                )
+            once(sub, sub.shard_iterator_initializer)
+        assert sub.stream_arn is None
+        assert sub._resync_required
+        tables.add_response(
+            'describe_table',
+            {'Table': {'LatestStreamArn': new_arn}},
+            {'TableName': sub.table_name},
+        )
+        streams.add_response(
+            'describe_stream',
+            {
+                'StreamDescription': {
+                    'StreamStatus': 'ENABLED',
+                    'Shards': [{'ShardId': 'shardId-000000000000000000000002'}],
+                }
+            },
+            {'StreamArn': new_arn},
+        )
+        streams.add_response(
+            'get_shard_iterator',
+            {'ShardIterator': 'fresh-iterator'},
+            {
+                'StreamArn': new_arn,
+                'ShardId': 'shardId-000000000000000000000002',
+                'ShardIteratorType': 'LATEST',
+            },
+        )
+        add_scan(snapshot, [{'key': 'maintenance', 'value': True}])
+        once(sub, sub.shard_iterator_initializer)
+        assert sub.stream_arn == new_arn
+        assert config.get_bool('maintenance') is True
+        assert config.get('deleted') is None
+        assert not sub._resync_required
+        tables.assert_no_pending_responses()
+        streams.assert_no_pending_responses()

@@ -32,12 +32,10 @@ shortuuid
 dataset
 prometheus-client
 python-dynamodb-lock
-supervisor
 sanic
 websockets
 python-ldap
 ldappool
 passlib
-cachetools
 prettytable
 asyncssh==2.24.1
