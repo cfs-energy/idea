@@ -25,6 +25,8 @@ on:
 concurrency:
   group: release-publication
   cancel-in-progress: false
+permissions:
+  contents: read
 jobs:
   checks:
     uses: ./.github/workflows/ideactl_checks.yaml

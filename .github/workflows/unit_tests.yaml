@@ -9,6 +9,8 @@ on:
     paths-ignore:
       - 'docs/**'
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   suites:
     strategy:
