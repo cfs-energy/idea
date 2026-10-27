@@ -53,8 +53,10 @@ if [[ -n "${IDEA_PBS_SERVER:-}" ]]; then
     SEARCH="$(grep -m1 '^search ' <<< "${RESOLV}" | cut -d' ' -f2-)"
     { grep -v '^search ' <<< "${RESOLV}"; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
   fi
+  # the server's own server_name (roles/scheduler.sh): qsub completes a short job id with it,
+  # and the server releases a dependency only on that exact id
   cat > /etc/pbs.conf <<EOF
-PBS_SERVER=${IDEA_PBS_SERVER}
+PBS_SERVER=${IDEA_PBS_SERVER%%.*}
 PBS_START_SERVER=0
 PBS_START_SCHED=0
 PBS_START_COMM=0

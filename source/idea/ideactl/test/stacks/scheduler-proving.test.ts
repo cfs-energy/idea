@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import type { ApiCallResult, JsonValue } from "../../tools/e2e/api.ts";
 import {
   parseNodeEvidence,
   parseStableSchedulerNameOptions,
+  probeCommand,
   runStableSchedulerNameCheck,
+  serverNameOf,
 } from "../../tools/e2e/checks/scheduler-stable-name.ts";
 import {
   parseSchedulerVmReplacementOptions,
@@ -14,13 +20,15 @@ import {
 } from "../../tools/e2e/checks/scheduler-vm-replacement.ts";
 
 const stableName = "scheduler.sample-cluster.us-east-2.local";
+// The batch server's own name (roles/scheduler.sh SERVER_NAME), which clients must use.
+const serverName = "scheduler";
 
 /** Builds a successful scheduler API result around a JSON payload. */
 function response(payload: JsonValue): ApiCallResult {
   return { body: { payload, success: true }, status: 200 };
 }
 
-test("accepts only clients and compute nodes using the stable scheduler name", async () => {
+test("accepts only clients and compute nodes using the server's own name through DNS", async () => {
   const commands: string[] = [];
   const result = await runStableSchedulerNameCheck(
     {
@@ -38,9 +46,10 @@ test("accepts only clients and compute nodes using the stable scheduler name", a
           exitCode: 0,
           stderr: "",
           stdout: [
-            `PBS_SERVER=${stableName}`,
+            `PBS_SERVER=${serverName}`,
             "HOSTS_PIN=",
             "RESOLVED_IPV4=192.0.2.44",
+            "STABLE_IPV4=192.0.2.44",
             "QSTAT_B=OK",
           ].join("\n"),
         };
@@ -52,9 +61,90 @@ test("accepts only clients and compute nodes using the stable scheduler name", a
   assert.equal(commands.length, 2);
   assert.match(commands[0] ?? "", /getent ahostsv4/);
   assert.deepEqual(result.observed, [
-    `node=client pbs_server=${stableName} hosts_pin=none resolved_ipv4=192.0.2.44 qstat_b=OK`,
-    `node=compute-1 pbs_server=${stableName} hosts_pin=none resolved_ipv4=192.0.2.44 qstat_b=OK`,
+    `node=client pbs_server=${serverName} hosts_pin=none resolved_ipv4=192.0.2.44 stable_ipv4=192.0.2.44 qstat_b=OK`,
+    `node=compute-1 pbs_server=${serverName} hosts_pin=none resolved_ipv4=192.0.2.44 stable_ipv4=192.0.2.44 qstat_b=OK`,
   ]);
+});
+
+test("rejects a client on the full name, whose short dependency ids never release", async () => {
+  const result = await runStableSchedulerNameCheck(
+    {
+      expectedServer: stableName,
+      nodes: [{ host: "desktop.example.invalid", name: "desktop" }],
+    },
+    {
+      async run() {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: [
+            `PBS_SERVER=${stableName}`,
+            "HOSTS_PIN=",
+            "RESOLVED_IPV4=192.0.2.44",
+            "STABLE_IPV4=192.0.2.44",
+            "QSTAT_B=OK",
+          ].join("\n"),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.passed, false);
+  assert.ok(result.observed.includes(`node=desktop expected_pbs_server=${serverName}`));
+});
+
+test("rejects a short name that resolves somewhere the stable record does not", async () => {
+  const result = await runStableSchedulerNameCheck(
+    {
+      expectedServer: stableName,
+      nodes: [{ host: "compute.example.invalid", name: "compute-1" }],
+    },
+    {
+      async run() {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: [
+            `PBS_SERVER=${serverName}`,
+            "HOSTS_PIN=",
+            "RESOLVED_IPV4=192.0.2.13",
+            "STABLE_IPV4=192.0.2.44",
+            "QSTAT_B=OK",
+          ].join("\n"),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.passed, false);
+  assert.ok(result.observed.includes("node=compute-1 pbs_server_and_stable_name_resolve_differently"));
+});
+
+test("the probe finds a hosts-file pin on either name and refuses a non-DNS stable name", async () => {
+  assert.equal(serverNameOf(stableName), serverName);
+  const command = probeCommand(stableName);
+  const program = /hosts_pin=\$\(awk -v short="\$pbs_server" -v full="\$stable_name" '([^']+)'/.exec(command)?.[1];
+  assert.ok(program !== undefined, command);
+  const dir = mkdtempSync(join(tmpdir(), "stable-name-"));
+  try {
+    const hosts = join(dir, "hosts");
+    const pin = (text: string) => {
+      writeFileSync(hosts, text);
+      return execFileSync("awk", ["-v", `short=${serverName}`, "-v", `full=${stableName}`, program, hosts], {
+        encoding: "utf8",
+      }).trim();
+    };
+    assert.equal(pin("127.0.0.1 localhost\n"), "");
+    assert.equal(pin(`# 192.0.2.9 ${serverName}\n`), "");
+    assert.equal(pin(`192.0.2.13 ${stableName} ${serverName}\n`), "192.0.2.13");
+    assert.equal(pin(`192.0.2.14 ${serverName}\n`), "192.0.2.14");
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+  await assert.rejects(
+    runStableSchedulerNameCheck({ expectedServer: "x; reboot", nodes: [] }, { run: async () => assert.fail() }),
+    /DNS name/,
+  );
 });
 
 test("rejects an old compute-node address pin", async () => {
@@ -69,9 +159,10 @@ test("rejects an old compute-node address pin", async () => {
           exitCode: 0,
           stderr: "",
           stdout: [
-            `PBS_SERVER=${stableName}`,
+            `PBS_SERVER=${serverName}`,
             "HOSTS_PIN=192.0.2.13",
             "RESOLVED_IPV4=192.0.2.44",
+            "STABLE_IPV4=192.0.2.44",
             "QSTAT_B=OK",
           ].join("\n"),
         };
@@ -85,12 +176,15 @@ test("rejects an old compute-node address pin", async () => {
 
 test("parses labelled probe output and rejects malformed node flags", () => {
   assert.deepEqual(
-    parseNodeEvidence(`ignored=value\nPBS_SERVER=${stableName}\nHOSTS_PIN=\nRESOLVED_IPV4=192.0.2.44\nQSTAT_B=OK\n`),
+    parseNodeEvidence(
+      `ignored=value\nPBS_SERVER=${serverName}\nHOSTS_PIN=\nRESOLVED_IPV4=192.0.2.44\nSTABLE_IPV4=192.0.2.44\nQSTAT_B=OK\n`,
+    ),
     {
       hostsPin: "",
-      pbsServer: stableName,
+      pbsServer: serverName,
       qstat: "OK",
       resolvedIpv4: "192.0.2.44",
+      stableIpv4: "192.0.2.44",
     },
   );
   assert.throws(

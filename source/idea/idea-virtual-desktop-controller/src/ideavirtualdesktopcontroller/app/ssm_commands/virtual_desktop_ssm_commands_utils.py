@@ -21,7 +21,7 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 
 # Bump whenever the refresh set or the contents of its templates change.
-BOOTSTRAP_REFRESH_VERSION = 3
+BOOTSTRAP_REFRESH_VERSION = 4
 BOOTSTRAP_REFRESH_TEMPLATES = (
     '_templates/linux/ssh_post_quantum_kex.jinja2',
     '_templates/linux/gnome_online_accounts.jinja2',
@@ -34,6 +34,8 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
     what the refresh renders its templates with: the scheduler name a PBS client talks to
     and the zone it resolves it through, derived exactly as openpbs_client.jinja2 does at
     first bootstrap, so a desktop from before a scheduler move picks the current name up.
+    the name is always the first label, the server's own server_name: qsub completes a short
+    job id with it, and a dependency on any other spelling never releases.
     bootstrap_refresh tells a template shared with first bootstrap which path it is on.
     """
     scheduler_dns_name = config.get_string('scheduler.private_dns_name')
@@ -56,9 +58,7 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
             'scheduler search path alone'
         )
     return {
-        'pbs_server_name': scheduler_dns_name
-        if stable
-        else scheduler_dns_name.split('.')[0],
+        'pbs_server_name': scheduler_dns_name.split('.')[0],
         'private_zone': private_zone or None,
         'bootstrap_refresh': True,
     }

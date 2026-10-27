@@ -410,7 +410,7 @@ describe('scheduler stack branches', () => {
     const settings = resources.ideademo1schedulersettings.Properties.settings as Json;
     assert.equal(settings.private_dns_name, "scheduler.idea-demo1.us-east-2.local");
     // Written, not inherited: the task reads this row to update the record, and the compute node
-    // template reads it to build PBS_SERVER from the DNS name instead of a short name.
+    // template reads it to resolve the scheduler through the private zone instead of an address pin.
     assert.equal(settings.use_stable_server_name, true);
     assert.equal(settings.private_ip, undefined);
     assert.equal(settings.instance_id, undefined);
