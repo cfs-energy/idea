@@ -12,6 +12,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[5]
 HOST = ROOT / 'source/idea/idea-bootstrap/common/terminal_host.py'
 TEMPLATE = ROOT / 'source/idea/idea-bootstrap/_templates/linux/web_terminal.jinja2'
+DCV_HOST = (
+    ROOT
+    / 'source/idea/idea-bootstrap/virtual-desktop-host-linux/configure_dcv_host.sh.jinja2'
+)
 BASTION = ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
 
 
@@ -383,7 +387,7 @@ def test_desktop_installs_trust_refresh_on_every_boot():
     assert 'systemctl reload ' not in rendered
     assert 'After=network-online.target' in rendered
     assert (
-        "ExecStart=/bin/sh -c 'until /usr/bin/python3 /usr/local/libexec/idea-terminal-host.py; do sleep 30; done'"
+        "ExecStart=/bin/sh -c 'until /usr/bin/python3 /usr/local/libexec/idea-terminal-host.py; do [ $$? -ne 78 ] || exit 78; sleep 30; done'"
         in rendered
     )
     assert 'EnvironmentFile=/etc/environment' in rendered
@@ -458,9 +462,8 @@ def test_hibernate_clears_trust_and_schedules_refresh(tmp_path):
     )
 
 
-def test_configure_creates_privsep_before_sshd_and_reloads_only_changes(
-    helper, tmp_path, monkeypatch
-):
+def fake_host(tmp_path, monkeypatch, helper, reload_failures=0, units=None):
+    """A desktop whose sshd unit is sshd.service, with ssh as its Ubuntu-style alias."""
     ssh = tmp_path / 'etc/ssh'
     ssh.mkdir(parents=True)
     (ssh / 'sshd_config').write_text('UsePAM yes\n')
@@ -470,43 +473,145 @@ def test_configure_creates_privsep_before_sshd_and_reloads_only_changes(
         'dynamodb',
         lambda *a, **k: {'Item': {'value': {'S': 'ssh-ed25519 ca-key'}}},
     )
+    units = {'sshd': 'sshd.service', 'ssh': 'sshd.service'} if units is None else units
     calls = []
+    failures = [reload_failures]
 
     def run(args, **kwargs):
         if args[0] == 'sshd':
             assert (tmp_path / 'run/sshd').is_dir()
             assert (tmp_path / 'run/sshd').stat().st_mode & 0o777 == 0o755
         calls.append(args)
+        if args[:2] == ['systemctl', 'show']:
+            unit = units.get(args[-1])
+            shown = (
+                f'Id={unit}\nLoadState=loaded\n'
+                if unit
+                else (f'Id={args[-1]}.service\nLoadState=not-found\n')
+            )
+            return subprocess.CompletedProcess(args, 0, stdout=shown)
+        if args[:2] == ['systemctl', 'try-reload-or-restart'] and failures[0]:
+            failures[0] -= 1
+            assert kwargs.get('check'), 'a failed reload must not mark trust ready'
+            raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0, stdout='trustedusercakeys none\n')
 
     monkeypatch.setattr(helper.subprocess, 'run', run)
+    return calls
+
+
+def test_configure_creates_privsep_before_sshd_and_reloads_only_changes(
+    helper, tmp_path, monkeypatch
+):
+    calls = fake_host(tmp_path, monkeypatch, helper)
     helper.configure('example', 'desktop', root=tmp_path)
     helper.configure('example', 'desktop', root=tmp_path)
-    assert calls.count(['systemctl', 'try-reload-or-restart', 'sshd', 'ssh']) == 1
+    reloads = [args for args in calls if args[1] == 'try-reload-or-restart']
+    # The alias resolves to one unit, reloaded once, for the one change.
+    assert reloads == [['systemctl', 'try-reload-or-restart', 'sshd.service']]
+
+
+def test_failed_sshd_reload_is_retried_before_trust_is_ready(
+    helper, tmp_path, monkeypatch
+):
+    calls = fake_host(tmp_path, monkeypatch, helper, reload_failures=1)
+    ready = tmp_path / 'run/idea-terminal-trust-ready'
+    with pytest.raises(subprocess.CalledProcessError):
+        helper.configure('example', 'desktop', root=tmp_path)
+    assert not ready.exists()
+    # sshd_config is already current, but the running daemon has not loaded it yet.
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert ready.exists()
+    reloads = [args for args in calls if args[1] == 'try-reload-or-restart']
+    assert len(reloads) == 2
+
+
+def test_missing_sshd_unit_is_a_failed_attempt(helper, tmp_path, monkeypatch):
+    fake_host(tmp_path, monkeypatch, helper, units={})
+    with pytest.raises(RuntimeError, match='No sshd unit'):
+        helper.configure('example', 'desktop', root=tmp_path)
+    assert not (tmp_path / 'run/idea-terminal-trust-ready').exists()
+
+
+def test_bastion_leaves_sshd_signalling_to_its_entrypoint(
+    helper, tmp_path, monkeypatch
+):
+    calls = fake_host(tmp_path, monkeypatch, helper, units={})
+    helper.configure('example', 'bastion', root=tmp_path)
+    assert not [args for args in calls if args[0] == 'systemctl']
+
+
+def test_sshd_config_is_edited_under_the_site_hook_lock(helper, tmp_path, monkeypatch):
+    import fcntl
+
+    fake_host(tmp_path, monkeypatch, helper)
+    replace = helper.os.replace
+    checked = []
+
+    def publish(src, dst):
+        if Path(dst).name == 'sshd_config':
+            with open(tmp_path / helper.LOCK) as other:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            checked.append(dst)
+        replace(src, dst)
+
+    monkeypatch.setattr(helper.os, 'replace', publish)
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert checked
+
+
+def test_held_lock_fails_the_attempt_without_editing(helper, tmp_path, monkeypatch):
+    import fcntl
+
+    fake_host(tmp_path, monkeypatch, helper)
+    monkeypatch.setattr(helper, 'LOCK_WAIT_SECONDS', 2)
+    monkeypatch.setattr(helper.time, 'sleep', lambda _: None)
+    (tmp_path / 'run').mkdir(exist_ok=True)
+    with open(tmp_path / helper.LOCK, 'a') as hook:
+        fcntl.flock(hook, fcntl.LOCK_EX)
+        with pytest.raises(RuntimeError, match='locked'):
+            helper.configure('example', 'desktop', root=tmp_path)
+    assert (tmp_path / 'etc/ssh/sshd_config').read_text() == 'UsePAM yes\n'
+    assert not (tmp_path / 'run/idea-terminal-trust-ready').exists()
+
+
+def test_desktop_site_hook_runs_under_the_trust_lock(helper, tmp_path):
+    import re
+
+    script = DCV_HOST.read_text()
+    block = re.search(r'\n  \(\n(.*?)\n  \) \|\| log_warning "userdata', script, re.S)
+    assert block, (
+        'the site hook must hold the lock terminal trust takes for sshd_config'
+    )
+    body = block[1]
+    lock = re.search(r'exec 9>>(\S+) && flock -w \d+ 9', body)
+    assert lock and lock[1] == '/' + helper.LOCK
+    assert 'userdata_customizations.sh 9>&-' in body
+    # An unopenable or stuck lock must delay, never skip, the site hook.
+    hook = tmp_path / 'hook.sh'
+    hook.write_text('echo ran-hook\n')
+    body = body.replace('/' + helper.LOCK, str(tmp_path / 'missing/lock'))
+    body = re.sub(r'/bin/bash \S+userdata_customizations.sh', f'/bin/bash {hook}', body)
+    body = re.sub(r'>> \S+ 2>&1', '', body)
+    result = subprocess.run(
+        ['bash', '-c', 'log_warning() { echo "warning: $*"; }\n' + body],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'warning: terminal trust lock unavailable' in result.stdout
+    assert 'ran-hook' in result.stdout
 
 
 def test_principals_are_published_atomically_and_unchanged_script_is_preserved(
     helper, tmp_path, monkeypatch
 ):
-    ssh = tmp_path / 'etc/ssh'
-    ssh.mkdir(parents=True)
-    (ssh / 'sshd_config').write_text('UsePAM yes\n')
-    (ssh / 'ssh_host_ed25519_key.pub').write_text('ssh-ed25519 host-key')
-    principals = ssh / 'idea_terminal_principals'
+    fake_host(tmp_path, monkeypatch, helper)
+    principals = tmp_path / 'etc/ssh/idea_terminal_principals'
     principals.write_text('old script')
     principals.chmod(0o755)
-    monkeypatch.setattr(
-        helper,
-        'dynamodb',
-        lambda *a, **k: {'Item': {'value': {'S': 'ssh-ed25519 ca-key'}}},
-    )
-    monkeypatch.setattr(
-        helper.subprocess,
-        'run',
-        lambda *a, **k: subprocess.CompletedProcess(
-            [], 0, stdout='trustedusercakeys none\n'
-        ),
-    )
     replace = helper.os.replace
     publications = []
 
@@ -557,34 +662,139 @@ def test_bastion_retries_failed_trust_and_reloads_running_sshd(tmp_path):
     assert '-HUP 123' in result.stdout
 
 
-def test_desktop_unit_retries_until_success(tmp_path):
+def test_bastion_stops_retrying_on_site_integration_error(tmp_path):
+    import re
+
+    retry = re.search(
+        r'(# Initialize and retry terminal trust.*?)(?=\ntrap )',
+        BASTION.read_text(),
+        re.S,
+    )
+    calls = tmp_path / 'calls'
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'set -euo pipefail\n'
+            + 'sshd_pid=123\n'
+            + 'timeout() { echo attempt >> "$CALLS"; return 78; }\n'
+            + 'sleep() { :; }\n'
+            + 'kill() { echo "$*"; }\n'
+            + retry[1].replace(
+                '/run/idea-terminal-trust-ready', str(tmp_path / 'ready')
+            )
+            + '\nwait "$trust_pid"\n',
+        ],
+        env={'CALLS': str(calls)},
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(calls.read_text().splitlines()) == 1
+    assert 'site principal policy' in result.stdout
+    assert '-HUP' not in result.stdout
+
+
+def unit_section(rendered, section):
+    import re
+
+    unit = re.search(
+        r"idea-terminal-trust.service <<'UNIT'\n(.*?)\nUNIT", rendered, re.S
+    )
+    lines, current = {}, None
+    for line in unit[1].splitlines():
+        if line.startswith('['):
+            current = line
+        elif '=' in line and not line.startswith('#'):
+            key, value = line.split('=', 1)
+            lines.setdefault((current, key), []).append(value)
+    return {key: values for (name, key), values in lines.items() if name == section}
+
+
+def run_unit_loop(tmp_path, exits):
     import shlex
 
-    rendered = TEMPLATE.read_text()
-    command = next(
-        line.removeprefix('ExecStart=')
-        for line in rendered.splitlines()
-        if line.startswith('ExecStart=')
-    )
+    service = unit_section(TEMPLATE.read_text(), '[Service]')
+    command = service['ExecStart'][0]
+    # systemd expands $NAME itself; only $$ reaches the shell, as a single $.
+    assert '$' not in command.replace('$$', '')
+    command = command.replace('$$', '$')
     calls = tmp_path / 'calls'
     helper = tmp_path / 'helper'
     helper.write_text(
-        '#!/bin/sh\necho attempt >> "'
-        + str(calls)
-        + '"\n[ $(wc -l < "'
-        + str(calls)
-        + '") -gt 7 ]\n'
+        '#!/bin/sh\necho attempt >> "{0}"\nset -- {1}\nshift $(($(wc -l < "{0}") - 1))\nexit $1\n'.format(
+            calls, ' '.join(map(str, exits))
+        )
     )
     helper.chmod(0o755)
     command = command.replace(
         '/usr/bin/python3 /usr/local/libexec/idea-terminal-host.py', str(helper)
     )
     command = command.replace('sleep 30', 'sleep 0.01')
-    subprocess.run(shlex.split(command), check=True, timeout=5)
-    assert len(calls.read_text().splitlines()) == 8
-    assert 'TimeoutStartSec=infinity' in rendered
-    assert 'Restart=' not in rendered  # oneshot restart is unsupported on AL2/RHEL8
-    assert 'EnvironmentFile=-/etc/profile.d/proxy.sh' in rendered
+    result = subprocess.run(shlex.split(command), timeout=5)
+    return result.returncode, len(calls.read_text().splitlines())
+
+
+def test_desktop_unit_retries_until_success(tmp_path):
+    assert run_unit_loop(tmp_path, [1] * 7 + [0]) == (0, 8)
+
+
+def test_desktop_unit_stops_on_site_integration_error(tmp_path):
+    # Retrying cannot fix a site principal policy; the unit fails visibly instead.
+    assert run_unit_loop(tmp_path, [1, 78, 0]) == (78, 2)
+
+
+def test_desktop_unit_never_holds_boot_targets():
+    service = unit_section(TEMPLATE.read_text(), '[Service]')
+    install = unit_section(TEMPLATE.read_text(), '[Install]')
+    assert install['WantedBy'] == ['multi-user.target']
+    # A oneshot looping in ExecStart keeps multi-user.target (and Ubuntu's cloud-final,
+    # which the bootstrap reboot waits for) activating until trust succeeds.
+    assert service['Type'] == ['simple']
+    assert 'until ' in service['ExecStart'][0]
+    # A start timeout is meaningless for simple; 'infinity' is unparsed on systemd 219.
+    assert 'TimeoutStartSec' not in service
+    # Restart= on oneshot is unsupported on AL2/RHEL8; the shell loop retries instead.
+    assert 'Restart' not in service
+    # The proxy profile holds shell exports systemd cannot parse; /etc/environment has IDEA_*.
+    assert service['EnvironmentFile'] == ['/etc/environment']
+
+
+def test_helper_exits_78_on_site_principal_policy(helper, monkeypatch):
+    monkeypatch.setenv('IDEA_MODULE_NAME', 'bastion-host')
+    monkeypatch.setenv('IDEA_CLUSTER_NAME', 'test')
+    configure = MagicMock(
+        side_effect=helper.SiteIntegrationRequired('Site certificate principal policy')
+    )
+    monkeypatch.setattr(helper, 'configure', configure)
+    monkeypatch.setattr(helper.time, 'sleep', MagicMock())
+    with pytest.raises(SystemExit) as caught:
+        helper.main()
+    assert caught.value.code == 78 == helper.EXIT_SITE_INTEGRATION
+    assert configure.call_count == 1
+
+
+def test_site_principal_policy_raises_the_permanent_error(
+    helper, tmp_path, monkeypatch
+):
+    ssh = tmp_path / 'etc/ssh'
+    ssh.mkdir(parents=True)
+    (ssh / 'sshd_config').write_text('AuthorizedPrincipalsFile /etc/ssh/principals\n')
+    monkeypatch.setattr(
+        helper,
+        'dynamodb',
+        lambda *a, **k: {'Item': {'value': {'S': 'ssh-ed25519 ca-key'}}},
+    )
+    monkeypatch.setattr(
+        helper.subprocess,
+        'run',
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout='authorizedprincipalsfile /etc/ssh/principals\n'
+        ),
+    )
+    with pytest.raises(helper.SiteIntegrationRequired):
+        helper.configure('example', 'desktop', root=tmp_path)
 
 
 def test_cli_receives_cluster_proxy_environment(helper, tmp_path, monkeypatch):

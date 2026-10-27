@@ -9,6 +9,9 @@ import { ideaVersion } from "../version.ts";
 // Lower versions need their published upgrade instructions first.
 export const UPGRADE_FLOOR_VERSION = "26.10.0";
 
+// The 26.10.9 administrator upgrades clusters at this release or newer in one run.
+export const RECOVERY_FLOOR_VERSION = "25.11.0";
+
 export const RECOVERY_COMMAND = "IDEA_REVISION=v26.10.9 ./idea-admin.sh upgrade-cluster --cluster-name <name> --aws-region <region>";
 export const HOST_CONTROL_PLANE_REFUSAL =
   "Host control-plane deployments and upgrades were removed in 26.11. Complete the ECS migration with the 26.10.9 administrator first.\n" +
@@ -88,7 +91,7 @@ export function upgradeFloorMessage(
     `Upgrade this cluster to 26.10.9 using the 26.10.9 administrator, then re-run this command.`,
     `Run from the checkout with your cluster name and region: ${RECOVERY_COMMAND}`,
     "",
-    `If the cluster is older than ${floor}, upgrade one published release at a time with that release's administrator, following that release's Upgrade Instructions.`,
+    `Clusters on ${RECOVERY_FLOOR_VERSION} or newer upgrade to 26.10.9 directly. Only a cluster older than ${RECOVERY_FLOOR_VERSION} first upgrades one published release at a time with that release's administrator, following that release's Upgrade Instructions.`,
   );
   return lines.join("\n");
 }

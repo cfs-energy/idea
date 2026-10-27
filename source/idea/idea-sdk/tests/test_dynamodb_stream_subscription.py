@@ -79,6 +79,8 @@ class StreamSimulation:
             'parent': parent,
             'closed': closed,
             'records': [record(value, str(i + 1)) for i, value in enumerate(values)],
+            # Records before this index have aged out of the 24 h retention window.
+            'trimmed': 0,
         }
 
     def describe_stream(self, **request):
@@ -95,7 +97,10 @@ class StreamSimulation:
         description = {'Shards': []}
         for shard_id in ids:
             shard = self.shards[shard_id]
-            entry = {'ShardId': shard_id, 'SequenceNumberRange': {}}
+            entry = {
+                'ShardId': shard_id,
+                'SequenceNumberRange': {'StartingSequenceNumber': '1'},
+            }
             if shard['parent']:
                 entry['ParentShardId'] = shard['parent']
             if shard['closed']:
@@ -110,9 +115,12 @@ class StreamSimulation:
         shard_id = request['ShardId']
         records = self.shards[shard_id]['records']
         kind = request['ShardIteratorType']
-        offset = len(records) if kind == 'LATEST' else 0
-        if kind == 'AFTER_SEQUENCE_NUMBER':
-            offset = int(request['SequenceNumber'])
+        trimmed = self.shards[shard_id]['trimmed']
+        offset = len(records) if kind == 'LATEST' else trimmed
+        if kind == 'AT_SEQUENCE_NUMBER':
+            offset = int(request['SequenceNumber']) - 1
+            if offset < trimmed:
+                raise error('TrimmedDataAccessException')
         return {'ShardIterator': self.cursor(shard_id, offset)}
 
     def cursor(self, shard_id, offset):
@@ -191,7 +199,10 @@ def test_live_split_and_late_descendants_are_parent_first(subscription):
         < values.index('grandchild-live')
     )
     assert values.index('parent-live') < values.index('child-b-live')
-    assert all(r['ShardIteratorType'] == 'TRIM_HORIZON' for r in streams.requests[1:])
+    assert all(
+        (r['ShardIteratorType'], r['SequenceNumber']) == ('AT_SEQUENCE_NUMBER', '1')
+        for r in streams.requests[1:]
+    )
 
 
 def test_merge_free_close_waits_for_late_child(subscription):
@@ -824,3 +835,38 @@ def test_drained_ancestry_loss_rescans_settings(live_config, generations, revers
     streams.shards[str(generations - 1)]['records'].append(setting_record(False, '2'))
     once(sub, sub.shard_processor)
     assert config.get_bool('maintenance') is False
+
+
+def test_drained_parent_child_with_trimmed_head_rescans_settings(live_config):
+    config, sub, streams, stub = live_config
+    streams.shards['parent']['closed'] = True
+    once(sub, sub.shard_processor)
+    assert 'parent' in sub._drained_shards
+    discover = streams.describe_stream
+    streams.describe_stream = Mock(side_effect=error('InternalServerError'))
+    once(sub, sub.shard_iterator_initializer)
+    streams.describe_stream = discover
+    # The parent ages out of the listing; its retained child lost its head record.
+    del streams.shards['parent']
+    streams.add('child', 'parent', closed=True)
+    streams.shards['child']['records'] = [
+        setting_record(True),
+        setting_record('kept', '2', key='other'),
+    ]
+    streams.shards['child']['trimmed'] = 1
+    streams.add('leaf', 'child')
+    once(sub, sub.shard_iterator_initializer)
+    assert streams.requests[-1] == {
+        'StreamArn': 'stream',
+        'ShardId': 'child',
+        'ShardIteratorType': 'AT_SEQUENCE_NUMBER',
+        'SequenceNumber': '1',
+    }
+    assert sub._resync_required
+    add_scan(stub, [{'key': 'maintenance', 'value': True}])
+    once(sub, sub.shard_iterator_initializer)
+    assert config.get_bool('maintenance') is True
+    assert config.get('deleted') is None
+    assert not sub._resync_required
+    assert streams.requests[-1]['ShardId'] == 'leaf'
+    assert streams.requests[-1]['ShardIteratorType'] == 'LATEST'

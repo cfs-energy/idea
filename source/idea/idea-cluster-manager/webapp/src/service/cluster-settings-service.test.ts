@@ -145,6 +145,13 @@ describe('maintenanceBannerText', () => {
             .toBe(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00Z'}))
     })
 
+    // The settings API rejects these offsets because Moment cannot parse them.
+    it.each(['2026-11-01T18:00+15:00', '2026-11-01T18:00-13:00', '2026-11-01T18:00+14:01', '2026-11-01T18:00-1201'])(
+        'omits an end time with an offset outside -12:00..+14:00 (%s)', (ends_at) => {
+            expect(maintenanceEndTimes.invalid).toContain(ends_at)
+            expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at})).toBe('Closed.')
+        })
+
     it('keeps the message when the end time cannot be parsed', () => {
         expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: 'next tuesday'})).toBe('Closed.')
     })

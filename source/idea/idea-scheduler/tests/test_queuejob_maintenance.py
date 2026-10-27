@@ -446,3 +446,23 @@ def test_accepted_maintenance_end_times_render_in_utc(ends_at, utc):
     assert maintenance_message(config) == (
         f'Cluster is in maintenance: Closed. Expected to end {utc[:10]} {utc[11:16]} UTC.'
     )
+
+
+@pytest.mark.parametrize(
+    'ends_at', ['0001-01-01T00:00+01:00', '9999-12-31T23:00-01:00', 'next tuesday']
+)
+def test_unconvertible_maintenance_end_time_is_omitted(ends_at):
+    from ideascheduler.app.api.scheduler_api import maintenance_message
+
+    fixture = json.loads(
+        (
+            Path(__file__).parents[2]
+            / 'idea-cluster-manager/tests/fixtures/maintenance-end-times.json'
+        ).read_text()
+    )
+    assert ends_at in fixture['invalid'] or ends_at == 'next tuesday'
+    config = Mock()
+    config.get_string.side_effect = lambda key, default='': (
+        ends_at if key.endswith('.ends_at') else 'Closed.'
+    )
+    assert maintenance_message(config) == 'Cluster is in maintenance: Closed.'

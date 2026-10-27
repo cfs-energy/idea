@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import math
 import re
@@ -565,6 +565,13 @@ class ClusterSettingsAPI(BaseAPI):
                     end = datetime.fromisoformat(ends_at.strip().replace('Z', '+00:00'))
                     if end.tzinfo is not None:
                         end.astimezone(timezone.utc)
+                        # Moment rejects offsets outside real time zones.
+                        if not (
+                            timedelta(hours=-12)
+                            <= end.utcoffset()
+                            <= timedelta(hours=14)
+                        ):
+                            raise ValueError('Offset outside -12:00..+14:00')
                 except (ValueError, OverflowError):
                     raise exceptions.invalid_params(
                         'maintenance.ends_at must be an ISO 8601 timestamp'

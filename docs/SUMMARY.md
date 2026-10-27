@@ -11,6 +11,7 @@
   * [Web Interface](first-time-users/access-your-idea-cluster/web-interface.md)
   * [Virtual Desktops (Linux/Windows)](first-time-users/access-your-idea-cluster/virtual-desktops-linux-windows.md)
   * [SSH](first-time-users/access-your-idea-cluster/ssh.md)
+  * [Browser Terminal](first-time-users/terminal.md)
   * [APIs](first-time-users/access-your-idea-cluster/apis.md)
   * [API tokens](first-time-users/api-tokens.md)
 * [File Browser](first-time-users/file-browser.md)
@@ -74,6 +75,7 @@
   * [Reporting](modules/cluster-manager/reporting.md)
   * [Costs by user](modules/cluster-manager/costs-by-user.md)
   * [Maintenance Banner](modules/cluster-manager/maintenance-banner.md)
+  * [Operating browser terminals](modules/cluster-manager/web-terminal.md)
   * [Enable Amazon Bedrock](modules/cluster-manager/enable-amazon-bedrock.md)
   * [AI Usage Tracking](modules/cluster-manager/ai-usage-tracking.md)
   * [Data Sharing Between Users](modules/cluster-manager/data-sharing-between-users.md)
@@ -109,6 +111,3 @@
 
 * [FAQ](help-and-support/faq.md)
 * [Raise a bug](help-and-support/raise-a-bug.md)
-
-* [Browser Terminal](first-time-users/terminal.md)
-* [Operating browser terminals](modules/cluster-manager/web-terminal.md)

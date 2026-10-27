@@ -1186,6 +1186,8 @@ class VirtualDesktopAPI(BaseAPI):
                     operation_failed = True
                 else:
                     old_session.server.instance_type = new_session.server.instance_type
+                    # A new size answers a stored capacity failure; other edits keep it.
+                    old_session.failure_reason = None
                     is_server_updated = True
                     is_session_updated = True
 
@@ -1215,13 +1217,14 @@ class VirtualDesktopAPI(BaseAPI):
             _ = self.server_db.update(old_session.server)
 
         if not operation_failed and is_session_updated:
-            old_session.failure_reason = None
             new_session = self.session_db.update(old_session)
             self.controller_utils.create_tag(
                 new_session.server.instance_id,
                 constants.IDEA_TAG_NAME,
                 f'{self.context.cluster_name()}-{new_session.name}-{new_session.owner}',
             )
+            # The stored diagnostic describes the desktop, not the result of this edit.
+            new_session.failure_reason = None
 
         return new_session
 

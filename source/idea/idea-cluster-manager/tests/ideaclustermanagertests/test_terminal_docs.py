@@ -116,6 +116,8 @@ def test_terminal_api_documents_portal_internal_contract():
         'Terminal.ListTargets',
         'Terminal.CreateTicket',
         'TERMINAL_UNAVAILABLE',
+        'TERMINAL_TARGET_STOPPED',
+        'TERMINAL_TARGET_ERROR',
         'TERMINAL_TARGET_MISCONFIGURED',
         'UNAUTHORIZED_ACCESS',
     ):
@@ -126,3 +128,64 @@ def test_user_docs_do_not_assume_a_bastion_or_upgrade():
     doc = (ROOT / 'docs/first-time-users/terminal.md').read_text()
     assert 'when the cluster has a bastion' in doc
     assert 'since the cluster began running 26.11.1' in doc
+
+
+def runbook_lines():
+    return [
+        line
+        for line in DOC.read_text().splitlines()
+        if line.startswith('sudo ') and 'idea-terminal-trust' in line
+    ]
+
+
+def test_trust_refresh_runbook_never_waits_on_the_retry_loop():
+    lines = runbook_lines()
+    restarts = [line for line in lines if ' restart ' in line]
+    # The service retries until trust lands; a blocking restart would never return.
+    assert restarts == ['sudo systemctl --no-block restart idea-terminal-trust.service']
+    assert not [line for line in lines if 'is-active' in line]
+
+
+@pytest.mark.parametrize('ready', [True, False])
+def test_trust_refresh_runbook_wait_is_bounded_and_reports_failure(tmp_path, ready):
+    import subprocess
+
+    wait = next(
+        line for line in runbook_lines() if '/run/idea-terminal-trust-ready' in line
+    )
+    assert re.match(r"sudo timeout \d+ sh -c 'until test -f ", wait)
+    marker = tmp_path / 'ready'
+    if ready:
+        marker.touch()
+    # Shorten only the bound; run the documented command as written otherwise.
+    command = re.sub(r'timeout \d+ ', 'timeout 1 ', wait).replace(
+        '/run/idea-terminal-trust-ready', str(marker)
+    )
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'sudo() { "$@"; }\njournalctl() { echo "journal $*"; }\n' + command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ('journal -u idea-terminal-trust.service' in result.stdout) is not ready
+
+
+def test_terminal_pages_sit_with_access_and_cluster_manager_docs():
+    summary = (ROOT / 'docs/SUMMARY.md').read_text().splitlines()
+    help_heading = next(
+        i for i, line in enumerate(summary) if 'Help and Support' in line
+    )
+    ssh = summary.index('  * [SSH](first-time-users/access-your-idea-cluster/ssh.md)')
+    banner = summary.index(
+        '  * [Maintenance Banner](modules/cluster-manager/maintenance-banner.md)'
+    )
+    assert summary[ssh + 1] == '  * [Browser Terminal](first-time-users/terminal.md)'
+    assert summary[banner + 1] == (
+        '  * [Operating browser terminals](modules/cluster-manager/web-terminal.md)'
+    )
+    assert ssh < help_heading and banner < help_heading

@@ -160,6 +160,7 @@ it.each([
     ['ended', 'max-duration', 'Closed after the maximum connection duration.'],
     ['ended', 'shell-exited', 'Your shell exited. Connect to start a new one.'],
     ['ended', 'target-stopped', 'This desktop is stopped. Start it from My desktops, then select Connect.'],
+    ['ended', 'target-error', 'This desktop is in an error or deleting state. Check it in My desktops.'],
     ['reconnecting', 'trust-not-ready', 'The target is refreshing terminal access.'],
     ['denied', 'target-misconfigured', 'The target needs administrator attention.'],
     ['ended', 'ack-timeout', 'Terminal stopped accepting output.'],

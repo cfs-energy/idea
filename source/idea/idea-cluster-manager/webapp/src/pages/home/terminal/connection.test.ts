@@ -72,7 +72,7 @@ it('retries transient ticket failures even when the network interface still repo
 });
 
 it.each([
-    [4006, 'target-stopped', 'ended'],
+    [4006, 'target-stopped', 'ended'], [4006, 'target-error', 'ended'],
     [4000, 'idle-timeout', 'ended'], [4000, 'max-duration', 'ended'], [4000, 'shell-exited', 'ended'],
     [1009, 'access-denied', 'denied'], [4003, 'access-denied', 'denied'], [4004, 'target-misconfigured', 'denied'], [4005, 'ack-timeout', 'ended'],
 ])('stops permanently for %s %s and retains the reason', async (code, reason, state) => {
@@ -96,10 +96,11 @@ it.each([
     ['UNAUTHORIZED_ACCESS', 'access-denied'], ['AUTH_INVALID_TOKEN', 'access-denied'],
     ['TERMINAL_TARGET_MISCONFIGURED', 'target-misconfigured'],
     ['TERMINAL_TARGET_STOPPED', 'target-stopped'],
+    ['TERMINAL_TARGET_ERROR', 'target-error'],
 ])('stops on permanent API error %s', async (errorCode, reason) => {
     vi.useFakeTimers(); const {connection, options} = setup();
     options.ticket.mockRejectedValue({errorCode}); connection.start(); await Promise.resolve();
-    expect(options.state).toHaveBeenLastCalledWith(errorCode === 'TERMINAL_TARGET_STOPPED' ? 'ended' : 'denied', reason);
+    expect(options.state).toHaveBeenLastCalledWith(reason.startsWith('target-') && reason !== 'target-misconfigured' ? 'ended' : 'denied', reason);
     await vi.advanceTimersByTimeAsync(300000); connection.wake();
     expect(options.ticket).toHaveBeenCalledTimes(1); connection.stop();
 });

@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -20,6 +22,9 @@ from ideaclustermanager.app.terminal.service import (
 from ideaclustermanager.app.terminal.store import TerminalDenied, TerminalStore
 from moto import mock_aws
 from ideasdk.server.soca_server import ServerOptionsProvider, SocaServerOptions
+
+
+ROOT = Path(__file__).resolve().parents[5]
 
 
 @pytest.fixture
@@ -215,6 +220,7 @@ class Socket:
         'surrogate-input',
         'wrong-host-key',
         'trust-not-ready',
+        'trust-refused-settled',
         'disconnected',
         'socket-closed',
         'ack-timeout',
@@ -248,7 +254,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
 
         trusted_ca = (
             asyncssh.generate_private_key('ssh-ed25519')
-            if mode == 'trust-not-ready'
+            if mode in {'trust-not-ready', 'trust-refused-settled'}
             else ca
         )
         authorized = asyncssh.import_authorized_keys(
@@ -302,7 +308,9 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             if mode == 'wrong-host-key'
             else host_key.convert_to_public()
         )
-        service.target = lambda *_: ('127.0.0.1', pin)
+        # A refusal long after the target started is not trust still landing.
+        settling = mode != 'trust-refused-settled'
+        service.target = lambda *_: ('127.0.0.1', pin, settling)
         service.load_ca = lambda: ca
         service.user = lambda *_: True
         if mode == 'account-deleted':
@@ -395,7 +403,12 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             await asyncio.gather(handler, return_exceptions=True)
             server.close()
             await server.wait_closed()
-        if mode not in {'wrong-host-key', 'lease-login', 'trust-not-ready'}:
+        if mode not in {
+            'wrong-host-key',
+            'lease-login',
+            'trust-not-ready',
+            'trust-refused-settled',
+        }:
             assert b'private-terminal-output' in ws.sent
         assert ws.closed['reason'] == {
             'bad-frame': 'access-denied',
@@ -403,6 +416,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             'extra-resize-field': 'access-denied',
             'surrogate-input': 'shell-exited',
             'wrong-host-key': 'target-misconfigured',
+            'trust-refused-settled': 'target-misconfigured',
             'socket-closed': 'disconnected',
             'stalled-stdin': 'connection-failed',
             'lease-login': 'unavailable',
@@ -415,6 +429,8 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             assert ws.closed['code'] == 4002
         if mode == 'account-deleted':
             assert ws.closed['code'] == 4003
+        if mode == 'trust-refused-settled':
+            assert ws.closed['code'] == 4004
         if mode == 'ack-timeout':
             assert ws.closed['code'] == 4005
         assert store.table.scan()['Count'] == 0
@@ -425,7 +441,12 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
         assert (
             'reason=target-misconfigured error_type=HostKeyNotVerifiable' in caplog.text
         )
-    started = mode not in {'wrong-host-key', 'lease-login', 'trust-not-ready'}
+    started = mode not in {
+        'wrong-host-key',
+        'lease-login',
+        'trust-not-ready',
+        'trust-refused-settled',
+    }
     assert ('terminal start user=alice' in caplog.text) == started
     assert ('terminal stop user=alice' in caplog.text) == started
     assert (
@@ -775,6 +796,7 @@ def test_configurable_session_limit(store, limit, expected):
     [
         (module.TerminalUnavailable('Bastion is unavailable'), 'TERMINAL_UNAVAILABLE'),
         (module.TerminalTargetStopped('Desktop is stopped'), 'TERMINAL_TARGET_STOPPED'),
+        (module.TerminalTargetError('Desktop is in an error'), 'TERMINAL_TARGET_ERROR'),
         (TerminalDenied('Account is disabled or invalid'), 'UNAUTHORIZED_ACCESS'),
     ],
 )
@@ -852,6 +874,7 @@ def test_initialization_lock_failure_does_not_stop_manager(caplog):
     [
         (module.TerminalUnavailable('slots full'), 4002),
         (module.TerminalTargetStopped('Desktop is stopped'), 4006),
+        (module.TerminalTargetError('Desktop is in an error state'), 4006),
         (module.TerminalMisconfigured('bad pin'), 4004),
         (TerminalDenied('not owner'), 4003),
     ],
@@ -937,7 +960,7 @@ def test_bastion_picker_skips_unready_tasks(store, unready):
     ecs.describe_tasks.return_value = {'tasks': [other, task]}
     key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
     store.table.put_item(Item={'pk': 'host:bastion', 'public_key': key})
-    host, _ = service.target('alice', 'bastion')
+    host, _, _ = service.target('alice', 'bastion')
     assert host == '10.0.0.2'
     assert ecs.describe_tasks.call_args.kwargs['tasks'] == ['a-unready', 'b-ready']
 
@@ -1012,7 +1035,7 @@ def test_real_sanic_disconnect_audit(store, monkeypatch, caplog, mode):
             'https://portal.example'
         )
         key = asyncssh.generate_private_key('ssh-ed25519')
-        service.target = lambda *_: ('127.0.0.1', key.convert_to_public())
+        service.target = lambda *_: ('127.0.0.1', key.convert_to_public(), True)
         service.load_ca = lambda: key
         process = MagicMock()
 
@@ -1289,7 +1312,7 @@ def test_real_soca_server_stop_drains_terminal(
     )
     service.context.config().get_int.side_effect = lambda _, default: default
     key = asyncssh.generate_private_key('ssh-ed25519')
-    service.target = lambda *_: ('127.0.0.1', key.convert_to_public())
+    service.target = lambda *_: ('127.0.0.1', key.convert_to_public(), True)
     service.load_ca = lambda: key
     process = MagicMock()
 
@@ -1607,6 +1630,160 @@ def test_shutdown_deadline_does_not_recancel_cleanup(monkeypatch):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize('state', ['ERROR', 'DELETING', 'DELETED'])
+def test_error_desktop_points_its_owner_at_the_desktop(state):
+    row = {'owner': 'alice', 'base_os': 'ubuntu2404', 'state': state}
+    with pytest.raises(module.TerminalTargetError):
+        validate_desktop(row, 'alice')
+    with pytest.raises(TerminalDenied) as denied:
+        validate_desktop(row, 'bob')
+    assert type(denied.value) is TerminalDenied
+
+
+@pytest.mark.parametrize('payload', [['target', 'client'], 'target', 7])
+def test_api_denies_a_non_object_payload(payload):
+    from ideadatamodel.exceptions import SocaException
+
+    context = MagicMock()
+    invocation = MagicMock(namespace='Terminal.CreateTicket', request_payload=payload)
+    invocation.is_unix_domain_socket_invocation.return_value = False
+    with pytest.raises(SocaException) as caught:
+        TerminalAPI(context).invoke(invocation)
+    assert caught.value.error_code == 'UNAUTHORIZED_ACCESS'
+    context.terminal.create_ticket.assert_not_called()
+
+
+def test_api_doc_lists_every_terminal_error_code():
+    source = (
+        ROOT
+        / 'source/idea/idea-cluster-manager/src/ideaclustermanager/app/api/terminal_api.py'
+    ).read_text()
+    doc = (
+        ROOT / 'source/idea/idea-cluster-manager/resources/api/api_doc.yml'
+    ).read_text()
+    codes = set(re.findall(r"'(TERMINAL_[A-Z_]+)'", source))
+    assert {'TERMINAL_TARGET_STOPPED', 'TERMINAL_TARGET_ERROR'} <= codes
+    assert not {code for code in codes if code not in doc}
+
+
+def test_targets_retry_unprocessed_host_pins(store, monkeypatch):
+    service = target_service(store)
+    service.desktops = MagicMock()
+    service.desktops().query.return_value = {
+        'Items': [
+            {
+                'owner': 'alice',
+                'state': 'READY',
+                'base_os': 'ubuntu2404',
+                'idea_session_id': 'one',
+                'server': {'instance_id': 'i-001'},
+            }
+        ]
+    }
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
+    pk = 'host:arn:aws-us-gov:ec2:us-gov-west-1:123456789012:instance/i-001'
+    requests = []
+
+    def batch(**kwargs):
+        requests.append(kwargs['RequestItems'])
+        if len(requests) == 1:
+            return {
+                'Responses': {store.table.name: []},
+                'UnprocessedKeys': kwargs['RequestItems'],
+            }
+        return {'Responses': {store.table.name: [{'pk': pk, 'public_key': key}]}}
+
+    service.context.aws().dynamodb_table().batch_get_item.side_effect = batch
+    assert {'id': 'desktop:one', 'label': 'My desktop'} in service.targets('alice')
+    assert requests[1] == requests[0]
+
+
+def test_targets_give_up_on_keys_that_stay_unprocessed(store, monkeypatch):
+    service = target_service(store)
+    service.desktops = MagicMock()
+    service.desktops().query.return_value = {
+        'Items': [
+            {
+                'owner': 'alice',
+                'state': 'READY',
+                'base_os': 'ubuntu2404',
+                'idea_session_id': 'one',
+                'server': {'instance_id': 'i-001'},
+            }
+        ]
+    }
+    monkeypatch.setattr(module.time, 'sleep', lambda _: None)
+    batch = service.context.aws().dynamodb_table().batch_get_item
+    batch.side_effect = lambda **kwargs: {'UnprocessedKeys': kwargs['RequestItems']}
+    assert service.targets('alice') == [{'id': 'bastion', 'label': 'Bastion'}]
+    assert batch.call_count == 3
+
+
+@pytest.mark.parametrize(
+    'age, settling', [(60, True), (599, True), (601, False), (None, True)]
+)
+def test_desktop_refusal_is_trust_settling_only_soon_after_start(store, age, settling):
+    import datetime
+
+    service = target_service(store)
+    service.desktops = MagicMock()
+    service.desktops().get_item.return_value = {
+        'Item': {
+            'owner': 'alice',
+            'state': 'READY',
+            'base_os': 'ubuntu2404',
+            'server': {'instance_id': 'i-abc'},
+        }
+    }
+    instance = {
+        'State': {'Name': 'running'},
+        'PrivateIpAddress': '10.0.0.9',
+        'Tags': [{'Key': 'idea:ClusterName', 'Value': 'example'}],
+    }
+    if age is not None:
+        instance['LaunchTime'] = datetime.datetime.now(
+            datetime.timezone.utc
+        ) - datetime.timedelta(seconds=age)
+    service.context.aws().ec2().describe_instances.return_value = {
+        'Reservations': [{'Instances': [instance]}]
+    }
+    key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
+    store.table.put_item(
+        Item={
+            'pk': 'host:arn:aws-us-gov:ec2:us-gov-west-1:123456789012:instance/i-abc',
+            'public_key': key,
+        }
+    )
+    assert service.target('alice', 'desktop:one')[2] is settling
+
+
+@pytest.mark.parametrize('age, settling', [(60, True), (181, False)])
+def test_bastion_refusal_is_trust_settling_only_for_a_new_task(store, age, settling):
+    import datetime
+
+    service = target_service(store)
+    ecs = service.context.aws().get_client()
+    ecs.list_tasks.return_value = {'taskArns': ['task']}
+    ecs.describe_tasks.return_value = {
+        'tasks': [
+            {
+                'taskArn': 'task',
+                'lastStatus': 'RUNNING',
+                'healthStatus': 'HEALTHY',
+                'startedAt': datetime.datetime.now(datetime.timezone.utc)
+                - datetime.timedelta(seconds=age),
+                'attachments': [
+                    {'details': [{'name': 'privateIPv4Address', 'value': '10.0.0.2'}]}
+                ],
+            }
+        ]
+    }
+    key = asyncssh.generate_private_key('ssh-ed25519').export_public_key().decode()
+    store.table.put_item(Item={'pk': 'host:bastion', 'public_key': key})
+    assert service.target('alice', 'bastion')[2] is settling
+
+
 def test_stopped_desktop_has_actionable_final_reason():
     row = {'owner': 'alice', 'base_os': 'ubuntu2404', 'state': 'STOPPED'}
     with pytest.raises(TerminalDenied) as stopped:
@@ -1660,7 +1837,6 @@ def test_instance_state_uses_real_ec2_response(store, state):
         )
         with pytest.raises(TerminalDenied) as caught:
             service.target('alice', 'desktop:one')
-        assert type(caught.value).__name__ == (
-            'TerminalTargetStopped' if state == 'stopped' else 'TerminalUnavailable'
-        )
+        # My desktops still shows READY, with no Start action, until VDC reconciles.
+        assert type(caught.value).__name__ == 'TerminalUnavailable'
         stubber.assert_no_pending_responses()

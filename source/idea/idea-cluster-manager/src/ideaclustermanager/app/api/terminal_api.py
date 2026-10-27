@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 from ideaclustermanager.app.terminal.store import (
     TerminalDenied,
     TerminalMisconfigured,
+    TerminalTargetError,
     TerminalTargetStopped,
     TerminalUnavailable,
     aws_unavailable,
@@ -25,6 +26,8 @@ class TerminalAPI(BaseAPI):
             raise exceptions.unauthorized_access()
         service = self.context.terminal
         payload = context.request_payload or {}
+        if not isinstance(payload, dict):
+            raise exceptions.unauthorized_access()
         try:
             if context.namespace == 'Terminal.ListTargets' and not payload:
                 context.success({'targets': service.targets(context.get_username())})
@@ -47,6 +50,10 @@ class TerminalAPI(BaseAPI):
                 str(payload.get('target', ''))[:256],
                 str(error),
             )
+            if isinstance(error, TerminalTargetError):
+                raise exceptions.SocaException(
+                    error_code='TERMINAL_TARGET_ERROR', message=str(error)
+                ) from None
             if isinstance(error, TerminalTargetStopped):
                 raise exceptions.SocaException(
                     error_code='TERMINAL_TARGET_STOPPED', message=str(error)

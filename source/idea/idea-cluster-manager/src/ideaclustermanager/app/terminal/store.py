@@ -19,6 +19,10 @@ class TerminalTargetStopped(TerminalDenied):
     pass
 
 
+class TerminalTargetError(TerminalDenied):
+    pass
+
+
 class TerminalMisconfigured(TerminalDenied):
     pass
 

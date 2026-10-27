@@ -58,6 +58,8 @@ test("the refusal names the floor, the below-floor modules, and the operator pat
   assert.match(message, /scheduler {3}25\.10\.0/);
   assert.match(message, /Upgrade this cluster to 26\.10\.9 using the 26\.10\.9 administrator/);
   assert.match(message, /IDEA_REVISION=v26\.10\.9 \.\/idea-admin\.sh upgrade-cluster --cluster-name <name> --aws-region <region>/);
+  assert.match(message, /Clusters on 25\.11\.0 or newer upgrade to 26\.10\.9 directly/);
+  assert.match(message, /Only a cluster older than 25\.11\.0 first upgrades one published release at a time/);
   assert.doesNotMatch(message, /--force/);
 });
 

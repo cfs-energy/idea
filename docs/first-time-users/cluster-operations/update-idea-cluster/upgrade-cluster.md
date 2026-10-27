@@ -11,8 +11,9 @@ IDEA_REVISION=v26.10.9 ./idea-admin.sh upgrade-cluster --cluster-name <name> --a
 ```
 
 `IDEA_REVISION` selects the published 26.10.9 administrator container. Complete that release's
-upgrade and ECS migration before retrying 26.11.1. For older releases, follow each intervening
-release's Upgrade Instructions. If an upgrade is unfinished, the refusal lists the leftover
+upgrade and ECS migration before retrying 26.11.1. Clusters on 25.11.0 or newer upgrade to 26.10.9
+directly; only clusters older than 25.11.0 follow each intervening release's Upgrade Instructions
+first. If an upgrade is unfinished, the refusal lists the leftover
 `<module>.maintenance.upgrade_baseline` or `cluster.upgrade_historical_pending` keys; use the
 26.10.9 administrator to recover that upgrade rather than deleting its recovery state.
 

@@ -247,6 +247,28 @@ def test_resize_reports_current_result_after_capacity_failure(
         api.server_db.update.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    'edit', [{'name': 'renamed'}, {'description': 'notes'}, {'idle_autostop_delay': 30}]
+)
+def test_edit_without_resize_keeps_stored_failure(api, edit):
+    from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
+        INSTANCE_UNHEALTHY_MESSAGE,
+    )
+
+    session = api.session_db.get_from_db('b', 'session-b')
+    session.state = VirtualDesktopSessionState.ERROR
+    session.failure_reason = INSTANCE_UNHEALTHY_MESSAGE
+    api.session_db.update(session)
+    api.validate_idle_autostop_delay = Mock(return_value=None)
+    context = invocation(api, {'session': {'idea_session_id': 'session-b', **edit}})
+    api.update_session(context)
+    assert context.is_success(), context.response
+    assert not context.response['payload']['session'].get('failure_reason')
+    stored = api.session_db.get_from_db('b', 'session-b')
+    assert stored.failure_reason == INSTANCE_UNHEALTHY_MESSAGE
+    assert stored.state == VirtualDesktopSessionState.ERROR
+
+
 @pytest.mark.parametrize('session_id', [None, 'session-a'])
 def test_screenshot_cannot_target_another_users_dcv_id(api, session_id):
     context = invocation(

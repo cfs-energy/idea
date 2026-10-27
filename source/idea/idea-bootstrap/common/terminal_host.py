@@ -1,5 +1,6 @@
 """Install public terminal trust and publish this host's SSH public key, never private keys."""
 
+import fcntl
 import json
 import os
 import subprocess
@@ -8,6 +9,17 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+
+
+# sysexits EX_CONFIG: retrying cannot fix this host, so the boot retry loop stops on it.
+EXIT_SITE_INTEGRATION = 78
+# Site hooks that edit sshd_config hold this lock, so neither side loses the other's edit.
+LOCK = 'run/idea-terminal-trust.lock'
+LOCK_WAIT_SECONDS = 120
+
+
+class SiteIntegrationRequired(ValueError):
+    pass
 
 
 PRINCIPALS_COMMAND = """#!/usr/bin/python3
@@ -58,7 +70,7 @@ def instance_identity():
 def dynamodb(operation, **payload):
     # The bootstrap already installs AWS CLI; system Python needs no third-party modules.
     env = {**os.environ, 'AWS_MAX_ATTEMPTS': '1', 'AWS_PAGER': ''}
-    # systemd EnvironmentFile does not interpret the proxy profile's shell exports.
+    # The unit loads /etc/environment, where bootstrap writes the proxy as IDEA_* names.
     for name in ('HTTPS_PROXY', 'NO_PROXY'):
         if env.get('IDEA_' + name):
             env.setdefault(name, env['IDEA_' + name])
@@ -128,6 +140,29 @@ def replace_validated(path, text, validator=None, mode=0o644):
             temporary.unlink()
 
 
+def reload_sshd():
+    # Distributions name the unit sshd or ssh (Ubuntu aliases one to the other).
+    units = set()
+    for name in ('sshd', 'ssh'):
+        shown = subprocess.run(
+            ['systemctl', 'show', '-p', 'Id', '-p', 'LoadState', name],
+            check=True,
+            stdout=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=10,
+        ).stdout
+        properties = dict(
+            line.split('=', 1) for line in shown.splitlines() if '=' in line
+        )
+        if properties.get('LoadState') == 'loaded':
+            units.add(properties['Id'])
+    if not units:
+        raise RuntimeError('No sshd unit to reload')
+    subprocess.run(
+        ['systemctl', 'try-reload-or-restart'] + sorted(units), check=True, timeout=30
+    )
+
+
 def configure(cluster, host_id, root=Path('/')):
     (root / 'run/sshd').mkdir(mode=0o755, parents=True, exist_ok=True)
     ready = root / 'run/idea-terminal-trust-ready'
@@ -155,6 +190,29 @@ def configure(cluster, host_id, root=Path('/')):
         stdout=subprocess.DEVNULL,
         timeout=5,
     )
+    with open(str(root / LOCK), 'a') as lock:
+        # A long site hook fails this attempt; the retry loop tries again later.
+        for _ in range(LOCK_WAIT_SECONDS):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(1)
+        else:
+            raise RuntimeError('sshd_config is locked by a site hook')
+        install_trust(ca, host_id, root)
+    public = (root / 'etc/ssh/ssh_host_ed25519_key.pub').read_text().strip()
+    dynamodb(
+        'put-item',
+        TableName=f'{cluster}.cluster-manager.terminal',
+        Item={'pk': {'S': 'host:' + host_id}, 'public_key': {'S': public}},
+    )
+
+    ready.parent.mkdir(parents=True, exist_ok=True)
+    ready.touch(mode=0o644)
+
+
+def install_trust(ca, host_id, root):
     ssh = root / 'etc/ssh'
     path = ssh / 'idea_terminal_ca.pub'
     effective = subprocess.run(
@@ -172,7 +230,7 @@ def configure(cluster, host_id, root=Path('/')):
     if options.get('authorizedprincipalsfile', 'none') != 'none' or options.get(
         'authorizedprincipalscommand', 'none'
     ) not in {'none', command}:
-        raise ValueError(
+        raise SiteIntegrationRequired(
             'Site certificate principal policy requires explicit Terminal integration'
         )
     previous = path.read_text().strip() if path.exists() else ''
@@ -204,20 +262,15 @@ def configure(cluster, host_id, root=Path('/')):
     directive = 'AuthorizedPrincipalsCommand ' + command
     if directive not in text.splitlines():
         text = directive + '\nAuthorizedPrincipalsCommandUser root\n' + text
-    if replace_sshd_config(config, text) and host_id != 'bastion':
-        # Distributions provide either sshd or ssh; the other unit may not exist.
-        subprocess.run(
-            ['systemctl', 'try-reload-or-restart', 'sshd', 'ssh'], timeout=10
-        )
-    public = (ssh / 'ssh_host_ed25519_key.pub').read_text().strip()
-    dynamodb(
-        'put-item',
-        TableName=f'{cluster}.cluster-manager.terminal',
-        Item={'pk': {'S': 'host:' + host_id}, 'public_key': {'S': public}},
-    )
-
-    ready.parent.mkdir(parents=True, exist_ok=True)
-    ready.touch(mode=0o644)
+    # The bastion entrypoint signals its own sshd. Elsewhere a failed reload stays
+    # pending, so the next attempt reloads even though the file is now unchanged.
+    pending = root / 'run/idea-terminal-sshd-reload'
+    if host_id != 'bastion' and config.read_text() != text:
+        pending.touch()
+    replace_sshd_config(config, text)
+    if pending.exists():
+        reload_sshd()
+        pending.unlink()
 
 
 def main():
@@ -238,6 +291,9 @@ def main():
         try:
             configure(os.environ['IDEA_CLUSTER_NAME'], host_id)
             return
+        except SiteIntegrationRequired as error:
+            print(f'Terminal trust not installed: {error}', file=sys.stderr)
+            sys.exit(EXIT_SITE_INTEGRATION)
         except Exception as error:
             print(
                 f'Terminal trust attempt {attempt + 1} failed: {error}', file=sys.stderr

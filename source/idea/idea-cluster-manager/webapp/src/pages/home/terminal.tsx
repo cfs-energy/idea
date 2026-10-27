@@ -22,6 +22,7 @@ const reasonLabels: Record<string, string> = {
     'unavailable': 'The target is temporarily unavailable or the terminal limit has been reached. Close any extra terminals. Retrying…',
     'trust-not-ready': 'The target is refreshing terminal access. Retrying…',
     'target-stopped': 'This desktop is stopped. Start it from My desktops, then select Connect.',
+    'target-error': 'This desktop is in an error or deleting state. Check it in My desktops.',
     'target-misconfigured': 'The target needs administrator attention. Ask your administrator to check terminal SSH trust and infrastructure configuration.',
     'ack-timeout': 'Terminal stopped accepting output. Select Connect to try again.',
     'retry-exhausted': 'Unable to connect after 8 attempts. Check the target and your network, then select Connect to try again.',

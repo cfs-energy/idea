@@ -90,6 +90,11 @@ sshd_pid=$!
 (
   if [[ ! -f /run/idea-terminal-trust-ready ]]; then
     until timeout 300 python3.13 /opt/idea/roles/terminal_host.py; do
+      # 78: the site's sshd principal policy needs explicit integration; retrying cannot help.
+      if (( $? == 78 )); then
+        echo "Terminal trust not installed: site principal policy; browser terminal unavailable"
+        exit 0
+      fi
       echo "Terminal trust not installed; retrying in 30 seconds"
       sleep 30
     done

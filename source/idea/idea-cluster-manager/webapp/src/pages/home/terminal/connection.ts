@@ -46,6 +46,7 @@ export class TerminalConnection {
             if (generation !== this.generation) return;
             const code = (error as {errorCode?: string})?.errorCode ?? '';
             if (code === 'TERMINAL_TARGET_STOPPED') this.finish('ended', 'target-stopped');
+            else if (code === 'TERMINAL_TARGET_ERROR') this.finish('ended', 'target-error');
             else if (code === 'TERMINAL_TARGET_MISCONFIGURED') this.finish('denied', 'target-misconfigured');
             else if (/UNAUTHORIZED|AUTH_|FORBIDDEN|INVALID_PARAM/.test(code)) this.finish('denied', 'access-denied');
             else this.retry(code === 'TERMINAL_UNAVAILABLE' ? 'unavailable' : undefined);
@@ -84,7 +85,7 @@ export class TerminalConnection {
             if (event.code === 4000) this.finish('ended', event.reason);
             else if (event.code === 4003 || event.code === 1009) this.finish('denied', 'access-denied');
             else if (event.code === 4004) this.finish('denied', 'target-misconfigured');
-            else if (event.code === 4006) this.finish('ended', 'target-stopped');
+            else if (event.code === 4006) this.finish('ended', event.reason === 'target-error' ? 'target-error' : 'target-stopped');
             else if (event.code === 4005) this.finish('ended', 'ack-timeout');
             else this.retry(event.code === 4002 ? (event.reason === 'trust-not-ready' ? 'trust-not-ready' : 'unavailable') : event.code === 1012 ? 'server-shutdown' : undefined);
         };

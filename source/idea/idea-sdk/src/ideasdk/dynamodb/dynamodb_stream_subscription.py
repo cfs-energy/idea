@@ -70,6 +70,8 @@ class DynamoDBStreamSubscription:
         self._shard_sequence_numbers: Dict[str, Optional[str]] = {}
         self._resync_required = False
         self._initialized = False
+        # ponytail: drained shard ids are never pruned (about six a day per partition,
+        # cleared on each resync); prune unlisted ones if processes live for months.
         self._drained_shards = set()
         self._skipped_shards = set()
         self.shard_initializer_thread = threading.Thread(
@@ -106,7 +108,9 @@ class DynamoDBStreamSubscription:
         """
         for a given dynamodb stream, find all available shards and initialize the shard iterator.
         a shard can be added or closed and this operation should be performed periodically.
-        a clean-up operation is performed for all closed shards. a shard considered is closed, the NextShardIterator returns null value in GetRecords response.
+        a shard is closed when GetRecords returns a null NextShardIterator. closed shards stay
+        tracked (iterator None, in _drained_shards) so a later listing can prove a child's
+        parent was read; losing that proof forces a full snapshot resync.
         :return:
         """
         while not self._exit.is_set():
@@ -238,16 +242,21 @@ class DynamoDBStreamSubscription:
                         iterator_request = {
                             'StreamArn': self.stream_arn,
                             'ShardId': shard_id,
-                            'ShardIteratorType': 'TRIM_HORIZON'
-                            if parent in self._drained_shards
-                            else 'LATEST',
+                            'ShardIteratorType': 'LATEST',
                         }
-                        sequence = self._shard_sequence_numbers.get(shard_id)
-                        if sequence is not None:
-                            iterator_request.update(
-                                ShardIteratorType='AFTER_SEQUENCE_NUMBER',
-                                SequenceNumber=sequence,
-                            )
+                        start = shard.get('SequenceNumberRange', {}).get(
+                            'StartingSequenceNumber'
+                        )
+                        if parent in self._drained_shards:
+                            # Read the child from its first record. TRIM_HORIZON would
+                            # silently skip a trimmed head; AT_SEQUENCE_NUMBER raises
+                            # TrimmedDataAccessException, which forces a resync below.
+                            iterator_request['ShardIteratorType'] = 'TRIM_HORIZON'
+                            if start is not None:
+                                iterator_request.update(
+                                    ShardIteratorType='AT_SEQUENCE_NUMBER',
+                                    SequenceNumber=start,
+                                )
                         while not self._exit.is_set():
                             try:
                                 result = (
@@ -339,6 +348,9 @@ class DynamoDBStreamSubscription:
                                 ):
                                     time.sleep(1)
                                     continue
+                                # An expired iterator also resyncs, even with a checkpoint:
+                                # the settings table is small, and a full rescan cannot miss
+                                # history the way a checkpoint resume across an outage can.
                                 elif e.response['Error']['Code'] in (
                                     'ExpiredIteratorException',
                                     'TrimmedDataAccessException',

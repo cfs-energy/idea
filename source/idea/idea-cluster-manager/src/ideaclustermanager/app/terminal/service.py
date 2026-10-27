@@ -23,6 +23,7 @@ from ideadatamodel.exceptions import SocaException
 from .store import (
     TerminalDenied,
     TerminalMisconfigured,
+    TerminalTargetError,
     TerminalTargetStopped,
     TerminalUnavailable,
     TerminalStore,
@@ -37,6 +38,8 @@ WRITE_TIMEOUT = 30
 SHUTDOWN_TIMEOUT = 5
 DRAIN_TIMEOUT = 3 * SHUTDOWN_TIMEOUT + 5
 PRE_READY_TIMEOUT = 40
+# An SSH refusal this soon after a target starts is boot/resume trust still landing.
+TRUST_SETTLE_SECONDS = {'bastion': 180, 'desktop': 600}
 LINUX = {
     'amazonlinux2',
     'amazonlinux2023',
@@ -76,6 +79,8 @@ def validate_desktop(row, username):
         raise TerminalDenied('Desktop is not an owned, ready Linux session')
     if row.get('state') == 'STOPPED':
         raise TerminalTargetStopped('Desktop is stopped')
+    if row.get('state') in {'ERROR', 'DELETING', 'DELETED'}:
+        raise TerminalTargetError('Desktop is in an error or deleting state')
     if row.get('state') in {
         'PROVISIONING',
         'CREATING',
@@ -323,26 +328,30 @@ class TerminalService:
         pins = set()
         keys = list(dict.fromkeys(row['host'] for row in candidates))
         for offset in range(0, len(keys), 100):
-            response = (
-                self.context.aws()
-                .dynamodb_table()
-                .batch_get_item(
-                    RequestItems={
-                        self.table.name: {
-                            'Keys': [
-                                {'pk': key} for key in keys[offset : offset + 100]
-                            ],
-                            'ConsistentRead': True,
-                        }
-                    }
+            request = {
+                self.table.name: {
+                    'Keys': [{'pk': key} for key in keys[offset : offset + 100]],
+                    'ConsistentRead': True,
+                }
+            }
+            # BatchGetItem may defer any subset of keys; retry those briefly.
+            for attempt in range(3):
+                if attempt:
+                    time.sleep(0.1 * 2**attempt)
+                response = (
+                    self.context.aws()
+                    .dynamodb_table()
+                    .batch_get_item(RequestItems=request)
                 )
-            )
-            pins.update(
-                row['pk']
-                for row in response.get('Responses', {}).get(self.table.name, [])
-                if row.get('public_key')
-            )
-        # Unprocessed/missing keys are unavailable; never advertise an unverified host.
+                pins.update(
+                    row['pk']
+                    for row in response.get('Responses', {}).get(self.table.name, [])
+                    if row.get('public_key')
+                )
+                request = response.get('UnprocessedKeys') or {}
+                if not request.get(self.table.name, {}).get('Keys'):
+                    break
+        # Still-unprocessed/missing keys are unavailable; never advertise an unverified host.
         targets.extend(
             {'id': row['id'], 'label': row['label']}
             for row in candidates
@@ -389,6 +398,7 @@ class TerminalService:
                 ]
                 if len(addresses) == 1:
                     host = addresses[0]
+                    started = task.get('startedAt')
                     break
             else:
                 raise TerminalUnavailable('Bastion network is unavailable')
@@ -428,13 +438,15 @@ class TerminalService:
             if instance['State']['Name'] in {'terminated', 'shutting-down'}:
                 raise TerminalDenied('Desktop instance is unavailable')
             if instance['State']['Name'] == 'stopped':
-                raise TerminalTargetStopped('Desktop is stopped')
+                # My desktops still shows READY and offers no Start until VDC catches up.
+                raise TerminalUnavailable('Desktop instance is stopped')
             if instance['State']['Name'] != 'running' or not instance.get(
                 'PrivateIpAddress'
             ):
                 raise TerminalUnavailable('Desktop instance is not running')
             host = instance['PrivateIpAddress']
             host_id = self.instance_arn(instance_id)
+            started = instance.get('LaunchTime')
         else:
             raise TerminalDenied('Invalid target')
         pin = (
@@ -444,8 +456,14 @@ class TerminalService:
         )
         if not pin:
             raise TerminalUnavailable('Target SSH identity is not registered')
+        settle = TRUST_SETTLE_SECONDS['bastion' if host_id == 'bastion' else 'desktop']
+        # Unknown start time: keep retrying rather than blame the target.
+        settling = (
+            not hasattr(started, 'timestamp')
+            or time.time() - started.timestamp() < settle
+        )
         try:
-            return host, asyncssh.import_public_key(pin)
+            return host, asyncssh.import_public_key(pin), settling
         except asyncssh.KeyImportError:
             raise TerminalMisconfigured('Target SSH identity is invalid') from None
 
@@ -530,6 +548,7 @@ class TerminalService:
         error_type = None
         tasks = []
         conn = process = None
+        settling = True
         audited = False
         authenticated = False
         try:
@@ -562,7 +581,7 @@ class TerminalService:
                     10,
                 )
                 authenticated = True
-                host, pin = await asyncio.wait_for(
+                host, pin, settling = await asyncio.wait_for(
                     asyncio.to_thread(self.target, username, target), 10
                 )
                 # shortcut: a timed-out worker can still acquire a slot; its lease expires
@@ -713,13 +732,17 @@ class TerminalService:
         except TerminalTargetStopped as error:
             error_type = type(error).__name__
             reason = 'target-stopped'
+        except TerminalTargetError as error:
+            error_type = type(error).__name__
+            reason = 'target-error'
         except TerminalUnavailable as error:
             error_type = type(error).__name__
             reason = 'unavailable'
         except asyncssh.PermissionDenied as error:
-            # sshd may accept connections before boot/resume trust refresh completes.
+            # sshd accepts connections before boot/resume trust refresh completes; a
+            # refusal long after start is a site policy or trust failure, not a delay.
             error_type = type(error).__name__
-            reason = 'trust-not-ready'
+            reason = 'trust-not-ready' if settling else 'target-misconfigured'
         except (TerminalMisconfigured, asyncssh.HostKeyNotVerifiable) as error:
             error_type = type(error).__name__
             reason = 'target-misconfigured'
@@ -805,7 +828,7 @@ class TerminalService:
                 else 4004
                 if reason == 'target-misconfigured'
                 else 4006
-                if reason == 'target-stopped'
+                if reason in {'target-stopped', 'target-error'}
                 else 4005
                 if reason == 'ack-timeout'
                 else 1000

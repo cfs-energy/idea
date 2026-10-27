@@ -100,7 +100,7 @@ def maintenance_message(config):
         message += (
             f' Expected to end {end.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC.'
         )
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, OverflowError):
         pass
     return message
 

@@ -18,7 +18,6 @@ import React, {Component} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
 import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, KeyValuePairs, SpaceBetween, Table, Textarea, Toggle} from "@cloudscape-design/components";
-import moment from "moment";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AppContext} from "../../common";
 import dot from "dot-object";
@@ -180,13 +179,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         const message = this.state.maintenanceMessage.trim()
         const endsAt = this.state.maintenanceEndsAt.trim()
 
-        if (Utils.isNotEmpty(endsAt) && !moment(endsAt, moment.ISO_8601, true).isValid()) {
-            this.setState({
-                maintenanceError: 'End time must be an ISO 8601 timestamp, for example 2026-09-15T18:00:00Z. Leave it empty for no end time.'
-            })
-            return
-        }
-
+        // The settings API owns the end-time rule; a second client-side parser disagreed with it.
         const clusterSettingsService = AppContext.get().getClusterSettingsService()
         const moduleId = Utils.asString(clusterSettingsService.getModuleId(Constants.MODULE_CLUSTER_MANAGER), Constants.MODULE_CLUSTER_MANAGER)
         this.setState({

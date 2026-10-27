@@ -25,7 +25,7 @@ Settings updates accept the ISO 8601 forms shared by the portal and scheduler:
 - Calendar dates: `YYYY-MM-DD` or `YYYYMMDD`.
 - ISO week dates: `YYYY-Www-D` or `YYYYWwwD` (weekday `D` is 1-7). `YYYY-Www` and `YYYYWww` alone mean Monday of that week and cannot include a time.
 - Calendar dates and week dates with a weekday may include `T` or one space, then `HH`, `HH:MM`, or `HH:MM:SS` for hyphenated dates; use `HH`, `HHMM`, or `HHMMSS` for compact dates. Seconds may have a decimal fraction introduced by `.` or `,`; a fraction that rounds up to a whole second in the portal parser is rejected.
-- A time may end in `Z`, `±HH`, `±HHMM`, or `±HH:MM`. Offset hours must be 00-23 and minutes 00-59. Without an offset, the time is UTC; without a time, the date means midnight UTC. Surrounding whitespace is ignored.
+- A time may end in `Z`, `±HH`, `±HHMM`, or `±HH:MM`. Offset minutes must be 00-59, and the offset must be between `-12:00` and `+14:00`. Without an offset, the time is UTC; without a time, the date means midnight UTC. Surrounding whitespace is ignored.
 
 Dates and times must be valid (years 0001-9999, hours 00-23, minutes and seconds 00-59), and converting to UTC must stay within years 0001-9999. Ordinal dates, incomplete calendar dates, arbitrary date/time separators, mixed compact/colon time forms, and non-string values other than null are rejected. For example, `2026-09-15T18:00:00Z`, `2026-09-15 18:00`, and `20260915T1800` all mean the same instant. An unparsable value set outside the settings API is omitted by the consumer that cannot parse it; its maintenance message still shows.
 

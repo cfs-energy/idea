@@ -1,12 +1,11 @@
 /**
  * The scheduler role script's batch-manager reconciliation.
  *
- * A host bastion keeps its grant by the name the server matches: the server authorizes a
- * connection by the name it reverse-resolves the caller's address to, so an entry built from the
- * private-zone alias in `bastion-host.hostname` would be accepted and never match. A container
- * bastion gets no grant: an administrator runs qmgr from inside the scheduler task, and a grant by
- * a task's address goes stale, then reaches whichever desktop is given the address next. Grants of
- * that shape from the host era are removed on every start; operator-added entries stay.
+ * No bastion gets a grant: bastions run only on ECS, an administrator runs qmgr from inside the
+ * scheduler task, and a grant by an EC2 name or a task's address goes stale, then reaches
+ * whichever desktop is given the address next. Grants of that shape from the host era are removed
+ * on every start, even when a host-era bastion name is still in settings; operator-added entries
+ * stay.
  *
  * The block is executed rather than pattern-matched, with `setting` and the batch client stubbed.
  * The one rewrite the harness makes is the client's absolute path, which cannot be stubbed on PATH.
@@ -70,11 +69,10 @@ function runGrant(rows: Record<string, string>, existing = ""): string[] {
 
 const STALE = ["root", "ip-10-7-0-9.us-east-2.compute.internal"].join("@");
 
-test("grants a host bastion batch-manager rights under the name the server matches", () => {
-  const calls = runGrant({ "bastion-host.private_dns_name": "ip-192-0-2-10.us-east-2.compute.internal" });
-  assert.deepEqual(calls, [
-    '-c set server managers += root@ip-192-0-2-10.us-east-2.compute.internal',
-  ]);
+test("prunes a leftover host-era bastion name instead of granting it again", () => {
+  const leftover = "root@ip-192-0-2-10.us-east-2.compute.internal";
+  const calls = runGrant({ "bastion-host.private_dns_name": leftover.slice(5) }, leftover);
+  assert.deepEqual(calls, [`-c set server managers -= ${leftover}`]);
 });
 
 test("grants nothing on a cluster with no bastion module", () => {
@@ -93,7 +91,7 @@ test("grants a container bastion nothing and removes the host-era grant", () => 
   }, `${STALE},root@example.invalid`), [`-c set server managers -= ${STALE}`]);
 });
 
-test("does not add an existing grant again", () => {
+test("keeps an operator-added grant", () => {
   assert.deepEqual(runGrant({ "bastion-host.private_dns_name": "example.invalid" }, "root@example.invalid"), []);
 });
 
