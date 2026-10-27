@@ -72,6 +72,7 @@ it('retries transient ticket failures even when the network interface still repo
 });
 
 it.each([
+    [4006, 'target-stopped', 'ended'],
     [4000, 'idle-timeout', 'ended'], [4000, 'max-duration', 'ended'], [4000, 'shell-exited', 'ended'],
     [1009, 'access-denied', 'denied'], [4003, 'access-denied', 'denied'], [4004, 'target-misconfigured', 'denied'], [4005, 'ack-timeout', 'ended'],
 ])('stops permanently for %s %s and retains the reason', async (code, reason, state) => {
@@ -94,10 +95,11 @@ it.each([1000, 1006, 1011, 1012, 4001, 4002])('retries transient close %s with a
 it.each([
     ['UNAUTHORIZED_ACCESS', 'access-denied'], ['AUTH_INVALID_TOKEN', 'access-denied'],
     ['TERMINAL_TARGET_MISCONFIGURED', 'target-misconfigured'],
+    ['TERMINAL_TARGET_STOPPED', 'target-stopped'],
 ])('stops on permanent API error %s', async (errorCode, reason) => {
     vi.useFakeTimers(); const {connection, options} = setup();
     options.ticket.mockRejectedValue({errorCode}); connection.start(); await Promise.resolve();
-    expect(options.state).toHaveBeenLastCalledWith('denied', reason);
+    expect(options.state).toHaveBeenLastCalledWith(errorCode === 'TERMINAL_TARGET_STOPPED' ? 'ended' : 'denied', reason);
     await vi.advanceTimersByTimeAsync(300000); connection.wake();
     expect(options.ticket).toHaveBeenCalledTimes(1); connection.stop();
 });
@@ -191,4 +193,24 @@ it('discards queued input on explicit disconnect and never closes a congested so
     expect(options.inputInterrupted).toHaveBeenCalledOnce();
     sockets[0].bufferedAmount = 0; await vi.advanceTimersByTimeAsync(1000);
     expect(sockets[0].send).not.toHaveBeenCalled();
+});
+
+
+it.each([true, false])('retries pending SSH trust with a bounded budget (recovers=%s)', async recovers => {
+    vi.useFakeTimers();
+    const {connection, options, sockets} = setup(); connection.start(); await Promise.resolve();
+    for (let attempt = 1; attempt <= (recovers ? 2 : 8); attempt++) {
+        sockets.at(-1)!.onclose({code: 4002, reason: 'trust-not-ready'});
+        if (attempt < 8) expect(options.state).toHaveBeenLastCalledWith('reconnecting', 'trust-not-ready');
+        await vi.advanceTimersByTimeAsync(36001);
+    }
+    if (recovers) {
+        sockets.at(-1)!.onmessage({data: '{"type":"ready"}'});
+        expect(options.state).toHaveBeenLastCalledWith('connected');
+    } else {
+        expect(options.state).toHaveBeenLastCalledWith('denied', 'target-misconfigured');
+        await vi.advanceTimersByTimeAsync(300000); connection.wake();
+        expect(options.ticket).toHaveBeenCalledTimes(8);
+    }
+    connection.stop();
 });

@@ -57,6 +57,11 @@ def instance_identity():
 
 def dynamodb(operation, **payload):
     # The bootstrap already installs AWS CLI; system Python needs no third-party modules.
+    env = {**os.environ, 'AWS_MAX_ATTEMPTS': '1', 'AWS_PAGER': ''}
+    # systemd EnvironmentFile does not interpret the proxy profile's shell exports.
+    for name in ('HTTPS_PROXY', 'NO_PROXY'):
+        if env.get('IDEA_' + name):
+            env.setdefault(name, env['IDEA_' + name])
     try:
         result = subprocess.run(
             [
@@ -77,7 +82,7 @@ def dynamodb(operation, **payload):
             stderr=subprocess.PIPE,
             universal_newlines=True,
             timeout=10,
-            env={**os.environ, 'AWS_MAX_ATTEMPTS': '1', 'AWS_PAGER': ''},
+            env=env,
         )
     except subprocess.CalledProcessError as error:
         # Only public trust is exchanged; retain AWS/configuration errors for operators.

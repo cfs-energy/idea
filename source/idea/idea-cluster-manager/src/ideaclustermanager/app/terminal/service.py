@@ -23,6 +23,7 @@ from ideadatamodel.exceptions import SocaException
 from .store import (
     TerminalDenied,
     TerminalMisconfigured,
+    TerminalTargetStopped,
     TerminalUnavailable,
     TerminalStore,
     TicketRejected,
@@ -73,13 +74,14 @@ def certificate(ca, username, session_id, now=None):
 def validate_desktop(row, username):
     if not row or row.get('owner') != username or row.get('base_os') not in LINUX:
         raise TerminalDenied('Desktop is not an owned, ready Linux session')
+    if row.get('state') == 'STOPPED':
+        raise TerminalTargetStopped('Desktop is stopped')
     if row.get('state') in {
         'PROVISIONING',
         'CREATING',
         'INITIALIZING',
         'RESUMING',
         'STOPPING',
-        'STOPPED',
     }:
         raise TerminalUnavailable('Desktop is not ready')
     if row.get('state') != 'READY':
@@ -425,6 +427,8 @@ class TerminalService:
                 raise TerminalDenied('Desktop instance is unavailable')
             if instance['State']['Name'] in {'terminated', 'shutting-down'}:
                 raise TerminalDenied('Desktop instance is unavailable')
+            if instance['State']['Name'] == 'stopped':
+                raise TerminalTargetStopped('Desktop is stopped')
             if instance['State']['Name'] != 'running' or not instance.get(
                 'PrivateIpAddress'
             ):
@@ -650,16 +654,21 @@ class TerminalService:
                         pending[0] = False
                         ack.put_nowait(True)
                     elif (
-                        frame.get('type') == 'input'
+                        set(frame) == {'type', 'data'}
+                        and frame.get('type') == 'input'
                         and isinstance(frame.get('data'), str)
                         and len(frame['data'].encode('utf-8', 'replace')) <= CHUNK_SIZE
                     ):
                         activity[0] = time.monotonic()
                         process.stdin.write(frame['data'].encode('utf-8', 'replace'))
                         await asyncio.wait_for(process.stdin.drain(), WRITE_TIMEOUT)
-                    elif frame.get('type') == 'resize' and all(
-                        type(frame.get(k)) is int and 1 <= frame[k] <= 500
-                        for k in ('cols', 'rows')
+                    elif (
+                        set(frame) == {'type', 'cols', 'rows'}
+                        and frame.get('type') == 'resize'
+                        and all(
+                            type(frame.get(k)) is int and 1 <= frame[k] <= 500
+                            for k in ('cols', 'rows')
+                        )
                     ):
                         process.change_terminal_size(frame['cols'], frame['rows'])
                     else:
@@ -701,14 +710,17 @@ class TerminalService:
         except TicketRejected as error:
             error_type = type(error).__name__
             reason = 'ticket-rejected'
+        except TerminalTargetStopped as error:
+            error_type = type(error).__name__
+            reason = 'target-stopped'
         except TerminalUnavailable as error:
             error_type = type(error).__name__
             reason = 'unavailable'
-        except (
-            TerminalMisconfigured,
-            asyncssh.HostKeyNotVerifiable,
-            asyncssh.PermissionDenied,
-        ) as error:
+        except asyncssh.PermissionDenied as error:
+            # sshd may accept connections before boot/resume trust refresh completes.
+            error_type = type(error).__name__
+            reason = 'trust-not-ready'
+        except (TerminalMisconfigured, asyncssh.HostKeyNotVerifiable) as error:
             error_type = type(error).__name__
             reason = 'target-misconfigured'
         except (TerminalDenied, json.JSONDecodeError, UnicodeError) as error:
@@ -789,9 +801,11 @@ class TerminalService:
                 else 4001
                 if reason == 'ticket-rejected'
                 else 4002
-                if reason == 'unavailable'
+                if reason in {'unavailable', 'trust-not-ready'}
                 else 4004
                 if reason == 'target-misconfigured'
+                else 4006
+                if reason == 'target-stopped'
                 else 4005
                 if reason == 'ack-timeout'
                 else 1000

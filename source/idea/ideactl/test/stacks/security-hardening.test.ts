@@ -177,6 +177,7 @@ function settings(options: FixtureOptions = {}): ClusterConfig {
     "cluster.route53.private_hosted_zone_id": "Z0123456789ABCDEF",
     "cm.iam_role_arn": clusterManagerRole,
     "cm.security_group_id": "sg-0123456789abcdef2",
+    "directoryservice.ad_automation.sqs_queue_url": `https://sqs.${REGION}.amazonaws.com/${ACCOUNT}/${CLUSTER}-ad-automation.fifo`,
     "directoryservice.directory_id": "d-0000000001",
     "directoryservice.provider": "aws_managed_activedirectory",
     "ecs.datadog.api_key_secret_arn": syntheticArn(
@@ -486,75 +487,7 @@ function moduleTaskDefinition(resources: Record<string, Json>, role: string): [s
   return taskDefinition(resources, role);
 }
 
-/** Every service in a template, with the security groups its ENI carries, by group logical id. */
-function serviceSecurityGroupIds(resources: Record<string, Json>): Map<string, string[]> {
-  const byService = new Map<string, string[]>();
-  for (const [id, service] of byType(resources, "AWS::ECS::Service")) {
-    const network = properties(service, "ECS service")["NetworkConfiguration"];
-    if (!isJson(network)) continue;
-    const awsvpc = network["AwsvpcConfiguration"];
-    if (!isJson(awsvpc)) continue;
-    const groups = awsvpc["SecurityGroups"];
-    byService.set(
-      id,
-      (Array.isArray(groups) ? groups : []).flatMap((entry) => {
-        const referenced = resourceId(entry);
-        return referenced === undefined ? [] : [referenced];
-      }),
-    );
-  }
-  return byService;
-}
-
-/** Every security group logical id a launch template or a bare instance puts on a host ENI. */
-function hostSecurityGroupIds(resources: Record<string, Json>): Set<string> {
-  const ids = new Set<string>();
-  for (const [, launchTemplate] of byType(resources, "AWS::EC2::LaunchTemplate")) {
-    const data = properties(launchTemplate, "Launch template")["LaunchTemplateData"];
-    if (!isJson(data)) continue;
-    for (const entry of Array.isArray(data["SecurityGroupIds"]) ? data["SecurityGroupIds"] : []) {
-      const referenced = resourceId(entry);
-      if (referenced !== undefined) ids.add(referenced);
-    }
-  }
-  for (const [, instance] of byType(resources, "AWS::EC2::Instance")) {
-    const interfaces = properties(instance, "Instance")["NetworkInterfaces"];
-    for (const entry of Array.isArray(interfaces) ? interfaces : []) {
-      if (!isJson(entry)) continue;
-      for (const group of Array.isArray(entry["GroupSet"]) ? entry["GroupSet"] : []) {
-        const referenced = resourceId(group);
-        if (referenced !== undefined) ids.add(referenced);
-      }
-    }
-  }
-  return ids;
-}
-
-test("2. runs each task in the host security group of the component it replaces", async () => {
-  // The task does not copy the host group's rules, it joins the group. Under
-  // `ecs.retain_existing_hosts` the host and the task are on it at the same time, which is what
-  // makes "the task holds the position the host holds" a property of the template rather than a
-  // rule-by-rule transcription that can drift.
-  const retained: Array<[string, Json]> = [
-    ["cluster-manager", (await synthClusterManagerWithEcs({ "ecs.retain_existing_hosts": { BOOL: true } })) as Json],
-    ["scheduler", (await synthSchedulerWithEcs({ "ecs.retain_existing_hosts": { BOOL: true } })) as Json],
-    ["vdc", (await synthVdcWithEcs({ "ecs.retain_existing_hosts": { BOOL: true } })) as Json],
-  ];
-  for (const [module, template] of retained) {
-    const resources = resourcesOf(template);
-    const hostGroups = hostSecurityGroupIds(resources);
-    assert.ok(hostGroups.size > 0, `${module} still has hosts to compare against`);
-    const services = serviceSecurityGroupIds(resources);
-    assert.ok(services.size > 0, `${module} owns a service`);
-    for (const [serviceId, groups] of services) {
-      assert.equal(groups.length, 1, `${module}.${serviceId} task ENI carries one group`);
-      assert.ok(
-        hostGroups.has(groups[0] as string),
-        `${module}.${serviceId} runs in a group its own hosts use, not a copy of one`,
-      );
-    }
-  }
-
+test("2. keeps application traffic off the container host security group", () => {
   // The container host group takes no application traffic at all: it is the instance ENI's group,
   // and every listener reaches a task ENI instead.
   const container = resourcesOf(synth());

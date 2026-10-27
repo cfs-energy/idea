@@ -184,6 +184,7 @@
         "python",
         "public.ecr.aws/amazonlinux/amazonlinux",
         "ubuntu",
+        "java",
         "java-jdk"
       ],
       "matchUpdateTypes": [

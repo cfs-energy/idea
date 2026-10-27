@@ -140,7 +140,9 @@ check a customized module ID.
 Turn maintenance on before draining the scheduler, and off after you have verified the upgraded
 cluster. Every portal page carries your message. Portal and `qsub` submissions from non-admin users are refused
 with "Cluster is in maintenance: <message>", plus the end time in UTC when `ends_at` is set.
-Root and cluster administrators remain exempt. Running and already-queued jobs are untouched
+Root and cluster administrators remain exempt. The configured image-pipeline validation user
+(default `idea-validate`) is also exempt so post-upgrade image canaries can run; see
+[maintenance admission](../../../modules/cluster-manager/maintenance-banner.md). Running and already-queued jobs are untouched
 and can finish draining. Use this flag instead of manually disabling queues with qmgr. Clearing
 the flag restores submission after config propagation (about half a minute), without a restart
 or redeploy.

@@ -82,3 +82,15 @@ test('S-39: the image uv pin follows the toolchain through Renovate', () => {
   const mise = readFileSync(new URL('../../../../../mise.toml', import.meta.url), 'utf8');
   assert.equal(match?.groups?.currentValue, mise.match(/^uv = "([^"]+)"$/m)?.[1]);
 });
+
+
+test('U-27: mise Java and java-jdk platform major and minor updates stay manual', () => {
+  const renovate = JSON.parse(readFileSync(new URL('../../../../../.github/renovate.json', import.meta.url), 'utf8'));
+  for (const depName of ['java', 'java-jdk']) {
+    for (const update of ['major', 'minor']) {
+      const effective = Object.assign({}, ...renovate.packageRules.filter((rule: any) =>
+        rule.matchDepNames?.includes(depName) && (!rule.matchUpdateTypes || rule.matchUpdateTypes.includes(update))));
+      assert.equal(effective.enabled, false, `${depName} ${update}`);
+    }
+  }
+});

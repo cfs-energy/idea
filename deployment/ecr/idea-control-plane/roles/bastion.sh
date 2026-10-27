@@ -66,7 +66,6 @@ EOF
   # shellcheck disable=SC2016  # expanded by the login shell, not here
   echo 'export PATH=/opt/pbs/bin:/opt/pbs/sbin:$PATH' > /etc/profile.d/pbs.sh
 fi
-timeout 300 python3.13 /opt/idea/roles/terminal_host.py || echo "Terminal trust not installed; continuing without browser terminal"
 # Site customizations, as compute nodes and desktops run theirs from the shared /apps file
 # system: tools users expect on the login node. It runs as root, so only a file root owns and
 # no one else can write (a desktop user with sudo can write to /apps); it gets two minutes,
@@ -87,7 +86,7 @@ fi
 sssd_pid=$!
 /usr/sbin/sshd -D -e &
 sshd_pid=$!
-# Retry terminal trust after transient startup failures without blocking ordinary SSH.
+# Initialize and retry terminal trust without blocking ordinary SSH.
 (
   if [[ ! -f /run/idea-terminal-trust-ready ]]; then
     until timeout 300 python3.13 /opt/idea/roles/terminal_host.py; do

@@ -1182,9 +1182,9 @@ def test_failed_record_write_retains_hook_timestamps_for_retry(
 
 
 @pytest.mark.parametrize('same_host', [False, True])
-@pytest.mark.parametrize('latest_has_end', [False, True])
+@pytest.mark.parametrize('latest_hooks', ['both', 'begin', 'none'])
 def test_recovery_uses_latest_real_pbs_attempt_after_restart(
-    fake_context, pricing_spy, tmp_path, same_host, latest_has_end
+    fake_context, pricing_spy, tmp_path, same_host, latest_hooks
 ):
     from test_job_cache import FakeSchedulerContext
     from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
@@ -1195,16 +1195,24 @@ def test_recovery_uses_latest_real_pbs_attempt_after_restart(
 
     db_context = FakeSchedulerContext(str(tmp_path))
     cache = JobCache(db_context)
-    job = make_job(job_uid='rerun', provisioned=True, state=SocaJobState.FINISHED)
-    cache.sync([job])
     start = arrow.get('2026-08-01T00:00:00Z')
+    job = make_job(
+        job_uid='rerun',
+        provisioned=True,
+        state=SocaJobState.FINISHED,
+        start_time=start.shift(seconds=7200).datetime,
+    )
+    cache.sync([job])
     for count, offset in [(2, 0), (10, 7200)]:
         host = 'compute-a' if same_host or count == 2 else 'compute-b'
         for event_type, seconds in [
             ('execjob_begin', offset),
             ('execjob_end', offset + 120),
         ]:
-            if count == 10 and event_type == 'execjob_end' and not latest_has_end:
+            if count == 10 and (
+                latest_hooks == 'none'
+                or (latest_hooks == 'begin' and event_type == 'execjob_end')
+            ):
                 continue
             event = OpenPBSEvent(
                 type=event_type,
@@ -1221,6 +1229,11 @@ def test_recovery_uses_latest_real_pbs_attempt_after_restart(
         [fake_context.job_cache.get_job(job.job_id)]
     )
     recorded = fake_context.job_cache.get_completed_job_by_uid(job.job_uid)
-    assert recorded.start_time == start.shift(seconds=7200).datetime
-    assert recorded.total_time_secs == (120 if latest_has_end else None)
-    assert pricing_spy.calls == ([(job.job_id, 120)] if latest_has_end else [])
+    assert recorded.start_time == (
+        None if latest_hooks == 'none' else start.shift(seconds=7200).datetime
+    )
+    assert recorded.total_time_secs == (120 if latest_hooks == 'both' else None)
+    assert pricing_spy.calls == ([(job.job_id, 120)] if latest_hooks == 'both' else [])
+    if latest_hooks != 'both':
+        assert recorded.estimated_bom_cost is None
+        assert recorded.end_time is None

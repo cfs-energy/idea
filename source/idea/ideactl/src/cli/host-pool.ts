@@ -27,7 +27,7 @@ export function refreshHostsCommand(command: string, options: object, modules: r
 
 async function hostPoolState(deps: Deps, options: HostPoolOptions) {
   const config = await ClusterConfig.fromDynamoDb(options.clusterName, options.awsRegion, { moduleSet: options.moduleSet, scan: deps.scan });
-  // Host-era clusters keep an EC2 bastion; only a container cluster has a host pool to gate.
+  // No directory provider means nothing to join; skip the join gate.
   if (!config.getString("directoryservice.provider")) return undefined;
   const api = deps.containerHosts;
   if (!api) throw new GeneralException("Container host adapter is required for the directory join gate");

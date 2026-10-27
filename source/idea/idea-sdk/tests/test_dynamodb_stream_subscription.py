@@ -65,28 +65,6 @@ def test_child_waits_until_parent_is_drained(subscription):
     streams.get_shard_iterator.assert_not_called()
 
 
-def test_expired_iterator_resumes_after_last_delivered_record(subscription):
-    streams = subscription.dynamodb_streams_client
-    subscription._initialized = True
-    subscription.shard_iterators_map = {'parent': 'iterator'}
-    streams.get_records.side_effect = [
-        {'Records': [record('first', '42')], 'NextShardIterator': 'expired'},
-        error('ExpiredIteratorException'),
-    ]
-    once(subscription, subscription.shard_processor)
-    streams.describe_stream.return_value = {
-        'StreamDescription': {'Shards': [{'ShardId': 'parent'}]}
-    }
-    streams.get_shard_iterator.return_value = {'ShardIterator': 'renewed'}
-    once(subscription, subscription.shard_iterator_initializer)
-    streams.get_shard_iterator.assert_called_once_with(
-        StreamArn='stream',
-        ShardId='parent',
-        ShardIteratorType='AFTER_SEQUENCE_NUMBER',
-        SequenceNumber='42',
-    )
-
-
 class StreamSimulation:
     """In-memory AWS boundary; the subscription and deserializer run unchanged."""
 
@@ -422,29 +400,36 @@ def test_expired_parent_missing_from_complete_topology_refreshes_snapshot(live_c
     assert config.get('added') == 'next'
 
 
-def test_checkpoint_parent_on_later_page_is_reacquired_before_child(subscription):
-    streams = StreamSimulation()
-    streams.add('parent')
-    subscription.dynamodb_streams_client = streams
-    once(subscription, subscription.shard_iterator_initializer)
-    streams.shards['parent']['records'].append(record('first', '1'))
-    once(subscription, subscription.shard_processor)
+@pytest.mark.parametrize('closed_parent', [False, True])
+def test_expired_checkpoint_rescans_settings_before_processing(
+    live_config, closed_parent
+):
+    config, sub, streams, stub = live_config
+    streams.shards['parent']['records'].append(setting_record(False))
+    once(sub, sub.shard_processor)
+    assert sub._shard_sequence_numbers['parent'] == '1'
     poll = streams.get_records
     streams.get_records = Mock(side_effect=error('ExpiredIteratorException'))
-    once(subscription, subscription.shard_processor)
+    once(sub, sub.shard_processor)
     streams.get_records = poll
-    streams.shards['parent']['closed'] = True
-    streams.shards['parent']['records'].append(record('second', '2'))
-    streams.add('child', 'parent', values=['third'])
-    streams.pages = [['child'], ['parent']]
-    once(subscription, subscription.shard_iterator_initializer)
-    assert streams.requests[-1]['ShardIteratorType'] == 'AFTER_SEQUENCE_NUMBER'
-    assert streams.requests[-1]['SequenceNumber'] == '1'
-    once(subscription, subscription.shard_processor)
-    once(subscription, subscription.shard_iterator_initializer)
-    once(subscription, subscription.shard_processor)
-    assert delivered(subscription) == ['first', 'second', 'third']
-    subscription.stream_subscriber.on_reset.assert_called_once_with()
+    assert sub._resync_required
+    leaf = 'parent'
+    if closed_parent:
+        streams.shards['parent']['closed'] = True
+        streams.add('child', 'parent')
+        streams.pages = [['child'], ['parent']]
+        leaf = 'child'
+    streams.shards[leaf]['records'].append(setting_record(True, '2'))
+    add_scan(stub, [{'key': 'maintenance', 'value': True}])
+    once(sub, sub.shard_iterator_initializer)
+    assert config.get_bool('maintenance') is True
+    assert config.get('deleted') is None
+    assert streams.requests[-1]['ShardIteratorType'] == 'LATEST'
+    assert streams.requests[-1]['ShardId'] == leaf
+    for _ in range(3):
+        once(sub, sub.shard_processor)
+        once(sub, sub.shard_iterator_initializer)
+    assert config.get_bool('maintenance') is True
 
 
 @pytest.mark.parametrize(
@@ -723,32 +708,6 @@ def test_late_baseline_child_refreshes_without_replaying_stale_history(
     assert config.on_update.call_count == 1
 
 
-def test_expired_baseline_child_reopens_checkpoint_without_reset(subscription):
-    streams = StreamSimulation()
-    streams.add('parent', closed=True)
-    streams.add('child', 'parent')
-    subscription.dynamodb_streams_client = streams
-    once(subscription, subscription.shard_iterator_initializer)
-    streams.shards['child']['records'].append(record('first', '1'))
-    once(subscription, subscription.shard_processor)
-    subscription.stream_subscriber.on_reset.reset_mock()
-    poll = streams.get_records
-
-    def expired(ShardIterator, Limit):
-        raise error('ExpiredIteratorException')
-
-    streams.get_records = expired
-    once(subscription, subscription.shard_processor)
-    streams.get_records = poll
-    streams.shards['child']['records'].append(record('second', '2'))
-    once(subscription, subscription.shard_iterator_initializer)
-    assert streams.requests[-1]['ShardIteratorType'] == 'AFTER_SEQUENCE_NUMBER'
-    assert streams.requests[-1]['SequenceNumber'] == '1'
-    subscription.stream_subscriber.on_reset.assert_not_called()
-    once(subscription, subscription.shard_processor)
-    assert delivered(subscription) == ['first', 'second']
-
-
 @pytest.mark.parametrize(
     'failure',
     ['describe_stream', 'get_shard_iterator', 'get_records', 'DISABLED', 'DISABLING'],
@@ -830,3 +789,38 @@ def test_replaced_stream_reloads_latest_arn_and_snapshot(live_config, failure):
         assert not sub._resync_required
         tables.assert_no_pending_responses()
         streams.assert_no_pending_responses()
+
+
+@pytest.mark.parametrize('generations', [1, 2, 3])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_drained_ancestry_loss_rescans_settings(live_config, generations, reverse):
+    config, sub, streams, stub = live_config
+    streams.shards['parent']['closed'] = True
+    once(sub, sub.shard_processor)
+    assert 'parent' in sub._drained_shards
+    discover = streams.describe_stream
+    streams.describe_stream = Mock(side_effect=error('InternalServerError'))
+    for _ in range(3):
+        once(sub, sub.shard_iterator_initializer)
+        once(sub, sub.shard_processor)
+    streams.describe_stream = discover
+    # Parent and unseen intermediate generations expire during the outage.
+    streams.shards.clear()
+    for i in range(generations):
+        streams.add(str(i), str(i - 1), closed=i < generations - 1)
+        streams.shards[str(i)]['records'] = [setting_record(True)]
+    ids = list(streams.shards)
+    streams.pages = [[shard] for shard in (reversed(ids) if reverse else ids)]
+    add_scan(stub, [{'key': 'maintenance', 'value': True}])
+    once(sub, sub.shard_iterator_initializer)
+    assert config.get_bool('maintenance') is True
+    assert config.get('deleted') is None
+    assert not sub._resync_required
+    assert streams.requests[-1]['ShardIteratorType'] == 'LATEST'
+    for _ in range(3):
+        once(sub, sub.shard_processor)
+        once(sub, sub.shard_iterator_initializer)
+    assert config.get_bool('maintenance') is True
+    streams.shards[str(generations - 1)]['records'].append(setting_record(False, '2'))
+    once(sub, sub.shard_processor)
+    assert config.get_bool('maintenance') is False

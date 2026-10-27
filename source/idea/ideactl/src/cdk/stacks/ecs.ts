@@ -352,8 +352,8 @@ export class EcsStack extends IdeaBaseStack {
    * this code cannot resolve is refused here: the alternative is a launch template with an image for
    * the wrong architecture, whose hosts boot and never register, and tasks that are never placed.
    *
-   * This assumes `ecs.image` is a manifest with both architectures. A single-architecture image on
-   * the other family is a task that pulls and fails to run, which the stack cannot see at synthesis.
+   * The release `ecs.image` is arm64-only. An x86 host family needs an operator-built image
+   * supporting x86 (or both architectures); synthesis cannot check the image manifest.
    */
   private hostInstanceType(): ec2.InstanceType {
     const configured = this.requiredString("ecs.hosts.instance_type");

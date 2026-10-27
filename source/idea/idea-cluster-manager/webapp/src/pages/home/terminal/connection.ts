@@ -45,7 +45,8 @@ export class TerminalConnection {
         catch (error) {
             if (generation !== this.generation) return;
             const code = (error as {errorCode?: string})?.errorCode ?? '';
-            if (code === 'TERMINAL_TARGET_MISCONFIGURED') this.finish('denied', 'target-misconfigured');
+            if (code === 'TERMINAL_TARGET_STOPPED') this.finish('ended', 'target-stopped');
+            else if (code === 'TERMINAL_TARGET_MISCONFIGURED') this.finish('denied', 'target-misconfigured');
             else if (/UNAUTHORIZED|AUTH_|FORBIDDEN|INVALID_PARAM/.test(code)) this.finish('denied', 'access-denied');
             else this.retry(code === 'TERMINAL_UNAVAILABLE' ? 'unavailable' : undefined);
             return;
@@ -83,8 +84,9 @@ export class TerminalConnection {
             if (event.code === 4000) this.finish('ended', event.reason);
             else if (event.code === 4003 || event.code === 1009) this.finish('denied', 'access-denied');
             else if (event.code === 4004) this.finish('denied', 'target-misconfigured');
+            else if (event.code === 4006) this.finish('ended', 'target-stopped');
             else if (event.code === 4005) this.finish('ended', 'ack-timeout');
-            else this.retry(event.code === 4002 ? 'unavailable' : event.code === 1012 ? 'server-shutdown' : undefined);
+            else this.retry(event.code === 4002 ? (event.reason === 'trust-not-ready' ? 'trust-not-ready' : 'unavailable') : event.code === 1012 ? 'server-shutdown' : undefined);
         };
         ws.onerror = () => ws.close();
     }
@@ -93,7 +95,11 @@ export class TerminalConnection {
     }
     private retry(reason?: string) {
         clearTimeout(this.timer);
-        if (this.attempt >= 8) {this.finish('ended', 'retry-exhausted'); return;}
+        if (this.attempt >= 8) {
+            if (reason === 'trust-not-ready') this.finish('denied', 'target-misconfigured');
+            else this.finish('ended', 'retry-exhausted');
+            return;
+        }
         if (reason) this.options.state('reconnecting', reason);
         else this.options.state('reconnecting');
         this.timer = setTimeout(() => {

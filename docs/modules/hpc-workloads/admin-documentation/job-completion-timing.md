@@ -10,7 +10,9 @@ Fresh terminal PBS history supplies both timestamps from one snapshot. Neither
 missing endpoint is filled from cached job timestamps or hooks. If history has
 neither endpoint, the latest hook attempt can supply the pair. When PBS history is
 unavailable, hooks replace both cached endpoints, including missing values. Without
-hooks, the cached timestamp pair is retained as a unit.
+hooks, the cached timestamp pair is retained as a unit. If the selected hook start or
+end predates the cached start, those hooks describe a superseded attempt; both
+endpoints, duration and estimated cost are left unknown.
 
 For hook recovery, start is the earliest known host start and end is the latest known
 host end within the selected attempt. A missing or reversed endpoint leaves duration

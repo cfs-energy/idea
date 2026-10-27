@@ -1215,6 +1215,7 @@ class VirtualDesktopAPI(BaseAPI):
             _ = self.server_db.update(old_session.server)
 
         if not operation_failed and is_session_updated:
+            old_session.failure_reason = None
             new_session = self.session_db.update(old_session)
             self.controller_utils.create_tag(
                 new_session.server.instance_id,

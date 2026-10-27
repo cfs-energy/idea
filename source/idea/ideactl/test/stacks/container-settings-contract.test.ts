@@ -444,7 +444,7 @@ test("replicated services surge in full, the scheduler stops first, and targets 
   const logs = follower.find((container) => container["Name"] === "pair-logs")!;
   assert.equal((logs["LinuxParameters"] as Json)["InitProcessEnabled"], true);
   assert.ok((logs["Environment"] as Json[]).some((entry) => entry["Name"] === "TINI_KILL_PROCESS_GROUP" && entry["Value"] === "1"));
-  // A stopping task drains for as long as its container then gets to stop, not five minutes.
+  // Target drain stays at 30 seconds; cluster-manager gets 60 seconds to stop.
   assert.equal(drain, "30");
   assert.equal(applicationContainerSettings("cluster-manager").stopTimeout?.toSeconds(), 60);
 });

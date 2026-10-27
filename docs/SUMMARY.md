@@ -63,6 +63,7 @@
       * [My job is not starting](modules/hpc-workloads/user-documentation/troubleshooting/my-job-is-not-starting.md)
   * [Admin Documentation](modules/hpc-workloads/admin-documentation/README.md)
     * [Queue Profiles](modules/hpc-workloads/admin-documentation/queue-profiles.md)
+    * [Job completion timing](modules/hpc-workloads/admin-documentation/job-completion-timing.md)
     * [Create Web Based Job Submission Workflows](modules/hpc-workloads/admin-documentation/create-web-based-job-submission-workflows.md)
     * [Configure Floating License resources](modules/hpc-workloads/admin-documentation/configure-floating-license-resources.md)
     * [Images](modules/hpc-workloads/admin-documentation/custom-amis.md)

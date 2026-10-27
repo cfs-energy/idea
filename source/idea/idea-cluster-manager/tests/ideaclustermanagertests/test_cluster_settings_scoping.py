@@ -3,6 +3,7 @@ Test Cases for ClusterSettingsAPI GetModuleSettings scoping
 """
 
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import Mock
 
@@ -753,25 +754,35 @@ def test_maintenance_end_time_is_validated_before_persistence():
     from ideadatamodel import exceptions
     from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
 
-    for value in (
-        'tomorrow 18:00',
-        '2026-02-30T18:00:00Z',
-        '',
-        '2026-11-01T18:00:00Z',
-        '2026-11-01T18:00:00-05:00',
-    ):
+    cases = json.loads(
+        (Path(__file__).parents[1] / 'fixtures/maintenance-end-times.json').read_text()
+    )
+    invalid = cases['invalid']
+    valid = ['', None, *(value for value, _ in cases['valid'])]
+    for value in (*invalid, *valid):
         app, invocation = scoped_invocation(role='administrator')
         invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
             module_id='portal', settings={'maintenance': {'ends_at': value}}
         )
         api = ClusterSettingsAPI(app)
-        if value in ('tomorrow 18:00', '2026-02-30T18:00:00Z'):
+        if value in invalid:
+            # Non-string values are rejected earlier by the settings catalog.
             with pytest.raises(
                 exceptions.SocaException,
-                match='maintenance.ends_at must be an ISO 8601 timestamp',
+                match='maintenance.ends_at must be an ISO 8601 timestamp'
+                if isinstance(value, str)
+                else 'must be a string',
             ):
                 api.update_module_settings(invocation)
             app.config().db.sync_cluster_settings_in_db.assert_not_called()
         else:
             api.update_module_settings(invocation)
             app.config().db.sync_cluster_settings_in_db.assert_called_once()
+
+    app, invocation = scoped_invocation(role='administrator')
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id='portal', settings={'maintenance.ends_at': 'tomorrow'}
+    )
+    with pytest.raises(exceptions.SocaException):
+        ClusterSettingsAPI(app).update_module_settings(invocation)
+    app.config().db.sync_cluster_settings_in_db.assert_not_called()

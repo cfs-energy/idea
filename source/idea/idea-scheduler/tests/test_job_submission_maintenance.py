@@ -10,7 +10,6 @@ from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
 from ideascheduler.app.api.scheduler_api import (
     SchedulerAPI,
-    DEFAULT_MAINTENANCE_MESSAGE,
     MAINTENANCE_ENABLED_CONFIG_KEY,
     MAINTENANCE_MESSAGE_CONFIG_KEY,
 )
@@ -110,10 +109,7 @@ def test_submit_job_falls_back_to_a_generic_message(
     with pytest.raises(exceptions.SocaException) as exc_info:
         scheduler_api.submit_job(api_context)
 
-    assert (
-        exc_info.value.message
-        == f'Cluster is in maintenance: {DEFAULT_MAINTENANCE_MESSAGE}'
-    )
+    assert exc_info.value.message == 'Cluster is in maintenance.'
 
 
 def test_submit_job_is_unaffected_while_the_window_is_closed(scheduler_api, context):

@@ -159,6 +159,8 @@ it.each([
     ['ended', 'idle-timeout', 'Closed after the input-idle limit.'],
     ['ended', 'max-duration', 'Closed after the maximum connection duration.'],
     ['ended', 'shell-exited', 'Your shell exited. Connect to start a new one.'],
+    ['ended', 'target-stopped', 'This desktop is stopped. Start it from My desktops, then select Connect.'],
+    ['reconnecting', 'trust-not-ready', 'The target is refreshing terminal access.'],
     ['denied', 'target-misconfigured', 'The target needs administrator attention.'],
     ['ended', 'ack-timeout', 'Terminal stopped accepting output.'],
     ['ended', 'retry-exhausted', 'Unable to connect after 8 attempts.'],
@@ -181,8 +183,8 @@ it('selects an available desktop when the cluster has no bastion and disables Co
     expect(mocks.options.target).toBe('desktop:one');
     unmount();
     render(<TerminalPanel client={{...client, listTargets: vi.fn().mockResolvedValue({targets: []})} as any} />);
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('No terminal targets.'));
-    expect(screen.getByText(/No bastion or eligible Linux desktop is available/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('No bastion or eligible Linux desktop is available'));
+    expect(screen.queryByText('No terminal targets.')).not.toBeInTheDocument();
     expect(screen.getByText(/before this cluster ran 26.11.1/)).toBeInTheDocument();
     expect(screen.queryByText(/Targets include the bastion/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'Connect'})).toBeDisabled();

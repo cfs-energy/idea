@@ -175,7 +175,21 @@ class DynamoDBStreamSubscription:
                         and shard.get('ParentShardId') in self._skipped_shards
                         for shard in shards
                     )
-                    if active_shards - shard_ids or late_baseline_child:
+                    # Even a drained shard can lose unseen descendants during an outage.
+                    known_shards = (
+                        self.shard_iterators_map.keys()
+                        | self._shard_sequence_numbers.keys()
+                    )
+                    lost_ancestry = self._initialized and any(
+                        shard['ShardId'] not in known_shards
+                        and shard.get('ParentShardId') not in known_shards | shard_ids
+                        for shard in shards
+                    )
+                    if (
+                        active_shards - shard_ids
+                        or late_baseline_child
+                        or lost_ancestry
+                    ):
                         self._resync_required = True
                     if self._resync_required:
                         # Missing history cannot be reconstructed by replaying descendants.
@@ -330,14 +344,7 @@ class DynamoDBStreamSubscription:
                                     'TrimmedDataAccessException',
                                     'ResourceNotFoundException',
                                 ):
-                                    if (
-                                        e.response['Error']['Code']
-                                        != 'ExpiredIteratorException'
-                                        or not self._shard_sequence_numbers.get(
-                                            shard_id
-                                        )
-                                    ):
-                                        self._resync_required = True
+                                    self._resync_required = True
                                     if (
                                         e.response['Error']['Code']
                                         == 'ResourceNotFoundException'

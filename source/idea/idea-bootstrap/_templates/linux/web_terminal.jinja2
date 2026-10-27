@@ -19,8 +19,9 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/environment
-ExecStart=/usr/bin/python3 /usr/local/libexec/idea-terminal-host.py
-TimeoutStartSec=300
+EnvironmentFile=-/etc/profile.d/proxy.sh
+ExecStart=/bin/sh -c 'until /usr/bin/python3 /usr/local/libexec/idea-terminal-host.py; do sleep 30; done'
+TimeoutStartSec=infinity
 RemainAfterExit=yes
 
 [Install]
@@ -40,5 +41,4 @@ SLEEP
 chmod 0755 /usr/lib/systemd/system-sleep/idea-terminal-trust
 systemctl daemon-reload
 systemctl enable idea-terminal-trust.service
-systemctl restart idea-terminal-trust.service || log_warning "Terminal trust not installed; browser terminal unavailable"
-sshd -t && (systemctl reload sshd || systemctl reload ssh)
+systemctl --no-block restart idea-terminal-trust.service || log_warning "Terminal trust not installed; browser terminal unavailable"

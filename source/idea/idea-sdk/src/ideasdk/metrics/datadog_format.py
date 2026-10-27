@@ -42,7 +42,7 @@ class DatadogFormat:
     def name_and_tags(self, entry):
         name = entry['MetricName']
         collector = name.startswith(('cost.', 'storage.'))
-        # Replayable series keep their historical identity for both live sends and backfills.
+        # Preserve formatter tags; DogStatsD agent enrichment can add live-only tags.
         tags = [
             tag
             for tag in self.base_tags

@@ -70,7 +70,6 @@ PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
 # submission, never cached, so closing the window takes effect straight away.
 MAINTENANCE_ENABLED_CONFIG_KEY = 'cluster-manager.maintenance.enabled'
 MAINTENANCE_MESSAGE_CONFIG_KEY = 'cluster-manager.maintenance.message'
-DEFAULT_MAINTENANCE_MESSAGE = 'No message was set.'
 # Leave time to return the notice inside the PBS hook's ten-second socket deadline.
 MAINTENANCE_LOOKUP_TIMEOUT_SECONDS = 2
 # Token retrieval can stall too; cap outstanding lookups without queuing more work.
@@ -86,7 +85,11 @@ def maintenance_message(config):
     message = Utils.get_as_string(
         config.get_string(MAINTENANCE_MESSAGE_CONFIG_KEY, default=''), ''
     ).strip()
-    message = message or DEFAULT_MAINTENANCE_MESSAGE
+    message = (
+        f'Cluster is in maintenance: {message}'
+        if message
+        else 'Cluster is in maintenance.'
+    )
     ends_at = config.get_string('cluster-manager.maintenance.ends_at', default='')
     try:
         end = datetime.fromisoformat(ends_at.strip().replace('Z', '+00:00'))
@@ -99,7 +102,7 @@ def maintenance_message(config):
         )
     except (ValueError, AttributeError):
         pass
-    return f'Cluster is in maintenance: {message}'
+    return message
 
 
 def maintenance_exempt(context, username, logger):
@@ -117,6 +120,10 @@ def maintenance_exempt(context, username, logger):
     if username and username == settings.validation_user:
         return True
     if not _maintenance_lookup_slots.acquire(blocking=False):
+        logger.warning(
+            'Maintenance admin exemption lookup capacity exhausted; refusing %s',
+            username,
+        )
         return False
     done = Event()
     exempt = False
@@ -420,11 +427,13 @@ class SchedulerAPI(BaseAPI):
         )
 
     def submit_job(self, context: ApiInvocationContext):
-        # before any other validation, so a closed cluster is reported as closed rather
-        # than as a malformed request
-        self.check_maintenance(context)
-
         request = context.get_request_payload_as(SubmitJobRequest)
+        client_submission_id = request.client_submission_id
+        dry_run = DryRunOption.resolve(request.dry_run)
+        # Keyed retries may replay accepted work even after maintenance starts.
+        if dry_run is not None or Utils.is_empty(client_submission_id):
+            self.check_maintenance(context)
+
         job_owner = request.job_owner
         context_user = context.get_username()
 
@@ -455,15 +464,12 @@ class SchedulerAPI(BaseAPI):
                 'job_script_interpreter must be one of [pbs, bash]'
             )
 
-        client_submission_id = request.client_submission_id
         if Utils.is_not_empty(client_submission_id) and not re.match(
             PATTERN_CLIENT_SUBMISSION_ID, client_submission_id
         ):
             raise exceptions.invalid_params(
                 f'client_submission_id must satisfy regex: {PATTERN_CLIENT_SUBMISSION_ID}'
             )
-
-        dry_run = DryRunOption.resolve(request.dry_run)
 
         # a dry run creates no capacity, so it is never deduplicated - and it must not share a
         # key with the real submission that follows it from the same form.
@@ -490,6 +496,7 @@ class SchedulerAPI(BaseAPI):
             return
 
         try:
+            self.check_maintenance(context)
             result = self._submit_job(
                 request=request, job_owner=job_owner, dry_run=dry_run
             )

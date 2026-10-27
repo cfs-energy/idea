@@ -1,6 +1,7 @@
 import ClusterSettingsService, {maintenanceBannerText, parseDashboardUrl} from './cluster-settings-service'
 import {ClusterSettingsClient} from '../client'
 import {initTestAppData} from '../test-support'
+import maintenanceEndTimes from '../../../tests/fixtures/maintenance-end-times.json'
 
 const GLOBAL_SETTINGS = {
     module_sets: {
@@ -127,6 +128,12 @@ describe('custom dashboard settings', () => {
 })
 
 describe('maintenanceBannerText', () => {
+    it.each(maintenanceEndTimes.valid)('renders the accepted timestamp %s at the expected instant', (ends_at, utc) => {
+        const expected = maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: utc})
+        expect(expected).toContain('Expected to end ')
+        expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at})).toBe(expected)
+    })
+
     it('reads an end time with no offset as UTC, as the setting is documented', () => {
         // Both spellings name the same instant, so both must render identically.
         expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00'}))

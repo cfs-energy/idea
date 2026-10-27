@@ -15,6 +15,10 @@ class TerminalUnavailable(TerminalDenied):
     pass
 
 
+class TerminalTargetStopped(TerminalDenied):
+    pass
+
+
 class TerminalMisconfigured(TerminalDenied):
     pass
 

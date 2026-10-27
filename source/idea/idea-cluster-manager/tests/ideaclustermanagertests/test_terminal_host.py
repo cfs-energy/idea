@@ -35,7 +35,10 @@ def test_desktop_runtime_and_package_transaction():
 
     rendered = Template(TEMPLATE.read_text()).render(context=MagicMock())
     assert 'install -y tmux python3' in rendered
-    assert 'systemctl restart idea-terminal-trust.service || log_warning' in rendered
+    assert (
+        'systemctl --no-block restart idea-terminal-trust.service || log_warning'
+        in rendered
+    )
     assert 'apt_update || log_warning' in rendered
     assert (
         'DEBIAN_FRONTEND=noninteractive package_transaction apt-get -o DPkg::Lock::Timeout=300'
@@ -45,23 +48,39 @@ def test_desktop_runtime_and_package_transaction():
     subprocess.run(['bash', '-n'], input=rendered, text=True, check=True)
 
 
-def test_bastion_continues_after_failed_trust(tmp_path):
-    # Run the actual trust-install line under the bastion's fail-fast shell options.
-    line = next(
-        line
-        for line in BASTION.read_text().splitlines()
-        if '/opt/idea/roles/terminal_host.py' in line
-    )
-    assert line.startswith('timeout 300 ')
-    script = (
-        'set -euo pipefail\ntimeout() { return 124; }\n'
-        + line
-        + '\necho sshd-started\n'
-    )
+def test_bastion_starts_ssh_before_optional_trust(tmp_path):
+    script = BASTION.read_text()
+    # Execute the actual startup ordering, replacing only host daemons and the helper.
+    start = script.index('# Site customizations')
+    first_helper = script.index('timeout 300 python3.13')
+    script = script[
+        min(start, first_helper) : script.index('# Losing directory authentication')
+    ]
+    script = script.replace('/usr/sbin/sshd', 'sshd').replace('/usr/sbin/sssd', 'sssd')
+    script = script.replace('/run/idea-terminal-trust-ready', str(tmp_path / 'ready'))
+    prefix = r"""set -euo pipefail
+sshd() { if [[ $1 == -t ]]; then return; fi; touch "$SSH_STARTED"; sleep 1; }
+sssd() { sleep 1; }
+kill() { :; }
+timeout() {
+  for ((i=0; i<20; i++)); do
+    if [[ -f "$SSH_STARTED" ]]; then echo trust-after-ssh; return; fi
+    sleep 0.01
+  done
+  echo trust-blocked-ssh
+  return 124
+}
+"""
     result = subprocess.run(
-        ['bash', '-c', script], text=True, capture_output=True, check=True
+        ['bash', '-c', prefix + script + '\nwait "$trust_pid"\n'],
+        env={'SSH_STARTED': str(tmp_path / 'ssh-started')},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
     )
-    assert 'sshd-started' in result.stdout
+    assert 'trust-after-ssh' in result.stdout
+    assert 'trust-blocked-ssh' not in result.stdout
 
 
 def test_retry_budget_and_cause(helper, monkeypatch):
@@ -361,15 +380,15 @@ def test_desktop_installs_trust_refresh_on_every_boot():
     rendered = Template(TEMPLATE.read_text()).render(context=MagicMock())
     assert 'Before=sshd.service ssh.service' not in rendered
     assert 'After=idea-terminal-trust.service' not in rendered
-    assert 'sshd -t && (systemctl reload sshd || systemctl reload ssh)' in rendered
+    assert 'systemctl reload ' not in rendered
     assert 'After=network-online.target' in rendered
     assert (
-        'ExecStart=/usr/bin/python3 /usr/local/libexec/idea-terminal-host.py'
+        "ExecStart=/bin/sh -c 'until /usr/bin/python3 /usr/local/libexec/idea-terminal-host.py; do sleep 30; done'"
         in rendered
     )
     assert 'EnvironmentFile=/etc/environment' in rendered
     assert 'systemctl enable idea-terminal-trust.service' in rendered
-    assert 'systemctl restart idea-terminal-trust.service' in rendered
+    assert 'systemctl --no-block restart idea-terminal-trust.service' in rendered
     subprocess.run(['bash', '-n'], input=rendered, text=True, check=True)
 
 
@@ -509,7 +528,9 @@ def test_bastion_retries_failed_trust_and_reloads_running_sshd(tmp_path):
     import re
 
     script = BASTION.read_text()
-    retry = re.search(r'(# Retry terminal trust.*?)(?=\ntrap )', script, re.S)
+    retry = re.search(
+        r'(# Initialize and retry terminal trust.*?)(?=\ntrap )', script, re.S
+    )
     assert retry, 'a transient trust failure must recover without replacing the task'
     calls = tmp_path / 'calls'
     result = subprocess.run(
@@ -534,3 +555,79 @@ def test_bastion_retries_failed_trust_and_reloads_running_sshd(tmp_path):
     assert len(calls.read_text().splitlines()) == 2
     assert 'Terminal trust not installed; retrying in 30 seconds' in result.stdout
     assert '-HUP 123' in result.stdout
+
+
+def test_desktop_unit_retries_until_success(tmp_path):
+    import shlex
+
+    rendered = TEMPLATE.read_text()
+    command = next(
+        line.removeprefix('ExecStart=')
+        for line in rendered.splitlines()
+        if line.startswith('ExecStart=')
+    )
+    calls = tmp_path / 'calls'
+    helper = tmp_path / 'helper'
+    helper.write_text(
+        '#!/bin/sh\necho attempt >> "'
+        + str(calls)
+        + '"\n[ $(wc -l < "'
+        + str(calls)
+        + '") -gt 7 ]\n'
+    )
+    helper.chmod(0o755)
+    command = command.replace(
+        '/usr/bin/python3 /usr/local/libexec/idea-terminal-host.py', str(helper)
+    )
+    command = command.replace('sleep 30', 'sleep 0.01')
+    subprocess.run(shlex.split(command), check=True, timeout=5)
+    assert len(calls.read_text().splitlines()) == 8
+    assert 'TimeoutStartSec=infinity' in rendered
+    assert 'Restart=' not in rendered  # oneshot restart is unsupported on AL2/RHEL8
+    assert 'EnvironmentFile=-/etc/profile.d/proxy.sh' in rendered
+
+
+def test_cli_receives_cluster_proxy_environment(helper, tmp_path, monkeypatch):
+    import os
+
+    # Execute a local CLI stand-in, so subprocess environment propagation is real.
+    cli = tmp_path / 'aws'
+    cli.write_text(
+        '#!'
+        + sys.executable
+        + '\nimport json, os\nprint(json.dumps({k: os.environ.get(k) for k in ("HTTPS_PROXY", "NO_PROXY")}))\n'
+    )
+    cli.chmod(0o755)
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    for name in ('HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('IDEA_HTTPS_PROXY', 'http://proxy.example:3128')
+    monkeypatch.setenv('IDEA_NO_PROXY', '169.254.169.254,localhost')
+    assert helper.dynamodb('get-item') == {
+        'HTTPS_PROXY': 'http://proxy.example:3128',
+        'NO_PROXY': '169.254.169.254,localhost',
+    }
+
+
+def test_manual_reload_allows_socket_activated_ssh():
+    import shlex
+
+    guide = (ROOT / 'docs/modules/cluster-manager/web-terminal.md').read_text()
+    command = next(
+        line
+        for line in guide.splitlines()
+        if line.startswith('sudo ') and 'systemctl' in line and 'reload' in line
+    )
+    if command.startswith('sudo sh -c '):
+        command = shlex.split(command)[3]
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'sudo() { "$@"; }\nsystemctl() { [[ $1 == try-reload-or-restart && $2 == ssh ]]; }\n'
+            + command,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

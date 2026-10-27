@@ -45,6 +45,28 @@ class DynamoDBInstallTests(unittest.TestCase):
             (self.home / 'lib/dynamodb-local/DynamoDBLocal.jar').read_text(), 'test jar'
         )
 
+    def test_cached_extraction_is_restored_from_verified_archive(self):
+        with self.download(self.archive):
+            self.installer.install(self.home)
+        library = self.home / 'lib/dynamodb-local'
+        (library / 'DynamoDBLocal.jar').write_text('tampered jar')
+        (library / 'injected.jar').write_text('unexpected dependency')
+        with self.download(self.archive) as download:
+            self.installer.install(self.home)
+        download.assert_not_called()
+        self.assertEqual((library / 'DynamoDBLocal.jar').read_text(), 'test jar')
+        self.assertFalse((library / 'injected.jar').exists())
+
+    def test_cached_archive_is_verified_on_every_install(self):
+        with self.download(self.archive):
+            self.installer.install(self.home)
+        archive = self.home / 'lib/dynamodb-local/dynamodb.zip'
+        archive.write_bytes(b'corrupt')
+        with self.download(self.archive) as download:
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                self.installer.install(self.home)
+        download.assert_not_called()
+
     def test_corrupt_download_is_never_reused(self):
         for _ in range(2):
             with self.download(b'corrupt') as download:

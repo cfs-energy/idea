@@ -66,9 +66,11 @@ export const TARGET_REGISTRATION_SECONDS = 150;
  * only lets requests already in flight finish: on SIGTERM the servers stop listening at once, and a
  * DCV or SSH connection is reset at the end of the drain whatever its length, so a longer drain
  * delays the client's one reconnect rather than saving it. At 300 seconds every stop held a
- * rollout for five minutes.
+ * rollout for five minutes. Cluster-manager overrides the SIGTERM-to-SIGKILL allowance below.
  */
 export const CONTAINER_STOP_SECONDS = 30;
+/** Cluster-manager needs its 30-second terminal drain deadline plus transport shutdown time. */
+export const CLUSTER_MANAGER_STOP_SECONDS = 60;
 
 /**
  * A process that is PID 1 and never installs a SIGTERM handler ignores the signal: a bash launcher
@@ -543,7 +545,7 @@ export function applicationContainerSettings(role: ContainerRole, brokerPorts = 
     // ECS deregisters the task and drains its target groups before entering STOPPING.
     // This is the separate allowance between SIGTERM and SIGKILL, not a drain timer.
     // Terminal cleanup gets 30s, leaving time for requests and graceful transport close.
-    stopTimeout: Duration.seconds(role === "cluster-manager" ? 60 : CONTAINER_STOP_SECONDS),
+    stopTimeout: Duration.seconds(role === "cluster-manager" ? CLUSTER_MANAGER_STOP_SECONDS : CONTAINER_STOP_SECONDS),
   };
 }
 

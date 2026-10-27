@@ -95,8 +95,17 @@ class ProcessFinishedJob:
             # Select a pair, never fill an endpoint from another snapshot or attempt.
             starts = [run.start for run in runs if run.start is not None]
             ends = [run.end for run in runs if run.end is not None]
-            self.job.start_time = min(starts) if starts else None
-            self.job.end_time = max(ends) if ends else None
+            start = min(starts) if starts else None
+            end = max(ends) if ends else None
+            if self._cached_fallback and self.job.start_time is not None:
+                # All hooks for a newer cached attempt may have been lost.
+                if any(
+                    timestamp is not None and timestamp < self.job.start_time
+                    for timestamp in (start, end)
+                ):
+                    start = end = None
+            self.job.start_time = start
+            self.job.end_time = end
         try:
             if self.never_started(self.job):
                 self._logger.info(
@@ -334,7 +343,7 @@ class ProcessFinishedJob:
             self.apply_job_execution_context()
             self.apply_disposition()
             self.job.state = SocaJobState.FINISHED
-            if self.job.start_time is None and self.job.end_time is None:
+            if self.never_started(self.job) and self.job.end_time is None:
                 self.job.end_time = arrow.utcnow().datetime
 
             self.compute_and_apply_estimated_costs()

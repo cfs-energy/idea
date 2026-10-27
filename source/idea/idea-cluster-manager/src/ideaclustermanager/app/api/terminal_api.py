@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 from ideaclustermanager.app.terminal.store import (
     TerminalDenied,
     TerminalMisconfigured,
+    TerminalTargetStopped,
     TerminalUnavailable,
     aws_unavailable,
 )
@@ -46,6 +47,10 @@ class TerminalAPI(BaseAPI):
                 str(payload.get('target', ''))[:256],
                 str(error),
             )
+            if isinstance(error, TerminalTargetStopped):
+                raise exceptions.SocaException(
+                    error_code='TERMINAL_TARGET_STOPPED', message=str(error)
+                ) from None
             if isinstance(error, TerminalUnavailable):
                 raise exceptions.SocaException(
                     error_code='TERMINAL_UNAVAILABLE', message=str(error)

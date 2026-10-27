@@ -75,6 +75,41 @@ class ReleaseDocsTests(unittest.TestCase):
             self.assertIn('YYYY-MM-DD HH:MM', text)
             self.assertIn('UTC', text)
 
+    def test_completion_timing_guidance_uses_one_timestamp_source(self):
+        text = (ROOT / 'docs/changelog.md').read_text()
+        self.assertNotIn('recover missing timestamps from cached', text)
+        self.assertIn('latest execution attempt', text)
+        self.assertIn('neither timestamp', text)
+        self.assertIn('missing from fresh PBS history is never filled', text)
+        self.assertIn('job-completion-timing.md', text)
+
+    def test_maintenance_exemptions_include_validation_user(self):
+        for path in (
+            'docs/changelog.md',
+            'docs/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md',
+        ):
+            with self.subTest(path=path):
+                text = (ROOT / path).read_text()
+                self.assertIn('configured image-pipeline validation user', text)
+                self.assertIn('default `idea-validate`', text)
+                self.assertIn('maintenance-banner.md', text)
+
+    def test_job_metric_guidance_distinguishes_agent_and_http_tags(self):
+        for path in (
+            'docs/changelog.md',
+            'docs/first-time-users/cluster-operations/update-idea-cluster/ecs-control-plane.md',
+        ):
+            with self.subTest(path=path):
+                text = (ROOT / path).read_text()
+                self.assertNotIn('without `env` for live sends and backfills', text)
+                self.assertNotIn(
+                    'for both live sends and backfills at every timestamp', text
+                )
+                self.assertIn('origin detection', text)
+                self.assertIn('service:scheduler', text)
+                self.assertIn('HTTP backfills', text)
+                self.assertIn('double-count', text)
+
     def test_operator_upgrade_remedies(self):
         text = (ROOT / 'docs/changelog.md').read_text()
         self.assertNotIn('Existing desktops require updated bootstrap trust', text)

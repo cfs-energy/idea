@@ -18,21 +18,16 @@ DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM = (
 
 def install(idea_home: Path) -> None:
     library = idea_home / 'lib/dynamodb-local'
-    marker = library / '.sha256'
-    if (
-        (library / 'DynamoDBLocal.jar').is_file()
-        and marker.is_file()
-        and marker.read_text() == DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM
-    ):
-        return
     library.parent.mkdir(parents=True, exist_ok=True)
     # A failed download never becomes a cached installation.
     with tempfile.TemporaryDirectory(dir=library.parent) as scratch:
-        archive = Path(scratch) / 'dynamodb.zip'
-        print(f'downloading ddb local: {DYNAMODB_LOCAL_PACKAGE_URL} ...')
-        with urlopen(DYNAMODB_LOCAL_PACKAGE_URL, timeout=120) as response:
-            with archive.open('wb') as output:
-                shutil.copyfileobj(response, output)
+        archive = library / 'dynamodb.zip'
+        if not archive.is_file():
+            archive = Path(scratch) / 'dynamodb.zip'
+            print(f'downloading ddb local: {DYNAMODB_LOCAL_PACKAGE_URL} ...')
+            with urlopen(DYNAMODB_LOCAL_PACKAGE_URL, timeout=120) as response:
+                with archive.open('wb') as output:
+                    shutil.copyfileobj(response, output)
         with archive.open('rb') as source:
             checksum = hashlib.file_digest(source, 'sha256').hexdigest()
         if checksum != DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM:
@@ -42,7 +37,8 @@ def install(idea_home: Path) -> None:
             package.extractall(extracted)
         if not (extracted / 'DynamoDBLocal.jar').is_file():
             raise ValueError('DynamoDB Local archive has no jar')
-        (extracted / '.sha256').write_text(checksum)
+        # Restore the jar and all dependencies from verified bytes, even on a cache hit.
+        shutil.copyfile(archive, extracted / 'dynamodb.zip')
         if library.exists():
             shutil.rmtree(library)
         extracted.rename(library)

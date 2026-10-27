@@ -378,17 +378,13 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
         )
         if stored_session is None:
             session.failure_reason = 'The desktop could not be found.'
-        else:
-            session = stored_session
-
-        if Utils.is_empty(session.failure_reason):
-            context.success(GetSessionInfoResponse(session=session))
-        else:
             context.fail(
                 error_code=errorcodes.INVALID_PARAMS,
                 message=session.failure_reason,
                 payload=GetSessionInfoResponse(session=session),
             )
+        else:
+            context.success(GetSessionInfoResponse(session=stored_session))
 
     def delete_sessions(self, context: ApiInvocationContext):
         """

@@ -1,5 +1,6 @@
 """Direct PBS submissions obey the live maintenance setting, using the submitter's identity."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -16,7 +17,7 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api_invocation_context import (
 from ideasdk.config.cluster_config import ClusterConfig
 from ideasdk.config.soca_config import SocaConfig
 
-MESSAGE = 'Cluster is in maintenance: No message was set.'
+MESSAGE = 'Cluster is in maintenance.'
 HOOK = Path(__file__).parents[1] / 'resources/openpbs/hooks/openpbs_hook_handler.py'
 
 
@@ -192,20 +193,20 @@ def test_queuejob_maintenance_notice_survives_account_lookup_failure(
         (
             'Upgrade',
             '2026-11-01T13:30:00-05:00',
-            'Upgrade. Expected to end 2026-11-01 18:30 UTC.',
+            'Cluster is in maintenance: Upgrade. Expected to end 2026-11-01 18:30 UTC.',
         ),
         (
             'Upgrade',
             '2026-11-01T18:30:00',
-            'Upgrade. Expected to end 2026-11-01 18:30 UTC.',
+            'Cluster is in maintenance: Upgrade. Expected to end 2026-11-01 18:30 UTC.',
         ),
         (
             '',
             '2026-11-01T18:30:00Z',
-            'No message was set. Expected to end 2026-11-01 18:30 UTC.',
+            'Cluster is in maintenance. Expected to end 2026-11-01 18:30 UTC.',
         ),
-        ('Upgrade', 'invalid', 'Upgrade'),
-        ('   ', '', 'No message was set.'),
+        ('Upgrade', 'invalid', 'Cluster is in maintenance: Upgrade'),
+        ('   ', '', 'Cluster is in maintenance.'),
     ],
 )
 def test_portal_and_qsub_share_complete_notice(
@@ -225,7 +226,7 @@ def test_portal_and_qsub_share_complete_notice(
     with pytest.raises(exceptions.SocaException) as error:
         SchedulerAPI(context).submit_job(invocation)
     api.hook_validate_job(hook)
-    assert error.value.message == f'Cluster is in maintenance: {expected}'
+    assert error.value.message == expected
     assert (
         hook.api_context.success.call_args.args[0].formatted_user_message
         == error.value.message
@@ -404,3 +405,44 @@ def test_queuejob_exempts_only_configured_validation_submitter(
     hook.event.job.Job_Owner = validation_user + '@host'
     api.hook_validate_job(hook)
     assert hook.api_context.success.call_args.args[0].accept is False
+
+
+def test_saturated_maintenance_lookup_logs_refusal(context, monkeypatch):
+    from threading import BoundedSemaphore
+    from ideascheduler.app.api import scheduler_api
+
+    slots = BoundedSemaphore(4)
+    for _ in range(4):
+        assert slots.acquire(blocking=False)
+    monkeypatch.setattr(scheduler_api, '_maintenance_lookup_slots', slots)
+    logger = Mock()
+    assert not scheduler_api.maintenance_exempt(context, 'testuser', logger)
+    context.accounts_client.get_user.assert_not_called()
+    logger.warning.assert_called_once_with(
+        'Maintenance admin exemption lookup capacity exhausted; refusing %s',
+        'testuser',
+    )
+    slots.release()
+    context.accounts_client.get_user.return_value = GetUserResult(user=User(sudo=True))
+    assert scheduler_api.maintenance_exempt(context, 'testuser', logger)
+
+
+@pytest.mark.parametrize(
+    'ends_at,utc',
+    json.loads(
+        (
+            Path(__file__).parents[2]
+            / 'idea-cluster-manager/tests/fixtures/maintenance-end-times.json'
+        ).read_text()
+    )['valid'],
+)
+def test_accepted_maintenance_end_times_render_in_utc(ends_at, utc):
+    from ideascheduler.app.api.scheduler_api import maintenance_message
+
+    config = Mock()
+    config.get_string.side_effect = lambda key, default='': (
+        ends_at if key.endswith('.ends_at') else 'Closed.'
+    )
+    assert maintenance_message(config) == (
+        f'Cluster is in maintenance: Closed. Expected to end {utc[:10]} {utc[11:16]} UTC.'
+    )

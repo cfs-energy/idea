@@ -4,8 +4,14 @@ from copy import deepcopy
 from unittest.mock import Mock
 
 import pytest
+import boto3
+from botocore.stub import Stubber
 
-from ideadatamodel import VirtualDesktopServer, VirtualDesktopSession
+from ideadatamodel import (
+    VirtualDesktopServer,
+    VirtualDesktopSession,
+    VirtualDesktopSessionState,
+)
 from ideasdk.api import ApiInvocationContext
 from ideasdk.auth import ApiAuthorization, ApiAuthorizationType
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_user_api import (
@@ -48,7 +54,12 @@ def api():
     api.session_db.get_from_index.side_effect = lambda idea_session_id: deepcopy(
         next(row for row in rows.values() if row.idea_session_id == idea_session_id)
     )
-    api.session_db.update.side_effect = lambda session: session
+
+    def save_session(session):
+        rows[(session.owner, session.idea_session_id)] = deepcopy(session)
+        return deepcopy(session)
+
+    api.session_db.update.side_effect = save_session
     api.server_db = Mock(spec=VirtualDesktopServerDB)
     api.server_db.get.side_effect = lambda instance_id: deepcopy(
         next(
@@ -153,6 +164,87 @@ def test_get_info_checks_stored_owner(api, session_id, allowed):
         assert context.response['payload']['session']['owner'] == 'b'
     else:
         assert 'server' not in context.response['payload']['session']
+
+
+@pytest.fixture
+def capacity_session(api):
+    session = api.session_db.get_from_db('b', 'session-b')
+    session.state = VirtualDesktopSessionState.STOPPED
+    session.failure_reason = (
+        'InsufficientInstanceCapacity: Update session to choose another allowed size'
+    )
+    api.session_db.update(session)
+    api.session_db.update.reset_mock()
+    return session
+
+
+def test_get_info_returns_owned_session_with_previous_failure(api, capacity_session):
+    context = invocation(api, {'session': {'idea_session_id': 'session-b'}})
+    api.get_session_info(context)
+    assert context.is_success()
+    assert (
+        context.response['payload']['session']['failure_reason']
+        == capacity_session.failure_reason
+    )
+    api.session_db.update.assert_not_called()
+
+
+@pytest.mark.parametrize('resize_succeeds', [True, False])
+def test_resize_reports_current_result_after_capacity_failure(
+    api, capacity_session, resize_succeeds
+):
+    controller = VirtualDesktopControllerUtils.__new__(VirtualDesktopControllerUtils)
+    controller._logger = api._logger
+    controller.ec2_client = boto3.client(
+        'ec2',
+        region_name='us-east-1',
+        aws_access_key_id='testing',
+        aws_secret_access_key='testing',
+    )
+    api.controller_utils.change_instance_type = controller.change_instance_type
+    context = invocation(
+        api,
+        {
+            'session': {
+                'idea_session_id': 'session-b',
+                'server': {'instance_type': 'm5.2xlarge'},
+            }
+        },
+    )
+    params = {
+        'InstanceId': 'i-b',
+        'Attribute': 'instanceType',
+        'Value': 'm5.2xlarge',
+    }
+    with Stubber(controller.ec2_client) as ec2:
+        if resize_succeeds:
+            ec2.add_response('modify_instance_attribute', {}, params)
+        else:
+            ec2.add_client_error(
+                'modify_instance_attribute',
+                service_error_code='UnauthorizedOperation',
+                expected_params=params,
+            )
+        api.update_session(context)
+        ec2.assert_no_pending_responses()
+
+    stored = api.session_db.get_from_db('b', 'session-b')
+    if resize_succeeds:
+        assert context.is_success(), context.response
+        assert not context.response['payload']['session'].get('failure_reason')
+        assert stored.failure_reason is None
+        assert stored.server.instance_type == 'm5.2xlarge'
+        assert stored.state == VirtualDesktopSessionState.STOPPED
+        api.session_db.update.assert_called_once()
+        assert api.server_db.update.call_args.args[0].instance_type == 'm5.2xlarge'
+    else:
+        assert not context.is_success()
+        assert context.response['error_code'] == 'UPDATE_SESSION_FAILED'
+        assert 'UnauthorizedOperation' in context.response['message']
+        assert stored.failure_reason == capacity_session.failure_reason
+        assert stored.server.instance_type == 'm5.xlarge'
+        api.session_db.update.assert_not_called()
+        api.server_db.update.assert_not_called()
 
 
 @pytest.mark.parametrize('session_id', [None, 'session-a'])

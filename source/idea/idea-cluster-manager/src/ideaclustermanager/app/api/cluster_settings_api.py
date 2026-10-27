@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import math
 import re
@@ -545,8 +545,27 @@ class ClusterSettingsAPI(BaseAPI):
             ends_at = request.settings.get('maintenance', {}).get('ends_at')
             if ends_at:
                 try:
-                    datetime.fromisoformat(ends_at.replace('Z', '+00:00'))
-                except ValueError:
+                    # Intersect Moment's ISO forms with Python's calendar/week dates.
+                    if not isinstance(ends_at, str) or not re.fullmatch(
+                        r'(?:\d{4}-(?:\d{2}-\d{2}|W\d{2}-[1-7])'
+                        r'(?:[T ]\d{2}(?::\d{2}(?::\d{2}(?:[.,]\d+)?)?)?'
+                        r'(?:Z|[+-](?:[01]\d|2[0-3])(?::?[0-5]\d)?)?)?'
+                        r'|\d{4}(?:\d{4}|W\d{2}[1-7])'
+                        r'(?:[T ]\d{2}(?:\d{2}(?:\d{2}(?:[.,]\d+)?)?)?'
+                        r'(?:Z|[+-](?:[01]\d|2[0-3])(?::?[0-5]\d)?)?)?'
+                        r'|\d{4}-?W\d{2})',
+                        ends_at.strip(),
+                        flags=re.ASCII,
+                    ):
+                        raise ValueError('Unsupported timestamp format')
+                    fraction = re.search(r'[.,]([0-9]+)', ends_at)
+                    # Moment rejects milliseconds rounded up to 1000 by its float parser.
+                    if fraction and float('0.' + fraction[1]) >= 1:
+                        raise ValueError('Fraction rounds outside the second')
+                    end = datetime.fromisoformat(ends_at.strip().replace('Z', '+00:00'))
+                    if end.tzinfo is not None:
+                        end.astimezone(timezone.utc)
+                except (ValueError, OverflowError):
                     raise exceptions.invalid_params(
                         'maintenance.ends_at must be an ISO 8601 timestamp'
                     ) from None

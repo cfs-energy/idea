@@ -210,8 +210,11 @@ class Socket:
         'idle-timeout',
         'max-duration',
         'bad-frame',
+        'extra-input-field',
+        'extra-resize-field',
         'surrogate-input',
         'wrong-host-key',
+        'trust-not-ready',
         'disconnected',
         'socket-closed',
         'ack-timeout',
@@ -243,8 +246,14 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             else:
                 await process.stdin.read()
 
+        trusted_ca = (
+            asyncssh.generate_private_key('ssh-ed25519')
+            if mode == 'trust-not-ready'
+            else ca
+        )
         authorized = asyncssh.import_authorized_keys(
-            'cert-authority,principals="idea:alice" ' + ca.export_public_key().decode()
+            'cert-authority,principals="idea:alice" '
+            + trusted_ca.export_public_key().decode()
         )
         server = await asyncssh.listen(
             '127.0.0.1',
@@ -346,6 +355,16 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
                     ws.incoming.put_nowait(
                         json.dumps({'type': 'input', 'data': '\ud800'})
                     )
+                if isinstance(value, bytes) and mode in {
+                    'extra-input-field',
+                    'extra-resize-field',
+                }:
+                    frame = (
+                        {'type': 'input', 'data': 'x', 'seq': 1}
+                        if mode == 'extra-input-field'
+                        else {'type': 'resize', 'cols': 90, 'rows': 30, 'seq': 1}
+                    )
+                    ws.incoming.put_nowait(json.dumps(frame))
                 if mode == 'bad-frame' and isinstance(value, bytes):
                     ws.incoming.put_nowait('x' * (module.FRAME_LIMIT + 1))
 
@@ -376,10 +395,12 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             await asyncio.gather(handler, return_exceptions=True)
             server.close()
             await server.wait_closed()
-        if mode not in {'wrong-host-key', 'lease-login'}:
+        if mode not in {'wrong-host-key', 'lease-login', 'trust-not-ready'}:
             assert b'private-terminal-output' in ws.sent
         assert ws.closed['reason'] == {
             'bad-frame': 'access-denied',
+            'extra-input-field': 'access-denied',
+            'extra-resize-field': 'access-denied',
             'surrogate-input': 'shell-exited',
             'wrong-host-key': 'target-misconfigured',
             'socket-closed': 'disconnected',
@@ -390,7 +411,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
         }.get(mode, mode)
         if mode in {'disconnected', 'socket-closed'}:
             assert ws.closed['code'] == 1000
-        if mode in {'lease-login', 'lease-watchdog'}:
+        if mode in {'lease-login', 'lease-watchdog', 'trust-not-ready'}:
             assert ws.closed['code'] == 4002
         if mode == 'account-deleted':
             assert ws.closed['code'] == 4003
@@ -404,7 +425,7 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
         assert (
             'reason=target-misconfigured error_type=HostKeyNotVerifiable' in caplog.text
         )
-    started = mode not in {'wrong-host-key', 'lease-login'}
+    started = mode not in {'wrong-host-key', 'lease-login', 'trust-not-ready'}
     assert ('terminal start user=alice' in caplog.text) == started
     assert ('terminal stop user=alice' in caplog.text) == started
     assert (
@@ -753,6 +774,7 @@ def test_configurable_session_limit(store, limit, expected):
     'error, code',
     [
         (module.TerminalUnavailable('Bastion is unavailable'), 'TERMINAL_UNAVAILABLE'),
+        (module.TerminalTargetStopped('Desktop is stopped'), 'TERMINAL_TARGET_STOPPED'),
         (TerminalDenied('Account is disabled or invalid'), 'UNAUTHORIZED_ACCESS'),
     ],
 )
@@ -829,6 +851,7 @@ def test_initialization_lock_failure_does_not_stop_manager(caplog):
     'error, expected',
     [
         (module.TerminalUnavailable('slots full'), 4002),
+        (module.TerminalTargetStopped('Desktop is stopped'), 4006),
         (module.TerminalMisconfigured('bad pin'), 4004),
         (TerminalDenied('not owner'), 4003),
     ],
@@ -1517,7 +1540,7 @@ def test_rejected_ticket_logs_claims_and_peer_not_authenticated_user(
 
 @pytest.mark.parametrize(
     'state',
-    ['PROVISIONING', 'CREATING', 'INITIALIZING', 'RESUMING', 'STOPPING', 'STOPPED'],
+    ['PROVISIONING', 'CREATING', 'INITIALIZING', 'RESUMING', 'STOPPING'],
 )
 def test_owned_desktop_transitions_are_retryable(state):
     row = {'owner': 'alice', 'base_os': 'ubuntu2404', 'state': state}
@@ -1582,3 +1605,62 @@ def test_shutdown_deadline_does_not_recancel_cleanup(monkeypatch):
         assert completed == ['audit-and-close']
 
     asyncio.run(run())
+
+
+def test_stopped_desktop_has_actionable_final_reason():
+    row = {'owner': 'alice', 'base_os': 'ubuntu2404', 'state': 'STOPPED'}
+    with pytest.raises(TerminalDenied) as stopped:
+        validate_desktop(row, 'alice')
+    assert type(stopped.value).__name__ == 'TerminalTargetStopped'
+    with pytest.raises(TerminalDenied) as denied:
+        validate_desktop(row, 'bob')
+    assert type(denied.value) is TerminalDenied
+
+
+@pytest.mark.parametrize('state', ['stopped', 'stopping', 'pending'])
+def test_instance_state_uses_real_ec2_response(store, state):
+    from botocore.stub import Stubber
+
+    service = target_service(store)
+    service.desktops = MagicMock()
+    service.desktops().get_item.return_value = {
+        'Item': {
+            'owner': 'alice',
+            'state': 'READY',
+            'base_os': 'ubuntu2404',
+            'server': {'instance_id': 'i-abc'},
+        }
+    }
+    ec2 = boto3.client(
+        'ec2',
+        region_name='us-gov-west-1',
+        aws_access_key_id='test',
+        aws_secret_access_key='test',
+    )
+    service.context.aws().ec2.return_value = ec2
+    with Stubber(ec2) as stubber:
+        stubber.add_response(
+            'describe_instances',
+            {
+                'Reservations': [
+                    {
+                        'Instances': [
+                            {
+                                'InstanceId': 'i-abc',
+                                'State': {'Name': state},
+                                'Tags': [
+                                    {'Key': 'idea:ClusterName', 'Value': 'example'}
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            },
+            {'InstanceIds': ['i-abc']},
+        )
+        with pytest.raises(TerminalDenied) as caught:
+            service.target('alice', 'desktop:one')
+        assert type(caught.value).__name__ == (
+            'TerminalTargetStopped' if state == 'stopped' else 'TerminalUnavailable'
+        )
+        stubber.assert_no_pending_responses()

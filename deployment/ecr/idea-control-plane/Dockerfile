@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
+#   docker buildx build --platform linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
 #     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.1 .
 # Copy the release tarballs into this directory before the build.
