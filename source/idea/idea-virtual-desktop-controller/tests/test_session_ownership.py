@@ -1,5 +1,6 @@
 """Session APIs bind client-supplied resource IDs to the authenticated owner."""
 
+import json
 from copy import deepcopy
 from unittest.mock import Mock
 
@@ -51,9 +52,22 @@ def api():
             rows.get((idea_session_owner, idea_session_id))
         )
     )
-    api.session_db.get_from_index.side_effect = lambda idea_session_id: deepcopy(
-        next(row for row in rows.values() if row.idea_session_id == idea_session_id)
-    )
+
+    def index_entry(idea_session_id):
+        # The index adds EC2 details the stored row does not carry.
+        row = deepcopy(
+            next(
+                (r for r in rows.values() if r.idea_session_id == idea_session_id),
+                None,
+            )
+        )
+        if row is not None:
+            row.state = VirtualDesktopSessionState.READY
+            row.server.private_ip = f'10.0.0.{ord(row.owner)}'
+            row.server.public_ip = None
+        return row
+
+    api.session_db.get_from_index.side_effect = index_entry
 
     def save_session(session):
         rows[(session.owner, session.idea_session_id)] = deepcopy(session)
@@ -327,3 +341,59 @@ def test_screenshot_resolves_dcv_id_from_owned_session(api):
     api.get_session_screenshots(context)
     assert context.response['payload']['success'][0]['dcv_session_id'] == 'dcv-b'
     assert context.response['payload']['failed'] == []
+
+
+def payload_session(session):
+    return json.loads(session.model_dump_json(exclude_none=True, by_alias=True))
+
+
+def test_get_info_returns_the_indexed_session_shape(api):
+    context = invocation(api, {'session': {'idea_session_id': 'session-b'}})
+    api.get_session_info(context)
+    assert context.is_success(), context.response
+    expected = payload_session(api.session_db.get_from_index('session-b'))
+    assert expected['server']['private_ip'] == '10.0.0.98'
+    assert expected['state'] == 'READY'
+    assert expected['dcv_session_id'] == 'dcv-b'
+    assert (
+        payload_session(
+            VirtualDesktopSession.model_validate(context.response['payload']['session'])
+        )
+        == expected
+    )
+
+
+def test_get_info_fails_when_owned_session_is_not_indexed(api):
+    api.session_db.get_from_index.side_effect = lambda idea_session_id: None
+    context = invocation(api, {'session': {'idea_session_id': 'session-b'}})
+    api.get_session_info(context)
+    assert not context.is_success()
+    assert 'invalid session.idea_session_id' in context.response['message']
+
+
+def test_update_returns_the_saved_session_shape(api):
+    context = invocation(
+        api, {'session': {'idea_session_id': 'session-b', 'name': 'renamed'}}
+    )
+    api.update_session(context)
+    assert context.is_success(), context.response
+    saved = api.session_db.get_from_db('b', 'session-b')
+    assert saved.name == 'renamed'
+    assert payload_session(
+        VirtualDesktopSession.model_validate(context.response['payload']['session'])
+    ) == payload_session(saved)
+
+
+def test_screenshot_returns_the_broker_shape(api):
+    context = invocation(api, {'screenshots': [{'idea_session_id': 'session-b'}]})
+    api.get_session_screenshots(context)
+    (sent,) = api.context.dcv_broker_client.get_session_screenshots.call_args.args
+    assert [payload_session(s) for s in sent] == [
+        {
+            'idea_session_id': 'session-b',
+            'idea_session_owner': 'b',
+            'dcv_session_id': 'dcv-b',
+        }
+    ]
+    assert context.response['payload']['failed'] == []
+    assert len(context.response['payload']['success']) == 1

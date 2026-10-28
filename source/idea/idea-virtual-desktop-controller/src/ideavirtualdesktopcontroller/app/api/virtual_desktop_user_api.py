@@ -373,18 +373,30 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
             return
 
         session = self.complete_get_session_info_request(session, context)
-        stored_session = self.get_session_if_owner(
-            context.get_username(), session.idea_session_id
-        )
-        if stored_session is None:
+        # The stored row proves ownership; the index carries the enriched shape
+        # (server.private_ip etc.) that callers read. A stored failure_reason
+        # is a diagnostic on an owned desktop, not a failed request.
+        indexed = None
+        if (
+            self.get_session_if_owner(context.get_username(), session.idea_session_id)
+            is None
+        ):
             session.failure_reason = 'The desktop could not be found.'
+        else:
+            indexed = self.session_db.get_from_index(
+                idea_session_id=session.idea_session_id
+            )
+            if indexed is None:
+                session.failure_reason = f'invalid session.idea_session_id: {session.idea_session_id} for {session.name} owned by user: {session.owner}'
+
+        if indexed is not None:
+            context.success(GetSessionInfoResponse(session=indexed))
+        else:
             context.fail(
                 error_code=errorcodes.INVALID_PARAMS,
                 message=session.failure_reason,
                 payload=GetSessionInfoResponse(session=session),
             )
-        else:
-            context.success(GetSessionInfoResponse(session=stored_session))
 
     def delete_sessions(self, context: ApiInvocationContext):
         """
