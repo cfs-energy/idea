@@ -594,17 +594,21 @@ export class EcsStack extends IdeaBaseStack {
       secrets: { DD_API_KEY: ecs.Secret.fromSecretsManager(apiKey) },
     });
     this.bindContainerToLogGroup(container, datadogLogGroupName);
-    const mounts: Array<{ name: string; path: string; readOnly: boolean }> = [
+    // The agent maps a socket sender's PID to its container through /host/proc. Without that
+    // path it falls back to Docker's record of each container's first process, so only modules
+    // that exec their app as PID 1 get container tags; the scheduler's app is a child of its role
+    // script and got none.
+    const mounts: Array<{ name: string; path: string; containerPath?: string; readOnly: boolean }> = [
       { name: "docker-socket", path: "/var/run/docker.sock", readOnly: false },
-      { name: "proc", path: "/proc", readOnly: true },
-      { name: "cgroup", path: "/sys/fs/cgroup", readOnly: true },
+      { name: "proc", path: "/proc", containerPath: "/host/proc", readOnly: true },
+      { name: "cgroup", path: "/sys/fs/cgroup", containerPath: "/host/sys/fs/cgroup", readOnly: true },
       { name: "datadog", path: "/var/run/datadog", readOnly: false },
     ];
     if (logsEnabled) mounts.push({ name: "container-logs", path: "/var/lib/docker/containers", readOnly: true });
     for (const mount of mounts) {
       taskDefinition.addVolume({ host: { sourcePath: mount.path }, name: mount.name });
       container.addMountPoints({
-        containerPath: mount.path,
+        containerPath: mount.containerPath ?? mount.path,
         readOnly: mount.readOnly,
         sourceVolume: mount.name,
       });
