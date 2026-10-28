@@ -1,16 +1,17 @@
 import React from 'react';
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {TerminalPanel, terminalEnabled} from './terminal';
-import {permittedViews, PORTAL_TASKS} from '../../navigation/task-navigation';
+import {FONT_KEY, HEIGHT_KEY, isCopyKey, ShellDock, TerminalRedirect, TerminalView, terminalEnabled} from './terminal';
+import {PORTAL_TASKS} from '../../navigation/task-navigation';
 import {initTestAppContext} from '../../test-support';
-import createWrapper from '@cloudscape-design/components/test-utils/dom';
-import userEvent from '@testing-library/user-event';
+import {shellStore} from './terminal/shell-store';
+import {resetHardwareKeyboard} from './terminal/touch';
+import {MemoryRouter, Route, Routes, useNavigate} from 'react-router-dom';
 
 const mocks = vi.hoisted(() => ({
     load: vi.fn(), focus: vi.fn(), dispose: vi.fn(), fit: vi.fn(), start: vi.fn(), stop: vi.fn(),
     input: vi.fn(() => true), send: vi.fn(), wake: vi.fn(), setTheme: vi.fn(), render: vi.fn(),
-    reset: vi.fn(), paste: vi.fn(), write: vi.fn(), selection: vi.fn(() => 'selected output'),
+    reset: vi.fn(), paste: vi.fn(), write: vi.fn(), selection: vi.fn(() => 'selected output'), hasSelection: vi.fn(() => true), mode: vi.fn(() => false),
     options: null as any, terminalOptions: null as any, onData: null as any, onResize: null as any, onKey: null as any,
 }));
 vi.mock('ghostty-web', () => ({
@@ -21,8 +22,9 @@ vi.mock('ghostty-web', () => ({
         renderer = {setTheme: mocks.setTheme, render: mocks.render}; wasmTerm = {};
         constructor(options: any) {this.options = options; mocks.terminalOptions = options;}
         focus = mocks.focus; dispose = mocks.dispose; reset = mocks.reset; paste = mocks.paste; write = mocks.write;
-        loadAddon() {} open(element: HTMLElement) {this.element = element;} getViewportY() {return 0;}
-        registerLinkProvider() {} getSelection = mocks.selection;
+        textarea?: HTMLTextAreaElement; buffer = {active: {length: 2, getLine: (y: number) => ({translateToString: () => ['$ ls', 'file.txt'][y]})}};
+        loadAddon() {} open(element: HTMLElement) {this.element = element; this.textarea = document.createElement('textarea'); element.appendChild(this.textarea);} getViewportY() {return 0;}
+        registerLinkProvider() {} getSelection = mocks.selection; hasSelection = mocks.hasSelection; getMode = mocks.mode;
         input(data: string) {mocks.onData(data);}
         attachCustomKeyEventHandler(fn: any) {mocks.onKey = fn;}
         onData(fn: any) {mocks.onData = fn; return {dispose() {}};}
@@ -35,8 +37,10 @@ vi.mock('./terminal/connection', () => ({TerminalConnection: class {
 }}));
 
 const client = {listTargets: vi.fn().mockResolvedValue({targets: [{id: 'bastion', label: 'Bastion'}, {id: 'desktop:one', label: 'Work'}]}), socketUrl: () => 'wss://portal.example/cluster-manager/terminal', createTicket: vi.fn()};
+const pointer = (coarse: boolean) => vi.stubGlobal('matchMedia', (query: string) => ({matches: coarse && query === '(pointer: coarse)', media: query, addEventListener() {}, removeEventListener() {}}));
 beforeEach(() => {
-    vi.resetModules(); vi.clearAllMocks(); mocks.load.mockResolvedValue({});
+    vi.resetModules(); vi.clearAllMocks(); mocks.load.mockResolvedValue({}); mocks.hasSelection.mockReturnValue(true);
+    shellStore.reset(); resetHardwareKeyboard(); localStorage.clear(); pointer(false);
     vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}});
     const computed = window.getComputedStyle;
     vi.spyOn(window, 'getComputedStyle').mockImplementation(element => {
@@ -46,60 +50,132 @@ beforeEach(() => {
     });
 });
 afterEach(() => {vi.unstubAllGlobals(); vi.restoreAllMocks();});
+const view = async (target = 'bastion') => {
+    const result = render(<TerminalView client={client as any} target={target} />);
+    await waitFor(() => expect(mocks.start).toHaveBeenCalled());
+    return result;
+};
+const key = (init: KeyboardEventInit) => new KeyboardEvent('keydown', init);
 
-it('waits for WASM before connecting and preserves state, modifiers, resize, focus and clipboard', async () => {
+it('waits for WASM, connects on open, and preserves state, resize, focus and Ctrl', async () => {
     let loaded!: (value: object) => void;
     mocks.load.mockImplementationOnce(() => new Promise(resolve => {loaded = resolve;}));
-    const {unmount} = render(<TerminalPanel client={client as any} />);
-    expect(screen.getByRole('button', {name: 'Connect'})).toBeDisabled();
+    const {unmount} = render(<TerminalView client={client as any} target="bastion" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading terminal…');
     await waitFor(() => expect(mocks.load).toHaveBeenCalled());
     expect(mocks.load.mock.calls[0][0]).toContain('ghostty-vt.wasm');
+    expect(mocks.start).not.toHaveBeenCalled();
     await act(async () => loaded({}));
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', {name: 'Connect'})); expect(mocks.start).toHaveBeenCalled(); expect(mocks.focus).toHaveBeenCalled();
-    expect(screen.getByRole('status')).toHaveTextContent('Disconnected');
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+    expect(mocks.options.target).toBe('bastion'); expect(mocks.focus).toHaveBeenCalled();
     act(() => mocks.options.state('connected'));
     expect(screen.getByRole('status')).toHaveTextContent('Connected');
     expect(mocks.send).toHaveBeenCalledWith({type: 'resize', cols: 80, rows: 24});
     act(() => mocks.onResize({cols: 100, rows: 30}));
     expect(mocks.send).toHaveBeenLastCalledWith({type: 'resize', cols: 100, rows: 30});
     act(() => mocks.onData('日本語')); expect(mocks.input).toHaveBeenCalledWith('日本語');
-    fireEvent.click(screen.getByRole('button', {name: 'Ctrl'})); act(() => mocks.onData('c'));
-    expect(mocks.input).toHaveBeenLastCalledWith('\x03');
-    expect(screen.getByRole('button', {name: 'Ctrl'})).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(screen.getByRole('button', {name: 'Alt'})); act(() => mocks.onData('x'));
-    expect(mocks.input).toHaveBeenLastCalledWith('\x1bx');
     fireEvent.click(screen.getByRole('button', {name: 'Larger terminal text'}));
     expect(mocks.terminalOptions.fontSize).toBe(17); expect(mocks.fit).toHaveBeenCalled();
-    expect(mocks.onKey({key: 'x'})).toBe(false);
-    expect(mocks.onKey({key: 'Escape', shiftKey: true})).toBe(true);
+    expect(localStorage.getItem(FONT_KEY)).toBe('17');
+    expect(mocks.onKey(key({key: 'x'}))).toBe(false);
+    expect(mocks.onKey(key({key: 'Escape', shiftKey: true}))).toBe(true);
     expect(screen.getByRole('button', {name: 'Disconnect'})).toHaveFocus();
-    const clipboard = {writeText: vi.fn().mockResolvedValue(undefined), readText: vi.fn().mockResolvedValue('paste me')};
-    Object.defineProperty(navigator, 'clipboard', {configurable: true, value: clipboard});
-    fireEvent.click(screen.getByRole('button', {name: 'Copy'}));
-    expect(clipboard.writeText).toHaveBeenCalledWith('selected output');
-    fireEvent.click(screen.getByRole('button', {name: 'Paste'}));
-    await waitFor(() => expect(mocks.paste).toHaveBeenCalledWith('paste me'));
     mocks.options.output('output');
     expect(mocks.write).toHaveBeenCalledWith('output');
     act(() => mocks.options.state('reconnecting'));
     expect(screen.getByRole('status')).toHaveTextContent('Reconnecting');
-    expect(screen.getByRole('button', {name: 'Paste'})).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', {name: 'Disconnect'}));
+    expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled();
     unmount(); expect(mocks.stop).toHaveBeenCalled(); expect(mocks.dispose).toHaveBeenCalled();
 });
 
-it('keeps the panel above the phone keyboard, bridges phone input and follows theme changes', async () => {
-    const viewport = Object.assign(new EventTarget(), {height: 420, offsetTop: 12});
-    vi.stubGlobal('visualViewport', viewport); vi.stubGlobal('innerWidth', 390);
-    const {unmount} = render(<TerminalPanel client={client as any} />);
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled());
-    const panel = screen.getByRole('region', {name: 'Browser terminal'});
-    expect(panel.style.height).toBe('420px'); expect(panel.style.top).toBe('12px');
-    viewport.height = 300; viewport.offsetTop = 20;
-    act(() => viewport.dispatchEvent(new Event('resize')));
-    expect(panel.style.height).toBe('300px'); expect(panel.style.top).toBe('20px');
+it('has no copy, paste or key bar controls on a laptop', async () => {
+    await view();
+    act(() => mocks.options.state('connected'));
+    expect(screen.queryByRole('button', {name: 'Copy'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Paste'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', {name: 'Terminal keys'})).not.toBeInTheDocument();
+});
+
+it.each([
+    ['macOS Cmd+C', {code: 'KeyC', key: 'c', metaKey: true}, true, true],
+    ['macOS Ctrl+C', {code: 'KeyC', key: 'c', ctrlKey: true}, true, false],
+    ['Linux Ctrl+Shift+C', {code: 'KeyC', key: 'C', ctrlKey: true, shiftKey: true}, false, true],
+    ['Linux Ctrl+C', {code: 'KeyC', key: 'c', ctrlKey: true}, false, false],
+    ['Windows Cmd-less Shift+C', {code: 'KeyC', key: 'C', shiftKey: true}, false, false],
+])('maps %s to copy=%s', (_name, init, mac, copy) => {
+    expect(isCopyKey(key(init), mac as boolean)).toBe(copy);
+});
+
+it('copies the selection with the copy key and passes Ctrl+C and paste keys to ghostty', async () => {
+    const clipboard = {writeText: vi.fn().mockResolvedValue(undefined)};
+    Object.defineProperty(navigator, 'clipboard', {configurable: true, value: clipboard});
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Linux x86_64');
+    await view();
+    expect(mocks.onKey(key({code: 'KeyC', key: 'C', ctrlKey: true, shiftKey: true}))).toBe(true);
+    expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output');
+    // Returning false lets ghostty encode Ctrl+C as an interrupt and leave Ctrl+Shift+V to the browser paste event.
+    expect(mocks.onKey(key({code: 'KeyC', key: 'c', ctrlKey: true}))).toBe(false);
+    expect(mocks.onKey(key({code: 'KeyV', key: 'V', ctrlKey: true, shiftKey: true}))).toBe(false);
+    expect(clipboard.writeText).toHaveBeenCalledOnce();
+    mocks.hasSelection.mockReturnValue(false);
+    expect(mocks.onKey(key({code: 'KeyC', key: 'C', ctrlKey: true, shiftKey: true}))).toBe(true);
+    expect(clipboard.writeText).toHaveBeenCalledOnce();
+});
+
+it('shows the touch key bar on a coarse pointer until a hardware key arrives', async () => {
+    pointer(true);
+    await view();
+    act(() => mocks.options.state('connected'));
+    const bar = screen.getByRole('group', {name: 'Terminal keys'});
+    fireEvent.click(screen.getByRole('button', {name: 'Ctrl'})); act(() => mocks.onData('c'));
+    expect(mocks.input).toHaveBeenLastCalledWith('\x03');
+    expect(screen.getByRole('button', {name: 'Ctrl'})).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByRole('button', {name: 'Esc'})); expect(mocks.input).toHaveBeenLastCalledWith('\x1b');
+    // A soft-keyboard letter is not proof of a hardware keyboard.
+    fireEvent.keyDown(window, {key: 'a'});
+    expect(bar).toBeInTheDocument();
+    fireEvent.keyDown(window, {key: 'Escape'});
+    expect(screen.queryByRole('group', {name: 'Terminal keys'})).not.toBeInTheDocument();
+});
+
+it('prepares the hidden input for phone keyboards and moves the shell cursor with native caret gestures', async () => {
+    pointer(true);
+    await view();
+    const textarea = document.querySelector('textarea')!;
+    for (const [name, value] of [['autocapitalize', 'off'], ['autocorrect', 'off'], ['autocomplete', 'off'], ['spellcheck', 'false'], ['inputmode', 'text']]) expect(textarea).toHaveAttribute(name, value);
+    textarea.focus();
+    expect(textarea.selectionStart).toBe(32);
+    textarea.setSelectionRange(35, 35);
+    act(() => {document.dispatchEvent(new Event('selectionchange'));});
+    expect(mocks.input).toHaveBeenLastCalledWith('\x1b[C\x1b[C\x1b[C');
+    expect(textarea.selectionStart).toBe(32);
+    mocks.mode.mockReturnValue(true);
+    textarea.setSelectionRange(31, 31);
+    act(() => {document.dispatchEvent(new Event('selectionchange'));});
+    expect(mocks.input).toHaveBeenLastCalledWith('\x1bOD');
+    expect(mocks.mode).toHaveBeenCalledWith(1);
+    // A jump to the end is a vertical drag: nothing is sent.
+    const calls = mocks.input.mock.calls.length;
+    textarea.setSelectionRange(64, 64);
+    act(() => {document.dispatchEvent(new Event('selectionchange'));});
+    expect(mocks.input).toHaveBeenCalledTimes(calls);
+    expect(textarea.selectionStart).toBe(32);
+});
+
+it('leaves the hidden input and caret alone on a laptop', async () => {
+    await view();
+    const textarea = document.querySelector('textarea')!;
+    expect(textarea).not.toHaveAttribute('inputmode');
+    textarea.focus(); textarea.value = 'abc'; textarea.setSelectionRange(1, 1);
+    act(() => {document.dispatchEvent(new Event('selectionchange'));});
+    expect(mocks.input).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('abc');
+});
+
+it('bridges phone input', async () => {
+    await view();
     const surface = screen.getByLabelText('Shell. Shift Escape moves focus to the controls.');
-    fireEvent.click(screen.getByRole('button', {name: 'Connect'}));
     act(() => surface.dispatchEvent(new InputEvent('beforeinput', {inputType: 'insertText', data: 'a', bubbles: true, cancelable: true})));
     expect(mocks.input).toHaveBeenLastCalledWith('a');
     const calls = mocks.input.mock.calls.length;
@@ -110,31 +186,88 @@ it('keeps the panel above the phone keyboard, bridges phone input and follows th
     await act(async () => {document.body.classList.add('awsui-dark-mode');});
     expect(mocks.setTheme).toHaveBeenCalledWith(expect.objectContaining({foreground: 'rgb(15, 20, 25)'}));
     act(() => window.dispatchEvent(new Event('online'))); expect(mocks.wake).toHaveBeenCalled();
-    unmount(); document.body.classList.remove('awsui-dark-mode');
+    document.body.classList.remove('awsui-dark-mode');
 });
 
-it('gates navigation and direct page access on the setting', () => {
-    const context = initTestAppContext();
+const touches = (...points: [number, number][]) => points.map(([clientX, clientY], identifier) => ({clientX, clientY, identifier}));
+const touch = (element: Element, type: string, points: [number, number][], timeStamp = 0) => {
+    const event = new Event(type, {bubbles: true, cancelable: true});
+    Object.defineProperties(event, {touches: {value: type === 'touchend' ? [] : touches(...points)}, changedTouches: {value: touches(...points)}, timeStamp: {value: timeStamp}});
+    act(() => {element.dispatchEvent(event);});
+    return event;
+};
+
+it('scrolls with momentum through ghostty wheel handling, pinches the text size and opens native selection on a phone', async () => {
+    pointer(true);
+    vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame']});
+    try {
+        render(<TerminalView client={client as any} target="bastion" />);
+        await vi.waitFor(() => expect(mocks.start).toHaveBeenCalled());
+        const surface = screen.getByLabelText('Shell. Shift Escape moves focus to the controls.');
+        const wheels: number[] = [];
+        surface.addEventListener('wheel', event => wheels.push((event as WheelEvent).deltaY));
+        // ghostty-web focuses its input from the canvas touchend: a tap must reach it, a drag must not.
+        const canvas = document.querySelector('textarea')!, tapped = vi.fn();
+        canvas.addEventListener('touchend', tapped);
+        touch(canvas, 'touchstart', [[100, 300]], 0); touch(canvas, 'touchend', [[100, 300]], 50);
+        expect(tapped).toHaveBeenCalledOnce();
+        touch(canvas, 'touchstart', [[100, 300]], 0);
+        expect(touch(canvas, 'touchmove', [[100, 260]], 16).defaultPrevented).toBe(true);
+        touch(canvas, 'touchmove', [[100, 220]], 32);
+        expect(wheels).toEqual([40, 40]);
+        touch(canvas, 'touchend', [[100, 220]], 48);
+        expect(tapped).toHaveBeenCalledOnce();
+        act(() => {vi.advanceTimersByTime(500);});
+        expect(wheels.length).toBeGreaterThan(3);
+        expect(screen.queryByRole('dialog', {name: 'Select terminal text'})).not.toBeInTheDocument();
+        touch(surface, 'touchstart', [[100, 100], [100, 200]]);
+        touch(surface, 'touchmove', [[100, 50], [100, 250]]);
+        touch(surface, 'touchend', [[100, 50]]);
+        expect(mocks.terminalOptions.fontSize).toBe(28);
+        expect(localStorage.getItem(FONT_KEY)).toBe('28');
+        touch(surface, 'touchstart', [[40, 40]]);
+        act(() => {vi.advanceTimersByTime(600);});
+        const layer = screen.getByRole('dialog', {name: 'Select terminal text'});
+        expect(layer).toHaveTextContent('$ ls');
+        const paste = new Event('paste', {bubbles: true, cancelable: true});
+        Object.defineProperty(paste, 'clipboardData', {value: {getData: () => 'echo hi'}});
+        act(() => {layer.querySelector('.terminal-select-text')!.dispatchEvent(paste);});
+        expect(mocks.paste).toHaveBeenCalledWith('echo hi');
+        expect(screen.queryByRole('dialog', {name: 'Select terminal text'})).not.toBeInTheDocument();
+    } finally {vi.useRealTimers();}
+});
+
+it('ignores touch gestures on a laptop', async () => {
+    await view();
+    const surface = screen.getByLabelText('Shell. Shift Escape moves focus to the controls.');
+    const wheels = vi.fn(); surface.addEventListener('wheel', wheels);
+    touch(surface, 'touchstart', [[100, 300]]);
+    expect(touch(surface, 'touchmove', [[100, 200]], 16).defaultPrevented).toBe(false);
+    expect(wheels).not.toHaveBeenCalled();
+});
+
+it('gates the dock and removes Terminal from the navigation', () => {
+    initTestAppContext();
     const app = (window as any).idea.app;
     app.web_terminal_enabled = false;
     expect(terminalEnabled()).toBe(false);
-    expect(permittedViews(PORTAL_TASKS.find(task => task.id === 'terminal')!, context)).toEqual([]);
     delete app.web_terminal_enabled;
     expect(terminalEnabled()).toBe(true);
+    expect(PORTAL_TASKS.some(task => task.id === 'terminal' || task.views.some(item => item.path === '/home/terminal'))).toBe(false);
 });
 
-it('reports a WASM failure without enabling a connection', async () => {
+it('reports a WASM failure without connecting', async () => {
     mocks.load.mockRejectedValueOnce(new Error('WASM fetch failed'));
-    render(<TerminalPanel client={client as any} />);
+    render(<TerminalView client={client as any} target="bastion" />);
     await screen.findByText('Terminal could not be loaded. Reload the page to try again.');
     expect(screen.getByRole('button', {name: 'Connect'})).toBeDisabled();
     expect(mocks.start).not.toHaveBeenCalled();
 });
 
-it('disposes late WASM initialization after navigating away', async () => {
+it('disposes late WASM initialization after closing', async () => {
     let loaded!: (value: object) => void;
     mocks.load.mockImplementationOnce(() => new Promise(resolve => {loaded = resolve;}));
-    const {unmount} = render(<TerminalPanel client={client as any} />);
+    const {unmount} = render(<TerminalView client={client as any} target="bastion" />);
     await waitFor(() => expect(mocks.load).toHaveBeenCalled());
     unmount();
     await act(async () => loaded({}));
@@ -145,9 +278,7 @@ it('disposes late WASM initialization after navigating away', async () => {
 it('accepts output while animation frames are suspended, including after renderer cleanup', async () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn());
     mocks.write.mockImplementation((_data: unknown, callback?: () => void) => {if (callback) requestAnimationFrame(callback);});
-    const {unmount} = render(<TerminalPanel client={client as any} />);
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', {name: 'Connect'}));
+    const {unmount} = await view();
     mocks.options.output(new Uint8Array([65]));
     expect(mocks.write).toHaveBeenCalledExactlyOnceWith(new Uint8Array([65]));
     unmount();
@@ -165,66 +296,71 @@ it.each([
     ['denied', 'target-misconfigured', 'The target needs administrator attention.'],
     ['ended', 'ack-timeout', 'Terminal stopped accepting output.'],
     ['ended', 'retry-exhausted', 'Unable to connect after 8 attempts.'],
-    ['reconnecting', 'unavailable', 'The target is temporarily unavailable or the terminal limit has been reached.'],
+    ['reconnecting', 'unavailable', 'the terminal limit has been reached. Close any extra terminals.'],
     ['denied', 'access-denied', 'Terminal access was denied.'],
 ])('explains %s %s', async (state, reason, message) => {
-    render(<TerminalPanel client={client as any} />);
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', {name: 'Connect'}));
+    await view();
     act(() => mocks.options.state(state, reason));
     expect(screen.getByRole('status')).toHaveTextContent(message);
 });
 
+function Pages() {
+    const navigate = useNavigate();
+    return <><button onClick={() => navigate('/b')}>Go</button><Routes><Route path="/a" element={<p>Page A</p>}/><Route path="/b" element={<p>Page B</p>}/></Routes></>;
+}
 
-it('selects an available desktop when the cluster has no bastion and disables Connect for an empty list', async () => {
-    const desktops = {...client, listTargets: vi.fn().mockResolvedValue({targets: [{id: 'desktop:one', label: 'Work'}]})};
-    const {unmount} = render(<TerminalPanel client={desktops as any} />);
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', {name: 'Connect'}));
-    expect(mocks.options.target).toBe('desktop:one');
-    unmount();
-    render(<TerminalPanel client={{...client, listTargets: vi.fn().mockResolvedValue({targets: []})} as any} />);
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('No bastion or eligible Linux desktop is available'));
-    expect(screen.queryByText('No terminal targets.')).not.toBeInTheDocument();
-    expect(screen.getByText(/before this cluster ran 26.11.1/)).toBeInTheDocument();
-    expect(screen.queryByText(/Targets include the bastion/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', {name: 'Connect'})).toBeDisabled();
+it('opens tabs per target, keeps them across navigation, closes per tab and remembers its height', async () => {
+    localStorage.setItem(HEIGHT_KEY, '400');
+    render(<MemoryRouter initialEntries={['/a']}><Pages/><ShellDock client={client as any}/></MemoryRouter>);
+    expect(screen.queryByRole('region', {name: 'Terminal'})).not.toBeInTheDocument();
+    act(() => shellStore.open('bastion', 'Bastion'));
+    act(() => shellStore.open('desktop:one', 'Work'));
+    act(() => shellStore.open('bastion', 'Bastion'));
+    const dock = screen.getByRole('region', {name: 'Terminal'});
+    expect(dock.style.height).toBe('400px');
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Bastion', 'Work']);
+    expect(screen.getByRole('tab', {name: 'Bastion'})).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', {name: 'Go'}));
+    expect(screen.getByText('Page B')).toBeInTheDocument();
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(mocks.stop).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', {name: 'Work'}));
+    expect(screen.getByRole('tab', {name: 'Work'})).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tabpanel', {hidden: true})[0]).toHaveStyle({display: 'none'});
+    const separator = screen.getByRole('separator', {name: 'Resize terminal'});
+    fireEvent.keyDown(separator, {key: 'ArrowUp'});
+    expect(localStorage.getItem(HEIGHT_KEY)).toBe('424');
+    fireEvent.click(screen.getByRole('button', {name: 'Minimize terminal'}));
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'Restore terminal'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Close Work'}));
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Bastion']);
+    expect(mocks.stop).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', {name: 'Close Bastion'}));
+    expect(screen.queryByRole('region', {name: 'Terminal'})).not.toBeInTheDocument();
 });
 
-it('uses identical selected and option labels, distinguishes duplicate names, and refreshes on focus', async () => {
-    const desktops = {...client, listTargets: vi.fn().mockResolvedValue({targets: [
-        {id: 'desktop:12345678-abcd', label: 'Work'}, {id: 'desktop:87654321-abcd', label: 'Work'}, {id: 'desktop:three', label: 'My desktop'},
-    ]})};
-    const {container} = render(<TerminalPanel client={desktops as any} />);
-    const select = createWrapper(container).findSelect()!;
-    await waitFor(() => expect(select.findTrigger().getElement()).toHaveTextContent('My desktop: Work (12345678)'));
-    await userEvent.click(select.findTrigger().getElement());
-    expect(await screen.findByText('My desktop: Work (87654321)')).toBeInTheDocument();
-    expect(await screen.findByText('My desktop: three')).toBeInTheDocument();
-    expect(select.findDropdown().getElement()).toHaveTextContent('My desktop: Work (12345678)');
-    await userEvent.click(select.findTrigger().getElement());
-    desktops.listTargets.mockResolvedValue({targets: [{id: 'desktop:new', label: 'New'}]});
-    fireEvent.focus(select.findTrigger().getElement());
-    await waitFor(() => expect(select.findTrigger().getElement()).toHaveTextContent('My desktop: New'));
-    expect(select.findTrigger().getElement()).not.toHaveTextContent('(new)');
-    fireEvent.click(screen.getByRole('button', {name: 'Connect'}));
-    expect(mocks.options.target).toBe('desktop:new');
+it('keeps the phone dock above the keyboard with the visual viewport', async () => {
+    const viewport = Object.assign(new EventTarget(), {height: 420, offsetTop: 12});
+    vi.stubGlobal('visualViewport', viewport); vi.stubGlobal('innerWidth', 390);
+    render(<MemoryRouter><ShellDock client={client as any}/></MemoryRouter>);
+    act(() => shellStore.open('bastion', 'Bastion'));
+    const dock = screen.getByRole('region', {name: 'Terminal'});
+    expect(dock.style.height).toBe('420px'); expect(dock.style.top).toBe('12px');
+    viewport.height = 300; viewport.offsetTop = 20;
+    act(() => {viewport.dispatchEvent(new Event('resize'));});
+    expect(dock.style.height).toBe('300px'); expect(dock.style.top).toBe('20px');
+    fireEvent.click(screen.getByRole('button', {name: 'Minimize terminal'}));
+    expect(dock.style.top).toBe('');
+    await waitFor(() => expect(mocks.start).toHaveBeenCalled());
 });
 
-
-it('preserves the clipboard when Copy has no selected text', async () => {
-    const clipboard = {writeText: vi.fn().mockResolvedValue(undefined)};
-    Object.defineProperty(navigator, 'clipboard', {configurable: true, value: clipboard});
-    mocks.selection.mockReturnValueOnce('');
-    render(<TerminalPanel client={client as any} />);
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Copy'})).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', {name: 'Copy'}));
-    expect(clipboard.writeText).not.toHaveBeenCalled();
-    expect(screen.getByText('Select text first.')).toBeInTheDocument();
-});
-
-it('omits migration guidance when targets are available', async () => {
-    render(<TerminalPanel client={client as any} />);
-    await waitFor(() => expect(screen.getByRole('button', {name: 'Connect'})).not.toBeDisabled());
-    expect(screen.queryByText(/Targets include|older desktop/)).not.toBeInTheDocument();
+it('redirects the old Terminal page to the dock', async () => {
+    render(<MemoryRouter initialEntries={['/home/terminal']}><Routes>
+        <Route path="/home/terminal" element={<TerminalRedirect client={client as any}/>}/>
+        <Route path="/" element={<p>Home</p>}/>
+    </Routes></MemoryRouter>);
+    expect(await screen.findByText('Home')).toBeInTheDocument();
+    await waitFor(() => expect(shellStore.get().tabs).toEqual([{target: 'bastion', label: 'Bastion'}]));
 });

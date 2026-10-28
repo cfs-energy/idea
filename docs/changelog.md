@@ -12,7 +12,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 **Highlights for users**
 
-* Open **Terminal** to check jobs from your phone or use your own running Linux desktop. Reconnect to the same tmux shell after sleep or a network interruption. Desktops launched before the upgrade are not listed; launch a new desktop to use it here.
+* Select **Shell** in the top bar for a terminal on the bastion, or **Terminal** on one of your running Linux desktops in My desktops. Terminals open in a panel at the bottom of the portal and stay open while you move between pages. Copy and paste with the keyboard. On a phone, tap the terminal for your keyboard; a small key bar adds Ctrl, Esc, Tab and arrows. Desktops launched before the upgrade have no Terminal; launch a new one.
 * During maintenance, new job submissions from `qsub` or the portal are refused with the maintenance notice and its planned end time in UTC when one is set; running and queued jobs continue.
 * When AWS has no capacity to start your desktop, it stays stopped. Select **Start** again in a few minutes. If hibernation is disabled, you can also use **Update session** to choose another allowed size in the same instance family. The message names the availability zone.
 * A job that depends on another by its short id (`qsub -W depend=afterok:70`) now starts when the parent finishes; before, it stayed held forever. A job already held this way does not recover: `qdel` it and submit it again. Desktops pick this up within six hours or the next time they start; jobs submitted from compute nodes started before the upgrade still need the full id (`afterok:70.scheduler`).
@@ -49,7 +49,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Terminal errors**: an SSH refusal is retried as trust still refreshing, including after an OS reboot; a refusal that persists through the client's retry budget (about a minute) asks for administrator attention. Desktops in an error or deleting state return `TERMINAL_TARGET_ERROR`.
 * **Scheduler managers**: no bastion gets a PBS manager grant; a host-era `root@ip-…` grant is removed on every scheduler start even when the old bastion name is still in settings.
 * **Limits and audit**: three connections per user across replicas, configurable 30-minute idle and 12-hour duration limits, bounded transport, and session metadata logging without terminal content.
-* **Terminal renderer**: pinned ghostty-web 0.4.0 with portal-hosted, lazy-loaded WASM, mobile key controls, and keyboard-aware resizing. Screen-reader terminal output is out of scope; log-tail retains xterm.js. See the [operator guide](modules/cluster-manager/web-terminal.md) for deployment and CA rotation.
+* **Terminal panel**: no Terminal page or navigation entry. A top-bar **Shell** button (shown when the bastion is a target) and a per-desktop **Terminal** action open tabs in a docked, resizable panel that persists across navigation; `#/home/terminal` bookmarks open the panel. Desktop Terminal is disabled with a reason for Windows, non-running, and pre-26.11.1 desktops. Copy is Cmd+C on macOS and Ctrl+Shift+C elsewhere; paste is Cmd+V / Ctrl+Shift+V or the right-click menu; Ctrl+C interrupts.
+* **Terminal renderer**: pinned ghostty-web 0.4.0 with portal-hosted, lazy-loaded WASM. On touch screens without a hardware keyboard: a key bar (Ctrl, Esc, Tab, arrows, tmux Scroll), native caret gestures move the shell cursor, drag scrolls with momentum, pinch sets the text size, and a long press opens native text selection. Screen-reader terminal output is out of scope; log-tail retains xterm.js. See the [operator guide](modules/cluster-manager/web-terminal.md) for deployment and CA rotation.
 
 ## [26.10.9] - 2026-10-22
 

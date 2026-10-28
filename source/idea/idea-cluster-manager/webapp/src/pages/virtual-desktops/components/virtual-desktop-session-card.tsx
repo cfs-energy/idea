@@ -35,6 +35,8 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import VirtualDesktopSessionStatusIndicator from "./virtual-desktop-session-status-indicator";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
+import {desktopTerminalReason, shellStore, terminalEnabled} from "../../home/terminal/shell-store";
+import {hasAccess} from "../../../navigation/task-navigation";
 
 interface VirtualDesktopSessionCardProps {
     virtualDesktopClient: VirtualDesktopClient
@@ -157,6 +159,32 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
 
     getSession(): VirtualDesktopSession {
         return this.props.session
+    }
+
+    private unsubscribeShell?: () => void
+
+    // Terminal is for the owner's Linux desktops; shared desktops never show it.
+    showTerminal = () => !this.props.isSharedSession && terminalEnabled() && hasAccess(AppContext.get(), 'cluster')
+
+    terminalReason = () => desktopTerminalReason(this.getSession(), shellStore.get())
+
+    openTerminal = () => shellStore.open(`desktop:${this.getSession().idea_session_id}`, this.getSession().name || 'My desktop')
+
+    componentDidMount() {
+        if (!this.showTerminal()) return
+        this.unsubscribeShell = shellStore.subscribe(() => this.forceUpdate())
+        void shellStore.loadTargets(AppContext.get().client().terminal())
+    }
+
+    componentDidUpdate(previous: VirtualDesktopSessionCardProps) {
+        // A desktop that just became ready may not have been a target when the list was read.
+        if (this.showTerminal() && previous.session.state !== this.getSession().state && this.getSession().state === 'READY') {
+            void shellStore.loadTargets(AppContext.get().client().terminal(), true)
+        }
+    }
+
+    componentWillUnmount() {
+        this.unsubscribeShell?.()
     }
 
     canConnect = (): boolean => this.props.session.state === 'READY' && !this.props.session.recovering
@@ -368,6 +396,16 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 iconSvg: <FontAwesomeIcon icon={faDesktop} size="xs"/>
             }]
 
+        if (this.showTerminal()) {
+            dropDownItems.push({
+                id: "terminal",
+                text: "Terminal",
+                disabled: !!this.terminalReason(),
+                disabledReason: this.terminalReason(),
+                iconName: "command-prompt"
+            })
+        }
+
         if (!this.props.isSharedSession) {
             dropDownItems.push(
                 {
@@ -450,6 +488,11 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 >
                     <Link variant="info" ariaLabel="About the DCV client file">Info</Link>
                 </Popover>
+                {this.showTerminal() && <Button iconName="command-prompt"
+                        disabled={!!this.terminalReason()}
+                        disabledReason={this.terminalReason()}
+                        onClick={this.openTerminal}>
+                    Terminal</Button>}
             </SpaceBetween>
             <Box>
                     <ButtonDropdown
@@ -458,6 +501,8 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                                 if (this.props.onDeleteSession) {
                                     this.props.onDeleteSession(this.getSession()).finally()
                                 }
+                            } else if (event.detail.id === 'terminal') {
+                                this.openTerminal()
                             } else if (event.detail.id === 'connect') {
                                 this.props.onLaunchSession(this.getSession()).finally()
                             } else if (event.detail.id === 'stop') {

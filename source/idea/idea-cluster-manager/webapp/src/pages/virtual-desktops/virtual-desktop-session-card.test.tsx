@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import VirtualDesktopSessionCard, { describeSchedule, primaryAction } from './components/virtual-desktop-session-card';
 import { initTestAppContext } from '../../test-support';
+import { desktopTerminalReason, shellStore } from '../home/terminal/shell-store';
 
 const BASE = {
     idea_session_id: 'session-1',
@@ -203,5 +204,64 @@ describe('desktop recovery', () => {
         const handlers = renderCard('READY');
         await userEvent.setup().click(screen.getByText('Preview not captured yet'));
         expect(handlers.onLaunchSession).toHaveBeenCalled();
+    });
+});
+
+describe('Terminal action', () => {
+    const terminal = async (session: any, targets: any[] = [{ id: 'bastion', label: 'Bastion' }, { id: 'desktop:session-1', label: 'my-desktop' }], props: any = {}) => {
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+        const listTargets = vi.spyOn(context.client().terminal(), 'listTargets').mockResolvedValue({ targets });
+        render(<VirtualDesktopSessionCard virtualDesktopClient={{} as any} isActiveDirectory={false} session={{ ...BASE, ...session }}
+            onLaunchSession={vi.fn()} onDownloadDcvSessionFile={vi.fn()} onConnectHelp={vi.fn()} {...props}/>);
+        return listTargets;
+    };
+    beforeEach(() => shellStore.reset());
+    afterEach(() => { vi.restoreAllMocks(); delete (window as any).idea?.app?.web_terminal_enabled; });
+
+    it('opens a terminal tab for a ready Linux desktop from the card and the Actions menu', async () => {
+        await terminal({ state: 'READY' });
+        const button = await screen.findByRole('button', { name: 'Terminal' });
+        await waitFor(() => expect(button).not.toHaveAttribute('aria-disabled'));
+        fireEvent.click(button);
+        expect(shellStore.get().tabs).toEqual([{ target: 'desktop:session-1', label: 'my-desktop' }]);
+        shellStore.close('desktop:session-1');
+        await userEvent.click(screen.getByRole('button', { name: 'Actions' }));
+        await userEvent.click(screen.getByRole('menuitem', { name: 'Terminal' }));
+        expect(shellStore.get().active).toBe('desktop:session-1');
+    });
+
+    it.each([
+        ['a Windows desktop', { state: 'READY', base_os: 'windows' }, 'Terminal is for Linux desktops.'],
+        ['a stopped desktop', { state: 'STOPPED' }, 'Start this desktop to use Terminal.'],
+        ['a broken desktop', { state: 'ERROR' }, 'This desktop is in an error or deleting state.'],
+        ['a starting desktop', { state: 'RESUMING' }, 'Terminal opens when the desktop is ready.'],
+        ['a desktop launched before 26.11.1', { state: 'READY', idea_session_id: 'old' }, 'Desktops launched before 26.11.1 have no Terminal. Launch a new one to use it.'],
+    ])('disables Terminal with a reason for %s', async (_name, session, reason) => {
+        await terminal(session);
+        if (session.state === 'READY') await waitFor(() => expect(shellStore.get().targets).toBeDefined());
+        const button = screen.getByRole('button', { name: 'Terminal' });
+        expect(button).toHaveAttribute('aria-disabled', 'true');
+        fireEvent.click(button);
+        expect(shellStore.get().tabs).toEqual([]);
+        expect(desktopTerminalReason({ ...BASE, ...session } as any, shellStore.get())).toBe(reason);
+        fireEvent.focus(button);
+        expect((await screen.findAllByText(reason))[0]).toBeInTheDocument();
+    });
+
+    it('is not offered on shared desktops or when Terminal is disabled', async () => {
+        await terminal({ state: 'READY' }, undefined, { isSharedSession: true });
+        expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    });
+
+    it('is not offered when the cluster disables Terminal', async () => {
+        initTestAppContext();
+        (window as any).idea.app.web_terminal_enabled = false;
+        const context = initTestAppContext();
+        (window as any).idea.app.web_terminal_enabled = false;
+        vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+        render(<VirtualDesktopSessionCard virtualDesktopClient={{} as any} isActiveDirectory={false} session={{ ...BASE, state: 'READY' }}
+            onLaunchSession={vi.fn()} onDownloadDcvSessionFile={vi.fn()} onConnectHelp={vi.fn()}/>);
+        expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
     });
 });

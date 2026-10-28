@@ -21,7 +21,11 @@ class ReleaseDocsTests(unittest.TestCase):
         self.assertIn('`qsub`', highlights)
         self.assertIn('submissions', highlights)
         self.assertIn('are refused', highlights)
-        self.assertIn('Desktops launched before the upgrade are not listed', highlights)
+        self.assertIn(
+            'Desktops launched before the upgrade have no Terminal', highlights
+        )
+        self.assertIn('**Shell**', highlights)
+        self.assertNotIn('Terminal page', highlights)
         self.assertIn('not retried immediately', operators)
         self.assertNotIn('Updated web portal components', highlights)
         self.assertNotIn('IDEA-', highlights)

@@ -127,7 +127,8 @@ def test_terminal_api_documents_portal_internal_contract():
 def test_user_docs_do_not_assume_a_bastion_or_upgrade():
     doc = (ROOT / 'docs/first-time-users/terminal.md').read_text()
     assert 'when the cluster has a bastion' in doc
-    assert 'since the cluster began running 26.11.1' in doc
+    assert 'launched before the cluster ran 26.11.1' in doc
+    assert 'Terminal page' not in doc
 
 
 def runbook_lines():
