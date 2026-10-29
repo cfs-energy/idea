@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import createWrapper from '@cloudscape-design/components/test-utils/dom';
 import VirtualDesktopSessionCard, { describeSchedule, primaryAction } from './components/virtual-desktop-session-card';
 import { initTestAppContext } from '../../test-support';
 import { desktopTerminalReason, shellStore } from '../home/terminal/shell-store';
@@ -144,7 +145,7 @@ describe('virtual desktop session card', () => {
     it('connects from the not-captured placeholder like the preview', async () => {
         const handlers = renderCard('READY');
         const placeholder = screen.getByText('Preview not captured yet');
-        expect(placeholder).toHaveStyle({cursor: 'pointer'});
+        expect(placeholder.closest('.virtual-desktop-placeholder-image')).toHaveStyle({cursor: 'pointer'});
         await userEvent.setup().click(placeholder);
         expect(handlers.onLaunchSession).toHaveBeenCalled();
     });
@@ -191,11 +192,54 @@ describe('virtual desktop session card', () => {
     });
 });
 
+describe('preview placeholder', () => {
+    const preview = (text: string) => {
+        const status = screen.getByText(text).closest('.virtual-desktop-placeholder-status');
+        expect(status).not.toBeNull();
+        expect(status!.closest('.virtual-desktop-placeholder-image')).not.toBeNull();
+        return status as HTMLElement;
+    };
+
+    it.each([
+        ['CREATING', {}, 'Creating…'],
+        ['INITIALIZING', {}, 'Initializing…'],
+        ['PROVISIONING', {}, 'Provisioning…'],
+        ['RESUMING', {}, 'Starting…'],
+        ['STOPPING', {}, 'Stopping…'],
+        ['STOPPING', { hibernation_enabled: true }, 'Hibernating…'],
+        ['DELETING', {}, 'Terminating…'],
+        ['DELETED', {}, 'Terminating…'],
+        ['READY', { recovering: true }, 'Restarting…']
+    ])('%s %o shows a spinner over a short centered line', (state, extra, text) => {
+        renderCard(state, { session: { ...BASE, state, ...extra } });
+        expect(createWrapper(preview(text)).findSpinner()).not.toBeNull();
+    });
+
+    it.each([
+        ['READY', {}, 'Preview not captured yet'],
+        ['STOPPED', {}, 'Stopped'],
+        ['STOPPED', { hibernation_enabled: true }, 'Hibernated'],
+        ['ERROR', {}, 'No preview']
+    ])('%s %o shows centered text without a spinner', (state, extra, text) => {
+        renderCard(state, { session: { ...BASE, state, ...extra } });
+        const status = screen.getAllByText(text).map(node => node.closest('.virtual-desktop-placeholder-status')).find(Boolean) as HTMLElement;
+        expect(status).toBeTruthy();
+        expect(createWrapper(status).findSpinner()).toBeNull();
+    });
+
+    it('drops the spinner once the desktop is ready', () => {
+        const card = renderCard('RESUMING');
+        expect(createWrapper(preview('Starting…')).findSpinner()).not.toBeNull();
+        card.rerender({ session: { ...BASE, state: 'READY' } });
+        expect(createWrapper(preview('Preview not captured yet')).findSpinner()).toBeNull();
+    });
+});
 
 describe('desktop recovery', () => {
     it('explains why Connect is unavailable while the session restarts', () => {
         renderCard('INITIALIZING', { session: { ...BASE, state: 'INITIALIZING', recovering: true } });
-        expect(screen.getByText('Your desktop session is restarting. Connect will be available when it is ready.')).toBeInTheDocument();
+        expect(screen.getByText('Restarting…')).toBeInTheDocument();
+        expect(createWrapper().findSpinner()).not.toBeNull();
         expect(screen.getByRole('button', { name: 'Session restarting' })).toBeDisabled();
         expect(screen.queryByText('Preview not captured yet')).not.toBeInTheDocument();
     });

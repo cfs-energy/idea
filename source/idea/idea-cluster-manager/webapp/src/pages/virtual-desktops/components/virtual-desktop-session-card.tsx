@@ -18,7 +18,7 @@ import Utils from "../../../common/utils";
 import 'moment-timezone';
 import moment from 'moment';
 import {AppContext} from "../../../common";
-import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, KeyValuePairs, Link, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, KeyValuePairs, Link, Popover, SpaceBetween, Spinner, StatusIndicator} from "@cloudscape-design/components";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {
     faClock,
@@ -323,23 +323,30 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         }
         if (Utils.isEmpty(imageUrl)) {
             const session = this.getSession()
-            const placeholders: { [state: string]: string } = {
-                CREATING: 'Creating your desktop',
-                INITIALIZING: 'Initializing your desktop',
-                PROVISIONING: 'Provisioning your desktop',
-                RESUMING: 'Starting',
-                READY: 'Preview not captured yet',
-                STOPPING: session.hibernation_enabled ? 'Hibernating' : 'Stopping',
-                STOPPED: session.hibernation_enabled ? 'Hibernated' : 'Stopped',
-                DELETING: 'Terminating',
-                DELETED: 'Terminating'
+            // In-between states get a spinner; settled states only text. Both stay centered and padded.
+            const transitions: { [state: string]: string } = {
+                CREATING: 'Creating…',
+                INITIALIZING: 'Initializing…',
+                PROVISIONING: 'Provisioning…',
+                RESUMING: 'Starting…',
+                STOPPING: session.hibernation_enabled ? 'Hibernating…' : 'Stopping…',
+                DELETING: 'Terminating…',
+                DELETED: 'Terminating…'
             }
+            const settled: { [state: string]: string } = {
+                READY: 'Preview not captured yet',
+                STOPPED: session.hibernation_enabled ? 'Hibernated' : 'Stopped'
+            }
+            const transition = session.recovering ? 'Restarting…' : transitions[session.state ?? '']
             return <div className="virtual-desktop-placeholder-image" onClick={() => {
                 if (this.canConnect()) {
                     this.props.onLaunchSession(this.getSession()).finally()
                 }
             }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
-                {session.recovering ? 'Your desktop session is restarting. Connect will be available when it is ready.' : placeholders[session.state ?? ''] ?? 'No preview'}
+                <div className="virtual-desktop-placeholder-status">
+                    {transition && <Spinner size="large"/>}
+                    <div>{transition ?? settled[session.state ?? ''] ?? 'No preview'}</div>
+                </div>
             </div>
         }
         return <img alt="Desktop preview" src={imageUrl} onLoad={(event) => {
