@@ -1,8 +1,8 @@
 # Terminal in your browser
 
-Select **Shell** in the portal's top bar for a terminal on the bastion, for example to check jobs. For your own running Linux desktop, open **My desktops** and select **Terminal** on the desktop, or choose **Terminal** from its **Actions** menu. **Shell** appears only when the cluster has a bastion you can use.
+Select **Shell** in the portal's top bar for a terminal on the bastion, for example to check jobs. For your own running Linux desktop, open **My desktops** and select the shell button next to **Connect** on the desktop, or choose **Terminal** from its **Actions** menu. **Shell** appears only when the cluster has a bastion you can use.
 
-**Terminal** is unavailable, with the reason shown, on Windows desktops, on desktops that are stopped or still starting, and on desktops launched before the cluster ran 26.11.1. To use an older desktop here, launch a new one. Shared desktops have no Terminal.
+The shell button is unavailable on Windows desktops and on desktops that are stopped or still starting; point to it to see why. A desktop launched before the cluster ran 26.11.1 gets Terminal the next time it starts, or within six hours while it runs. Shared desktops have no Terminal.
 
 Terminals open in a panel at the bottom of the portal, one tab for the bastion and one for each desktop. The panel stays open while you move between pages. Drag its top edge to resize it; the browser remembers the height. Use the arrow at the right to minimize or restore it, and **×** on a tab to close that terminal.
 

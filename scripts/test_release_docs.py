@@ -17,12 +17,13 @@ class ReleaseDocsTests(unittest.TestCase):
         banner, highlights = release.split('**Highlights for users**', 1)
         self.assertIn('**Upgrade floor: 26.10.0.**', banner)
         highlights, operators = highlights.strip().split('\n\n', 1)
-        self.assertIn('**Terminal**', highlights)
+        self.assertIn('the shell button beside **Connect**', highlights)
         self.assertIn('`qsub`', highlights)
         self.assertIn('submissions', highlights)
         self.assertIn('are refused', highlights)
         self.assertIn(
-            'Desktops launched before the upgrade have no Terminal', highlights
+            'Desktops launched before the upgrade get Terminal the next time they start',
+            highlights,
         )
         self.assertIn('**Shell**', highlights)
         self.assertNotIn('Terminal page', highlights)
@@ -117,7 +118,8 @@ class ReleaseDocsTests(unittest.TestCase):
     def test_operator_upgrade_remedies(self):
         text = (ROOT / 'docs/changelog.md').read_text()
         self.assertNotIn('Existing desktops require updated bootstrap trust', text)
-        self.assertIn('cannot be refreshed in place; launch a new desktop', text)
+        self.assertIn('get the same trust from the desktop refresh', text)
+        self.assertNotIn('cannot be refreshed in place', text)
         self.assertIn('`--accept-config-drift` for unattended runs', text)
         self.assertIn('update `values.yml` first', text)
 

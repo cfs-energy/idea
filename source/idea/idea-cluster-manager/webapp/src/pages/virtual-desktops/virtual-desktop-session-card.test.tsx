@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import VirtualDesktopSessionCard, { describeSchedule, primaryAction } from './components/virtual-desktop-session-card';
 import { initTestAppContext } from '../../test-support';
@@ -219,10 +219,13 @@ describe('Terminal action', () => {
     beforeEach(() => shellStore.reset());
     afterEach(() => { vi.restoreAllMocks(); delete (window as any).idea?.app?.web_terminal_enabled; });
 
-    it('opens a terminal tab for a ready Linux desktop from the card and the Actions menu', async () => {
+    const SHELL = 'Open a shell on my-desktop';
+
+    it('opens a terminal tab from the shell button beside Connect and from the Actions menu', async () => {
         await terminal({ state: 'READY' });
-        const button = await screen.findByRole('button', { name: 'Terminal' });
+        const button = await screen.findByRole('button', { name: SHELL });
         await waitFor(() => expect(button).not.toHaveAttribute('aria-disabled'));
+        expect(button).toHaveAttribute('title', SHELL);
         fireEvent.click(button);
         expect(shellStore.get().tabs).toEqual([{ target: 'desktop:session-1', label: 'my-desktop' }]);
         shellStore.close('desktop:session-1');
@@ -231,16 +234,42 @@ describe('Terminal action', () => {
         expect(shellStore.get().active).toBe('desktop:session-1');
     });
 
+    it('sits immediately before the primary button, icon only, in the card header', async () => {
+        await terminal({ state: 'READY' });
+        const shell = await screen.findByRole('button', { name: SHELL });
+        const connect = screen.getByRole('button', { name: 'Connect' });
+        expect(shell.textContent).toBe('');
+        const group = shell.closest('div[style*="flex-shrink: 0"]') as HTMLElement;
+        // two children: the shell button, then the primary button
+        expect(group.children).toHaveLength(2);
+        expect(group.children[0]).toContainElement(shell);
+        expect(group.children[1]).toContainElement(connect);
+        // the group keeps its buttons on one line; the name column takes any wrapping
+        expect(group.style.whiteSpace).toBe('nowrap');
+        expect((group.previousElementSibling as HTMLElement).style.minWidth).toBe('0');
+        expect(group.previousElementSibling).toHaveTextContent('my-desktop');
+    });
+
+    it('no longer puts a Terminal button in the bottom row', async () => {
+        await terminal({ state: 'READY' });
+        await waitFor(() => expect(shellStore.get().targets).toBeDefined());
+        const download = screen.getByRole('button', { name: 'DCV client file' });
+        const row = download.closest('div[style*="space-between"]') as HTMLElement;
+        expect(row).toContainElement(screen.getByRole('button', { name: 'Actions' }));
+        expect(within(row).queryByRole('button', { name: /terminal|shell/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    });
+
     it.each([
         ['a Windows desktop', { state: 'READY', base_os: 'windows' }, 'Terminal is for Linux desktops.'],
         ['a stopped desktop', { state: 'STOPPED' }, 'Start this desktop to use Terminal.'],
         ['a broken desktop', { state: 'ERROR' }, 'This desktop is in an error or deleting state.'],
         ['a starting desktop', { state: 'RESUMING' }, 'Terminal opens when the desktop is ready.'],
-        ['a desktop launched before 26.11.1', { state: 'READY', idea_session_id: 'old' }, 'Desktops launched before 26.11.1 have no Terminal. Launch a new one to use it.'],
-    ])('disables Terminal with a reason for %s', async (_name, session, reason) => {
+        ['a desktop whose trust the refresh has not installed yet', { state: 'READY', idea_session_id: 'old' }, 'Terminal becomes available after this desktop next starts.'],
+    ])('disables the shell button with its reason in the tooltip for %s', async (_name, session, reason) => {
         await terminal(session);
         if (session.state === 'READY') await waitFor(() => expect(shellStore.get().targets).toBeDefined());
-        const button = screen.getByRole('button', { name: 'Terminal' });
+        const button = screen.getByRole('button', { name: SHELL });
         expect(button).toHaveAttribute('aria-disabled', 'true');
         fireEvent.click(button);
         expect(shellStore.get().tabs).toEqual([]);
@@ -249,9 +278,15 @@ describe('Terminal action', () => {
         expect((await screen.findAllByText(reason))[0]).toBeInTheDocument();
     });
 
+    it('opens once the refresh has published the desktop as a target', async () => {
+        await terminal({ state: 'READY', idea_session_id: 'old' }, [{ id: 'desktop:old', label: 'my-desktop' }]);
+        const button = await screen.findByRole('button', { name: SHELL });
+        await waitFor(() => expect(button).not.toHaveAttribute('aria-disabled'));
+    });
+
     it('is not offered on shared desktops or when Terminal is disabled', async () => {
         await terminal({ state: 'READY' }, undefined, { isSharedSession: true });
-        expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: SHELL })).not.toBeInTheDocument();
     });
 
     it('is not offered when the cluster disables Terminal', async () => {
@@ -262,6 +297,6 @@ describe('Terminal action', () => {
         vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
         render(<VirtualDesktopSessionCard virtualDesktopClient={{} as any} isActiveDirectory={false} session={{ ...BASE, state: 'READY' }}
             onLaunchSession={vi.fn()} onDownloadDcvSessionFile={vi.fn()} onConnectHelp={vi.fn()}/>);
-        expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: SHELL })).not.toBeInTheDocument();
     });
 });

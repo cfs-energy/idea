@@ -511,6 +511,52 @@ def test_configure_creates_privsep_before_sshd_and_reloads_only_changes(
     assert reloads == [['systemctl', 'reload-or-try-restart', 'sshd.service']]
 
 
+def test_live_sshd_config_is_checked_before_each_reload(helper, tmp_path, monkeypatch):
+    calls = fake_host(tmp_path, monkeypatch, helper)
+    helper.configure('example', 'desktop', root=tmp_path)
+    live = ['sshd', '-t', '-f', str(tmp_path / 'etc/ssh/sshd_config')]
+    reload = ['systemctl', 'reload-or-try-restart', 'sshd.service']
+    assert calls.index(live) < calls.index(reload)
+    # Nothing changed on the second run: no check, no reload.
+    del calls[:]
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert live not in calls and reload not in calls
+
+
+def test_rejected_sshd_config_is_restored_and_sshd_is_not_reloaded(
+    helper, tmp_path, monkeypatch
+):
+    calls = fake_host(tmp_path, monkeypatch, helper)
+    config = tmp_path / 'etc/ssh/sshd_config'
+    config.write_text('UsePAM yes\nMatch User site\n  X11Forwarding no\n')
+    config.chmod(0o600)
+    before = config.read_text()
+    fake = helper.subprocess.run
+
+    def run(args, **kwargs):
+        # The staged copy passes; sshd rejects the file it would actually load.
+        if args == ['sshd', '-t', '-f', str(config)]:
+            calls.append(args)
+            raise subprocess.CalledProcessError(255, args, stderr='Bad configuration\n')
+        return fake(args, **kwargs)
+
+    monkeypatch.setattr(helper.subprocess, 'run', run)
+    with pytest.raises(
+        RuntimeError, match='previous file is restored: Bad configuration'
+    ):
+        helper.configure('example', 'desktop', root=tmp_path)
+    assert config.read_text() == before
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert not [
+        args for args in calls if args[:2] == ['systemctl', 'reload-or-try-restart']
+    ]
+    assert not (tmp_path / 'run/idea-terminal-trust-ready').exists()
+    assert (
+        sorted(path.name for path in config.parent.iterdir() if path.suffix == '.tmp')
+        == []
+    )
+
+
 def test_failed_sshd_reload_is_retried_before_trust_is_ready(
     helper, tmp_path, monkeypatch
 ):

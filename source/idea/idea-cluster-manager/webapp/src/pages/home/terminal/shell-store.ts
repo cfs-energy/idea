@@ -60,5 +60,5 @@ export function desktopTerminalReason(session: VirtualDesktopSession, current: S
     if (session.state !== 'READY' || session.recovering) return 'Terminal opens when the desktop is ready.';
     if (current.targetsFailed) return 'Terminal access could not be checked. Reload the page to try again.';
     if (!current.targets) return 'Checking terminal access…';
-    if (!current.targets.some(target => target.id === `desktop:${session.idea_session_id}`)) return 'Desktops launched before 26.11.1 have no Terminal. Launch a new one to use it.';
+    if (!current.targets.some(target => target.id === `desktop:${session.idea_session_id}`)) return 'Terminal becomes available after this desktop next starts.';
 }

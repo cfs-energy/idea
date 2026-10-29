@@ -140,6 +140,17 @@ def replace_validated(path, text, validator=None, mode=0o644):
             temporary.unlink()
 
 
+def check_sshd_config(path):
+    subprocess.run(
+        ['sshd', '-t', '-f', str(path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        timeout=5,
+    )
+
+
 def reload_sshd():
     # Distributions name the unit sshd or ssh (Ubuntu aliases one to the other).
     units = set()
@@ -266,10 +277,22 @@ def install_trust(ca, host_id, root):
     # The bastion entrypoint signals its own sshd. Elsewhere a failed reload stays
     # pending, so the next attempt reloads even though the file is now unchanged.
     pending = root / 'run/idea-terminal-sshd-reload'
-    if host_id != 'bastion' and config.read_text() != text:
+    before = config.read_text()
+    if host_id != 'bastion' and before != text:
         pending.touch()
-    replace_sshd_config(config, text)
+    changed = replace_sshd_config(config, text)
     if pending.exists():
+        # sshd re-reads its config on reload, and one it rejects stops new logins. Check the
+        # file as sshd will load it, drop-ins included, and put the previous one back if not.
+        try:
+            check_sshd_config(config)
+        except subprocess.CalledProcessError as error:
+            if changed:
+                replace_validated(config, before)
+            raise RuntimeError(
+                'sshd rejected the Terminal sshd_config; the previous file is restored: '
+                + (error.stderr or '').strip()
+            ) from error
         reload_sshd()
         pending.unlink()
 

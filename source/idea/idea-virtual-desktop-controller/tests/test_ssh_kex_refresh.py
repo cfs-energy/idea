@@ -13,6 +13,7 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
     BOOTSTRAP_REFRESH_VERSION,
     BOOTSTRAP_REFRESH_TEMPLATES,
     bootstrap_refresh_variables,
+    render_bootstrap_refresh,
 )
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_db import (
     VirtualDesktopSSMCommandType,
@@ -68,15 +69,16 @@ def test_command_renders_shared_template_and_records_completion_metadata(
     command_id = refresh.command_utils.submit_ssm_command_to_refresh_bootstrap(session)
     request = refresh.ssm.requests[0]
     payload = request['Parameters']['commands'][0]
-    env = Jinja2Utils.env_using_file_system_loader(refresh.context.get_bootstrap_dir())
     variables = bootstrap_refresh_variables(refresh.context.config())
-    expected = '\n'.join(
-        env.get_template(template).render(context={'base_os': base_os}, **variables)
-        for template in BOOTSTRAP_REFRESH_TEMPLATES
+    assert payload == render_bootstrap_refresh(
+        refresh.context.get_bootstrap_dir(), base_os, variables
     )
-    assert payload == (
-        'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n' + expected
+    assert payload.startswith(
+        'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n# Begin: Post-Quantum'
     )
+    for template in BOOTSTRAP_REFRESH_TEMPLATES:
+        assert Path(refresh.context.get_bootstrap_dir(), template).is_file()
+    assert '# Begin: Terminal Trust' in payload
     assert '/etc/krb5.conf.d/00-idea-file-ccache' in payload
     assert 'default_ccache_name = FILE:/tmp/krb5cc_%%{uid}' in payload
     assert 'rm -f /etc/dconf/db/local.d/00-idea-online-accounts' in payload

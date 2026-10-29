@@ -264,13 +264,24 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         const details = [Utils.getOsTitle(session.software_stack?.base_os), session.server?.instance_type].filter(Utils.isNotEmpty).join(' · ')
         return <SpaceBetween size="xs" direction="vertical">
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px'}}>
-                <Box variant="h3">
-                    {session.name}{this.props.isSharedSession && `: ${session.owner}`}
-                </Box>
-                <Button
-                    variant={primary.action === 'info' ? 'normal' : 'primary'}
-                    disabled={primary.action === undefined}
-                    onClick={() => this.onPrimaryAction(primary.action)}>{primary.label}</Button>
+                {/* a long name wraps inside its own column; the buttons never move to a new line */}
+                <div style={{minWidth: 0, overflowWrap: 'anywhere'}}>
+                    <Box variant="h3">
+                        {session.name}{this.props.isSharedSession && `: ${session.owner}`}
+                    </Box>
+                </div>
+                <div style={{display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, whiteSpace: 'nowrap'}}>
+                    {/* always rendered while Terminal applies, so the card does not shift once access is known */}
+                    {this.showTerminal() && <Button variant="icon" iconName="command-prompt"
+                            ariaLabel={`Open a shell on ${session.name || 'My desktop'}`}
+                            disabled={!!this.terminalReason()}
+                            disabledReason={this.terminalReason()}
+                            onClick={this.openTerminal}/>}
+                    <Button
+                        variant={primary.action === 'info' ? 'normal' : 'primary'}
+                        disabled={primary.action === undefined}
+                        onClick={() => this.onPrimaryAction(primary.action)}>{primary.label}</Button>
+                </div>
             </div>
             <SpaceBetween size="s" direction="horizontal" alignItems="center">
                 <VirtualDesktopSessionStatusIndicator state={session.state!} hibernation_enabled={session.hibernation_enabled!} updated_on={session.updated_on}/>
@@ -488,11 +499,6 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 >
                     <Link variant="info" ariaLabel="About the DCV client file">Info</Link>
                 </Popover>
-                {this.showTerminal() && <Button iconName="command-prompt"
-                        disabled={!!this.terminalReason()}
-                        disabledReason={this.terminalReason()}
-                        onClick={this.openTerminal}>
-                    Terminal</Button>}
             </SpaceBetween>
             <Box>
                     <ButtonDropdown
