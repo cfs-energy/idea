@@ -105,7 +105,7 @@ it.each([
     expect(options.ticket).toHaveBeenCalledTimes(1); connection.stop();
 });
 
-it('shares an eight-attempt budget across API and socket failures and resets only on ready or Connect', async () => {
+it('shares an eight-attempt budget across API and socket failures and resets only on ready or a new start', async () => {
     vi.useFakeTimers(); const {connection, options, sockets} = setup();
     options.ticket.mockRejectedValueOnce({errorCode: 'TERMINAL_UNAVAILABLE'});
     connection.start(); await Promise.resolve();
@@ -124,6 +124,19 @@ it('shares an eight-attempt budget across API and socket failures and resets onl
     sockets.at(-1)!.onclose({code: 1006});
     await vi.advanceTimersByTimeAsync(601);
     expect(options.ticket).toHaveBeenCalledTimes(10); connection.stop();
+});
+
+it('closing a tab sends a normal close and never reconnects', async () => {
+    vi.useFakeTimers(); const {connection, options, sockets} = setup();
+    connection.start(); await Promise.resolve();
+    sockets[0].onmessage({data: '{"type":"ready"}'});
+    connection.stop();
+    expect(sockets[0].close).toHaveBeenCalledExactlyOnceWith(1000);
+    expect(sockets[0].onclose).toBeNull();
+    sockets[0].readyState = WebSocket.CLOSED;
+    await vi.advanceTimersByTimeAsync(300000); connection.wake();
+    expect(options.ticket).toHaveBeenCalledOnce(); expect(sockets).toHaveLength(1);
+    expect(options.state).toHaveBeenLastCalledWith('connected');
 });
 
 it('cancels backoff on stop and leaves pending tickets and connecting sockets alone on wake', async () => {

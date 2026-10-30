@@ -1099,6 +1099,97 @@ def test_real_sanic_disconnect_audit(store, monkeypatch, caplog, mode):
     assert stops[0].endswith('reason=' + expected)
 
 
+def test_closed_tab_frees_its_slot_for_the_next_terminal(store, monkeypatch, caplog):
+    from unittest.mock import AsyncMock
+    from sanic import Sanic
+    from websockets.asyncio.client import connect
+
+    async def run():
+        service = target_service(store)
+        service.store = store
+        service.logger = logging.getLogger('terminal-limit-test')
+        service.context.config().get_cluster_external_endpoint.return_value = (
+            'https://portal.example'
+        )
+        key = asyncssh.generate_private_key('ssh-ed25519')
+        service.target = lambda *_: ('127.0.0.1', key.convert_to_public())
+        service.load_ca = lambda: key
+
+        async def read(*_):
+            await asyncio.Event().wait()
+
+        def process():
+            started = MagicMock()
+            started.stdout.read = read
+            return started
+
+        conn = MagicMock()
+        conn.create_process = AsyncMock(side_effect=lambda *_, **__: process())
+        conn.wait_closed = AsyncMock()
+        monkeypatch.setattr(module.asyncssh, 'connect', AsyncMock(return_value=conn))
+        service.context.config().get_int.side_effect = lambda _, default: default
+        app = Sanic('terminal_limit')
+        app.config.TOUCHUP = False
+
+        async def handler(request, ws):
+            await service.websocket(request, ws)
+
+        app.add_websocket_route(handler, '/terminal')
+        import socket
+
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        server = await app.create_server(
+            sock=listener, return_asyncio_server=True, access_log=False
+        )
+        await server.startup()
+        await server.start_serving()
+        port = server.server.sockets[0].getsockname()[1]
+
+        async def open_tab():
+            client = await connect(
+                f'ws://127.0.0.1:{port}/terminal', origin='https://portal.example'
+            )
+            await client.send(
+                json.dumps(
+                    dict(
+                        ticket=store.issue('alice', 'bastion', 'client'),
+                        username='alice',
+                        target='bastion',
+                        client='client',
+                    )
+                )
+            )
+            return client
+
+        tabs = []
+        try:
+            for _ in range(3):
+                tabs.append(await open_tab())
+                assert json.loads(await tabs[-1].recv()) == {'type': 'ready'}
+            refused = await open_tab()
+            with pytest.raises(Exception):
+                await refused.recv()
+            assert refused.close_code == 4002
+            # The server releases the slot before it answers the close.
+            await tabs[0].close(code=1000)
+            assert tabs[0].close_code == 1000
+            tabs[0] = await open_tab()
+            assert json.loads(await asyncio.wait_for(tabs[0].recv(), 5)) == {
+                'type': 'ready'
+            }
+        finally:
+            for tab in tabs:
+                await tab.close()
+            await server.close()
+            Sanic.unregister_app(app)
+
+    caplog.set_level(logging.INFO, logger='terminal-limit-test')
+    asyncio.run(run())
+    stops = [r.message for r in caplog.records if 'terminal stop ' in r.message]
+    assert stops[0].endswith('reason=disconnected')
+
+
 @pytest.mark.parametrize(
     'code,status,retryable',
     [

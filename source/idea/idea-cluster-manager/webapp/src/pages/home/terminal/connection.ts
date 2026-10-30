@@ -29,7 +29,8 @@ export class TerminalConnection {
         this.running = this.ready = false; this.generation++;
         this.discardInput();
         clearTimeout(this.timer); this.timer = undefined;
-        if (this.socket) {this.socket.onclose = null; this.socket.close(); this.socket = undefined;}
+        // 1000 is a normal close: the server ends the session, frees its slot and logs the stop.
+        if (this.socket) {this.socket.onclose = null; this.socket.close(1000); this.socket = undefined;}
     }
     wake() {
         if (this.running && this.socket?.readyState === WebSocket.CLOSED && !this.timer) this.retry();

@@ -79,14 +79,14 @@ it('waits for WASM, connects on open, and preserves state, resize, focus and Ctr
     expect(localStorage.getItem(FONT_KEY)).toBe('17');
     expect(mocks.onKey(key({key: 'x'}))).toBe(false);
     expect(mocks.onKey(key({key: 'Escape', shiftKey: true}))).toBe(true);
-    expect(screen.getByRole('button', {name: 'Disconnect'})).toHaveFocus();
+    expect(screen.getByRole('button', {name: 'Smaller terminal text'})).toHaveFocus();
     mocks.options.output('output');
     expect(mocks.write).toHaveBeenCalledWith('output');
     act(() => mocks.options.state('reconnecting'));
     expect(screen.getByRole('status')).toHaveTextContent('Reconnecting');
-    fireEvent.click(screen.getByRole('button', {name: 'Disconnect'}));
-    expect(screen.getByRole('button', {name: 'Connect'})).toBeEnabled();
-    unmount(); expect(mocks.stop).toHaveBeenCalled(); expect(mocks.dispose).toHaveBeenCalled();
+    for (const name of ['Disconnect', 'Connect', 'Reconnect']) expect(screen.queryByRole('button', {name})).not.toBeInTheDocument();
+    expect(mocks.start).toHaveBeenCalledOnce(); expect(mocks.stop).not.toHaveBeenCalled();
+    unmount(); expect(mocks.stop).toHaveBeenCalledOnce(); expect(mocks.dispose).toHaveBeenCalled();
 });
 
 it('has no copy, paste or key bar controls on a laptop', async () => {
@@ -260,7 +260,7 @@ it('reports a WASM failure without connecting', async () => {
     mocks.load.mockRejectedValueOnce(new Error('WASM fetch failed'));
     render(<TerminalView client={client as any} target="bastion" />);
     await screen.findByText('Terminal could not be loaded. Reload the page to try again.');
-    expect(screen.getByRole('button', {name: 'Connect'})).toBeDisabled();
+    expect(screen.queryByRole('button', {name: 'Connect'})).not.toBeInTheDocument();
     expect(mocks.start).not.toHaveBeenCalled();
 });
 
@@ -289,8 +289,8 @@ it('accepts output while animation frames are suspended, including after rendere
 it.each([
     ['ended', 'idle-timeout', 'Closed after the input-idle limit.'],
     ['ended', 'max-duration', 'Closed after the maximum connection duration.'],
-    ['ended', 'shell-exited', 'Your shell exited. Connect to start a new one.'],
-    ['ended', 'target-stopped', 'This desktop is stopped. Start it from My desktops, then select Connect.'],
+    ['ended', 'shell-exited', 'Your shell exited. Close this tab and open it again for a new one.'],
+    ['ended', 'target-stopped', 'This desktop is stopped. Start it from My desktops, then close this tab and open it again.'],
     ['ended', 'target-error', 'This desktop is in an error or deleting state. Check it in My desktops.'],
     ['reconnecting', 'trust-not-ready', 'The target is refreshing terminal access.'],
     ['denied', 'target-misconfigured', 'The target needs administrator attention.'],
@@ -302,6 +302,8 @@ it.each([
     await view();
     act(() => mocks.options.state(state, reason));
     expect(screen.getByRole('status')).toHaveTextContent(message);
+    expect(screen.getByRole('status')).not.toHaveTextContent(/select connect/i);
+    expect(screen.queryByRole('button', {name: /connect/i})).not.toBeInTheDocument();
 });
 
 function Pages() {
@@ -339,6 +341,18 @@ it('opens tabs per target, keeps them across navigation, closes per tab and reme
     expect(mocks.stop).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', {name: 'Close Bastion'}));
     expect(screen.queryByRole('region', {name: 'Terminal'})).not.toBeInTheDocument();
+});
+
+it('minimizing keeps every tab connected and closing the dock closes every tab', async () => {
+    const {unmount} = render(<MemoryRouter><ShellDock client={client as any}/></MemoryRouter>);
+    act(() => {shellStore.open('bastion', 'Bastion'); shellStore.open('desktop:one', 'Work');});
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', {name: 'Minimize terminal'}));
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', {name: /connect/i, hidden: true})).not.toBeInTheDocument();
+    unmount();
+    expect(mocks.stop).toHaveBeenCalledTimes(2);
 });
 
 it('keeps the phone dock above the keyboard with the visual viewport', async () => {

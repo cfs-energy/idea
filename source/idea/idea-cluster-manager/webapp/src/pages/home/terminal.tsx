@@ -14,20 +14,20 @@ export {terminalEnabled};
 
 const labels: Record<ConnectionState, string> = {
     disconnected: 'Disconnected', connecting: 'Connecting…', connected: 'Connected', reconnecting: 'Reconnecting…',
-    ended: 'Connection ended. Select Connect to try again.', denied: 'Terminal access was denied.'
+    ended: 'Connection ended. Close this tab and open it again.', denied: 'Terminal access was denied.'
 };
 const reasonLabels: Record<string, string> = {
-    'idle-timeout': 'Closed after the input-idle limit. Select Connect to return.',
-    'max-duration': 'Closed after the maximum connection duration. Select Connect to return.',
-    'shell-exited': 'Your shell exited. Connect to start a new one.',
+    'idle-timeout': 'Closed after the input-idle limit. Close this tab and open it again to return.',
+    'max-duration': 'Closed after the maximum connection duration. Close this tab and open it again to return.',
+    'shell-exited': 'Your shell exited. Close this tab and open it again for a new one.',
     'access-denied': 'Terminal access was denied. Check that Terminal and your account are enabled and that you own the target.',
     'unavailable': 'The target is temporarily unavailable or the terminal limit has been reached. Close any extra terminals. Retrying…',
     'trust-not-ready': 'The target is refreshing terminal access. Retrying…',
-    'target-stopped': 'This desktop is stopped. Start it from My desktops, then select Connect.',
+    'target-stopped': 'This desktop is stopped. Start it from My desktops, then close this tab and open it again.',
     'target-error': 'This desktop is in an error or deleting state. Check it in My desktops.',
     'target-misconfigured': 'The target needs administrator attention. Ask your administrator to check terminal SSH trust and infrastructure configuration.',
-    'ack-timeout': 'Terminal stopped accepting output. Select Connect to try again.',
-    'retry-exhausted': 'Unable to connect after 8 attempts. Check the target and your network, then select Connect to try again.',
+    'ack-timeout': 'Terminal stopped accepting output. Close this tab and open it again.',
+    'retry-exhausted': 'Unable to connect after 8 attempts. Check the target and your network, then close this tab and open it again.',
     'server-shutdown': 'The terminal service is restarting. Reconnecting…',
 };
 
@@ -128,8 +128,9 @@ export function TerminalView({client, target, visible = true}: {client: Terminal
     }, []);
     useEffect(() => {if (terminal.current) {terminal.current.options.fontSize = fontSize; fit.current?.fit();}}, [fontSize]);
     useEffect(() => {if (visible && terminal.current) {fit.current?.fit(); terminal.current.focus();}}, [visible]);
-    const connect = () => {
-        connection.current?.stop(); setError('');
+    // Opening a tab connects and closing it disconnects; there is no manual connect control.
+    useEffect(() => {
+        if (!ready) return;
         const next = new TerminalConnection({
             url: client.socketUrl(), target,
             ticket: (id, binding) => client.createTicket(id, binding),
@@ -143,15 +144,11 @@ export function TerminalView({client, target, visible = true}: {client: Terminal
             inputInterrupted: () => setError('Connection interrupted before all queued input was sent. Check the shell before retrying; part of the input may have run.'),
         });
         connection.current = next; next.start(); terminal.current?.focus();
-    };
-    // Opening a tab connects; later connections are the user's choice.
-    useEffect(() => {if (ready) connect();}, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
     const changeFont = (size: number) => {const next = clampFont(size); setFontSize(next); store(FONT_KEY, next);};
-    const active = ['connected', 'connecting', 'reconnecting'].includes(state);
     return <section ref={panel} className="terminal-panel" aria-label="Browser terminal">
         <div className="terminal-controls">
             <div role="status" aria-live="polite" className="terminal-status">{ready ? reasonLabels[reason] ?? labels[state] : 'Loading terminal…'}</div>
-            <Button disabled={!ready} onClick={() => {if (active) {connection.current?.stop(); setState('disconnected'); setReason('');} else connect();}}>{active ? 'Disconnect' : 'Connect'}</Button>
             <Button ariaLabel="Smaller terminal text" variant="icon" iconName="zoom-out" disabled={!ready || fontSize <= MIN_FONT} onClick={() => changeFont(fontSize - 1)}/>
             <Button ariaLabel="Larger terminal text" variant="icon" iconName="zoom-in" disabled={!ready || fontSize >= MAX_FONT} onClick={() => changeFont(fontSize + 1)}/>
         </div>
