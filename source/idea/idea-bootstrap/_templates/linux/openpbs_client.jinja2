@@ -1,12 +1,15 @@
 # Begin: OpenPBS Client
 {% include '_templates/linux/openpbs.jinja2' %}
 
-{# With a stable server name the client resolves the server through DNS by its full name;
-   the short name is not in the resolver search path. The desktop refresh derives the same two
-   values in the controller (bootstrap_refresh_variables). #}
+{# PBS_SERVER is the first label of the scheduler name, the server's own server_name
+   (roles/scheduler.sh): qsub completes a short job id (afterok:70) with it, and the server
+   releases dependencies by exact job id. With a stable server name the short name resolves
+   through the private zone in the search path, so it follows the same DNS record as the full
+   name. The desktop refresh derives the same two values in the controller
+   (bootstrap_refresh_variables). #}
 {% set stable_server_name = context.config.get_bool('scheduler.use_stable_server_name', default=False) %}
 {% set scheduler_dns_name = context.config.get_string('scheduler.private_dns_name', required=True) %}
-{% set pbs_server_name = scheduler_dns_name if stable_server_name else scheduler_dns_name.split('.')[0] %}
+{% set pbs_server_name = scheduler_dns_name.split('.')[0] %}
 {% set private_zone = context.config.get_string('cluster.route53.private_hosted_zone_name', required=True) if stable_server_name else none %}
 
 echo -e "PBS_SERVER={{ pbs_server_name }}

@@ -1,6 +1,6 @@
 # Standard Installation
 
-New clusters use the container control plane only. The installer does not offer a host-based control plane. To update an existing host-based cluster, do not run a fresh install; use `upgrade-cluster --drain` and follow the [container upgrade guide](../cluster-operations/update-idea-cluster/move-to-containers.md).
+The control plane runs only on ECS. Direct upgrades require 26.10.0 or newer on every deployed module. Use the 26.10.9 administrator to complete any older upgrade and ECS migration first. See the [recovery command](../cluster-operations/update-idea-cluster/upgrade-cluster.md#recovery-with-the-26109-administrator).
 
 Download the matching archive from the [GitHub release](https://github.com/cfs-energy/idea/releases) (replace `<VERSION>` with the release version):
 

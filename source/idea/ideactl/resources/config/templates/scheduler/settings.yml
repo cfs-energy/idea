@@ -1,12 +1,5 @@
 # Scale-Out Computing Settings
 
-# specify if the scheduler instance can be launched in public or private subnet
-public: false
-instance_type: {{instance_type}}
-base_os: {{base_os}}
-instance_ami: {{instance_ami}}
-volume_size: {{volume_size}}
-volume_type: {{volume_type}}
 hostname: "{{module_id}}.{{cluster_name}}.{{aws_region}}.local"
 provider: openpbs # only openpbs is supported as of now
 
@@ -54,14 +47,6 @@ logging:
 
 cloudwatch_logs:
   enabled: true
-
-ec2:
-  # enable detailed monitoring for scheduler ec2 instance, enabled by default
-  enable_detailed_monitoring: true
-  # enable termination protection for scheduler ec2 instance, enabled by default
-  enable_termination_protection: true
-  # instance metadata access method
-  metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
 
 cache:
   # How often a full refresh of EC2 instance type capabilities can be performed

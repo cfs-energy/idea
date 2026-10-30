@@ -173,22 +173,6 @@ def test_an_unsupported_kernel_reboots_only_into_a_new_kernel(tmp_path):
     assert 'Kernel installed for FSx for Lustre client' in history
 
 
-@pytest.mark.parametrize(
-    'template', ['bastion-host/setup.sh.jinja2', 'scheduler/setup.sh.jinja2']
-)
-@pytest.mark.parametrize('running', ['6.12.0-211.el10.x86_64', '6.12.0-55.el10.x86_64'])
-def test_a_host_that_does_not_mount_lustre_logs_and_carries_on(
-    tmp_path, template, running
-):
-    code, out, calls, history = run_install(
-        tmp_path, template, 'rocky10', running, FAIL_INSTALL='1'
-    )
-    assert code == 0 and calls.splitlines()[-1] == 'fell-through'
-    assert 'reboot' not in calls and history == ''
-    errors = [line for line in out.splitlines() if 'reason code:' in line]
-    assert len(errors) == 1 and '[ERROR]' in errors[0]
-
-
 def test_a_compute_node_reports_why_it_will_not_join(tmp_path):
     code, out, _, _ = run_install(
         tmp_path,

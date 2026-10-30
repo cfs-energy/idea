@@ -14,6 +14,7 @@ from ideadatamodel import (
     errorcodes,
     SocaJob,
     SocaJobExecutionHost,
+    SocaJobExecutionRun,
     EC2Instance,
     SocaCapacityType,
 )
@@ -667,6 +668,30 @@ class JobsDB:
     def add_execution_host(self, job_id: str, execution_host: SocaJobExecutionHost):
         with self._db_lock:
             with self.db as tx:
+                entry = tx[EXECUTION_HOSTS_TABLE].find_one(
+                    job_id=job_id, host=execution_host.host
+                )
+                if entry is not None and execution_host.execution is not None:
+                    previous = SocaJobExecutionHost(
+                        **Utils.from_json(entry['execution_host_data'])
+                    )
+                    if previous.execution is not None:
+                        runs = {
+                            run.run_id: run for run in previous.execution.runs or []
+                        }
+                        # Begin/end hooks carry complementary fields and may arrive out of order.
+                        for run in execution_host.execution.runs or []:
+                            runs[run.run_id] = (
+                                SocaJobExecutionRun(
+                                    **{
+                                        **runs[run.run_id].model_dump(),
+                                        **run.model_dump(exclude_none=True),
+                                    }
+                                )
+                                if run.run_id in runs
+                                else run
+                            )
+                        execution_host.execution.runs = list(runs.values())
                 tx[EXECUTION_HOSTS_TABLE].upsert(
                     row={
                         'job_id': job_id,

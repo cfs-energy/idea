@@ -43,13 +43,12 @@ describe('an upgrade never replaces a stateful resource', () => {
   });
 
   test('an instance is outside the protected set and its guard behaviour is unchanged', () => {
-    // An upgrade replaces the scheduler and jump-host instances routinely, so they are not in the
-    // protected set and nothing here treats them as stateful. What they keep is the refusal every
+    // EC2 instances are outside the protected stateful set. They keep the refusal every
     // resource type has had all along: a certain replacement stops, a conditional one does not,
     // and a removal is not a stateful removal.
-    assert.equal(asUpgrade(changeSet(change('Modify', 'schedulerinstance', 'AWS::EC2::Instance', 'True'))).refusals.length, 1);
-    assert.deepEqual(asUpgrade(changeSet(change('Modify', 'schedulerinstance', 'AWS::EC2::Instance', 'Conditional'))).refusals, []);
-    assert.deepEqual(asUpgrade(changeSet(change('Remove', 'schedulerinstance', 'AWS::EC2::Instance'))).refusals, []);
+    assert.equal(asUpgrade(changeSet(change('Modify', 'computeinstance', 'AWS::EC2::Instance', 'True'))).refusals.length, 1);
+    assert.deepEqual(asUpgrade(changeSet(change('Modify', 'computeinstance', 'AWS::EC2::Instance', 'Conditional'))).refusals, []);
+    assert.deepEqual(asUpgrade(changeSet(change('Remove', 'computeinstance', 'AWS::EC2::Instance'))).refusals, []);
   });
 
   test('a conditional replacement of a stateless resource is not refused', () => {
@@ -122,11 +121,9 @@ describe('the warnings', () => {
    * A warning that is a template with the noun swapped will not contain these.
    */
   const NAMES_ITS_OWN_LOSS: Record<string, readonly string[]> = {
-    'jump-host': ['host key', 'host identity'],
     'search-domain': ['indexed', 'starts empty'],
     directory: ['domain membership', 'rejoined'],
     'user-pool': ['multi-factor', 'sign in'],
-    'scheduler-host': ['batch server', 'in flight'],
     'shared-file-system': ['only copy'],
     'backup-vault': ['recovery point'],
   };
@@ -222,7 +219,18 @@ describe('the replace verb', () => {
   test('an unknown component lists the known ones', async () => {
     const { deps, err, reached } = depsReachingDeploy();
     await assert.rejects(() => runReplace(deps, 'the-database', options), ExitWithCode);
-    assert.match(err.join('\n'), /jump-host/);
+    assert.match(err.join('\n'), /search-domain/);
     assert.equal(reached(), false);
   });
+});
+
+test('removed control-plane hosts cannot be replaced', async () => {
+  const options = { clusterName: 'sample-cluster', awsRegion: 'us-east-2', moduleSet: 'default' };
+  for (const name of ['jump-host', 'scheduler-host']) {
+    assert.equal(componentByName(name), undefined);
+    const { deps, err, reached } = depsReachingDeploy();
+    await assert.rejects(() => runReplace(deps, name, { ...options, confirm: name }), ExitWithCode);
+    assert.match(err.join('\n'), /unknown component/);
+    assert.equal(reached(), false);
+  }
 });

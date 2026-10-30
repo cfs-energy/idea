@@ -3,19 +3,19 @@
  * the read-only status commands.
  */
 
+import type { Command } from 'commander';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import type { Command } from 'commander';
 
-import { ClusterConfigError, ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ChangeSetRefused, ExitWithCode } from '../../src/cli/cdk-invoker.ts';
-import { buildProgram, run } from '../../src/cli/main.ts';
 import { cdkAppArgv } from '../../src/cli/commands/cdk.ts';
-import { checkClusterStatus, connectionInfo, modulesTable, sessionManagerUrl, statusEndpoints } from '../../src/cli/commands/status.ts';
 import { asBoolFlag } from '../../src/cli/commands/deploy.ts';
+import { checkClusterStatus, connectionInfo, modulesTable, sessionManagerUrl, statusEndpoints } from '../../src/cli/commands/status.ts';
+import { buildProgram, run } from '../../src/cli/main.ts';
+import { ClusterConfig, ClusterConfigError } from '../../src/config/cluster-config.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 
 const CLUSTER = 'sample-cluster';
@@ -328,6 +328,7 @@ const STATUS_TABLES = {
     moduleRow('bastion-host', 'bastion-host', 'stack', 'deployed'),
   ],
   [`${CLUSTER}.cluster-settings`]: [
+    { key: 'ecs.enabled', value: true },
     { key: 'global-settings.module_sets.default.cluster.module_id', value: 'cluster' },
     { key: 'cluster.load_balancers.external_alb.certificates.provided', value: false },
     { key: 'cluster.cluster_name', value: CLUSTER },

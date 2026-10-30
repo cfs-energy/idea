@@ -21,6 +21,7 @@ import {
   DynamoDBClient,
   ListTablesCommand,
   ScanCommand,
+  UpdateItemCommand,
   type AttributeValue,
   type DynamoDBClientConfig,
 } from '@aws-sdk/client-dynamodb';
@@ -1015,3 +1016,26 @@ test('a template overwrite keeps rows the operator wrote and refreshes the rest'
   await db.syncClusterSettingsInDb([{ key: rows[0]!.key, value: 'from-file' }], true, 'cli');
   assert.equal((await db.getConfigEntry(rows[0]!.key))?.['value'], 'from-file');
 });
+
+for (const source of ['cli', 'api']) {
+  test(`values-owned SSH sources replace ${source} overrides only on overwrite`, async () => {
+    const db = await open(nextCluster());
+    const key = 'cluster.network.ssh_client_ip';
+    const original = ['192.0.2.0/24'];
+    await db.setConfigEntry(key, original);
+    await client.send(new UpdateItemCommand({
+      TableName: db.clusterSettingsTableName,
+      Key: { key: { S: key } },
+      UpdateExpression: 'SET #source = :source',
+      ExpressionAttributeNames: { '#source': 'source' },
+      ExpressionAttributeValues: { ':source': { S: source } },
+    }));
+    await db.syncClusterSettingsInDb([{ key, value: [] }], false, 'template');
+    assert.deepEqual((await db.getConfigEntry(key))?.['value'], original);
+    await db.syncClusterSettingsInDb([{ key, value: [] }], true, 'template');
+    const row = await db.getConfigEntry(key);
+    assert.deepEqual(row?.['value'], []);
+    assert.equal(row?.['source'], 'template');
+    assert.equal(row?.['version'], 2);
+  });
+}

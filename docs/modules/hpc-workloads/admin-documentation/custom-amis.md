@@ -1,7 +1,5 @@
 # Images
 
-New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
-
 **Administration → Images and applications → Images** shows the images desktops and jobs launch from. It has two tabs:
 
 * **Managed images**: one image per operating system, architecture and GPU variant. IDEA rebuilds these from the newest vendor image, validates each one, and switches new desktops and jobs to it only when every check passes.

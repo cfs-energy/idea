@@ -20,6 +20,11 @@ from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import 
 )
 
 
+from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_utils import (
+    CAPACITY_UNAVAILABLE,
+)
+
+
 class IDEASessionScheduledResumeEventHandler(BaseVirtualDesktopControllerEventHandler):
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context, 'idea-session-scheduled-resume-handler')
@@ -72,6 +77,12 @@ class IDEASessionScheduledResumeEventHandler(BaseVirtualDesktopControllerEventHa
         success_list, fail_list = self.session_utils.resume_sessions([session])
         # we know there is only 1 session in either of success or fail list
         if Utils.is_not_empty(fail_list):
+            if (fail_list[0].failure_reason or '').startswith(CAPACITY_UNAVAILABLE):
+                # A later schedule tick or manual Resume can retry without replaying this event.
+                self.log_error(
+                    message_id=message_id, message=fail_list[0].failure_reason
+                )
+                return
             raise self.do_not_delete_message_exception(
                 f'Error in resuming idea_session_id: {fail_list[0].idea_session_id}:{fail_list[0].name}. Error: {fail_list[0].failure_reason}'
             )

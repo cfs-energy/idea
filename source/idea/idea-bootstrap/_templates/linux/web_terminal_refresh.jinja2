@@ -1,0 +1,87 @@
+# Begin: Terminal Trust
+# A desktop launched before 26.11.1 gets the trust web_terminal.jinja2 installs at bootstrap: the
+# helper, its boot unit and the hibernate hook. A file is replaced only when it differs, and the
+# unit is started only when one did or when it is not running, so a second run changes nothing.
+# The helper edits sshd_config under the site-hook lock, checks it with sshd -t, puts the previous
+# file back if sshd rejects it, and reloads sshd only when the file changed.
+# The refresh runs without bootstrap_common.sh, so it brings a POSIX package_transaction:
+# bounded network timeouts and two retries, and a failure fails the refresh for the sweep to retry.
+package_transaction() {
+  for idea_delay in 15 30 0; do
+    LC_ALL=C "$@" && return 0
+    [ "${idea_delay}" -eq 0 ] && return 1
+    sleep "${idea_delay}"
+  done
+}
+if ! command -v tmux >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  log_info "Installing Terminal packages"
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    package_transaction apt-get -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=300 update || exit 1
+    package_transaction apt-get -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=300 install -y tmux python3 || exit 1
+  else
+    package_transaction yum --setopt=timeout=30 install -y tmux python3 || exit 1
+  fi
+fi
+ssh-keygen -A || exit 1
+IDEA_TERMINAL_CHANGED=
+IDEA_TERMINAL_STAGE=$(mktemp -d) || exit 1
+idea_terminal_fail() {
+  rm -rf "${IDEA_TERMINAL_STAGE}"
+  exit 1
+}
+idea_terminal_place() {
+  if [ -f "$3" ] && [ "$(sha256sum < "$2")" = "$(sha256sum < "$3")" ]; then
+    return 0
+  fi
+  install -D -m "$1" "$2" "$3" || return 1
+  log_info "Terminal: installed $3"
+  IDEA_TERMINAL_CHANGED=yes
+}
+# The helper is common/terminal_host.py, byte for byte, compressed to keep the command small.
+printf '%s' '{{ terminal_host_archive }}' | base64 -d | gzip -dc > "${IDEA_TERMINAL_STAGE}/host.py" || idea_terminal_fail
+# The unit and the hook are the ones web_terminal.jinja2 writes at bootstrap.
+cat > "${IDEA_TERMINAL_STAGE}/unit" <<'UNIT' || idea_terminal_fail
+[Unit]
+Description=Refresh IDEA terminal certificate trust on every boot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# simple, not oneshot: boot targets (and Ubuntu's cloud-final) must not wait on retries.
+# Exit 78 is a site configuration the helper must not override; retrying cannot fix it.
+Type=simple
+EnvironmentFile=/etc/environment
+ExecStart=/bin/sh -c 'until /usr/bin/python3 /usr/local/libexec/idea-terminal-host.py; do [ $$? -ne 78 ] || exit 78; sleep 30; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+cat > "${IDEA_TERMINAL_STAGE}/sleep" <<'SLEEP' || idea_terminal_fail
+#!/bin/sh
+case "$1" in
+  pre) rm -f /run/idea-terminal-trust-ready ;;
+  post) systemctl --no-block restart idea-terminal-trust.service ;;
+esac
+SLEEP
+idea_terminal_place 0755 "${IDEA_TERMINAL_STAGE}/host.py" /usr/local/libexec/idea-terminal-host.py || idea_terminal_fail
+idea_terminal_place 0644 "${IDEA_TERMINAL_STAGE}/unit" /etc/systemd/system/idea-terminal-trust.service || idea_terminal_fail
+idea_terminal_place 0755 "${IDEA_TERMINAL_STAGE}/sleep" /usr/lib/systemd/system-sleep/idea-terminal-trust || idea_terminal_fail
+rm -rf "${IDEA_TERMINAL_STAGE}"
+# Early release candidates held sshd until trust landed; the bootstrap removes those drop-ins too.
+for service in sshd ssh; do
+  if [ -e "/etc/systemd/system/${service}.service.d/idea-terminal-trust.conf" ]; then
+    rm -f "/etc/systemd/system/${service}.service.d/idea-terminal-trust.conf" || exit 1
+    IDEA_TERMINAL_CHANGED=yes
+  fi
+done
+if [ -n "${IDEA_TERMINAL_CHANGED}" ]; then
+  systemctl daemon-reload || exit 1
+fi
+systemctl is-enabled --quiet idea-terminal-trust.service || systemctl enable idea-terminal-trust.service || exit 1
+# The unit stays active while it retries and after it succeeds; a running one is left alone.
+if [ -n "${IDEA_TERMINAL_CHANGED}" ] || ! systemctl is-active --quiet idea-terminal-trust.service; then
+  systemctl --no-block restart idea-terminal-trust.service || exit 1
+fi
+# End: Terminal Trust

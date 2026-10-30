@@ -372,6 +372,19 @@ test("creates the host observability daemon only when enabled", () => {
     (container["MountPoints"] as Array<{ ContainerPath: string }>).some((mount) => mount.ContainerPath === "/var/run/datadog"),
     "the socket directory is mounted from the host",
   );
+  // Origin detection resolves a sender's PID to its container only through /host/proc; without it
+  // the agent knows each container's first process alone (agent env.IsHostProcAvailable).
+  const volumes = Object.fromEntries(
+    (record(task["Properties"], "task properties")["Volumes"] as Array<{ Name: string; Host: { SourcePath: string } }>)
+      .map((volume) => [volume.Name, volume.Host.SourcePath]),
+  );
+  const hostPaths = Object.fromEntries(
+    (container["MountPoints"] as Array<{ ContainerPath: string; SourceVolume: string; ReadOnly: boolean }>)
+      .map((mount) => [mount.ContainerPath, { source: volumes[mount.SourceVolume], readOnly: mount.ReadOnly }]),
+  );
+  assert.deepEqual(hostPaths["/host/proc"], { source: "/proc", readOnly: true });
+  assert.deepEqual(hostPaths["/host/sys/fs/cgroup"], { source: "/sys/fs/cgroup", readOnly: true });
+  assert.equal(hostPaths["/proc"], undefined, "host /proc over the agent's own /proc is not where it looks");
 });
 
 test("refuses an ECS deploy when effective account trunking is disabled", async () => {

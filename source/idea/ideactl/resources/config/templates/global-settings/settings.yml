@@ -378,38 +378,6 @@ package_config:
       # compat-openssl11 and ec2-hibinit-agent are not shipped for EL10
       - chkconfig
 
-    # used by cluster-manager to convert .pem files to .ppk files
-    putty:
-      - putty
-
-  # Keep version/nvm_version aligned with software_versions.yml, which pins the
-  # same toolchain for the installer container and CI.
-  nodejs:
-    version: "26.8.2"
-    nvm_version: "0.40.7"
-    npm_version: "11.19.1"
-    url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
-  openmpi:
-    version: "5.0.7"
-    url: "https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-5.0.7.tar.gz"
-    checksum: "51be23bb79f9f978696689bbbc6bc65b7b0df67f0f5b502b83513c8e098a7e53cfa73d14aaae5fffc407e79eb9422a85"
-    checksum_method: sha384
-
-  # url must pin the versioned directory, never /latest/: upstream redirects /latest/ to the current
-  # release, so a pinned filename under /latest/ 404s as soon as a new PuTTY ships.
-  putty:
-    version: "0.85"
-    url: "https://the.earth.li/~sgtatham/putty/0.85/putty-0.85.tar.gz"
-    checksum: "be24753dae138a870299ce3b63267c337cd14811efef667d0e2a5efe34645eaf67e7a1d51349a2272250d42332291d1f"
-    checksum_method: sha384
-
-  # Keep aligned with software_versions.yml python_version.
-  python:
-    version: "3.13.15"
-    url: "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tgz"
-    checksum: "085f0529892b35064abbc73c53129e504cf5223a656674b8990dd3bd53017db945dbbcdb286c0a6da6c13eccc3dded66"
-    checksum_method: sha384
-
   {% if metrics_provider and 'prometheus' in metrics_provider %}
   # Held on the Prometheus 2.53 LTS line; 3.x is a breaking major (removed flags,
   # changed remote-write defaults and UI) and is not part of this release.

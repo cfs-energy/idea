@@ -1,6 +1,7 @@
 spec:
   title: 'IDEA / Cluster Manager API'
-  description: 'All APIs served by Cluster Manager'
+  description: >-
+    Public APIs served by Cluster Manager. Terminal.ListTargets (empty payload {}) and Terminal.CreateTicket (payload {target, client}) are portal-internal APIs, excluded from the public OpenAPI schema. They require an authenticated user access token. Their error codes are TERMINAL_UNAVAILABLE (retryable), TERMINAL_TARGET_STOPPED (start the desktop; not retryable), TERMINAL_TARGET_ERROR (desktop in an error or deleting state; not retryable), TERMINAL_TARGET_MISCONFIGURED (operator attention), and UNAUTHORIZED_ACCESS (access denied).
   tags:
     - name: Reporting
       description: Reporting APIs **(Reporting Access)**

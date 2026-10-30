@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-python3.13 /opt/idea/roles/bastion.py
+node /opt/idea/ideactl/dist/src/container/bastion.js
 unset IDEA_LDAP_CERTIFICATE
 install -d -m 0755 /run/sshd
 # Container sessions have no host audit login UID to set.
@@ -53,8 +53,10 @@ if [[ -n "${IDEA_PBS_SERVER:-}" ]]; then
     SEARCH="$(grep -m1 '^search ' <<< "${RESOLV}" | cut -d' ' -f2-)"
     { grep -v '^search ' <<< "${RESOLV}"; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
   fi
+  # the server's own server_name (roles/scheduler.sh): qsub completes a short job id with it,
+  # and the server releases a dependency only on that exact id
   cat > /etc/pbs.conf <<EOF
-PBS_SERVER=${IDEA_PBS_SERVER}
+PBS_SERVER=${IDEA_PBS_SERVER%%.*}
 PBS_START_SERVER=0
 PBS_START_SCHED=0
 PBS_START_COMM=0
@@ -86,7 +88,23 @@ fi
 sssd_pid=$!
 /usr/sbin/sshd -D -e &
 sshd_pid=$!
-trap 'kill "$sshd_pid" "$sssd_pid" 2>/dev/null || true; wait || true' EXIT
+# Initialize and retry terminal trust without blocking ordinary SSH.
+(
+  if [[ ! -f /run/idea-terminal-trust-ready ]]; then
+    until timeout 300 python3.13 /opt/idea/roles/terminal_host.py; do
+      # 78: the site's sshd principal policy needs explicit integration; retrying cannot help.
+      if (( $? == 78 )); then
+        echo "Terminal trust not installed: site principal policy; browser terminal unavailable"
+        exit 0
+      fi
+      echo "Terminal trust not installed; retrying in 30 seconds"
+      sleep 30
+    done
+    kill -HUP "$sshd_pid"
+  fi
+) &
+trust_pid=$!
+trap 'kill "$trust_pid" "$sshd_pid" "$sssd_pid" 2>/dev/null || true; wait || true' EXIT
 trap 'exit 0' TERM INT
 # Losing directory authentication is a service failure, even if port 22 still answers.
 wait -n "$sshd_pid" "$sssd_pid"

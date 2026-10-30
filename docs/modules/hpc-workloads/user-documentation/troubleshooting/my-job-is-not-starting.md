@@ -181,46 +181,20 @@ ip-10-110-6-141
      last_state_change_time = Wed Dec 14 11:49:10 2022
 ```
 
-## 6 - Restart the Scheduler&#x20;
+## 6 - Inspect and restart the scheduler task
 
-If needed, SSH to the scheduler machine and restart both OpenPBS and  `idea-scheduler` module.
+The scheduler runs as one ECS task. Connect to its application container using the
+[ECS Exec procedure](../../../../help-and-support/faq.md#cluster-management) and inspect
+`/opt/idea/app/logs`, `/var/spool/pbs/sched_logs` and `/var/spool/pbs/server_logs`.
+Correct the reported cause before replacing the task.
 
-To restart OpenPBS, run `systemctl restart pbs`
+To restart it, force a new deployment of the scheduler ECS service:
 
-A valid output looks like this ( see `Active: active (running)`)
-
-```
-[clusteradmin@ip-10-110-2-204 ~]$ systemctl status pbs
-● pbs.service - Portable Batch System
-   Loaded: loaded (/opt/pbs/libexec/pbs_init.d; enabled; vendor preset: disabled)
-   Active: active (running) since Wed 2022-12-14 11:22:30 UTC; 2min 13s ago
-     Docs: man:pbs(8)
-  Process: 17146 ExecStop=/opt/pbs/libexec/pbs_init.d stop (code=exited, status=0/SUCCESS)
-  Process: 20115 ExecStart=/opt/pbs/libexec/pbs_init.d start (code=exited, status=0/SUCCESS)
-    Tasks: 9
-   Memory: 17.0M
-   CGroup: /system.slice/pbs.service
-           ├─20191 /opt/pbs/sbin/pbs_comm
-           ├─20206 /opt/pbs/sbin/pbs_sched
-           ├─20249 /opt/pbs/sbin/pbs_ds_monitor monitor
-           ├─20273 /usr/bin/postgres -D /var/spool/pbs/datastore -p 15007
-           ├─20283 postgres: logger process
-           ├─20285 postgres: checkpointer process
-           ├─20286 postgres: writer process
-           ├─20287 postgres: wal writer process
-           ├─20288 postgres: autovacuum launcher process
-           ├─20289 postgres: stats collector process
-           ├─20318 postgres: postgres pbs_datastore 10.110.2.204(60770) idle
-           └─20321 /opt/pbs/sbin/pbs_server.bin
+```bash
+aws --profile <PROFILE> --region <REGION> ecs update-service \
+  --cluster <ECS_CLUSTER> --service <SCHEDULER_SERVICE> --force-new-deployment
 ```
 
-If the service is not starting up correctly, verify the logs under:
-
-* &#x20;`/var/spool/pbs/sched_logs`&#x20;
-* &#x20;`/var/spool/pbs/server_logs`
-
-
-
-Finally, try to restart `idea-scheduler` by running  `/opt/idea/python/latest/bin/supervisorctl restart scheduler`
-
-You can confirm if `idea-scheduler` has started correctly by checking the application logs located under `/opt/idea/app/logs`
+Wait for the service to stabilize and confirm that the application logs show a healthy startup.
+The scheduler stops before its replacement starts, so submissions and the scheduler API are
+briefly unavailable. PBS state persists across task replacement.

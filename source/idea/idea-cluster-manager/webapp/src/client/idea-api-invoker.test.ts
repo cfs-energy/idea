@@ -64,6 +64,14 @@ describe('idea api invoker', () => {
         expect(JSON.stringify(trace.mock.calls)).not.toContain(token);
     });
 
+    it('keeps terminal tickets and browser bindings out of trace logs', async () => {
+        const invoker = buildInvoker((_message, transfer) => transfer[0].postMessage({response: {success: true, payload: {ticket: 'private-ticket'}}}));
+        vi.spyOn(invoker.logger, 'isTrace').mockReturnValue(true);
+        const trace = vi.spyOn(invoker.logger, 'trace').mockImplementation(() => {});
+        await invoker.invoke_alt('Terminal.CreateTicket', {target: 'bastion', client: 'private-binding'});
+        expect(trace).not.toHaveBeenCalled();
+    });
+
     it('honors a caller-supplied timeout instead of the hardcoded default', async () => {
         vi.useFakeTimers();
         const invoker = buildInvoker(() => {}, 5000);

@@ -24,7 +24,6 @@ import IdeaForm from "../../components/form";
 import {Constants} from "../../common/constants";
 import {ClusterSettingsService} from "../../service";
 import {KeyValue} from "../../components/key-value";
-import dot from "dot-object";
 import {CopyToClipBoard} from "../../components/common";
 import {withRouter} from "../../navigation/navigation-utils";
 
@@ -38,7 +37,6 @@ export interface UpdateHpcLicenseState {
     activeStepIndex: number
     errorMessage: string
     showForm: boolean
-    schedulerInstanceId: string
 }
 
 const OPENPBS_RESOURCE_DEF_FILE = '/var/spool/pbs/server_priv/resourcedef'
@@ -57,8 +55,7 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
             },
             activeStepIndex: 0,
             showForm: false,
-            errorMessage: '',
-            schedulerInstanceId: ''
+            errorMessage: ''
         }
     }
 
@@ -84,7 +81,6 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
     }
 
     componentDidMount() {
-        this.loadSchedulerInstanceId()
         if (this.isUpdate()) {
             const query = new URLSearchParams(this.props.location.search)
             const name = Utils.asString(query.get('name'))
@@ -114,14 +110,6 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
 
     clusterSettings(): ClusterSettingsService {
         return AppContext.get().getClusterSettingsService()
-    }
-
-    loadSchedulerInstanceId() {
-        AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_SCHEDULER).then(settings => {
-            this.setState({
-                schedulerInstanceId: dot.pick('instance_id', settings)
-            })
-        })
     }
 
     createOrUpdate(license: HpcLicenseResource, dryRun: boolean = false) {
@@ -304,17 +292,9 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                 <KeyValue title="Reserved Licenses" value={this.state.license.reserved_count}/>
                                             </ColumnLayout>
                                         </Container>
-                                        <Container header={<Header variant={"h3"}>SSH into Scheduler EC2 Instance</Header>}>
-                                            <ColumnLayout columns={2}>
-                                                <Box>
-                                                    <h3>SSH via SSM</h3>
-                                                    <p><Link external={true} href={Utils.getSessionManagerConnectionUrl(AppContext.get().auth().getAwsRegion(), this.state.schedulerInstanceId)}>Connect via SSM</Link></p>
-                                                </Box>
-                                                <Box>
-                                                    <h3>SSH via Bastion Host</h3>
-                                                    <p><Link external={true} href={'#/home/ssh-access'}>SSH Connection Details</Link></p>
-                                                </Box>
-                                            </ColumnLayout>
+                                        <Container header={<Header variant={"h3"}>Connect to the scheduler with ECS Exec</Header>}>
+                                            <p>Open the scheduler application container using the <Link external href="https://docs.idea-hpc.com/help-and-support/faq#cluster-management">ECS Exec procedure</Link> for your account, region, cluster, and scheduler task.</p>
+                                            <p>The files below are in the scheduler's persistent EFS volume at /var/spool/pbs. Their changes survive task replacement.</p>
                                         </Container>
                                         <Container header={<Header variant={"h3"}>Update resourcedef</Header>}>
 
@@ -376,16 +356,16 @@ class UpdateHpcLicense extends Component<UpdateHpcLicenseProps, UpdateHpcLicense
                                                 </Box>
                                             </SpaceBetween>
                                         </Container>
-                                        <Container header={<Header variant={"h3"}>Restart OpenPBS Server</Header>}>
-                                            Run the below command to, restart OpenPBS Server and apply the configuration changes and add new license resource.
+                                        <Container header={<Header variant={"h3"}>Replace the scheduler task</Header>}>
+                                            From your administrator shell, replace the scheduler task to apply the changes. Substitute your account profile, region, ECS cluster, and scheduler service. Submissions pause while the task restarts.
                                             <p>
                                                 <code>
-                                                    systemctl restart pbs
+                                                    aws --profile PROFILE --region REGION ecs update-service --cluster ECS_CLUSTER --service SCHEDULER_SERVICE --force-new-deployment
                                                 </code>
-                                                <CopyToClipBoard text={'systemctl restart pbs'} feedback={`systemctl restart pbs copied`}/>
+                                                <CopyToClipBoard text={'aws --profile PROFILE --region REGION ecs update-service --cluster ECS_CLUSTER --service SCHEDULER_SERVICE --force-new-deployment'} feedback={`aws --profile PROFILE --region REGION ecs update-service --cluster ECS_CLUSTER --service SCHEDULER_SERVICE --force-new-deployment copied`}/>
                                             </p>
                                             <Alert>
-                                                <Box variant="strong">Pro tip:</Box> If you are adding multiple license resources, create all license resources before restarting pbs server.
+                                                <Box variant="strong">Pro tip:</Box> If you are adding multiple license resources, create all license resources before replacing the scheduler task. Wait for the ECS service to stabilize and verify the license count before submitting jobs.
                                             </Alert>
                                         </Container>
                                     </SpaceBetween>

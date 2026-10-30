@@ -30,7 +30,7 @@ def test_only_the_complete_entry_is_sent(context):
     chosen = provider.complete_entries(batch)
     assert len(chosen) == 1
     assert provider.format_entry(chosen[0]) == (
-        'idea.jobs_finished:1|c|#idea_cluster:idea-mock,idea_module:mock,queue_type:compute,project:p1'
+        'idea.jobs_finished:1|c|#idea_cluster:idea-mock,env:idea-mock,idea_module:mock,queue_type:compute,project:p1'
     )
 
 
@@ -40,7 +40,7 @@ def test_summary_is_a_distribution_and_tags_are_sanitized(context):
         _entry('api_invocations', 12.5, [('Api', 'Jobs.List, all|now')], 'Summary')
     )
     assert line == (
-        'idea.api_invocations:12.5|d|#idea_cluster:idea-mock,idea_module:mock,component:api,api:Jobs.List_all_now'
+        'idea.api_invocations:12.5|d|#idea_cluster:idea-mock,env:idea-mock,idea_module:mock,component:api,api:Jobs.List_all_now'
     )
 
 
@@ -153,3 +153,17 @@ def test_synchronous_send_failure_raises_and_next_send_recovers(context, monkeyp
     provider.log([_entry('cost.amortized', 2, [])], raise_on_error=True)
     recovered.sendto.assert_called_once()
     assert provider._send_failures == 0
+
+
+@pytest.mark.parametrize(
+    'name', ['jobs_finished', 'job.count', 'cost.amortized', 'storage.used_bytes']
+)
+def test_environment_tag_matches_sanitized_cluster(context, name):
+    provider = DogStatsdMetrics(context, 'example cluster/module/component')
+    tags = provider.name_and_tags(_entry(name, 1, []))[1]
+    runtime = name == 'jobs_finished'
+    assert tags.count('env:example_cluster') == int(runtime)
+    assert tags.count('idea_cluster:example_cluster') == 1
+    assert (
+        'env:example_cluster' in provider.format_entry(_entry(name, 1, []))
+    ) is runtime

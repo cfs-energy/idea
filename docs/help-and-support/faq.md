@@ -1,6 +1,6 @@
 # FAQ
 
-New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+The control plane runs only on ECS. Direct upgrades require 26.10.0 or newer on every deployed module. Use the 26.10.9 administrator to complete any older upgrade and ECS migration first. See the [recovery command](../first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md#recovery-with-the-26109-administrator).
 
 ## Cluster Management
 
@@ -10,12 +10,7 @@ New clusters use the container control plane only. Move an existing host-based c
 
 Boto3 ([https://boto3.amazonaws.com/v1/documentation/api/latest/index.html](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html)) is the official AWS Python SDK. We recommend to update boto3 on a regular basis in order to stay up-to-date with the latest AWS releases (new instance types ...)
 
-On a cluster whose control plane runs as containers, the SDK version is part of the control plane image: build an image with the newer Boto3 and roll it out as described in [patch-idea-module.md](../first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md "mention"). On a host, run the update over Systems Manager and restart the services:
-
-```
-aws ssm send-command --instance-ids <SCHEDULER_INSTANCE_ID> --document-name AWS-RunShellScript \
-  --parameters 'commands=["sudo idea_pip install boto3 --upgrade && sudo supervisorctl restart all"]'
-```
+The SDK version is part of the control-plane image. Update the pinned requirement, build a new image, and roll it out as described in [Patching a module](../first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md).
 
 </details>
 
@@ -53,9 +48,7 @@ python3.13 -m ideaclustermanager.cli.cli_main accounts create-user \
 ```
 
 This creates a confirmed administrator without sending an invitation email. Use the same
-application task's logs to investigate a failed request. On a host deployment, connect to the
-cluster-manager EC2 instance through Systems Manager and run
-`sudo ideactl accounts create-user --email '<ADMIN_EMAIL>' --password '<NEW_PASSWORD>' --username '<ADMIN_USERNAME>' --sudo --email-verified`.
+application task's logs to investigate a failed request.
 
 </details>
 
@@ -283,10 +276,6 @@ deploying a corrected image, use `aws --profile <PROFILE> --region <REGION> ecs 
 and wait for the service to stabilize. Scheduler replacement briefly interrupts submissions/API
 access. Containers run their role directly and are restarted by ECS, so supervisor commands do not
 apply to them.
-
-For a host deployment, connect through Systems Manager, inspect `/root/bootstrap/logs`, then
-`/opt/idea/app/logs`. Check `/opt/idea/python/latest/bin/supervisorctl status` and
-`/var/log/supervisord.log`; after fixing the cause, run `sudo supervisorctl restart all` on that host.
 
 </details>
 

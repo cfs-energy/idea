@@ -52,7 +52,7 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
             cluster_name=cluster_name,
             aws_region=aws_region,
             aws_profile=aws_profile,
-            create_subscription=create_subscription,
+            create_subscription=False,
             cluster_config_subscriber=self,
             logger=logger,
         )
@@ -66,6 +66,9 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
         config = self.db.build_config_from_db()
 
         super().__init__(config=config.as_dict())
+        # Callbacks must not race assignment of self.db or the initial config tree.
+        if create_subscription:
+            self.db.start_subscription()
 
     def set_logger(self, logger):
         self.logger = logger
@@ -159,6 +162,10 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
             return None
         response = self.db.aws.secretsmanager().get_secret_value(SecretId=secret_arn)
         return Utils.get_value_as_string('SecretString', response)
+
+    def on_reset(self):
+        # Replace only after every page succeeds, including removal of deleted keys.
+        self._config = self.db.build_config_from_db(consistent_read=True).raw()
 
     def on_create(self, entry: Dict):
         log_message = f'config created: {Utils.to_json(entry)}'

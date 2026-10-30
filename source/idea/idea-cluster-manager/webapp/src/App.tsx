@@ -33,6 +33,7 @@ import {Navigate} from "react-router-dom";
 import UpdateHpcApplication from "./pages/hpc/update-hpc-application";
 import SubmitJob from "./pages/hpc/submit-job";
 import AccountSettings from "./pages/account/account-settings";
+import {ShellDock, TerminalRedirect, terminalEnabled} from "./pages/home/terminal";
 import SSHAccess from "./pages/home/ssh-access";
 import MyCosts from "./pages/home/my-costs";
 import CustomDashboard from "./pages/home/custom-dashboard";
@@ -323,6 +324,14 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     }
 
     render() {
+        // The dock sits beside the routes so terminals stay open while navigating.
+        return <>
+            {this.renderPage()}
+            {this.state.isInitialized && this.state.isLoggedIn && terminalEnabled() && <ShellDock client={AppContext.get().client().terminal()}/>}
+        </>
+    }
+
+    renderPage() {
         const view = this.props.searchParams.get('view')
         const AdminJobs = view === 'nodes' ? HpcNodes : AdminActiveJobs
         const redirected = legacyRoute(this.props.location.pathname, this.props.location.search, AppContext.get());
@@ -519,6 +528,11 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                             onFlashbarChange={this.onFlashbarChange}
                             flashbarItems={this.state.flashbarItems}
                         />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/home/terminal" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <TerminalRedirect client={AppContext.get().client().terminal()}/>
                     </IdeaAuthenticatedRoute>
                 }/>
                 <Route path="/home/ssh-access" element={

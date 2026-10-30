@@ -14,20 +14,20 @@
  * require them explicitly. The synthetic suite always runs.
  */
 
+import * as yaml from 'js-yaml';
 import assert from 'node:assert/strict';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
-  existsSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import * as yaml from 'js-yaml';
+import { fileURLToPath } from 'node:url';
 
 import {
   flattenConfigDir,
@@ -180,8 +180,8 @@ function checkRuntimeKeys(label: string, flat: Record<string, unknown>, keys: Ru
   const unexpected = forbidden.filter((key) => key in flat);
   console.log(
     `${label}: ${required.length} runtime keys checked ` +
-      `(${selected.slice(1).join('+') || 'base'}), ${missing.length} missing, ` +
-      `${unexpected.length} from an unselected branch`,
+    `(${selected.slice(1).join('+') || 'base'}), ${missing.length} missing, ` +
+    `${unexpected.length} from an unselected branch`,
   );
   assert.deepStrictEqual(missing, [], `${label}: runtime keys missing from the generated config`);
   assert.deepStrictEqual(unexpected, [], `${label}: keys produced by an unselected branch`);
@@ -305,8 +305,8 @@ describe('layer A: generated config equals the Python generator, key for key', {
       const differences = reportDifferences(got, want);
       console.log(
         `${fixture.name}: ${Object.keys(got).length} keys generated, ` +
-          `${Object.keys(want).length} in flat.json, ` +
-          `${differences.length === 0 ? 'PASS' : 'FAIL'}`,
+        `${Object.keys(want).length} in flat.json, ` +
+        `${differences.length === 0 ? 'PASS' : 'FAIL'}`,
       );
       if (differences.length > 0) console.log(differences.join('\n'));
       assert.deepStrictEqual(got, want);
@@ -329,7 +329,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     // The inventory counts key patterns: `<app>.server.port` is one entry there and three keys here, as are
     // `<day>`, `<state>`, `<os>`, `<family>` and the `<module>.module_id` mappings.
     const distinct = new Set(RUNTIME_KEY_GROUPS.flatMap((group) => runtimeKeys[group] as string[]));
-    assert.equal(distinct.size, 720);
+    assert.equal(distinct.size, 703);
     // Spot-check expanded key identities.
     for (const key of [
       'global-settings.module_sets.default.virtual-desktop-controller.module_id',
@@ -373,7 +373,7 @@ interface SyntheticExpectation {
 
 const syntheticExpectations: Record<string, SyntheticExpectation> = {
   'activedirectory-existing.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'cluster.network.use_existing_vpc': true,
       'directoryservice.provider': 'activedirectory',
@@ -382,7 +382,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['directoryservice.ad_edition'],
   },
   'alb-acm-certificate.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'cluster.load_balancers.external_alb.certificates.provided': true,
       'cluster.load_balancers.external_alb.certificates.custom_dns_name': 'idea.example.invalid',
@@ -390,7 +390,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: [],
   },
   'alb-private.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'cluster.load_balancers.external_alb.public': false,
       'cluster.load_balancers.external_alb.waf.enabled': false,
@@ -399,37 +399,28 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: [],
   },
   'base-os-rhel9.yml': {
-    modules: 11,
+    modules: 12,
     present: {
-      'bastion-host.base_os': 'rhel9',
-      'cluster-manager.ec2.autoscaling.base_os': 'rhel9',
-      'scheduler.base_os': 'rhel9',
-      'vdc.controller.autoscaling.base_os': 'rhel9',
+      'scheduler.compute_node_os': 'rhel9',
     },
     absent: [],
   },
   'base-os-rhel10.yml': {
-    modules: 11,
+    modules: 12,
     present: {
-      'bastion-host.base_os': 'rhel10',
-      'cluster-manager.ec2.autoscaling.base_os': 'rhel10',
-      'scheduler.base_os': 'rhel10',
-      'vdc.controller.autoscaling.base_os': 'rhel10',
+      'scheduler.compute_node_os': 'rhel10',
     },
     absent: [],
   },
   'base-os-rocky10.yml': {
-    modules: 11,
+    modules: 12,
     present: {
-      'bastion-host.base_os': 'rocky10',
-      'cluster-manager.ec2.autoscaling.base_os': 'rocky10',
-      'scheduler.base_os': 'rocky10',
-      'vdc.controller.autoscaling.base_os': 'rocky10',
+      'scheduler.compute_node_os': 'rocky10',
     },
     absent: [],
   },
   'existing-apps-fs.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'cluster.network.use_existing_vpc': true,
       'shared-storage.apps.efs.use_existing_fs': true,
@@ -437,7 +428,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['shared-storage.apps.efs.performance_mode'],
   },
   'existing-opensearch.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'analytics.opensearch.use_existing': true,
       'analytics.opensearch.domain_vpc_endpoint_url': 'vpc-idea-test1.us-east-2.es.amazonaws.com',
@@ -445,7 +436,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['analytics.opensearch.data_nodes'],
   },
   'fsx-lustre-apps.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'shared-storage.apps.provider': 'fsx_lustre',
       'shared-storage.apps.fsx_lustre.storage_type': 'SSD',
@@ -454,7 +445,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['shared-storage.apps.efs.performance_mode'],
   },
   'gateway-certificate.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'vdc.dcv_connection_gateway.certificate.provided': true,
       'vdc.dcv_connection_gateway.certificate.custom_dns_name': 'gateway.example.invalid',
@@ -463,7 +454,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: [],
   },
   'kms-customer-managed.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'cluster.kms.key_type': 'customer-managed',
       'analytics.kinesis.kms_key_id': '00000000-1111-2222-3333-444444444444',
@@ -472,7 +463,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: [],
   },
   'metrics-amp.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'metrics.provider': 'amazon_managed_prometheus',
       'metrics.amazon_managed_prometheus.workspace_name': 'idea-test1-workspace',
@@ -481,15 +472,15 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['metrics.cloudwatch.dashboard_name'],
   },
   'metrics-dogstatsd.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'metrics.provider': 'dogstatsd',
-      'metrics.dogstatsd.url': 'udp://127.0.0.1:8125',
+      'metrics.dogstatsd.url': 'unix:///var/run/datadog/dsd.socket',
     },
     absent: ['metrics.cloudwatch.dashboard_name'],
   },
   'metrics-prometheus.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'metrics.provider': 'prometheus',
       'metrics.prometheus.remote_write.url': 'https://prometheus.example.invalid/api/v1/write',
@@ -499,12 +490,12 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['metrics.cloudwatch.dashboard_name'],
   },
   'no-optional-modules.yml': {
-    modules: 7,
+    modules: 8,
     present: { 'cluster.cluster_name': 'idea-test1' },
     absent: ['metrics.provider', 'scheduler.provider', 'vdc.dcv_session.idle_timeout'],
   },
   'openldap.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'directoryservice.provider': 'openldap',
       'directoryservice.hostname': 'openldap.idea-test1.us-east-2.local',
@@ -513,7 +504,7 @@ const syntheticExpectations: Record<string, SyntheticExpectation> = {
     absent: ['directoryservice.ad_edition'],
   },
   'vpc-endpoints-existing-vpc.yml': {
-    modules: 11,
+    modules: 12,
     present: {
       'cluster.network.use_existing_vpc': true,
       'cluster.network.use_vpc_endpoints': true,
@@ -562,7 +553,7 @@ describe('synthetic branches render', () => {
       assert.ok(
         distinguishing.length > 0,
         `${caseFile}: every assertion also holds for base.yml - assert a value ` +
-          'only this branch produces',
+        'only this branch produces',
       );
       // The layer-D inventory is scoped to a full module set; the reduced case is covered by its
       // own module count and absence assertions.
@@ -682,9 +673,8 @@ describe('values coercion matches Python', () => {
       ),
     );
     assert.equal(context.volume_size, 1000);
-    assert.equal(context.dcv_broker_volume_size, 12);
     // "1_000.5" is not an int(); only the float() fallback can produce 1000 here.
-    assert.equal(context.dcv_connection_gateway_volume_size, 1000);
+    assert.equal(buildContext(valuesFromYaml('volume_size: "1_000.5"\n')).volume_size, 1000);
   });
 });
 
@@ -785,4 +775,11 @@ describe('cost settings keep shipped defaults', () => {
       assert.equal(flattenConfigDir(outDir)['scheduler.cost_estimation.provisioned_iops'], 0.075);
     });
   }
+});
+
+it('T-20: fresh settings omit retired host package configuration', () => {
+  const directory = tempDir();
+  generateConfig(join(here, 'ecs-values.yml'), directory);
+  const keys = Object.keys(flattenConfigDir(directory));
+  assert.deepEqual(keys.filter(key => /^global-settings\.package_config\.(nodejs\.|python\.|putty\.|openmpi\.|linux_packages\.putty$)/.test(key)), []);
 });

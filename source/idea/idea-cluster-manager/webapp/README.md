@@ -32,12 +32,12 @@ Type-checks, then builds the production bundle into `build/`:
 - `build/service-worker.js` is the compiled `src/service-worker.ts` (auth token
   handling; see `vite.config.ts`, built via vite-plugin-pwa injectManifest).
 - Assets follow the `static/{js,css,media}` layout consumed by
-  `tasks/tools/build_tool.py` packaging.
+  `scripts/tooling/modules.mjs` packaging.
 
 ## Notes
 
 - Environment variables keep the CRA-era `REACT_APP_` prefix: the build tooling
-  (`tasks/tools/build_tool.py`) writes `REACT_APP_IDEA_RELEASE_VERSION` into
+  (`scripts/tooling/modules.mjs`) writes `REACT_APP_IDEA_RELEASE_VERSION` into
   `.env`, and `vite.config.ts` maps each `REACT_APP_*` var onto `process.env.*`
   at build time.
 - Service workers cannot be exercised via the dev server; see the comments in

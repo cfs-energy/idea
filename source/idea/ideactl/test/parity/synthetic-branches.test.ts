@@ -61,7 +61,7 @@ const BRANCHES: BranchSpec[] = [
   {
     branch: "base_os amazonlinux2023",
     file: "network-new.yml",
-    present: { "bastion-host.base_os": "amazonlinux2023" },
+    present: { "scheduler.compute_node_os": "amazonlinux2023" },
     absent: ["directoryservice.hostname"],
   },
   {
@@ -158,7 +158,7 @@ const BRANCHES: BranchSpec[] = [
     file: "metrics-dogstatsd.yml",
     present: {
       "metrics.provider": "dogstatsd",
-      "metrics.dogstatsd.url": "udp://127.0.0.1:8125",
+      "metrics.dogstatsd.url": "unix:///var/run/datadog/dsd.socket",
     },
     absent: ["metrics.cloudwatch.dashboard_name"],
   },
@@ -201,9 +201,7 @@ const BRANCHES: BranchSpec[] = [
     branch: "base_os rhel8",
     file: "base-os-rhel8.yml",
     present: {
-      "bastion-host.base_os": "rhel8",
-      "scheduler.base_os": "rhel8",
-      "cluster-manager.ec2.autoscaling.base_os": "rhel8",
+      "scheduler.compute_node_os": "rhel8",
     },
     absent: ["directoryservice.hostname"],
   },
@@ -211,24 +209,21 @@ const BRANCHES: BranchSpec[] = [
     branch: "base_os rhel9",
     file: "base-os-rhel9.yml",
     present: {
-      "bastion-host.base_os": "rhel9",
-      "scheduler.base_os": "rhel9",
-      "vdc.controller.autoscaling.base_os": "rhel9",
+      "scheduler.compute_node_os": "rhel9",
     },
     absent: ["directoryservice.hostname"],
   },
   {
     branch: "base_os rhel10",
     file: "base-os-rhel10.yml",
-    present: { "scheduler.base_os": "rhel10", "bastion-host.base_os": "rhel10" },
+    present: { "scheduler.compute_node_os": "rhel10" },
     absent: ["vdc.controller.autoscaling.base_os"],
   },
   {
     branch: "base_os rocky8",
     file: "base-os-rocky8.yml",
     present: {
-      "bastion-host.base_os": "rocky8",
-      "scheduler.base_os": "rocky8",
+      "scheduler.compute_node_os": "rocky8",
     },
     absent: ["directoryservice.hostname"],
   },
@@ -236,15 +231,14 @@ const BRANCHES: BranchSpec[] = [
     branch: "base_os rocky9",
     file: "base-os-rocky9.yml",
     present: {
-      "bastion-host.base_os": "rocky9",
-      "scheduler.base_os": "rocky9",
+      "scheduler.compute_node_os": "rocky9",
     },
     absent: ["directoryservice.hostname"],
   },
   {
     branch: "base_os rocky10",
     file: "base-os-rocky10.yml",
-    present: { "scheduler.base_os": "rocky10", "bastion-host.base_os": "rocky10" },
+    present: { "scheduler.compute_node_os": "rocky10" },
     absent: ["vdc.controller.autoscaling.base_os"],
   },
 ];

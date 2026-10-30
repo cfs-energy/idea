@@ -37,7 +37,7 @@ import {
 
 import type { ModuleInfo } from './cluster-config.ts';
 import { isEmpty } from './cluster-config.ts';
-import { isOperatorSource } from './upgrade-drift.ts';
+import { isOperatorSource, VALUES_OWNED_KEYS } from './upgrade-drift.ts';
 
 const IDEA_TAG_PREFIX = 'idea:';
 const IDEA_TAG_CLUSTER_NAME = `${IDEA_TAG_PREFIX}ClusterName`;
@@ -259,7 +259,7 @@ export class ClusterConfigDb {
 
   /**
    * Add-only unless `overwrite`. Never deletes, never touches keys absent from `entries`. A template
-   * overwrite keeps a row the operator wrote (`api`, `cli`): its value and its marker stay.
+   * overwrite keeps a row the operator wrote (`api`, `cli`), except values-owned keys.
    */
   async syncClusterSettingsInDb(entries: ConfigEntry[], overwrite = false, source: 'cli' | 'template' = 'template'): Promise<void> {
     this.logger(`sync config entries to db. overwrite: ${overwrite}`);
@@ -270,7 +270,7 @@ export class ClusterConfigDb {
           this.logger(`entry already exists for key: ${entry.key}, skip.`);
           continue;
         }
-      } else if (source === 'template') {
+      } else if (source === 'template' && !VALUES_OWNED_KEYS.has(entry.key)) {
         const existing = await this.getConfigEntry(entry.key);
         if (existing !== undefined && isOperatorSource(existing['source'])) {
           this.logger(`operator value kept for key: ${entry.key}`);

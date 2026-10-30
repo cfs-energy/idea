@@ -1,4 +1,5 @@
 # Cluster Settings
+# The control plane runs on ECS.
 cluster_name: idea-sample
 cluster_timezone: ~ # leaving blank or ~ will result in using the TimezoneId for the city closest to the selected AWS Region
 cluster_locale: en_US
@@ -50,19 +51,13 @@ enabled_modules: []
 metrics_provider: cloudwatch
 # required when metrics_provider = prometheus
 prometheus_remote_write_url: ~
-# required when metrics_provider = dogstatsd and enable_ecs = true: the Secrets Manager secret
+# required when metrics_provider = dogstatsd: the Secrets Manager secret
 # holding the Datadog API key. The agent image defaults to the release's official Datadog image
 # from Datadog's public ECR, digest-pinned; name another digest-pinned reference to override it
 datadog_api_key_secret_arn: ~
 datadog_agent_image: ~
 # aws backup
 enable_aws_backup: true
-# Virtual Desktop Controller - DCV Broker
-dcv_broker_instance_ami: ~
-dcv_broker_volume_size: 200
-# Virtual Desktop Controller - DCV Connection Gateway
-dcv_connection_gateway_instance_ami: ~
-dcv_connection_gateway_volume_size: 200
 # Virtual Desktop Controller - DCV Gateway/Reverse Proxy Server
 reverse_proxy_server_instance_ami: ~
 reverse_proxy_server_volume_size: 200

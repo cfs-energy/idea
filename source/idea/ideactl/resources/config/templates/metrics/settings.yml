@@ -29,7 +29,7 @@ dogstatsd:
   # every task; on hosts an agent on the host receives them. udp://host:port, or
   # unix:///path/to/dsd.socket. When this is empty the module environment's DD_DOGSTATSD_URL is
   # used, then UDP on localhost.
-  url: {% if enable_ecs %}unix:///var/run/datadog/dsd.socket{% else %}udp://127.0.0.1:8125{% endif %}
+  url: unix:///var/run/datadog/dsd.socket
 {% endif %}
 
 {% if metrics_provider == 'amazon_managed_prometheus' %}

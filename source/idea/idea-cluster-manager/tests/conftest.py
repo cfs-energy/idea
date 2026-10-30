@@ -9,6 +9,8 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+import socket
+
 from ideadatamodel import (
     SocaAnyPayload,
 )
@@ -74,13 +76,18 @@ def wait_for_dynamodb_local(endpoint_url: str, timeout: int = 30):
 
 
 @pytest.fixture(scope='session')
-def ddb_local():
-    ddb_local = DynamoDBLocal(db_name='cluster-manager', reset=True)
+def ddb_local(tmp_path_factory):
+    # Concurrent worktrees must never share a port or a test database.
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+    ddb_local = DynamoDBLocal(db_name='cluster-manager', port=port, reset=True)
+    ddb_local.db_dir = str(tmp_path_factory.mktemp('cluster-manager-ddb'))
 
     # Check and install DynamoDB Local if not already installed
     install_success = ddb_local.check_and_install()
     if not install_success:
-        pytest.skip('DynamoDB Local installation failed')
+        pytest.fail('DynamoDB Local installation failed')
 
     ddb_local.start()
 
@@ -88,7 +95,7 @@ def ddb_local():
     endpoint_url = f'http://localhost:{ddb_local.port}/'
     if not wait_for_dynamodb_local(endpoint_url, timeout=30):
         ddb_local.stop()
-        pytest.skip('DynamoDB Local failed to start')
+        pytest.fail('DynamoDB Local failed to start')
 
     yield ddb_local
 

@@ -6,11 +6,12 @@
  * directly: every effect arrives through `Deps`.
  */
 
+import { HOST_CONTROL_PLANE_REFUSAL } from "../upgrade-floor.ts";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import * as yaml from 'js-yaml';
 import { Command, Option } from 'commander';
+import * as yaml from 'js-yaml';
 
 import {
   checkAndConvertDecimalValue,
@@ -24,19 +25,19 @@ import type { UpgradeDriftInput, UpgradeDriftReport } from "../../config/upgrade
 import { loadValuesFile } from '../../config/values.ts';
 import { vpcEndpointsFor } from '../../config/vpc-endpoints.ts';
 import {
+  clusterConfigDir,
+  clusterRegionDir,
+  ExitWithCode,
+  VALUES_FILE_S3_KEY,
+  valuesFilePath,
+  type Deps,
+} from '../cdk-invoker.ts';
+import {
   collectInstallerValues,
   type InstallerChoiceProvider,
   type InstallerIdentity,
 } from '../installer-params.ts';
 import { TerminalPromptDriver, type PromptDriver } from '../prompts.ts';
-import {
-  clusterConfigDir,
-  clusterRegionDir,
-  ExitWithCode,
-  valuesFilePath,
-  VALUES_FILE_S3_KEY,
-  type Deps,
-} from '../cdk-invoker.ts';
 
 /** One `<cluster>.cluster-settings` row as the CLI prints it. */
 export interface SettingsRow {
@@ -183,17 +184,6 @@ export interface GenerateOptions {
 /**
  * `config generate`. Returns the values map, because `quick-setup` deploys what this returned.
  */
-/** True when the cluster already has settings rows: it exists and its control plane is decided. */
-async function clusterHasSettings(deps: Deps, clusterName: string): Promise<boolean> {
-  try {
-    const page = await deps.scan({ TableName: `${clusterName}.cluster-settings` });
-    return (page.Items ?? []).length > 0;
-  } catch (error) {
-    if ((error as Error).name === 'ResourceNotFoundException') return false;
-    throw error;
-  }
-}
-
 export async function configGenerate(deps: Deps, options: GenerateOptions): Promise<Record<string, unknown>> {
   if (options.configDir !== undefined && !existsSync(options.configDir)) {
     deps.err(`${options.configDir} not found or is not a valid directory.`);
@@ -201,15 +191,15 @@ export async function configGenerate(deps: Deps, options: GenerateOptions): Prom
   }
   const values = isEmpty(options.valuesFile)
     ? await collectInstallerValues({
-        driver: options.installerDriver ?? new TerminalPromptDriver(),
-        identity: options.installerIdentity ?? (async (answers) => {
-          const region = answers["aws_region"];
-          return installerIdentity(await deps.accountId(), typeof region === "string" ? region : undefined);
-        }),
-        existingResources: options.existingResources,
-        regenerate: options.regenerate,
-        choices: options.installerChoices,
-      })
+      driver: options.installerDriver ?? new TerminalPromptDriver(),
+      identity: options.installerIdentity ?? (async (answers) => {
+        const region = answers["aws_region"];
+        return installerIdentity(await deps.accountId(), typeof region === "string" ? region : undefined);
+      }),
+      existingResources: options.existingResources,
+      regenerate: options.regenerate,
+      choices: options.installerChoices,
+    })
     : loadPreparedValues(options.valuesFile as string);
 
   const clusterName = String(values['cluster_name'] ?? '');
@@ -218,11 +208,9 @@ export async function configGenerate(deps: Deps, options: GenerateOptions): Prom
     deps.err('Cluster name and AWS region are required');
     throw new ExitWithCode(1);
   }
-  // A values file that predates the container control plane says nothing about it. A new install
-  // gets containers; an existing cluster keeps whatever it runs, so a routine regeneration of its
-  // old file cannot start the container cutover on the next upgrade.
-  if (options.regenerate !== true && !Object.hasOwn(values, 'enable_ecs') && !(await clusterHasSettings(deps, clusterName))) {
-    values['enable_ecs'] = true;
+  if (!Object.hasOwn(values, 'enable_ecs')) values['enable_ecs'] = true;
+  if (values['enable_ecs'] !== true) {
+    throw new GeneralException(HOST_CONTROL_PLANE_REFUSAL);
   }
 
   const regionDir = options.configDir ?? clusterRegionDir(clusterName, awsRegion);
@@ -329,7 +317,7 @@ export async function configUpdate(deps: Deps, options: UpdateOptions, source: '
 
   let entries = readEntries();
   if (options.force !== true) {
-    for (;;) {
+    for (; ;) {
       const result = await deps.prompt({
         message:
           'Are you sure you want to update cluster settings db with above configuration from local file system?',
@@ -492,7 +480,7 @@ export async function configExport(
   if (hasConfig(exportDir)) {
     throw new GeneralException(
       `export directory: ${exportDir} already exists and can cause merge conflicts. ` +
-        'backup your existing configuration to another directory and try again.',
+      'backup your existing configuration to another directory and try again.',
     );
   }
   const entries = await scanSettings(deps, options.clusterName);
@@ -572,9 +560,9 @@ export async function configUpgradePreview(
   const input =
     deps.loadUpgradeDriftInput === undefined
       ? await (async () => {
-          const { createLiveUpgradeDeps, prepareUpgradeDriftInput } = await import("./upgrade.ts");
-          return prepareUpgradeDriftInput(createLiveUpgradeDeps(deps), options, true);
-        })()
+        const { createLiveUpgradeDeps, prepareUpgradeDriftInput } = await import("./upgrade.ts");
+        return prepareUpgradeDriftInput(createLiveUpgradeDeps(deps), options, true);
+      })()
       : await deps.loadUpgradeDriftInput(options);
   const report = compareUpgradeDrift(input);
   deps.out(renderUpgradeDrift(report));
@@ -726,8 +714,8 @@ export function registerConfigCommands(program: Command, deps: Deps): Command {
       } catch (error) {
         deps.err(
           `Values file not found at ${valuesFile} and could not be downloaded from ` +
-            `s3://${bucket}/${VALUES_FILE_S3_KEY}: ${(error as Error).message}. Restore values.yml to ` +
-            `${valuesFile} from a backup, then upload it with: ideactl config save-values`,
+          `s3://${bucket}/${VALUES_FILE_S3_KEY}: ${(error as Error).message}. Restore values.yml to ` +
+          `${valuesFile} from a backup, then upload it with: ideactl config save-values`,
         );
         throw new ExitWithCode(1);
       }

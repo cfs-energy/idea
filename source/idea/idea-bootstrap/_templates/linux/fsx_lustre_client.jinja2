@@ -232,8 +232,8 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
       sudo yum clean all
       package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     elif [[ $kernel == *"5.14.0-687"*$machine ]]; then
-      # EL 9.8 kernel series; ami_update.py's de-staled RHEL-9.*/Rocky-9.* patterns
-      # resolve to 9.8 AMIs once published, so this arm must exist before they do
+      # EL 9.8 kernel series; ideasdk/aws/stock_amis.py resolves current RHEL/Rocky
+      # base images, so support their kernel before the new AMIs are selected
       curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc
       sudo rpm --import /tmp/fsx-rpm-public-key.asc || log_error "Failed to import the FSx for Lustre RPM signing key: the lustre-client install will fail its GPG check and Lustre filesystems will NOT be mounted on this node."
       sudo curl https://fsx-lustre-client-repo.s3.amazonaws.com/el/9/fsx-lustre-client.repo -o /etc/yum.repos.d/aws-fsx.repo

@@ -3,10 +3,9 @@
  * sequence. Each external operation is injected so callers can replay it.
  */
 
-import { liveContainerHosts } from "../live-operator-adapters.ts";
 import { refreshHostsCommand } from "../host-pool.ts";
+import { liveContainerHosts } from "../live-operator-adapters.ts";
 
-import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +14,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { Command } from "commander";
 import { EnvHttpProxyAgent, fetch as registryFetch, type Dispatcher, type RequestInit as RegistryRequestInit } from "undici";
 
-import { ideaVersion } from "../../version.ts";
 import { ClusterConfigError, GeneralException, type ModuleInfo } from "../../config/cluster-config.ts";
 import {
   convertConfigToKeyValuePairs,
@@ -27,6 +25,7 @@ import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../..
 import {
   compareUpgradeDrift,
   isOperatorSource,
+  VALUES_OWNED_KEYS,
   renderUpgradeDrift,
   type CurrentConfigRow,
   type StackSettingsPlan,
@@ -35,6 +34,11 @@ import {
 } from "../../config/upgrade-drift.ts";
 import { loadValuesFile } from "../../config/values.ts";
 import { vpcEndpointsFor } from "../../config/vpc-endpoints.ts";
+import { ideaVersion } from "../../version.ts";
+import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
+import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
+import { DeploymentHelper } from "../deployment-helper.ts";
+import { compareIdeaRelease, upgradeFloorRefusal, HOST_CONTROL_PLANE_REFUSAL, RECOVERY_COMMAND } from "../upgrade-floor.ts";
 import {
   buildTree,
   toYaml,
@@ -42,10 +46,6 @@ import {
   type ConfigUpgradePreviewOptions,
 } from "./config.ts";
 import { asBoolFlag } from "./deploy.ts";
-import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
-import { DeploymentHelper } from "../deployment-helper.ts";
-import { compareIdeaRelease, upgradeFloorRefusal } from "../upgrade-floor.ts";
-import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
 
 export const EOL_BASE_OS: Readonly<Record<string, string>> = {
   amazonlinux2: "amazonlinux2023",
@@ -161,30 +161,12 @@ const OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = "m5.large.search";
 const COMPUTE_IMAGE_PREFIX = ["idea", "compute", "node", ""].join("-");
 
 const AMI_UPDATE_KEYS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
-  "bastion-host": [["base_os", "instance_ami"]],
-  "cluster-manager": [["ec2.autoscaling.base_os", "ec2.autoscaling.instance_ami"]],
   directoryservice: [["base_os", "instance_ami"]],
-  scheduler: [
-    ["base_os", "instance_ami"],
-    ["compute_node_os", "compute_node_ami"],
-  ],
-  "virtual-desktop-controller": [
-    ["controller.autoscaling.base_os", "controller.autoscaling.instance_ami"],
-    ["dcv_broker.autoscaling.base_os", "dcv_broker.autoscaling.instance_ami"],
-    ["dcv_connection_gateway.autoscaling.base_os", "dcv_connection_gateway.autoscaling.instance_ami"],
-  ],
+  scheduler: [["compute_node_os", "compute_node_ami"]],
 };
 
 const HOST_INSTANCE_TYPE_KEYS: Readonly<Record<string, readonly string[]>> = {
-  "bastion-host": ["instance_type"],
-  "cluster-manager": ["ec2.autoscaling.instance_type"],
   directoryservice: ["instance_type"],
-  scheduler: ["instance_type"],
-  "virtual-desktop-controller": [
-    "controller.autoscaling.instance_type",
-    "dcv_broker.autoscaling.instance_type",
-    "dcv_connection_gateway.autoscaling.instance_type",
-  ],
 };
 
 export interface InstanceImage {
@@ -241,18 +223,6 @@ export interface UpgradeDeploymentOptions {
   allowReplacement?: readonly string[];
 }
 
-/** Jobs the batch server on a scheduler host still holds, by state. */
-export interface SchedulerJobInventory {
-  queued: number;
-  running: number;
-  other: number;
-}
-
-/** Reads the host scheduler's job inventory, over SSM in the live tool. */
-export interface SchedulerJobsApi {
-  activeJobs(input: { awsRegion: string; instanceId: string }): Promise<SchedulerJobInventory>;
-}
-
 export interface ContainerHost {
   attributes?: Record<string, string>;
   arn: string;
@@ -268,9 +238,11 @@ export interface ContainerHostsApi {
     current: { id: string; version: string };
     instances: Array<{ instanceId: string; id?: string; version?: string }>;
   }>;
-  startInstanceRefresh(input: { awsRegion: string; awsProfile?: string; name: string; preferences: {
-    MinHealthyPercentage: number; MaxHealthyPercentage?: number; InstanceWarmup: number; ScaleInProtectedInstances: "Refresh" | "Ignore" | "Wait";
-  } }): Promise<string>;
+  startInstanceRefresh(input: {
+    awsRegion: string; awsProfile?: string; name: string; preferences: {
+      MinHealthyPercentage: number; MaxHealthyPercentage?: number; InstanceWarmup: number; ScaleInProtectedInstances: "Refresh" | "Ignore" | "Wait";
+    }
+  }): Promise<string>;
   describeInstanceRefresh(input: { awsRegion: string; awsProfile?: string; name: string; id: string }): Promise<{
     status: string; percentageComplete?: number; reason?: string;
   }>;
@@ -292,12 +264,11 @@ export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   cloudFormation: UpgradeCloudFormationApi;
   openSearch: UpgradeOpenSearchApi;
   eolSoftwareStacks: EolSoftwareStackApi;
-  schedulerJobs?: SchedulerJobsApi;
-  historicalIam?: (roleName: string, policyName: string, options: UpgradeCommandOptions, ownsPolicy?: boolean) => Promise<{ attached: string[]; inline: string[]; collision: boolean; available: number }>;
   deploy(options: UpgradeDeploymentOptions): Promise<void>;
   regionAmiConfig?: () => RegionsConfig;
   /** Whether the registry serves this tagged image; throws when the registry cannot say. */
   releaseImageExists?: (image: string) => Promise<boolean>;
+  releaseImageDigest?: (image: string) => Promise<string | undefined>;
 }
 
 export interface UpgradeCommandOptions {
@@ -318,11 +289,6 @@ export interface UpgradeCommandOptions {
   skipGlobalSettingsUpdate?: boolean;
   skipReleaseImageCheck?: boolean;
   disableEolStacksInUse?: boolean;
-  /** Close job submission and wait for the host scheduler to empty before the container cutover. */
-  drain?: boolean;
-  drainTimeoutMinutes?: number;
-  /** Skip the job inventory check before the container cutover; the operator has drained by hand. */
-  skipDrainCheck?: boolean;
   modules?: readonly string[];
   allowReplacement?: string[];
 }
@@ -585,12 +551,10 @@ async function resolveUpgradeBaseOs(
 ): Promise<string> {
   let current: string[] = [];
   try {
-    current = [...new Set(
-      (await scanAll(deps, `${options.clusterName}.cluster-settings`))
-        .filter((entry) => valueAsString(entry["key"]).endsWith(".base_os"))
-        .map((entry) => valueAsString(entry["value"]))
-        .filter((value) => value !== ""),
-    )].sort();
+    const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+    const hostSettings = settings.filter((entry) => valueAsString(entry["key"]).endsWith(".base_os"));
+    const defaults = hostSettings.length > 0 ? hostSettings : settings.filter((entry) => valueAsString(entry["key"]).endsWith(".compute_node_os"));
+    current = [...new Set(defaults.map((entry) => valueAsString(entry["value"])).filter((value) => value !== ""))].sort();
   } catch (error) {
     if (options.baseOs === undefined || options.baseOs === "") {
       deps.err(`Could not read the cluster settings to determine the current Base OS: ${(error as Error).message}. Re-run with an explicit --base-os.`);
@@ -681,26 +645,6 @@ async function exportConfiguration(deps: UpgradeDeps, options: UpgradeCommandOpt
   writeFileSync(join(configDir, "idea.yml"), toYaml(idea));
 }
 
-// Older applications have a fixed module table that cannot resolve these new names.
-// Advertising them before cluster-manager upgrades breaks every portal page.
-const MODULES_UNKNOWN_TO_DEPLOYED_APPLICATIONS: ReadonlySet<string> = new Set([ECS_MODULE]);
-
-// The portal resolves every advertised module using its deployed application table.
-// ECS capacity alone cannot make an older cluster-manager recognize the new module.
-export function heldModuleSetEntries(
-  entries: ConfigEntry[],
-  portalReady = false,
-): { kept: ConfigEntry[]; held: ConfigEntry[] } {
-  const kept: ConfigEntry[] = [];
-  const held: ConfigEntry[] = [];
-  for (const entry of entries) {
-    const name = moduleSetEntryModule(entry.key);
-    const wait = name !== undefined && MODULES_UNKNOWN_TO_DEPLOYED_APPLICATIONS.has(name) && !portalReady;
-    (wait ? held : kept).push(entry);
-  }
-  return { kept, held };
-}
-
 /** `global-settings.module_sets.<set>.<module>.<field>` names a module; anything else does not. */
 function moduleSetEntryModule(key: string): string | undefined {
   const parts = key.split(".");
@@ -708,47 +652,6 @@ function moduleSetEntryModule(key: string): string | undefined {
 }
 
 /** The first release whose cluster-manager resolves the container module in its module table. */
-export const MODULE_TABLE_KNOWS_ECS_FROM = "26.09.1";
-
-// The portal resolves every advertised module through its deployed application's module table.
-// A cluster-manager from before the container release cannot resolve the new module, so its row
-// waits until the stack has completed on the target release. One that already knows the module
-// keeps the row for the whole run: holding it back from a portal that depends on it takes every
-// page down for the length of the upgrade.
-async function clusterManagerReady(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<boolean> {
-  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const id = maintenanceModuleId(settings, options.moduleSet);
-  const portal = modules.find((module) => module.module_id === id);
-  if (portal?.status !== "deployed") return false;
-  const deployed = typeof portal.version === "string" ? portal.version.trim() : "";
-  const knows = compareIdeaRelease(deployed, MODULE_TABLE_KNOWS_ECS_FROM);
-  // A row already at the target release may have advanced ahead of a stack that never completed,
-  // so only a completed stack carrying the tag proves that one; any earlier container release
-  // was reached by a completed run and its application resolves the module.
-  if (knows !== undefined && knows >= 0 && deployed !== ideaVersion()) return true;
-  if (deployed !== ideaVersion()) return false;
-  const stack = await deps.cfn.describeStack(portal.stack_name ?? `${options.clusterName}-${id}`);
-  return ["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(stack.StackStatus ?? "")
-    && stack.Tags?.some((tag) => tag.Key === "idea:ModuleVersion" && tag.Value === ideaVersion()) === true;
-}
-
-async function announceHeldModuleSets(
-  deps: UpgradeDeps,
-  options: UpgradeCommandOptions,
-  configDir: string,
-): Promise<void> {
-  if (!existsSync(join(configDir, "idea.yml"))) return;
-  const { held } = heldModuleSetEntries(convertConfigToKeyValuePairs(configDir, "global-settings"));
-  if (held.length === 0) return;
-  const currentModules = await clusterModules(deps, options.clusterName);
-  if (heldModuleSetEntries(held, await clusterManagerReady(deps, options, currentModules)).held.length > 0) return;
-  const writer = await deps.configWriter({
-    clusterName: options.clusterName,
-    awsRegion: options.awsRegion,
-    awsProfile: options.awsProfile,
-  });
-  await writer.syncClusterSettingsInDb(held, false, 'template');
-}
 
 // Global rows are rewritten in place so a running application never sees a missing row; the rows
 // this release no longer generates are removed only once every stack has deployed and nothing
@@ -771,6 +674,14 @@ async function removeObsoleteGlobalSettings(deps: UpgradeDeps, options: UpgradeC
   }
 }
 
+function maintenanceModuleId(entries: Array<Record<string, unknown>>, moduleSet: string): string {
+  const key = `global-settings.module_sets.${moduleSet}.cluster-manager.module_id`;
+  const id = entries.find((entry) => entry["key"] === key)?.["value"]
+    ?? asRecord(entries.find((entry) => entry["key"] === "cluster.upgrade_module_set_owners")?.["value"])[key];
+  if (typeof id !== "string" || id.trim() === "") throw new ClusterConfigError(`${key} is required`);
+  return id;
+}
+
 async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<string> {
   const regionDir = join(valuesFilePath(options.clusterName, options.awsRegion), "..");
   const configDir = join(regionDir, "config");
@@ -787,7 +698,6 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
     awsRegion: options.awsRegion,
     awsProfile: options.awsProfile,
   });
-  const portalReady = await clusterManagerReady(deps, options, modules);
   const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
   const ownerKey = `global-settings.module_sets.${options.moduleSet}.cluster-manager.module_id`;
   const ownerId = maintenanceModuleId(settings, options.moduleSet);
@@ -812,26 +722,8 @@ async function backupAndUpdateGlobalSettings(deps: UpgradeDeps, options: Upgrade
   // Update rows in place. Running applications resolve module sets and global settings on
   // requests; deleting the prefix exposes missing configuration even when the rewrite succeeds.
   // Retain obsolete rows for old tasks and scoped upgrades that leave some modules untouched.
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(refreshed, portalReady).kept, true, 'template');
+  await writer.syncClusterSettingsInDb(refreshed, true, 'template');
   return configDir;
-}
-
-// Defaults would mask the old scheduler interval before its replacement can inherit it.
-// Keep both keys so the old process and a retried upgrade retain their original inputs.
-async function migrateReconcilerIntervals(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<void> {
-  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const writer = await deps.configWriter(options);
-  for (const module of modules.filter((entry) => entry.name === "scheduler")) {
-    const prefix = `${module.module_id}.job_provisioning.`;
-    const old = settings.find((row) => row["key"] === `${prefix}job_periodic_check_interval_seconds`);
-    const current = settings.find((row) => row["key"] === `${prefix}job_reconciler_interval_seconds`);
-    if (old === undefined) continue;
-    if (current === undefined) {
-      await writer.syncClusterSettingsInDb([{ key: `${prefix}job_reconciler_interval_seconds`, value: old["value"] }], false, 'template');
-    } else if (JSON.stringify(old["value"]) !== JSON.stringify(current["value"])) {
-      deps.out(`warning: conflicting reconciler intervals for ${module.module_id}; keeping the new value ${JSON.stringify(current["value"])} and old value ${JSON.stringify(old["value"])}`);
-    }
-  }
 }
 
 async function syncFullConfiguration(
@@ -851,7 +743,10 @@ async function syncFullConfiguration(
   await writer.syncModulesInDb(
     readModulesFromFiles(configDir).map((module) => ({ id: module.id, name: module.name, type: module.type })),
   );
-  await writer.syncClusterSettingsInDb(heldModuleSetEntries(convertConfigToKeyValuePairs(configDir), await clusterManagerReady(deps, options, modules)).kept, false, 'template');
+  const entries = convertConfigToKeyValuePairs(configDir);
+  // values-owned keys (ssh_client_ip) overwrite, so values.yml stays the source of truth
+  await writer.syncClusterSettingsInDb(entries.filter((entry) => !VALUES_OWNED_KEYS.has(entry.key)), false, 'template');
+  await writer.syncClusterSettingsInDb(entries.filter((entry) => VALUES_OWNED_KEYS.has(entry.key)), true, 'template');
 }
 
 export function buildAmiUpdateEntries(
@@ -1000,16 +895,27 @@ export async function planUpgradePhase3Entries(
  * an image that cannot be pulled.
  */
 export async function verifyReleaseImage(
-  deps: Pick<UpgradeDeps, "releaseImageExists" | "out">,
+  deps: Pick<UpgradeDeps, "releaseImageExists" | "releaseImageDigest" | "out">,
   entries: ConfigEntry[],
   settings: readonly CurrentConfigRow[],
   skipReleaseImageCheck = false,
   onFailure?: (message: string) => void,
 ): Promise<ConfigEntry[]> {
   const move = entries.find((entry) => entry.key === "ecs.image");
-  if (move === undefined) return entries;
+  if (move === undefined) {
+    const rows = new Map(settings.map((row) => [row.key, row.value]));
+    const image = rows.get("ecs.image");
+    if (typeof image === "string" && image.includes("@sha256:") &&
+      image !== rows.get("ecs.release_image") && image !== rows.get("ecs.previous_release_image")) {
+      deps.out(`ecs.image stays ${image}; this digest is an operator pin and does not follow releases.`);
+    }
+    return entries;
+  }
   const target = String(move.value);
-  if (skipReleaseImageCheck) {
+  const rows = new Map(settings.map((row) => [row.key, row.value]));
+  const pinPublicFallback = rows.get("cluster.aws.partition") === "aws-us-gov" &&
+    !rows.get("ecs.image_repositories.aws-us-gov") && target.startsWith("public.ecr.aws/");
+  if (skipReleaseImageCheck && !pinPublicFallback) {
     deps.out(`Release image ${target} was not verified (--skip-release-image-check).`);
     return entries;
   }
@@ -1021,8 +927,13 @@ export async function verifyReleaseImage(
   const current = String(settings.find((row) => row.key === "ecs.image")?.value ?? "(unset)");
   const lookup = deps.releaseImageExists ?? publicRegistryImageExists;
   let exists: boolean;
+  let digest: string | undefined;
   try {
-    exists = await lookup(target);
+    if (pinPublicFallback) {
+      digest = await (deps.releaseImageDigest ?? publicRegistryImageDigest)(target);
+      if (digest !== undefined && !/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error("Invalid release image digest");
+      exists = digest !== undefined;
+    } else exists = await lookup(target);
   } catch (error) {
     return refuse(
       `Could not confirm that the release image ${target} exists, so ecs.image stays ${current} and nothing was changed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1031,8 +942,20 @@ export async function verifyReleaseImage(
   if (!exists) {
     return refuse(
       `The release image ${target} does not exist yet, so ecs.image stays ${current} and nothing was changed. ` +
-        `To prove a release candidate, set ecs.image to its candidate image (${target}-rc.<N>) and run the upgrade again.`,
+      `To prove a release candidate, set ecs.image to its candidate image (${target}-rc.<N>) and run the upgrade again.`,
     );
+  }
+  if (digest !== undefined) {
+    const pinned = `${target}@${digest}`;
+    deps.out(`GovCloud public release image resolved to ${pinned}`);
+    return [
+      // Preserve ownership of the current digest before replacing its marker.
+      ...(current.includes("@sha256:") &&
+        (current === rows.get("ecs.release_image") || current === rows.get("ecs.previous_release_image"))
+        ? [{ key: "ecs.previous_release_image", value: current }] : []),
+      { key: "ecs.release_image", value: pinned },
+      ...entries.map((entry) => entry === move ? { ...entry, value: pinned } : entry),
+    ];
   }
   return entries;
 }
@@ -1044,12 +967,15 @@ const MANIFEST_TYPES = [
   "application/vnd.docker.distribution.manifest.v2+json",
 ].join(", ");
 
-/** Ask ECR Public, anonymously, whether a tagged image exists. Any other answer throws. */
-export async function publicRegistryImageExists(
+type RegistryResponse = Pick<Response, "ok" | "status" | "json"> & Partial<Pick<Response, "headers">>;
+type RegistryFetcher = (url: string, init: RegistryRequestInit & { dispatcher: Dispatcher }) => Promise<RegistryResponse>;
+
+/** Ask ECR Public, anonymously, for a tagged image's manifest headers. */
+async function publicRegistryManifest(
   image: string,
-  fetcher: (url: string, init: RegistryRequestInit & { dispatcher: Dispatcher }) => Promise<Pick<Response, "ok" | "status" | "json">> = registryFetch,
+  fetcher: RegistryFetcher = registryFetch,
   createDispatcher: () => Dispatcher = () => new EnvHttpProxyAgent(),
-): Promise<boolean> {
+): Promise<RegistryResponse | undefined> {
   const match = /^public\.ecr\.aws\/([^:@]+):([^:@/]+)$/.exec(image);
   if (match === null) throw new Error(`${image} is not a tagged ECR Public image`);
   const [, path, tag] = match;
@@ -1068,12 +994,33 @@ export async function publicRegistryImageExists(
       headers: { Authorization: `Bearer ${token}`, Accept: MANIFEST_TYPES },
       signal: AbortSignal.timeout(15_000),
     });
-    if (manifest.status === 200) return true;
-    if (manifest.status === 404) return false;
+    if (manifest.status === 200) return manifest;
+    if (manifest.status === 404) return undefined;
     throw new Error(`ECR Public manifest request returned HTTP ${manifest.status}`);
   } finally {
     await dispatcher.close();
   }
+}
+
+/** Whether the tagged image exists; transport and registry failures throw. */
+export async function publicRegistryImageExists(
+  image: string,
+  fetcher: RegistryFetcher = registryFetch,
+  createDispatcher: () => Dispatcher = () => new EnvHttpProxyAgent(),
+): Promise<boolean> {
+  return await publicRegistryManifest(image, fetcher, createDispatcher) !== undefined;
+}
+
+export async function publicRegistryImageDigest(
+  image: string,
+  fetcher: RegistryFetcher = registryFetch,
+  createDispatcher: () => Dispatcher = () => new EnvHttpProxyAgent(),
+): Promise<string | undefined> {
+  const manifest = await publicRegistryManifest(image, fetcher, createDispatcher);
+  if (manifest === undefined) return undefined;
+  const digest = manifest.headers?.get("docker-content-digest");
+  if (digest == null || !/^sha256:[a-f0-9]{64}$/.test(digest)) throw new Error("ECR Public returned no valid manifest digest");
+  return digest;
 }
 
 /** The rows the add-only sync leaves on the previous provider when values move metrics to the daemon. */
@@ -1113,17 +1060,25 @@ const CANDIDATE_IMAGE_TAG = /^(\d{2}\.\d{2}\.\d+)-rc\.[1-9]\d*$/;
  * Plan the image row's move to the release being installed. The row is add-only for the sync, so
  * a routine upgrade would otherwise deploy the new templates on the previous image. Only a row
  * that names this partition's release repository at an older release tag, or at a candidate of
- * an earlier release, moves; a private
- * registry, a digest-qualified reference, a build tag or a newer tag is the operator's and stays.
+ * an earlier release, moves. Automatically selected digests keep following releases. Images
+ * outside that repository, operator-set digests, build tags and newer tags stay as set.
  */
 export function planEcsImageFollowsRelease(
   current: readonly CurrentConfigRow[],
   releaseVersion: string,
 ): ConfigEntry[] {
   const rows = new Map(current.map((entry) => [entry.key, entry.value]));
-  const image = rows.get("ecs.image");
+  const storedImage = rows.get("ecs.image");
+  // Only a digest recorded by this planner follows releases; operator pins remain untouched.
+  const image = typeof storedImage === "string" &&
+    (storedImage === rows.get("ecs.release_image") || storedImage === rows.get("ecs.previous_release_image"))
+    ? storedImage.replace(/@sha256:[a-f0-9]{64}$/, "") : storedImage;
   const partition = rows.get("cluster.aws.partition") ?? "aws";
-  const repository = rows.get(`ecs.image_repositories.${String(partition)}`);
+  const configured = rows.get(`ecs.image_repositories.${String(partition)}`);
+  // GovCloud can pull the public release image without a separate registry.
+  const repository = partition === "aws-us-gov" && (configured == null || configured === "")
+    ? rows.get("ecs.image_repositories.aws")
+    : configured;
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
@@ -1454,224 +1409,11 @@ async function confirmConfigDrift(
   if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
 }
 
-function maintenanceModuleId(entries: Array<Record<string, unknown>>, moduleSet: string): string {
-  const key = `global-settings.module_sets.${moduleSet}.cluster-manager.module_id`;
-  const id = entries.find((entry) => entry["key"] === key)?.["value"]
-    ?? asRecord(entries.find((entry) => entry["key"] === "cluster.upgrade_module_set_owners")?.["value"])[key];
-  if (typeof id !== "string" || id.trim() === "") throw new ClusterConfigError(`${key} is required`);
-  return id;
-}
-
-function maintenanceKeys(entries: Array<Record<string, unknown>>, moduleSet: string) {
-  const id = maintenanceModuleId(entries, moduleSet);
-  return { enabled: `${id}.maintenance.enabled`, message: `${id}.maintenance.message`, baseline: `${id}.maintenance.upgrade_baseline` };
-}
-
-const DRAIN_MESSAGE = "Scheduler upgrade in progress; job submission reopens when it completes.";
-const DRAIN_POLL_MS = 60_000;
-const DEFAULT_DRAIN_TIMEOUT_MINUTES = 240;
-
-/**
- * The shell command the live inventory reader runs on the scheduler host: PBS's own view of its
- * jobs, reduced to a count per state so the answer fits in an SSM invocation's output.
- */
-export const PBS_STATE_COUNT_COMMAND =
-  "/opt/pbs/bin/qstat -f -F json | python3 -c 'import json,sys,collections; d=json.load(sys.stdin); "
-  + "print(json.dumps(collections.Counter(j.get(\"job_state\",\"?\") for j in d.get(\"Jobs\",{}).values())))'";
-
-/** PBS job states to the inventory: Q queued, R and E running, F finished and ignored, anything else other. */
-export function countPbsStates(states: Record<string, unknown>): SchedulerJobInventory {
-  const inventory: SchedulerJobInventory = { queued: 0, running: 0, other: 0 };
-  for (const [state, count] of Object.entries(states)) {
-    const value = typeof count === "number" ? count : Number(count);
-    if (!Number.isFinite(value)) continue;
-    if (state === "Q") inventory.queued += value;
-    else if (state === "R" || state === "E") inventory.running += value;
-    else if (state !== "F") inventory.other += value;
-  }
-  return inventory;
-}
-
-function inventoryTotal(inventory: SchedulerJobInventory): number {
-  return inventory.queued + inventory.running + inventory.other;
-}
-
-function describeInventory(inventory: SchedulerJobInventory): string {
-  return `${inventory.queued} queued, ${inventory.running} running, ${inventory.other} other`;
-}
-
-async function restoreSubmission(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
-  const current = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const keys = maintenanceKeys(current, options.moduleSet);
-  const saved = current.find((entry) => entry["key"] === keys.baseline)?.["value"];
-  if (saved === undefined) return;
-  const baseline = JSON.parse(String(saved)) as { enabled: boolean; message: string };
-  const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
-  await writer.setConfigEntry(keys.message, baseline.message);
-  await writer.setConfigEntry(keys.enabled, baseline.enabled);
-  await writer.deleteConfigEntries(keys.baseline);
-  deps.out(`scheduler cutover gate: previous submission maintenance state restored on ${options.clusterName}`);
-}
-
-// A queue observed empty can accept new jobs before the scheduler stack replaces its host.
-// Closing submission first protects that interval, and a durable baseline survives failed runs.
-async function schedulerCutoverGate(
-  deps: UpgradeDeps,
-  options: UpgradeCommandOptions,
-  host: string,
-): Promise<void> {
-  const current = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const keys = maintenanceKeys(current, options.moduleSet);
-  const prior = (key: string): unknown => current.find((entry) => entry["key"] === key)?.["value"];
-  const writer = await deps.configWriter({ clusterName: options.clusterName, awsRegion: options.awsRegion, awsProfile: options.awsProfile });
-  const existingBaseline = prior(keys.baseline);
-  if (existingBaseline === undefined) {
-    await writer.setConfigEntry(keys.baseline, JSON.stringify({
-      enabled: prior(keys.enabled) === true,
-      message: typeof prior(keys.message) === "string" ? prior(keys.message) : "",
-    }));
-  }
-  await writer.setConfigEntry(keys.enabled, true);
-  await writer.setConfigEntry(keys.message, DRAIN_MESSAGE);
-  deps.out(`scheduler cutover gate: submission maintenance written on ${options.clusterName}`);
-  if (options.skipDrainCheck === true) {
-    deps.out(`scheduler cutover gate: inventory check skipped on request; submission stays closed for the run; jobs the host scheduler ${host} still holds will be lost`);
-    return;
-  }
-  if (deps.schedulerJobs === undefined) {
-    throw new GeneralException("scheduler cutover gate: this build cannot read the host scheduler's job inventory; drain by hand and re-run with --skip-drain-check");
-  }
-  const read = async (): Promise<SchedulerJobInventory> => {
-    try {
-      return await deps.schedulerJobs!.activeJobs({ awsRegion: options.awsRegion, instanceId: host });
-    } catch (error) {
-      throw new GeneralException(`scheduler cutover gate: could not read the job inventory on ${host}: ${(error as Error).message}. An unknown inventory is not an empty one; drain by hand and re-run with --skip-drain-check.`);
-    }
-  };
-  const timeoutMs = (options.drainTimeoutMinutes ?? DEFAULT_DRAIN_TIMEOUT_MINUTES) * 60_000;
-  const startedAt = deps.now();
-  // Submission settings propagate asynchronously to the scheduler.
-  // Let it observe maintenance before counting any inventory toward a safe cutover.
-  await deps.sleep(30_000);
-  let emptyReads = 0;
-  for (;;) {
-    const inventory = await read();
-    emptyReads = inventoryTotal(inventory) === 0 ? emptyReads + 1 : 0;
-    if (emptyReads === 2) {
-      deps.out(`scheduler cutover gate: two empty inventories at least thirty seconds apart after maintenance write; continuing`);
-      return;
-    }
-    if (inventoryTotal(inventory) > 0 && options.drain !== true) {
-      if (existingBaseline === undefined) await restoreSubmission(deps, options);
-      throw new ClusterConfigError(
-        `scheduler cutover gate: the host scheduler ${host} holds ${describeInventory(inventory)} job(s). Re-run with --drain to close submission and wait, or drain by hand and re-run with --skip-drain-check.`,
-      );
-    }
-    if (deps.now() - startedAt > timeoutMs) {
-      throw new GeneralException(
-        `scheduler cutover gate: ${describeInventory(inventory)} job(s) still on ${host} after ${Math.round(timeoutMs / 60_000)} minutes. Submission stays closed; re-run with --drain or --drain-timeout-minutes.`,
-      );
-    }
-    deps.out(`scheduler cutover gate: ${describeInventory(inventory)}; waiting for settings propagation and stable empty inventory`);
-    await deps.sleep(emptyReads > 0 ? 30_000 : DRAIN_POLL_MS);
-  }
-}
-
-function includesModule(options: UpgradeCommandOptions, modules: ModuleInfo[], name: string): boolean {
-  const requested = options.modules ?? [];
-  return requested.length === 0 || requested.includes(modules.find((module) => module.name === name)?.module_id ?? name);
-}
-
-// Scheduler synthesis can switch to ECS even when capacity was deployed in an earlier run.
-// Checking the host also avoids touching submission or DNS after that transition has completed.
-async function pendingSchedulerCutover(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[], restoredEcs = false): Promise<string | undefined> {
-  if (!includesModule(options, modules, "scheduler")) return;
-  const valuesPath = valuesFilePath(options.clusterName, options.awsRegion);
-  const enabledInValues = restoredEcs || existsSync(valuesPath) && (loadValuesFile(valuesPath) as Record<string, unknown>)["enable_ecs"] === true;
-  const ecs = modules.find((module) => module.name === ECS_MODULE);
-  if (!enabledInValues) {
-    if (ecs === undefined) return;
-    const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-    if (!settings.some((entry) => entry["key"] === `${ecs.module_id}.enabled` && entry["value"] === true)) return;
-  }
-  const scheduler = modules.find((module) => module.name === "scheduler");
-  if (scheduler === undefined) return;
-  const stackName = scheduler.stack_name ?? `${options.clusterName}-${scheduler.module_id}`;
-  let nextToken: string | undefined;
-  do {
-    const page = await deps.cloudFormation.listStackResources({ awsRegion: options.awsRegion, stackName, nextToken });
-    if (page.instanceIds.length > 0) return page.instanceIds[0];
-    nextToken = page.nextToken;
-  } while (nextToken !== undefined);
-}
-
-async function upgradeDeploysEcs(deps: UpgradeDeps, options: UpgradeCommandOptions, restoredEcs = false): Promise<boolean> {
+async function upgradeDeploysEcs(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<boolean> {
   const requested = options.modules ?? [];
   if (requested.length > 0) return requested.includes(ECS_MODULE);
-  if (restoredEcs) return true;
-  // The migration that introduces the module has no table row for it yet: the values file is
-  // what Phase 2b will register from, so it is read here too.
-  const valuesPath = valuesFilePath(options.clusterName, options.awsRegion);
-  if (existsSync(valuesPath) && (loadValuesFile(valuesPath) as Record<string, unknown>)["enable_ecs"] === true) return true;
   const modules = await clusterModules(deps, options.clusterName);
   return modules.some((module) => module.module_id === ECS_MODULE || module.name === ECS_MODULE);
-}
-
-/**
- * The deployed template with `DeletionPolicy: Retain` (and `UpdateReplacePolicy`) on every Route 53
- * record set that lacks it. Nothing else changes, so CloudFormation applies it as a policy-only
- * update: no resource is touched, no instance replaced. CDK templates are JSON; anything else is
- * left alone and reported as nothing to retain.
- */
-export function retainRecordSets(templateBody: string | undefined): { body: string; parameterKeys: string[]; retained: string[] } {
-  const none = { body: "", parameterKeys: [], retained: [] };
-  if (templateBody === undefined) return none;
-  let template: { Parameters?: Record<string, unknown>; Resources?: Record<string, { Type?: unknown; DeletionPolicy?: unknown; UpdateReplacePolicy?: unknown }> };
-  try {
-    template = JSON.parse(templateBody);
-  } catch {
-    return none;
-  }
-  const retained: string[] = [];
-  for (const [logicalId, resource] of Object.entries(template.Resources ?? {})) {
-    if (resource?.Type !== "AWS::Route53::RecordSet" || resource.DeletionPolicy === "Retain") continue;
-    resource.DeletionPolicy = "Retain";
-    resource.UpdateReplacePolicy = "Retain";
-    retained.push(logicalId);
-  }
-  return { body: JSON.stringify(template), parameterKeys: Object.keys(template.Parameters ?? {}), retained };
-}
-
-/**
- * The scheduler's host DNS record is the name execution hosts and clients resolve, and the container
- * scheduler upserts that same name itself when it starts. The container cutover removes the
- * CloudFormation-managed record; with the deployed DeletionPolicy of Delete, CloudFormation would
- * delete the name, and fail doing so once the task has re-pointed it. So when this upgrade turns
- * containers on for a cluster whose scheduler still runs on a host, the deployed template is updated
- * first with Retain on that record and nothing else. A host-shape deploy from this release would do
- * the same and also replace the scheduler instance one last time; a policy-only update replaces nothing.
- */
-async function retainSchedulerDnsRecord(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[]): Promise<void> {
-  if (deps.cfn.getTemplate === undefined || deps.cfn.updateStack === undefined) return;
-  const scheduler = modules.find((module) => module.name === "scheduler");
-  if (scheduler === undefined) return;
-  const stackName = scheduler.stack_name ?? `${options.clusterName}-${scheduler.module_id}`;
-  const { body, parameterKeys, retained } = retainRecordSets(await deps.cfn.getTemplate(stackName));
-  if (retained.length === 0) return;
-  deps.out(`Phase 0: retain the scheduler's DNS record (${retained.join(", ")}) with a policy-only update of ${stackName} before the container cutover`);
-  await deps.cfn.updateStack({ StackName: stackName, TemplateBody: body, ParameterKeys: parameterKeys });
-  for (;;) {
-    const stack = await deps.cfn.describeStack(stackName);
-    const status = stack.StackStatus ?? "";
-    if (status.endsWith("_IN_PROGRESS")) {
-      await deps.sleep(10_000);
-      continue;
-    }
-    if (status !== "UPDATE_COMPLETE") {
-      throw new GeneralException(`Phase 0 did not complete: ${stackName} is ${status}. ${stack.StackStatusReason ?? ""}`.trim());
-    }
-    return;
-  }
 }
 
 /**
@@ -1705,7 +1447,7 @@ async function deployedPublishedKeys(deps: UpgradeDeps, stackName: string): Prom
 // Read back the intended writes and deployed versions before reopening submission.
 async function verifyUpgradeCompletion(
   deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[], expected: Map<string, unknown>,
-  drift: UpgradeDriftInput, historical: boolean, schedulerCutover: boolean,
+  drift: UpgradeDriftInput,
 ): Promise<void> {
   const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
   const current = new Map(settings.map((row) => [String(row["key"]), row["value"]]));
@@ -1746,11 +1488,8 @@ async function verifyUpgradeCompletion(
     const stackName = valueAsString(modules.find((module) => module.module_id === stack.moduleId)?.stack_name) || `${options.clusterName}-${stack.moduleId}`;
     const publishedNow = stack.target === undefined ? await deployedPublishedKeys(deps, stackName) : undefined;
     for (const [key, value] of Object.entries(stack.target ?? stack.previous)) {
-      // The container scheduler no longer publishes its retired host identity.
-      if (schedulerCutover && stack.target === undefined && modules.some((module) => module.module_id === stack.moduleId && module.name === "scheduler") && ["instance_id", "private_ip"].includes(key)) continue;
       const fullKey = `${stack.moduleId}.${key}`;
-      // The bastion keeps its DNS record and module stack during cutover. Its instance rows
-      // disappear through the settings delta, so the deployed template is the completion contract.
+      // Skip keys the deployed stack no longer publishes; its template is the completion contract.
       if (publishedNow !== undefined && !publishedNow.has(key)) {
         deps.out(`${fullKey} is no longer published by the deployed ${stackName} stack`);
         continue;
@@ -1768,124 +1507,38 @@ async function verifyUpgradeCompletion(
     if (options.modules?.length && !options.modules.includes(module.module_id)) continue;
     const updated = after.find((row) => row.module_id === module.module_id);
     if (updated?.status !== "deployed" || updated.version !== ideaVersion()) throw new ClusterConfigError(`Completion verification failed for module ${module.module_id}`);
-    if (historical && module.status === "deployed" && module.name === "virtual-desktop-controller") {
-      const roleKey = `${module.module_id}.dcv_host_role_name`;
-      const role = current.get(roleKey);
-      const arn = current.get(`${module.module_id}.dcv_host_policy_arn`);
-      if (role !== expected.get(roleKey) || typeof role !== "string" || typeof arn !== "string" || !arn.includes(":policy/")) throw new ClusterConfigError(`Completion verification failed for DCV policy publication: ${module.module_id}`);
-      for (const suffix of ["dcv_host_role_arn", "dcv_host_role_id"]) {
-        const key = `${module.module_id}.${suffix}`;
-        const previous = drift.current.find((row) => row.key === key);
-        if (previous !== undefined && current.get(key) !== previous.value) throw new ClusterConfigError(`Completion verification failed for DCV identity: ${key}`);
-      }
-      const inventory = await deps.historicalIam!(role, `${options.clusterName}-${options.awsRegion}-${module.module_id}-host`, options);
-      // Releases before the managed-policy migration used this CDK logical ID as PolicyName.
-      const legacyConstruct = `${options.clusterName}-${module.module_id}-host-policy`;
-      const legacyPolicy = legacyConstruct.replace(/[^A-Za-z0-9]/g, "").slice(0, 240)
-        + createHash("md5").update(`${legacyConstruct}/Resource`).digest("hex").slice(0, 8).toUpperCase();
-      if (!inventory.attached.includes(arn.split("/").at(-1)!) || inventory.inline.includes(legacyPolicy)) throw new ClusterConfigError(`Completion verification failed for DCV policy attachment: ${module.module_id}`);
-      if (inventory.inline.length > 0) deps.out(`warning: operator inline policies remain on DCV host role ${role}: ${inventory.inline.join(", ")}`);
-    }
   }
   deps.out("Completion verified: settings and deployed module versions read back");
 }
 
-// Missing local values must not hide a requested container transition from its gates.
-// Parse the remote copy in scratch space while the cluster and local values remain unchanged.
-async function historicalValuesEnableEcs(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<boolean> {
-  const path = valuesFilePath(options.clusterName, options.awsRegion);
-  if (existsSync(path)) return loadValuesFile(path)["enable_ecs"] === true;
-  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const bucket = settings.find((row) => row["key"] === "cluster.cluster_s3_bucket")?.["value"];
-  if (typeof bucket !== "string" || bucket === "") throw new ClusterConfigError("cluster.cluster_s3_bucket is required to plan missing values.yml");
-  const root = mkdtempSync(join(tmpdir(), "upgrade-values-plan-"));
-  try {
-    const scratch = join(root, "values.yml");
-    writeFileSync(scratch, await deps.s3.getObject({ Bucket: bucket, Key: VALUES_FILE_S3_KEY }));
-    return loadValuesFile(scratch)["enable_ecs"] === true;
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-// Historical changes touch every deployed service and need a complete baseline.
-// Refuse missing inventory and unreadable dependencies before maintenance or settings writes.
-export async function planHistoricalUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, modules: ModuleInfo[], registersEcs = false): Promise<void> {
-  const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-  const ids = new Set(modules.map((module) => module.module_id));
-  // A private registry (GovCloud has no public ECR) is set as ecs.image before the run that registers the module.
-  if (registersEcs) ids.add(ECS_MODULE);
-  for (const row of settings) {
-    const key = valueAsString(row["key"]);
-    const owner = key.split(".")[0]!;
-    if (!ids.has(owner)) throw new ClusterConfigError(`Missing module row for ${owner}`);
-    if (key.startsWith("global-settings.module_sets.") && key.endsWith(".module_id") && !ids.has(valueAsString(row["value"]))) {
-      throw new ClusterConfigError(`Missing module row for ${String(row["value"])}`);
-    }
-  }
-  if (options.modules?.length && modules.some((module) => module.type !== "config" && module.status === "deployed" && !options.modules?.includes(module.module_id))) {
-    throw new ClusterConfigError("Historical migration requires every deployed module; omit the module selection");
-  }
-  if (deps.cfn.getTemplate === undefined) throw new ClusterConfigError("Historical migration requires deployed templates");
-  for (const module of modules.filter((entry) => entry.type !== "config" && entry.status === "deployed")) {
-    const template = await deps.cfn.getTemplate(module.stack_name ?? `${options.clusterName}-${module.module_id}`);
-    if (template === undefined || asRecord(JSON.parse(template))["Resources"] === undefined) throw new ClusterConfigError(`Missing deployed template for ${module.module_id}`);
-    if (module.name === "scheduler") await scanAll(deps, `${options.clusterName}.${module.module_id}.queue-profiles`);
-    if (module.name === "virtual-desktop-controller") {
-      await scanAll(deps, `${options.clusterName}.${module.module_id}.controller.software-stacks`);
-      await scanAll(deps, `${options.clusterName}.${module.module_id}.controller.user-sessions`);
-      const role = settings.find((row) => row["key"] === `${module.module_id}.dcv_host_role_name`)?.["value"];
-      if (typeof role !== "string" || deps.historicalIam === undefined) throw new ClusterConfigError(`Missing DCV IAM inventory for ${module.module_id}`);
-      const policy = `${options.clusterName}-${options.awsRegion}-${module.module_id}-host`;
-      const resources = asRecord(asRecord(JSON.parse(template))["Resources"]);
-      const ownsPolicy = Object.values(resources).some((resource) => asRecord(resource)["Type"] === "AWS::IAM::ManagedPolicy" && asRecord(asRecord(resource)["Properties"])["ManagedPolicyName"] === policy);
-      const inventory = await deps.historicalIam(role, policy, options, ownsPolicy);
-      if (inventory.collision || inventory.available < 1) throw new ClusterConfigError(`DCV managed-policy collision or quota exhausted for ${module.module_id}`);
-    }
-  }
-  // Only existing compute images affect preservation; host images are superseded.
-  const computeKeys = new Set(modules.filter((module) => module.name === "scheduler").map((module) => `${module.module_id}.compute_node_ami`));
-  const imageIds = [...new Set(settings.flatMap((row) => computeKeys.has(String(row["key"])) && typeof row["value"] === "string" && row["value"] !== "" ? [row["value"]] : []))];
-  if (imageIds.length > 0) {
-    const images = await deps.ec2.describeImages({ awsRegion: options.awsRegion, imageIds });
-    for (const id of imageIds) if (!images.some((image) => image.ImageId === id)) throw new ClusterConfigError(`Missing AMI metadata for ${id}`);
-  }
-  for (const instance of await moduleInstances(deps, options)) {
-    await deps.ec2.describeInstanceAttribute({ awsRegion: options.awsRegion, instanceId: instance.instanceId });
-  }
-}
-
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
-  // Version validation must precede even the maintenance gate.
+  // Validate the source release and deployment mode before any mutation.
   // An incomplete inventory cannot establish a safe starting release.
   const modulesBefore = await clusterModules(deps, options.clusterName);
   if (modulesBefore.length === 0) throw new ClusterConfigError("Missing module rows");
   const floorRefusal = upgradeFloorRefusal(options.clusterName, modulesBefore);
   if (floorRefusal !== undefined) throw new ClusterConfigError(floorRefusal);
-  const pendingHistorical = (await scanAll(deps, `${options.clusterName}.cluster-settings`)).some((row) => row["key"] === "cluster.upgrade_historical_pending" && row["value"] === true);
-  const historical = pendingHistorical || modulesBefore.some((module) => module.type !== "config" && module.status === "deployed" && (compareIdeaRelease(String(module.version), "26.09.0") ?? 0) < 0);
-  const restoredEcs = historical && await historicalValuesEnableEcs(deps, options);
-  if (historical) {
-    await planHistoricalUpgrade(deps, options, modulesBefore, restoredEcs);
-    options = { ...options, skipGlobalSettingsUpdate: false };
-    deps.out("Historical migration: global replacement, full configuration sync, AMI/settings updates and deployment of every deployed module are required; phase skip flags and prompts cannot omit them.");
+  const initialSettings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
+  if (initialSettings.find((row) => row.key === "ecs.enabled")?.value !== true ||
+    initialSettings.find((row) => row.key === "ecs.retain_existing_hosts")?.value === true) {
+    throw new ClusterConfigError(HOST_CONTROL_PLANE_REFUSAL);
+  }
+  const incompleteMigration = initialSettings.filter((row) =>
+    (row.key === "cluster.upgrade_historical_pending" && row.value === true) ||
+    (typeof row.key === "string" && row.key.endsWith(".maintenance.upgrade_baseline") && row.value != null));
+  if (incompleteMigration.length > 0) {
+    throw new ClusterConfigError(`Incomplete migration (${incompleteMigration.map((row) => row.key).join(", ")}): recover and complete the previous upgrade with the 26.10.9 administrator first.\nRun from the checkout with your cluster name and region: ${RECOVERY_COMMAND}`);
   }
   let cleared: ClearedInstance[] = [];
   try {
-    if (await upgradeDeploysEcs(deps, options, restoredEcs)) await checkAwsvpcTrunking(deps, options);
-    const cutoverHost = await pendingSchedulerCutover(deps, options, modulesBefore, restoredEcs);
+    if (await upgradeDeploysEcs(deps, options)) await checkAwsvpcTrunking(deps, options);
     const baseOs = await resolveUpgradeBaseOs(deps, options);
     await validateBaseOs(deps, options, baseOs);
     const eolPlans = await checkEolBaseOs(deps, options);
     const allModules = options.modules === undefined || options.modules.length === 0;
     deps.out(allModules ? "No modules specified, upgrading all modules" : `Upgrade scope: Specific modules - ${options.modules?.join(", ")}`);
     const driftInput = await prepareUpgradeDriftInput(deps, { ...options, baseOs });
-    if (historical) {
-      const stock = resolveRegionAmi((deps.regionAmiConfig ?? loadRegionAmiConfig)(), options.awsRegion, baseOs);
-      const images = await deps.ec2.describeImages({ awsRegion: options.awsRegion, imageIds: [stock] });
-      if (!images.some((image) => image.ImageId === stock)) throw new ClusterConfigError(`Missing release AMI metadata for ${stock}`);
-    }
     const driftReport = compareUpgradeDrift(driftInput);
     deps.out(renderUpgradeDrift(driftReport));
     await confirmConfigDrift(deps, options, driftReport);
@@ -1911,15 +1564,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         },
       };
     };
-    if (historical && !options.force && allModules) {
-      const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
-      if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
-    }
-    // Module versions advance before completion, so retries need a durable migration marker.
-    if (historical) await (await deps.configWriter(options)).setConfigEntry("cluster.upgrade_historical_pending", true);
-    if (cutoverHost !== undefined) await schedulerCutoverGate(deps, options, cutoverHost);
     await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
-    if (cutoverHost !== undefined) await retainSchedulerDnsRecord(deps, options, modulesBefore);
 
     deps.out("Phase 1: Update Base OS in values.yml");
     resolveRegionAmi((deps.regionAmiConfig ?? loadRegionAmiConfig)(), options.awsRegion, baseOs);
@@ -1927,7 +1572,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
 
     let configDir = join(valuesFilePath(options.clusterName, options.awsRegion), "..", "config");
     if (options.skipGlobalSettingsUpdate !== true) {
-      if (!historical && options.force !== true) {
+      if (options.force !== true) {
         const confirm = await deps.prompt({ message: "Continue with global settings backup and update?", default: true });
         if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
       }
@@ -1935,9 +1580,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       configDir = await backupAndUpdateGlobalSettings(deps, options, modulesBefore);
     }
 
-    await migrateReconcilerIntervals(deps, options, modulesBefore);
-    let syncFullConfig = historical || options.force === true;
-    if (!historical && options.force !== true) {
+    let syncFullConfig = options.force === true;
+    if (options.force !== true) {
       const confirm = await deps.prompt({ message: "Sync full configuration to add new values?", default: true });
       syncFullConfig = confirm === true || confirm === "Yes";
     }
@@ -1951,8 +1595,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
 
     deps.out("Phase 3: Update AMI IDs and Settings");
-    let updateAmis = historical || options.force === true;
-    if (!historical && options.force !== true) {
+    let updateAmis = options.force === true;
+    if (options.force !== true) {
       const confirm = await deps.prompt({ message: "Continue with AMI and settings updates?", default: true });
       updateAmis = confirm === true || confirm === "Yes";
     }
@@ -1962,7 +1606,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
 
     deps.out("Phase 4: Module Deployment");
-    if (!historical && !options.force && allModules) {
+    if (!options.force && allModules) {
       const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
       if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
     }
@@ -1988,7 +1632,6 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       allowReplacement: options.allowReplacement,
     };
     await deps.deploy(deployment);
-    await announceHeldModuleSets(deps, options, configDir);
     if (options.skipGlobalSettingsUpdate !== true) await removeObsoleteGlobalSettings(deps, options, configDir);
     let restore = cleared;
     try {
@@ -2002,10 +1645,9 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       deps.out(`warning: could not restore termination protection: ${(error as Error).message}`);
       await warnClearedProtection(deps, options.awsRegion, cleared);
     }
-    await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput, historical, cutoverHost !== undefined);
+    await verifyUpgradeCompletion(deps, options, [...expectedModules.values()], expected, driftInput);
     await saveValuesFile(deps, options);
-    await restoreSubmission(deps, options);
-    if (!historical && options.keepBorrowedHosts !== true) {
+    if (options.keepBorrowedHosts !== true) {
       try {
         await returnBorrowedHosts(deps, options);
       } catch (error) {
@@ -2013,14 +1655,9 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       }
     }
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
-    if (historical) await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_historical_pending");
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
     await warnClearedProtection(deps, options.awsRegion, cleared);
-    const settings = await scanAll(deps, `${options.clusterName}.cluster-settings`);
-    if (settings.some((entry) => entry["key"] === maintenanceKeys(settings, options.moduleSet).baseline)) {
-      deps.out(`warning: job submission is still closed on ${options.clusterName} (${maintenanceKeys(settings, options.moduleSet).enabled}); a completed re-run reopens it.`);
-    }
     throw error;
   }
 }
@@ -2059,9 +1696,6 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .option("--skip-release-image-check", "Skip the registry lookup and move to the release image without verifying it exists.")
     .option("--skip-global-settings-update", "Skip updating global settings.")
     .option("--disable-eol-stacks-in-use", "Disable end-of-life eVDI software stacks that are in use.")
-    .option("--drain", "Before the host-to-container scheduler cutover, close job submission and wait for the host scheduler to empty.")
-    .option("--drain-timeout-minutes <minutes>", `Give up waiting for the drain after this long. Default: ${DEFAULT_DRAIN_TIMEOUT_MINUTES}`, (value: string) => Number(value))
-    .option("--skip-drain-check", "Skip the host scheduler's job inventory check but close submission for the run; jobs it still holds are lost.")
     .argument("[modules...]", "module ids")
     .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
       await upgradeCluster(deps, { ...commandOptions, modules });
@@ -2099,43 +1733,6 @@ export function liveEcsAccountSettings(): EcsAccountSettingsApi {
           ? []
           : [{ name: setting.name.toString(), value: setting.value }],
       );
-    },
-  };
-}
-
-/** The live inventory reader: one SSM shell command on the scheduler host, polled to completion. */
-export function liveSchedulerJobs(sleep: (ms: number) => Promise<void>): SchedulerJobsApi {
-  return {
-    async activeJobs(input) {
-      const { GetCommandInvocationCommand, SSMClient, SendCommandCommand } = await import("@aws-sdk/client-ssm");
-      const client = new SSMClient(await awsClientOptions(input.awsRegion));
-      const sent = await client.send(
-        new SendCommandCommand({
-          InstanceIds: [input.instanceId],
-          DocumentName: "AWS-RunShellScript",
-          Parameters: { commands: [PBS_STATE_COUNT_COMMAND] },
-        }),
-      );
-      const commandId = sent.Command?.CommandId;
-      if (commandId === undefined) throw new GeneralException("ssm:SendCommand returned no command id");
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        await sleep(2_000);
-        let result;
-        try {
-          result = await client.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: input.instanceId }));
-        } catch (error) {
-          // The invocation record trails the send by a moment.
-          if ((error as { name?: string }).name === "InvocationDoesNotExist") continue;
-          throw error;
-        }
-        const status = result.Status ?? "";
-        if (status === "Pending" || status === "InProgress" || status === "Delayed") continue;
-        if (status !== "Success") {
-          throw new GeneralException(`qstat on ${input.instanceId} ended ${status}: ${(result.StandardErrorContent ?? "").trim().slice(0, 300)}`);
-        }
-        return countPbsStates(JSON.parse((result.StandardOutputContent ?? "{}").trim() || "{}") as Record<string, unknown>);
-      }
-      throw new GeneralException(`qstat on ${input.instanceId} did not finish within 60 s`);
     },
   };
 }
@@ -2222,36 +1819,6 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
     ec2,
     ecsAccountSettings,
     containerHosts,
-    schedulerJobs: liveSchedulerJobs(deps.sleep),
-    async historicalIam(roleName, policyName, options, ownsPolicy) {
-      const { IAMClient, GetAccountSummaryCommand, ListAttachedRolePoliciesCommand, ListRolePoliciesCommand, ListPoliciesCommand } = await import("@aws-sdk/client-iam");
-      const client = new IAMClient(await awsClientOptions(options.awsRegion, options.awsProfile));
-      const summary = await client.send(new GetAccountSummaryCommand({}));
-      const attached: string[] = [];
-      const inline: string[] = [];
-      let marker: string | undefined;
-      do {
-        const page: import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandOutput = await client.send(new ListAttachedRolePoliciesCommand({ RoleName: roleName, Marker: marker }));
-        attached.push(...(page.AttachedPolicies ?? []).flatMap((policy) => policy.PolicyName === undefined ? [] : [policy.PolicyName]));
-        marker = page.IsTruncated ? page.Marker : undefined;
-      } while (marker !== undefined);
-      do {
-        const page: import("@aws-sdk/client-iam").ListRolePoliciesCommandOutput = await client.send(new ListRolePoliciesCommand({ RoleName: roleName, Marker: marker }));
-        inline.push(...(page.PolicyNames ?? []));
-        marker = page.IsTruncated ? page.Marker : undefined;
-      } while (marker !== undefined);
-      let collision = false;
-      do {
-        const page: import("@aws-sdk/client-iam").ListPoliciesCommandOutput = await client.send(new ListPoliciesCommand({ Scope: "Local", Marker: marker }));
-        collision ||= (page.Policies ?? []).some((policy) => policy.PolicyName === policyName) && ownsPolicy !== true;
-        marker = page.IsTruncated ? page.Marker : undefined;
-      } while (marker !== undefined);
-      const available = attached.includes(policyName) ? 1 : Math.min(
-        (summary.SummaryMap?.PoliciesQuota ?? 0) - (summary.SummaryMap?.Policies ?? 0),
-        (summary.SummaryMap?.AttachedPoliciesPerRoleQuota ?? 10) - attached.length,
-      );
-      return { attached, inline, collision, available };
-    },
     cloudFormation: {
       async listStackResources(input) {
         const { CloudFormationClient, ListStackResourcesCommand } = await import("@aws-sdk/client-cloudformation");

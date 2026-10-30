@@ -307,6 +307,22 @@ it('keeps the maintenance end time informational and discards a cancelled notice
     vi.restoreAllMocks();
 });
 
+it('leaves the maintenance end-time rule to the settings API', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({maintenance: {enabled: false, message: 'Saved notice', ends_at: ''}});
+    // Strict Moment accepts '2026-10' but the server rejects it; only the server's answer counts.
+    const update = vi.spyOn(context.client().clusterSettings(), 'updateModuleSettings').mockRejectedValue({message: 'maintenance.ends_at must be an ISO 8601 timestamp'});
+    renderClusterSettings();
+    await userEvent.click(await screen.findByRole('link', {name: 'General'}));
+    await userEvent.click(await screen.findByRole('button', {name: 'Edit'}));
+    await userEvent.type(screen.getByPlaceholderText('2026-09-15T18:00:00Z'), '2026-10');
+    await userEvent.click(screen.getByRole('button', {name: 'Save'}));
+    expect(update).toHaveBeenCalledOnce();
+    expect((update.mock.calls[0][0] as {settings: {maintenance: {ends_at: string}}}).settings.maintenance.ends_at).toBe('2026-10');
+    expect(await screen.findByText('maintenance.ends_at must be an ISO 8601 timestamp')).toBeVisible();
+    vi.restoreAllMocks();
+});
+
 it('keeps the maintenance message full width with an accessible feature toggle', async () => {
     const context = initTestAppContext();
     vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({maintenance: {enabled: false, message: 'Saved notice', ends_at: ''}});

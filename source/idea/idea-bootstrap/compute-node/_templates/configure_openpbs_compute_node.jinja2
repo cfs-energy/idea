@@ -20,8 +20,10 @@ grep -qE "(^|[[:space:]])${INSTANCE_HOSTNAME}([[:space:]]|$)" /etc/hosts || echo
 {% set scheduler_dns_name = context.config.get_string('scheduler.private_dns_name', required=True) %}
 {# With a stable server name the record is in DNS and follows the server wherever it runs, so
    the address is never pinned here; a pinned address would outlive a server replacement. The
-   short name is not in the resolver search path, so the daemon is given the full name. #}
-{% set pbs_server_name = scheduler_dns_name if stable_server_name else scheduler_dns_name.split('.')[0] %}
+   daemon is given the first label, the server's own server_name, which resolves through the
+   private zone in the search path to that same record: qsub completes a short job id with
+   PBS_SERVER, and the server releases dependencies by exact job id. #}
+{% set pbs_server_name = scheduler_dns_name.split('.')[0] %}
 {% set scheduler_private_ip = context.config.get_string('scheduler.private_ip') %}
 {% if scheduler_private_ip and not stable_server_name %}
 grep -q "^{{ scheduler_private_ip }} " /etc/hosts || echo "{{ scheduler_private_ip }} {{ scheduler_dns_name }} {{ scheduler_dns_name.split('.')[0] }}" >> /etc/hosts

@@ -1,6 +1,7 @@
 import ClusterSettingsService, {maintenanceBannerText, parseDashboardUrl} from './cluster-settings-service'
 import {ClusterSettingsClient} from '../client'
 import {initTestAppData} from '../test-support'
+import maintenanceEndTimes from '../../../tests/fixtures/maintenance-end-times.json'
 
 const GLOBAL_SETTINGS = {
     module_sets: {
@@ -127,6 +128,12 @@ describe('custom dashboard settings', () => {
 })
 
 describe('maintenanceBannerText', () => {
+    it.each(maintenanceEndTimes.valid)('renders the accepted timestamp %s at the expected instant', (ends_at, utc) => {
+        const expected = maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: utc})
+        expect(expected).toContain('Expected to end ')
+        expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at})).toBe(expected)
+    })
+
     it('reads an end time with no offset as UTC, as the setting is documented', () => {
         // Both spellings name the same instant, so both must render identically.
         expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00'}))
@@ -137,6 +144,13 @@ describe('maintenanceBannerText', () => {
         expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T14:00:00-04:00'}))
             .toBe(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: '2026-09-15T18:00:00Z'}))
     })
+
+    // The settings API rejects these offsets because Moment cannot parse them.
+    it.each(['2026-11-01T18:00+15:00', '2026-11-01T18:00-13:00', '2026-11-01T18:00+14:01', '2026-11-01T18:00-1201'])(
+        'omits an end time with an offset outside -12:00..+14:00 (%s)', (ends_at) => {
+            expect(maintenanceEndTimes.invalid).toContain(ends_at)
+            expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at})).toBe('Closed.')
+        })
 
     it('keeps the message when the end time cannot be parsed', () => {
         expect(maintenanceBannerText({enabled: true, message: 'Closed.', ends_at: 'next tuesday'})).toBe('Closed.')
@@ -169,4 +183,9 @@ describe('fetchMaintenance', () => {
         expect(await service.initialize()).toBe(true)
         expect(await service.fetchMaintenance()).toEqual({enabled: false, message: '', ends_at: ''})
     })
+})
+
+it('makes the default maintenance end time a separate sentence', () => {
+    expect(maintenanceBannerText({enabled: true, message: '', ends_at: '2026-09-15T18:00:00Z'}))
+        .toMatch(/^This cluster is undergoing maintenance\. Expected to end .+\.$/)
 })

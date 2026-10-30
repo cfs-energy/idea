@@ -143,6 +143,9 @@ class WebPortal:
             ),
             'module_set': module_set_id,
             'modules': modules,
+            'web_terminal_enabled': self.context.config().get_bool(
+                'cluster-manager.web_terminal.enabled', True
+            ),
             'session_management': self.context.config().get_string(
                 'cluster-manager.web_portal.session_management', 'in-memory'
             ),

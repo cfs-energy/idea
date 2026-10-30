@@ -3,6 +3,8 @@ Test Cases for ClusterSettingsAPI GetModuleSettings scoping
 """
 
 import json
+import re
+from pathlib import Path
 import unittest
 from unittest.mock import Mock
 
@@ -54,6 +56,7 @@ BASTION_SETTINGS = {
 }
 
 CLUSTER_MANAGER_SETTINGS = {
+    'web_terminal': {'enabled': True, 'ca_public_key': 'ssh-ed25519 example'},
     'client_id': 'cluster-manager-client-id',
     'client_secret': 'cluster-manager-client-secret',
     'ec2': {'autoscaling': {'instance_type': 'm5.large'}},
@@ -745,3 +748,47 @@ def test_service_reads_deny_regular_users_and_require_app_read_scope():
             with pytest.raises(exceptions.SocaException):
                 api.list_cluster_services(invocation)
             app.aws.assert_not_called()
+
+
+def test_maintenance_end_time_is_validated_before_persistence():
+    import pytest
+    from ideadatamodel import exceptions
+    from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
+
+    cases = json.loads(
+        (Path(__file__).parents[1] / 'fixtures/maintenance-end-times.json').read_text()
+    )
+    invalid = cases['invalid']
+    valid = ['', None, *(value for value, _ in cases['valid'])]
+    for value in (*invalid, *valid):
+        app, invocation = scoped_invocation(role='administrator')
+        invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+            module_id='portal', settings={'maintenance': {'ends_at': value}}
+        )
+        api = ClusterSettingsAPI(app)
+        if value in invalid:
+            # Non-string values are rejected earlier by the settings catalog.
+            offset = isinstance(value, str) and re.search(
+                r'T18:00[+-]1[2-5]:?\d\d$', value
+            )
+            with pytest.raises(
+                exceptions.SocaException,
+                match='End time offset must be between -12:00 and \\+14:00'
+                if offset
+                else 'maintenance.ends_at must be an ISO 8601 timestamp'
+                if isinstance(value, str)
+                else 'must be a string',
+            ):
+                api.update_module_settings(invocation)
+            app.config().db.sync_cluster_settings_in_db.assert_not_called()
+        else:
+            api.update_module_settings(invocation)
+            app.config().db.sync_cluster_settings_in_db.assert_called_once()
+
+    app, invocation = scoped_invocation(role='administrator')
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id='portal', settings={'maintenance.ends_at': 'tomorrow'}
+    )
+    with pytest.raises(exceptions.SocaException):
+        ClusterSettingsAPI(app).update_module_settings(invocation)
+    app.config().db.sync_cluster_settings_in_db.assert_not_called()

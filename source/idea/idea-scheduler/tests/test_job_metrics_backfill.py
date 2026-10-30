@@ -282,3 +282,60 @@ def test_lost_lease_stops_delivery(monkeypatch):
     assert state['state'] == 'failed'
     assert state['errors'] == 1
     transport.log.assert_not_called()
+
+
+def test_backfill_sends_count_and_cost_with_historical_tag_identity(monkeypatch):
+    import requests
+    from ideadatamodel import SocaAmount, SocaJobEstimatedBOMCost, locale
+    from ideasdk.metrics.datadog_api import DatadogAPI
+
+    context = make_context()
+    value = job(1)
+    monkeypatch.setattr(locale, 'get_currency_code', lambda: 'USD')
+    value.estimated_bom_cost = SocaJobEstimatedBOMCost(
+        total=SocaAmount(amount=2.5, unit='USD')
+    )
+    context.document_store.finished_job_pages.side_effect = lambda *args: (
+        page for page in [[value]]
+    )
+    transport = DatadogAPI('test-key', 'datadoghq.com', 'cluster/scheduler')
+    monkeypatch.setattr(
+        'ideasdk.metrics.history_backfill.DatadogAPI.from_context', lambda _: transport
+    )
+    response = requests.Response()
+    response.status_code = 202
+    post = Mock(return_value=response)
+    monkeypatch.setattr('ideasdk.metrics.datadog_api.requests.post', post)
+    backfill = JobMetricsBackfill(context)
+    backfill.start_request(payload(False))
+    assert wait(backfill)['state'] == 'completed'
+    series = post.call_args.kwargs['json']['series']
+    assert all('env:cluster' not in point['tags'] for point in series)
+    series = [
+        point
+        for point in series
+        if point['metric'] in {'idea.job.count', 'idea.job.cost'}
+    ]
+    assert len(series) == 2
+    expected_tags = [
+        'idea_cluster:cluster',
+        'idea_module:scheduler',
+        'project:unknown',
+        'owner:user-1',
+        'queue:unknown',
+        'queue_type:unknown',
+        'state:SocaJobState.FINISHED',
+        'idea_cluster:cluster',
+        'cluster:cluster',
+        'instance_family:unknown',
+        'capacity_type:on-demand',
+        'base_os:unknown',
+        'job_outcome:unknown',
+        'gpu:false',
+    ]
+    for point in series:
+        assert sorted(point['tags']) == sorted(expected_tags)
+        assert point['points'][0]['timestamp'] == int(value.end_time.timestamp())
+        assert point['points'][0]['value'] == (
+            1 if point['metric'] == 'idea.job.count' else 2.5
+        )

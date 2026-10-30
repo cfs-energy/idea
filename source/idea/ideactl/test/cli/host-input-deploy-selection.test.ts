@@ -14,13 +14,13 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-import { DeploymentHelper, deploymentOrder } from "../../src/cli/deployment-helper.ts";
 import type { Deps } from "../../src/cli/cdk-invoker.ts";
-import type { ModuleInfo } from "../../src/config/cluster-config.ts";
 import { createLiveUpgradeDeps, type UpgradeDeploymentOptions } from "../../src/cli/commands/upgrade.ts";
+import { DeploymentHelper, deploymentOrder } from "../../src/cli/deployment-helper.ts";
+import type { ModuleInfo } from "../../src/config/cluster-config.ts";
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const STACKS = join(PKG, "src", "cdk", "stacks");
@@ -94,7 +94,7 @@ test("every stack that reads a container input is a known one", () => {
   // A new reader that this file does not know about would not be covered by the selection tests
   // below, so discovering one takes this red rather than passing silently.
   const files = readerStackFiles();
-  assert.deepEqual(files, ["bastion-host.ts", "cluster-manager.ts", "directoryservice.ts", "scheduler.ts", "vdc.ts"]);
+  assert.deepEqual(files, [], "stacks no longer branch on the retired host mode");
   for (const file of files) {
     assert.ok(MODULE_NAME_BY_STACK_FILE[file] !== undefined, `${file} has no module name mapping`);
   }
@@ -140,7 +140,7 @@ test("the upgrade command's deployment passes the flag that ignores recorded sta
   try {
     DeploymentHelper.open = async (options) => {
       captured.push(options as unknown as Record<string, unknown>);
-      return { async invoke() {} } as unknown as DeploymentHelper;
+      return { async invoke() { } } as unknown as DeploymentHelper;
     };
     await createLiveUpgradeDeps(base).deploy(deployment);
   } finally {

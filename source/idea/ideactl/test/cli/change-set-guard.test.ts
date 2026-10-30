@@ -12,9 +12,8 @@ import { after, before, describe, it } from 'node:test';
 
 import {
   builtInAllowedReplacements,
-  retainedResources,
-  CdkInvoker,
   CDK_DEPLOY_CHANGE_SET_NAME,
+  CdkInvoker,
   ChangeSetRefused,
   evaluateChangeSet,
   isEmptyChangeSet,
@@ -146,23 +145,6 @@ describe('evaluateChangeSet', () => {
     assert.equal(verdict.allowed[0]?.allowedBy, '--allow-replacement');
   });
 
-  it('allows Remove of a retired custom resource type, whose Delete handler is a no-op', () => {
-    // The prefix-list and OAuth-credential custom resources leave every stack this release. Their
-    // deployed Python handlers answer Delete with SUCCESS and change nothing, so the removal must
-    // not stop an upgrade on every cluster.
-    for (const [logicalId, resourceType] of [
-      ['sampleclusterclusterprefixlist', 'Custom::ClusterPrefixList'],
-      ['clustermanagercreds', 'Custom::GetOAuthCredentials'],
-    ] as const) {
-      const verdict = evaluateChangeSet({ Changes: [change('Remove', logicalId, resourceType)] });
-      assert.equal(verdict.refusals.length, 0, resourceType);
-      assert.equal(verdict.allowed[0]?.allowedBy, 'retired custom resource; its Delete handler is a no-op');
-    }
-    // Only the remove class: a replacement of one is still a replacement.
-    const replaced = evaluateChangeSet({ Changes: [change('Modify', 'clustermanagercreds', 'Custom::GetOAuthCredentials', 'True')] });
-    assert.equal(replaced.refusals.length, 1);
-  });
-
   it('allows a Conditional replacement that hangs only on attributes of unreplaced resources', () => {
     // The desktop stack's SNS subscriptions take Endpoint from !GetAtt queue.Arn. Adding a Retain
     // policy modifies the subscription, and CloudFormation calls that Conditional because it cannot
@@ -193,34 +175,6 @@ describe('evaluateChangeSet', () => {
 
     const bare = evaluateChangeSet({ Changes: [change('Modify', 'queuesubscription', 'AWS::SNS::Subscription', 'Conditional')] });
     assert.equal(bare.refusals.length, 1, 'no property detail means no evidence');
-  });
-
-  it('allows retained record set removal for the scheduler handover', () => {
-    const changes = [change('Remove', 'schedulerdnsrecord', 'AWS::Route53::RecordSet')];
-    const verdict = evaluateChangeSet({ Changes: changes }, [], new Map(), new Map(), new Set(['schedulerdnsrecord']));
-    assert.equal(verdict.refusals.length, 0);
-    assert.equal(verdict.allowed.length, 1);
-    assert.equal(evaluateChangeSet({ Changes: changes }).refusals.length, 1);
-  });
-
-  for (const type of ['AWS::EFS::FileSystem', 'Custom::Something']) {
-    it(`refuses retained ${type} removal without an explicit override`, () => {
-      const changes = [change('Remove', 'old', type), change('Add', 'renamed', type)];
-      const retained = new Set(['old']);
-      const verdict = evaluateChangeSet({ Changes: changes }, [], new Map(), new Map(), retained);
-      assert.equal(verdict.refusals.length, 1);
-      assert.equal(verdict.refusals[0]?.logicalId, 'old');
-      const override = evaluateChangeSet({ Changes: changes }, ['old'], new Map(), new Map(), retained);
-      assert.equal(override.refusals.length, 0);
-      assert.equal(override.allowed[0]?.allowedBy, '--allow-replacement');
-    });
-  }
-
-  it('reads retained logical IDs from a deployed template and nothing from an unparsable one', () => {
-    const template = JSON.stringify({ Resources: { a: { Type: 'X', DeletionPolicy: 'Retain' }, b: { Type: 'X', DeletionPolicy: 'Delete' }, c: { Type: 'X' } } });
-    assert.deepEqual([...retainedResources(template)], ['a']);
-    assert.deepEqual([...retainedResources('not json')], []);
-    assert.deepEqual([...retainedResources(undefined)], []);
   });
 
   it('allows replacing a task definition, which is how an image upgrade rolls', () => {

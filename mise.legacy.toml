@@ -1,0 +1,3 @@
+# The Python module build and test suites still use Corretto 17.
+[tools]
+java = "corretto-17.0.21.0.10"

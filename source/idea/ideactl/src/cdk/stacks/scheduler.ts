@@ -4,45 +4,44 @@
  * IAM policies take CDK's default `PolicyName`, which is the logical id, so the construct ids
  * here are load bearing twice over.
  *
- * Under the container flag the stack also runs the scheduler as a task on the container stack's
+ * The stack runs the scheduler as a task on the container stack's
  * capacity, with its PBS state on an elastic file system this stack owns. The task is built here
  * because the application reads this module's own settings rows at boot, so it must not start
  * before this stack has written them.
  */
 
-import { Aws, CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
+import { Aws, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as efs from 'aws-cdk-lib/aws-efs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 import { ArnBuilder } from '../../config/arn-builder.ts';
 import type { ClusterConfig } from '../../config/cluster-config.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
-import { IDEA_TAG_CLUSTER_NAME, IDEA_TAG_MODULE_ID, IDEA_TAG_MODULE_NAME, IDEA_TAG_NODE_TYPE } from '../constructs/base.ts';
+import { IDEA_TAG_CLUSTER_NAME, IDEA_TAG_MODULE_ID, IDEA_TAG_MODULE_NAME } from '../constructs/base.ts';
 import { InstanceProfile, ManagedPolicy, Policy, Role, SQSQueue } from '../constructs/common.ts';
 import {
   STREAM_PREFIX_APPLICATION,
   STREAM_PREFIX_OPENPBS,
+  addLogTailContainer,
   addStorageMounts,
   adoptedLogDriver,
-  addLogTailContainer,
-  applicationTargetGroup,
   applicationContainerSettings,
+  applicationTargetGroup,
   attachApplicationFileLogs,
   buildEc2Service,
   buildExecutionRole,
   buildTaskDefinition,
   buildTaskRole,
-  grantInjectedSecret,
   commonEnvironment,
   containerImage,
   dockerLabels,
+  grantInjectedSecret,
   healthCheckGrace,
   roleSizing,
   taskStartAllowance,
@@ -50,21 +49,14 @@ import {
 } from '../constructs/container.ts';
 import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
-  ExistingSocaCluster,
-  lookupClusterDns,
-  lookupEbsKmsKey,
-  lookupKeyPair,
+  ExistingSocaCluster
 } from '../constructs/existing-resources.ts';
 import { ComputeNodeSecurityGroup, SchedulerSecurityGroup } from '../constructs/network.ts';
-import { buildBootstrapUserData } from '../userdata.ts';
 
 const MODULE_SCHEDULER = 'scheduler';
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
 /** PBS state and logs live on the scheduler task volume. */
 const SCHEDULER_PBS_HOME = '/var/spool/pbs';
-const NODE_TYPE_APP = 'app';
-const OS_AMAZONLINUX2 = 'amazonlinux2';
-const OS_AMAZONLINUX2023 = 'amazonlinux2023';
 /** `constants.SQS_MAX_RECEIVE_COUNT_SCHEDULER_JOB_STATUS`. */
 const SQS_MAX_RECEIVE_COUNT_SCHEDULER_JOB_STATUS = 10;
 
@@ -82,36 +74,24 @@ function requiredList(config: ClusterConfig, key: string): string[] {
   return (config.getList as RequiredGet<string[]>)(key, undefined, { required: true });
 }
 
-/** `Utils.get_ec2_block_device_name`. */
-export function ec2BlockDeviceName(baseOs: string): string {
-  return baseOs === OS_AMAZONLINUX2 || baseOs === OS_AMAZONLINUX2023 ? '/dev/xvda' : '/dev/sda1';
-}
-
 export class SchedulerStack extends IdeaBaseStack {
   readonly cluster: ExistingSocaCluster;
   readonly arnBuilder: ArnBuilder;
-  readonly bootstrapPackageUri: string;
   readonly userPool: cognito.IUserPool;
-  private readonly ecsEnabled: boolean;
-  private readonly hostsPresent: boolean;
   private readonly schedulerHostname: string;
 
   oauth2ClientSecret!: OAuthClientIdAndSecret;
-  schedulerRole!: Role;
-  /** Attached to the scheduler host role and to the scheduler task role; see `buildIamRoles`. */
+  /** Managed policies attached to the scheduler task role; see `buildIamRoles`. */
   schedulerManagedPolicies!: ManagedPolicy[];
-  schedulerInstanceProfile!: InstanceProfile;
   computeNodeRole!: Role;
   computeNodeInstanceProfile!: InstanceProfile;
   spotFleetRequestRole!: Role;
   schedulerSecurityGroup!: SchedulerSecurityGroup;
   computeNodeSecurityGroup!: ComputeNodeSecurityGroup;
   jobStatusSqsQueue!: SQSQueue;
-  ec2Instance!: ec2.CfnInstance;
-  clusterDnsRecordSet!: route53.RecordSet;
   externalEndpoint!: CustomResource;
   internalEndpoint!: CustomResource;
-  /** Present under the container flag: the scheduler task service and its target groups. */
+  /** The ECS service: the scheduler task service and its target groups. */
   containerService: ecs.Ec2Service | undefined;
   private containerTaskRole?: iam.Role;
   private containerTargetGroups: elbv2.ApplicationTargetGroup[] = [];
@@ -131,17 +111,8 @@ export class SchedulerStack extends IdeaBaseStack {
     });
     if (!hostname?.trim()) throw new Error(`Missing required setting: ${this.moduleId}.hostname`);
     this.schedulerHostname = hostname;
-    this.bootstrapPackageUri = this.lookupBootstrapPackageUri();
     this.cluster = new ExistingSocaCluster(this.context, this.stack);
     this.arnBuilder = new ArnBuilder(this.context.config);
-    this.ecsEnabled = this.context.config.getBool("ecs.enabled", false);
-    // `ecs.enabled` alone routes the endpoints to the container service and deletes the instance
-    // that serves them in one change set, so nothing proves the new target before the old one is
-    // gone. With `ecs.retain_existing_hosts` the same deploy routes the endpoints and keeps the
-    // instance, idle and unregistered, so a later deploy removes it once the container is serving
-    // and turning the flag off puts the instance back in service.
-    this.hostsPresent =
-      !this.ecsEnabled || this.context.config.getBool("ecs.retain_existing_hosts", false);
 
     this.userPool = this.lookupUserPool();
 
@@ -150,10 +121,6 @@ export class SchedulerStack extends IdeaBaseStack {
     this.buildSqsQueue();
     this.buildIamRoles();
     this.buildSecurityGroups();
-    if (this.hostsPresent) this.buildEc2Instance();
-    // The container scheduler upserts this record itself, so the stack stops managing it as soon as
-    // routing moves. An earlier retain-only deploy is what keeps the name alive across that handover.
-    if (!this.ecsEnabled) this.buildRoute53RecordSet();
     this.buildContainerTargetGroups();
     this.buildEndpoints();
     this.buildContainerService();
@@ -173,22 +140,6 @@ export class SchedulerStack extends IdeaBaseStack {
   /** The service name, fixed so the settings resource can publish it without a reference. */
   private get containerServiceName(): string {
     return `${this.clusterName}-${this.moduleId}`;
-  }
-
-  /**
-   * The bootstrap package is not a CDK asset: the CLI uploads it and passes its location as the
-   * `bootstrap_package_uri` context parameter. When absent, the deployment identifier derives
-   * the package name for a standalone synth.
-   *
-   * The naming rule is local so stack synthesis does not load an S3 client.
-   */
-  private lookupBootstrapPackageUri(): string {
-    const fromContext: unknown = this.stack.node.tryGetContext('bootstrap_package_uri');
-    if (typeof fromContext === 'string' && fromContext !== '') return fromContext;
-    const bucket = this.context.config.getString('cluster.cluster_s3_bucket', undefined, {
-      required: true,
-    }) as string;
-    return `s3://${bucket}/idea/bootstrap/bootstrap-${this.moduleId}-${this.deploymentId}.tar.gz`;
   }
 
   buildOauth2Client(): void {
@@ -237,25 +188,6 @@ export class SchedulerStack extends IdeaBaseStack {
   buildIamRoles(): void {
     const ec2ManagedPolicies = this.getEc2InstanceManagedPolicies();
 
-    // Deduplication preserves first-seen order.
-    // These two lists are deduplicated in first-seen order. The reference implementation
-    // deduplicated through an unordered set of strings, so the array order it emitted is a per
-    // process permutation: no seed reproduces all three captured templates, and the two real
-    // clusters carry the opposite order to the development one. IAM attaches a set, so a
-    // permutation changes no permission and replaces nothing, but it is an ordered array in the
-    // template and a comparison that reads order sees it. This is the only place the reference did
-    // that, which is why only these two roles differ.
-    const schedulerPolicyArns = [
-      ...new Set([
-        ...this.context.config.getList<string>('cluster.iam.scheduler_iam_policy_arns', []),
-        ...ec2ManagedPolicies,
-      ]),
-    ];
-    this.schedulerRole = new Role(this.context, `${this.moduleId}-role`, this.stack, {
-      description: 'IAM role assigned to the scheduler',
-      assumedBy: ['ssm', 'ec2'],
-      managedPolicies: schedulerPolicyArns,
-    });
     // The inline policies of one role share a 10,240-byte limit, and scheduler.yml next to the task
     // role's default policy reached it when the image pipeline grants were added. Read-only access
     // and the image pipeline render into customer-managed policies, each with its own 6,144-character
@@ -274,15 +206,6 @@ export class SchedulerStack extends IdeaBaseStack {
         moduleId: this.moduleId,
       }),
     ];
-    for (const policy of this.schedulerManagedPolicies) this.schedulerRole.addManagedPolicy(policy);
-    if (this.hostsPresent) {
-      this.schedulerInstanceProfile = new InstanceProfile(
-        this.context,
-        `${this.moduleId}-scheduler-instance-profile`,
-        this.stack,
-        [this.schedulerRole],
-      );
-    }
 
     const computeNodePolicyArns = [
       ...new Set([
@@ -308,18 +231,10 @@ export class SchedulerStack extends IdeaBaseStack {
     });
 
     const vars = {
-      scheduler_role_arn: this.schedulerRole.roleArn,
       compute_node_role_arn: this.computeNodeRole.roleArn,
       spot_fleet_request_role_arn: this.spotFleetRequestRole.roleArn,
     };
 
-    this.schedulerRole.attachInlinePolicy(
-      new Policy(this.context, 'scheduler-policy', this.stack, {
-        policyTemplateName: 'scheduler.yml',
-        vars,
-        moduleId: this.moduleId,
-      }),
-    );
     this.computeNodeRole.attachInlinePolicy(
       new Policy(this.context, 'compute-node-policy', this.stack, {
         policyTemplateName: 'compute-node.yml',
@@ -397,7 +312,7 @@ export class SchedulerStack extends IdeaBaseStack {
       this.cluster.getSecurityGroup('external-load-balancer') as ec2.ISecurityGroup,
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
-    if (!this.hostsPresent) this.removeBastionHostIngressRule(this.schedulerSecurityGroup);
+    this.removeBastionHostIngressRule(this.schedulerSecurityGroup);
 
     this.computeNodeSecurityGroup = new ComputeNodeSecurityGroup(
       this.context,
@@ -438,7 +353,7 @@ export class SchedulerStack extends IdeaBaseStack {
    * the batch server is down rather than time a draining connection gets to finish.
    */
   private buildContainerTargetGroups(): void {
-    if (!this.ecsEnabled) return;
+
     const scope = this.containerScope;
     this.containerTargetGroups = (['e', 'i'] as const).map((suffix) =>
       applicationTargetGroup(scope, {
@@ -469,14 +384,17 @@ export class SchedulerStack extends IdeaBaseStack {
    * handover: running jobs survive, submissions fail while it is down.
    */
   private buildContainerService(): void {
-    if (!this.ecsEnabled) return;
+
     const scope = this.containerScope;
     const sizing = roleSizing(scope, 'scheduler');
     const { role: taskRole, policy: taskPolicy } = buildTaskRole(scope, {
       constructId: 'scheduler-task-role',
       name: `${this.moduleId}-task-role`,
       description: 'IAM role assigned to the scheduler ECS task',
-      managedPolicyArns: this.getEc2InstanceManagedPolicies(),
+      managedPolicyArns: [...new Set([
+        ...this.context.config.getList<string>('cluster.iam.scheduler_iam_policy_arns', []),
+        ...this.getEc2InstanceManagedPolicies(),
+      ])],
       policyConstructId: 'scheduler-task-policy',
       policyTemplateName: 'scheduler.yml',
       policyModuleId: this.moduleId,
@@ -691,165 +609,9 @@ export class SchedulerStack extends IdeaBaseStack {
     });
   }
 
-  buildEc2Instance(): void {
-    const config = this.context.config;
-    const isPublic = config.getBool('scheduler.public', false);
-    const baseOs = config.getString('scheduler.base_os', undefined, { required: true }) as string;
-    const instanceAmi = config.getString('scheduler.instance_ami', undefined, { required: true }) as string;
-    const instanceType = config.getString('scheduler.instance_type', undefined, { required: true }) as string;
-    const volumeSize = config.getInt('scheduler.volume_size', 200);
-    const keyPair = lookupKeyPair(this.context, this.stack);
-    const enableDetailedMonitoring = config.getBool('scheduler.ec2.enable_detailed_monitoring', false);
-    const enableTerminationProtection = config.getBool('scheduler.ec2.enable_termination_protection', false);
-    const metadataHttpTokens = config.getString('scheduler.ec2.metadata_http_tokens', undefined, {
-      required: true,
-    }) as string;
-    const httpsProxy = config.getString('cluster.network.https_proxy', '');
-    const noProxy = config.getString('cluster.network.no_proxy', '');
-    const proxyConfig: Record<string, string> =
-      httpsProxy === '' ? {} : { http_proxy: httpsProxy, https_proxy: httpsProxy, no_proxy: noProxy };
-    const ebsKmsKey = lookupEbsKmsKey(this.context, this.stack);
-
-    const usePublicSubnets = isPublic && this.cluster.publicSubnets.length > 0;
-    const subnetIds = usePublicSubnets
-      ? this.cluster.existingVpc.getPublicSubnetIds()
-      : this.cluster.existingVpc.getPrivateSubnetIds();
-    // Python indexes the list and raises IndexError on an empty one. Without this the template
-    // synthesizes with no SubnetId and the deploy fails halfway, after the roles and the queues.
-    const subnetId = subnetIds[0];
-    if (subnetId === undefined) {
-      throw new Error(
-        `cluster.network.${usePublicSubnets ? 'public' : 'private'}_subnets is empty: no subnet to launch the scheduler into`,
-      );
-    }
-
-    const blockDeviceName = ec2BlockDeviceName(baseOs);
-    const blockDeviceTypeString = config.getString('scheduler.volume_type', 'gp3');
-    const blockDeviceVolumeType =
-      blockDeviceTypeString === 'gp3' ? ec2.EbsDeviceVolumeType.GP3 : ec2.EbsDeviceVolumeType.GP2;
-
-    const userData = buildBootstrapUserData({
-      awsRegion: this.awsRegion,
-      bootstrapPackageUri: this.bootstrapPackageUri,
-      installCommands: ['/bin/bash scheduler/setup.sh'],
-      proxyConfig,
-      baseOs,
-    });
-
-    const launchTemplate = new ec2.LaunchTemplate(this.stack, `${this.moduleId}-lt`, {
-      instanceType: new ec2.InstanceType(instanceType),
-      machineImage: ec2.MachineImage.genericLinux({ [this.awsRegion]: instanceAmi }),
-      userData: ec2.UserData.custom(Fn.sub(userData)),
-      keyPair,
-      blockDevices: [
-        {
-          deviceName: blockDeviceName,
-          volume: ec2.BlockDeviceVolume.ebs(volumeSize, {
-            encrypted: true,
-            kmsKey: ebsKmsKey,
-            volumeType: blockDeviceVolumeType,
-          }),
-        },
-      ],
-      requireImdsv2: metadataHttpTokens === 'required',
-    });
-
-    this.ec2Instance = new ec2.CfnInstance(this.stack, `${this.moduleId}-instance`, {
-      blockDeviceMappings: [
-        {
-          deviceName: blockDeviceName,
-          ebs: { volumeSize, volumeType: blockDeviceTypeString },
-        },
-      ],
-      disableApiTermination: enableTerminationProtection,
-      // The profile name, not a Ref: there is no dependency edge to the instance profile.
-      iamInstanceProfile: this.schedulerInstanceProfile.instanceProfileName as string,
-      instanceType,
-      imageId: instanceAmi,
-      keyName: keyPair.keyPairName,
-      launchTemplate: {
-        version: launchTemplate.latestVersionNumber,
-        launchTemplateId: launchTemplate.launchTemplateId as string,
-      },
-      networkInterfaces: [
-        {
-          deviceIndex: '0',
-          associatePublicIpAddress: isPublic,
-          groupSet: [this.schedulerSecurityGroup.securityGroupId],
-          subnetId,
-        },
-      ],
-      userData: Fn.base64(Fn.sub(userData)),
-      monitoring: enableDetailedMonitoring,
-    });
-    Tags.of(this.ec2Instance).add('Name', this.buildResourceName(this.moduleId));
-    Tags.of(this.ec2Instance).add(IDEA_TAG_NODE_TYPE, NODE_TYPE_APP);
-    this.addBackupTags(this.ec2Instance);
-
-    this.addNagSuppression(
-      [{ rule_id: 'AwsSolutions-EC26', reason: 'EBS Encryption is enforced via Launch Template' }],
-      this.ec2Instance,
-    );
-
-    if (!enableDetailedMonitoring) {
-      this.addNagSuppression(
-        [
-          {
-            rule_id: 'AwsSolutions-EC28',
-            reason: 'detailed monitoring is a configurable option to save costs',
-          },
-        ],
-        this.ec2Instance,
-      );
-    }
-
-    if (!enableTerminationProtection) {
-      this.addNagSuppression(
-        [
-          {
-            rule_id: 'AwsSolutions-EC29',
-            reason:
-              'termination protection not supported in CDK L2 construct. enable termination protection via AWS EC2 console after deploying the cluster.',
-          },
-        ],
-        this.ec2Instance,
-      );
-    }
-  }
-
-  buildRoute53RecordSet(): void {
-    this.clusterDnsRecordSet = new route53.RecordSet(this.stack, `${this.moduleId}-dns-record`, {
-      recordType: route53.RecordType.A,
-      target: route53.RecordTarget.fromIpAddresses(this.ec2Instance.attrPrivateIp),
-      ttl: Duration.minutes(5),
-      recordName: this.schedulerHostname,
-      zone: lookupClusterDns(this.context, this.stack),
-    });
-    // The record is the name clients and execution hosts resolve. Retaining it lets a later
-    // deploy stop managing it, which is what the container path does, without CloudFormation
-    // deleting the name. Deploy this on its own before turning `ecs.enabled` on.
-    if (this.context.config.getBool('scheduler.retain_dns_record', false)) {
-      this.clusterDnsRecordSet.applyRemovalPolicy(RemovalPolicy.RETAIN);
-    }
-  }
-
   buildEndpoints(): void {
     const config = this.context.config;
-    const externalTargetGroupArn = this.ecsEnabled
-      ? this.containerTargetGroupArn(0)
-      : new elbv2.CfnTargetGroup(
-          this.stack,
-          `${this.moduleId}-external-target-group`,
-          {
-            port: 8443,
-            protocol: 'HTTPS',
-            targetType: 'ip',
-            vpcId: this.cluster.vpc.vpcId,
-            name: this.getTargetGroupName('sched-ext'),
-            targets: [{ id: this.ec2Instance.attrPrivateIp }],
-            healthCheckPath: '/healthcheck',
-          },
-        ).ref;
+    const externalTargetGroupArn = this.containerTargetGroupArn(0);
     const clusterEndpointsLambdaArn = config.getString('cluster.cluster_endpoints_lambda_arn', undefined, {
       required: true,
     }) as string;
@@ -887,21 +649,7 @@ export class SchedulerStack extends IdeaBaseStack {
     const internalEndpointPriority = requiredInt(config, 'scheduler.endpoints.internal.priority');
     const internalEndpointPathPatterns = requiredList(config, 'scheduler.endpoints.internal.path_patterns');
 
-    const internalTargetGroupArn = this.ecsEnabled
-      ? this.containerTargetGroupArn(1)
-      : new elbv2.CfnTargetGroup(
-          this.stack,
-          `${this.moduleId}-internal-target-group`,
-          {
-            port: 8443,
-            protocol: 'HTTPS',
-            targetType: 'ip',
-            vpcId: this.cluster.vpc.vpcId,
-            name: this.getTargetGroupName('sched-int'),
-            targets: [{ id: this.ec2Instance.attrPrivateIp }],
-            healthCheckPath: '/healthcheck',
-          },
-        ).ref;
+    const internalTargetGroupArn = this.containerTargetGroupArn(1);
 
     this.internalEndpoint = new CustomResource(this.stack, 'internal-endpoint', {
       serviceToken: clusterEndpointsLambdaArn,
@@ -923,44 +671,24 @@ export class SchedulerStack extends IdeaBaseStack {
   }
 
   buildClusterSettings(): void {
-    // The scheduler and the execution hosts both derive the PBS server name from
-    // private_dns_name. Pointing it at the cluster DNS record rather than the instance lets a
-    // replaced scheduler keep its name, so execution hosts do not need reconfiguring and running
-    // jobs survive. Off by default: turning it on for an existing cluster renames its PBS server,
-    // and execution hosts already running jobs would not follow the change.
-    const useStableServerName =
-      this.ecsEnabled || this.context.config.getBool('scheduler.use_stable_server_name', false);
-    const privateDnsName = useStableServerName
-      ? this.schedulerHostname
-      : this.ec2Instance.attrPrivateDnsName;
-
     const clusterSettings: Record<string, unknown> = {
       deployment_id: this.deploymentId,
-      private_dns_name: privateDnsName,
+      private_dns_name: this.schedulerHostname,
     };
 
-    if (this.ecsEnabled) {
-      // The container path has no instance address to pin the name with, so the row that makes the
-      // scheduler and the execution hosts use the DNS name is written, not assumed.
-      clusterSettings['use_stable_server_name'] = true;
-      // The AD automation agent verifies the scheduler task's node retirements by the task role
-      // session and the service the task belongs to, as the bastion's join is verified.
-      if (this.containerTaskRole !== undefined) {
-        clusterSettings['task_role_id'] = (this.containerTaskRole.node.defaultChild as iam.CfnRole).attrRoleId;
-        clusterSettings['service_name'] = this.containerServiceName;
-      }
-    } else {
-      clusterSettings['private_ip'] = this.ec2Instance.attrPrivateIp;
-      if (this.context.config.getBool('scheduler.public', false)) {
-        clusterSettings['public_ip'] = this.ec2Instance.attrPublicIp;
-      }
-      clusterSettings['instance_id'] = this.ec2Instance.ref;
+    // The container path has no instance address to pin the name with, so the row that makes the
+    // scheduler and the execution hosts use the DNS name is written, not assumed.
+    clusterSettings['use_stable_server_name'] = true;
+    // The AD automation agent verifies the scheduler task's node retirements by the task role
+    // session and the service the task belongs to, as the bastion's join is verified.
+    if (this.containerTaskRole !== undefined) {
+      clusterSettings['task_role_id'] = (this.containerTaskRole.node.defaultChild as iam.CfnRole).attrRoleId;
+      clusterSettings['service_name'] = this.containerServiceName;
     }
 
     clusterSettings['client_id'] = this.oauth2ClientSecret.clientId.ref;
     clusterSettings['client_secret'] = this.oauth2ClientSecret.clientSecret.ref;
     clusterSettings['security_group_id'] = this.schedulerSecurityGroup.securityGroupId;
-    clusterSettings['iam_role_arn'] = this.schedulerRole.roleArn;
     clusterSettings['compute_node_security_group_ids'] = [this.computeNodeSecurityGroup.securityGroupId];
     clusterSettings['compute_node_iam_role_arn'] = this.computeNodeRole.roleArn;
     clusterSettings['compute_node_instance_profile_arn'] = this.computeNodeInstanceProfile.ref;

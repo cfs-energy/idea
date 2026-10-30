@@ -137,7 +137,7 @@ cfg.tmp.json
 ## Local Development
 
 scratch/
-tasks/local_dev.py
+mise.local.toml
 build-dev-mode/
 codebuild_build.sh
 

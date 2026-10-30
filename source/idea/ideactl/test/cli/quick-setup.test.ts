@@ -33,6 +33,7 @@ const TABLES = {
     moduleRow('shared-storage', 'shared-storage', 'stack'),
   ],
   [`${CLUSTER}.cluster-settings`]: [
+    { key: 'ecs.enabled', value: true },
     { key: 'global-settings.module_sets.default.cluster.module_id', value: 'cluster' },
     { key: 'cluster.cluster_s3_bucket', value: 'sample-bucket' },
     { key: 'cluster.aws.dns_suffix', value: 'amazonaws.com' },

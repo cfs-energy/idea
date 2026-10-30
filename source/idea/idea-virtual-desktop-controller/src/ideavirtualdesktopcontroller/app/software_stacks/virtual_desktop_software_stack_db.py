@@ -186,6 +186,24 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             self._table_obj = self._ddb_client.Table(self.table_name)
         return self._table_obj
 
+    def _base_stack_projects(self) -> Dict[str, List[Project]]:
+        projects = {}
+        request = ListSoftwareStackRequest(disabled_also=True)
+        while True:
+            response = self.list_all_from_db(request)
+            for stack in response.listing or []:
+                if not (stack.stack_id or '').startswith(
+                    f'{software_stacks_constants.BASE_STACK_PREFIX}-'
+                ):
+                    continue
+                inherited = projects.setdefault(stack.architecture, {})
+                for project in stack.projects or []:
+                    inherited[project.project_id] = project
+            if Utils.is_empty(response.cursor):
+                break
+            request.paginator = response.paginator
+        return {arch: list(inherited.values()) for arch, inherited in projects.items()}
+
     def _create_base_software_stacks(self):
         base_stacks_config = self.get_base_software_stack_config()
 
@@ -197,6 +215,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             return
 
         default_project = self.context.projects_client.get_default_project().project
+        projects_by_arch = self._base_stack_projects()
         for base_os in VirtualDesktopBaseOS:
             software_stacks_seen = set()
             # Handle base_os as enum member - use the VALUE (not name)
@@ -368,7 +387,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                                 ),
                                 architecture=VirtualDesktopArchitecture(arch),
                                 gpu=custom_stack_gpu_manufacturer,
-                                projects=[default_project],
+                                projects=projects_by_arch.get(arch, [default_project]),
                                 pool_enabled=False,
                                 pool_asg_name=None,
                                 launch_tenancy=VirtualDesktopTenancy.DEFAULT,

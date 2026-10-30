@@ -183,6 +183,8 @@ fi
   log_info "GPU InstanceType not detected. Skipping disabling of Nouveau Drivers..."
 {% endif %}
 
+{% include '_templates/linux/web_terminal.jinja2' %}
+
 # Cleaning up earlier reboot notifications added by our code.
 crontab -l | grep -v "idea-reboot-do-not-edit-or-delete-idea-notif.sh" | crontab -
 

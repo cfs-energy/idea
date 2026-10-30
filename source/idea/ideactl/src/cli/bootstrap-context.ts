@@ -121,19 +121,6 @@ function configFacade(config: ClusterConfig): object {
   };
 }
 
-/** Resolves the release URI that the package publisher already uploaded. */
-function releaseUri(input: BootstrapContextInput, packagePrefix: string): string {
-  const entry = Object.entries(input.releasePackageUris).find(([name]) =>
-    name.startsWith(packagePrefix),
-  );
-  if (entry === undefined || isEmpty(entry[1])) {
-    throw new GeneralException(
-      `release package URI not found for module ${input.moduleId}: ${packagePrefix}`,
-    );
-  }
-  return entry[1];
-}
-
 /** Creates one log-file entry in the order used by the reference model. */
 function logFile(
   filePath: string,
@@ -184,179 +171,7 @@ function hostRole(input: BootstrapContextInput): HostRole {
     };
   }
 
-  if (input.moduleName === "cluster-manager") {
-    return {
-      baseOs: input.baseOs,
-      instanceType: input.instanceType,
-      metricsNamespace: moduleMetrics,
-      nodeType: "app",
-      enableLogging:
-        input.config.getBool("cluster-manager.cloudwatch_logs.enabled", false) ===
-        true,
-      logFiles: [
-        logFile("/opt/idea/app/logs/**.log", moduleLogGroup, "application_{ip_address}"),
-        logFile("/var/log/messages", moduleLogGroup, "system_{ip_address}"),
-        logFile("/var/log/syslog", moduleLogGroup, "syslog_{ip_address}"),
-      ],
-      vars: {
-        app_package_uri: releaseUri(input, "idea-cluster-manager-"),
-      },
-    };
-  }
-
-  if (input.moduleName === "scheduler") {
-    const logFiles = [
-      logFile("/opt/idea/app/logs/**.log", moduleLogGroup, "application_{ip_address}"),
-      logFile("/var/log/messages", moduleLogGroup, "system_{ip_address}"),
-      logFile("/var/log/syslog", moduleLogGroup, "syslog_{ip_address}"),
-    ];
-    if (requiredString(input.config, "scheduler.provider") === "openpbs") {
-      const openPbsLogGroup = `${moduleLogGroup}/openpbs`;
-      logFiles.push(
-        logFile(
-          "/var/spool/pbs/server_logs/**.log",
-          openPbsLogGroup,
-          "server_logs_{ip_address}",
-        ),
-        logFile(
-          "/var/spool/pbs/sched_logs/**.log",
-          openPbsLogGroup,
-          "sched_logs_{ip_address}",
-        ),
-        logFile(
-          "/var/spool/pbs/server_priv/accounting/**.log",
-          openPbsLogGroup,
-          "accounting_logs_{ip_address}",
-        ),
-      );
-    }
-    return {
-      baseOs: input.baseOs,
-      instanceType: input.instanceType,
-      metricsNamespace: moduleMetrics,
-      nodeType: "app",
-      enableLogging:
-        input.config.getBool("scheduler.cloudwatch_logs.enabled", false) === true,
-      logFiles,
-      vars: {
-        app_package_uri: releaseUri(input, "idea-scheduler-"),
-      },
-    };
-  }
-
-  if (input.moduleName === "bastion-host") {
-    return {
-      baseOs: input.baseOs,
-      instanceType: input.instanceType,
-      metricsNamespace: moduleMetrics,
-      nodeType: "infra",
-      enableLogging:
-        input.config.getBool("bastion-host.cloudwatch_logs.enabled", false) === true,
-      logFiles: [
-        logFile("/var/log/messages", moduleLogGroup, "system_{ip_address}"),
-        logFile("/var/log/syslog", moduleLogGroup, "syslog_{ip_address}"),
-        logFile("/var/log/secure", moduleLogGroup, "secure_{ip_address}"),
-        logFile("/var/log/auth.log", moduleLogGroup, "auth_{ip_address}"),
-      ],
-      vars: {},
-    };
-  }
-
-  if (input.moduleName !== "virtual-desktop-controller") {
-    throw new GeneralException(
-      `bootstrap context is not defined for module: ${input.moduleName}`,
-    );
-  }
-
-  const vdcLogging =
-    input.config.getBool(
-      "virtual-desktop-controller.cloudwatch_logs.enabled",
-      false,
-    ) === true;
-  if (input.plan.contextParameter === "controller_bootstrap_package_uri") {
-    const name = `${moduleLogGroup}/controller`;
-    return {
-      baseOs: input.baseOs,
-      instanceType: input.instanceType,
-      metricsNamespace: `${moduleMetrics}/controller`,
-      nodeType: "app",
-      enableLogging: vdcLogging,
-      logFiles: [
-        logFile("/opt/idea/app/logs/**.log", name, "application_{ip_address}"),
-        logFile("/var/log/messages", name, "system_{ip_address}"),
-        logFile("/var/log/syslog", name, "syslog_{ip_address}"),
-      ],
-      vars: {
-        controller_package_uri: releaseUri(
-          input,
-          "idea-virtual-desktop-controller-",
-        ),
-      },
-    };
-  }
-
-  if (input.plan.contextParameter === "dcv_broker_bootstrap_package_uri") {
-    const name = `${moduleLogGroup}/dcv-broker`;
-    return {
-      baseOs: requiredString(
-        input.config,
-        `${input.moduleId}.dcv_broker.autoscaling.base_os`,
-      ),
-      instanceType: requiredString(
-        input.config,
-        `${input.moduleId}.dcv_broker.autoscaling.instance_type`,
-      ),
-      metricsNamespace: `${moduleMetrics}/dcv-broker`,
-      nodeType: "infra",
-      enableLogging: vdcLogging,
-      logFiles: [
-        logFile(
-          "/var/log/dcv-session-manager-broker/**.log",
-          name,
-          "dcv-session-manager-broker_{ip_address}",
-        ),
-        logFile("/var/log/messages", name, "system_{ip_address}"),
-        logFile("/var/log/syslog", name, "syslog_{ip_address}"),
-      ],
-      vars: {},
-    };
-  }
-
-  if (input.plan.contextParameter === "dcv_connection_gateway_package_uri") {
-    const name = `${moduleLogGroup}/dcv-connection-gateway`;
-    return {
-      baseOs: requiredString(
-        input.config,
-        `${input.moduleId}.dcv_connection_gateway.autoscaling.base_os`,
-      ),
-      instanceType: requiredString(
-        input.config,
-        `${input.moduleId}.dcv_connection_gateway.autoscaling.instance_type`,
-      ),
-      metricsNamespace: `${moduleMetrics}/dcv-connection-gateway`,
-      nodeType: "infra",
-      enableLogging: vdcLogging,
-      logFiles: [
-        logFile(
-          "/var/log/dcv-connection-gateway/**.log",
-          name,
-          "dcv-connection-gateway_{ip_address}",
-        ),
-        logFile("/var/log/messages", name, "system_{ip_address}"),
-        logFile("/var/log/syslog", name, "syslog_{ip_address}"),
-      ],
-      vars: {
-        dcv_connection_gateway_package_uri: releaseUri(
-          input,
-          "idea-dcv-connection-gateway-",
-        ),
-      },
-    };
-  }
-
-  throw new GeneralException(
-    `bootstrap context parameter is not defined for module ${input.moduleId}: ${input.plan.contextParameter}`,
-  );
+  throw new GeneralException(`bootstrap context is not defined for module: ${input.moduleName}`);
 }
 
 /** Produces the default Linux metric sections emitted for module hosts. */
@@ -848,9 +663,9 @@ export function buildBootstrapContext(input: BootstrapContextInput): object {
       ...(initialPrometheusConfig === undefined
         ? {}
         : {
-            prometheus_config: initialPrometheusConfig,
-            prometheus_exporters: exporters,
-          }),
+          prometheus_config: initialPrometheusConfig,
+          prometheus_exporters: exporters,
+        }),
     },
     utils: {
       to_json: (value: unknown, ...args: unknown[]) =>

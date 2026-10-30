@@ -165,7 +165,7 @@ class HpcApplicationsService(HpcApplicationsProtocol):
                     scan_result = self.applications_dao.table.scan()
                 else:
                     scan_result = self.applications_dao.table.scan(
-                        LastEvaluatedKey=last_evaluated_key
+                        ExclusiveStartKey=last_evaluated_key
                     )
                 db_applications = Utils.get_value_as_list('Items', scan_result, [])
                 for db_application in db_applications:

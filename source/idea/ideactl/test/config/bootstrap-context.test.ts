@@ -5,9 +5,9 @@
 
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
-  existsSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -16,17 +16,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
-import { buildBootstrapContext } from "../../src/cli/bootstrap-context.ts";
 import {
-  bootstrapContextParameterArgs,
-  bootstrapPackagePlans,
+  renderedTreeId
 } from "../../src/cli/bootstrap-package.ts";
-import { renderedTreeId } from "../../src/cli/bootstrap-package.ts";
 import { bootstrapSourceDir, type Deps } from "../../src/cli/cdk-invoker.ts";
 import { DeploymentHelper } from "../../src/cli/deployment-helper.ts";
-import { fakeContainerHosts } from "../support/host-pool-harness.ts";
-import { ClusterConfig, type ModuleInfo } from "../../src/config/cluster-config.ts";
 import { ideaVersion } from "../../src/version.ts";
+import { fakeContainerHosts } from "../support/host-pool-harness.ts";
 
 const CLUSTER = "sample-cluster";
 const REGION = "us-east-2";
@@ -195,7 +191,7 @@ function harness(
         Status: "CREATE_COMPLETE",
         Changes: [],
       }),
-      executeChangeSet: async () => {},
+      executeChangeSet: async () => { },
       describeStack: async () => ({
         StackStatus: "UPDATE_COMPLETE",
         Outputs: [],
@@ -218,11 +214,11 @@ function harness(
     },
     accountId: async () => "123456789012",
     httpStatus: async () => 200,
-    sleep: async () => {},
+    sleep: async () => { },
     now: () => 0,
     uuid: () => DEPLOYMENT_ID,
-    out: () => {},
-    err: () => {},
+    out: () => { },
+    err: () => { },
     prompt: async () => true,
     bootstrapSourceDir: sourceDirectory,
   };
@@ -274,82 +270,19 @@ after(() => {
 });
 
 const releaseVersion = ideaVersion();
-const hosts: HostCase[] = [
-  {
-    moduleId: "directoryservice",
-    moduleName: "directoryservice",
-    packages: [
-      {
-        component: "openldap-server",
-        contextParameter: "bootstrap_package_uri",
-        basename: `bootstrap-directoryservice-${DEPLOYMENT_ID}`,
-        rendered:
-          "module=directoryservice;base=amazonlinux2023;instance=m7i.large;region=us-east-2",
-      },
-    ],
-  },
-  {
-    moduleId: "cluster-manager",
-    moduleName: "cluster-manager",
-    packages: [
-      {
-        component: "cluster-manager",
-        contextParameter: "bootstrap_package_uri",
-        basename: `bootstrap-cluster-manager-${DEPLOYMENT_ID}`,
-        rendered: `module=cluster-manager;release=s3://${BUCKET}/idea/releases/idea-cluster-manager-${releaseVersion}.tar.gz;packages=one two`,
-      },
-    ],
-  },
-  {
-    moduleId: "scheduler",
-    moduleName: "scheduler",
-    packages: [
-      {
-        component: "scheduler",
-        contextParameter: "bootstrap_package_uri",
-        basename: `bootstrap-scheduler-${DEPLOYMENT_ID}`,
-        rendered: `module=scheduler;release=s3://${BUCKET}/idea/releases/idea-scheduler-${releaseVersion}.tar.gz`,
-      },
-    ],
-  },
-  {
-    moduleId: "bastion-host",
-    moduleName: "bastion-host",
-    packages: [
-      {
-        component: "bastion-host",
-        contextParameter: "bootstrap_package_uri",
-        basename: `bootstrap-bastion-host-${DEPLOYMENT_ID}`,
-        rendered: "module=bastion-host;user=ubuntu;storage=True",
-      },
-    ],
-  },
-  {
-    moduleId: "vdc",
-    moduleName: "virtual-desktop-controller",
-    packages: [
-      {
-        component: "virtual-desktop-controller",
-        contextParameter: "controller_bootstrap_package_uri",
-        basename: `bootstrap-vdc-controller-${DEPLOYMENT_ID}`,
-        rendered: `module=virtual-desktop-controller;base=amazonlinux2023;release=s3://${BUCKET}/idea/releases/idea-virtual-desktop-controller-${releaseVersion}.tar.gz`,
-      },
-      {
-        component: "dcv-broker",
-        contextParameter: "dcv_broker_bootstrap_package_uri",
-        basename: `bootstrap-vdc-dcv-broker-${DEPLOYMENT_ID}`,
-        rendered:
-          "module=virtual-desktop-controller;base=rhel9;instance=m7i.xlarge",
-      },
-      {
-        component: "dcv-connection-gateway",
-        contextParameter: "dcv_connection_gateway_package_uri",
-        basename: `bootstrap-vdc-dcv-connection-gateway-${DEPLOYMENT_ID}`,
-        rendered: `module=virtual-desktop-controller;base=rocky9;release=s3://${BUCKET}/idea/releases/idea-dcv-connection-gateway-${releaseVersion}.tar.gz`,
-      },
-    ],
-  },
-];
+const hosts: HostCase[] = [{
+  moduleId: "directoryservice",
+  moduleName: "directoryservice",
+  packages: [
+    {
+      component: "openldap-server",
+      contextParameter: "bootstrap_package_uri",
+      basename: `bootstrap-directoryservice-${DEPLOYMENT_ID}`,
+      rendered:
+        "module=directoryservice;base=amazonlinux2023;instance=m7i.large;region=us-east-2",
+    },
+  ],
+}];
 
 describe("host bootstrap deployment context", () => {
   for (const host of hosts) {
@@ -401,140 +334,8 @@ test("a failed bootstrap upload aborts before deployment", async () => {
   assert.deepEqual(fake.spawns, []);
 });
 
-test("the provider attaches the reference scheduler log and metric configuration", () => {
-  const entries = settings().map((entry) => {
-    if (entry.key === "cluster.cloudwatch_logs.enabled") {
-      return { key: entry.key, value: true };
-    }
-    return { key: entry.key, value: entry.value };
-  });
-  entries.push(
-    { key: "scheduler.cloudwatch_logs.enabled", value: true },
-    { key: "metrics.provider", value: "cloudwatch" },
-    { key: "metrics.cloudwatch.metrics_collection_interval", value: 30 },
-  );
-  const modules: ModuleInfo[] = [
-    {
-      module_id: "scheduler",
-      name: "scheduler",
-      type: "app",
-      status: "not-deployed",
-    },
-  ];
-  const config = new ClusterConfig(entries, modules, {
-    moduleSet: MODULE_SET,
-    moduleId: "scheduler",
-  });
-  const packageName = `idea-scheduler-${releaseVersion}.tar.gz`;
-  const context = objectValue(
-    buildBootstrapContext({
-      moduleName: "scheduler",
-      moduleId: "scheduler",
-      moduleSet: MODULE_SET,
-      baseOs: "amazonlinux2023",
-      instanceType: "m7i.large",
-      plan: {
-        basename: `bootstrap-scheduler-${DEPLOYMENT_ID}`,
-        components: ["scheduler"],
-        contextParameter: "bootstrap_package_uri",
-      },
-      releasePackageUris: {
-        [packageName]: `s3://${BUCKET}/idea/releases/${packageName}`,
-      },
-      config,
-    }),
-    "bootstrap context must be an object",
-  );
-  const vars = objectValue(context.vars, "context vars must be an object");
-  const agentConfig = objectValue(
-    vars.cloudwatch_agent_config,
-    "agent config must be an object",
-  );
-  const agent = objectValue(agentConfig.agent, "agent settings must be an object");
-  const logs = objectValue(agentConfig.logs, "log settings must be an object");
-  const collected = objectValue(logs.logs_collected, "collected logs must be an object");
-  const files = objectValue(collected.files, "collected files must be an object");
-  const logFiles = files.collect_list;
-  assert.ok(Array.isArray(logFiles));
-  assert.equal(agent.metrics_collection_interval, 30);
-  assert.equal(logs.log_stream_name, "scheduler_default_{ip_address}");
-  assert.deepEqual(
-    logFiles.map((entry) => objectValue(entry, "log file must be an object").log_group_name),
-    [
-      `/${CLUSTER}/scheduler`,
-      `/${CLUSTER}/scheduler`,
-      `/${CLUSTER}/scheduler`,
-      `/${CLUSTER}/scheduler/openpbs`,
-      `/${CLUSTER}/scheduler/openpbs`,
-      `/${CLUSTER}/scheduler/openpbs`,
-    ],
-  );
-  const metrics = objectValue(agentConfig.metrics, "metric settings must be an object");
-  const metricsCollected = objectValue(
-    metrics.metrics_collected,
-    "collected metrics must be an object",
-  );
-  const disk = objectValue(metricsCollected.disk, "disk metrics must be an object");
-  assert.deepEqual(disk.resources, ["/dev/xvda"]);
-});
-
-// The four deploy-time context parameters and the modules that pass each one, read out of the
-// previous implementation's `cdk_invoker.py` before the administrator source tree was deleted.
-const contextParameterCases = [
-  {
-    name: "bootstrap_package_uri",
-    modules: ["directoryservice", "cluster-manager", "scheduler", "bastion-host"],
-  },
-  {
-    name: "controller_bootstrap_package_uri",
-    modules: ["virtual-desktop-controller"],
-  },
-  {
-    name: "dcv_broker_bootstrap_package_uri",
-    modules: ["virtual-desktop-controller"],
-  },
-  {
-    name: "dcv_connection_gateway_package_uri",
-    modules: ["virtual-desktop-controller"],
-  },
-] as const;
-
-const contextArgs = bootstrapContextParameterArgs({
-  bootstrapPackageUri: "s3://sample-bucket/idea/bootstrap/standard.tar.gz",
-  controllerBootstrapPackageUri: "s3://sample-bucket/idea/bootstrap/controller.tar.gz",
-  dcvBrokerBootstrapPackageUri: "s3://sample-bucket/idea/bootstrap/broker.tar.gz",
-  dcvConnectionGatewayPackageUri: "s3://sample-bucket/idea/bootstrap/gateway.tar.gz",
-});
-
-for (const parameter of contextParameterCases) {
-  test(`"${parameter.name}" is passed as a deploy-time context parameter`, () => {
-    assert.ok(
-      contextArgs.some((argument) => argument.startsWith(`-c ${parameter.name}=`)),
-      `${parameter.name} missing from bootstrapContextParameterArgs`,
-    );
-    for (const moduleName of parameter.modules) {
-      const names = bootstrapPackagePlans(
-        moduleName,
-        moduleName === "virtual-desktop-controller" ? "vdc" : moduleName,
-        DEPLOYMENT_ID,
-        moduleName === "directoryservice" ? "openldap" : undefined,
-      ).map((plan) => plan.contextParameter);
-      assert.ok(
-        names.includes(parameter.name),
-        `${moduleName} plan does not pass ${parameter.name}: ${names.join(", ")}`,
-      );
-    }
-  });
-}
-
 const shippedSetupTemplates = [
   ["openldap-server/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "IDEA_BASE_OS={{ context.base_os }}", "AWS_REGION={{ context.aws_region }}"],
-  ["cluster-manager/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "context.vars.app_package_uri"],
-  ["scheduler/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "context.vars.app_package_uri"],
-  ["bastion-host/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "IDEA_BASE_OS={{ context.base_os }}"],
-  ["virtual-desktop-controller/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "context.vars.controller_package_uri"],
-  ["dcv-broker/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "IDEA_BASE_OS={{ context.base_os }}"],
-  ["dcv-connection-gateway/setup.sh.jinja2", "IDEA_MODULE_NAME={{ context.module_name }}", "context.vars.dcv_connection_gateway_package_uri"],
 ] as const;
 
 for (const [relative, ...needles] of shippedSetupTemplates) {

@@ -83,12 +83,18 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         self.cluster_settings_table = self.get_or_create_cluster_settings_table()
 
         self.stream_subscription: Optional[DynamoDBStreamSubscription] = None
-        if self.create_subscription and self.stream_subscriber is not None:
+        if self.create_subscription:
+            self.start_subscription()
+
+    def start_subscription(self):
+        if self.stream_subscriber is not None and self.stream_subscription is None:
+            self.create_subscription = True
             self.stream_subscription = DynamoDBStreamSubscription(
                 stream_subscriber=self,
                 table_name=self.get_cluster_settings_table_name(),
-                aws_region=aws_region,
-                aws_profile=aws_profile,
+                aws_region=self.aws_region,
+                aws_profile=self.aws_profile,
+                logger=self.logger,
             )
 
     def set_logger(self, logger):
@@ -323,7 +329,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
                 },
             )
 
-    def build_config_from_db(self, query: str = None) -> SocaConfig:
+    def build_config_from_db(
+        self, query: str = None, consistent_read: bool = False
+    ) -> SocaConfig:
         """
         build configuration by reading all entries from database
         if query is provided, all keys matching the query regex will be returned
@@ -331,7 +339,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         :return:
         """
 
-        entries = self.get_config_entries(query=query)
+        entries = self.get_config_entries(query=query, consistent_read=consistent_read)
         config = SocaConfig(config={})
 
         for entry in entries:
@@ -345,7 +353,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         result = self.cluster_settings_table.get_item(Key={'key': key})
         return Utils.get_value_as_dict('Item', result)
 
-    def get_config_entries(self, query: str = None) -> List[Dict]:
+    def get_config_entries(
+        self, query: str = None, consistent_read: bool = False
+    ) -> List[Dict]:
         """
         read configuration entries as a list of dict items
         if query is provided, all keys matching the query regex will be returned
@@ -371,11 +381,13 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         while True:
             if last_evaluated_key is not None:
                 result = self.cluster_settings_table.scan(
-                    LastEvaluatedKey=last_evaluated_key, ReturnConsumedCapacity='TOTAL'
+                    ExclusiveStartKey=last_evaluated_key,
+                    ReturnConsumedCapacity='TOTAL',
+                    ConsistentRead=consistent_read,
                 )
             else:
                 result = self.cluster_settings_table.scan(
-                    ReturnConsumedCapacity='TOTAL'
+                    ReturnConsumedCapacity='TOTAL', ConsistentRead=consistent_read
                 )
 
             consumed_capacity = Utils.get_value_as_dict('ConsumedCapacity', result)
@@ -443,7 +455,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         while True:
             if last_evaluated_key is not None:
                 result = self.cluster_settings_table.scan(
-                    LastEvaluatedKey=last_evaluated_key
+                    ExclusiveStartKey=last_evaluated_key
                 )
             else:
                 result = self.cluster_settings_table.scan()
@@ -567,6 +579,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         value = item.get('value')
         item['value'] = Utils.check_and_convert_decimal_value(value)
         return item
+
+    def on_reset(self):
+        self.stream_subscriber.on_reset()
 
     def on_create(self, entry: Dict):
         updated_entry = self.post_process_ddb_config_entry(entry)

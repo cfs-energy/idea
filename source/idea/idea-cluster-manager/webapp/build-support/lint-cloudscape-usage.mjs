@@ -1,13 +1,13 @@
 // Three Cloudscape usage rules that nothing else in the toolchain catches. Runs over the file paths
-// given as arguments (pre-commit), or over src/ when called with none (yarn lint).
+// given as arguments (hk), or over src/ when called with none (yarn lint).
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-// CommonJS resolution, so typescript is found in webapp/node_modules or, when pre-commit runs this
-// before any yarn install, in the hook's own node env via NODE_PATH. An ESM bare import ignores that.
+// CommonJS resolution, so typescript is found in webapp/node_modules or, when hk runs this
+// before any yarn install, in mise's tool environment via NODE_PATH. An ESM bare import ignores that.
 const ts = createRequire(import.meta.url)('typescript');
 
 const WEBAPP_ROOT = fileURLToPath(new URL('..', import.meta.url));

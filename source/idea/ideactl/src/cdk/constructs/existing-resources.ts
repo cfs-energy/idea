@@ -162,15 +162,6 @@ export function lookupEbsKmsKey(ctx: IdeaContext, scope: Construct, componentNam
     : kms.Key.fromKeyArn(scope, `${prefix}ebs-kms-key`, kmsKeyArn(ctx, kmsKeyId));
 }
 
-/** `ec2.KeyPair.from_key_pair_name(stack, f'{module_id}-key-pair' | f'{component}-key-pair', ...)`. */
-export function lookupKeyPair(ctx: IdeaContext, scope: Construct, id?: string): ec2.IKeyPair {
-  return ec2.KeyPair.fromKeyPairName(
-    scope,
-    id ?? `${ctx.moduleId}-key-pair`,
-    required(ctx, 'cluster.network.ssh_key_pair'),
-  );
-}
-
 /** `s3.Bucket.from_bucket_name(stack, 'cluster-s3-bucket', cluster.cluster_s3_bucket)`. */
 export function lookupClusterS3Bucket(ctx: IdeaContext, scope: Construct): s3.IBucket {
   return s3.Bucket.fromBucketName(scope, 'cluster-s3-bucket', required(ctx, 'cluster.cluster_s3_bucket'));

@@ -21,7 +21,7 @@ SERVER_NAME="${IDEA_SCHEDULER_DNS_NAME%%.*}"
 TASK_IP=""
 if [[ -n "${ECS_CONTAINER_METADATA_URI_V4:-}" ]]; then
   TASK_IP="$(curl -fsS --max-time 3 "${ECS_CONTAINER_METADATA_URI_V4}/task" \
-    | python3 -c 'import json,sys; t=json.load(sys.stdin); print(t["Containers"][0]["Networks"][0]["IPv4Addresses"][0])' 2>/dev/null || true)"
+    | jq -er '.Containers[0].Networks[0].IPv4Addresses[0] // empty' 2>/dev/null || true)"
 fi
 if [[ -z "${TASK_IP}" ]]; then
   TASK_IP="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -v '^169\.254\.' | head -1)"
@@ -261,34 +261,23 @@ if grep -Eq '^Hook[[:space:]]+calculate_ncpus([[:space:]]|$)' <<< "${EXISTING_HO
 fi
 
 # The NLB name is not a host PBS can match, and a container bastion's address is per task.
-# A container bastion gets no grant: an administrator runs qmgr from inside the scheduler
-# task, where root on the server's own host needs none, and a grant by a task's address
+# The bastion gets no grant: an administrator runs qmgr from inside the scheduler task, where
+# root on the server's own host needs none, and a grant by an EC2 name or a task's address
 # would go stale, then reach whichever desktop is given the address next (users have sudo
-# there). A host bastion keeps its grant by its EC2 name, as before. Grants IDEA made or
-# inherited from the host era, root@ip-… in the EC2 domain, are removed on every start;
-# anything an operator added by hand stays. Nothing here stops the start.
+# there). Grants IDEA made or inherited from the host era, root@ip-… in the EC2 domain, are
+# removed on every start; anything an operator added by hand stays. Nothing here stops the
+# start.
 reconcile_managers() {
-  local bastion_host="" existing entry grant_pattern
+  local existing entry grant_pattern
   grant_pattern='^root@ip-[0-9]+(-[0-9]+){3}\.([a-z0-9-]+\.)?(compute|ec2)\.internal$'
-  if [[ -z "$(setting bastion-host.service_name '')" ]]; then
-    bastion_host="$(setting bastion-host.private_dns_name '')"
-    if [[ -n "${bastion_host}" && ! "${bastion_host}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]; then
-      log "ignoring invalid bastion hostname: ${bastion_host}"
-      bastion_host=""
-    fi
-  fi
   existing="$(/opt/pbs/bin/qmgr -c 'list server managers')" || { log "could not list managers; leaving them"; return 0; }
   while IFS= read -r entry; do
-    [[ -n "${entry}" && "${entry}" != "root@${bastion_host}" ]] || continue
+    [[ -n "${entry}" ]] || continue
     if [[ "${entry}" =~ ${grant_pattern} ]]; then
       log "removing stale manager grant ${entry}"
       /opt/pbs/bin/qmgr -c "set server managers -= ${entry}" || log "could not remove ${entry}"
     fi
   done < <(sed -n 's/^[[:space:]]*managers = //p' <<< "${existing}" | tr ', \t' '\n')
-  if [[ -n "${bastion_host}" ]] && ! tr ', \t' '\n' <<< "${existing}" | grep -Fxq "root@${bastion_host}"; then
-    log "granting qmgr manager rights to root@${bastion_host}"
-    /opt/pbs/bin/qmgr -c "set server managers += root@${bastion_host}" || log "could not grant root@${bastion_host}"
-  fi
 }
 reconcile_managers || log "manager reconciliation failed; continuing"
 
@@ -308,8 +297,8 @@ shutdown() {
 # Synchronize cluster users before starting the scheduler module. The sync itself defers a fresh
 # cluster's not-yet-created tables to its background pass and fails on anything else.
 log "syncing cluster users and groups into the resolver"
-python3.13 /opt/idea/sync_users.py --once
-python3.13 /opt/idea/sync_users.py &
+python3.13 -m ideascheduler.app.sync_users --once
+python3.13 -m ideascheduler.app.sync_users &
 SYNC_PID=$!
 
 # Containers have no cron; supervise the same daily archive alongside the app.

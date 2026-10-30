@@ -57,7 +57,7 @@ describe('maintenance banner', () => {
 
         // Rendered in the browser timezone, so the expected text is derived the same way.
         const localEnd = moment.utc('2026-09-15T18:00:00Z').local().format('lll');
-        expect(await screen.findByText(`Scheduler closed. until ${localEnd}`)).not.toBeNull();
+        expect(await screen.findByText(`Scheduler closed. Expected to end ${localEnd}.`)).not.toBeNull();
     });
 
     it('falls back to a generic message when the window is opened without one', async () => {

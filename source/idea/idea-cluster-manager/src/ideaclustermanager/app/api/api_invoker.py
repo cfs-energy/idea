@@ -41,6 +41,8 @@ from ideaclustermanager.app.api.my_costs_api import MyCostsAPI
 from ideaclustermanager.app.api.costs_api import CostsAPI
 from ideaclustermanager.app.api.reporting_api import ReportingAPI
 
+from ideaclustermanager.app.api.terminal_api import TerminalAPI
+
 from typing import Optional, Dict
 
 
@@ -58,6 +60,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self.my_costs_api = MyCostsAPI(context)
         self.costs_api = CostsAPI(context)
         self.reporting_api = ReportingAPI(context)
+        self.terminal_api = TerminalAPI(context)
         self.max_listings_for_logging = 10
         self.auto_truncate_responses = {
             'Accounts.ListUsers': ListUsersResult,
@@ -73,7 +76,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     ) -> Optional[Dict]:
         namespace = context.namespace
 
-        if namespace.startswith('Reporting.'):
+        if namespace.startswith(('Reporting.', 'Terminal.')):
             request = context.get_request(deep_copy=True)
             request['payload'] = {'redacted': True}
             return request
@@ -130,7 +133,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     def get_response_logging_payload(
         self, context: ApiInvocationContext
     ) -> Optional[Dict]:
-        if context.namespace.startswith('Reporting.'):
+        if context.namespace.startswith(('Reporting.', 'Terminal.')):
             response = context.get_response(deep_copy=True)
             response['payload'] = {'redacted': True}
             return response
@@ -224,3 +227,5 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             self.costs_api.invoke(context)
         elif namespace.startswith('Reporting.'):
             self.reporting_api.invoke(context)
+        elif namespace.startswith('Terminal.'):
+            self.terminal_api.invoke(context)

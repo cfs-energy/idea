@@ -90,7 +90,7 @@ export function buildBulkBody(entries: readonly AnalyticsEntry[]): string {
             lines.push(JSON.stringify(entry.entry));
         } else if (entry.action === UPDATE_ENTRY) {
             lines.push(JSON.stringify({ update: target }));
-            lines.push(JSON.stringify({ doc: entry.entry }));
+            lines.push(JSON.stringify({ doc: entry.entry, doc_as_upsert: true }));
         } else {
             lines.push(JSON.stringify({ delete: target }));
         }

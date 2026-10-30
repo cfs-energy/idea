@@ -1,0 +1,89 @@
+[tools]
+node = "26.8.2"
+python = "3.13.15"
+uv = "0.13.5"
+hk = "2.8.1"
+pkl = "0.31.1"
+ruff = "0.11.13"
+hadolint = "2.15.1"
+shellcheck = "0.10.0"
+actionlint = "1.7.7"
+yamlfmt = "0.17.0"
+typos = "1.33.1"
+trufflehog = "3.97.9"
+java = "temurin-21.0.13+9.0.LTS"
+"npm:yarn" = "1.22.22"
+"npm:typescript" = "5.9.3"
+"npm:json-schema-to-typescript" = "16.0.0"
+"pypi:identify" = "2.6.19"
+"pypi:texthooks" = "0.6.8"
+"pypi:yamllint" = "1.37.1"
+"pypi:j2lint" = "1.2.0"
+"pypi:pip-tools" = { version = "7.6.2", with = ["click==8.5.0"] }
+
+[tasks.lint]
+description = "Check every tracked file"
+run = "hk check --all"
+
+[tasks.fix]
+description = "Apply available hook fixes for review"
+run = "hk fix --all"
+
+[tasks."ideactl:build"]
+dir = "source/idea/ideactl"
+run = "npm run build"
+
+[tasks."ideactl:checks"]
+dir = "source/idea/ideactl"
+run = "node scripts/ci-checks.mjs all"
+
+[tasks."test:data-model"]
+run = "node scripts/tooling/test-service.mjs data-model"
+
+[tasks."test:sdk"]
+run = "node scripts/tooling/test-service.mjs sdk"
+
+[tasks."test:cluster-manager"]
+run = "node scripts/tooling/test-service.mjs cluster-manager"
+
+[tasks."test:scheduler"]
+run = "node scripts/tooling/test-service.mjs scheduler"
+
+[tasks."test:virtual-desktop-controller"]
+run = "node scripts/tooling/test-service.mjs virtual-desktop-controller"
+
+[tasks."test:web-portal"]
+dir = "source/idea/idea-cluster-manager/webapp"
+run = "yarn install --frozen-lockfile && yarn test"
+
+[tasks.build]
+description = "Build service artifacts (optional module name, defaults to all)"
+run = "node scripts/tooling/modules.mjs build"
+
+[tasks.clean]
+description = "Clean generated service artifacts (optional module name)"
+run = "node scripts/tooling/modules.mjs clean"
+
+[tasks.package]
+description = "Package built services (optional module name or make-all-archive)"
+run = "node scripts/tooling/modules.mjs package"
+
+[tasks.apispec]
+description = "Export service OpenAPI specifications (module or all, --output-file/--target-dir)"
+run = "node scripts/tooling/modules.mjs apispec"
+
+[tasks."req:update"]
+description = "Compile Linux requirements locks (--check, --name, --upgrade, --package-name)"
+run = "node scripts/tooling/requirements.mjs"
+
+[tasks."web-portal:typings"]
+description = "Generate TypeScript interfaces from the service models"
+run = "node scripts/tooling/typings.mjs"
+
+[tasks."web-portal:serve"]
+dir = "source/idea/idea-cluster-manager/webapp"
+run = "yarn serve"
+
+[tasks."test:all"]
+description = "Run all service and portal suites"
+run = "node scripts/tooling/test-all.mjs"

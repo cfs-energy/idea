@@ -106,7 +106,7 @@ test('native runners cover each release target and both publications include Win
   assert.equal(windows?.['runs-on'], 'windows-2025');
   assert.equal(workflow.jobs.build_push_ideactl?.['runs-on'], 'ubuntu-24.04-arm', 'the image is built natively, never through emulation');
   const setup = readFileSync(join(root, '.github/actions/setup_dev_environment/action.yml'), 'utf8');
-  assert.match(setup, /key: venv-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-/, 'the virtual environment cache is per architecture');
+  assert.match(setup, /key: venv-clean-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-/, 'the virtual environment cache is per architecture');
   assert.doesNotMatch(setup, /linux-x86_64/, 'the AWS CLI download follows the runner architecture');
   const smoke = windows?.steps?.find((candidate) => candidate.name?.startsWith('Test the extracted'))?.run ?? '';
   assert.match(smoke, /Expand-Archive/);
@@ -191,7 +191,7 @@ if (name === 'docker') {
     process.exit(0);
   }
   if (args[0] === 'run') {
-    if (mode === 'smoke-failure' ||
+    if (mode === 'smoke-failure' || (mode === 'import-failure' && args.includes('python3.13')) ||
         (mode === 'control-failure' && args.includes('about')) || (mode === 'config-failure' && args.includes('generate'))) process.exit(1);
     if (args.includes('generate')) {
       const mount = args.find(a => a.endsWith(':/tmp/config'));
@@ -352,12 +352,15 @@ test('the temporary image is smoked natively, and a candidate takes only its rc 
     assert.ok(builds[0]?.includes('linux/arm64'));
     assert.ok(builds[0]?.includes('type=gha,version=2,mode=max,scope=idea-control-plane'), 'intermediate stages are cached');
     const smoke = commands.filter((args) => args[0] === 'docker' && args[1] === 'run');
-    assert.equal(smoke.length, 3);
+    assert.equal(smoke.length, 4);
     assert.ok(smoke.every((args) => !args.includes('--platform')), 'the image is built and smoked natively on the arm64 runner');
     assert.ok(smoke.every((args) => args.includes(`${REPOSITORY}@sha256:control`)));
-    assert.ok(smoke[0]?.includes('/opt/pbs/sbin/pbs_server.bin --version'));
-    assert.deepEqual(smoke[1]?.slice(-2), ['ideactl', 'about']);
-    assert.ok(smoke[2]?.includes('generate'));
+    assert.ok(smoke[0]?.includes('python3.13'));
+    assert.ok(smoke[0]?.includes('none'));
+    assert.match(smoke[0]?.at(-1) ?? '', /import asyncssh, ideaclustermanager/);
+    assert.ok(smoke[1]?.includes('/opt/pbs/sbin/pbs_server.bin --version'));
+    assert.deepEqual(smoke[2]?.slice(-2), ['ideactl', 'about']);
+    assert.ok(smoke[3]?.includes('generate'));
     const writes = imagetoolsWrites(commands);
     assert.equal(writes.length, 1);
     assert.deepEqual(writes[0]!.slice(4), ['--tag', `${REPOSITORY}:1.2.3-rc.4`, `${REPOSITORY}@sha256:control`]);
@@ -388,7 +391,7 @@ test('a private dispatch writes no tag, and no dispatch ever writes a released t
 
 test('build, smoke, fixture, or release-check failures never tag an image', () => {
   for (const candidate of ['', '4']) {
-    for (const mode of ['existing', 'late-existing', 'network', 'missing-fixture', 'build-failure', 'smoke-failure', 'control-failure', 'config-failure']) {
+    for (const mode of ['existing', 'late-existing', 'network', 'missing-fixture', 'build-failure', 'smoke-failure', 'import-failure', 'control-failure', 'config-failure']) {
       harness(mode, (h) => {
         const result = h.run(imageScript, { RELEASE_CANDIDATE: candidate });
         // A private build writes no tag, so a release appearing after its first check does not stop it.
@@ -413,11 +416,14 @@ test('pull requests smoke OpenPBS and ideactl in the single deployment image', (
     const result = h.run(script);
     assert.equal(result.status, 0, result.output);
     const smoke = h.commands.filter((args) => args[0] === 'docker' && args[1] === 'run');
-    assert.equal(smoke.length, 3);
+    assert.equal(smoke.length, 4);
     assert.ok(smoke.every((args) => args.includes('idea-control-plane-ci:latest')));
-    assert.ok(smoke[0]?.includes('/opt/pbs/sbin/pbs_server.bin --version'));
+    assert.ok(smoke[0]?.includes('python3.13'));
+    assert.ok(smoke[0]?.includes('none'));
+    assert.match(smoke[0]?.at(-1) ?? '', /import asyncssh, ideaclustermanager/);
+    assert.ok(smoke[1]?.includes('/opt/pbs/sbin/pbs_server.bin --version'));
   });
-  for (const mode of ['smoke-failure', 'control-failure', 'config-failure']) {
+  for (const mode of ['smoke-failure', 'import-failure', 'control-failure', 'config-failure']) {
     harness(mode, (h) => assert.notEqual(h.run(script).status, 0, mode));
   }
 });

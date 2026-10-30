@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { refreshHostPool, waitForDirectoryJoin, refreshHostsCommand } from "../../src/cli/host-pool.ts";
 import { returnBorrowedHosts, type UpgradeDeps } from "../../src/cli/commands/upgrade.ts";
+import { refreshHostPool, refreshHostsCommand, waitForDirectoryJoin } from "../../src/cli/host-pool.ts";
 import { fakeDeps } from "../support/deploy-harness.ts";
 import { fakeContainerHosts } from "../support/host-pool-harness.ts";
 
@@ -68,7 +68,7 @@ test("borrowed host return reads the replacement inventory after refresh", async
     { arn: "arn:replacement", instanceId: "i-replacement", status: "ACTIVE", runningTasks: 1, registeredAt: "2026-09-20" },
     { arn: "arn:host", instanceId: "i-host", status: "ACTIVE", runningTasks: 0, registeredAt: "2026-09-01" },
   ]);
-  const released = t.mock.method(api, "release", async () => {});
+  const released = t.mock.method(api, "release", async () => { });
   await returnBorrowedHosts(deps as unknown as UpgradeDeps, options, settings);
   assert.deepEqual(released.mock.calls[0].arguments, [{ awsRegion: options.awsRegion, awsProfile: options.awsProfile, name: "hosts", instanceId: "i-replacement", desiredCapacity: 1 }]);
 });
@@ -84,20 +84,14 @@ test("a host still launching cannot be omitted from the join gate", async (t) =>
   const { deps, api, state } = fixture();
   state.old = false;
   state.joined = true;
-  t.mock.method(api, "launchTemplateVersions", async () => ({ current: { id: "lt-host", version: "2" }, instances: [
-    { instanceId: "i-host", id: "lt-host", version: "2" }, { instanceId: "i-launching", id: "lt-host", version: "2" },
-  ] }));
+  t.mock.method(api, "launchTemplateVersions", async () => ({
+    current: { id: "lt-host", version: "2" }, instances: [
+      { instanceId: "i-host", id: "lt-host", version: "2" }, { instanceId: "i-launching", id: "lt-host", version: "2" },
+    ]
+  }));
   await assert.rejects(waitForDirectoryJoin(deps, { ...options, refreshHosts: false }), /45 minutes.*i-launching.*idea-directory-join.service/);
 });
 
 test("rerun retains boolean termination protection as a valued option", () => {
   assert.match(refreshHostsCommand("upgrade-cluster", { terminationProtection: true }), /--termination-protection 'true' --refresh-hosts$/);
-});
-
-test("a host-era cluster with an EC2 bastion has no host pool to gate", async () => {
-  const { deps, calls, settings } = fixture();
-  settings.splice(0, 1);
-  await refreshHostPool(deps, options);
-  await waitForDirectoryJoin(deps, options);
-  assert.deepEqual(calls, []);
 });

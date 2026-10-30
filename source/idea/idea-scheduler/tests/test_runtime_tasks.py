@@ -376,23 +376,21 @@ qmgr() {
 @pytest.mark.parametrize(
     'container,existing,expected',
     [
-        # a container bastion: no grant, and the host-era grant goes
+        # no bastion gets a grant, and the host-era grant goes
         (True, f'{STALE},root@admin.example', [f'set server managers -= {STALE}']),
         (True, 'root@admin.example', []),
         (True, '', []),
-        # a host bastion: its own grant stays or is made, others of the kind go
+        # a leftover host-era bastion name is pruned, never granted again
+        (False, STALE, [f'set server managers -= {STALE}']),
         (
             False,
-            STALE,
-            [
-                f'set server managers -= {STALE}',
-                f'set server managers += root@{HOST_BASTION}',
-            ],
+            f'root@{HOST_BASTION}',
+            [f'set server managers -= root@{HOST_BASTION}'],
         ),
-        (False, f'root@{HOST_BASTION}', []),
+        (False, '', []),
     ],
 )
-def test_managers_prune_host_era_grants_and_grant_only_a_host_bastion(
+def test_managers_prune_host_era_grants_and_grant_no_bastion(
     tmp_path, container, existing, expected
 ):
     calls, log = run_managers(tmp_path, container, existing)

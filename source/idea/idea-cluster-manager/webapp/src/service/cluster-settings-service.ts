@@ -68,7 +68,7 @@ export function maintenanceBannerText(maintenance: MaintenanceSettings): string 
     if (!parsed.isValid()) {
         return text
     }
-    return `${text} until ${parsed.local().format('lll')}`
+    return `${text}${/[.!?]$/.test(text) ? '' : '.'} Expected to end ${parsed.local().format('lll')}.`
 }
 
 /**

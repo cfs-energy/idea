@@ -3,17 +3,23 @@ detectors:
     keywords:
       - password
       - passwd
+      - pwd
       - secret
       - credential
+      - creds
       - api_key
       - api-key
       - apikey
-      - auth_token
-      - auth-token
-      - authtoken
+      - access_key
+      - access-key
+      - accesskey
+      - private_key
+      - private-key
+      - token
+      - auth
     regex:
       secret: |-
-        (?i)(?:password|passwd|secret|credential|api[_-]?key|auth[_-]?token)[\s\t]*[=:]+[\s\t]*['"`]([^'"`<>\s]{8,})['"`]
+        (?i)[\w.-]*(?:passw(?:or)?d|pwd|secret|credentials?|creds|api[_-]?key|access[_-]?key|private[_-]?key|token|auth)[\w.-]*['"]?[ \t]*(?:=|:|:=|=>)[ \t]*['"`]([^'"`<>\s]{8,})['"`]
     entropy: 3.0
     validations:
       secret:
@@ -21,8 +27,12 @@ detectors:
     exclude_regexes_capture:
       - <[^>]+>
       - (?:\$\{?[\w.-]+\}?|%\([\w]+\)s|\{[\w.-]+\})
-      # unit-test fixture password, not a credential
       - ^MockPassword
+      # resource names and HTTP header names, not values
+      - '^arn:aws[\w-]*:'
+      - ^X-[\w-]+$
+      # URLs without userinfo; the URI detector covers user:password@ URLs
+      - '^https?://[^@\s]*$'
     exclude_words:
       - changeme
       - placeholder
@@ -30,3 +40,50 @@ detectors:
       - example
       - redacted
       - MockPassword
+      # sample credentials in the API documentation examples
+      - p@sswordtest
+      - mysecretpassword
+  # Token formats no built-in detector reports without network verification
+  - name: square-access-token
+    keywords:
+      - sq0atp-
+      - EAAA
+    regex:
+      token: \b((?:EAAA|sq0atp-)[\w-]{22,60})\b
+    entropy: 3.0
+  - name: square-oauth-secret
+    keywords:
+      - sq0csp-
+    regex:
+      secret: \b(sq0csp-[\w-]{43})\b
+  - name: age-secret-key
+    keywords:
+      - AGE-SECRET-KEY-1
+    regex:
+      key: (AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58})
+  - name: jwt
+    keywords:
+      - eyJ
+    regex:
+      token: \b(eyJ[\w-]{15,}\.eyJ[\w-]{15,}\.[\w-]{10,})
+  - name: curl-credentials
+    keywords:
+      - curl
+    regex:
+      credential: |-
+        \bcurl\b[^\n]*?(?:-u|--user)[ \t]+['"]?([^:'"\s$]+:[^'"\s$]{8,})['"]?
+    validations:
+      credential:
+        contains_digit: true
+  - name: curl-auth-header
+    keywords:
+      - curl
+    regex:
+      credential: |-
+        (?i)\bcurl\b[^\n]*?(?:-H|--header)[ \t]+['"]?(?:Authorization|X-API-Key|X-Auth-Token):[ \t]*(?:Bearer|Basic|Token)?[ \t]*([^'"\s$]{16,})
+    entropy: 3.0
+  - name: pypi-upload-token
+    keywords:
+      - pypi-AgEIcHlwaS5vcmc
+    regex:
+      token: (pypi-AgEIcHlwaS5vcmc[\w-]{50,1000})

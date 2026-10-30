@@ -1,0 +1,72 @@
+@use '@cloudscape-design/design-tokens/index' as tokens;
+
+.shell-dock {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001;
+    display: flex; flex-direction: column; box-sizing: border-box;
+    padding: 0 tokens.$space-scaled-s env(safe-area-inset-bottom);
+    background: tokens.$color-background-layout-main;
+    border-top: 1px solid tokens.$color-border-divider-default;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
+    font-family: tokens.$font-family-base;
+    font-size: tokens.$font-size-body-m;
+    color: tokens.$color-text-body-default;
+    .shell-dock-resize {
+        flex: none; height: 8px; margin: 0 (-(tokens.$space-scaled-s)); cursor: ns-resize; touch-action: none;
+        &:hover, &:focus-visible {background: tokens.$color-border-item-focused; outline: none;}
+    }
+    .shell-dock-header {flex: none; display: flex; align-items: center; gap: tokens.$space-scaled-xs; min-height: 40px;}
+    .shell-dock-tabs {flex: 1; display: flex; gap: 2px; overflow-x: auto; min-width: 0;}
+    .shell-dock-tab {
+        display: flex; align-items: center; flex: none;
+        border-bottom: 2px solid transparent;
+        button {font: inherit; color: inherit; background: none; border: 0; cursor: pointer; min-height: 36px; padding: 0 tokens.$space-scaled-xs;}
+        button:focus-visible {outline: 2px solid tokens.$color-border-item-focused; outline-offset: -2px;}
+        .shell-dock-close {min-width: 32px; font-size: 18px; color: tokens.$color-text-body-secondary;}
+        &.shell-dock-tab-active {border-bottom-color: tokens.$color-border-item-focused; font-weight: bold;}
+    }
+    .shell-dock-panel {flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: tokens.$space-scaled-xs;}
+    &.shell-dock-collapsed {height: auto;}
+}
+
+.terminal-panel {
+    position: relative; flex: 1; display: flex; flex-direction: column;
+    min-height: 0; min-width: 0; gap: tokens.$space-scaled-xs;
+    .terminal-controls {display: flex; flex-wrap: wrap; gap: tokens.$space-scaled-xs; align-items: center;}
+    .terminal-status {flex: 1; min-width: 160px; font-size: tokens.$font-size-body-s; color: tokens.$color-text-body-secondary;}
+    // The terminal owns touch: no page zoom, bounce or 300ms tap delay. Gestures are handled in touch.ts.
+    .terminal-surface {position: relative; flex: 1; min-height: 32px; min-width: 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; padding: 4px; border-radius: tokens.$border-radius-container;}
+    .terminal-keys {display: flex; flex-wrap: wrap; gap: 4px;}
+    .terminal-keys button {
+        min-width: 44px; min-height: 44px; flex: 1;
+        font: inherit; color: tokens.$color-text-body-default;
+        border: 1px solid tokens.$color-border-button-normal-default;
+        background: tokens.$color-background-button-normal-default;
+        border-radius: tokens.$border-radius-button;
+        touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+        &:active {background: tokens.$color-background-button-normal-active;}
+        &:focus-visible {outline: 2px solid tokens.$color-border-item-focused; outline-offset: 2px;}
+        &[aria-pressed='true'] {background: tokens.$color-background-button-primary-default; color: tokens.$color-text-button-primary-default;}
+        &:disabled {opacity: 0.5;}
+    }
+    .terminal-select {
+        position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
+        background: tokens.$color-background-container-content;
+    }
+    .terminal-select-bar {
+        display: flex; justify-content: space-between; align-items: center; gap: 8px;
+        font-size: tokens.$font-size-body-s; color: tokens.$color-text-body-secondary;
+        button {min-height: 44px; min-width: 44px; font: inherit; color: tokens.$color-text-link-default; background: none; border: 0;}
+    }
+    .terminal-select-text {
+        flex: 1; overflow: auto; margin: 0; padding: 4px; outline: none;
+        white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        user-select: text; -webkit-user-select: text; caret-color: transparent;
+    }
+}
+@media (max-width: 600px) {
+    .shell-dock:not(.shell-dock-collapsed) {top: 0; z-index: 1003; border-top: 0; box-shadow: none; padding-top: env(safe-area-inset-top);}
+    .shell-dock .shell-dock-resize {display: none;}
+    .terminal-panel .terminal-keys button {flex: 1 0 11%;}
+    // iOS zooms the page when a focused input is smaller than 16px.
+    .terminal-panel .terminal-surface textarea {font-size: 16px !important;}
+}

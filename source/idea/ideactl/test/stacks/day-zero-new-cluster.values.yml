@@ -15,7 +15,6 @@ storage_data_provider: efs
 directory_service_provider: aws_managed_activedirectory
 metrics_provider: cloudwatch
 enable_aws_backup: false
-enable_ecs: true
 enabled_modules:
   - metrics
   - scheduler

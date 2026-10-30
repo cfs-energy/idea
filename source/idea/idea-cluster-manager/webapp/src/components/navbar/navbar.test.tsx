@@ -5,6 +5,7 @@ import IdeaNavbar from './navbar';
 import {initTestAppContext} from '../../test-support';
 import {GetCostTickerResult, GetMyCostsResult} from '../../client/data-model';
 import {personalCostsCache} from '../../client/personal-costs-cache';
+import {shellStore} from '../../pages/home/terminal/shell-store';
 
 const ready: GetCostTickerResult = {enabled: true, period: 'MTD', total: 12.5, currency: 'USD', as_of: '2026-09-21T12:00:00Z'};
 
@@ -145,5 +146,36 @@ describe('cost ticker', () => {
         await act(async () => { vi.advanceTimersByTime(300000); });
         expect(read).toHaveBeenCalledTimes(2);
         expect(subscribe).not.toHaveBeenCalled();
+    });
+});
+
+describe('shell button', () => {
+    const shell = async (targets: {id: string; label: string}[], access = true, enabled = true) => {
+        shellStore.reset();
+        const context = initTestAppContext();
+        if (!enabled) (window as any).idea.app.web_terminal_enabled = false;
+        vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(access);
+        vi.spyOn(context.client().myCosts(), 'getCostTicker').mockResolvedValue({enabled: false} as any);
+        vi.spyOn(context.client().terminal(), 'listTargets').mockResolvedValue({targets});
+        render(<IdeaNavbar/>);
+        await act(async () => {});
+    };
+    afterEach(() => {vi.restoreAllMocks(); delete (window as any).idea?.app?.web_terminal_enabled; shellStore.reset();});
+
+    it('opens a bastion terminal from the top bar when the bastion is a target', async () => {
+        await shell([{id: 'bastion', label: 'Bastion'}]);
+        const button = screen.getByRole('button', {name: 'Open a shell on the bastion'});
+        expect(button).toHaveTextContent('Shell');
+        fireEvent.click(button);
+        expect(shellStore.get().tabs).toEqual([{target: 'bastion', label: 'Bastion'}]);
+    });
+
+    it.each([
+        ['without a bastion', [{id: 'desktop:one', label: 'Work'}], true, true],
+        ['without cluster access', [{id: 'bastion', label: 'Bastion'}], false, true],
+        ['when Terminal is disabled', [{id: 'bastion', label: 'Bastion'}], true, false],
+    ])('is hidden %s', async (_name, targets, access, enabled) => {
+        await shell(targets, access, enabled);
+        expect(screen.queryByRole('button', {name: 'Open a shell on the bastion'})).not.toBeInTheDocument();
     });
 });

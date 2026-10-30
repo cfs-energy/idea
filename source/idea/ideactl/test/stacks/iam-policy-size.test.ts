@@ -85,6 +85,7 @@ function measure(template: Json): void {
 describe("IAM policy sizes in the synthesized stacks", () => {
   const workDir = mkdtempSync(join(tmpdir(), "ideactl-iam-size-"));
   const synthesized: string[] = [];
+  const templates = new Map<string, Json>();
   // Every CDK app the rehearsal builds writes its tree file from a beforeExit hook, one hook per
   // stack, so the directory has to outlive the tests and the hook count exceeds the default cap.
   process.setMaxListeners(0);
@@ -97,8 +98,38 @@ describe("IAM policy sizes in the synthesized stacks", () => {
       const outdir = join(workDir, `cdk.out.${stack.moduleId}`);
       const file = readdirSync(outdir).find((name) => name.endsWith(".template.json"));
       assert.ok(file !== undefined, `${stack.moduleId}: no template in ${outdir}`);
-      measure(JSON.parse(readFileSync(join(outdir, file), "utf8")) as Json);
+      const template = JSON.parse(readFileSync(join(outdir, file), "utf8")) as Json;
+      templates.set(stack.moduleId, template);
+      measure(template);
       synthesized.push(stack.moduleId);
+    }
+  });
+
+  it("S-24: retains only compute host roles and publishes task sender identities", () => {
+    for (const module of ["scheduler", "cluster-manager", "vdc"]) {
+      const template = templates.get(module);
+      assert.ok(template, `${module} synthesized`);
+      const resources = Object.values(template.Resources) as Json[];
+      const hostRoles = resources.filter((resource) => resource.Type === "AWS::IAM::Role"
+        && /ec2\.amazonaws/.test(JSON.stringify(resolve(resource.Properties.AssumeRolePolicyDocument))));
+      assert.equal(hostRoles.length, module === "cluster-manager" ? 0 : 1, `${module}: obsolete host role`);
+      if (hostRoles.length) {
+        assert.match(hostRoles[0]!.Properties.RoleName, module === "scheduler" ? /compute-node/ : /vdc-host/);
+      }
+      const settings = resources.filter((resource) => resource.Type === "Custom::ClusterSettings");
+      assert.equal(settings.length, 1);
+      const rows = settings[0]!.Properties.settings;
+      assert.ok(rows, "published settings");
+      for (const key of ["iam_role_arn", "dcv_broker_role_arn", "dcv_broker_role_name", "controller_iam_role_arn", "controller_iam_role_name"]) {
+        assert.ok(!(key in rows), `${module}: obsolete ${key}`);
+      }
+      if (module === "vdc") {
+        for (const key of ["dcv_broker_role_id", "controller_iam_role_id"]) {
+          const [role, attr] = rows[key]["Fn::GetAtt"];
+          assert.equal(attr, "RoleId");
+          assert.match(JSON.stringify(template.Resources[role].Properties.AssumeRolePolicyDocument), /ecs-tasks/);
+        }
+      }
     }
   });
 

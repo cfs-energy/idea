@@ -2,7 +2,7 @@
  * Compare the settings table with every configuration write planned by an upgrade.
  *
  * The comparison reports the write classes used by the upgrade analysis. Values are
- * deliberately excluded from rendered output so configuration secrets cannot be printed.
+ * excluded from rendered output except the explicitly allowlisted SSH network restriction.
  */
 
 import { isDeepStrictEqual } from "node:util";
@@ -16,6 +16,7 @@ export const UPGRADE_DRIFT_ACTIONS = [
   "GLOBAL_REMOVE",
   "GLOBAL_REWRITE_SAME",
   "ADD",
+  "VALUES_UPDATE",
   "PRESERVE_DRIFT",
   "PRESERVE_TYPE_DRIFT",
   "ORPHAN_PRESERVED",
@@ -27,6 +28,8 @@ export const UPGRADE_DRIFT_ACTIONS = [
 
 export type UpgradeDriftAction = (typeof UPGRADE_DRIFT_ACTIONS)[number];
 export type UpgradeDriftEffect = "ADD" | "CHANGE" | "DELETE" | "PRESERVE";
+
+export const VALUES_OWNED_KEYS: ReadonlySet<string> = new Set(["cluster.network.ssh_client_ip"]);
 
 /** A row last written from the portal (`api`) or the command line (`cli`) belongs to the operator. */
 export function isOperatorSource(source: unknown): boolean {
@@ -69,7 +72,7 @@ export interface UpgradeDriftInput {
   syncFullConfiguration?: boolean;
 }
 
-/** One affected key. The actual values are retained only in the caller's input. */
+/** One affected key, with an optional display of the non-secret SSH allowlist. */
 export interface UpgradeDriftFinding {
   action: UpgradeDriftAction;
   effect: UpgradeDriftEffect;
@@ -80,6 +83,7 @@ export interface UpgradeDriftFinding {
   version?: number;
   differsFromGenerated: boolean;
   routineUpdate?: "template default" | "release image";
+  valuesChange?: string;
 }
 
 /** Findings are sorted by action and then key for deterministic terminal output. */
@@ -278,11 +282,20 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
     }
   }
 
-  // The full sync is add-only. Existing values and existing types win.
+  // Values-owned rows replace stored settings; the rest of the full sync is add-only.
   if (syncFull) {
     for (const [key, generatedRow] of generated) {
       if (replaceGlobals && key.startsWith("global-settings.")) continue;
-      const result = addOnlyFinding(key, current.get(key), generatedRow);
+      const currentRow = current.get(key);
+      if (VALUES_OWNED_KEYS.has(key) && currentRow !== undefined && isDeepStrictEqual(currentRow.value, generatedRow.value)) continue;
+      const result = VALUES_OWNED_KEYS.has(key)
+        ? {
+          ...finding("VALUES_UPDATE", current.has(key) ? "CHANGE" : "ADD", key, currentRow, generatedRow, generatedRow, true),
+          valuesChange: key === "cluster.network.ssh_client_ip"
+            ? `${JSON.stringify(currentRow?.value ?? null)} -> ${JSON.stringify(generatedRow.value)}`
+            : undefined,
+        }
+        : addOnlyFinding(key, currentRow, generatedRow);
       if (result !== undefined) findings.set(key, result);
     }
   }
@@ -312,7 +325,7 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
           true,
         ),
         // Only the release repository planner adds an image write to Phase 3.
-        routineUpdate: key === "ecs.image" ? "release image" : undefined,
+        routineUpdate: key === "ecs.image" || key === "ecs.release_image" || key === "ecs.previous_release_image" ? "release image" : undefined,
       },
     );
   }
@@ -406,12 +419,14 @@ export function renderUpgradeDrift(report: UpgradeDriftReport): string {
         `source=${row.source ?? "-"}`,
         `version=${row.version ?? "-"}`,
       ].join(", ");
-      const marker = row.routineUpdate !== undefined
+      const marker = row.action === "VALUES_UPDATE"
+        ? " [restored from values.yml]"
+        : row.routineUpdate !== undefined
         ? ` [${row.routineUpdate} updated]`
         : row.effect === "CHANGE" && row.differsFromGenerated
           ? " [differs from generated configuration]"
           : "";
-      lines.push(`    ${row.key} (${metadata})${marker}`);
+      lines.push(`    ${row.key} (${metadata})${marker}${row.valuesChange === undefined ? "" : ` ${row.valuesChange}`}`);
     }
   }
 

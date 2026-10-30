@@ -281,29 +281,6 @@ function get_server_ip() {
 }
 
 # Generate a Shake256 value from the input
-function get_shake256() {
-  local STR="${1}"
-  local SHAKE_LEN="${2}"
-  local IDEA_PYTHON
-  IDEA_PYTHON=$(command -v idea_python)
-  local SHAKE_VAL
-  SHAKE_VAL=$(${IDEA_PYTHON} -c "import sys; import hashlib; print(hashlib.shake_256(''.join(sys.argv[1]).encode('utf-8')).hexdigest(int(sys.argv[2])))" "${STR}" "${SHAKE_LEN}")
-  echo -n "${SHAKE_VAL}"
-}
-
-function get_shake256_hostname() {
-  local HOSTNAME
-  HOSTNAME=$(hostname -s)
-  local HOSTNAME_PREFIX="IDEA-"
-  # This is the overall max len in chars. Generally this will be 15
-  # for NetBIOS legacy reasons
-  local MAX_LENGTH=15
-  # /2 as get_shake256 takes number of hex bytes - which are 2 ASCII char to display
-  local ALLOWED_LEN_BYTES=$(((MAX_LENGTH - ${#HOSTNAME_PREFIX})/2))
-  SHAKE_HOSTNAME=$(get_shake256 "${HOSTNAME}" "${ALLOWED_LEN_BYTES}")
-  echo -n "${HOSTNAME_PREFIX}${SHAKE_HOSTNAME}"
-}
-
 # fsx for lustre
 function add_fsx_lustre_to_fstab () {
   local FS_DOMAIN="${1}"

@@ -6,12 +6,12 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { ClusterConfig, ConfigKeyNotFound } from '../../src/config/cluster-config.ts';
-import { buildContext, loadValuesFile } from '../../src/config/values.ts';
 import { jinjaEnv, renderTemplate } from '../../src/config/jinja.ts';
+import { buildContext, loadValuesFile } from '../../src/config/values.ts';
 import { pythonJsonString } from '../../src/lambda/commons/cfn-response.ts';
 
 const ECS_SETTINGS_TEMPLATE = fileURLToPath(
@@ -105,14 +105,14 @@ describe('enable_ecs reaches the render context as a Boolean', () => {
     return buildContext(loadValuesFile(file));
   }
 
-  it('defaults to false when the values file is silent', () => {
-    assert.equal(contextFor('# no ecs key').enable_ecs, false);
+  it('defaults to true when the values file is silent', () => {
+    assert.equal(contextFor('# no ecs key').enable_ecs, true);
   });
 
   it('reads a YAML 1.1 Boolean, not a string', () => {
     assert.equal(contextFor('enable_ecs: true').enable_ecs, true);
     assert.equal(contextFor('enable_ecs: on').enable_ecs, true);
-    assert.equal(contextFor('enable_ecs: false').enable_ecs, false);
+    assert.throws(() => contextFor('enable_ecs: false'), /Host control-plane deployments/);
   });
 
   it('renders the shipped enabled line from it, both ways', () => {
@@ -126,7 +126,7 @@ describe('enable_ecs reaches the render context as a Boolean', () => {
     writeFileSync(join(dir, 'ecs', 'settings.yml'), `${enabledLine}\n`);
     const env = jinjaEnv(dir);
     assert.equal(renderTemplate(env, 'ecs/settings.yml', contextFor('enable_ecs: true')), 'enabled: true');
-    assert.equal(renderTemplate(env, 'ecs/settings.yml', contextFor('enable_ecs: false')), 'enabled: false');
+
   });
 
   it('the shipped template writes no account-wide trunking key', () => {

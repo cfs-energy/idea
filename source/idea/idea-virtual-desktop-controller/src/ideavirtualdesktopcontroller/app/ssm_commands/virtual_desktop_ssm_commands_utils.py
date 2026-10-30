@@ -8,6 +8,9 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import base64
+import gzip
+import os
 from typing import List
 
 import ideavirtualdesktopcontroller
@@ -21,12 +24,30 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 
 # Bump whenever the refresh set or the contents of its templates change.
-BOOTSTRAP_REFRESH_VERSION = 3
+BOOTSTRAP_REFRESH_VERSION = 5
 BOOTSTRAP_REFRESH_TEMPLATES = (
     '_templates/linux/ssh_post_quantum_kex.jinja2',
     '_templates/linux/gnome_online_accounts.jinja2',
     '_templates/linux/openpbs_client_server.jinja2',
+    '_templates/linux/web_terminal_refresh.jinja2',
 )
+BOOTSTRAP_REFRESH_PRELUDE = 'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n'
+
+
+def render_bootstrap_refresh(bootstrap_dir: str, base_os, variables: dict) -> str:
+    """
+    the refresh script for one desktop. the terminal helper travels inside it, gzipped
+    with a fixed mtime so the same source always renders the same command.
+    """
+    with open(os.path.join(bootstrap_dir, 'common', 'terminal_host.py'), 'rb') as f:
+        archive = base64.b64encode(gzip.compress(f.read(), mtime=0)).decode()
+    env = Jinja2Utils.env_using_file_system_loader(bootstrap_dir)
+    return BOOTSTRAP_REFRESH_PRELUDE + '\n'.join(
+        env.get_template(template).render(
+            context={'base_os': base_os}, terminal_host_archive=archive, **variables
+        )
+        for template in BOOTSTRAP_REFRESH_TEMPLATES
+    )
 
 
 def bootstrap_refresh_variables(config, logger=None) -> dict:
@@ -34,6 +55,9 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
     what the refresh renders its templates with: the scheduler name a PBS client talks to
     and the zone it resolves it through, derived exactly as openpbs_client.jinja2 does at
     first bootstrap, so a desktop from before a scheduler move picks the current name up.
+    the name is the first label, the server's own server_name: qsub completes a short job id
+    with it, and a dependency on any other spelling never releases. a stable cluster with no
+    private zone keeps the full name, since the short name cannot resolve there.
     bootstrap_refresh tells a template shared with first bootstrap which path it is on.
     """
     scheduler_dns_name = config.get_string('scheduler.private_dns_name')
@@ -49,16 +73,18 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
         if stable
         else None
     )
-    if stable and not private_zone and logger is not None:
-        # the rest of the refresh (ssh kex, online accounts) still goes out
-        logger.warning(
-            'cluster.route53.private_hosted_zone_name is not set: the refresh leaves the '
-            'scheduler search path alone'
-        )
+    pbs_server_name = scheduler_dns_name.split('.')[0]
+    if stable and not private_zone:
+        # without the zone in the search path the short name does not resolve and pbs would
+        # not start: keep the full name, which resolves as before the short-name fix
+        pbs_server_name = scheduler_dns_name
+        if logger is not None:
+            logger.warning(
+                'cluster.route53.private_hosted_zone_name is not set: the refresh keeps the '
+                'full scheduler name and leaves the search path alone'
+            )
     return {
-        'pbs_server_name': scheduler_dns_name
-        if stable
-        else scheduler_dns_name.split('.')[0],
+        'pbs_server_name': pbs_server_name,
         'private_zone': private_zone or None,
         'bootstrap_refresh': True,
     }
@@ -254,23 +280,16 @@ class VirtualDesktopSSMCommandsUtils:
     def submit_ssm_command_to_refresh_bootstrap(
         self, session: VirtualDesktopSession
     ) -> str:
-        env = Jinja2Utils.env_using_file_system_loader(self.context.get_bootstrap_dir())
-        variables = bootstrap_refresh_variables(self.context.config(), self._logger)
-        block = '\n'.join(
-            env.get_template(template).render(
-                context={'base_os': session.base_os}, **variables
-            )
-            for template in BOOTSTRAP_REFRESH_TEMPLATES
+        script = render_bootstrap_refresh(
+            self.context.get_bootstrap_dir(),
+            session.base_os,
+            bootstrap_refresh_variables(self.context.config(), self._logger),
         )
         response = self._ssm_client.send_command(
             InstanceIds=[session.server.instance_id],
             DocumentName='AWS-RunShellScript',
             Comment=f'Refresh bootstrap for {session.idea_session_id}',
-            Parameters={
-                'commands': [
-                    'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n' + block
-                ]
-            },
+            Parameters={'commands': [script]},
             ServiceRoleArn=self.context.config().get_string(
                 'virtual-desktop-controller.ssm_commands_pass_role_arn', required=True
             ),

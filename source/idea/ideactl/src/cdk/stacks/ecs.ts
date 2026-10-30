@@ -352,8 +352,8 @@ export class EcsStack extends IdeaBaseStack {
    * this code cannot resolve is refused here: the alternative is a launch template with an image for
    * the wrong architecture, whose hosts boot and never register, and tasks that are never placed.
    *
-   * This assumes `ecs.image` is a manifest with both architectures. A single-architecture image on
-   * the other family is a task that pulls and fails to run, which the stack cannot see at synthesis.
+   * The release `ecs.image` is arm64-only. An x86 host family needs an operator-built image
+   * supporting x86 (or both architectures); synthesis cannot check the image manifest.
    */
   private hostInstanceType(): ec2.InstanceType {
     const configured = this.requiredString("ecs.hosts.instance_type");
@@ -566,7 +566,7 @@ export class EcsStack extends IdeaBaseStack {
     );
     grantInjectedSecret(scope, executionRole, apiKey.secretArn);
     // The module's own id, not the module-set row: an upgrade announces this module in the
-    // module set only after every stack has deployed (see `heldModuleSetEntries`).
+    // module set only after every stack has deployed.
     const datadogLogGroupName = `/${this.clusterName}/${this.moduleId}/datadog`;
     const container = taskDefinition.addContainer("datadog-container", {
       // The agent listens on UDP by default; the tasks send to the socket they mount, so the
@@ -594,17 +594,21 @@ export class EcsStack extends IdeaBaseStack {
       secrets: { DD_API_KEY: ecs.Secret.fromSecretsManager(apiKey) },
     });
     this.bindContainerToLogGroup(container, datadogLogGroupName);
-    const mounts: Array<{ name: string; path: string; readOnly: boolean }> = [
+    // The agent maps a socket sender's PID to its container through /host/proc. Without that
+    // path it falls back to Docker's record of each container's first process, so only modules
+    // that exec their app as PID 1 get container tags; the scheduler's app is a child of its role
+    // script and got none.
+    const mounts: Array<{ name: string; path: string; containerPath?: string; readOnly: boolean }> = [
       { name: "docker-socket", path: "/var/run/docker.sock", readOnly: false },
-      { name: "proc", path: "/proc", readOnly: true },
-      { name: "cgroup", path: "/sys/fs/cgroup", readOnly: true },
+      { name: "proc", path: "/proc", containerPath: "/host/proc", readOnly: true },
+      { name: "cgroup", path: "/sys/fs/cgroup", containerPath: "/host/sys/fs/cgroup", readOnly: true },
       { name: "datadog", path: "/var/run/datadog", readOnly: false },
     ];
     if (logsEnabled) mounts.push({ name: "container-logs", path: "/var/lib/docker/containers", readOnly: true });
     for (const mount of mounts) {
       taskDefinition.addVolume({ host: { sourcePath: mount.path }, name: mount.name });
       container.addMountPoints({
-        containerPath: mount.path,
+        containerPath: mount.containerPath ?? mount.path,
         readOnly: mount.readOnly,
         sourceVolume: mount.name,
       });

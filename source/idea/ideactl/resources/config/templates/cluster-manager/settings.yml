@@ -69,7 +69,9 @@ maintenance:
   # plain text shown to users. no markup, no links.
   message: ''
   # optional ISO 8601 timestamp, e.g. '2026-09-15T18:00:00Z'. when set, the banner adds
-  # "until <local time>". an offset-less value is read as UTC. left empty, no time is shown.
+  # "Expected to end <local time>."; portal and qsub rejections add
+  # "Expected to end <YYYY-MM-DD HH:MM> UTC." an offset-less value is read as UTC.
+  # left empty, no time is shown.
   ends_at: ''
 
 oauth2_client:
@@ -85,32 +87,6 @@ logging:
 
 cloudwatch_logs:
   enabled: true
-
-ec2:
-  autoscaling:
-    public: false
-    instance_type: {{instance_type}}
-    base_os: {{base_os}}
-    instance_ami: {{instance_ami}}
-    volume_size: {{volume_size}}
-    volume_type: {{volume_type}}
-    enable_detailed_monitoring: false
-    min_capacity: 1
-    max_capacity: 3
-    cooldown_minutes: 5
-    new_instances_protected_from_scale_in: false
-    elb_healthcheck:
-      # Specifies the time in minutes Auto Scaling waits before checking the health status of an EC2 instance that has come into service.
-      grace_time_minutes: 15
-    cpu_utilization_scaling_policy:
-      target_utilization_percent: 80
-      estimated_instance_warmup_minutes: 15
-    rolling_update_policy:
-      max_batch_size: 1
-      min_instances_in_service: 1
-      pause_time_minutes: 15
-    # instance metadata access method
-    metadata_http_tokens: "required"  # supported values are "required" for IMDSv2 or "optional" for IMDSv1
 
 cache:
   long_term:
@@ -194,3 +170,10 @@ accounts:
     okta:
       org_url: ~
       api_token_secret_arn: ~
+
+# Browser SSH sessions, attached to the user's persistent tmux session.
+web_terminal:
+  max_sessions_per_user: 3
+  enabled: true
+  idle_timeout_seconds: 1800
+  max_duration_seconds: 43200
