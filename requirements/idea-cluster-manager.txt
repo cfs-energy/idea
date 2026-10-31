@@ -109,7 +109,7 @@ protobuf==7.36.2
     # via opensearch-protobufs
 psutil==7.2.2
     # via -r idea-sdk.in
-pyasn1==0.6.4
+pyasn1==0.6.5
     # via
     #   pyasn1-modules
     #   python-ldap
