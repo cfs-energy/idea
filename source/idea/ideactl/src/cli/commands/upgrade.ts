@@ -879,6 +879,58 @@ export function planCostIntervalDefault(modules: ModuleInfo[], settings: readonl
   });
 }
 
+const DCV_CDN = "https://d1uj6qtbmh3dt5.cloudfront.net";
+/**
+ * NICE does not sign the Ubuntu 24.04 and 26.04 DCV packages, so 26.11.1 desktops install them from
+ * versioned URLs and require the SHA-256 in `sha256sum` (see global-settings/settings.yml). Earlier
+ * releases stored the unversioned URL and a `.sha256sum` URL in these rows, which the desktop
+ * bootstrap now refuses. Each entry: key prefix, old url, new url, new sha256.
+ */
+const DCV_UBUNTU_PINS: ReadonlyArray<readonly [string, string, string, string]> = [
+  ["dcv.x86_64.debian.ubuntu2404", "nice-dcv-ubuntu2404-x86_64.tgz", "2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2404-x86_64.tgz", "4694071af44270952e375aceeddf402e90aaa110b2c586ae973aa3e503d907e7"],
+  ["dcv.x86_64.debian.ubuntu2604", "nice-dcv-ubuntu2604-x86_64.tgz", "2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2604-x86_64.tgz", "92765147dc09f1b2a6c08c7d35fc81f7cad810dcd43d0a5fb6c8cc244094afde"],
+  ["dcv.aarch64.linux.ubuntu2404", "nice-dcv-ubuntu2404-aarch64.tgz", "2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2404-aarch64.tgz", "8010ea95cfa6b11c2904e37ad50bd1d7d19040f2631eca9099a023e65aa7c65e"],
+  ["dcv.aarch64.linux.ubuntu2604", "nice-dcv-ubuntu2604-aarch64.tgz", "2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2604-aarch64.tgz", "589431ebd3818ec7b14a8c61e6cf18caf1fe4af34fa60993f6f80059d082be17"],
+  ["dcv.agent.x86_64.ubuntu.ubuntu2404", "nice-dcv-session-manager-agent_amd64.ubuntu2404.deb", "2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2404.deb", "f9aa283bb06c8712ea24ce51a4629f9091e97052e2e1cda83e7451595dafb8b5"],
+  ["dcv.agent.x86_64.ubuntu.ubuntu2604", "nice-dcv-session-manager-agent_amd64.ubuntu2604.deb", "2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2604.deb", "fb1349024ed196bbfe296f6197322afe2f9d9de9ac989790dee2afa0c4061f96"],
+  ["dcv.agent.aarch64.linux.ubuntu2404", "nice-dcv-session-manager-agent_arm64.ubuntu2404.deb", "2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_arm64.ubuntu2404.deb", "67367504faca6bf133d3fcada7aa1ecdc245eb5db80bd86477b92fd2ffb064ec"],
+  ["dcv.agent.aarch64.linux.ubuntu2604", "nice-dcv-session-manager-agent_arm64.ubuntu2604.deb", "2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_arm64.ubuntu2604.deb", "9eaa17391f29b8bced8c18b02e9581a3f2a9a570b03e6ac772a98f1c4a612965"],
+];
+
+/** The pinned url/sha256sum pairs this release writes, keyed by setting. */
+export function dcvUbuntuPinTargets(): Map<string, string> {
+  return new Map(DCV_UBUNTU_PINS.flatMap(([prefix, , url, sha256]) => [
+    [`global-settings.package_config.${prefix}.url`, `${DCV_CDN}/${url}`],
+    [`global-settings.package_config.${prefix}.sha256sum`, sha256],
+  ]));
+}
+
+/**
+ * Move each Ubuntu 24.04/26.04 DCV url/sha256sum pair to its pinned release when BOTH rows still
+ * hold the exact old template default, whatever their source: a `cli` or `api` row whose value is
+ * identical to the old default is not a customization (clusters bulk-set the defaults), and the
+ * template sync keeps such rows. Any other value is the operator's: it is left alone and named
+ * here, because desktops on that OS refuse a URL-shaped sha256sum until it is updated by hand. A
+ * missing row is left to the configuration sync, and a pair already pinned plans nothing.
+ */
+export function planDcvUbuntuPins(settings: readonly CurrentConfigRow[], out: (line: string) => void = () => {}): ConfigEntry[] {
+  const rows = new Map(settings.map((row) => [row.key, row.value]));
+  return DCV_UBUNTU_PINS.flatMap(([prefix, oldName, url, sha256]) => {
+    const urlKey = `global-settings.package_config.${prefix}.url`;
+    const sumKey = `global-settings.package_config.${prefix}.sha256sum`;
+    const [currentUrl, currentSum] = [rows.get(urlKey), rows.get(sumKey)];
+    if (currentUrl === undefined || currentSum === undefined) return [];
+    if (currentUrl === `${DCV_CDN}/${url}` && currentSum === sha256) return [];
+    if (currentUrl === `${DCV_CDN}/${oldName}` && currentSum === `${DCV_CDN}/${oldName}.sha256sum`) {
+      return [{ key: urlKey, value: `${DCV_CDN}/${url}` }, { key: sumKey, value: sha256 }];
+    }
+    out(`${urlKey} and ${sumKey} hold custom values, so they are not moved to the pinned DCV release. `
+      + `Ubuntu desktops refuse a sha256sum that is not the package's SHA-256: set the url to a versioned package `
+      + `and sha256sum to its SHA-256 (this release pins ${DCV_CDN}/${url} ${sha256}).`);
+    return [];
+  });
+}
+
 /** Resolve every Phase 3 write before the upgrade asks for approval. */
 export async function planUpgradePhase3Entries(
   deps: UpgradeDeps,
@@ -899,6 +951,7 @@ export async function planUpgradePhase3Entries(
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
     ...planCostIntervalDefault(modules, settings),
+    ...planDcvUbuntuPins(settings, deps.out),
     ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
   ];
 }
@@ -1133,6 +1186,8 @@ async function applyPhase3Entries(
       out(`analytics data nodes move from ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} to ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a blue/green deployment.`);
     } else if (entry.key.endsWith(".metrics.cost.interval_hours")) {
       out(`${entry.key} moves from the old default ${COST_INTERVAL_HOURS_OLD} to ${COST_INTERVAL_HOURS}; cost collection runs once a day from the next cycle`);
+    } else if (entry.key.startsWith("global-settings.package_config.dcv.")) {
+      out(`${entry.key} moves from the old default ${String(previous.get(entry.key))} to the pinned ${String(entry.value)}`);
     }
   }
 }

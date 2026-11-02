@@ -16,7 +16,9 @@ import { ExitWithCode } from "../../src/cli/cdk-invoker.ts";
 import { configUpgradePreview, registerConfigCommands } from "../../src/cli/commands/config.ts";
 import {
   createLiveUpgradeDeps,
+  dcvUbuntuPinTargets,
   planCostIntervalDefault,
+  planDcvUbuntuPins,
   planEcsImageFollowsRelease,
   prepareUpgradeDriftInput,
   publicRegistryImageExists,
@@ -411,6 +413,94 @@ test("Phase 3 refreshes paired AMI keys, preserves a newer built compute image, 
     assert.ok(!events.includes("set:scheduler.instance_type=m7i.large"));
     assert.ok(events.includes("set:analytics.opensearch.data_node_instance_type=m7g.large.search"));
   });
+});
+
+const DCV = "https://d1uj6qtbmh3dt5.cloudfront.net";
+const U2404_URL = "global-settings.package_config.dcv.x86_64.debian.ubuntu2404.url";
+const U2404_SUM = "global-settings.package_config.dcv.x86_64.debian.ubuntu2404.sha256sum";
+const U2404_OLD = [
+  { key: U2404_URL, value: `${DCV}/nice-dcv-ubuntu2404-x86_64.tgz` },
+  { key: U2404_SUM, value: `${DCV}/nice-dcv-ubuntu2404-x86_64.tgz.sha256sum` },
+];
+const U2404_NEW = [
+  { key: U2404_URL, value: `${DCV}/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2404-x86_64.tgz` },
+  { key: U2404_SUM, value: "4694071af44270952e375aceeddf402e90aaa110b2c586ae973aa3e503d907e7" },
+];
+
+test("Ubuntu 24.04/26.04 DCV rows move to the pinned release only from the exact old default", () => {
+  const plan = (rows: { key: string; value: unknown; source?: string }[]) => {
+    const lines: string[] = [];
+    return { entries: planDcvUbuntuPins(rows, (line) => lines.push(line)), lines };
+  };
+  // the old default moves whatever wrote it: the template, or a bulk-set of the defaults
+  for (const source of ["template", "cli", "api", undefined]) {
+    const result = plan(U2404_OLD.map((row) => ({ ...row, source })));
+    assert.deepEqual(result.entries, U2404_NEW, String(source));
+    assert.deepEqual(result.lines, []);
+  }
+  // a custom value is left alone and named in the preview; the upgrade does not stop
+  for (const custom of [
+    [U2404_OLD[0], { key: U2404_SUM, value: `${DCV}/mirror/x.sha256sum` }],
+    [{ key: U2404_URL, value: "https://mirror.example.invalid/dcv.tgz" }, U2404_OLD[1]],
+    [U2404_NEW[0], U2404_OLD[1]],
+  ]) {
+    const result = plan(custom.map((row) => ({ ...row, source: "cli" })));
+    assert.deepEqual(result.entries, []);
+    assert.equal(result.lines.length, 1);
+    assert.match(result.lines[0], /ubuntu2404\.url and .*ubuntu2404\.sha256sum hold custom values/);
+  }
+  // missing rows are left to the configuration sync
+  assert.deepEqual(plan([]), { entries: [], lines: [] });
+  assert.deepEqual(plan([U2404_OLD[0]]), { entries: [], lines: [] });
+  // a second upgrade finds the pinned pair and plans nothing
+  assert.deepEqual(plan(U2404_NEW.map((row) => ({ ...row, source: "template" }))), { entries: [], lines: [] });
+
+  // every old default this release knows moves, and nothing else
+  const targets = dcvUbuntuPinTargets();
+  assert.equal(targets.size, 16);
+  const old = [...targets.keys()].map((key) => {
+    const name = key.endsWith(".url") ? targets.get(key)!.split("/").pop()! : "";
+    return { key, value: name };
+  });
+  const urls = old.filter((row) => row.key.endsWith(".url"));
+  const legacyName = (name: string) => name
+    .replace(/^nice-dcv-2026\.0-25174-/, "nice-dcv-")
+    .replace(/_2026\.0\.920-1_/, "_");
+  const rows = urls.flatMap((row) => [
+    { key: row.key, value: `${DCV}/${legacyName(row.value)}`, source: "cli" },
+    { key: row.key.replace(/\.url$/, ".sha256sum"), value: `${DCV}/${legacyName(row.value)}.sha256sum`, source: "template" },
+  ]);
+  const moved = plan(rows);
+  assert.deepEqual(new Map(moved.entries.map((entry) => [entry.key, entry.value])), targets);
+
+  // the move is a template default: listed, never held as operator drift
+  const report = compareUpgradeDrift({
+    current: U2404_OLD.map((row) => ({ ...row, source: "cli" })),
+    generated: U2404_NEW,
+    phase3: U2404_NEW,
+  });
+  assert.deepEqual(report.changedRowsDifferingFromGenerated, []);
+});
+
+test("upgrade-cluster writes the pinned DCV pair over a bulk-set old default in Phase 3", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    rows[`${clusterName}.cluster-settings`]!.push(...U2404_OLD.map((row) => ({ ...row, source: "cli" })));
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    for (const row of U2404_NEW) assert.ok(events.includes(`set:${row.key}=${row.value}`), row.key);
+  });
+});
+
+test("the pinned DCV release matches the global settings template", () => {
+  const template = readFileSync(
+    join(import.meta.dirname, "../../resources/config/templates/global-settings/settings.yml"),
+    "utf8",
+  );
+  for (const [key, value] of dcvUbuntuPinTargets()) {
+    if (!key.endsWith(".url")) continue;
+    const sum = dcvUbuntuPinTargets().get(key.replace(/\.url$/, ".sha256sum"));
+    assert.ok(template.includes(`url: ${value}\n`), key);
+    assert.match(template, new RegExp(`url: ${value.replaceAll(".", "\\.")}\\n\\s+sha256sum: ${sum}\\n`), key);
+  }
 });
 
 const COST_INTERVAL = "cluster-manager.metrics.cost.interval_hours";

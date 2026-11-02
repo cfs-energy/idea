@@ -231,11 +231,11 @@ def test_catalog_count_contract_and_explicit_dispositions():
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
     assert len(DESTINATION_SECTIONS) == 37
-    assert len(baseline) == 677
+    assert len(baseline) == 676
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == '2b485d077403a5fc90404aa584851fe88b948f30e80a3249e11d587a6a2ef8d1'
+        == '6e8dca909911d3fe74178b1ce5d26ed7b693b78c906a88a52689cbd0cfd5656d'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'

@@ -2410,14 +2410,6 @@ _ROWS = [
         False,
     ),
     (
-        'global-settings.package_config.dcv.gpg_key',
-        'string',
-        'deployment',
-        'software',
-        True,
-        False,
-    ),
-    (
         'global-settings.package_config.dcv.x86_64.debian.ubuntu2204.sha256sum',
         'string',
         'deployment',

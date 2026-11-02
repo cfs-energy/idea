@@ -300,7 +300,6 @@
     "global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.url",
     "global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.sha256sum",
     "global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.url",
-    "global-settings.package_config.dcv.gpg_key",
     "global-settings.package_config.dcv.x86_64.debian.ubuntu2204.sha256sum",
     "global-settings.package_config.dcv.x86_64.debian.ubuntu2204.url",
     "global-settings.package_config.dcv.x86_64.debian.ubuntu2404.sha256sum",

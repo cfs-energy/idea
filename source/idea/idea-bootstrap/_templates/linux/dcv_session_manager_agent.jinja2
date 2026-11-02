@@ -1,6 +1,6 @@
 # BEGIN: DCV Session Manager Agent
 
-DCV_GPG_KEY_DCV_AGENT="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
+{% include '_templates/linux/dcv_package_trust.jinja2' %}
 {% if context.base_os in ('amazonlinux2023',) %}
 DCV_SESSION_MANAGER_AGENT_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.url', required=True) }}"
 DCV_SESSION_MANAGER_AGENT_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.agent.x86_64.linux.al2023.sha256sum', required=True) }}"
@@ -47,9 +47,9 @@ DCV_SESSION_MANAGER_AGENT_AARCH64_SHA256_HASH="{{ context.config.get_string('glo
 
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
-rpm --import ${DCV_GPG_KEY_DCV_SERVER}
+rpm --import "${DCV_NICE_KEY}"
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
-curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
+gpg --dearmor < "${DCV_NICE_KEY}" | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
 {% endif %}
 
 machine=$(uname -m) #x86_64 or aarch64
@@ -71,14 +71,23 @@ if [[ -z "$(rpm -qa nice-dcv-session-manager-agent)" ]]; then
 if [[ -z "$(dpkg -l nice-dcv-session-manager-agent | grep ^ii)" ]]; then
 {% endif %}
   wget ${AGENT_URL}
-  wget ${AGENT_SHA256_HASH}
   PACKAGE_NAME=$(basename "${AGENT_URL}")
+  {% if context.base_os in ('ubuntu2404', 'ubuntu2604') %}
+  dcv_sha256_pinned "${PACKAGE_NAME}" "${AGENT_SHA256_HASH}" || dcv_untrusted "DCV Session Manager Agent ${PACKAGE_NAME} does not match its pinned SHA-256."
+  {% else %}
+  wget ${AGENT_SHA256_HASH}
   CHECKSUM_FILE=$(basename "${AGENT_SHA256_HASH}")
   EXPECTED_CHECKSUM=$(cat ${CHECKSUM_FILE} | awk '{print $1}')
   if [[ $(sha256sum ${PACKAGE_NAME} | awk '{print $1}') != ${EXPECTED_CHECKSUM} ]];  then
       echo -e "FATAL ERROR: Checksum for DCV Session Manager Agent failed. File may be compromised." > /etc/motd
       exit 1
   fi
+  {% endif %}
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+  dcv_rpms_signed "${PACKAGE_NAME}" || dcv_untrusted "DCV Session Manager Agent ${PACKAGE_NAME} is not signed by the pinned NICE key."
+  {% elif context.base_os == 'ubuntu2204' %}
+  dcv_debs_signed "${PACKAGE_NAME}" || dcv_untrusted "DCV Session Manager Agent ${PACKAGE_NAME} is not signed by the pinned NICE key."
+  {% endif %}
   {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
   package_transaction yum install -y ${PACKAGE_NAME}
   {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}

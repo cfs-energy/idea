@@ -283,14 +283,22 @@ function renderContext(family: BranchFamily): object {
   return { context: templateContext(family.flags, family.baseOs ?? "rhel9") };
 }
 
-/** Read every source template so the oracle renders the local source revision. */
+/**
+ * Read every source template so the oracle renders the local source revision. Every file under
+ * `_templates` is included, since templates there may include plain assets (the NICE key).
+ */
 function templateSources(directory: string, root = directory, includeYaml = root === CONFIG_TEMPLATE_SOURCE): Record<string, string> {
   const sources: Record<string, string> = {};
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       Object.assign(sources, templateSources(path, root, includeYaml));
-    } else if (entry.isFile() && (entry.name.endsWith(".jinja2") || (includeYaml && entry.name.endsWith(".yml")))) {
+    } else if (
+      entry.isFile() &&
+      (entry.name.endsWith(".jinja2") ||
+        (includeYaml && entry.name.endsWith(".yml")) ||
+        relative(root, path).startsWith("_templates/"))
+    ) {
       sources[relative(root, path)] = readFileSync(path, "utf8");
     }
   }

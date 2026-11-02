@@ -137,7 +137,6 @@ export function fullContext(): Record<string, unknown> {
     "virtual-desktop-controller.events_sqs_queue_url": "https://sqs.example.invalid/events",
     "global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern":
       "https://example.invalid/%region%/%os%/%architecture%.%ext%",
-    "global-settings.package_config.dcv.gpg_key": "https://example.invalid/dcv.gpg",
     "global-settings.package_config.efa.url": "https://example.invalid/efa.tgz",
     "global-settings.package_config.efa.checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "global-settings.package_config.efa.checksum_method": "sha256",
@@ -151,7 +150,6 @@ export function fullContext(): Record<string, unknown> {
         key.includes(".url") ||
         key.includes("download_link") ||
         key.endsWith(".sha256sum") ||
-        key.includes("gpg_key") ||
         key.includes("s3_bucket")
       ) {
         return key.includes("sha256") || key.includes("checksum")

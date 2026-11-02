@@ -681,7 +681,6 @@ global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_r
 global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky8.url|17|URL|string|deployment|1|hidden|228
 global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.sha256sum|17|Sha256sum|string|deployment|1|hidden|229
 global-settings.package_config.dcv.connection_gateway.x86_64.linux.rhel_centos_rocky9.url|17|URL|string|deployment|1|hidden|229
-global-settings.package_config.dcv.gpg_key|17|Gpg key|string|deployment|1|hidden|195
 global-settings.package_config.dcv.x86_64.debian.ubuntu2204.sha256sum|17|Sha256sum|string|deployment|1|hidden|230
 global-settings.package_config.dcv.x86_64.debian.ubuntu2204.url|17|URL|string|deployment|1|hidden|230
 global-settings.package_config.dcv.x86_64.debian.ubuntu2404.sha256sum|17|Sha256sum|string|deployment|1|hidden|231
@@ -1117,9 +1116,9 @@ virtual-desktop-controller.volume_type|17|Volume type|enum|deployment|1|read_onl
 
 it('accounts for every baseline, later and dynamic field in one destination or hidden disposition', () => {
     const baseline = fieldManifest.filter(setting => setting.originalSection !== null);
-    expect(baseline).toHaveLength(736);
-    expect(new Set(baseline.map(setting => setting.key)).size).toBe(736);
-    expect(new Set(baseline.map(setting => setting.originalSection)).size).toBe(250);
+    expect(baseline).toHaveLength(735);
+    expect(new Set(baseline.map(setting => setting.key)).size).toBe(735);
+    expect(new Set(baseline.map(setting => setting.originalSection)).size).toBe(249);
     expect(fieldManifest.length).toBeGreaterThan(baseline.length);
     expect(new Set(fieldManifest.map(setting => setting.key)).size).toBe(fieldManifest.length);
     for (const setting of fieldManifest) {

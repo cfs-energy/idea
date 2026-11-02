@@ -87,7 +87,6 @@ GLOBAL_SETTINGS = {
         'aws_ssm': {'download_url': 'https://example.com/ssm'},
         'dcv': {
             'clients': {'windows': {'url': 'https://example.com/dcv.msi'}},
-            'gpg_key': 'https://example.com/NICE-GPG-KEY',
         },
     },
 }
