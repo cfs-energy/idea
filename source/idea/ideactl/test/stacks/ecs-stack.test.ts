@@ -25,6 +25,7 @@ import { Template } from "aws-cdk-lib/assertions";
 
 import { dockerLabels, addLogTailContainer, STREAM_PREFIX_APPLICATION, STREAM_PREFIX_OPENPBS, type ContainerScope, storageMounts } from "../../src/cdk/constructs/container.ts";
 import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
+import { evaluateChangeSet } from "../../src/cli/cdk-invoker.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "../support/ecs-settings.ts";
@@ -803,3 +804,44 @@ for (const [enabled, logsEnabled] of [[true, true], [true, false], [false, true]
     }
   });
 }
+
+test("Container Insights is off when Datadog collects the same series, and toggles in place", () => {
+  const cluster = (datadogEnabled: boolean): [string, Json] => {
+    const found = byType(resourcesOf(synth(datadogEnabled)), "AWS::ECS::Cluster");
+    assert.equal(found.length, 1);
+    return found[0] as [string, Json];
+  };
+  const insights = (properties: Json): unknown => {
+    const clusterSettings = properties["ClusterSettings"];
+    assert.ok(Array.isArray(clusterSettings), "cluster settings");
+    return clusterSettings.find((entry) => isJson(entry) && entry["Name"] === "containerInsights")?.["Value"];
+  };
+  const [plainId, plain] = cluster(false);
+  const [datadogId, datadog] = cluster(true);
+  const plainProperties = record(plain["Properties"], "cluster properties");
+  const datadogProperties = record(datadog["Properties"], "cluster properties");
+  assert.equal(insights(plainProperties), "enabled");
+  // Explicitly disabled, not omitted, so an existing cluster turns it off on upgrade.
+  assert.equal(insights(datadogProperties), "disabled");
+  // Only ClusterSettings differs. ClusterName is the one create-only property of AWS::ECS::Cluster
+  // (CloudFormation resource schema); ClusterSettings is updated through ecs:UpdateClusterSettings.
+  assert.equal(datadogId, plainId);
+  assert.deepEqual(
+    { ...datadogProperties, ClusterSettings: undefined },
+    { ...plainProperties, ClusterSettings: undefined },
+  );
+  assert.deepEqual({ ...datadog, Properties: undefined }, { ...plain, Properties: undefined });
+  // CloudFormation reports that update as a Modify without replacement, which the guard passes.
+  const verdict = evaluateChangeSet({
+    Changes: [{
+      ResourceChange: {
+        Action: "Modify",
+        LogicalResourceId: datadogId,
+        ResourceType: "AWS::ECS::Cluster",
+        Replacement: "False",
+        Details: [{ Target: { Attribute: "Properties", Name: "ClusterSettings", RequiresRecreation: "Never" } }],
+      },
+    }],
+  });
+  assert.deepEqual(verdict.refusals, []);
+});

@@ -103,7 +103,11 @@ export class EcsStack extends IdeaBaseStack {
     const execLogGroup = this.ensureAgentLogGroup("exec-log-group-ensure", execLogGroupName);
     this.ecsCluster = new ecs.Cluster(this.stack, "ecs-cluster", {
       clusterName: `${this.clusterName}-ecs`,
-      containerInsightsV2: ecs.ContainerInsights.ENABLED,
+      // The Datadog agent already collects per-task CPU and memory; Container Insights would bill
+      // the same series again as CloudWatch custom metrics. ClusterSettings updates in place.
+      containerInsightsV2: this.context.config.getBool("ecs.datadog.enabled", false)
+        ? ecs.ContainerInsights.DISABLED
+        : ecs.ContainerInsights.ENABLED,
       executeCommandConfiguration: {
         logConfiguration: {
           cloudWatchLogGroup: logs.LogGroup.fromLogGroupName(this.stack, "exec-log-group-ref", execLogGroupName),

@@ -324,8 +324,11 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
           target,
           true,
         ),
-        // Only the release repository planner adds an image write to Phase 3.
-        routineUpdate: key === "ecs.image" || key === "ecs.release_image" || key === "ecs.previous_release_image" ? "release image" : undefined,
+        // Only the release repository planner adds an image write to Phase 3. The cost interval
+        // planner writes only a row still holding the old template default that no operator set.
+        routineUpdate: key === "ecs.image" || key === "ecs.release_image" || key === "ecs.previous_release_image"
+          ? "release image"
+          : key.endsWith(".metrics.cost.interval_hours") ? "template default" : undefined,
       },
     );
   }

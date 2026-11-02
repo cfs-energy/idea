@@ -181,32 +181,35 @@ def test_outbox_paginates_and_keeps_latest_correction(collector, monkeypatch):
         outbox.save()
         metric['Value'] = 2
         outbox.save()
-        assert len(db.values) == 1
-        saved = next(iter(db.values.values()))
-        assert json.loads(saved)['Value'] == 2
+        saved = [json.loads(db.values[key]) for key in sorted(db.values)]
+        assert [[entry['Value'] for entry in batch] for batch in saved] == [[1], [2]]
         requests = []
+        keys = sorted(db.values)
 
         def listing(**request):
             requests.append(request)
             if len(requests) == 1:
-                return {'Contents': [], 'NextContinuationToken': 'next'}
-            assert request['ContinuationToken'] == 'next'
-            return {'Contents': [{'Key': next(iter(db.values))}]}
+                return {'Contents': [{'Key': keys[1]}], 'NextContinuationToken': 'n'}
+            assert request['ContinuationToken'] == 'n'
+            return {'Contents': [{'Key': keys[0]}]}
 
         monkeypatch.setattr(db, 'list_objects_v2', listing)
         outbox.replay()
         assert len(requests) == 2
+        # the correction supersedes the pending point: delivered once, as corrected
         assert context.published() == [metric]
         assert db.values == {}
     finally:
         context.distributed_lock().release('test')
 
 
-def test_outbox_retires_only_successful_points(collector):
+def test_outbox_retires_only_successful_batches(collector, monkeypatch):
+    from ideaclustermanager.app.metrics import collector_outbox
     from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
 
     _, _, _, contexts, _ = collector
     context = contexts[0]
+    monkeypatch.setattr(collector_outbox, 'BATCH_SIZE', 1)
     outbox = CollectorOutbox(context, 'partial', historical=True)
     entries = [
         {
@@ -230,6 +233,63 @@ def test_outbox_retires_only_successful_points(collector):
     outbox.replay()
     assert context.published() == entries
     assert context.aws().s3().values == {}
+
+
+def test_outbox_saves_and_sends_a_batch_per_object_and_request(collector, monkeypatch):
+    import json
+    import requests
+    from ideasdk.metrics.datadog_api import DatadogAPI
+    from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
+
+    _, _, _, contexts, _ = collector
+    context = contexts[0]
+    store = context.aws().s3()
+    transport = DatadogAPI('key', 'datadoghq.com', 'test-cluster/cluster-manager')
+    monkeypatch.setattr(DatadogAPI, 'from_context', lambda _: transport)
+    response = requests.Response()
+    response.status_code = 202
+    post = Mock(return_value=response)
+    monkeypatch.setattr('ideasdk.metrics.datadog_api.requests.post', post)
+    # an object an earlier release wrote, one point, is replayed first
+    legacy = dict(
+        MetricName='storage.used',
+        MetricType='Gauge',
+        Value=7,
+        Timestamp=1,
+        Dimensions=[],
+    )
+    store.values[f'metrics/outbox/storage/{"a" * 64}.json'] = json.dumps(
+        legacy
+    ).encode()
+    outbox = CollectorOutbox(context, 'storage', historical=False)
+    points = [
+        dict(
+            MetricName='storage.used',
+            MetricType='Gauge',
+            Value=index,
+            Timestamp=1700000000,
+            Dimensions=[{'Name': 'volume', 'Value': f'vol{index}'}],
+        )
+        for index in range(1201)
+    ]
+    outbox.publish(points)
+    outbox.save()
+    assert len(store.values) == 1 + 3
+    outbox.replay()
+    sent = [
+        series['points'][0]['value']
+        for call in post.call_args_list
+        for series in call.kwargs['json']['series']
+    ]
+    assert [len(call.kwargs['json']['series']) for call in post.call_args_list] == [
+        1,
+        500,
+        500,
+        201,
+    ]
+    # every point once: the legacy point, then the run's in the order saved
+    assert sent == [7] + list(range(1201))
+    assert store.values == {}
 
 
 @pytest.mark.parametrize('outcome', [202, 200, 204, 503, 'connection'])

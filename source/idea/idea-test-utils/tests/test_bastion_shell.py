@@ -225,5 +225,67 @@ class SiteHook(unittest.TestCase):
         )
 
 
+class SshdHealthCheckLines(unittest.TestCase):
+    """health-check connections never leave the container; every other sshd line does"""
+
+    DROPPED = [
+        # the task's ssh-keyscan check
+        'Connection closed by 127.0.0.1 port 41022 [preauth]',
+        # the load balancer's TCP check, from its private addresses
+        'Connection closed by 10.7.0.48 port 3151',
+        'Connection closed by 172.31.4.9 port 22',
+        'Connection closed by 192.168.1.20 port 60000',
+    ]
+    KEPT = [
+        'Accepted publickey for alice from 23.23.20.238 port 61737 ssh2: RSA SHA256:abc',
+        'Accepted publickey for alice from 10.7.0.48 port 61737 ssh2: RSA SHA256:abc',
+        'Failed publickey for alice from 10.7.0.48 port 5000 ssh2: RSA SHA256:abc',
+        'Invalid user admin from 81.218.86.52 port 18694',
+        'Connection closed by invalid user admin 10.7.0.48 port 5000 [preauth]',
+        'Connection closed by authenticating user alice 127.0.0.1 port 5000 [preauth]',
+        'Disconnected from user alice 23.23.20.238 port 63564',
+        'Received disconnect from 10.7.0.48 port 5000:11: Bye Bye [preauth]',
+        # a client that sent its identification and left before authenticating
+        'Connection closed by 10.7.0.48 port 5000 [preauth]',
+        # a close from a public address is not the load balancer
+        'Connection closed by 23.23.20.238 port 54871',
+        'Connection closed by 172.32.0.1 port 22',
+        'Connection closed by 127.0.0.1 port 41022',
+        'error: kex_exchange_identification: Connection closed by remote host',
+        'Server listening on 0.0.0.0 port 22.',
+    ]
+
+    def run_filter(self, lines):
+        import subprocess
+
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = text.index('SSHD_HEALTH_CHECK_LINES=')
+        end = text.index('/usr/sbin/sshd -D -e', start)
+        # sshd's stderr goes through the filter and on to the task's stderr
+        script = (
+            'set -euo pipefail\n'
+            + text[start:end]
+            + 'printf "%s\\n" "$@" | sshd_log_filter'
+        )
+        result = subprocess.run(
+            ['bash', '-c', script, 'filter', *lines],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout, '')
+        return result.stderr.splitlines()
+
+    def test_only_health_check_closes_are_dropped(self):
+        self.assertEqual(self.run_filter(self.DROPPED + self.KEPT), self.KEPT)
+
+    def test_an_all_dropped_stream_does_not_fail(self):
+        self.assertEqual(self.run_filter(self.DROPPED), [])
+
+    def test_sshd_logs_through_the_filter(self):
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        self.assertIn('/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &\nsshd_pid=$!', text)
+
+
 if __name__ == '__main__':
     unittest.main()

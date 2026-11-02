@@ -750,7 +750,7 @@ describe('cost settings keep shipped defaults', () => {
       const expected = {
         'cluster-manager.metrics.cost.enabled': false,
         'cluster-manager.metrics.cost.lookback_days': 3,
-        'cluster-manager.metrics.cost.interval_hours': 6,
+        'cluster-manager.metrics.cost.interval_hours': 24,
         'cluster-manager.metrics.cost.by_account': false,
         'cluster-manager.metrics.storage.enabled': false,
         'cluster-manager.metrics.storage.interval_minutes': 60,

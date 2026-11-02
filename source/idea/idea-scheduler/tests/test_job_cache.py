@@ -109,7 +109,7 @@ def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
     db = cache._jobs_db
     assert Path(db._db_file) == tmp_path / 'db/job-cache-v3.db'
     assert Path(db._backup_file) == tmp_path / 'pbs/idea/db/job-cache-v3.db'
-    assert db._backup_interval == 60
+    assert db._backup_interval == 300
     assert db._backup_thread.is_alive()
     assert (
         list(cache.get_connection().query('PRAGMA journal_mode'))[0]['journal_mode']
@@ -117,6 +117,39 @@ def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
     )
     cache.stop()
     assert not db._backup_thread.is_alive()
+
+
+def test_an_operator_set_backup_interval_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=45
+        )
+    )
+    assert cache._jobs_db._backup_interval == 45
+    cache.stop()
+
+
+def test_stop_flushes_a_final_copy_without_waiting_out_the_default_interval(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    copy = Path(cache._jobs_db._backup_file)
+    cache.add_finished_job(
+        build_job('41', job_uid='finished', state=SocaJobState.FINISHED)
+    )
+    assert not copy.exists()  # the first interval has not passed
+    started = time.monotonic()
+    cache.stop()
+    assert time.monotonic() - started < 5
+    with sqlite3.connect(copy) as connection:
+        assert (
+            connection.execute(
+                'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_host_job_cache_has_no_backup(tmp_path):

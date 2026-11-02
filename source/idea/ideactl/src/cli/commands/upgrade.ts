@@ -158,6 +158,9 @@ const MODULE_HOST_INSTANCE_TYPE = "m7i.large";
 const MODULE_HOST_INSTANCE_TYPE_OLD = "m6i.large";
 const OPENSEARCH_DATA_NODE_INSTANCE_TYPE = "m7g.large.search";
 const OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = "m5.large.search";
+// 26.11.1 collects Cost Explorer spend once a day; earlier releases installed six hours.
+const COST_INTERVAL_HOURS = 24;
+const COST_INTERVAL_HOURS_OLD = 6;
 const COMPUTE_IMAGE_PREFIX = ["idea", "compute", "node", ""].join("-");
 
 const AMI_UPDATE_KEYS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
@@ -862,6 +865,20 @@ async function planOpenSearchDataNodeInstanceType(
   }
 }
 
+/**
+ * The cost collector's interval moves from the old default to the new one only when the row still
+ * holds the old default and the operator did not write it. Any other value, a row the operator
+ * set, or no row at all is left alone; a second upgrade finds 24 and plans nothing.
+ */
+export function planCostIntervalDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return modules.filter((module) => module.name === "cluster-manager").flatMap((module) => {
+    const key = `${module.module_id}.metrics.cost.interval_hours`;
+    const row = settings.find((entry) => entry.key === key);
+    if (row === undefined || row.value !== COST_INTERVAL_HOURS_OLD || isOperatorSource(row.source)) return [];
+    return [{ key, value: COST_INTERVAL_HOURS }];
+  });
+}
+
 /** Resolve every Phase 3 write before the upgrade asks for approval. */
 export async function planUpgradePhase3Entries(
   deps: UpgradeDeps,
@@ -881,6 +898,7 @@ export async function planUpgradePhase3Entries(
     })),
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
+    ...planCostIntervalDefault(modules, settings),
     ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
   ];
 }
@@ -1113,6 +1131,8 @@ async function applyPhase3Entries(
       previous.get(entry.key) === OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD
     ) {
       out(`analytics data nodes move from ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} to ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a blue/green deployment.`);
+    } else if (entry.key.endsWith(".metrics.cost.interval_hours")) {
+      out(`${entry.key} moves from the old default ${COST_INTERVAL_HOURS_OLD} to ${COST_INTERVAL_HOURS}; cost collection runs once a day from the next cycle`);
     }
   }
 }

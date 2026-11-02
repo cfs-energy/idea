@@ -16,6 +16,7 @@ import { ExitWithCode } from "../../src/cli/cdk-invoker.ts";
 import { configUpgradePreview, registerConfigCommands } from "../../src/cli/commands/config.ts";
 import {
   createLiveUpgradeDeps,
+  planCostIntervalDefault,
   planEcsImageFollowsRelease,
   prepareUpgradeDriftInput,
   publicRegistryImageExists,
@@ -25,6 +26,7 @@ import {
   type UpgradeDeps,
 } from "../../src/cli/commands/upgrade.ts";
 import { DATADOG_AGENT_IMAGE } from "../../src/config/datadog-agent.ts";
+import { compareUpgradeDrift } from "../../src/config/upgrade-drift.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { change } from "../support/deploy-harness.ts";
 
@@ -410,6 +412,58 @@ test("Phase 3 refreshes paired AMI keys, preserves a newer built compute image, 
     assert.ok(events.includes("set:analytics.opensearch.data_node_instance_type=m7g.large.search"));
   });
 });
+
+const COST_INTERVAL = "cluster-manager.metrics.cost.interval_hours";
+const CLUSTER_MANAGER = [{ module_id: "cluster-manager", name: "cluster-manager", type: "app" }];
+
+test("the cost interval moves from the old six-hour default to 24 and nothing else moves", () => {
+  const plan = (row?: { value: unknown; source?: string }) =>
+    planCostIntervalDefault(CLUSTER_MANAGER, row === undefined ? [] : [{ key: COST_INTERVAL, ...row }]);
+  assert.deepEqual(plan({ value: 6, source: "template" }), [{ key: COST_INTERVAL, value: 24 }]);
+  // a release that stamped no source wrote the template default too
+  assert.deepEqual(plan({ value: 6 }), [{ key: COST_INTERVAL, value: 24 }]);
+  assert.deepEqual(plan({ value: 12, source: "template" }), []);
+  assert.deepEqual(plan(), []);
+  // the operator chose six
+  assert.deepEqual(plan({ value: 6, source: "cli" }), []);
+  assert.deepEqual(plan({ value: 6, source: "api" }), []);
+  // a second upgrade finds 24 and plans nothing
+  assert.deepEqual(plan({ value: 24, source: "cli" }), []);
+  assert.deepEqual(planCostIntervalDefault([], [{ key: COST_INTERVAL, value: 6 }]), []);
+
+  // the move is a template default: it is listed, but never held as operator drift
+  const report = compareUpgradeDrift({
+    current: [{ key: COST_INTERVAL, value: 6, source: "template" }],
+    generated: [{ key: COST_INTERVAL, value: 24 }],
+    phase3: plan({ value: 6, source: "template" }),
+  });
+  assert.equal(report.findings.find((row) => row.key === COST_INTERVAL)?.routineUpdate, "template default");
+  assert.deepEqual(report.changedRowsDifferingFromGenerated, []);
+});
+
+for (const [stored, expected] of [[6, 24], [12, 12], [undefined, undefined]] as const) {
+  test(`an upgrade leaves the cost interval at ${String(expected)} from ${String(stored)}, and a re-run changes nothing`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      const table = rows[`${clusterName}.cluster-settings`]!;
+      rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
+      if (stored !== undefined) table.push({ key: COST_INTERVAL, value: stored, source: "template" });
+      const interval = () => table.find((row) => row["key"] === COST_INTERVAL)?.["value"];
+      const run = () => upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, skipGlobalSettingsUpdate: true });
+      await run();
+      // the full sync is add-only, so a missing row may be added from the template; only Phase 3 rewrites
+      assert.equal(events.filter((event) => event === `set:${COST_INTERVAL}=24`).length, stored === 6 ? 1 : 0);
+      assert.equal(events.some((event) => event.includes("moves from the old default 6 to 24")), stored === 6);
+      // a missing row is not the migration's: only the add-only template sync may add it, as before
+      if (stored !== undefined) assert.equal(interval(), expected);
+      else assert.equal(table.find((row) => row["key"] === COST_INTERVAL)?.["source"] ?? "template", "template");
+      const after = interval();
+      events.length = 0;
+      await run();
+      assert.ok(!events.some((event) => event.startsWith(`set:${COST_INTERVAL}=`)));
+      assert.equal(interval(), after);
+    });
+  });
+}
 
 for (const serviceSoftwareOptions of [
   { newVersion: "R20260901-P1", updateAvailable: true, updateStatus: "ELIGIBLE" },

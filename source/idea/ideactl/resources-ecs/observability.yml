@@ -84,9 +84,10 @@ new_surfaces:
     note: used only when ecs.datadog.enabled is true, never the gateway group
   - name: ECS/ContainerInsights
     verdict: new
-    note: classic Container Insights on cluster {cluster}-ecs
+    note: classic Container Insights on cluster {cluster}-ecs, only when ecs.datadog.enabled is false
   - name: "/aws/ecs/containerinsights/{cluster}-ecs/performance"
     verdict: new
+    note: only when ecs.datadog.enabled is false
   - name: AWS/ECS
     verdict: new
 dropped:

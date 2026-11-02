@@ -86,7 +86,19 @@ fi
 /usr/sbin/sshd -t
 /usr/sbin/sssd -i --logger=stderr &
 sssd_pid=$!
-/usr/sbin/sshd -D -e &
+# Health checks connect to sshd without logging in and sshd reports each one on stderr, which
+# the log shipper files as an error: about 1.2M lines a week, every error IDEA logged. Two shapes
+# are dropped before they leave the container, and nothing else:
+#   the task's ssh-keyscan on 127.0.0.1, which closes after the key exchange:
+#     Connection closed by 127.0.0.1 port N [preauth]
+#   the load balancer's TCP check from its private addresses, which closes before sending an SSH
+#     identification string (no [preauth]: no session existed):
+#     Connection closed by 10.x.y.z port N
+# Logins, failed and invalid-user attempts, disconnects after authentication, any close from a
+# public address and every other sshd line still reach the task log.
+SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+ \[preauth\]|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)$'
+sshd_log_filter() { grep --line-buffered -v -E "${SSHD_HEALTH_CHECK_LINES}" >&2 || true; }
+/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &
 sshd_pid=$!
 # Initialize and retry terminal trust without blocking ordinary SSH.
 (

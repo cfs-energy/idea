@@ -71,5 +71,6 @@ test('bootstrap and the standalone cost collector match the pre-sunset v26.10.9 
     datadogApiKeySecretArn: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:datadog-abcdef',
     vpcId: 'vpc-0123456789abcdef0', subnetIds: ['subnet-0123456789abcdef0'], publicSubnets: true,
   });
-  assert.equal(templateDigest(Template.fromStack(collector).toJSON()), '31d184e7cdb65422e032a336b91f69e3a077159bbff98f086abb49129c20819c');
+  // 26.11.1: the collector's default interval is 24 hours (was 6); nothing else in the template changed.
+  assert.equal(templateDigest(Template.fromStack(collector).toJSON()), '606bdcf40706329abdf355311ccf281c01d1f75ed446e066f0dfc6c6ee12342b');
 });

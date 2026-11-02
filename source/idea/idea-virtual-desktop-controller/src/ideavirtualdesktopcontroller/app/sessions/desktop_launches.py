@@ -43,6 +43,8 @@ class DesktopLaunches:
         self.launches: List[Dict] = []
         self._seen = set()
         self.complete = False
+        # set once the history table was checked for rows still to match
+        self.rows_checked = False
 
     def read(self, budget_seconds: float = 30) -> bool:
         """true once every event in the 90 days has been read."""

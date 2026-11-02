@@ -222,6 +222,19 @@ if [[ "${PBS_CREATE}" == 1 && ! -f "${MARKER}" ]]; then
   log "PBS server configured"
 fi
 
+# PBS's default log_events, 511, includes 256: a "Type N request received" line for every client
+# request, most of the server log and mostly the container health check. 255 keeps every other
+# event class. Only the default is replaced, on a new or an existing datastore, so a value an
+# operator set stands. Nothing here stops the start.
+LOG_EVENTS="$(/opt/pbs/bin/qmgr -c 'list server log_events' | sed -n 's/^[[:space:]]*log_events = //p')" \
+  || LOG_EVENTS=failed
+if [[ -z "${LOG_EVENTS}" || "${LOG_EVENTS}" == 511 ]]; then
+  log "setting PBS log_events to 255 (no per-request lines)"
+  /opt/pbs/bin/qmgr -c "set server log_events = 255" || log "could not set log_events; leaving it"
+elif [[ "${LOG_EVENTS}" == failed ]]; then
+  log "could not read log_events; leaving it"
+fi
+
 # Reconcile image-owned hooks on every start, including existing/imported datastores.
 # A hook is created when absent, and (re)imported, given its events and enabled when the
 # image's file differs from the one recorded at the last import. An unchanged hook is not

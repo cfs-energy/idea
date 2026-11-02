@@ -30,7 +30,7 @@ export class CostCollectorStack extends Stack {
   constructor(scope: Construct, id: string, props: StackProps & CostCollectorSettings & CostCollectorNetwork) {
     super(scope, id, props);
     const agentImage = requireDigestPinnedImage(props.agentImage, "agent image");
-    for (const value of [props.intervalHours ?? 6, props.lookbackDays ?? 3]) {
+    for (const value of [props.intervalHours ?? 24, props.lookbackDays ?? 3]) {
       if (!Number.isInteger(value) || value < 1) throw new Error("interval and lookback must be positive integers");
     }
     if (props.subnetIds.length === 0) throw new Error("at least one subnet is required");
@@ -94,7 +94,7 @@ export class CostCollectorStack extends Stack {
         AWS_DEFAULT_REGION: this.region,
         DD_DOGSTATSD_URL: `unix://${DOGSTATSD_SOCKET}`,
         IDEA_COST_METRICS_ENABLED: "true",
-        IDEA_COST_METRICS_INTERVAL_HOURS: String(props.intervalHours ?? 6),
+        IDEA_COST_METRICS_INTERVAL_HOURS: String(props.intervalHours ?? 24),
         IDEA_COST_METRICS_LOOKBACK_DAYS: String(props.lookbackDays ?? 3),
         IDEA_COST_METRICS_MODULE_TAG: props.moduleTag ?? "idea:ModuleId",
         IDEA_COST_METRICS_PROJECT_TAG: props.projectTag ?? "idea:Project",

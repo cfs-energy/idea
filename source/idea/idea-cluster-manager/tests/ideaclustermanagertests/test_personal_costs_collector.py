@@ -17,6 +17,7 @@ from ideadatamodel import (
     MyCostsJobs,
     MyCostsDesktops,
     MyCostsAi,
+    MyCostsStorageShare,
 )
 from ideaclustermanager.app.api.my_costs_api import MyCostsAPI
 from ideaclustermanager.app.costs.personal_costs_store import (
@@ -28,6 +29,7 @@ from ideaclustermanager.app.costs.personal_costs_collector import (
     PersonalCostsCollector,
     DailyCostsCalculator,
     FACETS,
+    SETTLE_DAYS,
 )
 
 
@@ -1115,3 +1117,348 @@ def test_storage_rate_fallback_preserves_stored_zero(
         assert storage['fs-test'][0].status == 'no_usage_data'
     finally:
         calc._workers.shutdown()
+
+
+def settling(context, store, value=None):
+    """A calculator whose day sources are a function of (user, day, observed at)."""
+    calc = DailyCostsCalculator(context, store)
+    calls = []
+    value = value or (lambda user, lower, now: float(lower.day))
+
+    def day(user, lower, upper, storage=None):
+        calls.append((user, lower.format('YYYY-MM-DD')))
+        amount = value(user, lower, arrow.utcnow())
+        if storage is not None:
+            storage.setdefault('fs-1', []).append(
+                MyCostsStorageShare(
+                    filesystem='data',
+                    used_bytes=lower.day,
+                    share=0.25,
+                    measured_at=lower.shift(hours=2).float_timestamp,
+                    cost=amount,
+                    status='estimated_share',
+                    note='n',
+                )
+            )
+        lines = {
+            facet: calc._line(
+                amount + index / 8,
+                missing=lower.day % 11 == 0 and facet == 'ai',
+                partial=lower.day % 7 == 0,
+                reason=f'r{lower.day % 3}',
+                missing_prices=int(lower.day % 5 == 0),
+            )
+            for index, facet in enumerate(FACETS)
+        }
+        lines['desktop_disks'].source_as_of = lower.shift(hours=1).isoformat()
+        return lines
+
+    calc.day = day
+    return calc, calls
+
+
+def empty_store(context):
+    store = PersonalCostsStore(context)
+    store.table = Table()
+    return store
+
+
+def at(monkeypatch, when):
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get(when))
+
+
+def both_months(calc, user='user-a'):
+    now = arrow.utcnow()
+    start = now.floor('month')
+    return (
+        calc.month(user, start, now),
+        calc.month(user, start.shift(months=-1), start),
+    )
+
+
+def test_upgrade_computes_once_then_only_the_open_window(setup, monkeypatch):
+    context, store, _ = setup
+    calc, calls = settling(context, store)
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    both_months(calc)
+    # no stored days (an upgraded cluster): one full pass, as before
+    assert len(calls) == 15 + 31
+    calls.clear()
+    at(monkeypatch, '2026-11-15T12:15:00Z')
+    both_months(calc)
+    # a settled day is not computed again; today and the open days are
+    assert calls == [
+        ('user-a', f'2026-11-{day}') for day in range(15 - SETTLE_DAYS, 16)
+    ]
+    calc._workers.shutdown()
+
+
+def test_open_days_pick_up_revised_sources(setup, monkeypatch):
+    context, store, _ = setup
+    revision = {'value': 0.0}
+    calc, _ = settling(
+        context, store, lambda user, lower, now: lower.day + revision['value']
+    )
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    first, _ = both_months(calc)
+    revision['value'] = 100.0
+    second, _ = both_months(calc)
+    amounts = {point.date: point.amount for point in second.jobs.daily}
+    assert amounts['2026-11-11'] == 11
+    assert [amounts[f'2026-11-{day}'] for day in (12, 13, 14, 15)] == [
+        112,
+        113,
+        114,
+        115,
+    ]
+    assert second.jobs.cost == first.jobs.cost + 400
+    calc._workers.shutdown()
+
+
+def test_stored_days_reproduce_a_full_recompute_exactly(setup, monkeypatch):
+    context, store, _ = setup
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    full, _ = settling(context, empty_store(context))
+    expected = [m.model_dump(mode='json') for m in both_months(full)]
+    calc, calls = settling(context, store)
+    both_months(calc)
+    calls.clear()
+    actual = [m.model_dump(mode='json') for m in both_months(calc)]
+    assert len(calls) == SETTLE_DAYS + 1
+    assert actual == expected
+    assert actual[1]['storage'] and actual[1]['jobs']['coverage']['missing_days'] == 0
+    full._workers.shutdown()
+    calc._workers.shutdown()
+
+
+def test_month_rollover_matches_a_full_recompute_after_close(setup, monkeypatch):
+    # A day is revised for two days, and once more when the month's bill closes.
+    def billed(user, lower, now):
+        amount = lower.day * 1.5
+        if now < lower.shift(days=2):
+            amount -= 1
+        if now >= lower.floor('month').shift(months=1, days=3):
+            amount += 0.25
+        return amount
+
+    context, store, _ = setup
+    calc, calls = settling(context, store, billed)
+    when = arrow.get('2026-10-20T00:00:00Z')
+    while when <= arrow.get('2026-11-06T18:00:00Z'):
+        at(monkeypatch, when)
+        if when == arrow.get('2026-11-05T00:00:00Z'):
+            calls.clear()
+        _, previous = both_months(calc)
+        if when == arrow.get('2026-11-03T00:00:00Z'):
+            before_close = previous
+        when = when.shift(hours=6)
+    full, _ = settling(context, empty_store(context), billed)
+    _, expected = both_months(full)
+    assert previous.model_dump(mode='json') == expected.model_dump(mode='json')
+    # the close-of-month reconcile is what brings in the late revision
+    assert before_close.total != expected.total
+    # and it happens once: each October day is computed once more from the 5th
+    assert sorted(c[1] for c in calls if c[1] < '2026-11') == [
+        f'2026-10-{day:02d}' for day in range(1, 32)
+    ]
+    full._workers.shutdown()
+    calc._workers.shutdown()
+
+
+def test_a_faulted_day_is_not_stored(setup, monkeypatch):
+    context, store, _ = setup
+    calc, calls = settling(context, store)
+    plain = calc.day
+
+    def flaky(user, lower, upper, storage=None):
+        lines = plain(user, lower, upper, storage)
+        if lower.day == 3:
+            calc.faulted = True
+        return lines
+
+    calc.day = flaky
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    both_months(calc)
+    calls.clear()
+    both_months(calc)
+    assert [c[1] for c in calls] == ['2026-11-03'] + [
+        f'2026-11-{day}' for day in range(12, 16)
+    ] + ['2026-10-03']
+    calc._workers.shutdown()
+
+
+def test_a_cached_failed_read_keeps_marking_days_unsettled(setup):
+    context, store, _ = setup
+    calc = DailyCostsCalculator(context, store)
+
+    def down():
+        raise RuntimeError('source down')
+
+    calc.faulted = False
+    assert calc._remember(('home-usage',), down) is None
+    assert calc.faulted
+    calc.faulted = False
+    # served from the cache without a read: still the failed value
+    assert calc._remember(('home-usage',), lambda: 'unused') is None
+    assert calc.faulted
+    calc._reads.clear()
+    calc.faulted = False
+    assert calc._remember(('home-usage',), lambda: 'ok') == 'ok'
+    assert not calc.faulted
+    calc._workers.shutdown()
+
+
+def fifty_users(setup, monkeypatch):
+    context, store, _ = setup
+    names = [f'user-{index:02d}' for index in range(50)]
+    context.accounts = SimpleNamespace(
+        list_users=lambda request: SimpleNamespace(
+            listing=[SimpleNamespace(username=name) for name in names],
+            paginator=None,
+        )
+    )
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.MyCostsService.get_summary',
+        lambda self, username: GetMyCostsSummaryResult(
+            username=username, window='last_30_days'
+        ),
+    )
+    calc, calls = settling(context, store)
+    calc.capture_storage = lambda *args: None
+    calc.capture_inventory = lambda *args: None
+    worker = PersonalCostsCollector(context, store, calc)
+    worker.activity.capture = lambda *args: None
+    return worker, calls
+
+
+def test_fifty_users_mid_month_work_per_run(setup, monkeypatch):
+    worker, calls = fifty_users(setup, monkeypatch)
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    worker.check()
+    before = len(calls)
+    calls.clear()
+    at(monkeypatch, '2026-11-15T12:16:00Z')
+    worker.check()
+    after = len(calls)
+    # every run used to be the first: users x (days so far + all of last month)
+    assert (before, after) == (50 * (15 + 31), 50 * (SETTLE_DAYS + 1))
+    print(f'per-user-day computations per run: {before} -> {after} ({before / after}x)')
+    worker.calculator._workers.shutdown()
+
+
+def test_a_long_run_cannot_start_the_next_back_to_back(setup, monkeypatch):
+    worker, _ = fifty_users(setup, monkeypatch)
+    _, store, _ = setup
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    clock = iter([0, 1200])
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.time.monotonic',
+        lambda: next(clock, 1200),
+    )
+    worker.check()
+    state = store.get(SYSTEM, 'state')
+    assert state['last_duration'] == 1200
+    assert arrow.get(state['next_run']) == arrow.get('2026-11-15T12:20:00Z')
+    worker.calculator._workers.shutdown()
+
+
+class Counted:
+    """A DynamoDB table that counts requests by operation."""
+
+    def __init__(self, counts, name, rows=()):
+        self.counts, self.name, self.rows = counts, name, list(rows)
+
+    def query(self, **kwargs):
+        self.counts[self.name] = self.counts.get(self.name, 0) + 1
+        return {'Items': copy.deepcopy(self.rows)}
+
+
+def real_days_fifty_users(setup, monkeypatch):
+    """The real day calculation over counted tables: desktops read session history,
+    AI lists the user's projects (user-projects query plus a GetItem per project)
+    and each project's bedrock day rows."""
+    context, store, _ = setup
+    counts = {}
+    names = [f'user-{index:02d}' for index in range(50)]
+    context.accounts = SimpleNamespace(
+        list_users=lambda request: SimpleNamespace(
+            listing=[SimpleNamespace(username=name) for name in names],
+            paginator=None,
+        )
+    )
+    context.config = lambda: SimpleNamespace(
+        get_string=lambda key, default=None: (
+            'sessions' if key.endswith('dcv_session.alias') else default
+        ),
+        get_bool=lambda *args: True,
+        get_config=lambda key, default=None: default,
+        is_module_enabled=lambda module: module == 'virtual-desktop-controller',
+        get_module_id=lambda module: 'vdc',
+    )
+    history = Counted(counts, 'session-history')
+    context.aws = lambda: SimpleNamespace(
+        aws_partition=lambda: 'aws-us-gov',
+        dynamodb_table=lambda: SimpleNamespace(Table=lambda name: history),
+    )
+    projects = [
+        SimpleNamespace(project_id=f'p{index}', name=f'project-{index}')
+        for index in range(2)
+    ]
+
+    def user_projects(request):
+        counts['user-projects'] = counts.get('user-projects', 0) + 1
+        counts['projects'] = counts.get('projects', 0) + len(projects)
+        return SimpleNamespace(projects=projects)
+
+    usage = Counted(counts, 'bedrock.usage')
+    context.projects = SimpleNamespace(
+        get_user_projects=user_projects,
+        bedrock_provisioner=SimpleNamespace(is_enabled=lambda: True),
+        bedrock_usage_dao=SimpleNamespace(
+            table=usage,
+            query_day_rows=lambda *args: usage.query(),
+        ),
+    )
+    own = store.table
+    for operation in ('get_item', 'put_item', 'query'):
+
+        def counted(*args, _call=getattr(own, operation), _op=operation, **kwargs):
+            key = f'personal-costs.{_op}'
+            counts[key] = counts.get(key, 0) + 1
+            return _call(*args, **kwargs)
+
+        setattr(own, operation, counted)
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_collector.MyCostsService.get_summary',
+        lambda self, username: GetMyCostsSummaryResult(
+            username=username, window='last_30_days'
+        ),
+    )
+    calc = DailyCostsCalculator(context, store)
+    calc._search = lambda index, body: {'hits': {'hits': []}}
+    calc.capture_storage = lambda *args: None
+    calc.capture_inventory = lambda *args: None
+    worker = PersonalCostsCollector(context, store, calc)
+    worker.activity.capture = lambda *args: None
+    return worker, counts
+
+
+def test_fifty_users_mid_month_dynamodb_requests_per_run(setup, monkeypatch, capsys):
+    worker, counts = real_days_fifty_users(setup, monkeypatch)
+    at(monkeypatch, '2026-11-15T12:00:00Z')
+    worker.check()
+    first = dict(counts)
+    counts.clear()
+    at(monkeypatch, '2026-11-15T12:16:00Z')
+    worker.check()
+    with capsys.disabled():
+        print(
+            f'\nDynamoDB requests, first run (no stored days): {sorted(first.items())}'
+        )
+        print(f'DynamoDB requests, next run: {sorted(counts.items())}')
+    open_days = SETTLE_DAYS + 1
+    # closed days read nothing; the open days share one read per user or project
+    assert counts['session-history'] == 50
+    assert counts['user-projects'] == 50 and counts['projects'] == 100
+    assert counts['bedrock.usage'] == 2 * open_days
+    worker.calculator._workers.shutdown()
