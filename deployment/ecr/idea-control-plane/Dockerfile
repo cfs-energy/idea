@@ -5,9 +5,10 @@
 #     --build-context dcv-packages=/path/to/dcv-packages \
 #     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.1 .
 # Copy the release tarballs into this directory before the build.
-# The dcv-packages context contains NICE-GPG-KEY, checksums.txt, the broker RPM,
-# both gateway RPMs, and both DCV archives. checksums.txt covers each package
-# file, one sha256sum entry per line.
+# The dcv-packages context contains checksums.txt, the broker RPM, both gateway RPMs,
+# and both DCV archives. checksums.txt covers each package file, one sha256sum entry
+# per line; it only proves the context arrived intact. Authenticity comes from the
+# NICE signing key committed beside this file (see the install step below).
 # Each architecture-dependent step declares ARG TARGETARCH inside its stage and reads the
 # value the builder supplies. Do not declare TARGETARCH before the first FROM: under the
 # dockerfile:1.7 frontend a global declaration with no default shadows the builder's value,
@@ -74,6 +75,14 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 
 # Install the session-manager broker, connection gateway, and web viewer from the
 # supplied package context. This avoids a build-time dependency on a public host.
+# The packages are fetched from unversioned CloudFront URLs, so each RPM must carry a
+# signature from the committed NICE key, primary fingerprint
+# 5B9E EBC8 6444 9701 F6CE 566A 11B5 C70A 170C 6114 (expires 2027-09-15; refresh the file
+# from https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY when NICE extends it and check
+# the fingerprint is unchanged). The check uses a scratch RPM database holding only that
+# key, and requires "signatures OK": plain rpm -K passes an unsigned package on its digests.
+# The archive itself is unsigned; only the web viewer RPM inside it is installed.
+COPY deployment/ecr/idea-control-plane/NICE-GPG-KEY /tmp/NICE-GPG-KEY
 COPY --from=dcv-packages / /tmp/dcv-packages/
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
@@ -81,19 +90,21 @@ RUN set -eux; \
       arm64) A=aarch64 ;; \
       *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
     esac; \
-    for F in NICE-GPG-KEY checksums.txt nice-dcv-session-manager-broker-amzn2023.noarch.rpm "nice-dcv-connection-gateway-amzn2023.${A}.rpm" "nice-dcv-amzn2023-${A}.tgz"; do \
+    for F in checksums.txt nice-dcv-session-manager-broker-amzn2023.noarch.rpm "nice-dcv-connection-gateway-amzn2023.${A}.rpm" "nice-dcv-amzn2023-${A}.tgz"; do \
       test -f "/tmp/dcv-packages/${F}" || { echo "dcv-packages is missing ${F}" >&2; exit 1; }; \
     done; \
     (cd /tmp/dcv-packages && sha256sum -c checksums.txt); \
-    rpm --import /tmp/dcv-packages/NICE-GPG-KEY; \
-    rpm -K /tmp/dcv-packages/nice-dcv-session-manager-broker-amzn2023.noarch.rpm; \
+    mkdir -p /tmp/dcv && tar -xzf "/tmp/dcv-packages/nice-dcv-amzn2023-${A}.tgz" -C /tmp/dcv --strip-components=1; \
+    KEYDB=$(mktemp -d); rpmkeys --dbpath "$KEYDB" --import /tmp/NICE-GPG-KEY; \
+    for R in /tmp/dcv-packages/nice-dcv-session-manager-broker-amzn2023.noarch.rpm "/tmp/dcv-packages/nice-dcv-connection-gateway-amzn2023.${A}.rpm" /tmp/dcv/nice-dcv-web-viewer-*.rpm; do \
+      OUT=$(rpmkeys --dbpath "$KEYDB" --checksig "$R"); \
+      case "$OUT" in *" signatures OK") ;; *) echo "not signed by the pinned NICE key: $OUT" >&2; exit 1 ;; esac; \
+    done; \
+    rpm --import /tmp/NICE-GPG-KEY; \
     dnf install -y /tmp/dcv-packages/nice-dcv-session-manager-broker-amzn2023.noarch.rpm; \
-    rpm -K "/tmp/dcv-packages/nice-dcv-connection-gateway-amzn2023.${A}.rpm"; \
     dnf install -y "/tmp/dcv-packages/nice-dcv-connection-gateway-amzn2023.${A}.rpm"; \
-    cp "/tmp/dcv-packages/nice-dcv-amzn2023-${A}.tgz" /tmp/dcv.tgz; \
-    mkdir -p /tmp/dcv && tar -xzf /tmp/dcv.tgz -C /tmp/dcv --strip-components=1; \
-    rpm -K /tmp/dcv/nice-dcv-web-viewer-*.rpm; dnf install -y /tmp/dcv/nice-dcv-web-viewer-*.rpm; \
-    rm -rf /tmp/dcv-packages /tmp/dcv.tgz /tmp/dcv; dnf clean all; \
+    dnf install -y /tmp/dcv/nice-dcv-web-viewer-*.rpm; \
+    rm -rf "$KEYDB" /tmp/dcv-packages /tmp/dcv /tmp/NICE-GPG-KEY; dnf clean all; \
     sed -i 's|> /dev/null|2>\&1|' /usr/share/dcv-session-manager-broker/bin/dcv-session-manager-broker.sh
 
 FROM dcv-runtime

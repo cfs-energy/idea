@@ -1,5 +1,7 @@
 """Keep image smoke tests and cached environments aligned with runtime inputs."""
 
+import base64
+import hashlib
 from pathlib import Path
 import unittest
 
@@ -13,6 +15,27 @@ IMPORTS = (
     'ideascheduler.app.sync_users',
     'ideavirtualdesktopcontroller.app.virtual_desktop_controller_app',
 )
+
+
+def _primary_fingerprint(armored):
+    """V4 fingerprint of the first public-key packet in an armored key block."""
+    lines = armored.strip().splitlines()
+    body = lines[lines.index('') + 1 : -1]
+    data = base64.b64decode(''.join(line for line in body if not line.startswith('=')))
+    tag = data[0]
+    if tag & 0x40:
+        length, start = data[1], 2
+        if length >= 192:
+            length, start = ((length - 192) << 8) + data[2] + 192, 3
+    else:
+        width = (1, 2, 4)[tag & 0x03]
+        length, start = int.from_bytes(data[1 : 1 + width], 'big'), 1 + width
+    packet = data[start : start + length]
+    return (
+        hashlib.sha1(b'\x99' + len(packet).to_bytes(2, 'big') + packet)
+        .hexdigest()
+        .upper()
+    )
 
 
 class ImageCiTests(unittest.TestCase):
@@ -40,6 +63,52 @@ class ImageCiTests(unittest.TestCase):
         )
         self.assertNotIn('restore-keys', cache['with'])
         self.assertIn("hashFiles('requirements/dev.txt')", cache['with']['key'])
+
+    def test_awscli_installer_is_signature_verified_before_unzip(self):
+        action = ROOT / '.github/actions/setup_dev_environment'
+        text = (action / 'action.yml').read_text()
+        key = (action / 'awscli-public-key.asc').read_text()
+        self.assertIn('-----BEGIN PGP PUBLIC KEY BLOCK-----', key)
+        self.assertIn('FB5DB77FD5C118B80511ADA8A6310ACC4672475C', text)
+        self.assertIn('VALIDSIG', text)
+        self.assertLess(
+            text.index('gpg --batch --status-fd 1 --verify'), text.index('unzip -q')
+        )
+        self.assertLess(
+            text.index('gpg --batch --status-fd 1 --verify'), text.index('aws/install')
+        )
+
+    def test_dcv_rpms_are_verified_against_the_committed_nice_key(self):
+        image = ROOT / 'deployment/ecr/idea-control-plane'
+        self.assertEqual(
+            _primary_fingerprint((image / 'NICE-GPG-KEY').read_text()),
+            '5B9EEBC864449701F6CE566A11B5C70A170C6114',
+        )
+        for path in ('scripts/ci-stage-images.sh', '.github/workflows/build_push.yaml'):
+            self.assertNotIn('/NICE-GPG-KEY"', (ROOT / path).read_text(), path)
+        text = (image / 'Dockerfile').read_text()
+        self.assertIn(
+            'COPY deployment/ecr/idea-control-plane/NICE-GPG-KEY /tmp/NICE-GPG-KEY',
+            text,
+        )
+        self.assertNotIn('/tmp/dcv-packages/NICE-GPG-KEY', text)
+        check = text.index('--checksig "$R"')
+        self.assertIn('*" signatures OK") ;;', text[check:])
+        loop = text[text.rindex('for R in', 0, check) : check]
+        for rpm in (
+            'nice-dcv-session-manager-broker-amzn2023.noarch.rpm',
+            'nice-dcv-connection-gateway-amzn2023.${A}.rpm',
+            '/tmp/dcv/nice-dcv-web-viewer-*.rpm',
+        ):
+            self.assertIn(rpm, loop)
+        installs = [
+            line
+            for line in text.splitlines()
+            if 'dnf install -y' in line and 'dcv' in line
+        ]
+        self.assertEqual(len(installs), 3)
+        for line in installs:
+            self.assertLess(check, text.index(line))
 
     def test_unused_signer_is_absent_from_runtime_and_dev(self):
         for name in ('runtime.in', 'runtime.txt', 'dev.txt'):

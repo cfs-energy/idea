@@ -38,6 +38,12 @@ WRITE_TIMEOUT = 30
 SHUTDOWN_TIMEOUT = 5
 DRAIN_TIMEOUT = 3 * SHUTDOWN_TIMEOUT + 5
 PRE_READY_TIMEOUT = 40
+# The browser sends its ticket as soon as the socket opens. Until a ticket is
+# consumed a socket is anonymous, so it gets a short deadline and a bounded share.
+HELLO_TIMEOUT = 5
+PRE_AUTH_PER_SOURCE = 16
+PRE_AUTH_TOTAL = 256
+REJECT_LOG_INTERVAL = 60
 LINUX = {
     'amazonlinux2',
     'amazonlinux2023',
@@ -95,6 +101,17 @@ def validate_desktop(row, username):
     return instance
 
 
+class HandshakeTimeout(Exception):
+    pass
+
+
+def peer(request):
+    # The ALB appends the client address as the last X-Forwarded-For hop.
+    return (request.headers.get('x-forwarded-for') or '').split(',')[
+        -1
+    ].strip() or getattr(request, 'ip', '')
+
+
 def check_origin(origin, endpoint):
     try:
         portal, source = urlsplit(endpoint), urlsplit(origin or '')
@@ -139,6 +156,8 @@ class TerminalService:
         self._closing_handlers = set()
         self._initialization_lock = threading.Lock()
         self._next_initialization = 0.0
+        self._pre_auth = {}
+        self._rejections = {}
 
     def enabled(self):
         return self.context.config().get_bool(
@@ -521,15 +540,60 @@ class TerminalService:
         if self.stopping:
             await ws.close(code=1012, reason='server-shutdown')
             return
+        source = peer(request)
+        if (
+            self._pre_auth.get(source, 0) >= PRE_AUTH_PER_SOURCE
+            or sum(self._pre_auth.values()) >= PRE_AUTH_TOTAL
+        ):
+            self.reject(source, 'pre-auth-limit')
+            try:
+                await asyncio.wait_for(
+                    ws.close(code=1013, reason='pre-auth-limit'), SHUTDOWN_TIMEOUT
+                )
+            except Exception:
+                pass
+            return
+        self._pre_auth[source] = self._pre_auth.get(source, 0) + 1
+        held = [True]
+
+        def authenticated():
+            if held[0]:
+                held[0] = False
+                self._pre_auth[source] -= 1
+                if not self._pre_auth[source]:
+                    del self._pre_auth[source]
+
         task = asyncio.current_task()
         self._handlers.add(task)
         try:
-            await self._websocket(request, ws)
+            await self._websocket(request, ws, authenticated)
         finally:
+            authenticated()
             self._handlers.discard(task)
             self._closing_handlers.discard(task)
 
-    async def _websocket(self, request, ws):
+    def reject(self, source, reason):
+        # One line per source and interval, so a flood cannot flood the log too.
+        now = time.monotonic()
+        last, suppressed = self._rejections.get(source, (None, 0))
+        if last is not None and now - last < REJECT_LOG_INTERVAL:
+            self._rejections[source] = (last, suppressed + 1)
+            return
+        if len(self._rejections) >= PRE_AUTH_TOTAL:
+            self._rejections = {
+                key: value
+                for key, value in self._rejections.items()
+                if now - value[0] < REJECT_LOG_INTERVAL
+            }
+        self._rejections[source] = (now, 0)
+        self.logger.warning(
+            'terminal pre-auth rejected peer=%r reason=%s suppressed=%d',
+            source,
+            reason,
+            suppressed,
+        )
+
+    async def _websocket(self, request, ws, on_authenticated=lambda: None):
         session_id = uuid.uuid4().hex
         slot = None
         username = target = ''
@@ -546,7 +610,10 @@ class TerminalService:
                     request.headers.get('origin'),
                     self.context.config().get_cluster_external_endpoint(),
                 )
-                raw = await asyncio.wait_for(ws.recv(), 5)
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), HELLO_TIMEOUT)
+                except TimeoutError:
+                    raise HandshakeTimeout from None
                 if not isinstance(raw, str) or len(raw.encode()) > 4096:
                     raise TerminalDenied('Invalid handshake')
                 hello = json.loads(raw)
@@ -570,6 +637,7 @@ class TerminalService:
                     10,
                 )
                 authenticated = True
+                on_authenticated()
                 host, pin = await asyncio.wait_for(
                     asyncio.to_thread(self.target, username, target), 10
                 )
@@ -715,6 +783,9 @@ class TerminalService:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             finished = next(iter(done))
             reason = 'disconnected' if finished.cancelled() else finished.result()
+        except HandshakeTimeout:
+            reason = 'handshake-timeout'
+            self.reject(peer(request), reason)
         except TicketRejected as error:
             error_type = type(error).__name__
             reason = 'ticket-rejected'
@@ -769,10 +840,7 @@ class TerminalService:
                     username,
                     'target' if authenticated else 'claimed_target',
                     target,
-                    (request.headers.get('x-forwarded-for') or '')
-                    .split(',')[-1]
-                    .strip()
-                    or getattr(request, 'ip', ''),
+                    peer(request),
                     session_id,
                     reason,
                     error_type,
@@ -821,6 +889,8 @@ class TerminalService:
                 if reason in {'target-stopped', 'target-error'}
                 else 4005
                 if reason == 'ack-timeout'
+                else 1008
+                if reason == 'handshake-timeout'
                 else 1000
                 if reason == 'disconnected'
                 else 1012

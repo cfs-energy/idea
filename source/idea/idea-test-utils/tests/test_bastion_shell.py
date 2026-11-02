@@ -108,6 +108,142 @@ class SshdConfig(unittest.TestCase):
             self.assertEqual(settings[key], value)
 
 
+class SshdSourceLimits(unittest.TestCase):
+    """brute force is refused per source; health checks and a shared NAT address are not"""
+
+    def render(self, vpc_cidrs, ssh_client_cidrs=None):
+        import subprocess
+
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = text.index("cat > /etc/ssh/sshd_config <<'EOF'")
+        end = text.index('# Offer post-quantum key exchange', start)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'sshd_config'
+            block = 'set -euo pipefail\n' + text[start:end].replace(
+                '/etc/ssh/sshd_config', str(path)
+            )
+            env = {'PATH': '/usr/bin:/bin'}
+            if vpc_cidrs is not None:
+                env['IDEA_VPC_CIDRS'] = vpc_cidrs
+            if ssh_client_cidrs is not None:
+                env['IDEA_SSH_CLIENT_CIDRS'] = ssh_client_cidrs
+            result = subprocess.run(
+                ['bash', '-c', block],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return path.read_text(), result.stdout
+
+    def settings(self, config):
+        return dict(
+            line.split(None, 1)
+            for line in config.splitlines()
+            if line and not line.startswith('#')
+        )
+
+    def test_limits_bite_only_sustained_failures(self):
+        settings = self.settings(self.render('10.7.0.0/16')[0])
+        self.assertEqual(settings['MaxStartups'], '50:30:200')
+        self.assertEqual(settings['PerSourceMaxStartups'], '30')
+        # one address per source: users behind one NAT address are not grouped with neighbours
+        self.assertEqual(settings['PerSourceNetBlockSize'], '32:128')
+        penalties = dict(
+            item.split(':', 1) for item in settings['PerSourcePenalties'].split()
+        )
+        self.assertEqual(penalties, {'authfail': '2s', 'min': '30s', 'max': '10m'})
+        # a source holds fewer unauthenticated slots than the point where drops start for all
+        self.assertLess(
+            int(settings['PerSourceMaxStartups']),
+            int(settings['MaxStartups'].split(':')[0]),
+        )
+
+    def test_loopback_and_the_vpc_are_exempt(self):
+        config, _ = self.render('10.7.0.0/16,100.64.0.0/24')
+        self.assertEqual(
+            self.settings(config)['PerSourcePenaltyExemptList'],
+            '127.0.0.0/8,::1,10.7.0.0/16,100.64.0.0/24',
+        )
+
+    def test_a_task_without_vpc_cidrs_still_exempts_loopback(self):
+        # a task definition from before this setting runs the new image until it is redeployed
+        for value in (None, ''):
+            config, _ = self.render(value)
+            self.assertEqual(
+                self.settings(config)['PerSourcePenaltyExemptList'], '127.0.0.0/8,::1'
+            )
+
+    def test_sshd_accepts_the_rendered_config(self):
+        # the image's OpenSSH (9.9) knows the per-source keywords; validate where a local one does
+        import re
+        import shutil
+        import subprocess
+
+        sshd = shutil.which('sshd') or (
+            '/usr/sbin/sshd' if Path('/usr/sbin/sshd').exists() else None
+        )
+        version = subprocess.run(['ssh', '-V'], capture_output=True, text=True).stderr
+        found = re.search(r'OpenSSH_(\d+)\.(\d+)', version)
+        if not sshd or not found or tuple(map(int, found.groups())) < (9, 8):
+            self.skipTest('no local OpenSSH 9.8 or later')
+        config, _ = self.render('10.7.0.0/16', '23.23.20.238/32,0.0.0.0/0')
+        with tempfile.TemporaryDirectory() as tmp:
+            path, key = Path(tmp) / 'sshd_config', Path(tmp) / 'host_key'
+            path.write_text(config)
+            subprocess.run(
+                ['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)],
+                check=True,
+            )
+            result = subprocess.run(
+                [sshd, '-t', '-f', str(path), '-h', str(key)],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_malformed_cidr_is_dropped_not_fatal(self):
+        config, out = self.render('10.7.0.0/16,bogus value')
+        self.assertEqual(
+            self.settings(config)['PerSourcePenaltyExemptList'],
+            '127.0.0.0/8,::1,10.7.0.0/16',
+        )
+        self.assertIn('ignoring VPC CIDR bogus value', out)
+
+    def test_the_ssh_allowlist_is_exempt_but_not_the_internet(self):
+        # an office behind one NAT address must not be refused for a few users' failures
+        config, out = self.render('10.7.0.0/16', '23.23.20.238/32,198.51.100.0/24')
+        self.assertEqual(
+            self.settings(config)['PerSourcePenaltyExemptList'],
+            '127.0.0.0/8,::1,10.7.0.0/16,23.23.20.238/32,198.51.100.0/24',
+        )
+        # a public bastion's 0.0.0.0/0, or anything wider than /8, keeps its penalties
+        config, out = self.render('10.7.0.0/16', '0.0.0.0/0,64.0.0.0/2,23.0.0.0/8')
+        self.assertEqual(
+            self.settings(config)['PerSourcePenaltyExemptList'],
+            '127.0.0.0/8,::1,10.7.0.0/16,23.0.0.0/8',
+        )
+        self.assertIn('not exempting SSH client CIDR 0.0.0.0/0 from penalties', out)
+        self.assertIn('not exempting SSH client CIDR 64.0.0.0/2 from penalties', out)
+
+    def test_a_malformed_allowlist_entry_is_dropped_not_fatal(self):
+        # sshd -t refuses host bits or a bad address, which would stop the bastion
+        config, out = self.render(
+            '', '23.23.20.238/32,23.23.20.238/24,256.1.1.1/32,1.2.3.4,x'
+        )
+        self.assertEqual(
+            self.settings(config)['PerSourcePenaltyExemptList'],
+            '127.0.0.0/8,::1,23.23.20.238/32',
+        )
+        for entry, reason in (
+            ('23.23.20.238/24', 'host bits set'),
+            ('256.1.1.1/32', 'not an IPv4 network'),
+            ('1.2.3.4', 'not an IPv4 network'),
+            ('x', 'not an IPv4 network'),
+        ):
+            self.assertIn(f'ignoring SSH client CIDR {entry}: {reason}', out)
+
+
 class PbsServerSuffix(unittest.TestCase):
     def run_block(self, resolv):
         import subprocess

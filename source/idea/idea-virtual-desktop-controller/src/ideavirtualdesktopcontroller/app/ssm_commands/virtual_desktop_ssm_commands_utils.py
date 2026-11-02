@@ -24,7 +24,7 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 
 # Bump whenever the refresh set or the contents of its templates change.
-BOOTSTRAP_REFRESH_VERSION = 5
+BOOTSTRAP_REFRESH_VERSION = 6
 BOOTSTRAP_REFRESH_TEMPLATES = (
     '_templates/linux/ssh_post_quantum_kex.jinja2',
     '_templates/linux/gnome_online_accounts.jinja2',

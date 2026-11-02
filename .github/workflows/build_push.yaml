@@ -287,7 +287,8 @@ jobs:
           PACKAGE_DIR=/tmp/dcv-packages
           DOWNLOAD_HOST=https://d1uj6qtbmh3dt5.cloudfront.net
           mkdir -p "$PACKAGE_DIR"
-          curl --fail --location --silent --show-error -o "$PACKAGE_DIR/NICE-GPG-KEY" "$DOWNLOAD_HOST/NICE-GPG-KEY"
+          # Unversioned and unverified here: the image build checks every RPM against the NICE key
+          # committed in deployment/ecr/idea-control-plane, and checksums.txt only covers the transfer.
           curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-session-manager-broker-amzn2023.noarch.rpm" "$DOWNLOAD_HOST/nice-dcv-session-manager-broker-amzn2023.noarch.rpm"
           curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-connection-gateway-amzn2023.x86_64.rpm" "$DOWNLOAD_HOST/nice-dcv-connection-gateway-amzn2023.x86_64.rpm"
           curl --fail --location --silent --show-error -o "$PACKAGE_DIR/nice-dcv-connection-gateway-amzn2023.aarch64.rpm" "$DOWNLOAD_HOST/nice-dcv-connection-gateway-amzn2023.aarch64.rpm"

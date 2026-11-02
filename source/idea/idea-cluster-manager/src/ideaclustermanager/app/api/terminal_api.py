@@ -1,6 +1,8 @@
 from ideadatamodel import exceptions
 from ideasdk.api import BaseAPI
 
+from ideaclustermanager.app.api.auth_api import AuthAPI
+
 from botocore.exceptions import ClientError
 from ideaclustermanager.app.terminal.store import (
     TerminalDenied,
@@ -24,6 +26,8 @@ class TerminalAPI(BaseAPI):
             and not context.is_unix_domain_socket_invocation()
         ):
             raise exceptions.unauthorized_access()
+        # a shell needs a signed-in session; a leaked API token must not open one.
+        AuthAPI._signed_in_user_only(context)
         service = self.context.terminal
         payload = context.request_payload or {}
         if not isinstance(payload, dict):

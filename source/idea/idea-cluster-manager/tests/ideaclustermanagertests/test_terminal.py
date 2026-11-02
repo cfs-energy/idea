@@ -12,6 +12,7 @@ import pytest
 from cryptography.hazmat.primitives.serialization import load_ssh_public_identity
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
 from ideaclustermanager.app.api.terminal_api import TerminalAPI
+from ideadatamodel import exceptions
 from ideaclustermanager.app.terminal import service as module
 from ideaclustermanager.app.terminal.service import (
     TerminalService,
@@ -166,7 +167,9 @@ def test_api_auth_and_redaction():
         request_payload={'target': 'bastion', 'client': 'a' * 64},
     )
     invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     invocation.get_username.return_value = 'alice'
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     TerminalAPI(context).invoke(invocation)
     context.terminal.create_ticket.assert_called_once_with('alice', 'bastion', 'a' * 64)
     invocation.has_access_token.return_value = False
@@ -181,6 +184,29 @@ def test_api_auth_and_redaction():
     assert invoker.get_response_logging_payload(invocation)['payload'] == {
         'redacted': True
     }
+
+
+@pytest.mark.parametrize(
+    'namespace,payload',
+    [
+        ('Terminal.ListTargets', {}),
+        ('Terminal.CreateTicket', {'target': 'bastion', 'client': 'a' * 64}),
+    ],
+)
+def test_api_token_cannot_use_terminal(namespace, payload):
+    context = MagicMock()
+    invocation = MagicMock(namespace=namespace, request_payload=payload)
+    invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id='abc123')
+    with pytest.raises(exceptions.SocaException) as error:
+        TerminalAPI(context).invoke(invocation)
+    assert error.value.error_code == 'UNAUTHORIZED_ACCESS'
+    context.terminal.targets.assert_not_called()
+    context.terminal.create_ticket.assert_not_called()
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
+    invocation.get_username.return_value = 'alice'
+    TerminalAPI(context).invoke(invocation)
+    invocation.success.assert_called_once()
 
 
 class Socket:
@@ -555,6 +581,8 @@ def test_host_bootstrap_only_distributes_public_trust(tmp_path):
     assert (
         'AuthorizedPrincipalsCommand /etc/ssh/idea_terminal_principals %u %K' in config
     )
+    assert 'AuthorizedPrincipalsCommandUser idea-terminal\n' in config
+    assert 'AuthorizedPrincipalsCommandUser root' not in config
     assert config.count('TrustedUserCAKeys') == 1
     assert 'PasswordAuthentication no\nUsePAM yes' in config
     assert ddb.call_args.kwargs['Item'] == {
@@ -804,6 +832,7 @@ def test_api_preserves_error_category_and_logs_fixed_reason(error, code, caplog)
     )
     invocation.get_username.return_value = 'alice'
     invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     caplog.set_level(logging.INFO, logger='terminal-api-test')
     with pytest.raises(SocaException) as caught:
         TerminalAPI(context).invoke(invocation)
@@ -1223,6 +1252,7 @@ def test_aws_error_contract_shared_by_api_and_websocket(store, code, status, ret
         request_payload={'target': 'bastion', 'client': 'a' * 64},
     )
     invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     with pytest.raises(module.SocaException) as caught:
         TerminalAPI(context).invoke(invocation)
     assert caught.value.error_code == (
@@ -1251,6 +1281,7 @@ def test_rejection_logs_escape_client_target(caplog):
     )
     invocation.get_username.return_value = 'alice'
     invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     caplog.set_level(logging.INFO, logger='terminal-api-injection-test')
     with pytest.raises(module.SocaException):
         TerminalAPI(context).invoke(invocation)
@@ -1331,6 +1362,172 @@ def test_whole_handshake_has_a_deadline(store, monkeypatch):
         assert not any(
             row['pk'].startswith('slot:') for row in store.table.scan()['Items']
         )
+
+    asyncio.run(run())
+
+
+def pre_auth_service(store):
+    service = target_service(store)
+    service.store = store
+    service.logger = logging.getLogger('terminal-pre-auth-test')
+    service.context.config().get_cluster_external_endpoint.return_value = (
+        'https://portal.example'
+    )
+    return service
+
+
+def pre_auth_request(source):
+    return SimpleNamespace(
+        headers={
+            'origin': 'https://portal.example',
+            'x-forwarded-for': f'198.51.100.9, {source}',
+        },
+        ip='10.0.0.1',
+    )
+
+
+class SilentSocket(Socket):
+    def __init__(self):
+        super().__init__({})
+        self.incoming = asyncio.Queue()
+
+
+def test_slow_hello_closes_at_the_short_deadline(store, monkeypatch, caplog):
+    async def run():
+        service = pre_auth_service(store)
+        service.target = MagicMock(side_effect=TerminalDenied('must not reach lookup'))
+        monkeypatch.setattr(module, 'HELLO_TIMEOUT', 0.01, raising=False)
+        sockets = [SilentSocket() for _ in range(3)]
+        await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    service.websocket(pre_auth_request('203.0.113.7'), socket)
+                    for socket in sockets
+                )
+            ),
+            2,
+        )
+        for socket in sockets:
+            assert socket.closed == {'code': 1008, 'reason': 'handshake-timeout'}
+        service.target.assert_not_called()
+        assert service._pre_auth == {}
+
+    caplog.set_level(logging.WARNING, logger='terminal-pre-auth-test')
+    asyncio.run(run())
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines == [
+        "terminal pre-auth rejected peer='203.0.113.7' reason=handshake-timeout suppressed=0"
+    ]
+
+
+def test_pre_auth_cap_per_source_and_total(store, monkeypatch, caplog):
+    async def run():
+        service = pre_auth_service(store)
+        monkeypatch.setattr(module, 'PRE_AUTH_PER_SOURCE', 2, raising=False)
+        monkeypatch.setattr(module, 'PRE_AUTH_TOTAL', 3, raising=False)
+        reached = asyncio.Event()
+        proceed = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def target(*_):
+            loop.call_soon_threadsafe(reached.set)
+            asyncio.run_coroutine_threadsafe(proceed.wait(), loop).result()
+            raise TerminalDenied('done')
+
+        service.target = target
+
+        def start(source, socket):
+            return asyncio.create_task(
+                service.websocket(pre_auth_request(source), socket)
+            )
+
+        held = [SilentSocket(), SilentSocket()]
+        tasks = [start('203.0.113.7', socket) for socket in held]
+        await asyncio.sleep(0)
+        extra = SilentSocket()
+        await start('203.0.113.7', extra)
+        assert extra.closed == {'code': 1013, 'reason': 'pre-auth-limit'}
+        again = SilentSocket()
+        await start('203.0.113.7', again)
+        assert again.closed['code'] == 1013
+
+        # Another source is admitted until the global cap is full.
+        other = SilentSocket()
+        tasks.append(start('192.0.2.44', other))
+        await asyncio.sleep(0)
+        assert other.closed is None
+        full = SilentSocket()
+        await start('192.0.2.45', full)
+        assert full.closed == {'code': 1013, 'reason': 'pre-auth-limit'}
+
+        # A socket that authenticates frees its pre-auth share while it connects.
+        held[0].incoming.put_nowait(
+            json.dumps(
+                dict(
+                    ticket=store.issue('alice', 'bastion', 'client'),
+                    username='alice',
+                    target='bastion',
+                    client='client',
+                )
+            )
+        )
+        await asyncio.wait_for(reached.wait(), 2)
+        assert service._pre_auth == {'203.0.113.7': 1, '192.0.2.44': 1}
+        admitted = SilentSocket()
+        tasks.append(start('203.0.113.7', admitted))
+        await asyncio.sleep(0)
+        assert admitted.closed is None
+
+        # A socket that closes frees its share too.
+        other.incoming.put_nowait(WebsocketClosed('client closed'))
+        await asyncio.wait_for(tasks[2], 2)
+        late = SilentSocket()
+        tasks.append(start('192.0.2.45', late))
+        await asyncio.sleep(0)
+        assert late.closed is None
+
+        proceed.set()
+        for socket in (held[1], admitted, late):
+            socket.incoming.put_nowait(WebsocketClosed('client closed'))
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+        assert held[0].closed['code'] == 4003
+        assert service._pre_auth == {}
+
+    from sanic.exceptions import WebsocketClosed
+
+    caplog.set_level(logging.WARNING, logger='terminal-pre-auth-test')
+    asyncio.run(run())
+    rejected = [
+        r.getMessage() for r in caplog.records if 'pre-auth rejected' in r.getMessage()
+    ]
+    assert rejected == [
+        "terminal pre-auth rejected peer='203.0.113.7' reason=pre-auth-limit suppressed=0",
+        "terminal pre-auth rejected peer='192.0.2.45' reason=pre-auth-limit suppressed=0",
+    ]
+
+
+def test_slow_target_after_valid_ticket_keeps_the_long_window(store, monkeypatch):
+    async def run():
+        service = pre_auth_service(store)
+        monkeypatch.setattr(module, 'HELLO_TIMEOUT', 0.01, raising=False)
+
+        def slow_target(*_):
+            import time
+
+            time.sleep(0.1)
+            raise module.TerminalMisconfigured('reached after the hello deadline')
+
+        service.target = slow_target
+        socket = Socket(
+            dict(
+                ticket=store.issue('alice', 'bastion', 'client'),
+                username='alice',
+                target='bastion',
+                client='client',
+            )
+        )
+        await service.websocket(pre_auth_request('203.0.113.7'), socket)
+        assert socket.closed == {'code': 4004, 'reason': 'target-misconfigured'}
 
     asyncio.run(run())
 
@@ -1730,6 +1927,7 @@ def test_api_denies_a_non_object_payload(payload):
     context = MagicMock()
     invocation = MagicMock(namespace='Terminal.CreateTicket', request_payload=payload)
     invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     with pytest.raises(SocaException) as caught:
         TerminalAPI(context).invoke(invocation)
     assert caught.value.error_code == 'UNAUTHORIZED_ACCESS'

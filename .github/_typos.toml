@@ -15,5 +15,7 @@ extend-ignore-re = [
   # CDK logical ids end in an eight-character hex hash whose letters read as words.
   "[a-z]+[0-9A-F]{8}\\b",
   # Cloudscape class names are generated and carry a per-release build hash.
-  "awsui_[A-Za-z0-9_]+"
+  "awsui_[A-Za-z0-9_]+",
+  # ASCII-armoured PGP key bodies are base64, not prose.
+  "(?m)^[A-Za-z0-9+/]{64}$"
 ]

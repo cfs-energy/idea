@@ -40,6 +40,7 @@ export function templateDigest(template: any): string {
 // terminal CA, SSH ingress, IAM grants and service dependency changed in 26.11.1.
 // Cluster-manager also always grants the three read-only Cost Explorer actions.
 // S-24 removes the unused scheduler, cluster-manager and VDC host roles and their settings.
+// The bastion task also carries IDEA_VPC_CIDRS and IDEA_SSH_CLIENT_CIDRS, the sources sshd never penalizes.
 // Keep hashing every field except the three validated random values above.
 test('all eleven ECS module templates match the reviewed v26.11.1 baseline', async () => {
   const baseline = JSON.parse(readFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), 'utf8'));

@@ -217,7 +217,7 @@ def test_failed_rotation_keeps_previous_key_until_bundle_replaced(
     real_run = subprocess.run
 
     def run(args, **kwargs):
-        if args[:3] == ['sshd', '-t', '-f']:
+        if args[:3] == ['sshd', '-t', '-f'] or args[0] == 'useradd':
             return subprocess.CompletedProcess(args, 0)
         if args == ['sshd', '-T']:
             return subprocess.CompletedProcess(
@@ -673,6 +673,127 @@ def test_principals_are_published_atomically_and_unchanged_script_is_preserved(
     helper.configure('example', 'desktop', root=tmp_path)
     helper.configure('example', 'desktop', root=tmp_path)
     assert publications == [principals]
+
+
+PRINCIPALS_USER_LINE = 'AuthorizedPrincipalsCommandUser idea-terminal'
+USERADD = [
+    'useradd',
+    '--system',
+    '--no-create-home',
+    '--home-dir',
+    '/',
+    '--shell',
+    '/usr/sbin/nologin',
+    'idea-terminal',
+]
+
+
+def test_principals_command_runs_unprivileged_and_reads_only_public_files(
+    helper, tmp_path, monkeypatch
+):
+    real_run = subprocess.run
+    calls = fake_host(tmp_path, monkeypatch, helper)
+    replace = helper.os.replace
+
+    def publish(src, dst):
+        if Path(dst).name == 'sshd_config':
+            # sshd resolves the account at login, so it must exist before any config names it.
+            assert USERADD in calls
+        replace(src, dst)
+
+    monkeypatch.setattr(helper.os, 'replace', publish)
+    helper.configure('example', 'desktop', root=tmp_path)
+    config = (tmp_path / 'etc/ssh/sshd_config').read_text()
+    assert config.startswith(
+        'AuthorizedPrincipalsCommand /etc/ssh/idea_terminal_principals %u %K\n'
+        + PRINCIPALS_USER_LINE
+        + '\n'
+    )
+    assert 'AuthorizedPrincipalsCommandUser root' not in config
+    # Everything the command opens is readable, and the command executable, by any account.
+    ssh = tmp_path / 'etc/ssh'
+    assert (ssh / 'idea_terminal_ca.pub').stat().st_mode & 0o777 == 0o644
+    assert (ssh / 'idea_terminal_principals').stat().st_mode & 0o777 == 0o755
+    ready = tmp_path / 'run/idea-terminal-trust-ready'
+    assert ready.stat().st_mode & 0o004
+    # The installed command, run as the test's own account, still names the principal.
+    getent = tmp_path / 'getent'
+    getent.write_text(
+        '#!/bin/sh\n[ "$2" = files ] && exit 2\necho "$4:x:1000:1000::/home/$4:/bin/bash"\n'
+    )
+    getent.chmod(0o755)
+    script = (
+        (ssh / 'idea_terminal_principals')
+        .read_text()
+        .replace('/etc/ssh/', str(ssh) + '/')
+        .replace('/run/idea-terminal-trust-ready', str(ready))
+        .replace('/usr/bin/getent', str(getent))
+    )
+    result = real_run(
+        [sys.executable, '-', 'alice', 'ca-key'],
+        input=script,
+        capture_output=True,
+        text=True,
+        env={},
+        check=True,
+    )
+    assert result.stdout == 'idea:alice\n'
+    # Once the account exists it is not created again, and nothing else changes.
+    (tmp_path / 'etc/passwd').write_text(
+        'root:x:0:0::/root:/bin/bash\nidea-terminal:x:990:990::/:/usr/sbin/nologin\n'
+    )
+    del calls[:]
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert USERADD not in calls
+    assert (tmp_path / 'etc/ssh/sshd_config').read_text() == config
+
+
+def test_release_candidate_host_moves_its_principals_command_off_root(
+    helper, tmp_path, monkeypatch
+):
+    calls = fake_host(tmp_path, monkeypatch, helper)
+    ssh = tmp_path / 'etc/ssh'
+    (ssh / 'idea_terminal_ca.pub').write_text('ssh-ed25519 ca-key\n')
+    (ssh / 'idea_terminal_principals').write_text(helper.PRINCIPALS_COMMAND)
+    config = ssh / 'sshd_config'
+    rest = 'TrustedUserCAKeys /etc/ssh/idea_terminal_ca.pub\nUsePAM yes\n'
+    config.write_text(
+        'AuthorizedPrincipalsCommand /etc/ssh/idea_terminal_principals %u %K\n'
+        'AuthorizedPrincipalsCommandUser root\n' + rest
+    )
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert config.read_text() == (
+        'AuthorizedPrincipalsCommand /etc/ssh/idea_terminal_principals %u %K\n'
+        + PRINCIPALS_USER_LINE
+        + '\n'
+        + rest
+    )
+    live = ['sshd', '-t', '-f', str(config)]
+    reload = ['systemctl', 'reload-or-try-restart', 'sshd.service']
+    assert calls.index(USERADD) < calls.index(live) < calls.index(reload)
+    del calls[:]
+    helper.configure('example', 'desktop', root=tmp_path)
+    assert live not in calls and reload not in calls
+
+
+def test_failed_account_creation_leaves_sshd_config_and_readiness_alone(
+    helper, tmp_path, monkeypatch
+):
+    fake_host(tmp_path, monkeypatch, helper)
+    fake = helper.subprocess.run
+
+    def run(args, **kwargs):
+        if args[0] == 'useradd':
+            raise subprocess.CalledProcessError(
+                9, args, stderr="useradd: user 'idea-terminal' already exists\n"
+            )
+        return fake(args, **kwargs)
+
+    monkeypatch.setattr(helper.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='idea-terminal account: useradd: user'):
+        helper.configure('example', 'desktop', root=tmp_path)
+    assert (tmp_path / 'etc/ssh/sshd_config').read_text() == 'UsePAM yes\n'
+    assert not (tmp_path / 'run/idea-terminal-trust-ready').exists()
 
 
 def test_bastion_retries_failed_trust_and_reloads_running_sshd(tmp_path):

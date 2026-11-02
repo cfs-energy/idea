@@ -31,7 +31,17 @@ runs:
       # Unpack outside the checkout: the installer expands to an aws/ directory of about
       # 25,000 files, which every tool that walks the working tree would read as project files.
       run: |
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "${RUNNER_TEMP}/awscliv2.zip"
+        set -euo pipefail
+        url="https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip"
+        curl --fail --location --silent --show-error -o "${RUNNER_TEMP}/awscliv2.zip" "$url"
+        curl --fail --location --silent --show-error -o "${RUNNER_TEMP}/awscliv2.zip.sig" "$url.sig"
+        # The AWS CLI team's public key is committed beside this action and imported into a fresh
+        # keyring. The signature must be good and made by the pinned primary key fingerprint.
+        # The key expires 2027-07-01; replace awscli-public-key.asc from the AWS CLI install guide.
+        export GNUPGHOME="$(mktemp -d)"
+        gpg --batch --quiet --import "${GITHUB_ACTION_PATH}/awscli-public-key.asc"
+        gpg --batch --status-fd 1 --verify "${RUNNER_TEMP}/awscliv2.zip.sig" "${RUNNER_TEMP}/awscliv2.zip" \
+          | grep '^\[GNUPG:\] VALIDSIG .* FB5DB77FD5C118B80511ADA8A6310ACC4672475C$' > /dev/null
         unzip -q "${RUNNER_TEMP}/awscliv2.zip" -d "${RUNNER_TEMP}"
         sudo "${RUNNER_TEMP}/aws/install" --update
     - name: Install system dependencies

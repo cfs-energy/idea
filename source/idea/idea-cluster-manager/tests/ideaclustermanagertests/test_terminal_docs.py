@@ -160,6 +160,15 @@ case "$*" in
 esac
 """
 
+# Records whether the documented wait ended on its bound (124) or on an event.
+STUB_TIMEOUT = """#!/bin/sh
+real=$(PATH="$REAL_PATH" command -v timeout)
+"$real" "$@"
+status=$?
+echo "timeout exit $status" >> "$LOG"
+exit $status
+"""
+
 
 @pytest.mark.parametrize(
     'before, outcome, succeeds',
@@ -179,7 +188,6 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
 ):
     import os
     import subprocess
-    import time
 
     # Run every command in the documented block, not only the trust-unit lines.
     block = DOC.read_text().split('refresh trust as root', 1)[1].split('```', 2)[1]
@@ -193,6 +201,7 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
         'journalctl': '#!/bin/sh\necho "journal $*"\n',
         'sshd': '#!/bin/sh\nexit 0\n',
         'systemctl': STUB_SYSTEMCTL,
+        'timeout': STUB_TIMEOUT,
     }.items():
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
@@ -200,23 +209,26 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
     if before == 'ready':
         marker.touch()
     (tmp_path / 'state').write_text('failed\n' if before == 'failed' else 'active\n')
-    # Shorten only the bounds; run the documented commands as written otherwise.
+    # Shorten only the bounds; run the documented commands as written otherwise. Only a
+    # refresh that keeps retrying should reach the bound, so the others get one that a
+    # loaded machine cannot hit; whether the bound fired is read from the stub, not a clock.
+    bound = 3 if outcome == 'retrying' else 60
     script = '\n'.join(
-        re.sub(r'timeout \d+ ', 'timeout 3 ', line)
+        re.sub(r'timeout \d+ ', f'timeout {bound} ', line)
         .replace('sleep 5', 'sleep 0.1')
         .replace('/run/idea-terminal-trust-ready', str(marker))
         for line in lines
     )
-    began = time.monotonic()
     # SSM Run Command runs the block with sh and no -e; the exit status must still fail.
     result = subprocess.run(
         ['sh', '-c', script],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=bound + 60,
         env=dict(
             os.environ,
             PATH=f'{bin_dir}:{os.environ["PATH"]}',
+            REAL_PATH=os.environ['PATH'],
             LOG=str(tmp_path / 'log'),
             STATE=str(tmp_path / 'state'),
             MARKER=str(marker),
@@ -225,9 +237,12 @@ def test_trust_refresh_runbook_waits_for_this_refresh(
     )
     assert (result.returncode == 0) is succeeds, result.stderr
     assert ('journal -u idea-terminal-trust.service' in result.stdout) is not succeeds
-    if outcome == 'failed':
-        assert time.monotonic() - began < 2
     calls = (tmp_path / 'log').read_text().splitlines()
+    # A failed unit must stop the wait at once and a ready marker must end it; only a
+    # refresh still retrying waits out the bound.
+    waits = [call for call in calls if call.startswith('timeout exit ')]
+    assert len(waits) == 1
+    assert (waits[0] == 'timeout exit 124') is (outcome == 'retrying')
     assert calls[:2] == [
         'reset-failed idea-terminal-trust.service',
         '--no-block restart idea-terminal-trust.service',

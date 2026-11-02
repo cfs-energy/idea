@@ -121,3 +121,22 @@ test("bastion placement requires a joined directory client on the host", () => {
   const [, service] = one(resourcesOf(synthBastion()), "AWS::ECS::Service");
   assert.ok(service.Properties.PlacementConstraints.some((constraint: any) => constraint.Type === "memberOf" && constraint.Expression === "attribute:idea.directory == joined"));
 });
+
+test('sshd exempts the VPC and the cluster subnets from per-source penalties', () => {
+  const [, task] = one(resourcesOf(synthBastion()), 'AWS::ECS::TaskDefinition');
+  const environment = task.Properties.ContainerDefinitions[0].Environment;
+  const cidrs = environment.find((entry: any) => entry.Name === 'IDEA_VPC_CIDRS')?.Value;
+  // the public subnets carry the load balancer's health checks and may sit outside the primary CIDR
+  assert.deepEqual(cidrs.split(','), ['192.0.2.0/24', '198.51.100.0/25', '198.51.100.128/25', '192.0.2.0/25', '192.0.2.128/25']);
+});
+
+test('sshd exempts the SSH allowlist the bastion prefix list holds', () => {
+  const environmentOf = (overrides: Record<string, unknown>) => {
+    const [, task] = one(resourcesOf(synthBastion(overrides)), 'AWS::ECS::TaskDefinition');
+    return task.Properties.ContainerDefinitions[0].Environment.find((entry: any) => entry.Name === 'IDEA_SSH_CLIENT_CIDRS')?.Value;
+  };
+  // bare addresses become /32 as in the prefix list; the script, not synthesis, drops 0.0.0.0/0
+  assert.equal(environmentOf({ 'cluster.network.ssh_client_ip': ['23.23.20.238', '198.51.100.0/24', '23.23.20.238/32', '0.0.0.0/0'] }),
+    '23.23.20.238/32,198.51.100.0/24,0.0.0.0/0');
+  assert.equal(environmentOf({}), '');
+});

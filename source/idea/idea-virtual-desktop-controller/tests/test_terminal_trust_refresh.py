@@ -44,7 +44,8 @@ def heredoc(text, path, end):
 
 
 def test_the_refresh_carries_terminal_trust_from_this_release():
-    assert BOOTSTRAP_REFRESH_VERSION >= 5
+    # 6: the helper moves release-candidate desktops' principals command off root.
+    assert BOOTSTRAP_REFRESH_VERSION >= 6
 
 
 @pytest.mark.parametrize('base_os', LINUX)

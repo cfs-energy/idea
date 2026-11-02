@@ -19,6 +19,7 @@ import {
 } from '../constructs/container.ts';
 
 import { ArnBuilder } from '../../config/arn-builder.ts';
+import { isEmpty } from '../../config/cluster-config.ts';
 
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
@@ -145,6 +146,14 @@ export class BastionHostStack extends IdeaBaseStack {
     environment['IDEA_DIRECTORY_PROVIDER'] = provider as string;
     environment['IDEA_SSH_KEY_PAIR'] = config.getString('cluster.network.ssh_key_pair', undefined, { required: true }) as string;
     environment['IDEA_PBS_SERVER'] = config.getString('scheduler.private_dns_name', '');
+    // sshd never penalizes these sources (roles/bastion.sh): the load balancer's health checks and
+    // the browser terminals connect from the cluster subnets, which may sit in a secondary CIDR
+    environment['IDEA_VPC_CIDRS'] = [...new Set([this.cluster.vpc.vpcCidrBlock,
+      ...[...this.cluster.publicSubnets, ...this.cluster.privateSubnets].map((subnet) => subnet.ipv4CidrBlock)])].join(',');
+    // and the SSH allowlist the bastion prefix list holds (cluster.ts), read the same way; the
+    // script keeps penalizing any entry wider than /8
+    environment['IDEA_SSH_CLIENT_CIDRS'] = [...new Set(config.getList<string>('cluster.network.ssh_client_ip', [])
+      .filter((ip) => !isEmpty(ip)).map((ip) => (ip.includes('/') ? ip : `${ip}/32`)))].join(',');
     environment['IDEA_DATA_DIR'] = config.getString('shared-storage.data.mount_dir', undefined, { required: true }) as string;
     // the site hook lives under the cluster home on /apps, as the compute and desktop hooks do
     environment['IDEA_CLUSTER_HOME'] = config.getString('cluster.home_dir', undefined, { required: true }) as string;

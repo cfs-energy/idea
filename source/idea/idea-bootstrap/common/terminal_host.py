@@ -16,6 +16,10 @@ EXIT_SITE_INTEGRATION = 78
 # Site hooks that edit sshd_config hold this lock, so neither side loses the other's edit.
 LOCK = 'run/idea-terminal-trust.lock'
 LOCK_WAIT_SECONDS = 120
+# sshd runs the principals command as this account: the command reads only world-readable
+# files and asks NSS, so it needs no privilege. Not nobody, the identity NFS servers give
+# squashed root, so it owns nothing on shared file systems.
+PRINCIPALS_USER = 'idea-terminal'
 
 
 class SiteIntegrationRequired(ValueError):
@@ -138,6 +142,36 @@ def replace_validated(path, text, validator=None, mode=0o644):
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def ensure_principals_user(root):
+    passwd = root / 'etc/passwd'
+    names = passwd.read_text().splitlines() if passwd.exists() else []
+    if any(line.split(':', 1)[0] == PRINCIPALS_USER for line in names):
+        return
+    try:
+        subprocess.run(
+            [
+                'useradd',
+                '--system',
+                '--no-create-home',
+                '--home-dir',
+                '/',
+                '--shell',
+                '/usr/sbin/nologin',
+                PRINCIPALS_USER,
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            timeout=30,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f'Could not create the {PRINCIPALS_USER} account: '
+            + (error.stderr or '').strip()
+        ) from error
 
 
 def check_sshd_config(path):
@@ -271,9 +305,16 @@ def install_trust(ca, host_id, root):
     replace_public_keys(path, ca + '\n')
     principals = ssh / 'idea_terminal_principals'
     replace_validated(principals, PRINCIPALS_COMMAND, mode=0o755)
+    # sshd resolves the account at login, not on reload: create it before the config names it.
+    ensure_principals_user(root)
     directive = 'AuthorizedPrincipalsCommand ' + command
-    if directive not in text.splitlines():
-        text = directive + '\nAuthorizedPrincipalsCommandUser root\n' + text
+    current = f'{directive}\nAuthorizedPrincipalsCommandUser {PRINCIPALS_USER}\n'
+    # Hosts from 26.11.1 release candidates ran the command as root; move them over.
+    legacy = '\n' + directive + '\nAuthorizedPrincipalsCommandUser root\n'
+    if legacy in '\n' + text:
+        text = ('\n' + text).replace(legacy, '\n' + current, 1)[1:]
+    elif directive not in text.splitlines():
+        text = current + text
     # The bastion entrypoint signals its own sshd. Elsewhere a failed reload stays
     # pending, so the next attempt reloads even though the file is now unchanged.
     pending = root / 'run/idea-terminal-sshd-reload'
