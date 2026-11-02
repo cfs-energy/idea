@@ -63,23 +63,74 @@ function Wait-ForService {
     }
 }
 
+function Assert-InstallerTrusted {
+    # Every downloaded installer runs as SYSTEM, so it is checked before it runs. A Valid
+    # Authenticode status alone accepts any publicly trusted signer, so the signer must also be
+    # the pinned publisher: its CN, O, L and C, which the CA vets and which carry over to a renewed
+    # certificate. OU is not vetted and differs between a publisher's certificates. An unsigned
+    # installer (7-Zip) is pinned by SHA-256 instead.
+    Param (
+        [Parameter(Mandatory=$true)] [String] $Path,
+        [ValidateSet('Amazon', 'NVIDIA')] [String] $Publisher,
+        [String] $Sha256
+    )
+    $Publishers = @{
+        'Amazon' = @('CN=Amazon Web Services, Inc.', 'O=Amazon Web Services, Inc.', 'L=Seattle', 'C=US')
+        'NVIDIA' = @('CN=NVIDIA Corporation', 'O=NVIDIA Corporation', 'L=Santa Clara', 'C=US')
+    }
+    if ($Sha256) {
+        $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+        if ($Actual -eq $Sha256) { return }
+        $Reason = "its SHA-256 $Actual does not match the pinned $Sha256"
+    } elseif ($Publisher) {
+        $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+        if ("$($Signature.Status)" -ne 'Valid') {
+            $Reason = "its Authenticode signature is $($Signature.Status): $($Signature.StatusMessage)"
+        } else {
+            $Subject = @($Signature.SignerCertificate.SubjectName.Decode(
+                [Security.Cryptography.X509Certificates.X500DistinguishedNameFlags]'UseNewLines, DoNotUseQuotes'
+            ) -split "`r?`n" | ForEach-Object { $_.Trim() })
+            $Missing = @($Publishers[$Publisher] | Where-Object { $Subject -cnotcontains $_ })
+            if ($Missing.Count -eq 0) { return }
+            $Reason = "it is signed by '$($Signature.SignerCertificate.Subject)', not the pinned $Publisher publisher ($($Publishers[$Publisher] -join ', '))"
+        }
+    } else {
+        $Reason = 'no publisher or SHA-256 is pinned for it'
+    }
+    Write-ToLog -Message "Refusing to install ${Path}: $Reason" -Level 'Error'
+    exit 1
+}
+
 function Save-Installer {
     # A background-job download whose job process dies reports no error and leaves no file, so
     # msiexec then failed with 1619 (package could not be opened). Download in-process, check
-    # the file, and name the failure.
-    Param ([Parameter(Mandatory=$true)] [String] $Uri, [Parameter(Mandatory=$true)] [String] $OutFile)
+    # the file, and name the failure. The download is then checked against its pinned publisher
+    # or SHA-256 before anything runs it.
+    Param (
+        [Parameter(Mandatory=$true)] [String] $Uri,
+        [Parameter(Mandatory=$true)] [String] $OutFile,
+        [ValidateSet('Amazon', 'NVIDIA')] [String] $Publisher,
+        [String] $Sha256
+    )
     $ProgressPreference = 'SilentlyContinue'
+    $Saved = $false
     foreach ($Attempt in 1..3) {
         try {
             Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-            if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { return }
+            if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { $Saved = $true; break }
             $Reason = 'the download wrote no file'
         } catch { $Reason = $_.Exception.Message }
         Write-ToLog -Message "Download of $Uri attempt $Attempt failed: $Reason" -Level 'Warn'
         Start-Sleep -Seconds 3
     }
-    Write-ToLog -Message "Could not download $Uri to ${OutFile}: $Reason" -Level 'Error'
-    exit 1
+    if (-not $Saved) {
+        Write-ToLog -Message "Could not download $Uri to ${OutFile}: $Reason" -Level 'Error'
+        exit 1
+    }
+    $Pin = @{}
+    if ($Publisher) { $Pin.Publisher = $Publisher }
+    if ($Sha256) { $Pin.Sha256 = $Sha256 }
+    Assert-InstallerTrusted -Path $OutFile @Pin
 }
 
   function Install-NiceDCV {
@@ -103,7 +154,7 @@ function Save-Installer {
       # Information on NICE Virtual Display Driver: https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-winprereq.html#setting-up-installing-general
       # Every supported base_os (2019, 2022, 2025) ships the Indirect Display Driver with
       # DCV 2023.1+, so the Virtual Display Driver is never installed: it conflicts with GPU drivers.
-      Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi
+      Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-server-x64-Release.msi -OutFile C:\Windows\Temp\DCVServer.msi -Publisher Amazon
       $DCVServerInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVServer.msi ADDLOCAL=ALL /quiet /norestart /l*v dcv_install_msi.log " -Wait -PassThru
       if($DCVServerInstall.ExitCode -notin @(0, 3010)){
         Write-ToLog -Message "DCV Server install failed with exit code $($DCVServerInstall.ExitCode), see dcv_install_msi.log" -Level 'Error'
@@ -132,7 +183,7 @@ function Save-Installer {
 
     if(!$DCVSMInstalled -or $Update){
       # Standard distribution link for NICE DCV Session Manager Agent
-      Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi
+      Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi -Publisher Amazon
       $SMAgentInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVSMAgent.msi /quiet /norestart " -Wait -PassThru
       if($SMAgentInstall.ExitCode -notin @(0, 3010)){
         Write-ToLog -Message "DCV Session Manager Agent install failed with exit code $($SMAgentInstall.ExitCode)" -Level 'Error'
@@ -161,7 +212,7 @@ function Save-Installer {
           New-Item -Path $workdir -ItemType Directory -Force | Out-Null
           Write-ToLog -Message "Created directory: $workdir" -Level 'Info'
         }
-        Invoke-WebRequest $AwsCliInstaller -OutFile "$workdir\AWSCLIV2.msi"
+        Save-Installer -Uri $AwsCliInstaller -OutFile "$workdir\AWSCLIV2.msi" -Publisher Amazon
         Start-Process msiexec.exe -Wait -ArgumentList "/i $workdir\AWSCLIV2.msi /quiet"
         }
     } catch {
@@ -173,12 +224,18 @@ function Save-Installer {
       New-Item -Path $workdir -ItemType Directory -Force | Out-Null
       Write-ToLog -Message "Created directory: $workdir" -Level 'Info'
     }
-    Invoke-WebRequest $AwsCliInstaller -OutFile "$workdir\AWSCLIV2.msi"
+    Save-Installer -Uri $AwsCliInstaller -OutFile "$workdir\AWSCLIV2.msi" -Publisher Amazon
     Start-Process msiexec.exe -Wait -ArgumentList "/i $workdir\AWSCLIV2.msi /quiet"
     }
 }
 function Install-7Zip {
-    Write-ToLog -Message "Installing 7-Zip (latest version)" -Level 'Info'
+    # 7-Zip installers are not Authenticode-signed, so a pinned release is checked by SHA-256.
+    # To move to a new release, change both values together; the GitHub release (ip7z/7zip) lists
+    # each asset's SHA-256.
+    $Release = '26.05'
+    $Version = $Release.Replace('.', '')
+    $Sha256 = 'FD99E86F57D8F429EF5ED045BF98315AF962E2309B0F1BA87A147A44C71647D0'
+    Write-ToLog -Message "Installing 7-Zip $Release" -Level 'Info'
 
     # Check if already installed
     $7zPath = "${env:ProgramFiles}\7-Zip\7z.exe"
@@ -188,11 +245,6 @@ function Install-7Zip {
     }
 
     try {
-      # Get latest version info
-      $url = 'https://sourceforge.net/projects/sevenzip/best_release.json'
-      $releaseInfo = ConvertFrom-Json (Invoke-WebRequest $url -UseBasicParsing).Content
-      $Version = $releaseInfo.release.filename.Split('/')[2] -replace("[^\d]","")
-
       # Download and install
       $workdir = 'C:\IDEA\Assets'
 
@@ -204,9 +256,7 @@ function Install-7Zip {
 
       $source = "https://www.7-zip.org/a/7z$Version-x64.exe"
       $destination = "$workdir\7z$Version-x64.exe"
-
-      $ProgressPreference = 'SilentlyContinue'
-      Invoke-WebRequest $source -OutFile $destination -UseBasicParsing
+      Save-Installer -Uri $source -OutFile $destination -Sha256 $Sha256
 
       # Install silently
       Start-Process -FilePath $destination -ArgumentList '/S' -Wait -PassThru | Out-Null
