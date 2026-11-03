@@ -1,9 +1,32 @@
+import {readFileSync} from 'node:fs';
 import {afterEach, expect, it, vi} from 'vitest';
 import {LinkDetector, UrlRegexProvider} from 'ghostty-web';
 import type {Terminal} from 'ghostty-web';
-import {configureTerminal, portalTheme} from './renderer';
+import {configureTerminal, createTerminal, portalTheme} from './renderer';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {vi.unstubAllGlobals(); vi.restoreAllMocks();});
+
+it('never shows a closed terminal\'s output in the next one after it is sized', async () => {
+    const wasm = readFileSync('node_modules/ghostty-web/ghostty-vt.wasm');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ok: true, arrayBuffer: async () => wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength)}));
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    // jsdom has no canvas. Only drawing is stubbed; both terminals and their WASM parsers are real.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({measureText: () => ({width: 8}), scale() {}, fillRect() {}, fillText() {}} as any);
+    const text = (term: Terminal) => Array.from({length: term.buffer.active.length}, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n');
+    const earlier = await createTerminal();
+    earlier.open(document.createElement('div'));
+    earlier.resize(137, 40);
+    earlier.write('[alice@desktop ~]$ ls\r\nDesktop  Documents  Downloads  private-notes.txt\r\n'.repeat(60));
+    expect(text(earlier)).toContain('private-notes.txt');
+    earlier.dispose();
+    const next = await createTerminal();
+    try {
+        next.open(document.createElement('div'));
+        next.resize(137, 40);
+        expect(text(next)).not.toMatch(/alice|Documents|private-notes/);
+    } finally {next.dispose();}
+});
 
 it('keeps plain HTTP links clickable and prevents the built-in provider from opening other schemes', async () => {
     const text = 'https://example.org/path mailto:user@example.org ssh://host/path';

@@ -55,6 +55,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 **Security**
 
+* **Web terminal session end**: ending the portal session (sign-out, expiry or a different user) closes every terminal tab, and a new terminal tab never shows an earlier tab's output. Font size and dock height are kept.
 * **Web terminal and API tokens**: `Terminal.ListTargets` and `Terminal.CreateTicket` require a signed-in session; API tokens are refused, so a leaked token cannot open a shell.
 * **Web terminal handshakes**: an unauthenticated terminal WebSocket must send its ticket within 5 s and is capped at 16 concurrent per client address and 256 per cluster-manager; over-limit sockets close with 1013.
 * **Terminal principals command**: sshd runs it as the unprivileged `idea-terminal` system account instead of root. Desktops move over through bootstrap refresh 6, bastions on the next task start.

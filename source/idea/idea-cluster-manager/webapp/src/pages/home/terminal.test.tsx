@@ -378,3 +378,35 @@ it('redirects the old Terminal page to the dock', async () => {
     expect(await screen.findByText('Home')).toBeInTheDocument();
     await waitFor(() => expect(shellStore.get().tabs).toEqual([{target: 'bastion', label: 'Bastion'}]));
 });
+
+it('ending the session closes every socket, frees every renderer and opens nothing on the next sign-in', async () => {
+    let listed!: (value: object) => void;
+    const view = render(<MemoryRouter><ShellDock client={client as any}/></MemoryRouter>);
+    act(() => {shellStore.open('bastion', 'Bastion'); shellStore.open('desktop:one', 'Work');});
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(2));
+    localStorage.setItem(FONT_KEY, '20'); localStorage.setItem(HEIGHT_KEY, '500');
+    const pending = shellStore.loadTargets({listTargets: () => new Promise(resolve => {listed = resolve;})} as any);
+    act(() => shellStore.endSession());
+    expect(screen.queryByRole('region', {name: 'Terminal'})).not.toBeInTheDocument();
+    expect(mocks.stop).toHaveBeenCalledTimes(2); expect(mocks.dispose).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem(FONT_KEY)).toBe('20'); expect(localStorage.getItem(HEIGHT_KEY)).toBe('500');
+    // The earlier user's target list must not land in the next session.
+    await act(async () => {listed({targets: [{id: 'bastion', label: 'Bastion'}]}); await pending;});
+    expect(shellStore.get().tabs).toEqual([]); expect(shellStore.get().targets).toBeUndefined();
+    view.unmount();
+    render(<MemoryRouter><ShellDock client={client as any}/></MemoryRouter>);
+    expect(screen.queryByRole('region', {name: 'Terminal'})).not.toBeInTheDocument();
+    expect(mocks.start).toHaveBeenCalledTimes(2);
+});
+
+it('closes the dock only when a different user signs in', async () => {
+    render(<MemoryRouter><ShellDock client={client as any}/></MemoryRouter>);
+    shellStore.setOwner('alice');
+    act(() => shellStore.open('bastion', 'Bastion'));
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+    act(() => {shellStore.setOwner('alice'); shellStore.setOwner('');});
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    act(() => shellStore.setOwner('bob'));
+    expect(screen.queryByRole('region', {name: 'Terminal'})).not.toBeInTheDocument();
+    expect(mocks.stop).toHaveBeenCalledOnce();
+});

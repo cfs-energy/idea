@@ -8,11 +8,12 @@ export class FitAddon extends GhosttyFitAddon {
         return size && {cols: Math.min(500, Math.max(1, size.cols)), rows: Math.min(500, Math.max(1, size.rows))};
     }
 }
-let engine: Promise<Ghostty> | undefined;
 export async function createTerminal() {
-    engine ??= Ghostty.load(wasmUrl).catch(error => {engine = undefined; throw error;});
     return new Terminal({
-        ghostty: await engine,
+        // One WASM instance per terminal. 0.4.0 hands a disposed terminal's memory to the next one
+        // uncleared, so a shared instance shows the previous shell's output, even another user's.
+        // ponytail: fetches (HTTP-cached) and compiles the 413 KB module per tab; share one once upstream clears freed pages.
+        ghostty: await Ghostty.load(wasmUrl),
         fontSize: 16, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         cursorBlink: true, scrollback: 5000,
         // 0.4.0 requires a complete palette when passing a scrollback limit.

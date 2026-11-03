@@ -15,6 +15,8 @@ const initial: ShellState = {tabs: [], active: '', expanded: true, targetsFailed
 let state = initial;
 let loading: Promise<void> | undefined;
 let inflight = false;
+let session = 0;
+let owner = '';
 const listeners = new Set<() => void>();
 const set = (next: Partial<ShellState>) => {state = {...state, ...next}; listeners.forEach(listener => listener());};
 
@@ -37,13 +39,26 @@ export const shellStore = {
         if (!terminalEnabled()) return Promise.resolve();
         if (loading && (!force || inflight)) return loading;
         inflight = true;
+        const current = session;
         loading = client.listTargets()
-            .then(result => set({targets: result.targets, targetsFailed: false}))
-            .catch(() => {loading = undefined; set({targetsFailed: true});})
-            .finally(() => {inflight = false;});
+            .then(result => {if (current === session) set({targets: result.targets, targetsFailed: false});})
+            .catch(() => {if (current === session) {loading = undefined; set({targetsFailed: true});}})
+            .finally(() => {if (current === session) inflight = false;});
         return loading;
     },
-    reset() {state = initial; loading = undefined; inflight = false; listeners.forEach(listener => listener());},
+    reset() {state = initial; loading = undefined; inflight = false; session++; listeners.forEach(listener => listener());},
+    /** Sign-out, expiry or a different user: closing every tab unmounts its view, which closes the socket and frees the renderer.
+     *  Font size and dock height are per-browser display preferences and stay. */
+    endSession() {
+        owner = '';
+        shellStore.reset();
+    },
+    /** A token refresh can sign in someone else without a sign-out in this tab. An unknown user is not a change. */
+    setOwner(user: string) {
+        if (!user) return;
+        if (owner && owner !== user) shellStore.endSession();
+        owner = user;
+    },
 };
 
 export const useShell = () => useSyncExternalStore(shellStore.subscribe, shellStore.get);
