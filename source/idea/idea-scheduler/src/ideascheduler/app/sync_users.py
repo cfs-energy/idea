@@ -71,18 +71,18 @@ def sync_once():
         for g in u.get('additional_groups') or []:
             members.setdefault(g, set()).add(u['username'])
 
-    passwd = system_lines('/etc/passwd', 2) + [
+    user_entries = system_lines('/etc/passwd', 2) + [
         f'{u["username"]}:x:{int(u["uid"])}:{int(u["gid"])}:{u["username"]}:{u.get("home_dir") or "/"}:{u.get("login_shell") or "/bin/bash"}'
         for u in sorted(users, key=lambda u: int(u['uid']))
         if int(u['uid']) >= SYSTEM_ID_LIMIT
     ]
-    group = system_lines('/etc/group', 2) + [
+    group_entries = system_lines('/etc/group', 2) + [
         f'{g["group_name"]}:x:{int(g["gid"])}:{",".join(sorted(members.get(g["group_name"], ())))}'
         for g in sorted(groups, key=lambda g: int(g['gid']))
         if int(g['gid']) >= SYSTEM_ID_LIMIT
     ]
-    write_atomic('/etc/passwd', passwd)
-    write_atomic('/etc/group', group)
+    write_atomic('/etc/passwd', user_entries)
+    write_atomic('/etc/group', group_entries)
     return len(users), len(groups)
 
 
