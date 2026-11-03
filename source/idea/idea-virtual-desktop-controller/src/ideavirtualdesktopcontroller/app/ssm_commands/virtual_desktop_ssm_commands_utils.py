@@ -24,12 +24,15 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 
 # Bump whenever the refresh set or the contents of its templates change.
-BOOTSTRAP_REFRESH_VERSION = 6
+BOOTSTRAP_REFRESH_VERSION = 8
 BOOTSTRAP_REFRESH_TEMPLATES = (
     '_templates/linux/ssh_post_quantum_kex.jinja2',
     '_templates/linux/gnome_online_accounts.jinja2',
     '_templates/linux/openpbs_client_server.jinja2',
     '_templates/linux/web_terminal_refresh.jinja2',
+    '_templates/linux/kernel_net_hardening.jinja2',
+    '_templates/linux/kernel_module_hardening.jinja2',
+    '_templates/linux/unused_services.jinja2',
 )
 BOOTSTRAP_REFRESH_PRELUDE = 'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n'
 
@@ -60,12 +63,30 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
     private zone keeps the full name, since the short name cannot resolve there.
     bootstrap_refresh tells a template shared with first bootstrap which path it is on.
     """
+    flags = {
+        'drop_tcp_ip_options': bool(
+            config.get_bool(
+                'global-settings.kernel_hardening.drop_tcp_ip_options', default=True
+            )
+        ),
+        'block_kernel_modules': bool(
+            config.get_bool(
+                'global-settings.kernel_hardening.block_modules', default=True
+            )
+        ),
+        'disable_unused_services': bool(
+            config.get_bool(
+                'global-settings.host_hardening.disable_unused_services', default=True
+            )
+        ),
+    }
     scheduler_dns_name = config.get_string('scheduler.private_dns_name')
     if not scheduler_dns_name:
         return {
             'pbs_server_name': None,
             'private_zone': None,
             'bootstrap_refresh': True,
+            **flags,
         }
     stable = bool(config.get_bool('scheduler.use_stable_server_name', default=False))
     private_zone = (
@@ -87,6 +108,7 @@ def bootstrap_refresh_variables(config, logger=None) -> dict:
         'pbs_server_name': pbs_server_name,
         'private_zone': private_zone or None,
         'bootstrap_refresh': True,
+        **flags,
     }
 
 

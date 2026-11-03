@@ -3,6 +3,7 @@ import {render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router-dom';
 import ClusterSettings from './portal-settings';
+import LegacyClusterSettings from './cluster-settings';
 import {initTestAppContext} from '../../test-support';
 
 const CATALOG_WARNING = 'Review model terms and pricing';
@@ -333,4 +334,31 @@ it('keeps the maintenance message full width with an accessible feature toggle',
     expect(screen.getByRole('textbox', {name: 'Message'}).tagName).toBe('TEXTAREA');
     expect(screen.getAllByRole('textbox').map(node => node.getAttribute('placeholder'))).toContain('2026-09-15T18:00:00Z');
     expect(screen.queryByRole('checkbox', {name: /^Enable(?:d)?$/})).toBeNull();
+});
+
+it('links no OpenSearch Dashboards URL from the analytics settings', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({opensearch: {domain_name: 'sample-domain', domain_endpoint: 'vpc-sample.example.invalid'}});
+    vi.spyOn(context.getClusterSettingsService(), 'getClusterSettings').mockResolvedValue({load_balancers: {external_alb: {load_balancer_dns_name: 'alb.example.invalid'}}});
+    render(
+        <MemoryRouter>
+            <LegacyClusterSettings
+                ideaPageId="cluster-settings"
+                toolsOpen={false}
+                tools={null}
+                onToolsChange={() => {}}
+                onPageChange={() => {}}
+                sideNavHeader={{text: 'IDEA', href: '#/'}}
+                sideNavItems={[]}
+                onSideNavChange={() => {}}
+                onFlashbarChange={() => {}}
+                flashbarItems={[]}
+                renderSections={(source: any) => <div>{source.sections.find((section: any) => section.id === 'analytics')?.content}</div>}
+            />
+        </MemoryRouter>
+    );
+    expect(await screen.findByText('sample-domain')).toBeInTheDocument();
+    expect(screen.queryByText('Dashboard URL')).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain('_dashboards');
+    vi.restoreAllMocks();
 });

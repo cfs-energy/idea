@@ -326,6 +326,19 @@ test("blocks task access to host metadata", () => {
   );
 });
 
+test("hosts carry the TCP SYN use-after-free network hardening", () => {
+  const userData = hostUserData(resourcesOf(synth()));
+  assert.match(userData, /net.mptcp.enabled = 0/);
+  assert.match(userData, /net.ipv4.tcp_migrate_req = 0/);
+  assert.match(userData, /sysctl -q -e -p \/etc\/sysctl.d\/90-idea-net-hardening.conf/);
+  assert.match(userData, /type filter hook prerouting priority -300; policy accept;/);
+  assert.match(userData, /ip hdrlength > 5 meta l4proto tcp counter drop/);
+  assert.match(userData, /systemctl enable --now idea-tcp-ip-options.service/);
+  const off = hostUserData(resourcesOf(synth(false, {"global-settings.kernel_hardening.drop_tcp_ip_options": false})));
+  assert.match(off, /net.mptcp.enabled = 0/);
+  assert.doesNotMatch(off, /idea_tcp_ip_options/);
+});
+
 test("never emits an account-level network interface trunking resource", () => {
   const resources = resourcesOf(synth());
   const accountSettingResources = Object.values(resources).filter((resource) => {

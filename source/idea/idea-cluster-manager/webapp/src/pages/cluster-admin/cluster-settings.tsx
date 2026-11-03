@@ -292,11 +292,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
             return provider === 'activedirectory' || provider === 'aws_managed_activedirectory'
         }
 
-        const getOpenSearchDashboardUrl = () => {
-            let externalAlbUrl = ConfigUtils.getExternalAlbUrl(this.state.cluster)
-            return `${externalAlbUrl}/_dashboards`
-        }
-
         const isMetricsEnabled = () => {
             return AppContext.get().getClusterSettingsService().isMetricsEnabled()
         }
@@ -615,8 +610,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                 <KeyValue title="Domain Name" value={dot.pick('opensearch.domain_name', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Domain ARN" value={dot.pick('opensearch.domain_arn', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Domain Endpoint" value={dot.pick('opensearch.domain_endpoint', this.state.analytics)} clipboard={true}/>
-                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Dashboard URL" value={getOpenSearchDashboardUrl()} type={"external-link"} clipboard={true}/>
-                                <KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
                             </SpaceBetween></ColumnLayout>
                         </Container>
                         <Container header={<Header variant={"h2"}>Kinesis Settings</Header>}>

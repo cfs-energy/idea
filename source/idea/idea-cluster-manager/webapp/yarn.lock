@@ -857,9 +857,9 @@
     weekstart "^2.0.0"
 
 "@cloudscape-design/components@^3.0.1348":
-  version "3.0.1407"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1407.tgz#177675b03b271f8856dc1358c5d447c53dc0890b"
-  integrity sha512-nzTvmYDh6zAtpYUrePV82bD4K7nl/YACYOF8IIvxOUixvsBUkrXAYyaMtM8H8I3bLGps63OhH40IT++WuIQ9iw==
+  version "3.0.1408"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1408.tgz#b9581645ac0f9a78643bf8375395bb9d8b942549"
+  integrity sha512-xTg5QAZOXtZfM0LB/ITeo9urkkLH+rWkRW1V2DEDD4nT/2kUXz9moecpWvhSbwgnM3MbuCeYSI5jDLKc/K1Zpg==
   dependencies:
     "@cloudscape-design/collection-hooks" "^1.0.0"
     "@cloudscape-design/component-toolkit" "^1.0.0-beta"
@@ -1105,9 +1105,9 @@
   integrity sha512-ztmtTd6xwnuh2/xu+Vb01btgV8SQWYCaK56CkRK8gEkWe5TuDyBcYJ0wgkMRn+2VcE9KUmhvkz+N9GHrqw/C0g==
 
 "@microlink/react-json-view@^1.31.28":
-  version "1.31.45"
-  resolved "https://registry.yarnpkg.com/@microlink/react-json-view/-/react-json-view-1.31.45.tgz#ecf135e268aaa23c45b8b6c011cf03581f6a9958"
-  integrity sha512-8Y7U/Ushe5r/Q1vC4DCygBDyif8KRjYjS8LHNUCevGgCQyzC0RKNhZ+/WmwRJqWBbvNS3zpd0wAHTOGpmUX0FQ==
+  version "1.31.46"
+  resolved "https://registry.yarnpkg.com/@microlink/react-json-view/-/react-json-view-1.31.46.tgz#ae52130f76a2a2ee59a34e537d9d956a900935b3"
+  integrity sha512-RKkHZYOpccM2J1+q09nZ3lq6NeGkdflBLGE+ZDAUubla7M4o6W79fHQH1MfHEYb6pSZ4oTigZ+jfUP4t7EU2pw==
   dependencies:
     react-base16-styling "~0.10.0"
     react-lifecycles-compat "~3.0.4"
@@ -4630,10 +4630,10 @@ safe-regex-test@^1.1.0:
   resolved "https://registry.yarnpkg.com/safer-buffer/-/safer-buffer-2.1.2.tgz#44fa161b0187b9549dd84bb91802f9bd8385cd6a"
   integrity sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==
 
-sass@1.107.0:
-  version "1.107.0"
-  resolved "https://registry.yarnpkg.com/sass/-/sass-1.107.0.tgz#2fc0e6fb63fcddb478bd9a7b05cfe7c08a2d3e5e"
-  integrity sha512-+whPilvVNoAD57xvdIPLQT0gXo4RD1lHYw+Uw8zYHlojaeaMDxK14tc0JmEsz/XMns48h3lpypisMP+3E8eHQA==
+sass@1.107.1:
+  version "1.107.1"
+  resolved "https://registry.yarnpkg.com/sass/-/sass-1.107.1.tgz#a8a461744666e31f8973041a6b9ae7fcb265befd"
+  integrity sha512-aJ1/LvxOOb04YhmiBjzZn3jVwdHKol+OVhoMV6fFl02fF9T3i+5Mg9l/CnzqtM+NX5Jn5o3lAbs/ZJivTCLHfQ==
   dependencies:
     chokidar "^5.0.0"
     immutable "^5.1.5"

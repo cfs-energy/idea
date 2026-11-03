@@ -41,6 +41,8 @@ export function templateDigest(template: any): string {
 // Cluster-manager also always grants the three read-only Cost Explorer actions.
 // S-24 removes the unused scheduler, cluster-manager and VDC host roles and their settings.
 // The bastion task also carries IDEA_VPC_CIDRS and IDEA_SSH_CLIENT_CIDRS, the sources sshd never penalizes.
+// The scheduler and VDC roles no longer carry policy writes on service-linked roles.
+// Analytics builds no dashboard route on the external load balancer unless it is enabled.
 // Keep hashing every field except the three validated random values above.
 test('all eleven ECS module templates match the reviewed v26.11.1 baseline', async () => {
   const baseline = JSON.parse(readFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), 'utf8'));

@@ -20,6 +20,9 @@ opensearch:
 
   endpoints:
     external:
+      # Publishes OpenSearch Dashboards on the external load balancer with no authentication in
+      # front of it. Leave off and reach Dashboards privately (see the analytics docs).
+      enabled: false
       priority: 16
       path_patterns: ['/_dashboards*']
 

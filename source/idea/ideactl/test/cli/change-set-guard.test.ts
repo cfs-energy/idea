@@ -230,8 +230,36 @@ describe('the built-in allow list', () => {
     assert.equal(verdict.refusals.length, 1);
   });
 
-  it('holds exactly one entry, so it cannot quietly grow into a bypass', () => {
-    assert.equal(builtInAllowedReplacements(CLUSTER).size, 1);
+  it('lets an analytics deploy drop the opt-in dashboard route', () => {
+    const verdict = evaluateChangeSet(
+      {
+        Changes: [
+          change('Remove', 'dashboardendpoint', 'Custom::DashboardEndpointExternal'),
+          change('Remove', 'opensearchprivateips', 'Custom::OpenSearchPrivateIPAddresses'),
+          change('Remove', 'sampleclusterdashboardtargetgroup', 'AWS::ElasticLoadBalancingV2::TargetGroup'),
+        ],
+      },
+      [],
+      builtInAllowedReplacements(CLUSTER),
+    );
+    assert.deepEqual(verdict.refusals, []);
+    assert.deepEqual(
+      verdict.allowed.map((entry) => entry.logicalId),
+      ['dashboardendpoint', 'opensearchprivateips'],
+    );
+  });
+
+  it('still refuses removing any other custom resource', () => {
+    const verdict = evaluateChangeSet(CUSTOM_RESOURCE_REMOVE_CHANGE_SET, [], builtInAllowedReplacements(CLUSTER));
+    assert.equal(verdict.refusals.length, 1);
+  });
+
+  it('holds exactly these three entries, so it cannot quietly grow into a bypass', () => {
+    assert.deepEqual([...builtInAllowedReplacements(CLUSTER).keys()], [
+      'sampleclusterdashboardtargetgroup',
+      'dashboardendpoint',
+      'opensearchprivateips',
+    ]);
   });
 });
 

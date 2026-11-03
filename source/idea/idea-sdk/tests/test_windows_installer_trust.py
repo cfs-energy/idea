@@ -53,6 +53,15 @@ def test_trust_check_needs_a_valid_signature_from_the_pinned_publisher():
     # OU is not vetted and differs between certificates of the same publisher
     assert 'OU=' not in body
     assert 'Get-FileHash -LiteralPath $Path -Algorithm SHA256' in body
+    # the pass path says so in the bootstrap log, so bake and boot logs prove the check ran
+    sha_pass = body.index('if ($Actual -eq $Sha256) {')
+    log = (
+        'Write-ToLog -Message "Verified $(Split-Path -Leaf $Path): SHA-256 matches pin"'
+    )
+    assert body.index(log, sha_pass) < body.index('return', sha_pass)
+    pub_pass = body.index('if ($Missing.Count -eq 0) {')
+    log = 'Write-ToLog -Message "Verified $(Split-Path -Leaf $Path): Authenticode publisher $($Publishers[$Publisher][0].Substring(3))"'
+    assert body.index(log, pub_pass) < body.index('return', pub_pass)
     # neither pin given is a refusal, not a pass
     assert 'no publisher or SHA-256 is pinned for it' in body
     refusal = body.index(

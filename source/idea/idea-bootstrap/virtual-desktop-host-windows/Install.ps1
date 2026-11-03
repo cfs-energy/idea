@@ -80,7 +80,10 @@ function Assert-InstallerTrusted {
     }
     if ($Sha256) {
         $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
-        if ($Actual -eq $Sha256) { return }
+        if ($Actual -eq $Sha256) {
+            Write-ToLog -Message "Verified $(Split-Path -Leaf $Path): SHA-256 matches pin"
+            return
+        }
         $Reason = "its SHA-256 $Actual does not match the pinned $Sha256"
     } elseif ($Publisher) {
         $Signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -91,7 +94,10 @@ function Assert-InstallerTrusted {
                 [Security.Cryptography.X509Certificates.X500DistinguishedNameFlags]'UseNewLines, DoNotUseQuotes'
             ) -split "`r?`n" | ForEach-Object { $_.Trim() })
             $Missing = @($Publishers[$Publisher] | Where-Object { $Subject -cnotcontains $_ })
-            if ($Missing.Count -eq 0) { return }
+            if ($Missing.Count -eq 0) {
+                Write-ToLog -Message "Verified $(Split-Path -Leaf $Path): Authenticode publisher $($Publishers[$Publisher][0].Substring(3))"
+                return
+            }
             $Reason = "it is signed by '$($Signature.SignerCertificate.Subject)', not the pinned $Publisher publisher ($($Publishers[$Publisher] -join ', '))"
         }
     } else {

@@ -15,6 +15,7 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils imp
     BOOTSTRAP_REFRESH_LINUX_BASE_OS,
 )
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_utils import (
+    BOOTSTRAP_REFRESH_TEMPLATES,
     BOOTSTRAP_REFRESH_VERSION,
     render_bootstrap_refresh,
 )
@@ -46,6 +47,50 @@ def heredoc(text, path, end):
 def test_the_refresh_carries_terminal_trust_from_this_release():
     # 6: the helper moves release-candidate desktops' principals command off root.
     assert BOOTSTRAP_REFRESH_VERSION >= 6
+
+
+def test_the_refresh_carries_the_cve_2026_98432_network_hardening():
+    # 7: running desktops get the MPTCP/request-migration sysctls and the IP options drop rule.
+    assert BOOTSTRAP_REFRESH_VERSION >= 7
+    assert '_templates/linux/kernel_net_hardening.jinja2' in BOOTSTRAP_REFRESH_TEMPLATES
+    script = render('rocky9')
+    assert 'net.mptcp.enabled = 0' in script
+    assert 'ip hdrlength > 5 meta l4proto tcp counter drop' in script
+    off = render_bootstrap_refresh(
+        str(BOOTSTRAP), 'rocky9', {**VARIABLES, 'drop_tcp_ip_options': False}
+    )
+    assert 'ip hdrlength' not in off
+    assert 'nft delete table inet idea_tcp_ip_options' in off
+
+
+def test_the_refresh_blocks_the_hardened_kernel_modules():
+    # 8: running desktops get the algif_aead/esp4/esp6 modprobe rule; the flag removes it.
+    assert (
+        '_templates/linux/kernel_module_hardening.jinja2' in BOOTSTRAP_REFRESH_TEMPLATES
+    )
+    script = render('rocky9')
+    assert 'install algif_aead /bin/false' in script
+    assert 'rmmod' not in script
+    off = render_bootstrap_refresh(
+        str(BOOTSTRAP), 'rocky9', {**VARIABLES, 'block_kernel_modules': False}
+    )
+    assert 'install algif_aead' not in off
+    assert 'rm -f /etc/modprobe.d/90-idea-kernel-modules.conf' in off
+
+
+def test_the_refresh_masks_unused_ubuntu_services_without_a_package_transaction():
+    # 8: running Ubuntu desktops get cups-browsed stopped and masked; the flag puts it back.
+    assert BOOTSTRAP_REFRESH_VERSION >= 8
+    assert '_templates/linux/unused_services.jinja2' in BOOTSTRAP_REFRESH_TEMPLATES
+    script = render('ubuntu2404')
+    block = script[script.index('# Begin: Unused Services') :]
+    assert 'systemctl mask cups-browsed.service' in block
+    assert 'apt-get purge' not in block
+    assert 'cups-browsed' not in render('rocky9')
+    off = render_bootstrap_refresh(
+        str(BOOTSTRAP), 'ubuntu2404', {**VARIABLES, 'disable_unused_services': False}
+    )
+    assert 'systemctl unmask cups-browsed.service' in off
 
 
 @pytest.mark.parametrize('base_os', LINUX)
@@ -122,6 +167,8 @@ class Desktop:
         )
         self.stub('ssh-keygen', f'echo "ssh-keygen $*" >> {self.calls}')
         self.stub('dconf', 'exit 0')
+        # a loaded table: kernel_net_hardening restarts its unit only when the table is missing
+        self.stub('nft', f'echo "nft $*" >> {self.calls}')
         script = render(base_os)
         archive = re.search(r"printf '%s' '([A-Za-z0-9+/=]+)'", script)[1]
         self.script = self.moved(script.replace(archive, 'ARCHIVE')).replace(
@@ -216,6 +263,24 @@ def test_a_desktop_from_this_release_is_left_exactly_as_it_is(tmp_path, base_os)
     helper = desktop.root / 'usr/local/libexec/idea-terminal-host.py'
     helper.parent.mkdir(parents=True)
     helper.write_bytes(HELPER.read_bytes())
+    hardening = (BOOTSTRAP / '_templates/linux/kernel_net_hardening.jinja2').read_text()
+    for path, end in (
+        ('/etc/sysctl.d/90-idea-net-hardening.conf', 'IDEA_SYSCTL_EOF'),
+        ('/etc/idea/idea-tcp-ip-options.nft', 'IDEA_NFT_EOF'),
+        ('/etc/systemd/system/idea-tcp-ip-options.service', 'IDEA_UNIT_EOF'),
+    ):
+        target = desktop.root / path.lstrip('/')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        found = re.search(
+            rf"{re.escape(path)} << '{end}'[^\n]*\n(.*?\n){end}\n", hardening, re.S
+        )
+        target.write_text(desktop.moved(found[1]))
+    modules = (
+        BOOTSTRAP / '_templates/linux/kernel_module_hardening.jinja2'
+    ).read_text()
+    target = desktop.root / 'etc/modprobe.d/90-idea-kernel-modules.conf'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(re.search(r"idea_modules_conf='(.*?)'", modules, re.S)[1] + '\n')
     kex = desktop.root / 'etc/ssh/sshd_config.d/10-idea-kex.conf'
     kex.parent.mkdir()
     kex.write_text(

@@ -76,7 +76,6 @@ checking endpoint status for cluster: idea-test, url: https://idea-test-external
 | Cluster Manager              | https://idea-test-external-alb-1837136939.us-east-2.elb.amazonaws.com/cluster-manager             | SUCCESS |
 | eVDI                         | https://idea-test-external-alb-1837136939.us-east-2.elb.amazonaws.com/vdc                         | SUCCESS |
 | Scale-Out Computing          | https://idea-test-external-alb-1837136939.us-east-2.elb.amazonaws.com/scheduler                   | SUCCESS |
-| OpenSearch Service Dashboard | https://idea-test-external-alb-1837136939.us-east-2.elb.amazonaws.com/_dashboards/                | SUCCESS |
 +------------------------------+---------------------------------------------------------------------------------------------------+---------+
 ```
 

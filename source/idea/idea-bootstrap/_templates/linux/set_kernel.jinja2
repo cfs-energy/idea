@@ -40,11 +40,10 @@ if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/n
         continue
       fi
       [[ -n "${NEWEST_FSX_KERNEL_ABI}" ]] || NEWEST_FSX_KERNEL_ABI="${candidate_abi}"
+      # The newest, not the running one: a bake must carry the latest kernel fixes.
       if [[ -n "$(apt-cache show "linux-image-${candidate_abi}:${KERNEL_ARCH}" 2>/dev/null)" ]]; then
-        if [[ -z "${SELECTED_KERNEL_ABI}" || "${candidate_abi}" == "${TARGET_KERNEL_ABI}" ]]; then
-          SELECTED_KERNEL_ABI="${candidate_abi}"
-        fi
-        [[ "${candidate_abi}" != "${TARGET_KERNEL_ABI}" ]] || break
+        SELECTED_KERNEL_ABI="${candidate_abi}"
+        break
       fi
     done < <(apt-cache pkgnames lustre-client-modules- | sed -n 's/^lustre-client-modules-\([0-9][0-9.]*-[0-9]*-aws\)$/\1/p' | sort -Vr)
     if [[ -z "${SELECTED_KERNEL_ABI}" ]]; then
@@ -64,6 +63,42 @@ if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/n
 {% endif %}    fail_kernel_bootstrap lustre-module-missing "The FSx for Lustre repository has no lustre-client-modules-${TARGET_KERNEL_ABI} for the running kernel ${TARGET_KERNEL_ABI}."
   fi
 fi
+{% elif ubuntu_desktop_bake | default(false) %}
+# No Lustre module to match: a bake takes the newest kernel of the running series.
+if [[ -n "${BAKE_STAGE:-}" ]]; then
+  apt_update || exit 1
+  KERNEL_ARCH=$(dpkg --print-architecture)
+  while read -r candidate_abi; do
+    [[ "${candidate_abi}" == "${TARGET_KERNEL_ABI%%-*}"-* ]] || continue
+    if [[ -n "$(apt-cache show "linux-image-${candidate_abi}:${KERNEL_ARCH}" 2>/dev/null)" ]]; then
+      TARGET_KERNEL_ABI="${candidate_abi}"
+      break
+    fi
+  done < <(apt-cache pkgnames linux-image- | sed -n 's/^linux-image-\([0-9][0-9.]*-[0-9]*-aws\)$/\1/p' | sort -Vr)
+fi
+{% endif %}
+{% if ubuntu_desktop_bake | default(false) %}
+{# Kernel series Canonical no longer fixes on this release: a bake from a base image booting one
+   would snapshot a kernel that never gets another security fix. Overridable per release with
+   global-settings.kernel_hardening.eol_kernel_series.<base_os>. #}
+{% if context.base_os == 'ubuntu2204' %}
+{% set idea_eol_defaults = ['6.2', '6.5'] %}
+{% elif context.base_os == 'ubuntu2404' %}
+{% set idea_eol_defaults = ['6.11', '6.14', '6.17'] %}
+{% else %}
+{% set idea_eol_defaults = [] %}
+{% endif %}
+{% set idea_eol_series = context.config.get_list('global-settings.kernel_hardening.eol_kernel_series.' + context.base_os, default=idea_eol_defaults) or [] %}
+{% if idea_eol_series | length > 0 %}
+if [[ -n "${BAKE_STAGE:-}" ]]; then
+  TARGET_KERNEL_SERIES=$(echo "${TARGET_KERNEL_ABI}" | cut -d. -f1-2)
+  for eol_series in {{ idea_eol_series | join(' ') }}; do
+    if [[ "${TARGET_KERNEL_SERIES}" == "${eol_series}" ]]; then
+      fail_kernel_bootstrap kernel-series-end-of-life "Kernel ${TARGET_KERNEL_ABI} is in the ${eol_series} series, which no longer receives security fixes on this Ubuntu release. Bake from a base image that boots a supported series."
+    fi
+  done
+fi
+{% endif %}
 {% endif %}
 TARGET_KERNEL_VERSION="${TARGET_KERNEL_ABI%-aws}*"
 {% elif context.base_os in ('amazonlinux2023',) %}
@@ -126,6 +161,7 @@ TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
   # Lock the running kernel under its own package family (kernel, kernel6.12, ...)
   local kernel_package
   kernel_package=$(rpm -qf --queryformat '%{NAME}' "/boot/vmlinuz-${current_kernel}" 2>/dev/null) || kernel_package=kernel
+  current_kernel="${TARGET_KERNEL_RELEASE:-${current_kernel}}"
   dnf versionlock ${kernel_package}-${current_kernel} ${kernel_package}-devel-${current_kernel} ${kernel_package}-headers-${current_kernel} >/dev/null 2>&1 || true
 
 {% elif context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
@@ -134,7 +170,8 @@ TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
     log_info "Installing dnf-plugin-versionlock for kernel version management"
     package_transaction dnf install -y dnf-plugin-versionlock >/dev/null 2>&1 || true
   fi
-  # Lock the specific current kernel version
+  # Lock the kernel the host boots: the newest of the series once one was installed
+  current_kernel="${TARGET_KERNEL_RELEASE:-${current_kernel}}"
   dnf versionlock kernel-${current_kernel} kernel-core-${current_kernel} kernel-devel-${current_kernel} kernel-headers-${current_kernel} >/dev/null 2>&1 || true
 {% endif %}
 }
@@ -231,6 +268,43 @@ function install_target_kernel() {
 {% endif %}
 }
 
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+# The host already runs the target series, which is not the newest kernel of it: install the
+# newest (a security fix ships as a new release in the series, CVE-2026-98432 among them) and
+# boot it. The host's existing reboot activates it, so this adds none.
+function update_within_target_series() {
+  local current_kernel
+  current_kernel=$(uname -r)
+  # An image baked by an earlier release locks its kernel, which would hide the newer one.
+  dnf versionlock delete 'kernel*' >/dev/null 2>&1 || true
+{% if context.base_os == 'amazonlinux2023' %}
+  # AL2023 repositories are versioned; only the latest release carries the newest kernel.
+  local kernel_package
+  kernel_package=$(rpm -qf --queryformat '%{NAME}' "/boot/vmlinuz-${current_kernel}" 2>/dev/null) || kernel_package=kernel
+  local newest
+  newest=$(dnf repoquery -q --releasever=latest --latest-limit 1 --qf '%{version}-%{release}.%{arch}' "${kernel_package}" 2>/dev/null | tail -1)
+  [[ -n "${newest}" && "${newest}" != "${current_kernel}" ]] || return 0
+  [[ "$(printf '%s\n%s\n' "${current_kernel}" "${newest}" | sort -V | tail -1)" == "${newest}" ]] || return 0
+  if ! package_transaction dnf install -y --releasever=latest "${kernel_package}-${newest}" "${kernel_package}-devel-${newest}"; then
+{% else %}
+  local newest
+  newest=$(dnf repoquery -q --latest-limit 1 --qf '%{version}-%{release}.%{arch}' "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | tail -1)
+  [[ -n "${newest}" && "${newest}" != "${current_kernel}" ]] || return 0
+  [[ "$(printf '%s\n%s\n' "${current_kernel}" "${newest}" | sort -V | tail -1)" == "${newest}" ]] || return 0
+  if ! package_transaction dnf install -y "kernel-${newest}" "kernel-core-${newest}" "kernel-devel-${newest}"; then
+{% endif %}
+    log_warning "Unable to install kernel ${newest}; keeping ${current_kernel}"
+    return 0
+  fi
+  if [[ ! -f "/boot/vmlinuz-${newest}" ]] || ! grubby --set-default "/boot/vmlinuz-${newest}"; then
+    log_warning "Kernel ${newest} is installed but not the default boot kernel; keeping ${current_kernel}"
+    return 0
+  fi
+  TARGET_KERNEL_RELEASE="${newest}"
+  set_reboot_required "Kernel update to ${newest}"
+}
+{% endif %}
+
 function set_kernel_version() {
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  [[ -n "${BAKE_STAGE:-}" ]] || return 0
 {% endif %}  # Skip kernel management on captured images that already went through bootstrap
@@ -248,7 +322,8 @@ function set_kernel_version() {
 
 {% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  # Check if we're already running the target kernel series
   if [[ "$current_kernel" == "${target_base}"[.-]* ]]; then
-    log_info "Confirmed running target kernel series $target_base - pinning current version"
+    log_info "Confirmed running target kernel series $target_base"
+    update_within_target_series
     apply_kernel_holds
     remove_unwanted_kernels
     return 0

@@ -44,7 +44,7 @@ The AMIs IDEA ships are entirely flat, so every published AMI is x86\_64. An arm
 
 ## Region AMI coverage
 
-`region_ami_config.yml` maps each region to one AMI per `base_os` (commercial ids resolved 2026-08-18, GovCloud 2026-08-26). A region without an entry cannot launch that `base_os` unless the job passes a custom `instance_ami`.
+`region_ami_config.yml` maps each region to one AMI per `base_os` (commercial ids resolved 2026-08-18, amazonlinux2023 2026-11-03 except me-south-1, GovCloud 2026-08-26). A region without an entry cannot launch that `base_os` unless the job passes a custom `instance_ami`.
 
 * `amazonlinux2023`, `rhel8`, `rhel9`: all 29 cataloged regions.
 * `rocky8`, `rocky9`: all except `us-gov-west-1`.

@@ -609,6 +609,28 @@ package_config:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-viewer_amd64.ubuntu2404.deb
   {% endif %}
 
+kernel_hardening:
+  # drop IPv4 TCP packets that carry IP options on every Linux host IDEA configures (an
+  # nftables table, idea_tcp_ip_options): the interim mitigation for CVE-2026-98432 until the
+  # hosts run a fixed kernel. false removes the table on the next bootstrap or desktop refresh.
+  drop_tcp_ip_options: true
+  # refuse to load algif_aead, esp4 and esp6 (a modprobe.d install rule) on every Linux host IDEA
+  # bootstraps and on running desktops through the refresh: interim local privilege escalation
+  # hardening until the hosts run a fixed kernel. Nothing IDEA runs uses them. An already loaded
+  # module stays loaded. false removes the rule on the next bootstrap or desktop refresh.
+  block_modules: true
+  # kernel series an Ubuntu desktop bake refuses, per base OS: Canonical no longer ships security
+  # fixes for them on that release, so an image on one could never be patched
+  eol_kernel_series:
+    ubuntu2204: ['6.2', '6.5']
+    ubuntu2404: ['6.11', '6.14', '6.17']
+
+host_hardening:
+  # stop daemons Ubuntu desktops and compute nodes carry that no IDEA service uses (cups-browsed,
+  # postgresql, sendmail) at bootstrap, image bake and desktop refresh. false puts back what was
+  # stopped on the next bootstrap or desktop refresh.
+  disable_unused_services: true
+
 gpu_settings:
   # fail bootstrap when a node reports GPU hardware and no usable driver was installed,
   # instead of joining the cluster driverless. disable only to work around a false positive.

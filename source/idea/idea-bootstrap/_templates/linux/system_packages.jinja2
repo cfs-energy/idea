@@ -96,5 +96,6 @@ EXCLUDE=()
      too old for the running kernel headers; the other deb node types run universe.jinja2 first #}
   apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
   DEBIAN_FRONTEND=noninteractive apt install -yq $DEFAULT_PACKAGES_FOR_DEB
+  {% include '_templates/linux/unused_services.jinja2' %}
 {% endif %}
 # End: System Packages Install

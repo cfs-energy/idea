@@ -495,6 +495,9 @@ def test_a_missing_private_zone_degrades_the_refresh(refresh):
         'pbs_server_name': 'scheduler.private_dns_name',
         'private_zone': None,
         'bootstrap_refresh': True,
+        'drop_tcp_ip_options': True,
+        'block_kernel_modules': True,
+        'disable_unused_services': True,
     }
     logger.warning.assert_called_once()
     session = refresh.add_session()

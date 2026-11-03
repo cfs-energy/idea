@@ -176,6 +176,8 @@ EOF
   update-desktop-database
 {% endif %}
 
+{% include '_templates/linux/unused_services.jinja2' %}
+
   # Apply colord policy fix for all distributions
      {% include '_templates/linux/colord.jinja2' %}
 

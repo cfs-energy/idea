@@ -64,7 +64,7 @@ interface Attribution {
 const ATTRIBUTED: Attribution[] = [
   // analytics_stack.py:208, :438
   { stack: 'analytics', path: 'analytics-sink-lambda-policy/Resource', demo1Id: 'analyticssinklambdapolicyD33AD925', template: 'analytics-sink-lambda.yml' },
-  { stack: 'analytics', path: 'opensearch-private-ips-lambda-policy/Resource', demo1Id: 'opensearchprivateipslambdapolicy2C1A5D98', template: 'custom-resource-opensearch-private-ips.yml' },
+  { stack: 'analytics', path: 'opensearch-private-ips-lambda-policy/Resource', demo1Id: 'opensearchprivateipslambdapolicy2C1A5D98', template: 'custom-resource-opensearch-private-ips.yml', conditional: true },
   {
     stack: 'analytics',
     pathPattern: /^analytics\/ESLogGroupPolicy[0-9a-f]+\/CustomResourcePolicy\/Resource$/,

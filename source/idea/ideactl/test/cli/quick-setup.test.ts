@@ -73,11 +73,12 @@ describe('quick-setup --skip-config', () => {
     const file = valuesFile();
     const tables = {
       ...TABLES,
-      // analytics gives the check an endpoint to fail on
+      // a published analytics dashboard gives the check an endpoint to fail on
       [`${CLUSTER}.modules`]: [...TABLES[`${CLUSTER}.modules`], moduleRow('analytics', 'analytics', 'stack')],
       [`${CLUSTER}.cluster-settings`]: [
         ...TABLES[`${CLUSTER}.cluster-settings`],
         { key: 'cluster.load_balancers.external_alb.public', value: false },
+        { key: 'analytics.opensearch.endpoints.external.enabled', value: true },
       ],
     };
     const deps = fakeDeps({ tables });

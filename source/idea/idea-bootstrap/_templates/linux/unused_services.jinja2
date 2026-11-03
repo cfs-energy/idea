@@ -1,0 +1,70 @@
+# Begin: Unused Services
+{# Daemons Ubuntu desktop and compute images carry that no IDEA service uses. Shared by first
+   bootstrap, image bakes and the running-desktop refresh, which renders without the cluster config
+   and passes the flag as a variable. A running desktop gets no package transaction, only
+   systemctl. POSIX: the refresh runs under dash. #}
+{% if disable_unused_services is not defined %}
+{% set disable_unused_services = context.config.get_bool('global-settings.host_hardening.disable_unused_services', default=True) if context.config is defined else True %}
+{% endif %}
+{% set idea_running_desktop = bootstrap_refresh is defined and bootstrap_refresh %}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+idea_deb_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q ' installed$'
+}
+{% if disable_unused_services %}
+# cups-browsed listens on UDP 631 on every interface to discover network printers. DCV printing
+# uses cupsd, which stays. Only cups-daemon names it, as a Recommends, so removing it removes
+# nothing else; masked as well, so a later install does not start it.
+{% if not idea_running_desktop %}
+if idea_deb_installed cups-browsed; then
+  DEBIAN_FRONTEND=noninteractive apt-get purge -y -o DPkg::Lock::Timeout=300 cups-browsed > /dev/null 2>&1 || log_warning "cups-browsed not removed"
+fi
+# The telnet client: the cloud image's ubuntu-standard names it as a Recommends only, nothing IDEA
+# runs uses it, and ssh and nc remain. Images and new hosts only; a running desktop keeps it.
+for idea_package in telnet inetutils-telnet; do
+  if idea_deb_installed "${idea_package}"; then
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y -o DPkg::Lock::Timeout=300 "${idea_package}" > /dev/null 2>&1 || log_warning "${idea_package} not removed"
+  fi
+done
+{% endif %}
+if [ "$(systemctl is-enabled cups-browsed.service 2>/dev/null)" != masked ]; then
+  systemctl disable --now cups-browsed.service > /dev/null 2>&1 || true
+  systemctl mask cups-browsed.service > /dev/null 2>&1 || log_warning "unable to mask cups-browsed"
+fi
+# postgresql and sendmail-bin come from linux_packages.application_deb as OpenPBS build
+# dependencies. The PBS server and its database run in the scheduler container, so no host needs
+# either daemon; the packages stay for their headers and client libraries. A PostgreSQL holding
+# more than the three databases it was created with is someone's data and keeps running. What is
+# stopped is recorded, so turning the flag off starts exactly that again.
+for idea_pair in postgresql:postgresql sendmail:sendmail-bin; do
+  idea_unit=${idea_pair%%:*}
+  idea_deb_installed "${idea_pair#*:}" || continue
+  systemctl is-enabled "${idea_unit}.service" > /dev/null 2>&1 || continue
+  if [ "${idea_unit}" = postgresql ]; then
+    idea_pg_data=no
+    for idea_pg_base in /var/lib/postgresql/*/main/base; do
+      [ -d "${idea_pg_base}" ] || continue
+      [ "$(ls "${idea_pg_base}" | wc -l)" -le 3 ] || idea_pg_data=yes
+    done
+    if [ "${idea_pg_data}" = yes ]; then
+      log_warning "postgresql holds databases beyond its defaults; left running"
+      continue
+    fi
+  fi
+  systemctl disable --now "${idea_unit}.service" > /dev/null 2>&1 || { log_warning "unable to stop ${idea_unit}"; continue; }
+  mkdir -p /var/lib/idea && touch "/var/lib/idea/stopped-${idea_unit}"
+done
+{% else %}
+# global-settings.host_hardening.disable_unused_services is off: put back what an earlier run masked
+if [ "$(systemctl is-enabled cups-browsed.service 2>/dev/null)" = masked ]; then
+  systemctl unmask cups-browsed.service > /dev/null 2>&1 || true
+  ! idea_deb_installed cups-browsed || systemctl enable --now cups-browsed.service > /dev/null 2>&1 || log_warning "unable to start cups-browsed"
+fi
+for idea_unit in postgresql sendmail; do
+  [ -f "/var/lib/idea/stopped-${idea_unit}" ] || continue
+  systemctl enable --now "${idea_unit}.service" > /dev/null 2>&1 || log_warning "unable to start ${idea_unit}"
+  rm -f "/var/lib/idea/stopped-${idea_unit}"
+done
+{% endif %}
+{% endif %}
+# End: Unused Services

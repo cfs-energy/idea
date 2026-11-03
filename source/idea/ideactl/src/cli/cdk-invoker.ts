@@ -378,9 +378,19 @@ export interface ChangeSetVerdict {
  */
 export const REVISIONED_TYPES: ReadonlySet<string> = new Set(['AWS::ECS::TaskDefinition']);
 
+/**
+ * The dashboard route on the external load balancer is opt-in, so an analytics deploy with it off
+ * removes the two custom resources that built it. Their delete handlers only remove the listener
+ * rule (a no-op when it is already gone) and read nothing back; nothing stateful goes with them.
+ */
+const DASHBOARD_ROUTE_CUSTOM_RESOURCES: ReadonlyArray<[string, string]> = [
+  ['dashboardendpoint', 'Custom::DashboardEndpointExternal'],
+  ['opensearchprivateips', 'Custom::OpenSearchPrivateIPAddresses'],
+];
+
 export function builtInAllowedReplacements(clusterName: string): Map<string, string> {
   const dashboardTargetGroup = `${clusterName.replace(/-/g, '')}dashboardtargetgroup`;
-  return new Map([[dashboardTargetGroup, 'AWS::ElasticLoadBalancingV2::TargetGroup']]);
+  return new Map([[dashboardTargetGroup, 'AWS::ElasticLoadBalancingV2::TargetGroup'], ...DASHBOARD_ROUTE_CUSTOM_RESOURCES]);
 }
 
 /**
