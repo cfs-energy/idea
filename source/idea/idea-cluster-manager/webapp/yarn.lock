@@ -842,9 +842,9 @@
     "@babel/helper-validator-identifier" "^7.29.7"
 
 "@cloudscape-design/collection-hooks@^1.0.0":
-  version "1.0.110"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/collection-hooks/-/collection-hooks-1.0.110.tgz#8777d3ec6b8a6fd5f7781ebcedbc7fe3c6a4e9b8"
-  integrity sha512-aCESwWMRwYKDZmUIUZZAdiFKLm7qnweqCNVfC1ONMlEmjcmTsoIPqdLDUxF5rwTzM3Pytx5FyKVEpg+h6sz5Gw==
+  version "1.0.111"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/collection-hooks/-/collection-hooks-1.0.111.tgz#9ca9ad57b5aa5234af670aedb607de92b0c9ecf9"
+  integrity sha512-6LMwy8mex7rBqTpQRJskV/HTaxYbP+C+tEKOzBQVjHjtTK2Hi6MY/Lv6PpspnbwVbcc1gimFdPZcJi3zTnMVCA==
   dependencies:
     "@cloudscape-design/component-toolkit" "^1.0.0-beta"
 

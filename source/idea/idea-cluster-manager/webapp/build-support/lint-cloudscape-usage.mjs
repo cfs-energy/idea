@@ -23,8 +23,8 @@ const ALLOW_MARKER = 'awsui-hashed-class-name-allowed';
 
 // Rule 2: these components flatten React.Fragment children on React 18 but hand them straight to
 // React.Children.toArray on 19, so a fragment that expanded into N grid cells collapses into one.
-// flattenChildren's consumers in the installed package: column-layout, grid, space-between.
-const FLATTEN_CONSUMERS = new Set(['ColumnLayout', 'Grid', 'SpaceBetween']);
+// flattenChildren's consumers in the installed package: column-layout, control-group, grid, space-between.
+const FLATTEN_CONSUMERS = new Set(['ColumnLayout', 'ControlGroup', 'Grid', 'SpaceBetween']);
 
 const FRAGMENT_MARKER = 'cloudscape-fragment-child-allowed';
 

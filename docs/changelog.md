@@ -6,7 +6,7 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.11.1] - 2026-10-26
+## [26.11.1] - 2026-11-04
 
 > **Upgrade floor: 26.10.0.** 26.11.1 upgrades only clusters whose modules are all on 26.10.0 or later, and refuses before changing anything otherwise. A cluster on an older release upgrades to 26.10.9 first (that release also completes the move to ECS), then to 26.11.1. Clusters on 25.11.0 or newer reach 26.10.9 directly; older clusters follow each intervening release's upgrade instructions first (see [Full IDEA Upgrade](first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md)).
 
@@ -31,7 +31,6 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Upgrade floor 26.10.0**: every deployed module must meet it; migration paths for older releases are removed.
 * **idea-cli removed**: the unused Python package; administrator commands stay in ideactl and the three service CLIs stay in their packages.
 * **Python dependencies**: consolidated into runtime and development locks; unused direct dependencies and unreferenced SDK and data-model modules are removed.
-* **Dependencies**: AWS SDK for JavaScript 3.1156.0, CDK CLI 2.1146.1 / library 2.274.0, Cloudscape components 3.0.1404 / design tokens 3.0.116, Vite 8.3.5, Sass 1.106.1, undici 8.12.3, and the setup-python action refresh. Python locks recompiled.
 * Contributors use mise tasks for builds, tests, schema generation and requirements locks, replacing Invoke and unused Python maintenance scripts; run `mise install` and `hk install` after updating the checkout, and use `mise run <task>` for development commands. trufflehog is the single secret scanner, run by the same `scripts/trufflehog-scan.sh` in hk and CI.
 * **Maintenance admission**: the queuejob hook reads `cluster-manager.maintenance.enabled` on each submission. Non-admin submissions are refused while it is on; root and cluster administrators can still submit. The configured image-pipeline validation user (default `idea-validate`) is also exempt so post-upgrade image canaries can run; see [maintenance admission](modules/cluster-manager/maintenance-banner.md). Clearing the flag restores submission after config propagation without a restart. No queue enable/disable commands are needed for drains.
 * **Maintenance end time**: `maintenance.ends_at` offsets must be between -12:00 and +14:00, and the scheduler omits an end time it cannot convert to UTC instead of failing the submission with a generic error.
@@ -85,7 +84,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Desktop history backfill**: the desktop controller no longer re-reads 90 days of CloudTrail RunInstances events on every leader start once the backfill is done.
 * **Metrics outbox**: the cluster manager saves and sends cost and storage metric points in batches of up to 500, one S3 object and one Datadog request each, instead of one per point. A batch is deleted only after Datadog accepts it.
 * **Scheduler log archive**: the daily archive no longer stops at a busy `.nfs` file in the PBS log directories, so compute node logs are archived and pruned again.
-* **Dependencies**: pyasn1 0.6.5 (security), refreshed Python locks, @types/node 26 for the web portal, cloudscape 3.0.1409, sass 1.107.1 and other web portal and ideactl updates (AWS SDK 3.1161, aws-cdk 2.1147, aws-cdk-lib 2.275), clearing the fast-uri, brace-expansion, source-map-js and serialize-javascript advisories.
+* **Dependencies**: AWS SDK for JavaScript 3.1161.0, CDK CLI 2.1147.0 / library 2.275.0, Cloudscape components 3.0.1409 / design tokens 3.0.117 / collection hooks 1.0.111, Vite 8.3.5, Sass 1.107.1, undici 8.12.3, @types/node 26, pyasn1 0.6.5 (security), and the setup-python action refresh. Python locks recompiled. Clears the fast-uri, brace-expansion, source-map-js and serialize-javascript advisories.
 
 ## [26.10.9] - 2026-10-22
 
