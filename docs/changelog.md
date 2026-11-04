@@ -85,7 +85,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Desktop history backfill**: the desktop controller no longer re-reads 90 days of CloudTrail RunInstances events on every leader start once the backfill is done.
 * **Metrics outbox**: the cluster manager saves and sends cost and storage metric points in batches of up to 500, one S3 object and one Datadog request each, instead of one per point. A batch is deleted only after Datadog accepts it.
 * **Scheduler log archive**: the daily archive no longer stops at a busy `.nfs` file in the PBS log directories, so compute node logs are archived and pruned again.
-* **Dependencies**: pyasn1 0.6.5 (security), refreshed Python locks, @types/node 26 for the web portal, cloudscape 3.0.1408, sass 1.107.1 and other web portal and ideactl updates (AWS SDK 3.1161, aws-cdk 2.1147, aws-cdk-lib 2.275), clearing the fast-uri, brace-expansion, source-map-js and serialize-javascript advisories.
+* **Dependencies**: pyasn1 0.6.5 (security), refreshed Python locks, @types/node 26 for the web portal, cloudscape 3.0.1409, sass 1.107.1 and other web portal and ideactl updates (AWS SDK 3.1161, aws-cdk 2.1147, aws-cdk-lib 2.275), clearing the fast-uri, brace-expansion, source-map-js and serialize-javascript advisories.
 
 ## [26.10.9] - 2026-10-22
 
