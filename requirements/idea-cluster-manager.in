@@ -1,6 +1,0 @@
--r idea-sdk.in
-supervisor
-sanic
-python-ldap
-ldappool
-passlib

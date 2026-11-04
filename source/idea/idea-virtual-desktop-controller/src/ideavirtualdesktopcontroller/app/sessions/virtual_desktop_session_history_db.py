@@ -258,31 +258,24 @@ class VirtualDesktopSessionHistoryDB:
         keeps, or an instance another row also matched, it is marked instance_unknown
         and the cost pages leave it unpriced. each row is written once, so this is
         safe to repeat; true when nothing is left to do.
+
+        the rows written are the persisted record of a finished backfill: a pass first
+        checks for rows still to match, once, and with none returns before any
+        CloudTrail read, so a leader start after the backfill makes no LookupEvents
+        call. while CloudTrail is being read, slice by slice, the table is not scanned.
         """
         from ideavirtualdesktopcontroller.app.sessions.desktop_launches import (
             CLOUDTRAIL_DAYS,
         )
 
+        if not launches.rows_checked:
+            launches.rows_checked = True
+            if not self._rows_to_backfill(self.list_all()):
+                return True
         if not launches.read():
             return False
         all_rows = self.list_all()
-        # runs began to be recorded at the first run; a desktop deleted since then
-        # without an instance id never had one, and has nothing to look up
-        runs = [
-            Utils.get_value_as_int('started_on', row, 0)
-            for row in all_rows
-            if row.get('run_of')
-        ]
-        recording_since = min(runs) if runs else Utils.current_time_ms()
-        rows = [
-            row
-            for row in all_rows
-            if not row.get('run_of')
-            and not row.get('instance_id')
-            and not row.get('instance_unknown')
-            and not row.get('never_ran')
-            and Utils.get_value_as_int('deleted_on', row, 0) < recording_since
-        ]
+        rows = self._rows_to_backfill(all_rows)
         if not rows:
             return True
         taken = set(live_instance_ids()) | {
@@ -336,6 +329,26 @@ class VirtualDesktopSessionHistoryDB:
                     ):
                         raise
         return True
+
+    @staticmethod
+    def _rows_to_backfill(all_rows: List[Dict]) -> List[Dict]:
+        # runs began to be recorded at the first run; a desktop deleted since then
+        # without an instance id never had one, and has nothing to look up
+        runs = [
+            Utils.get_value_as_int('started_on', row, 0)
+            for row in all_rows
+            if row.get('run_of')
+        ]
+        recording_since = min(runs) if runs else Utils.current_time_ms()
+        return [
+            row
+            for row in all_rows
+            if not row.get('run_of')
+            and not row.get('instance_id')
+            and not row.get('instance_unknown')
+            and not row.get('never_ran')
+            and Utils.get_value_as_int('deleted_on', row, 0) < recording_since
+        ]
 
     def list_for_owner(self, owner: str) -> List[Dict]:
         result = self.table.query(KeyConditionExpression=Key('owner').eq(owner))

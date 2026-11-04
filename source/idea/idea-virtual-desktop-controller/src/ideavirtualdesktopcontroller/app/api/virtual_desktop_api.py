@@ -1126,6 +1126,22 @@ class VirtualDesktopAPI(BaseAPI):
             self._logger.error(new_session.failure_reason)
             return new_session
 
+        if new_session.server and (
+            new_session.server.instance_id or new_session.server.instance_type
+        ):
+            if (
+                not old_session.server
+                or not old_session.server.instance_id
+                or (
+                    new_session.server.instance_id
+                    and new_session.server.instance_id != old_session.server.instance_id
+                )
+            ):
+                new_session.failure_reason = (
+                    'Instance does not match the stored session.'
+                )
+                return new_session
+
         operation_failed = False
         is_session_updated = False
         is_server_updated = False
@@ -1151,7 +1167,7 @@ class VirtualDesktopAPI(BaseAPI):
             and Utils.is_not_empty(new_session.server)
             and Utils.is_not_empty(new_session.server.instance_type)
         ):
-            old_server = self.server_db.get(instance_id=new_session.server.instance_id)
+            old_server = self.server_db.get(instance_id=old_session.server.instance_id)
             if (
                 Utils.is_not_empty(old_server)
                 and old_server.instance_type != new_session.server.instance_type
@@ -1161,7 +1177,7 @@ class VirtualDesktopAPI(BaseAPI):
                     success = False
                 else:
                     error, success = self.controller_utils.change_instance_type(
-                        instance_id=new_session.server.instance_id,
+                        instance_id=old_session.server.instance_id,
                         instance_type_name=new_session.server.instance_type,
                     )
 
@@ -1170,6 +1186,8 @@ class VirtualDesktopAPI(BaseAPI):
                     operation_failed = True
                 else:
                     old_session.server.instance_type = new_session.server.instance_type
+                    # A new size answers a stored capacity failure; other edits keep it.
+                    old_session.failure_reason = None
                     is_server_updated = True
                     is_session_updated = True
 
@@ -1205,6 +1223,11 @@ class VirtualDesktopAPI(BaseAPI):
                 constants.IDEA_TAG_NAME,
                 f'{self.context.cluster_name()}-{new_session.name}-{new_session.owner}',
             )
+            # The stored diagnostic describes the desktop, not the result of this edit.
+            # ponytail: failure_reason is both the stored diagnostic and this request's
+            # result, so the response omits a still-stored diagnostic and the card shows
+            # it again only on the next list refresh (30 s). Split the fields if that matters.
+            new_session.failure_reason = None
 
         return new_session
 

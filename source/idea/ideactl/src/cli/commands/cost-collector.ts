@@ -159,7 +159,7 @@ export function registerCostCollectorCommands(program: Command, deps: Deps, read
     .option("--agent-image <image>", "Digest-pinned Datadog agent image. Default: the release's official public ECR image", DATADOG_AGENT_IMAGE)
     .requiredOption("--datadog-api-key-secret-arn <arn>", "Datadog API key secret ARN")
     .requiredOption("--subnet-ids <ids...>", "Subnets in one VPC, all public or all private")
-    .option("--interval-hours <hours>", "Collection interval", positiveInteger, 6)
+    .option("--interval-hours <hours>", "Collection interval", positiveInteger, 24)
     .option("--lookback-days <days>", "Trailing full days", positiveInteger, 3)
     .option("--module-tag <key>", "Module cost allocation tag", "idea:ModuleId")
     .option("--project-tag <key>", "Project cost allocation tag", "idea:Project")

@@ -562,7 +562,6 @@ global-settings:
         - postgresql-libs
         - postgresql-server
     dcv:
-      gpg_key: https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
       x86_64:
         linux:
           al2023:
@@ -582,11 +581,11 @@ global-settings:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-x86_64.tgz
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-x86_64.tgz.sha256sum
           ubuntu2404:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz.sha256sum
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2404-x86_64.tgz
+            sha256sum: 4694071af44270952e375aceeddf402e90aaa110b2c586ae973aa3e503d907e7
           ubuntu2604:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-x86_64.tgz
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-x86_64.tgz.sha256sum
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2604-x86_64.tgz
+            sha256sum: 92765147dc09f1b2a6c08c7d35fc81f7cad810dcd43d0a5fb6c8cc244094afde
       aarch64:
         linux:
           al2023:
@@ -621,11 +620,11 @@ global-settings:
               url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2204.deb
               sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2204.deb.sha256sum
             ubuntu2404:
-              url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb
-              sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb.sha256sum
+              url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2404.deb
+              sha256sum: f9aa283bb06c8712ea24ce51a4629f9091e97052e2e1cda83e7451595dafb8b5
             ubuntu2604:
-              url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2604.deb
-              sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2604.deb.sha256sum
+              url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2604.deb
+              sha256sum: fb1349024ed196bbfe296f6197322afe2f9d9de9ac989790dee2afa0c4061f96
         aarch64:
           linux:
             al2023:

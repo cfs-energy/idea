@@ -1,7 +1,5 @@
 # Configure Floating License resources
 
-New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
-
 In this page, we will see how IDEA manages job and capacity provisioning based on license availabilities.
 
 {% hint style="info" %}
@@ -114,14 +112,18 @@ Once ready, click "**Next**" and IDEA will validate your configuration.
 If you are getting a "Permission Denied", ensure the availability check script is in a location your client can access (e.g: /apps/)
 {% endhint %}
 
-Step2 will requires you to configure the scheduler manually. Follow the instructions mentioned on the page:
+Step 2 configures the ECS scheduler:
 
-* Connect to the Scheduler EC2 instance
-* Update your `resourcedef`
-* Update your `sched_config`
-* Restart OpenPBS
+* Open the scheduler application container using the [ECS Exec procedure](../../../help-and-support/faq.md#cluster-management) for the intended account, region, cluster, and scheduler task.
+* Update `/var/spool/pbs/server_priv/resourcedef` and `/var/spool/pbs/sched_priv/sched_config` as shown in the wizard. `/var/spool/pbs` is mounted from the scheduler's retained EFS volume; these edits survive task replacement. Startup preserves manually declared resources.
+* From your administrator shell, force a new deployment of the scheduler service:
 
-<figure><img src="../../../.gitbook/assets/mods_hpc_admin_fnl_instructions.webp" alt=""><figcaption><p>Follow the instructions to finalize your configuration</p></figcaption></figure>
+```bash
+aws --profile <PROFILE> --region <REGION> ecs update-service \
+  --cluster <ECS_CLUSTER> --service <SCHEDULER_SERVICE> --force-new-deployment
+```
+
+Wait for the service to stabilize and verify a healthy startup in the scheduler logs. Submissions pause while the scheduler task is replaced. Configure multiple licenses before restarting once.
 
 Once done, validate your configuration by clicking "**Create License Resource**". If your configuration is correct, you will now see the name of your License Resource as well as a real-time count of the number of licenses available.
 

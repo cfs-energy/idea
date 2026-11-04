@@ -14,8 +14,7 @@ import type { PutObjectCommand } from "@aws-sdk/client-s3";
 
 import {
   uploadBootstrapPackage,
-  uploadReleasePackage,
-  type BootstrapPackageUploadClient,
+  type BootstrapPackageUploadClient
 } from "../../src/cli/bootstrap-package.ts";
 import type {
   ConfigWriter,
@@ -23,13 +22,13 @@ import type {
   Deps,
   PromptChoice,
 } from "../../src/cli/cdk-invoker.ts";
-import { run } from "../../src/cli/main.ts";
-import { deleteBackupsCommand, deleteCluster, type DeleteClusterDeps } from "../../src/cli/commands/delete-cluster.ts";
-import { configUpdate } from "../../src/cli/commands/config.ts";
-import { runDeploy } from "../../src/cli/commands/deploy.ts";
 import { ExitWithCode } from "../../src/cli/cdk-invoker.ts";
-import { ClusterConfig, type ModuleInfo, type ScanPage } from "../../src/config/cluster-config.ts";
+import { configUpdate } from "../../src/cli/commands/config.ts";
+import { deleteBackupsCommand, deleteCluster, type DeleteClusterDeps } from "../../src/cli/commands/delete-cluster.ts";
+import { runDeploy } from "../../src/cli/commands/deploy.ts";
+import { run } from "../../src/cli/main.ts";
 import type { ConfigEntry, ModuleSpec } from "../../src/config/cluster-config-db.ts";
+import { ClusterConfig, type ModuleInfo, type ScanPage } from "../../src/config/cluster-config.ts";
 
 const CLUSTER = "sample-cluster";
 const REGION = "us-east-2";
@@ -280,6 +279,7 @@ function assertConfigTreeWritten(deps: MemoryCommandDeps): void {
 
 test("deploy without upgrade performs no second deployment after the first run marks the module deployed", async () => {
   const deps = new MemoryCommandDeps();
+  deps.settings.set("ecs.enabled", { value: true, version: 1 });
   deps.modules.set("cluster", {
     module_id: "cluster",
     name: "cluster",
@@ -419,7 +419,7 @@ class MemoryPackageClient implements BootstrapPackageUploadClient {
   }
 }
 
-test("bootstrap and release package uploads converge on the same current object when repeated", async () => {
+test("bootstrap package uploads converge on the same current object when repeated", async () => {
   const directory = mkdtempSync(join(tmpdir(), "ideactl-idempotency-packages-"));
   const bootstrapFile = join(directory, "bootstrap-cluster-deployment.tar.gz");
   const releaseName = "idea-cluster-manager-26.09.0.tar.gz";
@@ -433,24 +433,14 @@ test("bootstrap and release package uploads converge on the same current object 
         clusterS3Bucket: "sample-bucket",
         archiveFile: bootstrapFile,
       });
-      await uploadReleasePackage({
-        client,
-        clusterS3Bucket: "sample-bucket",
-        packageDistDir: directory,
-        packageName: releaseName,
-      });
     }
 
     assert.deepEqual(
       client.objects.get("sample-bucket/idea/bootstrap/bootstrap-cluster-deployment.tar.gz"),
       readFileSync(bootstrapFile),
     );
-    assert.deepEqual(
-      client.objects.get(`sample-bucket/idea/releases/${releaseName}`),
-      readFileSync(join(directory, releaseName)),
-    );
-    assert.equal(client.objects.size, 2);
-    assert.equal(client.puts, 4);
+    assert.equal(client.objects.size, 1);
+    assert.equal(client.puts, 2);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -484,7 +474,7 @@ function deletionDeps(state: DeleteState): DeleteClusterDeps {
     loadConfig: async () => new ClusterConfig([], modules),
     findInstances: async () => [...state.instances].map((instanceId) => ({ instanceId, state: "running" })),
     instanceTerminationProtection: async () => false,
-    disableInstanceTerminationProtection: async () => {},
+    disableInstanceTerminationProtection: async () => { },
     terminateInstance: async ({ instanceId }) => {
       if (state.instances.delete(instanceId)) state.destructiveCalls += 1;
     },
@@ -493,7 +483,7 @@ function deletionDeps(state: DeleteState): DeleteClusterDeps {
       if (!state.stacks.has(stackName)) throw new Error("ValidationError: stack not found");
       return { stackName, stackStatus: "CREATE_COMPLETE", terminationProtection: false };
     },
-    disableStackTerminationProtection: async () => {},
+    disableStackTerminationProtection: async () => { },
     deleteStack: async (stackName) => {
       if (state.stacks.delete(stackName)) state.destructiveCalls += 1;
     },
@@ -501,29 +491,29 @@ function deletionDeps(state: DeleteState): DeleteClusterDeps {
     sendAppCleanup: async () => "cleanup",
     appCleanupStatus: async () => [],
     findBedrockProjects: async () => [],
-    deleteBedrockProjectResources: async () => {},
+    deleteBedrockProjectResources: async () => { },
     listUserPools: async () => ({ pools: [] }),
     describeUserPool: async () => ({}),
-    disableUserPoolDeletionProtection: async () => {},
+    disableUserPoolDeletionProtection: async () => { },
     describeLambdaNetworkInterfaces: async () => [],
-    deleteNetworkInterface: async () => {},
-    describeBackupVault: async () => {},
+    deleteNetworkInterface: async () => { },
+    describeBackupVault: async () => { },
     listRecoveryPoints: async () => [],
-    deleteRecoveryPoint: async () => {},
+    deleteRecoveryPoint: async () => { },
     listTables: async () => ({ tableNames: [] }),
-    deleteTable: async () => {},
+    deleteTable: async () => { },
     listDynamoDbAlarms: async () => [],
-    deleteAlarms: async () => {},
+    deleteAlarms: async () => { },
     listLogGroups: async () => [],
-    deleteLogGroup: async () => {},
+    deleteLogGroup: async () => { },
     accountId: async () => "123456789012",
     bucketExists: async () => false,
-    deleteAllBucketObjectVersions: async () => {},
-    deleteBucket: async () => {},
+    deleteAllBucketObjectVersions: async () => { },
+    deleteBucket: async () => { },
     prompt: async () => true,
-    sleep: async () => {},
-    out: () => {},
-    err: () => {},
+    sleep: async () => { },
+    out: () => { },
+    err: () => { },
   };
 }
 

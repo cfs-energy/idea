@@ -1,9 +1,11 @@
 """Leader-owned personal cost collection, independent of metrics export settings."""
 
+import base64
 import json
 import os
 import threading
 import time
+import zlib
 
 import arrow
 
@@ -53,6 +55,42 @@ DISKS_NOTE = (
 )
 NOTES = (JOBS_NOTE, DESKTOP_NOTE, DISKS_NOTE, STORAGE_NOTE, AI_NOTE)
 
+# A day is computed once and stored when it ended more than SETTLE_DAYS days ago; today
+# and the SETTLE_DAYS days before it are recomputed every run. Cost Explorer reports usage
+# through the previous day and notes some current-period data lands later than 24 hours;
+# job documents, the storage share (measured up to a day late) and CloudWatch running
+# hours (settled after 3 h) all settle within a day. Three days covers the Cost Explorer lag.
+SETTLE_DAYS = 3
+# Cost Explorer and the CUR stay estimated until the month's bill is finalized after it
+# ends, so every day of a month is recomputed once more on the 5th of the next month.
+MONTH_CLOSE_DAYS = 4
+
+
+class _FaultLog:
+    """The calculator's logger. A logged source failure marks the day being computed
+    as unsettled, so it is computed again instead of being stored."""
+
+    def __init__(self, logger, owner):
+        self._logger, self._owner = logger, owner
+
+    def __getattr__(self, name):
+        return getattr(self._logger, name)
+
+    def exception(self, *args, **kwargs):
+        self._owner.faulted = True
+        self._logger.exception(*args, **kwargs)
+
+    def error(self, *args, **kwargs):
+        self._owner.faulted = True
+        self._logger.error(*args, **kwargs)
+
+    def warning(self, message, *args, **kwargs):
+        # The cost readers report a failed source read as 'failed to ...'. Other
+        # warnings (a price falling back to the public list) are surfaced as coverage.
+        if str(message).startswith('failed to'):
+            self._owner.faulted = True
+        self._logger.warning(message, *args, **kwargs)
+
 
 class DailyCostsCalculator(MonthlyCostsService):
     """Keep the existing compute, runtime, disk proration and token apportionment rules.
@@ -73,8 +111,19 @@ class DailyCostsCalculator(MonthlyCostsService):
         self._run_reads = {}
         self._inventory_all = None
         self._inventory_as_of = None
+        self._log = self.logger
+        self.logger = _FaultLog(self._log, self)
+        self.faulted = False
+        # Cached reads whose last fetch failed: every use marks the day unsettled.
+        self._faulted_keys = set()
+        self.computed_days = 0
+        self.stored_days = 0
+        self._run_shared = {}
 
     def begin(self):
+        self.computed_days = 0
+        self.stored_days = 0
+        self._run_shared = {}
         self._run_reads.clear()
         self._reads.pop(('storage-rates',), None)
         self._reported = set()
@@ -89,20 +138,64 @@ class DailyCostsCalculator(MonthlyCostsService):
         self.source_times = {
             key: value for key, value in self.source_times.items() if key in self._reads
         }
+        self._faulted_keys = {key for key in self._faulted_keys if key in self._reads}
+
+    def _tracked(self, key, read):
+        def run():
+            self._faulted_keys.discard(key)
+            outer, self.faulted = self.faulted, False
+            try:
+                return read()
+            except Exception:
+                self.faulted = True
+                raise
+            finally:
+                if self.faulted:
+                    self._faulted_keys.add(key)
+                self.faulted = self.faulted or outer
+
+        return run
 
     def _remember(self, key, read):
         duration = 86400 if key[0] in ('volume-price', 'instance-price') else 3600
         cached = self._reads.get(key)
         if cached and time.monotonic() - cached[0] < duration:
-            return cached[1]
-        return super()._remember(key, read)
+            value = cached[1]
+        else:
+            value = super()._remember(key, self._tracked(key, read))
+        if key in self._faulted_keys:
+            self.faulted = True
+        return value
 
     def _cache_source(self, key, read):
         if key not in self._run_reads:
             if len(self._run_reads) >= 64:
                 self._run_reads.pop(next(iter(self._run_reads)))
-            self._run_reads[key] = read()
+            self._run_reads[key] = self._tracked(key, read)()
+        if key in self._faulted_keys:
+            self.faulted = True
         return self._run_reads[key]
+
+    def _shared(self, key, read):
+        # Once per run, not once per user-day: project lookups, a user's desktop
+        # history and a project's token rows for a day. A failed read is not kept.
+        if key not in self._run_shared:
+            self._run_shared[key] = self._tracked(key, read)()
+        if key in self._faulted_keys:
+            self.faulted = True
+        return self._run_shared[key]
+
+    def _user_projects(self, username):
+        return self._shared(
+            ('user-projects', username),
+            lambda: super(DailyCostsCalculator, self)._user_projects(username),
+        )
+
+    def _history_rows(self, table, username):
+        return self._shared(
+            ('history', username),
+            lambda: MonthlyCostsService._history_rows(table, username),
+        )
 
     def _search(self, index, body):
         key = ('search', index, json.dumps(body, sort_keys=True))
@@ -141,6 +234,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         cached = self._reads.get(key)
         if not cached or time.monotonic() - cached[0] >= 21600:
             values = None
+            self._faulted_keys.discard(key)
             try:
                 if self.context.aws().aws_partition() == 'aws':
                     values = {}
@@ -165,9 +259,12 @@ class DailyCostsCalculator(MonthlyCostsService):
                         query['NextPageToken'] = response['NextPageToken']
             except Exception:
                 self.logger.exception('Daily billing unavailable')
+                self._faulted_keys.add(key)
                 values = None
             self._reads[key] = (time.monotonic(), values)
             self.source_times[key] = arrow.utcnow().isoformat()
+        if key in self._faulted_keys:
+            self.faulted = True
         values = self._reads[key][1]
         if values is None:
             return None
@@ -191,14 +288,12 @@ class DailyCostsCalculator(MonthlyCostsService):
                 # said once per run per cause, the users and days it covers at debug.
                 key = ('ai-project', str(error))
                 if key in self._reported:
-                    self.logger.debug(
+                    self._log.debug(
                         f'Daily project attribution unavailable: {error} ({username}, {project.project_id}, {start_date})'
                     )
                 else:
                     self._reported.add(key)
-                    self.logger.warning(
-                        f'Daily project attribution unavailable: {error}'
-                    )
+                    self._log.warning(f'Daily project attribution unavailable: {error}')
             else:
                 self.logger.exception('Daily project attribution unavailable')
             return MyCostsAiProject(
@@ -215,7 +310,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         # The existing reader omits users with zero tokens. Check the denominator and
         # billing first so missing attribution, including spend without tokens, survives.
         key = ('tokens', project.project_id, start_date, end_date)
-        rows = self._cache_source(
+        rows = self._shared(
             key, lambda: self._usage_rows(project.project_id, start_date, end_date)
         )
         if rows is None:
@@ -234,6 +329,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         if amount and self._total_tokens(rows) <= 0:
             raise ValueError('AI spend has no token denominator')
         reader = MyCostsService(self.context)
+        reader.logger = self.logger
         reader._usage_rows = lambda *args: rows
         reader._project_spend = lambda *args: SocaAmount(amount=amount)
         return reader._ai_project(username, project, start_date, end_date)
@@ -436,7 +532,7 @@ class DailyCostsCalculator(MonthlyCostsService):
             return
         self._reported.add(key)
         if isinstance(error, ValueError):
-            self.logger.warning(f'Personal facet {facet} unavailable: {error}')
+            self._log.warning(f'Personal facet {facet} unavailable: {error}')
         else:
             self.logger.exception(f'Personal facet {facet} source unavailable')
 
@@ -496,6 +592,9 @@ class DailyCostsCalculator(MonthlyCostsService):
                         AI_NOTE,
                     )
             except Exception as error:
+                # A ValueError is an authored data condition; anything else is a fault,
+                # including the repeats _report does not log again.
+                self.faulted |= not isinstance(error, ValueError)
                 self._report(facet, error)
                 reason = (
                     str(error)
@@ -769,15 +868,83 @@ class DailyCostsCalculator(MonthlyCostsService):
         )
         return result
 
+    def _stored_days(self, username, key):
+        try:
+            value = self.store.get(username, f'days:{key}')
+            if value and value.get('v') == 1:
+                return json.loads(zlib.decompress(base64.b64decode(value['z'])))
+        except Exception:
+            self._log.exception('Stored personal days unreadable; computing them again')
+        return {}
+
+    def _store_days(self, username, key, days):
+        # The notes repeat on every day; compressed, a month is a few KB per user.
+        try:
+            packed = base64.b64encode(
+                zlib.compress(self.store.encode(days).encode(), 9)
+            )
+            self.store.put(
+                username, f'days:{key}', {'v': 1, 'z': packed.decode()}, source=True
+            )
+        except Exception:
+            self._log.exception(
+                'Settled personal days not stored; computing them again'
+            )
+
     def month(self, username, start, end):
         daily = {facet: [] for facet in FACETS}
         metadata = {facet: [] for facet in FACETS}
         storage = {}
+        now = arrow.utcnow().to(start.tzinfo)
+        open_from = now.floor('day').shift(days=-SETTLE_DAYS)
+        stored, changed = {}, set()
         cursor = start
         while cursor < end:
-            lines = self.day(
-                username, cursor, min(cursor.shift(days=1), end), storage=storage
-            )
+            upper = min(cursor.shift(days=1), end)
+            key, date = cursor.format('YYYY-MM'), cursor.format('YYYY-MM-DD')
+            if key not in stored:
+                stored[key] = self._stored_days(username, key)
+            closed = now >= cursor.floor('month').shift(months=1, days=MONTH_CLOSE_DAYS)
+            saved = stored[key].get(date)
+            shares = {}
+            if (
+                saved
+                and saved.get('start') == cursor.isoformat()
+                and (saved.get('closed') or not closed)
+            ):
+                lines = {
+                    facet: MyCostsAmount.model_validate(value)
+                    for facet, value in saved['lines'].items()
+                }
+                for fs_id, rows in saved['shares'].items():
+                    shares[fs_id] = [
+                        MyCostsStorageShare.model_validate(r) for r in rows
+                    ]
+                self.stored_days += 1
+            else:
+                self.faulted = False
+                lines = self.day(username, cursor, upper, storage=shares)
+                self.computed_days += 1
+                if (
+                    upper == cursor.shift(days=1)
+                    and cursor < open_from
+                    and not self.faulted
+                ):
+                    stored[key][date] = dict(
+                        start=cursor.isoformat(),
+                        closed=closed,
+                        lines={
+                            facet: line.model_dump(mode='json')
+                            for facet, line in lines.items()
+                        },
+                        shares={
+                            fs_id: [row.model_dump(mode='json') for row in rows]
+                            for fs_id, rows in shares.items()
+                        },
+                    )
+                    changed.add(key)
+            for fs_id, rows in shares.items():
+                storage.setdefault(fs_id, []).extend(rows)
             for facet, line in lines.items():
                 daily[facet].append(
                     MyCostsDaily(
@@ -789,6 +956,8 @@ class DailyCostsCalculator(MonthlyCostsService):
                 )
                 metadata[facet].append(line)
             cursor = cursor.shift(days=1)
+        for key in changed:
+            self._store_days(username, key, stored[key])
         facets = {}
         for facet, note in zip(FACETS, NOTES):
             points = daily[facet]
@@ -1167,5 +1336,13 @@ class PersonalCostsCollector:
             self.store.put(SYSTEM, 'state', state)
         state['last_duration'] = max(1, int(time.monotonic() - started))
         state.pop('run_started', None)
-        state['next_run'] = max(arrow.utcnow(), now.shift(minutes=15)).isoformat()
+        # At most half the time busy: a run longer than the period waits as long again.
+        state['next_run'] = max(
+            arrow.utcnow().shift(seconds=state['last_duration']), now.shift(minutes=15)
+        ).isoformat()
+        self.logger.info(
+            f'Personal costs collected for {len(selected)} users in '
+            f'{state["last_duration"]}s: {self.calculator.computed_days} days computed, '
+            f'{self.calculator.stored_days} settled days reused'
+        )
         self.store.put(SYSTEM, 'state', state)

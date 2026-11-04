@@ -1199,14 +1199,15 @@ def test_a_quiet_monthly_check_bakes_nothing():
     assert {h.row(o).status for o in ('rocky9', 'rocky8')} == {'current'}
 
 
-def test_the_first_tick_only_starts_the_schedule_clock():
+def test_the_first_tick_starts_the_schedule_clock_and_queues_missing_release_rows():
     h = Harness()
     h.pipeline._start = lambda record, blocking: True
     h.pipeline.tick(now=T0)
     assert h.config.values['vdc.software_stacks.image_refresh_last_run_on'] == int(
         T0.timestamp() * 1000
     )
-    assert h.row() is None
+    assert h.row().status == 'queued'
+    assert h.row().trigger == 'release'
 
 
 # rollback, hold and pins
@@ -1449,6 +1450,11 @@ def test_a_gpu_row_bakes_on_a_gpu_builder_under_its_own_key():
             base_stack('rocky9', suffix='gpu', gpu=VirtualDesktopGPU.NVIDIA),
         ]
     )
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9', architecture='x86_64', status='current', release=VERSION
+        )
+    )
     queue_and_run(
         h, ImageRowKey(base_os='rocky9', architecture='x86_64', variant='nvidia')
     )
@@ -1457,7 +1463,7 @@ def test_a_gpu_row_bakes_on_a_gpu_builder_under_its_own_key():
     assert FakeBuilder.made[0]['instance_type'] == 'g4dn.xlarge'
     assert FakeBuilder.made[0]['ami_name'] == 'idea-dcv-host-rocky9-nvidia'
     assert h.stack_db.updated == ['ss-base-rocky9-x86-64-gpu']
-    assert h.row() is None  # the CPU row is untouched
+    assert h.row().status == 'current'  # the settled CPU row is untouched
 
 
 def test_the_builder_gets_the_base_stack_root_size_and_the_row_links_its_log_stream():
@@ -1840,3 +1846,37 @@ def test_no_matching_base_stack_keeps_builder_floor():
         base_os='rocky9', architecture='x86_64', source_ami='ami-stock-rocky9'
     )
     assert h.pipeline._builder_volume_gb(record) == 20
+
+
+def test_settled_release_seeds_new_os_and_arch_without_requeuing_guarded_rows():
+    h = Harness([base_stack('rocky9'), base_stack('rhel9', arch='arm64')])
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9', architecture='x86_64', status='current', release=VERSION
+        )
+    )
+    h.pipeline._release_trigger()
+    assert h.row('rhel9', 'arm64').status == 'queued'
+    assert h.row('rhel9', 'arm64').trigger == 'release'
+    assert h.row('rocky9').status == 'current'
+
+    # Subsequent ticks do not queue an in-flight row again.
+    h.pipeline.queue = Mock(wraps=h.pipeline.queue)
+    h.pipeline._release_trigger()
+    h.pipeline.queue.assert_not_called()
+
+
+@pytest.mark.parametrize('guard', ['pinned', 'rollback_hold'])
+def test_settled_release_preserves_row_guards(guard):
+    h = Harness()
+    row = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status='current',
+        release='older',
+        **{guard: True},
+    )
+    h.records.put(row)
+    h.pipeline._release_trigger()
+    assert h.row().release == 'older'
+    assert h.row().status == 'current'

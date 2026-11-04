@@ -1,6 +1,6 @@
 # Update IDEA backend resource (idea-admin.sh deploy)
 
-New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](move-to-containers.md).
+The control plane runs only on ECS. Direct upgrades require 26.10.0 or newer on every deployed module. Use the 26.10.9 administrator to complete any older upgrade and ECS migration first. See the [recovery command](upgrade-cluster.md#recovery-with-the-26109-administrator).
 
 ## Update IDEA backend resource
 

@@ -62,6 +62,12 @@ class AuthUtils:
             'ec2-user',
             'centos',
             'ssm-user',
+            'rocky',
+            'ubuntu',
+            'almalinux',
+            'debian',
+            'fedora',
+            'cloud-user',
         ):
             raise exceptions.invalid_params(
                 f'invalid username: {username}. Change username to prevent conflicts with local or directory system users.'

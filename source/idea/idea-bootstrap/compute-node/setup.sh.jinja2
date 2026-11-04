@@ -93,6 +93,10 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 {% include '_templates/linux/disable_firewall.jinja2' %}
 
+{% include '_templates/linux/kernel_net_hardening.jinja2' %}
+
+{% include '_templates/linux/kernel_module_hardening.jinja2' %}
+
 {% include '_templates/linux/systemd_resolved.jinja2' %}
 
 {% include '_templates/linux/idea_service_account.jinja2' %}

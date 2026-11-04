@@ -21,7 +21,7 @@ test("the automation queue permits events from this account only", () => {
   assert.deepEqual(eventStatements[0].Resource, { "Fn::GetAtt": [queue[0], "Arn"] });
 });
 
-for (const ecsEnabled of [true, false]) {
+for (const ecsEnabled of [true]) {
   test(`automation queue encryption with ECS ${ecsEnabled}`, () => {
     const resources = resourcesOf(synthBastion({
       "ecs.enabled": ecsEnabled,
@@ -30,12 +30,8 @@ for (const ecsEnabled of [true, false]) {
       "directoryservice.directory_id": "d-synthetic",
     }, DirectoryServiceStack, "directoryservice"));
     const queue = byType(resources, "AWS::SQS::Queue").find(([id]) => !id.includes("dlq"))![1];
-    if (ecsEnabled) {
-      assert.equal(queue.Properties.SqsManagedSseEnabled, true);
-      assert.equal(queue.Properties.KmsMasterKeyId, undefined);
-    } else {
-      assert.ok(JSON.stringify(queue.Properties.KmsMasterKeyId).includes("alias/aws/sqs"));
-    }
+    assert.equal(queue.Properties.SqsManagedSseEnabled, true);
+    assert.equal(queue.Properties.KmsMasterKeyId, undefined);
   });
 }
 

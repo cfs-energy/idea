@@ -33,6 +33,7 @@ const TABLES = {
     moduleRow('shared-storage', 'shared-storage', 'stack'),
   ],
   [`${CLUSTER}.cluster-settings`]: [
+    { key: 'ecs.enabled', value: true },
     { key: 'global-settings.module_sets.default.cluster.module_id', value: 'cluster' },
     { key: 'cluster.cluster_s3_bucket', value: 'sample-bucket' },
     { key: 'cluster.aws.dns_suffix', value: 'amazonaws.com' },
@@ -72,11 +73,12 @@ describe('quick-setup --skip-config', () => {
     const file = valuesFile();
     const tables = {
       ...TABLES,
-      // analytics gives the check an endpoint to fail on
+      // a published analytics dashboard gives the check an endpoint to fail on
       [`${CLUSTER}.modules`]: [...TABLES[`${CLUSTER}.modules`], moduleRow('analytics', 'analytics', 'stack')],
       [`${CLUSTER}.cluster-settings`]: [
         ...TABLES[`${CLUSTER}.cluster-settings`],
         { key: 'cluster.load_balancers.external_alb.public', value: false },
+        { key: 'analytics.opensearch.endpoints.external.enabled', value: true },
       ],
     };
     const deps = fakeDeps({ tables });

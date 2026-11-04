@@ -1327,7 +1327,9 @@ def test_optional_userdata_hooks_are_guarded():
 def _hook_block(text):
     start = text.index('userdata_customizations.sh')
     start = text.rindex('if [[ -f', 0, start)
-    end = text.index('fi', start)
+    # The block's own closing fi, not the first 'fi' inside a word such as sshd_config.
+    indent = start - text.rindex('\n', 0, start) - 1
+    end = text.index('\n' + ' ' * indent + 'fi', start) + 1
     return text[start : text.index('\n', end)]
 
 

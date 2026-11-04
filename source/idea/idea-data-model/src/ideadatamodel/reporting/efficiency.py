@@ -64,7 +64,7 @@ def instant(value):
 def allocation(params):
     select = (params.get('custom_params') or {}).get('select')
     if select is not None:
-        cpus, memory, nodes = 0, 0, 0
+        cpus, memory, nodes, largest_chunk = 0, 0, 0, 0
         try:
             for chunk in select_chunks(str(select)):
                 tokens = chunk.split(':')
@@ -73,6 +73,7 @@ def allocation(params):
                     raise ValueError()
                 fields = dict(token.split('=', 1) for token in tokens)
                 ncpus = numeric(fields.get('ncpus'))
+                largest_chunk = max(largest_chunk, ncpus or 0)
                 mem = memory_bytes(fields.get('mem'))
                 cpus = cpus + count * ncpus if cpus is not None and ncpus else None
                 memory = memory + count * mem if memory is not None and mem else None
@@ -81,9 +82,10 @@ def allocation(params):
                 cpus,
                 memory if memory is not None else memory_bytes(params.get('memory')),
                 nodes,
+                largest_chunk,
             )
         except (ValueError, TypeError, IndexError):
-            return None, None, None
+            return None, None, None, None
     nodes = numeric(params.get('nodes') if params.get('nodes') is not None else 1)
     cpus = numeric(params.get('cpus'))
     # Resource_List.ncpus and mem are job-wide requests when no select is retained.
@@ -91,6 +93,7 @@ def allocation(params):
         cpus if cpus and nodes else None,
         memory_bytes(params.get('memory')),
         nodes,
+        cpus / nodes if cpus and nodes else None,
     )
 
 
@@ -116,11 +119,16 @@ def instance_memory(job):
     return sizes.pop() if len(sizes) == 1 else None
 
 
+def latest_run_id(run_ids):
+    # PBS run IDs are increasing run_count values; unnumbered legacy hooks form run 0.
+    return max(run_ids, key=lambda run_id: numeric(run_id) or 0, default=None)
+
+
 def job_efficiency(job):
     if hasattr(job, 'model_dump'):
         job = job.model_dump(mode='json', exclude_none=True)
     params = job.get('params') or {}
-    cpus, requested_memory, nodes = allocation(params)
+    cpus, requested_memory, nodes, largest_chunk = allocation(params)
     start, end = instant(job.get('start_time')), instant(job.get('end_time'))
     elapsed = (
         end - start
@@ -130,10 +138,17 @@ def job_efficiency(job):
     elapsed = elapsed if elapsed is not None and elapsed > 0 else None
     job_cpu_times, local_cpu_times, memories, host_memories = [], [], [], []
     cpu_hosts = 0
+    latest = latest_run_id(
+        run.get('run_id')
+        for host in job.get('execution_hosts') or []
+        for run in (host.get('execution') or {}).get('runs') or []
+    )
     for host in job.get('execution_hosts') or []:
         local_memories, host_cpu_times = [], []
         local_scope = True
         for run in (host.get('execution') or {}).get('runs') or []:
+            if run.get('run_id') != latest:
+                continue
             used = run.get('resources_used') or {}
             cpu = numeric(used.get('cpu_time_secs'))
             if cpu is not None:
@@ -164,7 +179,7 @@ def job_efficiency(job):
             and nodes > 1
             and elapsed
             and cpus
-            and cpu_times[0] <= elapsed * cpus / nodes * CPU_EFFICIENCY_MAX
+            and cpu_times[0] <= elapsed * largest_chunk * CPU_EFFICIENCY_MAX
         ):
             cpu_times = []
     elif local_cpu_times and (not nodes or nodes <= 1 or cpu_hosts == nodes):

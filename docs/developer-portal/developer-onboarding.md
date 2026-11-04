@@ -14,67 +14,17 @@ Each archive has a `.sha256` sidecar and is included in `SHA256SUMS`. Extract it
 Windows releases have no code signing. SmartScreen may warn: after verifying the archive with `Get-FileHash -Algorithm SHA256` against the release checksum, choose **More info > Run anyway**, or run `Unblock-File .\ideactl.exe` in PowerShell before launching it. Organization policy may prevent this override.
 
 
-## Pre-Requisites
+## Prerequisites
 
-* [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-* [Python3](https://www.python.org/downloads/) + [PyEnv](https://github.com/pyenv/pyenv)
-* [nvm](https://github.com/nvm-sh/nvm)
-* [yarn](https://yarnpkg.com/)
-* [Git](https://git-scm.com/downloads)
+Install [Git](https://git-scm.com/downloads) and
+[mise](https://mise.jdx.dev/getting-started.html). Deployment also needs the
+[AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
+Activate mise in your shell, for example `eval "$(mise activate zsh)"` for zsh.
 
-{% hint style="warning" %}
-#### Versions
-
-Replace the variables in the code snippets below with the values in `software_versions.yml`
-at the repository root (`python_version`, `node_version`). The CDK CLI needs no version of its
-own: the deploy tool pins it.
-{% endhint %}
-
-## Prepare environment
-
-### Set Environment Variables for Versions
-
-```
-PYTHON_VERSION=<see above>
-NODEJS_VERSION=<see above>
-```
-
-### Install pyenv and nvm
-
-{% tabs %}
-{% tab title="Mac" %}
-Using Homebrew:
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-brew install pyenv
-brew install nvm
-```
-{% endtab %}
-
-{% tab title="Windows" %}
-Using Powershell:
-
-<pre class="language-powershell"><code class="lang-powershell"><strong>Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/pyenv-win/install-pyenv-win.ps1" -OutFile "./install-pyenv-win.ps1"; &#x26;"./install-pyenv-win.ps1"
-</strong></code></pre>
-
-Install NVM latest release from: [https://github.com/coreybutler/nvm-windows/releases](https://github.com/coreybutler/nvm-windows/releases)
-{% endtab %}
-{% endtabs %}
-
-### Python \<PYTHON\_VERSION>
-
-```bash
-pyenv install --skip-existing $PYTHON_VERSION
-```
-
-### **NodeJS \<NODEJS\_VERSION>**
-
-```bash
-nvm install $NODEJS_VERSION
-nvm use $NODEJS_VERSION
-```
+`mise.toml` owns exact developer and CI tool versions, including Node, Python, the lock
+compiler, and the hook linters. Application libraries retain their existing lockfiles.
+`software_versions.yml` selects the deployed runtimes; keep its Node and Python versions
+aligned with mise when changing those runtimes.
 
 #### AWS CDK
 
@@ -94,22 +44,19 @@ All PRs will be accepted only against the main branch.
 ```bash
 git clone https://github.com/cfs-energy/idea.git
 cd idea
-// make your changes
+mise trust
+mise install
+hk install
+hk check --all
 ```
 
 ## Virtual Environment
 
-Activate your python virtual environment via:
+Create a virtual environment with the pinned Python:
 
 ```bash
-PYENV_VERSION=$PYTHON_VERSION python -m venv venv
+mise exec -- python -m venv venv
 source venv/bin/activate
-```
-
-If your PYENV\_VERSION command is not working for any reason, you can create venv using below command:
-
-```bash
-$HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3 -m venv venv
 ```
 
 ## Install Dev Requirements
@@ -118,91 +65,74 @@ $HOME/.pyenv/versions/$PYTHON_VERSION/bin/python3 -m venv venv
 pip install -r requirements/dev.txt
 ```
 
-<details>
+## Run checks
 
-<summary><em><strong>Note for MacOS users</strong></em></summary>
+Run `hk check --all` or `mise run lint` before submitting a change. Use `hk fix --all`
+to apply available fixes, then review and stage them. The installed commit hook also
+applies fixes and stops for review when a file changes.
 
-_**BigSur Note:**_ cryptography and orjson library requirements fail to install on MacOS BigSur.
+After installing development requirements, use `mise run test:data-model`, `test:sdk`,
+`test:cluster-manager`, `test:scheduler`, `test:virtual-desktop-controller`, or
+`test:web-portal`. These legacy suites use Corretto 17; select it with
+`MISE_ENV=legacy mise install` and `MISE_ENV=legacy mise run test:sdk`.
+For ideactl, run `npm ci` in `source/idea/ideactl`, then use `mise run ideactl:build`
+and `mise run ideactl:checks` from the repository root.
 
-To fix **cryptography**, follow the instructions mentioned here:\
-[https://stackoverflow.com/questions/64919326/pip-error-installing-cryptography-on-big-sur](https://stackoverflow.com/questions/64919326/pip-error-installing-cryptography-on-big-sur)
+## Development commands
 
-```
-env LDFLAGS="-L$(brew --prefix openssl@1.1)/lib" CFLAGS="-I$(brew --prefix openssl@1.1)/include" pip install cryptography==36.0.1
-```
+Run `mise tasks ls` to list commands. Activate the development virtual environment
+before invoking service tasks; `VIRTUAL_ENV` selects its Python interpreter.
 
-To fix **orjson**, run:
+| Command | Purpose |
+| --- | --- |
+| `mise run clean [module]` | Remove generated service artifacts |
+| `mise run build [module]` | Build service source archives, resources and portal |
+| `mise run package [module]` | Package built services and dependencies |
+| `mise run apispec [module]` | Export OpenAPI specs; `all --target-dir PATH` writes all three |
+| `mise run web-portal:typings` | Generate portal interfaces from service models |
+| `mise run web-portal:serve` | Start the portal development server |
+| `mise run req:update` | Recompile Linux requirements locks |
+| `mise run test:data-model` | Test the data models |
+| `mise run test:sdk` | Test the SDK |
+| `mise run test:cluster-manager` | Test cluster-manager |
+| `mise run test:scheduler` | Test the scheduler |
+| `mise run test:virtual-desktop-controller` | Test virtual desktops |
+| `mise run test:web-portal` | Install portal dependencies and run Vitest |
+| `mise run test:all` | Run all six suites, reporting any failure |
+| `mise run ideactl:build` | Build ideactl |
+| `mise run ideactl:checks` | Run ideactl checks |
+| `mise run lint` | Run hk checks |
+| `mise run fix` | Apply hk fixes for review |
 
-```
-brew install rust
-# Upgrade your pip
-python3 -m pip install --upgrade pip
-```
-
-</details>
-
-## Verify Dev Setup
-
-Run below command to check if development environment is working as expected, run:
-
-```bash
-invoke -l
-```
-
-Running this command should print output like below:
-
-```
-Available tasks:
-
-  apispec.all (apispec)                build OpenAPI 3.0 spec for all modules
-  apispec.cluster-manager              cluster-manager api spec
-  apispec.scheduler                    scheduler api spec
-  apispec.virtual-desktop-controller   virtual desktop controller api spec
-  build.all (build)                    build all
-  build.cluster-manager                build cluster manager
-  build.data-model                     build data-model
-  build.scheduler                      build scheduler
-  build.sdk                            build sdk
-  build.virtual-desktop-controller     build virtual desktop controller
-  clean.all (clean)                    clean all components
-  clean.cluster-manager                clean cluster manager
-  clean.data-model                     clean data-model
-  clean.scheduler                      clean scheduler
-  clean.sdk                            clean sdk
-  clean.virtual-desktop-controller     clean virtual desktop controller
-  cli.cluster-manager                  invoke cluster-manager cli
-  cli.scheduler                        invoke scheduler cli
-  cli.virtual-desktop-controller       invoke virtual desktop controller cli
-  devtool.build                        wrapper utility for invoke clean.<module> build.<module> package.<module>
-  devtool.configure                    configure devtool
-  devtool.ssh                          ssh into the workstation
-  devtool.sync                         rsync local sources with remote development server
-  devtool.upload-packages              upload packages
-  package.all (package)                package all components
-  package.cluster-manager              package cluster manager
-  package.make-all-archive             build an all archive containing all package archived
-  package.scheduler                    package scheduler
-  package.virtual-desktop-controller   package virtual desktop controller
-  release.build-opensource-dist        build open source package for Github
-  release.build-s3-dist                build s3 distribution package for global assets
-  release.update-version               update idea release version in all applicable places
-  req.install                          Install python requirements
-  req.update                           Update python requirements using pip-compile.
-  tests.all (tests)                    run unit tests for all components
-  tests.cluster-manager                run cluster-manager unit tests
-  tests.scheduler                      run scheduler unit tests
-  tests.sdk                            run sdk unit tests
-  tests.virtual-desktop-controller     run virtual desktop controller unit tests
-  tests.web-portal                     run cluster-manager web-portal (webapp) tests via vitest
-  web-portal.serve                     serve web-portal frontend app in web-browser
-  web-portal.typings                   convert idea python models to typescript
-```
-
-Clean, build and package the Python modules:
+Module names are `data-model`, `sdk`, `scheduler`, `cluster-manager`, and
+`virtual-desktop-controller`; omit the name for all modules. Packaging applies to
+the three services; `mise run package make-all-archive` gathers their archives.
+The virtual-desktop-controller build also includes the connection gateway.
 
 ```bash
-invoke clean build package
+mise run clean
+mise run web-portal:typings
+mise run build
+mise run package
 ```
+
+Service tests retain `--keywords`, repeated `--params key=value`, `--capture-output`,
+and `--cov-report`. Pass additional pytest arguments after `--`.
+The portal task accepts Yarn test arguments.
+
+Use `mise run req:update --name dev` for one lock, `--upgrade` for all dependencies,
+or `--package-name NAME` for one dependency. `--check` recompiles in a temporary
+directory and fails on any byte difference or orphan lock. The compiler remains
+mise-pinned pip-tools to preserve the existing lock format; macOS uses the pinned
+Python Linux container, so Docker must be running. `--container` forces the same
+path on Linux. Renovate uses this task too. Install dependencies directly with
+`uv pip install -r requirements/dev.txt` in the active virtual environment.
+
+Invoke's unused remote workstation helpers, release-export wrappers and encoded
+service CLI wrappers were removed. Use SSH/rsync directly for remote work and
+`python -m <service>.cli.cli_main` for a service CLI. Administrator commands use
+ideactl. The standalone AMI refresh scripts had no build, CI or documented command
+callers and were removed; the shipped AMI maps and runtime refresh code remain.
 
 ## Build the deploy tool
 

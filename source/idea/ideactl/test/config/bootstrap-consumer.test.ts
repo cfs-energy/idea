@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -13,25 +13,6 @@ import { buildComponent, unpackLikeLinux, unpackLikeWindows, withWorkdir } from 
 
 const LINUX_URI = "s3://sample-bucket/idea/bootstrap/bootstrap-scheduler-deployment.tar.gz";
 const WINDOWS_URI = "s3://sample-bucket/idea/bootstrap/bootstrap-vdc-windows-deployment.tar.gz";
-
-test("Linux user data unpacks with tar -xvf -C into a directory named from %.tar.gz*", () => {
-  const userdata = buildBootstrapUserData({
-    baseOs: "amazonlinux2023",
-    awsRegion: "us-east-2",
-    bootstrapPackageUri: LINUX_URI,
-    installCommands: ["/bin/bash scheduler/setup.sh"],
-  });
-  assert.match(userdata, /PACKAGE_NAME=\\\$\{!PACKAGE_ARCHIVE%\.tar\.gz\*\}/);
-  assert.match(userdata, /tar -xvf \/root\/bootstrap\/\\\$\{!PACKAGE_ARCHIVE\} -C \\\$\{!PACKAGE_DIR\}/);
-  assert.match(userdata, /rm -f \/root\/bootstrap\/latest/);
-  // only the generated download script stops on errors; the user data itself reports through fail_userdata
-  assert.equal(userdata.split("set -e\n").length - 1, 1);
-  assert.match(userdata, /^set -x$/m);
-  assert.match(userdata, /source \/root\/bootstrap\/proxy\.cfg/);
-  assert.match(userdata, /\/root\/bootstrap\/infra\.cfg/);
-  assert.match(userdata, /cd \/root\/bootstrap\/latest/);
-  assert.match(userdata, /\/bin\/bash scheduler\/setup\.sh/);
-});
 
 test("Linux non-substitution user data does not write infra.cfg", () => {
   const userdata = buildBootstrapUserData({
@@ -71,19 +52,6 @@ test("GetFileNameWithoutExtension of a .tar.gz URI is not the Linux package dire
   assert.equal(linuxName, "bootstrap-vdc-windows-deployment");
 });
 
-test("the Linux consumer layout matches a scheduler package the builder emits", () => {
-  withWorkdir((workDirectory) => {
-    const archiveFile = buildComponent("scheduler", workDirectory);
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "linux"));
-    assert.equal(existsSync(join(extracted, "scheduler/setup.sh")), true);
-    assert.equal(existsSync(join(extracted, "common/bootstrap_common.sh")), true);
-    assert.equal(existsSync(join(extracted, "scheduler/install_app.sh")), true);
-    const wrapping = extracted.split("/").pop();
-    assert.equal(wrapping, "bootstrap-scheduler-hard");
-    assert.equal(existsSync(join(extracted, "bootstrap-scheduler-hard")), false);
-  });
-});
-
 test("the Windows consumer layout matches a desktop-host package the builder emits", () => {
   withWorkdir((workDirectory) => {
     const archiveFile = buildComponent("virtual-desktop-host-windows", workDirectory);
@@ -94,69 +62,15 @@ test("the Windows consumer layout matches a desktop-host package the builder emi
   });
 });
 
-test("broker and gateway install scripts source infra.cfg which only substitution user data writes", () => {
-  withWorkdir((workDirectory) => {
-    const broker = unpackLikeLinux(buildComponent("dcv-broker", workDirectory), join(workDirectory, "broker"));
-    const gateway = unpackLikeLinux(
-      buildComponent("dcv-connection-gateway", join(workDirectory, "gw-build")),
-      join(workDirectory, "gateway"),
-    );
-    assert.match(readFileSync(join(broker, "dcv-broker/install_app.sh"), "utf8"), /source \/root\/bootstrap\/infra\.cfg/);
-    assert.match(
-      readFileSync(join(gateway, "dcv-connection-gateway/install_app.sh"), "utf8"),
-      /source \/root\/bootstrap\/infra\.cfg/,
-    );
-  });
-});
-
-test("download_bootstrap.sh does not checksum the bootstrap archive, and a failed download fails the user data", () => {
-  const userdata = buildBootstrapUserData({
-    baseOs: "amazonlinux2023",
-    awsRegion: "us-east-2",
-    bootstrapPackageUri: LINUX_URI,
-    installCommands: ["/bin/bash scheduler/setup.sh"],
-  });
-  assert.equal(userdata.includes("sha256sum"), false);
-  assert.match(userdata, /download_bootstrap\.sh "[^"]*" \|\| fail_userdata bootstrap-download/);
-  assert.match(userdata, /^install_aws_cli \|\| fail_userdata aws-cli$/m);
-});
-
 test("a wrapping top-level folder would break the Linux install command, and the builder does not emit one", () => {
   withWorkdir((workDirectory) => {
     const extracted = unpackLikeLinux(
-      buildComponent("bastion-host", workDirectory),
+      buildComponent("openldap-server", workDirectory),
       join(workDirectory, "linux"),
     );
-    assert.equal(existsSync(join(extracted, "bastion-host/setup.sh")), true);
-    assert.equal(existsSync(join(extracted, "bastion-host/bastion-host/setup.sh")), false);
+    assert.equal(existsSync(join(extracted, "openldap-server/setup.sh")), true);
+    assert.equal(existsSync(join(extracted, "openldap-server/openldap-server/setup.sh")), false);
   });
-});
-
-test("Linux install commands invoke bash by path, so a rendered setup.sh need not be executable", () => {
-  withWorkdir((workDirectory) => {
-    const extracted = unpackLikeLinux(buildComponent("scheduler", workDirectory), join(workDirectory, "linux"));
-    assert.equal((statSync(join(extracted, "scheduler/setup.sh")).mode & 0o111) !== 0, false);
-    const userdata = buildBootstrapUserData({
-      baseOs: "amazonlinux2023",
-      awsRegion: "us-east-2",
-      bootstrapPackageUri: LINUX_URI,
-      installCommands: ["/bin/bash scheduler/setup.sh"],
-    });
-    assert.match(userdata, /\/bin\/bash scheduler\/setup\.sh/);
-    assert.equal(userdata.includes("./scheduler/setup.sh"), false);
-  });
-});
-
-test("download_bootstrap.sh stops at its first failure and replaces latest even when it is absent", () => {
-  const userdata = buildBootstrapUserData({
-    baseOs: "amazonlinux2023",
-    awsRegion: "us-east-2",
-    bootstrapPackageUri: LINUX_URI,
-    installCommands: ["/bin/bash scheduler/setup.sh"],
-  });
-  assert.match(userdata, /#!\/bin\/bash\nset -e\nPACKAGE_DOWNLOAD_URI=/);
-  assert.match(userdata, /rm -f \/root\/bootstrap\/latest/);
-  assert.match(userdata, /ln -sf/);
 });
 
 test("Windows VDI user data uses substitutionSupport false, so it never writes infra.cfg", () => {

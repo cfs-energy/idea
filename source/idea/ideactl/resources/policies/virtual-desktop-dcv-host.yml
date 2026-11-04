@@ -72,3 +72,16 @@ Statement:
 {% include '_templates/openldap.yml' %}
 
 {% include '_templates/custom-kms-key.yml' %}
+
+  - Effect: Allow
+    Action: dynamodb:GetItem
+    Resource: '{{ context.arns.get_ddb_table_arn("cluster-settings") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:LeadingKeys: [cluster-manager.web_terminal.enabled, cluster-manager.web_terminal.ca_public_key]
+  - Effect: Allow
+    Action: dynamodb:PutItem
+    Resource: '{{ context.arns.get_ddb_table_arn("cluster-manager.terminal") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:LeadingKeys: ['host:${ec2:SourceInstanceARN}']

@@ -18,7 +18,6 @@ import React, {Component} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
 import {Alert, Box, Button, ColumnLayout, Container, FormField, Header, Input, KeyValuePairs, SpaceBetween, Table, Textarea, Toggle} from "@cloudscape-design/components";
-import moment from "moment";
 import {KeyValue, KeyValueGroup} from "../../components/key-value";
 import {AppContext} from "../../common";
 import dot from "dot-object";
@@ -180,13 +179,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         const message = this.state.maintenanceMessage.trim()
         const endsAt = this.state.maintenanceEndsAt.trim()
 
-        if (Utils.isNotEmpty(endsAt) && !moment(endsAt, moment.ISO_8601, true).isValid()) {
-            this.setState({
-                maintenanceError: 'End time must be an ISO 8601 timestamp, for example 2026-09-15T18:00:00Z. Leave it empty for no end time.'
-            })
-            return
-        }
-
+        // The settings API owns the end-time rule; a second client-side parser disagreed with it.
         const clusterSettingsService = AppContext.get().getClusterSettingsService()
         const moduleId = Utils.asString(clusterSettingsService.getModuleId(Constants.MODULE_CLUSTER_MANAGER), Constants.MODULE_CLUSTER_MANAGER)
         this.setState({
@@ -297,11 +290,6 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
         const isDirectoryServiceActiveDirectory = (): boolean => {
             let provider = dot.pick('provider', this.state.directoryservice)
             return provider === 'activedirectory' || provider === 'aws_managed_activedirectory'
-        }
-
-        const getOpenSearchDashboardUrl = () => {
-            let externalAlbUrl = ConfigUtils.getExternalAlbUrl(this.state.cluster)
-            return `${externalAlbUrl}/_dashboards`
         }
 
         const isMetricsEnabled = () => {
@@ -622,8 +610,7 @@ class ClusterSettings extends Component<ClusterSettingsProps, ClusterSettingsSta
                                 <KeyValue title="Domain Name" value={dot.pick('opensearch.domain_name', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Domain ARN" value={dot.pick('opensearch.domain_arn', this.state.analytics)} clipboard={true}/>
                                 <KeyValue title="Domain Endpoint" value={dot.pick('opensearch.domain_endpoint', this.state.analytics)} clipboard={true}/>
-                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Dashboard URL" value={getOpenSearchDashboardUrl()} type={"external-link"} clipboard={true}/>
-                                <KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
+                                </SpaceBetween><SpaceBetween size="m"><KeyValue title="Existing OpenSearch Service Domain?" value={dot.pick('opensearch.use_existing', this.state.analytics)} type={"boolean"}/>
                             </SpaceBetween></ColumnLayout>
                         </Container>
                         <Container header={<Header variant={"h2"}>Kinesis Settings</Header>}>

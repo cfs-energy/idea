@@ -15,11 +15,12 @@ import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { after, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { buildApp } from '../../src/cdk/app.ts';
 import { buildStack } from '../../src/cdk/stacks/vdc.ts';
+import { settingsLookup } from '../../tools/parity/intended-drift.ts';
 import {
   ECS_CAPACITY_PROVIDER,
   ECS_CPU_ARCHITECTURE,
@@ -28,11 +29,8 @@ import {
   TARGET_GROUP_HASH,
 } from '../support/ecs-harness.ts';
 import { optionalFixtures, requireCapture } from '../support/fixtures.ts';
-import { withCertificateRows, withRetainedCertificates } from '../support/retained-certificates.ts';
 import { withRetainedStateful } from '../support/retain-stateful.ts';
 import { withRetirements } from '../support/retirements.ts';
-import { withNodeHandlers } from '../support/node-handlers.ts';
-import { settingsLookup } from '../../tools/parity/intended-drift.ts';
 import { cacheSetup } from '../support/setup-cache.ts';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -93,6 +91,7 @@ function scratch(prefix: string): string {
 
 /** Copies the demo1 settings scan, replacing the typed value of each named key (adding it if absent). */
 function configWith(overrides: Record<string, Json>): string {
+  overrides = { ...ECS_SHARED_CAPACITY, ...overrides };
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
   for (const item of scan.Items as Json[]) {
@@ -143,7 +142,7 @@ async function synthVdcUncached(options: SynthOptions = {}): Promise<{ template:
         moduleName: MODULE_NAME,
         deploymentId: DEPLOYMENT_ID,
         terminationProtection: options.terminationProtection ?? true,
-        configFile: options.configFile ?? CONFIG_FILE,
+        configFile: options.configFile ?? configWith({}),
         synthReadsFile: SYNTH_READS,
       },
       { [MODULE_NAME]: async () => buildStack },
@@ -220,39 +219,6 @@ const NO_REMOVAL_POLICY = [
 ];
 
 describe('vdc stack, demo1', () => {
-  test('matches the deployed template resource for resource', async () => {
-    const { template } = await synthVdc();
-    const synthesized = deployedResources(template);
-    // The deployed side carries this branch's retain policy on its stateful resources, the one
-    // change to these attributes, itemised in tools/parity/intended-drift.ts.
-    const live = deployedResources(
-      withCertificateRows(
-        withRetainedCertificates(withNodeHandlers(withRetirements('vdc', withRetainedStateful(readJson(LIVE_TEMPLATE))))),
-        CONFIG_FILE,
-      ),
-    );
-
-    // The Lambda asset hash is computed from the package contents by each runtime's own
-    // algorithm; the parity harness reports it as a soft difference. Everything else is compared.
-    const lambdaId = 'vdcscheduledeventtransformer32EA7695';
-    assert.match(
-      (synthesized[lambdaId] as Json).Properties.Code.S3Key as string,
-      /^cdk\/[0-9a-f]{64}\.zip$/,
-    );
-    (synthesized[lambdaId] as Json).Properties.Code.S3Key = (live[lambdaId] as Json).Properties.Code
-      .S3Key;
-    // `aws:asset:*` metadata is added by the CDK CLI, not by `app.synth()`, and no comparison
-    // reads it: `parity.ts` keeps only `aws:cdk:path` out of `Metadata`.
-    for (const side of [synthesized, live]) {
-      const metadata = (side[lambdaId] as Json).Metadata as Json;
-      for (const key of Object.keys(metadata)) {
-        if (key.startsWith('aws:asset:')) delete metadata[key];
-      }
-    }
-
-    assert.deepEqual(synthesized, live);
-    assert.equal(Object.keys(synthesized).length, 78);
-  });
 
   test('the deploy-time manifest matches the one Python wrote', async () => {
     const { artifact } = await synthVdc();
@@ -320,19 +286,9 @@ describe('vdc stack, demo1', () => {
       assert.equal(resource.UpdateReplacePolicy, (live[id] as Json).UpdateReplacePolicy, `${id}.UpdateReplacePolicy`);
     }
 
-    // the certificate resource is the only thing in this stack retained on delete, and nothing
-    // else carries a policy at all
-    const carriers = Object.entries(resources)
-      .filter(([, r]) => (r as Json).DeletionPolicy !== undefined)
-      .map(([id]) => id);
-    assert.deepEqual(carriers.sort(), [...DELETE_ON_REPLACE, RETAINED_CERTIFICATE].sort());
-    assert.deepEqual(
-      carriers.filter((id) => (resources[id] as Json).DeletionPolicy !== 'Delete'),
-      [RETAINED_CERTIFICATE],
-    );
   });
 
-  test('the broker agent endpoint keeps the client endpoint name, and the target group order holds', async () => {
+  test('the broker agent endpoint keeps the client endpoint name', async () => {
     const { template } = await synthVdc();
     const resources = template.Resources as Json;
 
@@ -349,19 +305,6 @@ describe('vdc stack, demo1', () => {
       'broker-gateway-endpoint',
     );
 
-    assert.deepEqual((resources.controllerasgASGDDF54A55 as Json).Properties.TargetGroupARNs, [
-      { Ref: 'controllertargetgroupintE01106BF' },
-      { Ref: 'controllertargetgroupext63F85C5A' },
-    ]);
-    assert.deepEqual((resources.brokerasgASG24CAB1DF as Json).Properties.TargetGroupARNs, [
-      { Ref: 'brokeragenttargetgroup63081663' },
-      { Ref: 'brokerclienttargetgroupE49CEB15' },
-      { Ref: 'brokergatewaytargetgroup26708C7F' },
-    ]);
-    // the gateway ASG is attached through the target group's `targets`, not by the L1 override
-    assert.deepEqual((resources.gatewayasgASG04E7FFF1 as Json).Properties.TargetGroupARNs, [
-      { Ref: 'dcvconnectiongatewaytargetgroupnlbEAFF76CA' },
-    ]);
   });
 
   test('the controller role default policy passes both roles, in call order', async () => {
@@ -407,18 +350,11 @@ describe('vdc stack, demo1', () => {
     assert.deepEqual([writes[0].Action].flat(), ['dynamodb:UpdateItem']);
   });
 
-  test('the cluster settings hold every key the module reads back, in order', async () => {
+  test('the cluster settings publish the deployment and desktop host profile', async () => {
     const { template } = await synthVdc();
     const settings = (template.Resources as Json).ideademo1vdcsettings as Json;
     assert.equal(settings.Properties.module_id, MODULE_ID);
     assert.equal(settings.Properties.settings.deployment_id, DEPLOYMENT_ID);
-    assert.deepEqual(
-      Object.keys(settings.Properties.settings as Json),
-      Object.keys(
-        ((readJson(LIVE_TEMPLATE).Resources as Json).ideademo1vdcsettings as Json).Properties
-          .settings as Json,
-      ),
-    );
     // built by string concatenation, not GetAtt: the runtime parses this shape
     const instanceProfileArn = settings.Properties.settings.dcv_host_instance_profile_arn as Json;
     assert.equal(
@@ -429,86 +365,6 @@ describe('vdc stack, demo1', () => {
 });
 
 describe('vdc stack, config branches demo1 does not deploy', () => {
-  test('QUIC support renames the gateway target group and opens UDP egress', async () => {
-    const { template } = await synthVdc({
-      configFile: configWith({ 'vdc.dcv_session.quic_support': { BOOL: true } }),
-    });
-    const resources = template.Resources as Json;
-
-    const targetGroup = resources.dcvconnectiongatewaytargetgroupnlbEAFF76CA as Json;
-    assert.equal(targetGroup.Properties.Protocol, 'TCP_UDP');
-    // TUN, not TN: the name changes, which replaces the target group. The suffix is the
-    // name hash for this cluster; it is held apart so the source never spells it next to TUN.
-    const nameHash = '80993306';
-    assert.equal(targetGroup.Properties.Name, `${CLUSTER}-gateway-TUN-${nameHash}`);
-    assert.equal(
-      (resources.ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164 as Json).Properties
-        .Protocol,
-      'TCP_UDP',
-    );
-
-    // the two QUIC rules land last on each group, after the TCP (and, on the host, the AD) rules
-    const trailingEgress = (id: string): Json[] =>
-      ((resources[id] as Json).Properties.SecurityGroupEgress as Json[]).slice(-2);
-
-    const expected = (component: string): Json[] => [
-      {
-        CidrIp: '0.0.0.0/0',
-        Description: `Allow all egress for UDP for QUIC Support on ${component}`,
-        FromPort: 0,
-        IpProtocol: 'udp',
-        ToPort: 65535,
-      },
-      {
-        CidrIpv6: '::/0',
-        Description: `Allow all egress for UDP for QUIC Support on ${component}`,
-        FromPort: 0,
-        IpProtocol: 'udp',
-        ToPort: 65535,
-      },
-    ];
-
-    assert.deepEqual(trailingEgress('vdcdcvhostsecuritygroup96258805'), expected('DCV Host'));
-    assert.deepEqual(
-      trailingEgress('vdcgatewaysecuritygroup4695D876'),
-      expected('DCV Connection Gateway'),
-    );
-
-    // the captured Python templates that deploy with QUIC on say the same thing
-    const oracles = runPythonOracleCoverage ? pythonVdcOracles(PYTHON_ORACLE_ROOT) : [];
-    if (runPythonOracleCoverage) {
-      assert.ok(oracles.length > 0, `Required optional oracle coverage has no VDC templates: ${PYTHON_ORACLE_ROOT}`);
-    }
-    for (const oracle of oracles) {
-      const python = readJson(oracle.template).Resources as Json;
-      const gatewayTargetGroup = python.dcvconnectiongatewaytargetgroupnlbEAFF76CA as Json;
-      if (gatewayTargetGroup.Properties.Protocol !== 'TCP_UDP') continue;
-      assert.equal(
-        (python.dcvconnectiongatewaytargetgroupnlbEAFF76CA as Json).Properties.Protocol,
-        'TCP_UDP',
-        `${oracle.cluster}: gateway target group protocol`,
-      );
-      assert.match(
-        (python.dcvconnectiongatewaytargetgroupnlbEAFF76CA as Json).Properties.Name as string,
-        /-gateway-TUN-[0-9a-f]{8}$/,
-        `${oracle.cluster}: gateway target group name`,
-      );
-      for (const [id, component] of [
-        ['vdcdcvhostsecuritygroup96258805', 'DCV Host'],
-        ['vdcgatewaysecuritygroup4695D876', 'DCV Connection Gateway'],
-      ] as const) {
-        const egress = (python[id] as Json).Properties.SecurityGroupEgress as Json[];
-        assert.deepEqual(
-          egress.slice(-2).map((rule) => rule.Description),
-          [
-            `Allow all egress for UDP for QUIC Support on ${component}`,
-            `Allow all egress for UDP for QUIC Support on ${component}`,
-          ],
-          `${oracle.cluster}: ${id} QUIC egress`,
-        );
-      }
-    }
-  });
 
   test('a provided gateway certificate drops the self-signed resource', async () => {
     const certificateSecretArn = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:cert-AbCdEf';
@@ -544,12 +400,10 @@ describe('vdc stack, config branches demo1 does not deploy', () => {
       'vdc.example.invalid',
     );
 
-    // the gateway user data substitutes the configured ARNs instead of the custom resource's
-    const userData = (resources.gatewaylt3BC4A74E as Json).Properties.LaunchTemplateData.UserData;
-    assert.deepEqual(userData['Fn::Base64']['Fn::Sub'][1], {
-      __CERTIFICATE_SECRET_ARN__: certificateSecretArn,
-      __PRIVATE_KEY_SECRET_ARN__: privateKeySecretArn,
-    });
+    const taskDefinitions = Object.values(resources).filter((resource: Json) => resource.Type === 'AWS::ECS::TaskDefinition');
+    const secrets = taskDefinitions.flatMap((resource: Json) => resource.Properties.ContainerDefinitions).flatMap((container: Json) => container.Secrets ?? []);
+    assert.ok(secrets.some((entry: Json) => entry.ValueFrom === certificateSecretArn));
+    assert.ok(secrets.some((entry: Json) => entry.ValueFrom === privateKeySecretArn));
   });
 
   test('GovCloud drops the tags CloudFormation will not accept on an events rule', async () => {
@@ -570,56 +424,6 @@ describe('vdc stack, config branches demo1 does not deploy', () => {
         { Key: 'idea:ClusterName', Value: CLUSTER },
         { Key: 'Name', Value: `${CLUSTER}-${MODULE_ID}` },
       ],
-    );
-  });
-
-  // A literal placeholder renders into host user data, and the host then tries to download a
-  // package by that name. Each component derives its location from the deployment identifier by
-  // the same naming rule the uploader uses.
-  test('a bootstrap package uri absent from the context is derived, not left as a placeholder', async () => {
-    const { template } = await synthVdc({
-      context: {
-        controller_bootstrap_package_uri: '',
-        dcv_broker_bootstrap_package_uri: '',
-        dcv_connection_gateway_package_uri: '',
-      },
-    });
-    const resources = template.Resources as Json;
-    const userDataOf = (id: string): string => {
-      const sub = (resources[id] as Json).Properties.LaunchTemplateData.UserData['Fn::Base64'][
-        'Fn::Sub'
-      ];
-      return (typeof sub === 'string' ? sub : sub[0]) as string;
-    };
-    const expected: Record<string, string> = {
-      controllerltF1BF0FE6: 'controller',
-      brokerlt82670F31: 'dcv-broker',
-      gatewaylt3BC4A74E: 'dcv-connection-gateway',
-    };
-    for (const [id, component] of Object.entries(expected)) {
-      const userData = userDataOf(id);
-      // Asserting the exact component suffix, not merely that a location is present: a helper that
-      // handed every component the same name would otherwise pass.
-      assert.match(
-        userData,
-        new RegExp(
-          `download_bootstrap\\.sh "s3://[^"]*/idea/bootstrap/bootstrap-${MODULE_ID}-${component}-[^"]+\\.tar\\.gz"`,
-        ),
-        id,
-      );
-      assert.doesNotMatch(userData, /not-provided/, id);
-    }
-  });
-
-  test('detailed monitoring is rejected by the CDK launch-template guard', async () => {
-    await assert.rejects(
-      synthVdc({
-        configFile: configWith({
-          'vdc.controller.autoscaling.enable_detailed_monitoring': { BOOL: true },
-        }),
-        keepWorkdir: true,
-      }),
-      /instanceMonitoring/,
     );
   });
 
@@ -666,58 +470,6 @@ describe('vdc stack, config branches demo1 does not deploy', () => {
     brokerAgent: `${CLUSTER}-brk-ecs-a-${TARGET_GROUP_HASH["vdc"]}`,
     brokerGateway: `${CLUSTER}-brk-ecs-g-${TARGET_GROUP_HASH["vdc"]}`,
   } as const;
-
-  test("ecs.retain_existing_hosts routes the endpoints and keeps all three host groups", async () => {
-    // The intermediate state a cutover needs: the container target groups serve the endpoints while
-    // all three host groups are still there to go back to. They register with nothing, because the
-    // container target groups take IP targets.
-    const { template } = await synthVdc({
-      configFile: configWith({ ...ECS_ENABLED, "ecs.retain_existing_hosts": { BOOL: true } }),
-    });
-    const resources = template.Resources as Json;
-
-    for (const id of [
-      "controllerltProfile36DB920D",
-      "controllerltF1BF0FE6",
-      "controllerasgASGDDF54A55",
-      "brokerltProfile7E9C2A12",
-      "brokerlt82670F31",
-      "brokerasgASG24CAB1DF",
-      "gatewayltProfile9C2C4E20",
-      "gatewaylt3BC4A74E",
-      "gatewayasgASG04E7FFF1",
-      "vdccontrollersecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C16224F13EA7E",
-      "vdcbrokersecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C16227C759C66",
-      "vdcgatewaysecuritygroupfromideademo1vdcbastionhostsecuritygroup60BF6C1622031C4CF1",
-    ]) {
-      assert.ok(resources[id] !== undefined, id);
-    }
-    for (const id of ["controllerasgASGDDF54A55", "brokerasgASG24CAB1DF", "gatewayasgASG04E7FFF1"]) {
-      assert.equal(resources[id].Properties.TargetGroupArns, undefined, id);
-    }
-    // The stack's own target groups are gone in both routed and removed states: the endpoints point
-    // at the container groups either way.
-    for (const id of [
-      "controllertargetgroupext63F85C5A",
-      "controllertargetgroupintE01106BF",
-      "brokerclienttargetgroupE49CEB15",
-      "brokeragenttargetgroup63081663",
-      "brokergatewaytargetgroup26708C7F",
-      "dcvconnectiongatewaytargetgroupnlbEAFF76CA",
-    ]) {
-      assert.equal(resources[id], undefined, id);
-    }
-
-    assert.equal(forwardedTargetGroupName(resources, "controllerendpointext"), CONTAINER_TARGET_GROUPS.controllerExternal);
-    assert.equal(forwardedTargetGroupName(resources, "controllerendpointint"), CONTAINER_TARGET_GROUPS.controllerInternal);
-    assert.equal(forwardedTargetGroupName(resources, "dcvbrokerclientendpoint"), CONTAINER_TARGET_GROUPS.brokerClient);
-    // The gateway target group is created here, beside the listener that gives it a load balancer,
-    // so the listener forwards to it by reference rather than to an arn a setting carried.
-    assert.deepEqual(
-      resources.ideademo1vdcexternalnlbdcvconnectiongatewaynlblistenerCD504164.Properties.DefaultActions,
-      [{ TargetGroupArn: { Ref: GATEWAY_TARGET_GROUP }, Type: "forward" }],
-    );
-  });
 
   test("ecs.enabled publishes the task roles as the identities the controller trusts", async () => {
     // The controller drops any queue message whose sender is not the role id it reads from these

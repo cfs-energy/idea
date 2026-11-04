@@ -186,6 +186,7 @@ def test_every_point_uses_job_end_time(context, monkeypatch):
         'job.cost_ondemand',
         'job.savings',
         'job.cpu_efficiency',
+        'job.cpu_efficiency.measured',
         'job.detail.cost',
     }
     assert all(entry['Timestamp'] == int(job.end_time.timestamp()) for entry in entries)
@@ -353,3 +354,44 @@ def test_multi_node_resource_list_ncpus_is_job_wide(select):
     assert result['requested_cores'] == 8
     assert result['core_hours'] == 8
     assert result['wasted_core_hours'] == 2
+
+
+@pytest.mark.parametrize('wall, expected', [(0, 0), (0.5, 0.5), (-1, None)])
+def test_duration_preserves_zero_and_rejects_negative(
+    context, monkeypatch, wall, expected
+):
+    entries = _published(context, monkeypatch, 'dogstatsd', _job(wall_secs=wall))
+    durations = [
+        e['Value'] for e in entries if e['MetricName'] == 'job.duration_seconds'
+    ]
+    assert durations == ([] if expected is None else [expected])
+
+
+def test_never_started_job_explicitly_has_no_duration(context, monkeypatch):
+    entries = _published(context, monkeypatch, 'dogstatsd', _job(started=False))
+    assert 'job.count' in {e['MetricName'] for e in entries}
+    assert 'job.duration_seconds' not in {e['MetricName'] for e in entries}
+
+
+@pytest.mark.parametrize(
+    'cpu_time, expected', [(None, None), (0, 0), (10800, 0.75), (5000000, None)]
+)
+def test_both_cpu_series_preserve_measurement_rules(
+    context, monkeypatch, cpu_time, expected
+):
+    entries = _published(
+        context, monkeypatch, 'dogstatsd', _job(cpu_time_secs=cpu_time)
+    )
+    series = {
+        e['MetricName']: e for e in entries if 'cpu_efficiency' in e['MetricName']
+    }
+    if expected is None:
+        assert series == {}
+    else:
+        assert set(series) == {'job.cpu_efficiency', 'job.cpu_efficiency.measured'}
+        legacy = series['job.cpu_efficiency']
+        measured = series['job.cpu_efficiency.measured']
+        assert legacy['Value'] == measured['Value'] == expected
+        assert legacy['Dimensions'] == measured['Dimensions']
+        assert legacy['Timestamp'] == measured['Timestamp']
+        assert legacy['MetricType'] == measured['MetricType'] == 'Summary'

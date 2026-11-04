@@ -18,18 +18,11 @@ from ideasdk.utils import Utils
 from ideatestutils import IdeaTestProps
 
 import os
-import requests
 import shutil
-import pathlib
+from pathlib import Path
+from ideatestutils.dynamodb.install import install
 from threading import Thread
 from typing import Optional
-
-DYNAMODB_LOCAL_PACKAGE_URL = (
-    'https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.zip'
-)
-DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM = (
-    '06e7bdd5d03262d8373696282f79867f9f6beb94b76e230b49da135be080558c'
-)
 
 
 class DynamoDBLocal:
@@ -103,31 +96,11 @@ class DynamoDBLocal:
             )
             return False
 
-        # download and install (if not already installed)
-        ddb_local_zip_file = self.get_ddb_local_zip_file()
-        if not Utils.is_file(ddb_local_zip_file):
-            print(f'downloading ddb local: {DYNAMODB_LOCAL_PACKAGE_URL} ...')
-            request = requests.get(DYNAMODB_LOCAL_PACKAGE_URL)
-            with open(ddb_local_zip_file, 'wb') as f:
-                f.write(request.content)
-            sha256_checksum = Utils.compute_checksum_for_file(ddb_local_zip_file)
-            if sha256_checksum != DYNAMODB_LOCAL_PACKAGE_SHA256_CHECKSUM:
-                print('failed to verify checksum. skip.')
-                return False
-
-        ddb_local_jar_file = self.get_ddb_local_jar_file()
-        if Utils.is_file(ddb_local_jar_file):
-            return True
-
-        # directory exists but zip does not exist. clean up
-        ddb_local_lib_dir = self.get_ddb_local_lib_dir()
-        if Utils.is_dir(ddb_local_lib_dir):
-            shutil.rmtree(ddb_local_lib_dir)
-
-        os.makedirs(str(pathlib.Path(ddb_local_lib_dir).parent), exist_ok=True)
-
-        print('installing ddb local ...')
-        shutil.unpack_archive(ddb_local_zip_file, self.get_ddb_local_lib_dir(), 'zip')
+        try:
+            install(Path(self.props.get_idea_user_home_dir()))
+        except (OSError, ValueError) as error:
+            print(f'DynamoDB Local installation failed: {error}')
+            return False
         return True
 
     def _run_ddb_local(self):

@@ -73,6 +73,10 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 {% include '_templates/linux/disable_firewall.jinja2' %}
 
+{% include '_templates/linux/kernel_net_hardening.jinja2' %}
+
+{% include '_templates/linux/kernel_module_hardening.jinja2' %}
+
 {% include '_templates/linux/systemd_resolved.jinja2' %}
 
 {% include '_templates/linux/idea_proxy.jinja2' %}
@@ -182,6 +186,8 @@ fi
 {% else %}
   log_info "GPU InstanceType not detected. Skipping disabling of Nouveau Drivers..."
 {% endif %}
+
+{% include '_templates/linux/web_terminal.jinja2' %}
 
 # Cleaning up earlier reboot notifications added by our code.
 crontab -l | grep -v "idea-reboot-do-not-edit-or-delete-idea-notif.sh" | crontab -

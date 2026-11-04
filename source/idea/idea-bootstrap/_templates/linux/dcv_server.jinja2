@@ -4,7 +4,7 @@
 GDM_CONFIG_RHEL_PATH="/etc/gdm/custom.conf"
 GDM_CONFIG_DEBIAN_PATH="/etc/gdm3/custom.conf"
 
-DCV_GPG_KEY_DCV_SERVER="{{ context.config.get_string('global-settings.package_config.dcv.gpg_key', required=True) }}"
+{% include '_templates/linux/dcv_package_trust.jinja2' %}
 {% if context.base_os in ('amazonlinux2023',) %}
 DCV_SERVER_X86_64_URL="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2023.url', required=True) }}"
 DCV_SERVER_X86_64_SHA256_HASH="{{ context.config.get_string('global-settings.package_config.dcv.x86_64.linux.al2023.sha256sum', required=True) }}"
@@ -176,6 +176,8 @@ EOF
   update-desktop-database
 {% endif %}
 
+{% include '_templates/linux/unused_services.jinja2' %}
+
   # Apply colord policy fix for all distributions
      {% include '_templates/linux/colord.jinja2' %}
 
@@ -194,9 +196,9 @@ fi
 {% include '_templates/linux/mesa_shader_cache.jinja2' %}
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
-rpm --import ${DCV_GPG_KEY_DCV_SERVER}
+rpm --import "${DCV_NICE_KEY}"
 {% elif context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
-curl -fsSL "${DCV_GPG_KEY_DCV_SERVER}" | gpg --dearmor | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
+gpg --dearmor < "${DCV_NICE_KEY}" | sudo tee /usr/share/keyrings/dcv.gpg > /dev/null
 {% endif %}
 
 machine=$(uname -m) #x86_64 or aarch64
@@ -254,14 +256,19 @@ fi
 {% endif %}
 
   wget ${DCV_SERVER_URL}
-  wget ${DCV_SERVER_SHA256_HASH}
   DCV_SERVER_TGZ=$(basename "${DCV_SERVER_URL}")
+{% if context.base_os in ('ubuntu2404', 'ubuntu2604') %}
+  CHECKSUM_FILE=""
+  dcv_sha256_pinned "${DCV_SERVER_TGZ}" "${DCV_SERVER_SHA256_HASH}" || dcv_untrusted "DCV Server archive ${DCV_SERVER_TGZ} does not match its pinned SHA-256."
+{% else %}
+  wget ${DCV_SERVER_SHA256_HASH}
   CHECKSUM_FILE=$(basename "${DCV_SERVER_SHA256_HASH}")
   EXPECTED_CHECKSUM=$(cat ${CHECKSUM_FILE} | awk '{print $1}')
   if [[ $(sha256sum ${DCV_SERVER_TGZ} | awk '{print $1}') != ${EXPECTED_CHECKSUM} ]];  then
       echo -e "FATAL ERROR: Checksum for DCV Server failed. File may be compromised." > /etc/motd
       exit 1
   fi
+{% endif %}
   tar zxvf ${DCV_SERVER_TGZ}
 
   # Extract directory name from the archive
@@ -289,6 +296,14 @@ fi
     log_error "Failed to install $rpm_file after $max_attempts attempts"
     return 1
   }
+
+  {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rocky8', 'rocky9') %}
+  dcv_rpms_signed nice-xdcv-*.${machine}.rpm nice-dcv-server-*.${machine}.rpm nice-dcv-web-viewer-*.${machine}.rpm || dcv_untrusted "DCV Server packages are not signed by the pinned NICE key."
+  {% elif context.base_os in ('rhel10', 'rocky10') %}
+  dcv_rpms_signed nice-dcv-server-*.${machine}.rpm nice-dcv-web-viewer-*.${machine}.rpm || dcv_untrusted "DCV Server packages are not signed by the pinned NICE key."
+  {% elif context.base_os == 'ubuntu2204' %}
+  dcv_debs_signed nice-xdcv_*.deb nice-dcv-server_*.deb nice-dcv-web-viewer_*.deb || dcv_untrusted "DCV Server packages are not signed by the pinned NICE key."
+  {% endif %}
 
   {% if context.base_os in ('amazonlinux2023',) %}
     install_rpm_with_retry "nice-xdcv-*.${machine}.rpm" ""

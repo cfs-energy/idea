@@ -53,6 +53,8 @@ function Install-NvidiaGpuDrivers {
                 Write-ToLog -Message "No file matching ${keyPrefix} was copied from ${s3Path}, cannot install NVIDIA drivers" -Level 'Error'
                 exit 1
             }
+            # setup.exe runs from this archive as SYSTEM: it must be NVIDIA's
+            Assert-InstallerTrusted -Path $driverFile.FullName -Publisher NVIDIA
 
             Write-ToLog -Message "Disabling Licensing Page"
             reg add "HKLM\SOFTWARE\NVIDIA Corporation\Global\GridLicensing" /v NvCplDisableManageLicensePage /t REG_DWORD /d 1 /f

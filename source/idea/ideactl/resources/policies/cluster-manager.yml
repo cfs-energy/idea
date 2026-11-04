@@ -21,13 +21,9 @@ Statement:
       - logs:GetQueryResults
       - logs:StopQuery
     {% endif %}
-    {% if context.config.get_bool(context.module_id + '.bedrock.enabled', False) or context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
       - ce:GetCostAndUsage
-    {% endif %}
-    {% if context.config.get_bool(context.module_id + '.metrics.cost.enabled', False) %}
       - ce:GetTags
       - ce:GetDimensionValues
-    {% endif %}
     Resource: '*'
     Effect: Allow
 
@@ -61,7 +57,14 @@ Statement:
     Effect: Allow
 
   - Action:
+      - dynamodb:DescribeTimeToLive
+    Resource:
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.terminal") }}'
+    Effect: Allow
+
+  - Action:
       - dynamodb:GetItem
+      - dynamodb:BatchGetItem
       - dynamodb:Query
       - dynamodb:Scan
       - dynamodb:DescribeTable
@@ -79,6 +82,7 @@ Statement:
     Resource:
       - '{{ context.arns.get_ddb_table_arn("cluster-settings") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.personal-costs") }}'
+      - '{{ context.arns.get_ddb_table_arn("cluster-manager.terminal") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.reporting-snapshots") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}/index/*'
@@ -387,3 +391,7 @@ Statement:
       - ecs:DescribeTaskDefinition
     Resource: '*'
 {% endif %}
+
+  - Effect: Allow
+    Action: [dynamodb:GetItem, dynamodb:Query]
+    Resource: '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("virtual-desktop-controller") + ".controller.user-sessions") }}'

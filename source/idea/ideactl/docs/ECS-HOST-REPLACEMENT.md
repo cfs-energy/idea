@@ -1,4 +1,22 @@
-# Replacing hosts created before the shared-storage mount correction
+# Replacing ECS hosts
+
+## Moving hosts onto the current ECS AMI
+
+The host launch template resolves its image at launch from the public ECS-optimized AL2023 parameter (`/aws/service/ecs/optimized-ami/amazon-linux-2023/[arm64/]recommended/image_id`), so a new host always boots the current ECS AMI and running hosts keep the image they started with. Replace them with:
+
+```bash
+ideactl upgrade-cluster --cluster-name <CLUSTER_NAME> --aws-region <REGION> --refresh-hosts
+# or, for the ECS host pool alone
+ideactl deploy ecs --upgrade --cluster-name <CLUSTER_NAME> --aws-region <REGION> --refresh-hosts
+```
+
+After the ecs stack deploys, `--refresh-hosts` starts an instance refresh of the whole host group (minimum healthy 100%, new hosts first; managed draining moves the tasks) and waits up to 90 minutes for it, then waits for every host to join the directory before the bastion deploys. Check the result with `uname -r` and the image id of a new host.
+
+It acts only when at least one host runs an older launch-template version, which every release that changes the host template produces. Because the image id lives in an SSM parameter rather than in the template, a newer ECS AMI on its own does not create a template version. To pick up an AMI released after your last deploy, start the same refresh on the host auto scaling group (`ecs.capacity_provider` names its capacity provider) yourself: `aws autoscaling start-instance-refresh --auto-scaling-group-name <ASG> --preferences '{"MinHealthyPercentage":100,"MaxHealthyPercentage":200,"InstanceWarmup":300,"ScaleInProtectedInstances":"Refresh"}'`.
+
+Single-task services (the scheduler) stop before their replacement starts, so run the refresh in a maintenance window.
+
+## Replacing hosts created before the shared-storage mount correction
 
 Updating the ECS launch template does not update running hosts. Before deploying application stacks on previously created capacity, deploy only the ECS capacity stack, then replace every host using the previous launch-template version. Do not resume the application upgrade until every active host passes the checks below.
 

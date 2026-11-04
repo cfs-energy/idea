@@ -38,7 +38,7 @@ if ((Test-Path $CloudWatchAgentPath) -and (Test-Path $CloudWatchAgentConfig)) {
 
     try {
         Write-Output "Downloading CloudWatch Agent from: $CLOUDWATCH_AGENT_DOWNLOAD_LINK"
-        Invoke-WebRequest -Uri $CLOUDWATCH_AGENT_DOWNLOAD_LINK -OutFile $LocalPackagePath -UseBasicParsing
+        Save-Installer -Uri $CLOUDWATCH_AGENT_DOWNLOAD_LINK -OutFile $LocalPackagePath -Publisher Amazon
 
         Write-Output "Installing CloudWatch Agent..."
         $CloudWatchInstall = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $LocalPackagePath, "/quiet", "/norestart" -Wait -NoNewWindow -PassThru

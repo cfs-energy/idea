@@ -698,9 +698,7 @@ class TokenService(TokenServiceProtocol):
             self._sso_client_id = client_id
             self._sso_client_secret = client_secret
 
-        self._logger.debug(
-            f'sso client_id: {self._sso_client_id}, client_secret: {self._sso_client_secret}'
-        )
+        self._logger.debug(f'sso client_id: {self._sso_client_id}')
         basic_auth = Utils.encode_basic_auth(
             self._sso_client_id, self._sso_client_secret
         )
@@ -724,7 +722,9 @@ class TokenService(TokenServiceProtocol):
         if Utils.is_not_empty(error):
             raise exceptions.unauthorized_access(f'sso authentication failed: {error}')
 
-        self._logger.debug(f'sso access token: {Utils.to_json(result)}')
+        self._logger.debug(
+            f'sso token exchange succeeded, expires_in: {Utils.get_value_as_int("expires_in", result)}'
+        )
 
         return AuthResult(
             access_token=Utils.get_value_as_string('access_token', result),

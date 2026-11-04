@@ -23,7 +23,9 @@ if [[ -f /etc/pbs.conf ]]; then
     log_error "pbs is not running after pointing it at {{ pbs_server_name }}"
 {% if bootstrap_refresh %}
     # the refresh is only marked done on success: a stopped mom fails it rather than hide
-    # behind a matching name. First bootstrap carries on: qsub works without the local mom.
+    # behind a matching name. First bootstrap carries on, but qsub/qstat also resolve the
+    # short name through the private-zone search path, so a mom that could not resolve it
+    # means they fail too.
     exit 1
 {% endif %}
   fi

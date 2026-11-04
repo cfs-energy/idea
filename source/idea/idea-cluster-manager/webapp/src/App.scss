@@ -31,6 +31,18 @@ $idea-background-dark: #182836;
     font-size: 18px;
 }
 
+.virtual-desktop-placeholder-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    box-sizing: border-box;
+    max-width: 100%;
+    padding: 0 24px;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
 .application-placeholder-image {
     width: 100px;
     height: 40px;

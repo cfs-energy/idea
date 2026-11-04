@@ -227,12 +227,6 @@ Statement:
       StringLike:
         iam:AWSServiceName: 'dynamodb.application-autoscaling.amazonaws.com'
 
-  - Action:
-      - iam:AttachRolePolicy
-      - iam:PutRolePolicy
-    Resource: '{{ context.arns.get_ddb_application_autoscaling_service_role_arn() }}'
-    Effect: Allow
-
   {% if context.config.get_bool(context.config.get_module_id('cluster-manager') + '.bedrock.enabled', False) %}
   # scoped to roles under the per-project IAM path, passed only to ec2; enabling bedrock requires redeploying this module along with cluster-manager.
   - Condition:

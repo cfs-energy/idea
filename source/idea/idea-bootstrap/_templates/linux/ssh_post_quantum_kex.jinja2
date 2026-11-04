@@ -9,9 +9,11 @@ if command -v sshd > /dev/null 2>&1; then
   IDEA_PQ_KEX=$(ssh -Q kex 2>/dev/null | grep -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)
   # Drop the post-quantum names from the policy list so a re-run (the running-desktop refresh) does not repeat them.
   IDEA_POLICY_KEX=$(sshd -T 2>/dev/null | awk '/^kexalgorithms /{print $2}' | tr ',' '\n' | grep -v -E '^(mlkem768x25519-sha256|sntrup761x25519-sha512@openssh\.com)$' | paste -sd, -)
-  if [ -n "${IDEA_PQ_KEX}" ]; then
+  IDEA_KEX_LINE="KexAlgorithms ${IDEA_PQ_KEX}${IDEA_POLICY_KEX:+,${IDEA_POLICY_KEX}}"
+  # An unchanged drop-in is left alone, so a re-run does not restart sshd.
+  if [ -n "${IDEA_PQ_KEX}" ] && [ "$(cat /etc/ssh/sshd_config.d/10-idea-kex.conf 2>/dev/null)" != "${IDEA_KEX_LINE}" ]; then
     mkdir -p /etc/ssh/sshd_config.d
-    echo "KexAlgorithms ${IDEA_PQ_KEX}${IDEA_POLICY_KEX:+,${IDEA_POLICY_KEX}}" > /etc/ssh/sshd_config.d/10-idea-kex.conf
+    echo "${IDEA_KEX_LINE}" > /etc/ssh/sshd_config.d/10-idea-kex.conf
     if sshd -t 2>/dev/null; then
       systemctl restart sshd || systemctl restart ssh || true
     else

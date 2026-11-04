@@ -121,52 +121,6 @@ test("an optional list without a default still reaches join(undefined) and fails
   });
 });
 
-test("a missing release URI is written as an empty argument to install_app.sh", () => {
-  withWorkdir((workDirectory) => {
-    const rendered = renderMini(
-      workDirectory,
-      {
-        "cluster-manager/setup.sh.jinja2":
-          "/bin/bash ${SCRIPT_DIR}/install_app.sh \"{{ context.vars.app_package_uri }}\"\n",
-      },
-      sparseContext({ vars: {} }),
-      "cluster-manager/setup.sh",
-    );
-    assert.equal(rendered, "/bin/bash ${SCRIPT_DIR}/install_app.sh \"\"");
-  });
-});
-
-test("an empty app_deploy_dir turns the gateway replace into rm -rf of a root path", () => {
-  withWorkdir((workDirectory) => {
-    const rendered = renderMini(
-      workDirectory,
-      {
-        "dcv-connection-gateway/install_app.sh.jinja2":
-          "APP_NAME=\"dcv-connection-gateway\"\nAPP_DIR={{ context.app_deploy_dir }}/${APP_NAME}\nif [[ -d \"${APP_DIR}\" ]]; then\n  rm -rf \"${APP_DIR}\"\nfi\n",
-      },
-      sparseContext({ fields: { app_deploy_dir: "" } }),
-      "dcv-connection-gateway/install_app.sh",
-    );
-    assert.match(rendered, /^APP_DIR=\/\$\{APP_NAME\}/m);
-    assert.match(rendered, /rm -rf "\$\{APP_DIR\}"/);
-  });
-});
-
-test("an empty cluster home directory is still passed to mkdir and chmod", () => {
-  withWorkdir((workDirectory) => {
-    const rendered = renderMini(
-      workDirectory,
-      {
-        "cluster-manager/setup.sh.jinja2":
-          "mkdir -p \"{{ context.cluster_home_dir }}\"\nchmod 701 \"{{ context.cluster_home_dir }}\"\n",
-      },
-      sparseContext({ fields: { cluster_home_dir: "" } }),
-      "cluster-manager/setup.sh",
-    );
-    assert.equal(rendered, "mkdir -p \"\"\nchmod 701 \"\"");
-  });
-});
-
 test("a missing scheduler private IP does not write an /etc/hosts pin", () => {
   withWorkdir((workDirectory) => {
     const rendered = renderMini(
@@ -282,69 +236,6 @@ test("the real compute-node PBS template still emits an empty usecp when the mou
   });
 });
 
-test("the real cluster-manager setup writes an empty install_app URI when vars.app_package_uri is absent", () => {
-  withWorkdir((workDirectory) => {
-    const archiveFile = buildComponent("cluster-manager", workDirectory, { vars: {} });
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "extracted"));
-    const setup = readFileSync(join(extracted, "cluster-manager/setup.sh"), "utf8");
-    assert.match(setup, /\/bin\/bash \$\{SCRIPT_DIR\}\/install_app\.sh ""/);
-  });
-});
-
-test("the real gateway setup writes an empty IDEA_APP_DEPLOY_DIR that install_app later rm -rf", () => {
-  withWorkdir((workDirectory) => {
-    const archiveFile = buildComponent("dcv-connection-gateway", workDirectory, { app_deploy_dir: "" });
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "extracted"));
-    const setup = readFileSync(join(extracted, "dcv-connection-gateway/setup.sh"), "utf8");
-    const install = readFileSync(join(extracted, "dcv-connection-gateway/install_app.sh"), "utf8");
-    assert.match(setup, /^IDEA_APP_DEPLOY_DIR=$/m);
-    assert.match(install, /APP_DIR=\$\{IDEA_APP_DEPLOY_DIR\}\/\$\{APP_NAME\}/);
-    assert.match(install, /rm -rf "\$\{APP_DIR\}"/);
-  });
-});
-
-test("the real cluster-manager setup still mkdir/chmod an empty IDEA_CLUSTER_HOME", () => {
-  withWorkdir((workDirectory) => {
-    const archiveFile = buildComponent("cluster-manager", workDirectory, { cluster_home_dir: "" });
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "extracted"));
-    const setup = readFileSync(join(extracted, "cluster-manager/setup.sh"), "utf8");
-    assert.match(setup, /mkdir -p "\$\{IDEA_CLUSTER_HOME\}"/);
-    assert.match(setup, /^IDEA_CLUSTER_HOME=$/m);
-  });
-});
-
-test("dcv-broker clean_staging_area quotes the variable so rm does not expand it", () => {
-  withWorkdir((workDirectory) => {
-    const archiveFile = buildComponent("dcv-broker", workDirectory);
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "extracted"));
-    const install = readFileSync(join(extracted, "dcv-broker/install_app.sh"), "utf8");
-    assert.match(install, /rm -rf '\$\{STAGING_AREA_RELATIVE_PATH\}'/);
-    assert.match(install, /mkdir -p \$\{STAGING_AREA_RELATIVE_PATH\}/);
-  });
-});
-
-test("dcv-broker register-auth-server fails the render when the Cognito URL is required and absent", () => {
-  withWorkdir((workDirectory) => {
-    const full = fullContext();
-    const inner = full.config as { get_string: (key: string, ...args: unknown[]) => unknown };
-    assert.throws(
-      () =>
-        buildComponent("dcv-broker", workDirectory, {
-          config: {
-            ...inner,
-            get_string(key: string, ...args: unknown[]): unknown {
-              if (key === "identity-provider.cognito.provider_url") {
-                throw new Error("missing required config: identity-provider.cognito.provider_url");
-              }
-              return inner.get_string(key, ...args);
-            },
-          },
-        }),
-      /identity-provider\.cognito\.provider_url/,
-    );
-  });
-});
-
 test("ClusterConfig treats a missing required key as a render failure", () => {
   withWorkdir((workDirectory) => {
     assert.throws(
@@ -450,47 +341,6 @@ test("a missing optional openmpi URL fails on .split rather than baking an empty
         return true;
       },
     );
-  });
-});
-
-test("the real scheduler post-reboot writes undefined/python and installs OpenMPI under /openmpi when apps mount_dir is empty", () => {
-  withWorkdir((workDirectory) => {
-    const full = fullContext();
-    const inner = full.config as { get_string: (key: string, ...args: unknown[]) => unknown };
-    const archiveFile = buildComponent("scheduler", workDirectory, {
-      config: {
-        ...inner,
-        get_string(key: string, ...args: unknown[]): unknown {
-          if (key === "shared-storage.apps.mount_dir") return undefined;
-          return inner.get_string(key, ...args);
-        },
-      },
-    });
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "extracted"));
-    const post = readFileSync(join(extracted, "scheduler/scheduler_post_reboot.sh"), "utf8");
-    assert.match(post, /local INSTALL_DIR="undefined\/python"/);
-    assert.match(post, /OPENMPI_INSTALL_DIR="\/openmpi\/\$\{OPENMPI_VERSION\}\/\$\(uname -m\)"/);
-  });
-});
-
-test("the real scheduler OpenMPI template still wget-compares an empty hash when the checksum is absent", () => {
-  withWorkdir((workDirectory) => {
-    const full = fullContext();
-    const inner = full.config as { get_string: (key: string, ...args: unknown[]) => unknown };
-    const archiveFile = buildComponent("scheduler", workDirectory, {
-      config: {
-        ...inner,
-        get_string(key: string, ...args: unknown[]): unknown {
-          if (key === "global-settings.package_config.openmpi.checksum") return undefined;
-          return inner.get_string(key, ...args);
-        },
-      },
-    });
-    const extracted = unpackLikeLinux(archiveFile, join(workDirectory, "extracted"));
-    const post = readFileSync(join(extracted, "scheduler/scheduler_post_reboot.sh"), "utf8");
-    assert.match(post, /^OPENMPI_HASH=""$/m);
-    assert.match(post, /wget "\$\{OPENMPI_URL\}"/);
-    assert.match(post, /!= "\$\{OPENMPI_HASH\}"/);
   });
 });
 

@@ -10,7 +10,15 @@
 #  and limitations under the License.
 
 from ideascheduler.app.accounts_guard import require_enabled
-from ideadatamodel import constants, errorcodes, exceptions, SocaPaginator, SocaFilter
+from ideadatamodel import (
+    constants,
+    errorcodes,
+    exceptions,
+    SocaPaginator,
+    SocaFilter,
+    GetUserRequest,
+    ImagePipelineSettings,
+)
 from ideadatamodel.scheduler import (
     SocaJob,
     ListJobsRequest,
@@ -38,8 +46,10 @@ from ideascheduler.app.scheduler.job_param_builder import (
     InstanceTypesParamBuilder,
 )
 
+from datetime import datetime, timezone
+
 from cacheout import Cache
-from threading import RLock
+from threading import BoundedSemaphore, Event, RLock, Thread
 from typing import Optional
 
 import ideascheduler
@@ -60,12 +70,89 @@ PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
 # submission, never cached, so closing the window takes effect straight away.
 MAINTENANCE_ENABLED_CONFIG_KEY = 'cluster-manager.maintenance.enabled'
 MAINTENANCE_MESSAGE_CONFIG_KEY = 'cluster-manager.maintenance.message'
-DEFAULT_MAINTENANCE_MESSAGE = 'This cluster is undergoing maintenance.'
+# Leave time to return the notice inside the PBS hook's ten-second socket deadline.
+MAINTENANCE_LOOKUP_TIMEOUT_SECONDS = 2
+# Token retrieval can stall too; cap outstanding lookups without queuing more work.
+_maintenance_lookup_slots = BoundedSemaphore(4)
 
 # the job name is taken from the user-supplied '#PBS -N' line and is only used as a
 # cosmetic filename prefix. it must never influence the path a root process writes to.
 JOB_NAME_PREFIX_MAX_LENGTH = 64
 PATTERN_JOB_NAME_DISALLOWED = re.compile(r'[^A-Za-z0-9._-]')
+
+
+def maintenance_message(config):
+    message = Utils.get_as_string(
+        config.get_string(MAINTENANCE_MESSAGE_CONFIG_KEY, default=''), ''
+    ).strip()
+    message = (
+        f'Cluster is in maintenance: {message}'
+        if message
+        else 'Cluster is in maintenance.'
+    )
+    ends_at = config.get_string('cluster-manager.maintenance.ends_at', default='')
+    try:
+        end = datetime.fromisoformat(ends_at.strip().replace('Z', '+00:00'))
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        if not message.endswith(('.', '!', '?')):
+            message += '.'
+        message += (
+            f' Expected to end {end.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC.'
+        )
+    except (ValueError, AttributeError, OverflowError):
+        pass
+    return message
+
+
+def maintenance_exempt(context, username, logger):
+    if username == 'root':
+        return True
+    # Upgrade image canaries run while ordinary submissions are closed.
+    settings = ImagePipelineSettings(
+        **dict(
+            context.config().get_config(
+                'virtual-desktop-controller.software_stacks.image_pipeline', default={}
+            )
+            or {}
+        )
+    )
+    if username and username == settings.validation_user:
+        return True
+    if not _maintenance_lookup_slots.acquire(blocking=False):
+        logger.warning(
+            'Maintenance admin exemption lookup capacity exhausted; refusing %s',
+            username,
+        )
+        return False
+    done = Event()
+    exempt = False
+
+    def lookup():
+        nonlocal exempt
+        try:
+            user = context.accounts_client.get_user(
+                GetUserRequest(username=username)
+            ).user
+            exempt = user is not None and user.sudo is True
+        except Exception:
+            logger.warning(
+                'Could not verify maintenance admin exemption', exc_info=True
+            )
+        finally:
+            _maintenance_lookup_slots.release()
+            done.set()
+
+    try:
+        Thread(target=lookup, name='maintenance-exemption', daemon=True).start()
+    except Exception:
+        _maintenance_lookup_slots.release()
+        logger.warning('Could not start maintenance exemption lookup', exc_info=True)
+        return False
+    if not done.wait(MAINTENANCE_LOOKUP_TIMEOUT_SECONDS):
+        logger.warning('Maintenance admin exemption lookup timed out')
+        return False
+    return exempt
 
 
 def sanitize_job_name_prefix(job_name: Optional[str]) -> str:
@@ -323,31 +410,30 @@ class SchedulerAPI(BaseAPI):
         result = self.context.applications.get_user_applications(request)
         return context.success(result)
 
-    def check_maintenance(self):
+    def check_maintenance(self, context: ApiInvocationContext):
         """
-        Refuse new work while a maintenance window is open. Checked here rather than in the
-        OpenPBS submit hook: the hook runs inside the PBS server, so once the scheduler is
-        stopped nothing runs it and qsub fails with a generic connection error instead.
+        Refuse portal submissions before calling PBS. The queuejob hook also gates direct
+        qsub while PBS is running; this API can explain maintenance before contacting PBS.
         """
         config = self.context.config()
         if not config.get_bool(MAINTENANCE_ENABLED_CONFIG_KEY, default=False):
             return
-        message = Utils.get_as_string(
-            config.get_string(MAINTENANCE_MESSAGE_CONFIG_KEY, default=''), ''
-        ).strip()
-        if Utils.is_empty(message):
-            message = DEFAULT_MAINTENANCE_MESSAGE
+        if maintenance_exempt(self.context, context.get_username(), self.logger):
+            return
+        message = maintenance_message(config)
         raise exceptions.soca_exception(
             error_code=errorcodes.JOB_SUBMISSION_FAILED,
-            message=f'Cluster is in maintenance: {message}',
+            message=message,
         )
 
     def submit_job(self, context: ApiInvocationContext):
-        # before any other validation, so a closed cluster is reported as closed rather
-        # than as a malformed request
-        self.check_maintenance()
-
         request = context.get_request_payload_as(SubmitJobRequest)
+        client_submission_id = request.client_submission_id
+        dry_run = DryRunOption.resolve(request.dry_run)
+        # Keyed retries may replay accepted work even after maintenance starts.
+        if dry_run is not None or Utils.is_empty(client_submission_id):
+            self.check_maintenance(context)
+
         job_owner = request.job_owner
         context_user = context.get_username()
 
@@ -378,15 +464,12 @@ class SchedulerAPI(BaseAPI):
                 'job_script_interpreter must be one of [pbs, bash]'
             )
 
-        client_submission_id = request.client_submission_id
         if Utils.is_not_empty(client_submission_id) and not re.match(
             PATTERN_CLIENT_SUBMISSION_ID, client_submission_id
         ):
             raise exceptions.invalid_params(
                 f'client_submission_id must satisfy regex: {PATTERN_CLIENT_SUBMISSION_ID}'
             )
-
-        dry_run = DryRunOption.resolve(request.dry_run)
 
         # a dry run creates no capacity, so it is never deduplicated - and it must not share a
         # key with the real submission that follows it from the same form.
@@ -413,6 +496,7 @@ class SchedulerAPI(BaseAPI):
             return
 
         try:
+            self.check_maintenance(context)
             result = self._submit_job(
                 request=request, job_owner=job_owner, dry_run=dry_run
             )

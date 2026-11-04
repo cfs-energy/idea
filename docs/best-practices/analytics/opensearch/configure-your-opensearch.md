@@ -2,18 +2,25 @@
 
 ## Access your OpenSearch endpoint
 
-Run `idea-admin.sh show-connection-info --aws-region <REGION> --cluster-name <NAME>` command to retrieve the "**Analytic Dashboard**" URL.
+OpenSearch Dashboards is private by default: the domain has only a VPC endpoint, and IDEA does not route `/_dashboards` through the external load balancer. Reach it from inside the VPC.
+
+Find the domain endpoint:
 
 ```bash
-$ ./idea-admin.sh show-connection-info --aws-region us-east-2 --cluster-name idea-mcdev
-Web Portal: xx
-Bastion Host (SSH Access): xx
-Bastion Host (Session Manager URL): xx
-Analytics Dashboard: https://idea-mcdev-external-alb-391482262.us-east-2.elb.amazonaws.com/_dashboards
-
+ideactl config show --cluster-name <NAME> --aws-region <REGION> --query analytics.opensearch.domain_endpoint --format raw
 ```
 
-Alternatively, you can retrieve the OpenSearch dashboard endpoint via your IDEA Web Interface > "**Cluster** **Management**" > "**Settings**" then "**Analytics**".
+**From a network routed to the VPC** (VPN or Transit Gateway): open `https://<domain_endpoint>/_dashboards`. The domain security group allows HTTPS from the cluster VPC only; add your network's CIDR to it if your traffic does not arrive from inside the VPC.
+
+**From a workstation with Session Manager**: forward a local port through any cluster instance that runs the SSM agent (an ECS container host works):
+
+```bash
+aws ssm start-session --region <REGION> --target <INSTANCE_ID> \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["<domain_endpoint>"],"portNumber":["443"],"localPortNumber":["8443"]}'
+```
+
+Then open `https://localhost:8443/_dashboards`. The browser warns that the certificate names the domain endpoint, not `localhost`; that is expected for a forwarded port.
 
 ## Initialize OpenSearch indexes (first time accessing OpenSearch)
 

@@ -7,6 +7,7 @@ import logging
 from typing import List, Optional
 
 import arrow
+import pytest
 from ideadatamodel import (
     CloudFormationStack,
     EC2InstanceUnitPrice,
@@ -484,3 +485,192 @@ def test_every_price_property_survives_an_unavailable_price():
     assert helper.ec2_ondemand_price == 0
     assert helper.ec2_reserved_price == 0
     assert helper.ec2_spot_unit_price == 0.0
+
+
+@pytest.mark.parametrize('state', ['F', 'X'])
+@pytest.mark.parametrize(
+    'used', [{'walltime': '00:02:00'}, 'cput=00:00:00,walltime=00:02:00']
+)
+def test_terminal_job_shapes_keep_measured_walltime(context, state, used):
+    start = arrow.get('2026-08-01T00:00:00Z')
+    job = build_pbs_job(
+        id='42[1].scheduler',
+        job_state=state,
+        stime=str(start.int_timestamp),
+        resources_used=used,
+    ).as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+    assert job.end_time == start.shift(seconds=120).datetime
+
+
+def test_zero_stime_is_not_a_started_job(context):
+    job = build_pbs_job(stime='0', mtime='1785542400').as_soca_job(
+        context=context, queue_profile=QUEUE_PROFILE
+    )
+    assert job.start_time is None
+    assert job.end_time is None
+
+
+@pytest.mark.parametrize('history', ['missing', 'complete', 'start_only'])
+@pytest.mark.parametrize('job_id', ['14906', '14906[1]'])
+@pytest.mark.parametrize('attempt', ['single', 'rerun', 'node_failure'])
+@pytest.mark.parametrize('cached_times', ['missing', 'start_only', 'old_pair'])
+@pytest.mark.parametrize(
+    'order',
+    [('begin', 'end'), ('end', 'begin'), ('begin', 'end', 'end'), ('end',), ('begin',)],
+)
+def test_serialized_hooks_recover_duration_without_pbs_history(
+    context, monkeypatch, tmp_path, order, history, job_id, attempt, cached_times
+):
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+    from test_job_cache import FakeSchedulerContext
+    from test_finished_job_record import build_poller, FakeScheduler, PricingSpy
+    from ideascheduler.app.provisioning.job_monitor.job_monitor import JobMonitor
+    from ideascheduler.app.provisioning.job_monitor import finished_job_processor
+
+    # PBS's extension only runs inside PBS; keep its attribute surface, but execute
+    # the production serializer, consumer models, SQLite cache and recovery method.
+    class PBSObject(SimpleNamespace):
+        def __getattr__(self, name):
+            return None
+
+    hook = Path(__file__).parents[1] / 'resources/openpbs/hooks/openpbs_hook_handler.py'
+    monkeypatch.setitem(sys.modules, 'pbs', Mock())
+    serializer = {}
+    exec(
+        compile(hook.read_text().split('\ne = pbs.event()\n', 1)[0], str(hook), 'exec'),
+        serializer,
+    )
+    serializer.update(
+        get_instance_id=lambda: None,
+        get_instance_type=lambda: 'c5.large',
+        get_local_node_name=lambda: 'compute',
+    )
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+    start = arrow.get('2026-08-01T02:00:00Z')
+    context.job_cache = cache
+    context.config().put('scheduler.job_status_sqs_queue_url', 'unused')
+    monitor = JobMonitor(context)
+    previous_start = start.shift(hours=-2)
+    cached = build_pbs_job(
+        id=job_id + '.scheduler',
+        job_state='F' if cached_times == 'old_pair' else 'R',
+        stime=str(previous_start.int_timestamp) if cached_times != 'missing' else None,
+        resources_used={'walltime': '00:01:00'} if cached_times == 'old_pair' else None,
+        run_count=1,
+    ).as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+    cached.job_uid = 'rerun-job'
+    cache.sync([cached])
+    PricingSpy.reset()
+    monkeypatch.setattr(finished_job_processor, 'PricingHelper', PricingSpy)
+    context.metrics = Mock()
+    context.job_notifications = Mock()
+    context.document_store = Mock()
+    context.lifecycle_events = None
+
+    def deliver(phase, count, when, host):
+        serializer['get_local_node_name'] = lambda: host
+        serializer['start_time'] = when.int_timestamp * 1000
+        payload = serializer['OpenPBSEvent'](
+            PBSObject(
+                type=0x200 if phase == 'end' else 0x40,
+                requestor_host=host,
+                hook_name='job_status',
+                job=PBSObject(
+                    **build_pbs_job(
+                        id=job_id + '.scheduler',
+                        job_state='E' if phase == 'end' else 'R',
+                        exec_host=host + '/0',
+                        stime=str(start.int_timestamp),
+                        run_count=count,
+                        Exit_status=0,
+                        resources_used='cput=00:01:00,ncpus=1,walltime=00:02:00',
+                    ).model_dump()
+                ),
+            )
+        ).build()
+        assert 'stime' not in payload['job']
+        event = OpenPBSEvent(**payload)
+        job = event.job.as_soca_job(
+            context=context, queue_profile=QUEUE_PROFILE, event=event
+        )
+        monitor.job_status_update(job)
+
+    count = 1 if attempt == 'single' else 10
+    host = 'replacement' if attempt == 'node_failure' else 'compute'
+    try:
+        if attempt != 'single':
+            deliver('begin', 2, previous_start, 'compute')
+            deliver('end', 2, previous_start.shift(seconds=60), 'compute')
+        for phase in order:
+            deliver(
+                phase, count, start.shift(seconds=120 if phase == 'end' else 0), host
+            )
+        if attempt != 'single':
+            # A late duplicate from the failed/requeued attempt cannot become latest.
+            deliver('end', 2, previous_start.shift(seconds=60), 'compute')
+
+        # Reopen SQLite: recovery must use persisted hook data, not the last object.
+        cache.stop()
+        cache = JobCache(context=FakeSchedulerContext(str(tmp_path)))
+        context.job_cache = cache
+        cached = cache.get_job(cached.job_id)
+        assert cached.start_time == (
+            previous_start.datetime if cached_times != 'missing' else None
+        )
+        # Use the real history adapter, including array state X and missing walltime.
+        fresh = build_pbs_job(
+            id=job_id + '.scheduler',
+            job_state='X' if '[' in job_id else 'F',
+            stime=str(start.shift(seconds=1).int_timestamp),
+            resources_used={'walltime': '00:01:59'} if history == 'complete' else None,
+            run_count=count,
+        ).as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+        fresh.job_uid = cached.job_uid
+        context.scheduler = FakeScheduler(
+            {cached.job_id: fresh} if history != 'missing' else {}
+        )
+        assert build_poller(context)._process_finished_jobs([cached]) == [cached.job_id]
+        finished = cache.get_completed_job_by_uid(cached.job_uid)
+        expected_start = (
+            start.shift(seconds=1).datetime
+            if history != 'missing'
+            else start.datetime
+            if 'begin' in order
+            else None
+        )
+        expected_end = (
+            start.shift(seconds=120).datetime
+            if history == 'complete' or (history == 'missing' and 'end' in order)
+            else None
+        )
+        seconds = (
+            int((expected_end - expected_start).total_seconds())
+            if expected_start is not None and expected_end is not None
+            else None
+        )
+        assert finished.start_time == expected_start
+        assert finished.end_time == expected_end
+        assert finished.total_time_secs == seconds
+        assert PricingSpy.calls == (
+            [(cached.job_id, seconds)] if seconds is not None else []
+        )
+        assert not ProcessFinishedJob.never_started(finished)
+        if seconds is None:
+            assert finished.estimated_bom_cost is None
+        if order == ('end',) and history == 'missing':
+            deliver('begin', count, start, host)
+            assert build_poller(context)._process_finished_jobs([cached]) == [
+                cached.job_id
+            ]
+            assert (
+                cache.get_completed_job_by_uid(cached.job_uid).total_time_secs is None
+            )
+            assert PricingSpy.calls == []
+    finally:
+        cache.stop()

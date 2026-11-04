@@ -62,7 +62,8 @@ it('stays within the role inline policy limit with every conditional block enabl
   const bytes = JSON.stringify({Statement: statements}).length;
   t.diagnostic(`Rendered task policy: ${bytes} bytes; generated policy reserve: 950 bytes`);
   assert.ok(bytes + 950 <= 10240);
-  assert.ok(JSON.stringify({Statement: statements}).length <= 8600, `task policy renders ${JSON.stringify({Statement: statements}).length} bytes`);
+  // The terminal TTL read adds one table-scoped statement; retain the actual role limit above.
+  assert.ok(JSON.stringify({Statement: statements}).length <= 8750, `task policy renders ${JSON.stringify({Statement: statements}).length} bytes`);
 });
 
 it('includes the dedicated personal cost table in the existing DynamoDB statement', () => {
@@ -72,3 +73,17 @@ it('includes the dedicated personal cost table in the existing DynamoDB statemen
   assert.ok(resources.some(resource => resource.endsWith(':table/example.cluster-manager.personal-costs')));
   assert.ok(statement.Action.includes('dynamodb:CreateTable'));
 });
+
+for (const enabled of [undefined, 'false', 'true']) {
+  it(`allows the collector's read-only cost queries with enabled=${enabled}`, () => {
+    const statements = policy(false, enabled === undefined ? {} : {'cluster-manager.metrics.cost.enabled': enabled}, true);
+    const actions = statements.flatMap(s => s.Action).filter(action => action.startsWith('ce:'));
+    assert.deepEqual(actions.sort(), ['ce:GetCostAndUsage', 'ce:GetDimensionValues', 'ce:GetTags']);
+    for (const action of actions) {
+      const statement = statements.find(s => s.Action.includes(action))!;
+      assert.equal(statement.Resource, '*');
+      assert.equal(statement.Condition, undefined);
+      assert.equal((statement as {Effect?: string}).Effect, 'Allow');
+    }
+  });
+}

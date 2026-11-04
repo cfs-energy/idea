@@ -14,10 +14,9 @@
  * The companion check, scheduler-stable-name, asks the same question of the client hosts.
  * This one asks it of the server, which is the half that had no reader.
  *
- * Both the host bootstrap and the container role set `PBS_SERVER` to the first label of
- * `scheduler.private_dns_name` (`configure_openpbs_server.jinja2`, `roles/scheduler.sh`), and
- * both put the full name and that label in `/etc/hosts`, so either form is accepted and the
- * evidence records which was seen.
+ * The container role (`roles/scheduler.sh`) sets `PBS_SERVER` to the first label of
+ * `scheduler.private_dns_name` and puts both names in `/etc/hosts`, so either form is
+ * accepted and the evidence records which was seen.
  */
 
 import { isIP } from "node:net";

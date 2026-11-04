@@ -103,7 +103,11 @@ export class EcsStack extends IdeaBaseStack {
     const execLogGroup = this.ensureAgentLogGroup("exec-log-group-ensure", execLogGroupName);
     this.ecsCluster = new ecs.Cluster(this.stack, "ecs-cluster", {
       clusterName: `${this.clusterName}-ecs`,
-      containerInsightsV2: ecs.ContainerInsights.ENABLED,
+      // The Datadog agent already collects per-task CPU and memory; Container Insights would bill
+      // the same series again as CloudWatch custom metrics. ClusterSettings updates in place.
+      containerInsightsV2: this.context.config.getBool("ecs.datadog.enabled", false)
+        ? ecs.ContainerInsights.DISABLED
+        : ecs.ContainerInsights.ENABLED,
       executeCommandConfiguration: {
         logConfiguration: {
           cloudWatchLogGroup: logs.LogGroup.fromLogGroupName(this.stack, "exec-log-group-ref", execLogGroupName),
@@ -352,8 +356,8 @@ export class EcsStack extends IdeaBaseStack {
    * this code cannot resolve is refused here: the alternative is a launch template with an image for
    * the wrong architecture, whose hosts boot and never register, and tasks that are never placed.
    *
-   * This assumes `ecs.image` is a manifest with both architectures. A single-architecture image on
-   * the other family is a task that pulls and fails to run, which the stack cannot see at synthesis.
+   * The release `ecs.image` is arm64-only. An x86 host family needs an operator-built image
+   * supporting x86 (or both architectures); synthesis cannot check the image manifest.
    */
   private hostInstanceType(): ec2.InstanceType {
     const configured = this.requiredString("ecs.hosts.instance_type");
@@ -408,6 +412,54 @@ export class EcsStack extends IdeaBaseStack {
     this.scaleInRelease.node.addDependency(this.hostAutoScalingGroup);
   }
 
+  /**
+   * The interim TCP SYN use-after-free mitigations the desktop and compute bootstrap apply
+   * (_templates/linux/kernel_net_hardening.jinja2): no MPTCP or request migration, and an
+   * nftables table dropping IPv4 TCP packets with IP options. Both act on the host's network
+   * namespace only; an awsvpc task (the bastion) has its own. A fixed kernel needs a host
+   * replacement (docs/ECS-HOST-REPLACEMENT.md) once the recommended image carries one.
+   */
+  private hostNetworkHardeningCommands(): string[] {
+    const commands = [
+      "printf 'net.mptcp.enabled = 0\\nnet.ipv4.tcp_migrate_req = 0\\n' > /etc/sysctl.d/90-idea-net-hardening.conf",
+      "sysctl -q -e -p /etc/sysctl.d/90-idea-net-hardening.conf || true",
+    ];
+    if (!this.context.config.getBool("global-settings.kernel_hardening.drop_tcp_ip_options", true)) return commands;
+    return [
+      ...commands,
+      "command -v nft >/dev/null 2>&1 || dnf install -y nftables || true",
+      "mkdir -p /etc/idea",
+      "cat > /etc/idea/idea-tcp-ip-options.nft << 'IDEA_NFT_EOF'",
+      "table inet idea_tcp_ip_options",
+      "delete table inet idea_tcp_ip_options",
+      "table inet idea_tcp_ip_options {",
+      "  chain prerouting {",
+      "    type filter hook prerouting priority -300; policy accept;",
+      "    ip hdrlength > 5 meta l4proto tcp counter drop",
+      "  }",
+      "}",
+      "IDEA_NFT_EOF",
+      "cat > /etc/systemd/system/idea-tcp-ip-options.service << 'IDEA_UNIT_EOF'",
+      "[Unit]",
+      "Description=IDEA: drop IPv4 TCP packets carrying IP options (interim SYN use-after-free mitigation)",
+      "Wants=network-pre.target",
+      "Before=network-pre.target",
+      "After=nftables.service",
+      "",
+      "[Service]",
+      "Type=oneshot",
+      "RemainAfterExit=yes",
+      "ExecStart=/usr/sbin/nft -f /etc/idea/idea-tcp-ip-options.nft",
+      "ExecStop=-/usr/sbin/nft delete table inet idea_tcp_ip_options",
+      "",
+      "[Install]",
+      "WantedBy=multi-user.target",
+      "IDEA_UNIT_EOF",
+      "systemctl daemon-reload",
+      "systemctl enable --now idea-tcp-ip-options.service || true",
+    ];
+  }
+
   /** Builds the ECS host group and its metadata-isolating launch template. */
   private buildHostAutoScalingGroup(): autoscaling.AutoScalingGroup {
     const userData = ec2.UserData.forLinux();
@@ -416,6 +468,7 @@ export class EcsStack extends IdeaBaseStack {
       // never registers and never receives a task.
       ...this.hostStorageCommands(),
       "sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216 net.core.netdev_max_backlog=5000",
+      ...this.hostNetworkHardeningCommands(),
       "mkdir -p /etc/ecs",
       `echo ECS_CLUSTER=${this.ecsCluster.clusterName} >> /etc/ecs/ecs.config`,
       "echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
@@ -566,7 +619,7 @@ export class EcsStack extends IdeaBaseStack {
     );
     grantInjectedSecret(scope, executionRole, apiKey.secretArn);
     // The module's own id, not the module-set row: an upgrade announces this module in the
-    // module set only after every stack has deployed (see `heldModuleSetEntries`).
+    // module set only after every stack has deployed.
     const datadogLogGroupName = `/${this.clusterName}/${this.moduleId}/datadog`;
     const container = taskDefinition.addContainer("datadog-container", {
       // The agent listens on UDP by default; the tasks send to the socket they mount, so the
@@ -594,17 +647,21 @@ export class EcsStack extends IdeaBaseStack {
       secrets: { DD_API_KEY: ecs.Secret.fromSecretsManager(apiKey) },
     });
     this.bindContainerToLogGroup(container, datadogLogGroupName);
-    const mounts: Array<{ name: string; path: string; readOnly: boolean }> = [
+    // The agent maps a socket sender's PID to its container through /host/proc. Without that
+    // path it falls back to Docker's record of each container's first process, so only modules
+    // that exec their app as PID 1 get container tags; the scheduler's app is a child of its role
+    // script and got none.
+    const mounts: Array<{ name: string; path: string; containerPath?: string; readOnly: boolean }> = [
       { name: "docker-socket", path: "/var/run/docker.sock", readOnly: false },
-      { name: "proc", path: "/proc", readOnly: true },
-      { name: "cgroup", path: "/sys/fs/cgroup", readOnly: true },
+      { name: "proc", path: "/proc", containerPath: "/host/proc", readOnly: true },
+      { name: "cgroup", path: "/sys/fs/cgroup", containerPath: "/host/sys/fs/cgroup", readOnly: true },
       { name: "datadog", path: "/var/run/datadog", readOnly: false },
     ];
     if (logsEnabled) mounts.push({ name: "container-logs", path: "/var/lib/docker/containers", readOnly: true });
     for (const mount of mounts) {
       taskDefinition.addVolume({ host: { sourcePath: mount.path }, name: mount.name });
       container.addMountPoints({
-        containerPath: mount.path,
+        containerPath: mount.containerPath ?? mount.path,
         readOnly: mount.readOnly,
         sourceVolume: mount.name,
       });

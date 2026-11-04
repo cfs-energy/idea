@@ -20,6 +20,9 @@ from ideadatamodel import (
     SocaJobParams,
     SocaJobLicenseAsk,
     SocaJobState,
+    SocaJobExecution,
+    SocaJobExecutionHost,
+    SocaJobExecutionRun,
 )
 from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
 
@@ -106,7 +109,7 @@ def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
     db = cache._jobs_db
     assert Path(db._db_file) == tmp_path / 'db/job-cache-v3.db'
     assert Path(db._backup_file) == tmp_path / 'pbs/idea/db/job-cache-v3.db'
-    assert db._backup_interval == 60
+    assert db._backup_interval == 300
     assert db._backup_thread.is_alive()
     assert (
         list(cache.get_connection().query('PRAGMA journal_mode'))[0]['journal_mode']
@@ -114,6 +117,39 @@ def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
     )
     cache.stop()
     assert not db._backup_thread.is_alive()
+
+
+def test_an_operator_set_backup_interval_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=45
+        )
+    )
+    assert cache._jobs_db._backup_interval == 45
+    cache.stop()
+
+
+def test_stop_flushes_a_final_copy_without_waiting_out_the_default_interval(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    copy = Path(cache._jobs_db._backup_file)
+    cache.add_finished_job(
+        build_job('41', job_uid='finished', state=SocaJobState.FINISHED)
+    )
+    assert not copy.exists()  # the first interval has not passed
+    started = time.monotonic()
+    cache.stop()
+    assert time.monotonic() - started < 5
+    with sqlite3.connect(copy) as connection:
+        assert (
+            connection.execute(
+                'SELECT count(*) FROM finished_jobs WHERE job_uid = ?', ('finished',)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_host_job_cache_has_no_backup(tmp_path):
@@ -491,3 +527,57 @@ def test_a_new_job_cache_reports_ready_only_after_set_ready(tmp_path):
     cache.set_ready()
     assert cache.is_ready() is True
     cache.stop()
+
+
+def test_execution_end_does_not_borrow_start_from_another_run(job_cache):
+    from datetime import datetime, timezone
+
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    for run in [
+        SocaJobExecutionRun(run_id='1', start=start),
+        SocaJobExecutionRun(run_id='2', end=start),
+    ]:
+        job_cache.log_job_execution(
+            '42',
+            SocaJobExecutionHost(
+                host='compute', execution=SocaJobExecution(runs=[run])
+            ),
+        )
+    runs = job_cache.get_job_execution_hosts('42')[0].execution.runs
+    assert [run.run_id for run in runs] == ['1', '2']
+    saved = runs[1]
+    assert saved.run_id == '2'
+    assert saved.start is None
+
+
+@pytest.mark.parametrize('reverse_hooks', [False, True])
+def test_same_host_requeue_preserves_real_pbs_run_history(job_cache, reverse_hooks):
+    from ideascheduler.app.scheduler.openpbs.openpbs_model import (
+        OpenPBSEvent,
+        OpenPBSJob,
+    )
+
+    for count in (1, 2):
+        hooks = [
+            ('execjob_begin', 1785542400000 + count * 100000),
+            ('execjob_end', 1785542400000 + count * 100000 + 10000),
+        ]
+        if reverse_hooks:
+            hooks.reverse()
+        for event_type, timestamp in hooks:
+            event = OpenPBSEvent(
+                type=event_type, timestamp=timestamp, node_name='compute'
+            )
+            pbs_job = OpenPBSJob(
+                exec_host='compute/0', run_count=count, resources_used='cput=00:00:05'
+            )
+            host = pbs_job.get_soca_execution_hosts(event)[0]
+            job_cache.log_job_execution('42', host)
+            assert (
+                len(job_cache.get_job_execution_hosts('42')[0].execution.runs) == count
+            )
+        runs = job_cache.get_job_execution_hosts('42')[0].execution.runs
+        assert [run.run_id for run in runs] == [str(i) for i in range(1, count + 1)]
+        for run in runs:
+            assert (run.end - run.start).total_seconds() == 10
+            assert run.resources_used.cpu_time_secs == 5

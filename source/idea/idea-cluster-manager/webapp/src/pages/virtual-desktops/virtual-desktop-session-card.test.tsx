@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import createWrapper from '@cloudscape-design/components/test-utils/dom';
 import VirtualDesktopSessionCard, { describeSchedule, primaryAction } from './components/virtual-desktop-session-card';
 import { initTestAppContext } from '../../test-support';
+import { desktopTerminalReason, shellStore } from '../home/terminal/shell-store';
 
 const BASE = {
     idea_session_id: 'session-1',
@@ -143,7 +145,7 @@ describe('virtual desktop session card', () => {
     it('connects from the not-captured placeholder like the preview', async () => {
         const handlers = renderCard('READY');
         const placeholder = screen.getByText('Preview not captured yet');
-        expect(placeholder).toHaveStyle({cursor: 'pointer'});
+        expect(placeholder.closest('.virtual-desktop-placeholder-image')).toHaveStyle({cursor: 'pointer'});
         await userEvent.setup().click(placeholder);
         expect(handlers.onLaunchSession).toHaveBeenCalled();
     });
@@ -190,11 +192,54 @@ describe('virtual desktop session card', () => {
     });
 });
 
+describe('preview placeholder', () => {
+    const preview = (text: string) => {
+        const status = screen.getByText(text).closest('.virtual-desktop-placeholder-status');
+        expect(status).not.toBeNull();
+        expect(status!.closest('.virtual-desktop-placeholder-image')).not.toBeNull();
+        return status as HTMLElement;
+    };
+
+    it.each([
+        ['CREATING', {}, 'Creating…'],
+        ['INITIALIZING', {}, 'Initializing…'],
+        ['PROVISIONING', {}, 'Provisioning…'],
+        ['RESUMING', {}, 'Starting…'],
+        ['STOPPING', {}, 'Stopping…'],
+        ['STOPPING', { hibernation_enabled: true }, 'Hibernating…'],
+        ['DELETING', {}, 'Terminating…'],
+        ['DELETED', {}, 'Terminating…'],
+        ['READY', { recovering: true }, 'Restarting…']
+    ])('%s %o shows a spinner over a short centered line', (state, extra, text) => {
+        renderCard(state, { session: { ...BASE, state, ...extra } });
+        expect(createWrapper(preview(text)).findSpinner()).not.toBeNull();
+    });
+
+    it.each([
+        ['READY', {}, 'Preview not captured yet'],
+        ['STOPPED', {}, 'Stopped'],
+        ['STOPPED', { hibernation_enabled: true }, 'Hibernated'],
+        ['ERROR', {}, 'No preview']
+    ])('%s %o shows centered text without a spinner', (state, extra, text) => {
+        renderCard(state, { session: { ...BASE, state, ...extra } });
+        const status = screen.getAllByText(text).map(node => node.closest('.virtual-desktop-placeholder-status')).find(Boolean) as HTMLElement;
+        expect(status).toBeTruthy();
+        expect(createWrapper(status).findSpinner()).toBeNull();
+    });
+
+    it('drops the spinner once the desktop is ready', () => {
+        const card = renderCard('RESUMING');
+        expect(createWrapper(preview('Starting…')).findSpinner()).not.toBeNull();
+        card.rerender({ session: { ...BASE, state: 'READY' } });
+        expect(createWrapper(preview('Preview not captured yet')).findSpinner()).toBeNull();
+    });
+});
 
 describe('desktop recovery', () => {
     it('explains why Connect is unavailable while the session restarts', () => {
         renderCard('INITIALIZING', { session: { ...BASE, state: 'INITIALIZING', recovering: true } });
-        expect(screen.getByText('Your desktop session is restarting. Connect will be available when it is ready.')).toBeInTheDocument();
+        expect(screen.getByText('Restarting…')).toBeInTheDocument();
+        expect(createWrapper().findSpinner()).not.toBeNull();
         expect(screen.getByRole('button', { name: 'Session restarting' })).toBeDisabled();
         expect(screen.queryByText('Preview not captured yet')).not.toBeInTheDocument();
     });
@@ -203,5 +248,99 @@ describe('desktop recovery', () => {
         const handlers = renderCard('READY');
         await userEvent.setup().click(screen.getByText('Preview not captured yet'));
         expect(handlers.onLaunchSession).toHaveBeenCalled();
+    });
+});
+
+describe('Terminal action', () => {
+    const terminal = async (session: any, targets: any[] = [{ id: 'bastion', label: 'Bastion' }, { id: 'desktop:session-1', label: 'my-desktop' }], props: any = {}) => {
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+        const listTargets = vi.spyOn(context.client().terminal(), 'listTargets').mockResolvedValue({ targets });
+        render(<VirtualDesktopSessionCard virtualDesktopClient={{} as any} isActiveDirectory={false} session={{ ...BASE, ...session }}
+            onLaunchSession={vi.fn()} onDownloadDcvSessionFile={vi.fn()} onConnectHelp={vi.fn()} {...props}/>);
+        return listTargets;
+    };
+    beforeEach(() => shellStore.reset());
+    afterEach(() => { vi.restoreAllMocks(); delete (window as any).idea?.app?.web_terminal_enabled; });
+
+    const SHELL = 'Open a shell on my-desktop';
+
+    it('opens a terminal tab from the shell button beside Connect and from the Actions menu', async () => {
+        await terminal({ state: 'READY' });
+        const button = await screen.findByRole('button', { name: SHELL });
+        await waitFor(() => expect(button).not.toHaveAttribute('aria-disabled'));
+        expect(button).toHaveAttribute('title', SHELL);
+        fireEvent.click(button);
+        expect(shellStore.get().tabs).toEqual([{ target: 'desktop:session-1', label: 'my-desktop' }]);
+        shellStore.close('desktop:session-1');
+        await userEvent.click(screen.getByRole('button', { name: 'Actions' }));
+        await userEvent.click(screen.getByRole('menuitem', { name: 'Terminal' }));
+        expect(shellStore.get().active).toBe('desktop:session-1');
+    });
+
+    it('sits immediately before the primary button, icon only, in the card header', async () => {
+        await terminal({ state: 'READY' });
+        const shell = await screen.findByRole('button', { name: SHELL });
+        const connect = screen.getByRole('button', { name: 'Connect' });
+        expect(shell.textContent).toBe('');
+        const group = shell.closest('div[style*="flex-shrink: 0"]') as HTMLElement;
+        // two children: the shell button, then the primary button
+        expect(group.children).toHaveLength(2);
+        expect(group.children[0]).toContainElement(shell);
+        expect(group.children[1]).toContainElement(connect);
+        // the group keeps its buttons on one line; the name column takes any wrapping
+        expect(group.style.whiteSpace).toBe('nowrap');
+        expect((group.previousElementSibling as HTMLElement).style.minWidth).toBe('0');
+        expect(group.previousElementSibling).toHaveTextContent('my-desktop');
+    });
+
+    it('no longer puts a Terminal button in the bottom row', async () => {
+        await terminal({ state: 'READY' });
+        await waitFor(() => expect(shellStore.get().targets).toBeDefined());
+        const download = screen.getByRole('button', { name: 'DCV client file' });
+        const row = download.closest('div[style*="space-between"]') as HTMLElement;
+        expect(row).toContainElement(screen.getByRole('button', { name: 'Actions' }));
+        expect(within(row).queryByRole('button', { name: /terminal|shell/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    });
+
+    it.each([
+        ['a Windows desktop', { state: 'READY', base_os: 'windows' }, 'Terminal is for Linux desktops.'],
+        ['a stopped desktop', { state: 'STOPPED' }, 'Start this desktop to use Terminal.'],
+        ['a broken desktop', { state: 'ERROR' }, 'This desktop is in an error or deleting state.'],
+        ['a starting desktop', { state: 'RESUMING' }, 'Terminal opens when the desktop is ready.'],
+        ['a desktop whose trust the refresh has not installed yet', { state: 'READY', idea_session_id: 'old' }, 'Terminal becomes available after this desktop next starts.'],
+    ])('disables the shell button with its reason in the tooltip for %s', async (_name, session, reason) => {
+        await terminal(session);
+        if (session.state === 'READY') await waitFor(() => expect(shellStore.get().targets).toBeDefined());
+        const button = screen.getByRole('button', { name: SHELL });
+        expect(button).toHaveAttribute('aria-disabled', 'true');
+        fireEvent.click(button);
+        expect(shellStore.get().tabs).toEqual([]);
+        expect(desktopTerminalReason({ ...BASE, ...session } as any, shellStore.get())).toBe(reason);
+        fireEvent.focus(button);
+        expect((await screen.findAllByText(reason))[0]).toBeInTheDocument();
+    });
+
+    it('opens once the refresh has published the desktop as a target', async () => {
+        await terminal({ state: 'READY', idea_session_id: 'old' }, [{ id: 'desktop:old', label: 'my-desktop' }]);
+        const button = await screen.findByRole('button', { name: SHELL });
+        await waitFor(() => expect(button).not.toHaveAttribute('aria-disabled'));
+    });
+
+    it('is not offered on shared desktops or when Terminal is disabled', async () => {
+        await terminal({ state: 'READY' }, undefined, { isSharedSession: true });
+        expect(screen.queryByRole('button', { name: SHELL })).not.toBeInTheDocument();
+    });
+
+    it('is not offered when the cluster disables Terminal', async () => {
+        initTestAppContext();
+        (window as any).idea.app.web_terminal_enabled = false;
+        const context = initTestAppContext();
+        (window as any).idea.app.web_terminal_enabled = false;
+        vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+        render(<VirtualDesktopSessionCard virtualDesktopClient={{} as any} isActiveDirectory={false} session={{ ...BASE, state: 'READY' }}
+            onLaunchSession={vi.fn()} onDownloadDcvSessionFile={vi.fn()} onConnectHelp={vi.fn()}/>);
+        expect(screen.queryByRole('button', { name: SHELL })).not.toBeInTheDocument();
     });
 });

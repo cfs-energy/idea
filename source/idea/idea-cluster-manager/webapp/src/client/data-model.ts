@@ -1,6 +1,6 @@
 /* tslint:disable */
 /* eslint-disable */
-/* This file is generated using IDEA invoke web-portal.typings task. */
+/* This file is generated using mise run web-portal:typings. */
 /* Do not modify this file manually. */
 /**
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -2452,10 +2452,6 @@ export interface SaveFileRequest {
   content?: string;
 }
 export interface SaveFileResult {}
-export interface SendNotificationRequest {
-  notification?: Notification;
-}
-export interface SendNotificationResult {}
 export interface ServiceQuota {
   quota_name?: string;
   available?: number;

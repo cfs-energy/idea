@@ -1,12 +1,12 @@
 // Captured inventories make historical refusals and state changes reproducible offline.
 // Writes update only replay state; upgrade-dry-run.md describes the required captures.
 
-import { ideaVersion } from "../../src/version.ts";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { ideaVersion } from "../../src/version.ts";
 
 import type { ConfigWriter, Deps } from "../../src/cli/cdk-invoker.ts";
 import { type UpgradeDeps, upgradeCluster } from "../../src/cli/commands/upgrade.ts";
@@ -37,12 +37,11 @@ const { values: args } = parseArgs({
     values: { type: "string" },
     templates: { type: "string" },
     inventory: { type: "string" },
-    "enable-ecs": { type: "boolean", default: false },
     out: { type: "string" },
   },
 });
 if (args.capture === undefined || args.values === undefined) {
-  console.error("usage: upgrade-dry-run.ts --capture <dir> --values <values.yml> [--templates <dir>] [--enable-ecs] [--out <file>]");
+  console.error("usage: upgrade-dry-run.ts --capture <dir> --values <values.yml> [--templates <dir>] [--out <file>]");
   process.exit(2);
 }
 
@@ -79,7 +78,6 @@ process.env.IDEA_USER_HOME = home;
 const valuesDirectory = join(home, "clusters", clusterName, awsRegion);
 mkdirSync(valuesDirectory, { recursive: true });
 let valuesText = readFileSync(args.values, "utf8");
-if (args["enable-ecs"] && !/^enable_ecs:\s*true/m.test(valuesText)) valuesText = `${valuesText.replace(/^enable_ecs:.*\n?/m, "")}\nenable_ecs: true\n`;
 writeFileSync(join(valuesDirectory, "values.yml"), valuesText);
 
 /** Writes land in the in-memory table so later phases read what earlier phases produced. */
@@ -122,7 +120,7 @@ const base: Deps = {
   async spawn() { return 0; },
   cfn: {
     async describeChangeSet() { return {}; },
-    async executeChangeSet() {},
+    async executeChangeSet() { },
     async describeStack() { return { StackStatus: "UPDATE_COMPLETE", Tags: deployed ? [{ Key: "idea:ModuleVersion", Value: ideaVersion() }] : [] }; },
     ...(args.templates === undefined ? {} : {
       async getTemplate(stackName: string) {
@@ -146,7 +144,7 @@ const base: Deps = {
   async configWriter() { return writer; },
   async accountId() { return ["123456", "789012"].join(""); },
   async httpStatus() { return 200; },
-  async sleep() {},
+  async sleep() { },
   now: () => Date.now(),
   uuid: () => "00000000-0000-0000-0000-000000000000",
   out: record,
@@ -157,18 +155,6 @@ const base: Deps = {
 const deps: UpgradeDeps = {
   ...base,
   ecsAccountSettings: { async listAccountSettings() { return [{ name: "awsvpcTrunking", value: inventory?.trunking === false ? "disabled" : "enabled" }]; } },
-  ...(inventory === undefined ? {} : {
-    async historicalIam(role: string) {
-      const state = (deployed ? inventory.deployedIam : inventory.iam)[role];
-      if (state === undefined) throw new Error(`Missing captured IAM role ${role}`);
-      return state;
-    },
-    schedulerJobs: { async activeJobs(input: { instanceId: string }) {
-      const jobs = inventory.jobs[input.instanceId];
-      if (jobs === undefined) throw new Error(`Missing captured job inventory for ${input.instanceId}`);
-      return jobs;
-    } },
-  }),
   ec2: {
     async describeImages(input) {
       if (inventory !== undefined) {
@@ -195,15 +181,17 @@ const deps: UpgradeDeps = {
     async deleteTags(input) { tags.delete(input.instanceId); record(`EC2 protection marker removed on ${input.instanceId}`); },
     async describeLiveInstances(input) { return input.instanceIds.filter((id) => input.tagKey === undefined || tags.has(id)); },
   },
-  cloudFormation: { async listStackResources(input) {
-    if (inventory === undefined) return { instanceIds: [] };
-    const instanceIds = inventory.stacks[input.stackName];
-    if (instanceIds === undefined) {
-      if (modules.some((row) => `${clusterName}-${String(row.module_id)}` === input.stackName && row.status === "not-deployed")) return { instanceIds: [] };
-      throw new Error(`Missing captured resources for ${input.stackName}`);
+  cloudFormation: {
+    async listStackResources(input) {
+      if (inventory === undefined) return { instanceIds: [] };
+      const instanceIds = inventory.stacks[input.stackName];
+      if (instanceIds === undefined) {
+        if (modules.some((row) => `${clusterName}-${String(row.module_id)}` === input.stackName && row.status === "not-deployed")) return { instanceIds: [] };
+        throw new Error(`Missing captured resources for ${input.stackName}`);
+      }
+      return { instanceIds };
     }
-    return { instanceIds };
-  } },
+  },
   openSearch: {
     async describeDomain() { return { engineVersion: "OpenSearch_2.19" }; },
     async listInstanceTypeDetails() { return inventory?.openSearchTypes ?? ["m5.large.search", "m6g.large.search", "m7g.large.search"]; },
@@ -212,10 +200,12 @@ const deps: UpgradeDeps = {
     async setEnabled(input) {
       const row = rows[input.tableName]?.find((entry) => entry.stack_id === input.stackId && entry.base_os === input.baseOs);
       if (row !== undefined) row.enabled = input.enabled;
-      record(`EOL software stack ${JSON.stringify(input)} disabled`); },
+      record(`EOL software stack ${JSON.stringify(input)} disabled`);
+    },
     async delete(input) {
       rows[input.tableName] = (rows[input.tableName] ?? []).filter((entry) => entry.stack_id !== input.stackId || entry.base_os !== input.baseOs);
-      record(`EOL software stack ${JSON.stringify(input)} deleted`); },
+      record(`EOL software stack ${JSON.stringify(input)} deleted`);
+    },
   },
   async deploy(input) {
     record(`DEPLOY ${(input.moduleIds ?? ["all"]).join(", ")}`);
@@ -240,8 +230,8 @@ try {
 const report = [
   `# upgrade-cluster dry run: ${clusterName} (${awsRegion})`,
   `capture: ${args.capture}`,
-  `values: ${args.values}${args["enable-ecs"] ? " + enable_ecs: true" : ""}`,
-  `templates: ${args.templates ?? "(none; historical migration refuses)"}`,
+  `values: ${args.values}`,
+  `templates: ${args.templates ?? "(none)"}`,
   `inventory: ${args.inventory ?? "(none)"}`,
   "assumptions:",
   ...ASSUMPTIONS.map((assumption) => `  - ${assumption}`),

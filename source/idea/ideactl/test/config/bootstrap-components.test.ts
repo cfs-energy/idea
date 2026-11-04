@@ -47,18 +47,12 @@ for (const baseOs of ["amazonlinux2023", "rhel8", "rhel9", "rocky8", "rocky9", "
 }
 
 const ALL_COMPONENTS = [
-  "bastion-host",
-  "cluster-manager",
   "common",
   "compute-node",
   "compute-node-ami-builder",
-  "dcv-broker",
-  "dcv-connection-gateway",
   "dcv-host-ami-builder",
   "dcv-host-ami-builder-windows",
   "openldap-server",
-  "scheduler",
-  "virtual-desktop-controller",
   "virtual-desktop-host-linux",
   "virtual-desktop-host-windows",
 ];

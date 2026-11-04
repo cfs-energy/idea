@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
+#   docker buildx build --platform linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.10.9 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.1 .
 # Copy the release tarballs into this directory before the build.
-# The dcv-packages context contains NICE-GPG-KEY, checksums.txt, the broker RPM,
-# both gateway RPMs, and both DCV archives. checksums.txt covers each package
-# file, one sha256sum entry per line.
+# The dcv-packages context contains checksums.txt, the broker RPM, both gateway RPMs,
+# and both DCV archives. checksums.txt covers each package file, one sha256sum entry
+# per line; it only proves the context arrived intact. Authenticity comes from the
+# NICE signing key committed beside this file (see the install step below).
 # Each architecture-dependent step declares ARG TARGETARCH inside its stage and reads the
 # value the builder supplies. Do not declare TARGETARCH before the first FROM: under the
 # dockerfile:1.7 frontend a global declaration with no default shadows the builder's value,
@@ -19,7 +20,7 @@
 # The PostgreSQL major version must match an existing PBS_HOME/datastore/PG_VERSION.
 # PBS_HOME lives on shared storage; pbs_dblock permits one server at a time.
 # A replacement keeps the datastore and server name while jobs stay on execution hosts.
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS pbs
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188 AS pbs
 
 ARG OPENPBS_VERSION=23.06.06
 ARG OPENPBS_URL=https://github.com/openpbs/openpbs/archive/v23.06.06.tar.gz
@@ -48,7 +49,7 @@ RUN set -eux; \
     /opt/pbs/libexec/pbs_postinstall; \
     chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
 
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS dcv-runtime
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188 AS dcv-runtime
 
 ARG TARGETARCH
 
@@ -69,11 +70,19 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       java-11-amazon-corretto-headless \
       nginx openssl nmap-ncat \
       glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
-      rsync git vim-minimal vim-enhanced nano \
+      rsync git vim-minimal vim-enhanced nano tmux \
   && dnf clean all
 
 # Install the session-manager broker, connection gateway, and web viewer from the
 # supplied package context. This avoids a build-time dependency on a public host.
+# The packages are fetched from unversioned CloudFront URLs, so each RPM must carry a
+# signature from the committed NICE key, primary fingerprint
+# 5B9E EBC8 6444 9701 F6CE 566A 11B5 C70A 170C 6114 (expires 2027-09-15; refresh the file
+# from https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY when NICE extends it and check
+# the fingerprint is unchanged). The check uses a scratch RPM database holding only that
+# key, and requires "signatures OK": plain rpm -K passes an unsigned package on its digests.
+# The archive itself is unsigned; only the web viewer RPM inside it is installed.
+COPY deployment/ecr/idea-control-plane/NICE-GPG-KEY /tmp/NICE-GPG-KEY
 COPY --from=dcv-packages / /tmp/dcv-packages/
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
@@ -81,19 +90,21 @@ RUN set -eux; \
       arm64) A=aarch64 ;; \
       *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
     esac; \
-    for F in NICE-GPG-KEY checksums.txt nice-dcv-session-manager-broker-amzn2023.noarch.rpm "nice-dcv-connection-gateway-amzn2023.${A}.rpm" "nice-dcv-amzn2023-${A}.tgz"; do \
+    for F in checksums.txt nice-dcv-session-manager-broker-amzn2023.noarch.rpm "nice-dcv-connection-gateway-amzn2023.${A}.rpm" "nice-dcv-amzn2023-${A}.tgz"; do \
       test -f "/tmp/dcv-packages/${F}" || { echo "dcv-packages is missing ${F}" >&2; exit 1; }; \
     done; \
     (cd /tmp/dcv-packages && sha256sum -c checksums.txt); \
-    rpm --import /tmp/dcv-packages/NICE-GPG-KEY; \
-    rpm -K /tmp/dcv-packages/nice-dcv-session-manager-broker-amzn2023.noarch.rpm; \
+    mkdir -p /tmp/dcv && tar -xzf "/tmp/dcv-packages/nice-dcv-amzn2023-${A}.tgz" -C /tmp/dcv --strip-components=1; \
+    KEYDB=$(mktemp -d); rpmkeys --dbpath "$KEYDB" --import /tmp/NICE-GPG-KEY; \
+    for R in /tmp/dcv-packages/nice-dcv-session-manager-broker-amzn2023.noarch.rpm "/tmp/dcv-packages/nice-dcv-connection-gateway-amzn2023.${A}.rpm" /tmp/dcv/nice-dcv-web-viewer-*.rpm; do \
+      OUT=$(rpmkeys --dbpath "$KEYDB" --checksig "$R"); \
+      case "$OUT" in *" signatures OK") ;; *) echo "not signed by the pinned NICE key: $OUT" >&2; exit 1 ;; esac; \
+    done; \
+    rpm --import /tmp/NICE-GPG-KEY; \
     dnf install -y /tmp/dcv-packages/nice-dcv-session-manager-broker-amzn2023.noarch.rpm; \
-    rpm -K "/tmp/dcv-packages/nice-dcv-connection-gateway-amzn2023.${A}.rpm"; \
     dnf install -y "/tmp/dcv-packages/nice-dcv-connection-gateway-amzn2023.${A}.rpm"; \
-    cp "/tmp/dcv-packages/nice-dcv-amzn2023-${A}.tgz" /tmp/dcv.tgz; \
-    mkdir -p /tmp/dcv && tar -xzf /tmp/dcv.tgz -C /tmp/dcv --strip-components=1; \
-    rpm -K /tmp/dcv/nice-dcv-web-viewer-*.rpm; dnf install -y /tmp/dcv/nice-dcv-web-viewer-*.rpm; \
-    rm -rf /tmp/dcv-packages /tmp/dcv.tgz /tmp/dcv; dnf clean all; \
+    dnf install -y /tmp/dcv/nice-dcv-web-viewer-*.rpm; \
+    rm -rf "$KEYDB" /tmp/dcv-packages /tmp/dcv /tmp/NICE-GPG-KEY; dnf clean all; \
     sed -i 's|> /dev/null|2>\&1|' /usr/share/dcv-session-manager-broker/bin/dcv-session-manager-broker.sh
 
 FROM dcv-runtime
@@ -104,7 +115,7 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
-ARG UV_VERSION=0.12.24
+ARG UV_VERSION=0.13.5
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
@@ -132,16 +143,19 @@ RUN set -eux; \
 # Build ideactl and include its pinned CDK CLI.
 # The build uses the repository path expected by its resource-copy script.
 ARG NODE_VERSION=26.8.2
+# Node archive checksums for 26.8.2
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
-      amd64) N=x64 ;; \
-      arm64) N=arm64 ;; \
+      amd64) N=x64; SUM=badb3fe6a61b85e1352ca6564dc56b8b7bd5ecd5c474c52acc21dd0cdd586f35 ;; \
+      arm64) N=arm64; SUM=746cdbf21565b4ea06f77642bb0e85466de8bb722242be2c5e006f272c361c63 ;; \
       *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
     esac; \
     mkdir -p /usr/local/node; \
     curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${N}.tar.gz"; \
+    printf '%s  %s\n' "${SUM}" /tmp/node.tar.gz > /tmp/node.sha256; \
+    sha256sum -c /tmp/node.sha256; \
     tar -xzf /tmp/node.tar.gz -C /usr/local/node --strip-components=1 --no-same-owner; \
-    rm -f /tmp/node.tar.gz
+    rm -f /tmp/node.tar.gz /tmp/node.sha256
 
 ENV PATH="/usr/local/node/bin:/opt/idea/ideactl/node_modules/.bin:${PATH}"
 ENV CDK_DISABLE_CLI_TELEMETRY=true
@@ -149,21 +163,22 @@ ENV CDK_DISABLE_CLI_TELEMETRY=true
 # Keep runtime tools cached when only the application bundle changes.
 ARG IDEA_VERSION
 # Install all module packages from the release bundle. The selected role runs at startup.
-# Keep the release bundle in /root/.idea/downloads for package commands.
-ADD deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz /root/.idea/downloads/
-RUN set -eux; \
+RUN --mount=type=bind,source=deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz,target=/tmp/release.tar.gz \
+    set -eux; \
+    mkdir -p /tmp/release; \
+    tar -xzf /tmp/release.tar.gz -C /tmp/release; \
     for MODULE in idea-cluster-manager idea-virtual-desktop-controller idea-scheduler; do \
       APP_NAME="${MODULE#idea-}"; \
       PKG="/tmp/idea/${MODULE}"; \
       mkdir -p "${PKG}"; \
-      tar -xf "/root/.idea/downloads/${MODULE}-${IDEA_VERSION}.tar.gz" -C "${PKG}"; \
+      tar -xf "/tmp/release/${MODULE}-${IDEA_VERSION}.tar.gz" -C "${PKG}"; \
       python3.13 -m pip install --no-cache-dir -r "${PKG}/requirements.txt"; \
       python3.13 -m pip install --no-cache-dir "${PKG}"/*-lib.tar.gz; \
       mkdir -p "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}"; \
       cp -r "${PKG}/resources" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; \
       if [ -d "${PKG}/webapp" ]; then cp -r "${PKG}/webapp" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; fi; \
     done; \
-    rm -rf /root/.cache/pip; \
+    rm -rf /tmp/release /tmp/idea /root/.cache/pip; \
     mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
 
 # Overlay the gateway web resources.
@@ -192,8 +207,8 @@ RUN set -eux; \
 
 COPY deployment/ecr/idea-control-plane/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deployment/ecr/idea-control-plane/entrypoint.sh /opt/idea/entrypoint.sh
-COPY deployment/ecr/idea-control-plane/sync_users.py /opt/idea/sync_users.py
 COPY deployment/ecr/idea-control-plane/roles /opt/idea/roles
+COPY source/idea/idea-bootstrap/common/terminal_host.py /opt/idea/roles/terminal_host.py
 RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh
 
 # module 8443; broker 8444/8445/8446 client/agent/gateway and 47100/47500 between brokers;

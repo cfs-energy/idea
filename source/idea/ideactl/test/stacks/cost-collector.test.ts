@@ -46,7 +46,7 @@ test("one Fargate service has two containers sharing a socket and an injected ag
   assert.deepEqual(env(collector), {
     IDEA_CONTAINER_ROLE: "cost-metrics", IDEA_CLUSTER_NAME: "gov-cluster", AWS_DEFAULT_REGION: "us-east-1",
     DD_DOGSTATSD_URL: "unix:///var/run/datadog/dsd.socket", IDEA_COST_METRICS_ENABLED: "true",
-    IDEA_COST_METRICS_INTERVAL_HOURS: "6", IDEA_COST_METRICS_LOOKBACK_DAYS: "3",
+    IDEA_COST_METRICS_INTERVAL_HOURS: "24", IDEA_COST_METRICS_LOOKBACK_DAYS: "3",
     IDEA_COST_METRICS_MODULE_TAG: "idea:ModuleId", IDEA_COST_METRICS_PROJECT_TAG: "idea:Project",
     IDEA_COST_METRICS_OWNER_TAG: "idea:JobOwner", IDEA_COST_METRICS_BY_ACCOUNT: "false",
   });

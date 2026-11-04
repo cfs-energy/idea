@@ -198,3 +198,109 @@ def test_network_call_releases_buffer_lock(monkeypatch):
         producer.join(2)
     assert lock_released == [True]
     assert service._buffer == [make_entry('new')]
+
+
+def test_partial_failure_cannot_move_delete_ahead_of_update(monkeypatch):
+    """Exercise the producer with modeled PutRecords partial success and real boto validation."""
+    import json
+
+    import boto3
+    from botocore.stub import Stubber
+
+    service, _ = make_service(monkeypatch)
+    client = boto3.client(
+        'kinesis',
+        region_name='us-east-1',
+        aws_access_key_id='testing',
+        aws_secret_access_key='testing',
+    )
+    service.context.aws.return_value.kinesis.return_value = client
+    entries = [make_entry('desktop'), make_entry('other'), make_entry('desktop')]
+    entries[0].entry_action = EntryAction.UPDATE_ENTRY
+    entries[2].entry_action = EntryAction.DELETE_ENTRY
+    service._buffer = entries.copy()
+    delivered = []
+    attempts = []
+    original_put = client.put_records
+
+    def put_records(*, Records, StreamName):
+        decoded = [json.loads(record['Data']) for record in Records]
+        results = []
+        failed = 0
+        for entry in decoded:
+            if not attempts and entry['action'] == 'UPDATE_ENTRY':
+                results.append({'ErrorCode': 'ProvisionedThroughputExceededException'})
+                failed += 1
+            else:
+                results.append(
+                    {'SequenceNumber': '1', 'ShardId': 'shardId-000000000000'}
+                )
+                delivered.append(entry)
+        attempts.append(decoded)
+        with Stubber(client) as stubber:
+            stubber.add_response(
+                'put_records',
+                {
+                    **({'FailedRecordCount': failed} if failed else {}),
+                    'Records': results,
+                },
+                {'Records': Records, 'StreamName': StreamName},
+            )
+            return original_put(Records=Records, StreamName=StreamName)
+
+    monkeypatch.setattr(client, 'put_records', put_records)
+    assert not service._post_entries_to_kinesis()
+    assert service._buffer == [entries[0], entries[2]]
+    assert [entry['document_id'] for entry in delivered] == ['other']
+    assert service._post_entries_to_kinesis()
+    assert service._buffer == [entries[2]]
+    assert service._post_entries_to_kinesis()
+    assert service._buffer == []
+    assert [
+        entry['action'] for entry in delivered if entry['document_id'] == 'desktop'
+    ] == [
+        'UPDATE_ENTRY',
+        'DELETE_ENTRY',
+    ]
+
+
+def test_document_order_is_preserved_across_chunks_and_concurrent_additions(
+    monkeypatch,
+):
+    import json
+
+    service, client = make_service(monkeypatch)
+    entries = [make_entry(i) for i in range(501)]
+    delete = make_entry(0)
+    delete.entry_action = EntryAction.DELETE_ENTRY
+    entries.append(delete)
+    service._buffer = entries.copy()
+    newer = make_entry(0)
+
+    def deliver(**kwargs):
+        if client.put_records.call_count == 1:
+            service.post_entry(newer)
+        return {'FailedRecordCount': 0}
+
+    client.put_records.side_effect = deliver
+    assert service._post_entries_to_kinesis()
+    assert service._buffer == [delete, newer]
+    batches = [call.kwargs['Records'] for call in client.put_records.call_args_list]
+    assert [len(batch) for batch in batches] == [500, 1]
+    assert all(
+        json.loads(record['Data'])['action'] == 'CREATE_ENTRY'
+        for batch in batches
+        for record in batch
+    )
+    assert service._post_entries_to_kinesis()
+    assert service._buffer == [newer]
+
+
+def test_same_document_id_in_different_indexes_is_independent(monkeypatch):
+    service, client = make_service(monkeypatch)
+    first, second = make_entry('same'), make_entry('same')
+    second.entry_content.index_id = 'other-index'
+    service._buffer = [first, second]
+    assert service._post_entries_to_kinesis()
+    assert service._buffer == []
+    assert len(client.put_records.call_args.kwargs['Records']) == 2

@@ -26,7 +26,6 @@ import {
   lookupEbsKmsKey,
   lookupEc2StateChangeTopic,
   lookupExistingOpensearch,
-  lookupKeyPair,
 } from '../../src/cdk/constructs/existing-resources.ts';
 import {
   CustomResourceProvider,
@@ -579,8 +578,6 @@ describe('per-stack imports keep their pinned construct ids', () => {
         lookupClusterDns(ctx, scope).node.id,
         lookupEbsKmsKey(ctx, scope).node.id,
         lookupEbsKmsKey(ctx, scope, 'dcv-host').node.id,
-        lookupKeyPair(ctx, scope).node.id,
-        lookupKeyPair(ctx, scope, 'dcv-host-key-pair').node.id,
         lookupClusterS3Bucket(ctx, scope).node.id,
         lookupExistingOpensearch(ctx, scope).node.id,
         lookupEc2StateChangeTopic(ctx, scope).node.id,
@@ -598,8 +595,6 @@ describe('per-stack imports keep their pinned construct ids', () => {
       'cluster-dns',
       'ebs-kms-key',
       'dcv-host-ebs-kms-key',
-      'vdc-key-pair',
-      'dcv-host-key-pair',
       'cluster-s3-bucket',
       'existing-opensearch',
       `${CLUSTER}-vdc-ec2-state-change-topic`,

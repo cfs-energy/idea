@@ -51,6 +51,8 @@ class InputTests(unittest.TestCase):
             ('software_versions.yml', True, True, True),
             ('.github/workflows/build_push.yaml', True, True, True),
             ('docs/README.md', False, False, False),
+            ('scripts/tooling/requirements.mjs', True, True, False),
+            ('mise-tasks/unused', False, False, False),
         ]:
             with self.subTest(path=path):
                 code, values = self.run_gate(path)

@@ -14,6 +14,7 @@ from ideadatamodel import (
     errorcodes,
     SocaJob,
     SocaJobExecutionHost,
+    SocaJobExecutionRun,
     EC2Instance,
     SocaCapacityType,
 )
@@ -86,10 +87,13 @@ class JobsDB:
     The live cache is a SQLite file on local disk, where it is fast. A container's local
     disk goes with every task replacement, so there a copy is kept under PBS_HOME (the
     scheduler-pbs volume, which outlives the task): refreshed by SQLite's online backup
-    every minute when something changed, and on an orderly stop, and restored on a start
-    that finds no local file. At most the last minute of cache is lost at a replacement,
-    and no network filesystem locking sits in the hot path.
+    every five minutes when something changed, and on an orderly stop, and restored on a
+    start that finds no local file. At most the last five minutes of cache are lost when a
+    task dies without an orderly stop, and no network filesystem locking sits in the hot
+    path. Each refresh copies the whole file, so the interval sets the EFS write volume.
     """
+
+    DEFAULT_BACKUP_INTERVAL_SECONDS = 300
 
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
@@ -112,7 +116,8 @@ class JobsDB:
             else None
         )
         self._backup_interval = config.get_float(
-            'scheduler.job_cache.backup_interval_seconds', default=60
+            'scheduler.job_cache.backup_interval_seconds',
+            default=self.DEFAULT_BACKUP_INTERVAL_SECONDS,
         )
         self._backup_stop = Event()
         self._backup_thread: Optional[Thread] = None
@@ -667,6 +672,30 @@ class JobsDB:
     def add_execution_host(self, job_id: str, execution_host: SocaJobExecutionHost):
         with self._db_lock:
             with self.db as tx:
+                entry = tx[EXECUTION_HOSTS_TABLE].find_one(
+                    job_id=job_id, host=execution_host.host
+                )
+                if entry is not None and execution_host.execution is not None:
+                    previous = SocaJobExecutionHost(
+                        **Utils.from_json(entry['execution_host_data'])
+                    )
+                    if previous.execution is not None:
+                        runs = {
+                            run.run_id: run for run in previous.execution.runs or []
+                        }
+                        # Begin/end hooks carry complementary fields and may arrive out of order.
+                        for run in execution_host.execution.runs or []:
+                            runs[run.run_id] = (
+                                SocaJobExecutionRun(
+                                    **{
+                                        **runs[run.run_id].model_dump(),
+                                        **run.model_dump(exclude_none=True),
+                                    }
+                                )
+                                if run.run_id in runs
+                                else run
+                            )
+                        execution_host.execution.runs = list(runs.values())
                 tx[EXECUTION_HOSTS_TABLE].upsert(
                     row={
                         'job_id': job_id,

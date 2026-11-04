@@ -1,0 +1,107 @@
+# Begin: DCV package trust
+# DCV packages come from unversioned URLs on a public CDN, and the .sha256sum files beside them
+# come from the same host, so they only prove the download is intact. Authenticity comes from
+# the NICE signing key carried in this bundle (primary fingerprint
+# 5B9E EBC8 6444 9701 F6CE 566A 11B5 C70A 170C 6114, expires 2027-09-15; keep it identical to
+# deployment/ecr/idea-control-plane/NICE-GPG-KEY). No key is fetched at boot.
+# - RPMs and the Ubuntu 22.04 .debs (dpkg-sig _gpgbuilder) must carry a signature from that key.
+# - The Ubuntu 24.04 and 26.04 .debs are not signed by NICE: their archives come from versioned
+#   URLs and must match the SHA-256 in package_config.dcv (the sha256sum value is the digest itself).
+if [[ -z "${DCV_NICE_KEY:-}" ]]; then
+DCV_NICE_FINGERPRINT=5B9EEBC864449701F6CE566A11B5C70A170C6114
+DCV_NICE_KEY=$(mktemp) || exit 1
+cat > "${DCV_NICE_KEY}" <<'NICE_GPG_KEY'
+{% include '_templates/linux/NICE-GPG-KEY' %}
+NICE_GPG_KEY
+
+# Stops the bootstrap: nothing below may run with a package that failed its check.
+function dcv_untrusted () {
+  log_error "$1"
+  echo -e "FATAL ERROR: $1" > /etc/motd
+  exit 1
+}
+
+# Each RPM must verify against a scratch rpmdb holding only the pinned key. "digests OK" without
+# "signatures OK" is an unsigned package, which rpm -ivh and dnf/yum on a local file accept.
+function dcv_rpms_signed () {
+  local keydb out rpm_file rc=0
+  keydb=$(mktemp -d) || return 1
+  if ! rpmkeys --dbpath "${keydb}" --import "${DCV_NICE_KEY}"; then
+    rm -rf "${keydb}"
+    return 1
+  fi
+  for rpm_file in "$@"; do
+    out=$(LC_ALL=C rpmkeys --dbpath "${keydb}" --checksig "${rpm_file}" 2>&1)
+    case "${out}" in
+      *" signatures OK") log_info "${out}" ;;
+      *) log_error "not signed by the pinned NICE key ${DCV_NICE_FINGERPRINT}: ${out}"; rc=1 ;;
+    esac
+  done
+  rm -rf "${keydb}"
+  return ${rc}
+}
+
+# dpkg-sig builder signature: a clearsigned list of md5, sha1 and size for every other member.
+# dpkg -i and apt install of a local file ignore it, so check the signature and every member here.
+function dcv_debs_signed () {
+  local work deb member want got count rc=0
+  command -v ar > /dev/null || package_transaction apt-get install -y binutils
+  command -v gpg > /dev/null || package_transaction apt-get install -y gnupg
+  work=$(mktemp -d) || return 1
+  mkdir -m 0700 "${work}/gnupg"
+  if ! gpg --batch --quiet --homedir "${work}/gnupg" --import "${DCV_NICE_KEY}"; then
+    rm -rf "${work}"
+    return 1
+  fi
+  for deb in "$@"; do
+    rm -f "${work}/sig" "${work}/signed" "${work}/status"
+    if ! ar p "${deb}" _gpgbuilder > "${work}/sig" 2> /dev/null || [[ ! -s "${work}/sig" ]]; then
+      log_error "${deb} carries no NICE signature (_gpgbuilder member)"
+      rc=1
+      continue
+    fi
+    # --decrypt writes only the signed text, so nothing outside the signature is read
+    gpg --batch --homedir "${work}/gnupg" --status-file "${work}/status" --output "${work}/signed" --decrypt "${work}/sig" 2> /dev/null
+    if ! grep -q '^\[GNUPG:\] GOODSIG ' "${work}/status" || ! grep -q "^\[GNUPG:\] VALIDSIG .* ${DCV_NICE_FINGERPRINT}\$" "${work}/status"; then
+      log_error "${deb} is not signed by the pinned NICE key ${DCV_NICE_FINGERPRINT}: $(grep -o '\[GNUPG:\] [A-Z]*SIG.*' "${work}/status" | head -1)"
+      rc=1
+      continue
+    fi
+    count=0
+    for member in $(ar t "${deb}" | grep -v '^_gpg'); do
+      count=$((count + 1))
+      want=$(awk -v m="${member}" 'NF == 4 && $4 == m {print $1, $2, $3}' "${work}/signed")
+      got="$(ar p "${deb}" "${member}" | md5sum | cut -d' ' -f1) $(ar p "${deb}" "${member}" | sha1sum | cut -d' ' -f1) $(ar p "${deb}" "${member}" | wc -c | tr -d ' ')"
+      if [[ -z "${want}" || "${want}" != "${got}" ]]; then
+        log_error "${deb}: member ${member} does not match its NICE signature"
+        rc=1
+        continue 2
+      fi
+    done
+    if [[ ${count} -eq 0 || ${count} -ne $(awk 'NF == 4 && length($1) == 32 && length($2) == 40' "${work}/signed" | wc -l) ]]; then
+      log_error "${deb}: members differ from the list NICE signed"
+      rc=1
+      continue
+    fi
+    log_info "${deb}: signed by the pinned NICE key ${DCV_NICE_FINGERPRINT}"
+  done
+  rm -rf "${work}"
+  return ${rc}
+}
+
+# For packages NICE does not sign: the configured value is the SHA-256 itself, never a URL.
+function dcv_sha256_pinned () {
+  local file="$1" want
+  want=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+  if [[ ! "${want}" =~ ^[0-9a-f]{64}$ ]]; then
+    log_error "${file}: package_config.dcv sha256sum must be the package's SHA-256 (64 hex digits) because NICE does not sign it; got '${2}'"
+    return 1
+  fi
+  if [[ "$(sha256sum "${file}" | cut -d' ' -f1)" != "${want}" ]]; then
+    log_error "${file}: SHA-256 does not match the pinned ${want}"
+    return 1
+  fi
+  log_info "${file}: matches the pinned SHA-256"
+}
+fi
+# End: DCV package trust

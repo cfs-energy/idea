@@ -3,19 +3,19 @@
  * the read-only status commands.
  */
 
+import type { Command } from 'commander';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import type { Command } from 'commander';
 
-import { ClusterConfigError, ClusterConfig } from '../../src/config/cluster-config.ts';
 import { ChangeSetRefused, ExitWithCode } from '../../src/cli/cdk-invoker.ts';
-import { buildProgram, run } from '../../src/cli/main.ts';
 import { cdkAppArgv } from '../../src/cli/commands/cdk.ts';
-import { checkClusterStatus, connectionInfo, modulesTable, sessionManagerUrl, statusEndpoints } from '../../src/cli/commands/status.ts';
 import { asBoolFlag } from '../../src/cli/commands/deploy.ts';
+import { checkClusterStatus, connectionInfo, modulesTable, sessionManagerUrl, statusEndpoints } from '../../src/cli/commands/status.ts';
+import { buildProgram, run } from '../../src/cli/main.ts';
+import { ClusterConfig, ClusterConfigError } from '../../src/config/cluster-config.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 
 const CLUSTER = 'sample-cluster';
@@ -328,6 +328,7 @@ const STATUS_TABLES = {
     moduleRow('bastion-host', 'bastion-host', 'stack', 'deployed'),
   ],
   [`${CLUSTER}.cluster-settings`]: [
+    { key: 'ecs.enabled', value: true },
     { key: 'global-settings.module_sets.default.cluster.module_id', value: 'cluster' },
     { key: 'cluster.load_balancers.external_alb.certificates.provided', value: false },
     { key: 'cluster.cluster_name', value: CLUSTER },
@@ -345,15 +346,32 @@ async function statusConfig(): Promise<ClusterConfig> {
   return ClusterConfig.fromDynamoDb(CLUSTER, REGION, { scan: fakeDeps({ tables: STATUS_TABLES }).scan });
 }
 
+async function publishedDashboardConfig(): Promise<ClusterConfig> {
+  const settings = `${CLUSTER}.cluster-settings`;
+  const tables = {
+    ...STATUS_TABLES,
+    [settings]: [...STATUS_TABLES[settings], { key: 'analytics.opensearch.endpoints.external.enabled', value: true }],
+  };
+  return ClusterConfig.fromDynamoDb(CLUSTER, REGION, { scan: fakeDeps({ tables }).scan });
+}
+
 describe('check-cluster-status', () => {
-  it('checks the analytics dashboard and one healthcheck per app module', async () => {
+  it('checks one healthcheck per app module, and no dashboard unless it is published', async () => {
     const endpoints = statusEndpoints(await statusConfig());
+    assert.deepEqual(
+      endpoints.map((endpoint) => endpoint.name),
+      ['Cluster Manager', 'Scale-Out Computing'],
+    );
+    assert.ok(endpoints[0]?.endpoint.endsWith('/cluster-manager/healthcheck'));
+  });
+
+  it('checks the analytics dashboard first when the route is published', async () => {
+    const endpoints = statusEndpoints(await publishedDashboardConfig());
     assert.deepEqual(
       endpoints.map((endpoint) => endpoint.name),
       ['OpenSearch Service Dashboard', 'Cluster Manager', 'Scale-Out Computing'],
     );
     assert.ok(endpoints[0]?.endpoint.endsWith('/_dashboards/'));
-    assert.ok(endpoints[1]?.endpoint.endsWith('/cluster-manager/healthcheck'));
   });
 
   it('exits 1 when an endpoint fails', async () => {
@@ -403,7 +421,7 @@ describe('list-modules', () => {
 
 describe('show-connection-info', () => {
   it('sorts by the hardcoded weights', async () => {
-    const entries = connectionInfo(await statusConfig(), REGION);
+    const entries = connectionInfo(await publishedDashboardConfig(), REGION);
     assert.deepEqual(entries.map((entry) => entry.key), [
       'Web Portal',
       'Bastion Host (SSH Access)',
@@ -411,6 +429,11 @@ describe('show-connection-info', () => {
       'Analytics Dashboard',
     ]);
     assert.ok(entries[1]?.value.startsWith('ssh -i ~/.ssh/sample-keypair.pem ec2-user@192.0.2.10'));
+  });
+
+  it('lists no analytics dashboard unless the route is published', async () => {
+    const entries = connectionInfo(await statusConfig(), REGION);
+    assert.ok(!entries.some((entry) => entry.key === 'Analytics Dashboard'));
   });
 
   it('skips modules that are not deployed', async () => {

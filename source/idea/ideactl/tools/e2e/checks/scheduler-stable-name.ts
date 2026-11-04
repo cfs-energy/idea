@@ -20,6 +20,7 @@ export interface SchedulerNode {
 /** Inputs for checking that hosts use the stable scheduler name. */
 export interface StableSchedulerNameOptions {
   expectedAddress?: string;
+  /** The stable name, `scheduler.private_dns_name`; clients use its first label. */
   expectedServer: string;
   nodes: readonly SchedulerNode[];
 }
@@ -35,33 +36,55 @@ interface NodeEvidence {
   pbsServer: string;
   qstat: string;
   resolvedIpv4: string;
+  stableIpv4: string;
 }
 
-const probeCommand = [
-  "set -u",
-  "pbs_server=$(awk -F= '$1 == \"PBS_SERVER\" { print $2; exit }' /etc/pbs.conf 2>/dev/null || true)",
-  "hosts_pin=$(awk -v name=\"$pbs_server\" '$1 !~ /^#/ { for (index = 2; index <= NF; index += 1) if ($index == name) pin = $1 } END { print pin }' /etc/hosts 2>/dev/null || true)",
-  "resolved_ipv4=$(getent ahostsv4 \"$pbs_server\" 2>/dev/null | awk 'NR == 1 { print $1 }')",
-  "qstat=FAIL",
-  "if /opt/pbs/bin/qstat -B >/dev/null 2>&1; then qstat=OK; fi",
-  "printf 'PBS_SERVER=%s\\nHOSTS_PIN=%s\\nRESOLVED_IPV4=%s\\nQSTAT_B=%s\\n' \"$pbs_server\" \"$hosts_pin\" \"$resolved_ipv4\" \"$qstat\"",
-].join("; ");
+/**
+ * The remote probe. `stableName` is validated as a DNS name before it is put in the command.
+ * A pin on either name fails: the short name must reach the server through the search path,
+ * the same record the stable name follows across a scheduler replacement.
+ */
+export function probeCommand(stableName: string): string {
+  return [
+    "set -u",
+    `stable_name=${stableName}`,
+    "pbs_server=$(awk -F= '$1 == \"PBS_SERVER\" { print $2; exit }' /etc/pbs.conf 2>/dev/null || true)",
+    "hosts_pin=$(awk -v short=\"$pbs_server\" -v full=\"$stable_name\" '$1 !~ /^#/ { for (i = 2; i <= NF; i += 1) if ($i == short || $i == full) pin = $1 } END { print pin }' /etc/hosts 2>/dev/null || true)",
+    "resolved_ipv4=$(getent ahostsv4 \"$pbs_server\" 2>/dev/null | awk 'NR == 1 { print $1 }')",
+    "stable_ipv4=$(getent ahostsv4 \"$stable_name\" 2>/dev/null | awk 'NR == 1 { print $1 }')",
+    "qstat=FAIL",
+    "if /opt/pbs/bin/qstat -B >/dev/null 2>&1; then qstat=OK; fi",
+    "printf 'PBS_SERVER=%s\\nHOSTS_PIN=%s\\nRESOLVED_IPV4=%s\\nSTABLE_IPV4=%s\\nQSTAT_B=%s\\n' \"$pbs_server\" \"$hosts_pin\" \"$resolved_ipv4\" \"$stable_ipv4\" \"$qstat\"",
+  ].join("; ");
+}
+
+/** The batch server's own name: the first label of the stable name (roles/scheduler.sh). */
+export function serverNameOf(stableName: string): string {
+  return stableName.split(".")[0] ?? stableName;
+}
 
 /**
- * Inspects scheduler clients and compute nodes for a full stable PBS server name, no hosts-file
- * pin, a resolvable IPv4 address, and a working scheduler query.
+ * Inspects scheduler clients and compute nodes for PBS_SERVER equal to the batch server's own
+ * name (so a short job id in a dependency completes to the id the server releases), resolved
+ * through DNS to the same address as the stable name, no hosts-file pin, and a working
+ * scheduler query.
  */
 export async function runStableSchedulerNameCheck(
   options: StableSchedulerNameOptions,
   remote: RemoteRunner,
 ): Promise<StableSchedulerNameResult> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(options.expectedServer)) {
+    throw new Error("--expected-server must be a DNS name");
+  }
+  const expectedPbsServer = serverNameOf(options.expectedServer);
+  const command = probeCommand(options.expectedServer);
   const observed: string[] = [];
   let passed = true;
 
   for (const node of options.nodes) {
     let result;
     try {
-      result = await remote.run(node.host, probeCommand);
+      result = await remote.run(node.host, command);
     } catch (error: unknown) {
       observed.push(`node=${node.name} remote_error=${errorMessage(error)}`);
       passed = false;
@@ -79,13 +102,14 @@ export async function runStableSchedulerNameCheck(
       `pbs_server=${evidence.pbsServer || "missing"}`,
       `hosts_pin=${evidence.hostsPin || "none"}`,
       `resolved_ipv4=${evidence.resolvedIpv4 || "missing"}`,
+      `stable_ipv4=${evidence.stableIpv4 || "missing"}`,
       `qstat_b=${evidence.qstat || "missing"}`,
     ].join(" ");
     observed.push(nodeObserved);
 
-    if (evidence.pbsServer !== options.expectedServer) {
+    if (evidence.pbsServer !== expectedPbsServer) {
       passed = false;
-      observed.push(`node=${node.name} expected_pbs_server=${options.expectedServer}`);
+      observed.push(`node=${node.name} expected_pbs_server=${expectedPbsServer}`);
     }
     if (evidence.hostsPin !== "") {
       passed = false;
@@ -93,7 +117,11 @@ export async function runStableSchedulerNameCheck(
     }
     if (isIP(evidence.resolvedIpv4) !== 4) {
       passed = false;
-      observed.push(`node=${node.name} stable_name_did_not_resolve_to_ipv4`);
+      observed.push(`node=${node.name} pbs_server_did_not_resolve_to_ipv4`);
+    }
+    if (evidence.resolvedIpv4 !== evidence.stableIpv4) {
+      passed = false;
+      observed.push(`node=${node.name} pbs_server_and_stable_name_resolve_differently`);
     }
     if (options.expectedAddress !== undefined && evidence.resolvedIpv4 !== options.expectedAddress) {
       passed = false;
@@ -117,7 +145,7 @@ export function parseNodeEvidence(stdout: string): NodeEvidence {
     }
     const key = line.slice(0, separator);
     const value = line.slice(separator + 1).trim();
-    if (["PBS_SERVER", "HOSTS_PIN", "RESOLVED_IPV4", "QSTAT_B"].includes(key)) {
+    if (["PBS_SERVER", "HOSTS_PIN", "RESOLVED_IPV4", "STABLE_IPV4", "QSTAT_B"].includes(key)) {
       fields.set(key, value);
     }
   }
@@ -126,6 +154,7 @@ export function parseNodeEvidence(stdout: string): NodeEvidence {
     pbsServer: fields.get("PBS_SERVER") ?? "",
     qstat: fields.get("QSTAT_B") ?? "",
     resolvedIpv4: fields.get("RESOLVED_IPV4") ?? "",
+    stableIpv4: fields.get("STABLE_IPV4") ?? "",
   };
 }
 

@@ -56,7 +56,10 @@ def test_request_body_and_shared_names_and_tags(context, monkeypatch):
         line = provider.format_entry(original)
         assert line.startswith(actual['metric'] + ':')
         assert line.split('|#')[1].split('|')[0].split(',') == actual['tags']
-    assert series[1]['tags'] == ['idea_cluster:cluster', 'project:team_one']
+    assert series[1]['tags'] == [
+        'idea_cluster:cluster',
+        'project:team_one',
+    ]
 
 
 @pytest.mark.parametrize(
@@ -158,3 +161,43 @@ def test_cost_series_has_only_documented_dimensions_and_cluster():
         'owner:alice',
     ]
     assert 'resources' not in series
+
+
+@pytest.mark.parametrize(
+    'metric', ['cost.amortized', 'cost.unblended', 'storage.bytes']
+)
+def test_collector_replay_preserves_historical_series_identity(metric):
+    point = entry(metric, 'Gauge')
+    point['Dimensions'] = [{'Name': 'project', 'Value': 'research'}]
+    series = DatadogAPI('key', 'datadoghq.com', 'cluster/manager/new-task').series(
+        point
+    )
+    historical_series = {
+        'metric': f'idea.{metric}',
+        'tags': ['idea_cluster:cluster', 'project:research'],
+        'points': [{'timestamp': 1700000000, 'value': 2.5}],
+        'type': 3,
+    }
+    assert series == historical_series
+
+
+@pytest.mark.parametrize('metric', ['job.count', 'job.cost'])
+@pytest.mark.parametrize('timestamp', [1700000000, 1900000000])
+def test_job_series_replay_keeps_pre_upgrade_identity(metric, timestamp):
+    point = entry(metric, timestamp=timestamp)
+    series = DatadogAPI('key', 'datadoghq.com', 'cluster/scheduler/component').series(
+        point
+    )
+    assert series == {
+        'metric': f'idea.{metric}',
+        'type': 1,
+        'interval': 1,
+        'points': [{'timestamp': timestamp, 'value': 2.5}],
+        'tags': [
+            'idea_cluster:cluster',
+            'idea_module:scheduler',
+            'component:component',
+            'project:team_one',
+            'host:collector',
+        ],
+    }

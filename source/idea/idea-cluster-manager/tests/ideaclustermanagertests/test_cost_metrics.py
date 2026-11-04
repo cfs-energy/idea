@@ -366,3 +366,68 @@ def test_two_runs_publish_each_day_once_with_only_documented_tags():
             *[f'{key}:{value}' for key, value in context.dimensions(point).items()],
         }
         assert set(context.dimensions(point)) == {'module', 'project', 'owner'}
+
+
+def test_disabled_collector_starts_so_configuration_can_enable_it():
+    from unittest.mock import Mock
+
+    context = FakeContext(values(**{'cluster-manager.metrics.cost.enabled': False}))
+    service = CostMetricsService(context)
+    service._thread = Mock()
+    service.start()
+    service._thread.start.assert_called_once_with()
+    service.stop()
+    assert service._exit.is_set()
+    service._thread.join.assert_called_once_with()
+
+
+def test_collection_rechecks_enabled_each_cycle():
+    from unittest.mock import Mock
+    from threading import Event
+
+    context = FakeContext(
+        values(**{'cluster-manager.metrics.cost.enabled': False}),
+        cost_explorer=StubCostExplorer(['scheduler'], responses()),
+    )
+    service = CostMetricsService(context)
+    reader = service.reader()
+    reader.fetch_all = Mock(wraps=reader.fetch_all)
+    service.reader = Mock(return_value=reader)
+    waits = []
+
+    class CycleExit(Event):
+        def wait(self, seconds):
+            waits.append(seconds)
+            if len(waits) == 1:
+                reader.fetch_all.assert_not_called()
+                assert context.published() == []
+                context.config().values['cluster-manager.metrics.cost.enabled'] = True
+            elif len(waits) == 2:
+                reader.fetch_all.assert_called_once()
+                assert context.published()
+                context.config().values['cluster-manager.metrics.cost.enabled'] = False
+                # A checkpoint must not hide a disabled-cycle collection attempt.
+                context.config().db.values.clear()
+            else:
+                reader.fetch_all.assert_called_once()
+                self.set()
+
+    service._exit = CycleExit()
+    service._loop()
+    assert len(waits) == 3
+    assert waits == [service.get_interval_seconds()] * 3
+    service.reader.assert_called_once()
+    assert not context.distributed_lock().held
+
+
+def test_disabled_run_once_does_not_lock_replay_or_query():
+    from unittest.mock import Mock
+
+    context = FakeContext(values(**{'cluster-manager.metrics.cost.enabled': False}))
+    context.distributed_lock().acquire = Mock()
+    service = CostMetricsService(context)
+    service.reader = Mock()
+    service.run_once()
+    context.distributed_lock().acquire.assert_not_called()
+    service.reader.assert_not_called()
+    assert context.published() == []

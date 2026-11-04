@@ -1,8 +1,8 @@
 # Backup IDEA environment
 
-New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
+The control plane runs only on ECS. Direct upgrades require 26.10.0 or newer on every deployed module. Use the 26.10.9 administrator to complete any older upgrade and ECS migration first. See the [recovery command](../../first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md#recovery-with-the-26109-administrator).
 
-By default, IDEA **automatically backup your EC2 scheduler, EFS filesystems, DynamoDB and Virtual Desktops every day and keep the backups for 7 days** using AWS Backup.
+By default, IDEA **automatically backs up tagged EFS filesystems, DynamoDB tables and virtual desktops every day and keeps the backups for 7 days** using AWS Backup.
 
 During the installation, IDEA creates a new [#backup-vault](backup-idea-environment.md#backup-vault "mention") and one [#backup-plan](backup-idea-environment.md#backup-plan "mention") per module
 

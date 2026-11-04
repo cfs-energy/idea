@@ -376,23 +376,21 @@ qmgr() {
 @pytest.mark.parametrize(
     'container,existing,expected',
     [
-        # a container bastion: no grant, and the host-era grant goes
+        # no bastion gets a grant, and the host-era grant goes
         (True, f'{STALE},root@admin.example', [f'set server managers -= {STALE}']),
         (True, 'root@admin.example', []),
         (True, '', []),
-        # a host bastion: its own grant stays or is made, others of the kind go
+        # a leftover host-era bastion name is pruned, never granted again
+        (False, STALE, [f'set server managers -= {STALE}']),
         (
             False,
-            STALE,
-            [
-                f'set server managers -= {STALE}',
-                f'set server managers += root@{HOST_BASTION}',
-            ],
+            f'root@{HOST_BASTION}',
+            [f'set server managers -= root@{HOST_BASTION}'],
         ),
-        (False, f'root@{HOST_BASTION}', []),
+        (False, '', []),
     ],
 )
-def test_managers_prune_host_era_grants_and_grant_only_a_host_bastion(
+def test_managers_prune_host_era_grants_and_grant_no_bastion(
     tmp_path, container, existing, expected
 ):
     calls, log = run_managers(tmp_path, container, existing)
@@ -595,3 +593,129 @@ flock() { return 0; }
     assert result.returncode == 1
     assert (pbs / 'server_logs/old.log').exists()
     assert not (pbs / 'sched_logs/old.log').exists()
+
+
+def run_log_events(tmp_path, current, fails=''):
+    source = ROLE.read_text()
+    block = source[
+        source.index("# PBS's default log_events") : source.index(
+            '# Reconcile image-owned hooks'
+        )
+    ]
+    calls = tmp_path / 'qmgr.log'
+    calls.write_text('')
+    harness = (
+        """set -Eeuo pipefail
+log() { :; }
+qmgr() {
+  printf '%s\\n' "$2" >> "$CALLS"
+  [[ "$2" != "$FAIL" ]] || return 1
+  if [[ "$2" == 'list server log_events' ]]; then
+    printf 'Server scheduler\\n'
+    [[ -z "$CURRENT" ]] || printf '    log_events = %s\\n' "$CURRENT"
+  fi
+}
+"""
+        + block.replace('/opt/pbs/bin/qmgr', 'qmgr')
+        + 'echo reached >> "$CALLS"\n'
+    )
+    result = subprocess.run(
+        ['bash', '-c', harness],
+        env={**os.environ, 'CALLS': str(calls), 'CURRENT': current, 'FAIL': fails},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return calls.read_text().splitlines()
+
+
+@pytest.mark.parametrize('current', ['511', ''])
+def test_the_default_log_events_drop_per_request_lines(tmp_path, current):
+    calls = run_log_events(tmp_path, current)
+    assert calls == [
+        'list server log_events',
+        'set server log_events = 255',
+        'reached',
+    ]
+
+
+@pytest.mark.parametrize('current', ['255', '2047'])
+def test_a_set_log_events_value_is_left_alone(tmp_path, current):
+    # 255 is the second start; anything else is an operator's choice
+    assert run_log_events(tmp_path, current) == ['list server log_events', 'reached']
+
+
+@pytest.mark.parametrize(
+    'fails', ['list server log_events', 'set server log_events = 255']
+)
+def test_a_failing_log_events_step_does_not_stop_the_start(tmp_path, fails):
+    assert run_log_events(tmp_path, '511', fails)[-1] == 'reached'
+
+
+def test_log_events_runs_on_every_start_after_the_server_answers():
+    source = ROLE.read_text()
+    start = source.index("# PBS's default log_events")
+    assert source.index('pbs server is answering') < start
+    # after the first-create block, not inside it, so an upgraded datastore gets it too
+    assert source.index('log "PBS server configured"\nfi\n') < start
+    assert start < source.index('log "starting pbs_sched"')
+
+
+def archive_with_a_stuck_file(tmp_path, name):
+    """an old file in sched_logs that cannot be removed, as a busy .nfs file cannot"""
+    import time
+
+    pbs = tmp_path / 'pbs'
+    held = pbs / 'sched_logs/held'
+    held.mkdir(parents=True)
+    stuck = held / name
+    stuck.write_text('held open')
+    os.utime(stuck, (time.time() - 12 * 86400,) * 2)
+    compute = tmp_path / 'apps/scheduler/compute_node/logs'
+    compute.mkdir(parents=True)
+    calls = tmp_path / 'aws.log'
+    # GNU find, as on the scheduler, exits non-zero when -delete fails; BSD find does
+    # not, so a reported failure is turned into that status here
+    harness = """aws() { printf '%s\\n' "$*" >> "$CALLS"; }
+flock() { return 0; }
+find() {
+  local errors status
+  errors=$(command find "$@" 2>&1 >/dev/null) && status=0 || status=$?
+  [[ -z "${errors}" ]] || { printf '%s\\n' "${errors}" >&2; return 1; }
+  return "${status}"
+}
+""" + SCRIPT.read_text()
+    held.chmod(0o555)
+    try:
+        result = subprocess.run(
+            ['bash', '-c', harness],
+            env={
+                **os.environ,
+                'PBS_HOME': str(pbs),
+                'IDEA_CLUSTER_HOME': str(tmp_path / 'apps'),
+                'IDEA_MODULE_ID': 'scheduler',
+                'IDEA_CLUSTER_S3_BUCKET': 'cluster-bucket',
+                'CALLS': str(calls),
+            },
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        held.chmod(0o755)
+    return result, stuck, calls.read_text() if calls.exists() else ''
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root removes from a read-only directory')
+def test_a_busy_nfs_file_does_not_stop_the_archive(tmp_path):
+    result, stuck, calls = archive_with_a_stuck_file(tmp_path, '.nfs0000000012345')
+    assert result.returncode == 0, result.stderr
+    assert stuck.exists()
+    assert 'compute_nodes/' in calls
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root removes from a read-only directory')
+def test_any_other_file_that_cannot_be_removed_still_fails_the_archive(tmp_path):
+    result, stuck, calls = archive_with_a_stuck_file(tmp_path, 'sched.log')
+    assert result.returncode != 0
+    assert 'sched.log' in result.stderr
+    assert stuck.exists()

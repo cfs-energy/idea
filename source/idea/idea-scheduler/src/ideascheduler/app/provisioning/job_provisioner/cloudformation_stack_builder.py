@@ -265,7 +265,7 @@ class CloudFormationStackBuilder:
             metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.get_job_group()}'
         else:
             bootstrap_package_suffix = f'{self.job.job_id}-{self.job.job_uid}'
-            metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}'
+            metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}-{self.job.job_uid}'
 
         # Configure CloudWatch logging and metrics for compute nodes
         cloudwatch_logs_enabled = self.context.config().get_bool(
@@ -281,7 +281,7 @@ class CloudFormationStackBuilder:
             if self.job.is_shared_capacity():
                 log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.get_job_group()}'
             else:
-                log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}'
+                log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}-{self.job.job_uid}'
 
             log_files = [
                 CloudWatchAgentLogFileOptions(

@@ -19,7 +19,7 @@ import {ColumnLayout, Container, Header, SpaceBetween, Table, Button, Box} from 
 import IdeaForm from "../../components/form";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
-import {KeyValue, KeyValueGroup} from "../../components/key-value";
+import {KeyValue} from "../../components/key-value";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import dot from "dot-object";
@@ -545,25 +545,6 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
             return !Utils.asBoolean(dot.pick('dcv_connection_gateway.certificate.provided', this.state.vdcSettings), false)
         }
 
-        const buildAutoScalingSettingContainer = (setting: any) => {
-            return (
-                <Container header={<Header variant={"h2"}>Autoscaling</Header>}>
-                    <ColumnLayout variant={"text-grid"} columns={2}>
-                        <KeyValue title="Min Instances" value={dot.pick('autoscaling.min_capacity', setting)}/>
-                        <KeyValue title="Max Instances" value={dot.pick('autoscaling.max_capacity', setting)}/>
-                        <KeyValue title="Scale-In Protection">
-                            <EnabledDisabledStatusIndicator enabled={Utils.asBoolean(dot.pick('autoscaling.new_instances_protected_from_scale_in', setting))}/>
-                        </KeyValue>
-                        <KeyValue title={"ARN"} value={dot.pick('asg_arn', setting)} clipboard={true} type={'ec2:asg-arn'}/>
-                    </ColumnLayout>
-                    <KeyValueGroup title={"Scaling Policy"}>
-                        <KeyValue title="CPU Target Utilization" value={dot.pick('autoscaling.cpu_utilization_scaling_policy.target_utilization_percent', setting)} suffix={"%"}/>
-                        <KeyValue title="Warmup time" value={dot.pick('autoscaling.cpu_utilization_scaling_policy.estimated_instance_warmup_minutes', setting)} suffix={"minutes"}/>
-                    </KeyValueGroup>
-                </Container>
-            )
-        }
-
         const sections: SettingsSection[] = [
             {
                 label: 'General',
@@ -644,45 +625,10 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 )
             },
             {
-                label: 'Controller',
-                id: 'controller',
-                content: (
-                    <SpaceBetween size={"m"}>
-                        <Container header={<Header variant={"h2"}>VDI Controller</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('controller.autoscaling.base_os', this.state.vdcSettings))}/>
-                                <KeyValue title="Instance Type" value={dot.pick('controller.autoscaling.instance_type', this.state.vdcSettings)}/>
-                                <KeyValue title="Volume" value={{
-                                    value: dot.pick('controller.autoscaling.volume_size', this.state.vdcSettings),
-                                    unit: 'GB'
-                                }} type={"memory"}/>
-                            </ColumnLayout>
-                        </Container>
-                        {
-                            buildAutoScalingSettingContainer(dot.pick('controller', this.state.vdcSettings))
-                        }
-                    </SpaceBetween>
-                )
-            },
-            {
                 label: 'Broker',
                 id: 'broker',
                 content: (
                     <SpaceBetween size={'m'}>
-                        <Container header={<Header variant={"h2"}>Amazon DCV Broker</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('dcv_broker.autoscaling.base_os', this.state.vdcSettings))}/>
-                                <KeyValue title="Instance Type" value={dot.pick('dcv_broker.autoscaling.instance_type', this.state.vdcSettings)}/>
-                                <KeyValue title="Volume" value={{
-                                    value: dot.pick('dcv_broker.autoscaling.volume_size', this.state.vdcSettings),
-                                    unit: 'GB'
-                                }} type={"memory"}/>
-
-                            </ColumnLayout>
-                        </Container>
-                        {
-                            buildAutoScalingSettingContainer(dot.pick('dcv_broker', this.state.vdcSettings))
-                        }
                         <Container header={<Header variant={"h2"}>Connection Details</Header>}>
                             <ColumnLayout variant={"text-grid"} columns={3}>
                                 <KeyValue title="Client Port" value={dot.pick('dcv_broker.client_communication_port', this.state.vdcSettings)}/>
@@ -701,19 +647,6 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 id: 'connection-gateway',
                 content: (
                     <SpaceBetween size={'m'}>
-                        <Container header={<Header variant={"h2"}>Amazon DCV Connection Gateway</Header>}>
-                            <ColumnLayout variant={"text-grid"} columns={3}>
-                                <KeyValue title="Base OS" value={Utils.getOsTitle(dot.pick('dcv_connection_gateway.autoscaling.base_os', this.state.vdcSettings))}/>
-                                <KeyValue title="Instance Type" value={dot.pick('dcv_connection_gateway.autoscaling.instance_type', this.state.vdcSettings)}/>
-                                <KeyValue title="Volume" value={{
-                                    value: dot.pick('dcv_connection_gateway.autoscaling.volume_size', this.state.vdcSettings),
-                                    unit: 'GB'
-                                }} type={"memory"}/>
-                            </ColumnLayout>
-                        </Container>
-                        {
-                            buildAutoScalingSettingContainer(dot.pick('dcv_connection_gateway', this.state.vdcSettings))
-                        }
                         <Container header={<Header variant={"h2"}>Certificate</Header>}>
                             <ColumnLayout variant={"text-grid"} columns={isGatewayCertificateSelfSigned() ? 3 : 2}>
                                 <KeyValue title="Type" value={isGatewayCertificateSelfSigned() ? 'Self-Signed' : 'Custom'}/>

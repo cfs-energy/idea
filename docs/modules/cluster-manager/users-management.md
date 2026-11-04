@@ -1,7 +1,5 @@
 # Users Management
 
-New clusters use the container control plane only. Move an existing host-based control plane with `upgrade-cluster --drain`; follow the [container upgrade guide](../../first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md).
-
 To manage IDEA users, navigate to "**Administration**" > "**People and access**" > "**Users**"
 
 <figure><img src="../../.gitbook/assets/mods_cm_users_portal.webp" alt=""><figcaption><p>Users portal</p></figcaption></figure>

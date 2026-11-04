@@ -158,7 +158,7 @@ export function validateGeneratedContainerState(
   modules: ModuleEntry[],
   settings: ReadonlyMap<string, unknown>,
 ): string[] {
-  const enabled = values["enable_ecs"];
+  const enabled = values["enable_ecs"] ?? true;
   if (enabled !== true) {
     return [
       typeof enabled === "boolean" || enabled === undefined || enabled === null
@@ -399,7 +399,7 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
   const synthReadsFile = join(root, "synth-reads.json");
   const values = loadValuesFile(options.valuesFile);
   const clusterName = typeof values.cluster_name === "string" ? values.cluster_name : "";
-  const accountId = typeof values.aws_account_id === "string" ? values.aws_account_id : "";
+  const accountId = values.aws_account_id == null ? "" : String(values.aws_account_id);
   const awsRegion = typeof values.aws_region === "string" ? values.aws_region : "";
   if (clusterName === "" || accountId === "" || awsRegion === "") {
     throw new Error("values file must provide cluster_name, aws_account_id, and aws_region");
@@ -407,7 +407,7 @@ export async function rehearseDayZero(options: RehearseOptions): Promise<DayZero
 
   const modules = generateConfig(options.valuesFile, configDir);
   const settings = initialSettings(convertConfigToKeyValuePairs(configDir));
-  const containerInstallRequested = values["enable_ecs"] === true;
+  const containerInstallRequested = (values["enable_ecs"] ?? true) === true;
   const generatedStateProblems = validateGeneratedContainerState(values, modules, settings);
   const origins: SettingOrigins = new Map([...settings.keys()].map((key) => [key, "values"]));
   const orderedModules = deploymentOrder(modules.map(toModuleInfo), modules.map((module) => module.id), false);

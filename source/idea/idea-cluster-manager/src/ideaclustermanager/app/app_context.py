@@ -40,6 +40,7 @@ class ClusterManagerAppContext(SocaContext):
 
         self.token_service: Optional[TokenService] = None
         self.personal_costs_store = None
+        self.terminal = None
         self.storage_metrics: Optional[StorageMetricsService] = None
         self.projects: Optional[ProjectsService] = None
         self.user_pool: Optional[CognitoUserPool] = None

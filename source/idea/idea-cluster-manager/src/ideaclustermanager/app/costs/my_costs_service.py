@@ -190,11 +190,14 @@ class MyCostsService:
 
     # ai
 
+    def _user_projects(self, username: str):
+        return self.context.projects.get_user_projects(
+            GetUserProjectsRequest(username=username)
+        ).projects
+
     def _ai(self, username: str, start_date: str, end_date: str) -> MyCostsAi:
         try:
-            projects = self.context.projects.get_user_projects(
-                GetUserProjectsRequest(username=username)
-            ).projects
+            projects = self._user_projects(username)
         except Exception as e:
             self.logger.warning(f'failed to list projects for {username}: {e}')
             return MyCostsAi(is_unavailable=True)
@@ -588,14 +591,7 @@ class MyCostsService:
             if all_users:
                 rows = self._scan_history(table)
             else:
-                rows = []
-                request = {'KeyConditionExpression': Key('owner').eq(username)}
-                while True:
-                    page = table.query(**request)
-                    rows.extend(Utils.get_value_as_list('Items', page, []))
-                    if not page.get('LastEvaluatedKey'):
-                        break
-                    request['ExclusiveStartKey'] = page['LastEvaluatedKey']
+                rows = self._history_rows(table, username)
         except Exception as e:
             # additive: a history read that fails leaves the live sessions intact
             self.logger.warning(f'failed to read desktop session history: {e}')
@@ -655,6 +651,17 @@ class MyCostsService:
                 }
             )
         return hits
+
+    @staticmethod
+    def _history_rows(table, username: str) -> List[Dict]:
+        rows: List[Dict] = []
+        request = {'KeyConditionExpression': Key('owner').eq(username)}
+        while True:
+            page = table.query(**request)
+            rows.extend(Utils.get_value_as_list('Items', page, []))
+            if not page.get('LastEvaluatedKey'):
+                return rows
+            request['ExclusiveStartKey'] = page['LastEvaluatedKey']
 
     @staticmethod
     def _scan_history(table) -> List[Dict]:

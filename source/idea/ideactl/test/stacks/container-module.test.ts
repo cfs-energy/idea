@@ -12,8 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 
-import { flattenConfigDir, generateConfigFromTemplates } from "../../src/config/generator.ts";
 import type { ModuleEntry } from "../../src/config/generator.ts";
+import { flattenConfigDir, generateConfigFromTemplates } from "../../src/config/generator.ts";
 import { loadValuesFile } from "../../src/config/values.ts";
 import { ideaVersion } from "../../src/version.ts";
 
@@ -66,22 +66,22 @@ describe("the container module in the generated configuration", () => {
     assert.notEqual(flat["ecs.image"], flat["ecs.datadog.image"]);
   });
 
-  it("leaves the reference null in a partition with no repository", () => {
+  it("uses the public release image on GovCloud without a repository override", () => {
     const flat = generate({ aws_partition: "aws-us-gov" }).flat;
     assert.equal(flat["ecs.image_repositories.aws-us-gov"], null);
-    assert.equal(flat["ecs.image"], null);
+    assert.equal(flat["ecs.image"], `${String(flat["ecs.image_repositories.aws"])}:${ideaVersion()}`);
   });
 
-  it("generates none of it when the values key is absent", () => {
+  it("defaults to ECS when the values key is absent", () => {
     const values = loadValuesFile(join(import.meta.dirname, "./ecs-values.yml"));
     delete values.enable_ecs;
     const dir = mkdtempSync(join(tmpdir(), "ideactl-generator-ecs-off-"));
     work.push(dir);
     const modules = generateConfigFromTemplates(values, dir);
     const flat = flattenConfigDir(dir);
-    assert.deepEqual(modules.filter((module) => module.id === "ecs"), []);
-    assert.equal(flat[MODULE_SET_KEY], undefined);
-    assert.deepEqual(Object.keys(flat).filter((key) => key.startsWith("ecs.")), []);
+    assert.equal(modules.filter((module) => module.id === "ecs").length, 1);
+    assert.equal(flat[MODULE_SET_KEY], "ecs");
+    assert.equal(flat["ecs.enabled"], true);
   });
 
   it("stops the run when the module the splice orders against is gone", () => {

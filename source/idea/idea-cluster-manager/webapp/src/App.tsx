@@ -33,6 +33,8 @@ import {Navigate} from "react-router-dom";
 import UpdateHpcApplication from "./pages/hpc/update-hpc-application";
 import SubmitJob from "./pages/hpc/submit-job";
 import AccountSettings from "./pages/account/account-settings";
+import {ShellDock, TerminalRedirect, terminalEnabled} from "./pages/home/terminal";
+import {shellStore} from "./pages/home/terminal/shell-store";
 import SSHAccess from "./pages/home/ssh-access";
 import MyCosts from "./pages/home/my-costs";
 import CustomDashboard from "./pages/home/custom-dashboard";
@@ -145,10 +147,14 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     componentDidMount() {
         AppContext.setOnRoute(this.onRoute)
         const context = AppContext.get()
-        this.unsubscribeReporting = context.auth().subscribeReporting(() => this.setState({
-            sideNavHeader: IdeaSideNavHeader(context),
-            sideNavItems: IdeaSideNavItems(context)
-        }))
+        this.unsubscribeReporting = context.auth().subscribeReporting(() => {
+            // Claims change on every refresh; a different user must not inherit open terminals.
+            shellStore.setOwner(context.auth().getUsername())
+            this.setState({
+                sideNavHeader: IdeaSideNavHeader(context),
+                sideNavItems: IdeaSideNavItems(context)
+            })
+        })
         context.auth().isLoggedIn().then(loginStatus => {
 
             const init = () => {
@@ -180,6 +186,9 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     onLogin = (): Promise<boolean> => {
         return new Promise((resolve, reject) => {
             const context = AppContext.get()
+            // A new sign-in never restores an earlier session's terminals.
+            shellStore.endSession()
+            shellStore.setOwner(context.auth().getUsername())
             context.getClusterSettingsService().initialize().then(_ => {
                 this.setState({
                     isLoggedIn: true,
@@ -196,6 +205,8 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     }
 
     onLogout = (): Promise<boolean> => {
+        // Every session end reaches this hook: sign-out, expiry, refresh failure and expired-token API responses.
+        shellStore.endSession()
         return new Promise((resolve, _) => {
             this.setState({
                 isLoggedIn: false
@@ -323,6 +334,14 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     }
 
     render() {
+        // The dock sits beside the routes so terminals stay open while navigating.
+        return <>
+            {this.renderPage()}
+            {this.state.isInitialized && this.state.isLoggedIn && terminalEnabled() && <ShellDock client={AppContext.get().client().terminal()}/>}
+        </>
+    }
+
+    renderPage() {
         const view = this.props.searchParams.get('view')
         const AdminJobs = view === 'nodes' ? HpcNodes : AdminActiveJobs
         const redirected = legacyRoute(this.props.location.pathname, this.props.location.search, AppContext.get());
@@ -519,6 +538,11 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                             onFlashbarChange={this.onFlashbarChange}
                             flashbarItems={this.state.flashbarItems}
                         />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="/home/terminal" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <TerminalRedirect client={AppContext.get().client().terminal()}/>
                     </IdeaAuthenticatedRoute>
                 }/>
                 <Route path="/home/ssh-access" element={

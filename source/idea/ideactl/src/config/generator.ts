@@ -107,14 +107,13 @@ export function generateConfigFromTemplates(
   const context = buildContext(values, options);
   const env = jinjaEnv(options.templatesDir ?? configTemplatesDir());
   const renderContext = { ...context, utils: { to_yaml: toYaml } };
-  const containers = context.enable_ecs === true;
 
   mkdirSync(configDir, { recursive: true });
 
   const ideaConfig = loadYaml(renderTemplate(env, 'idea.yml', renderContext)) as {
     modules: ModuleEntry[];
   };
-  if (containers) ideaConfig.modules = withContainerModule(ideaConfig.modules);
+  ideaConfig.modules = withContainerModule(ideaConfig.modules);
   const modules = ideaConfig.modules;
 
   for (const module of modules) {
@@ -125,7 +124,7 @@ export function generateConfigFromTemplates(
         module_name: module.name,
         supported_base_os: SUPPORTED_OS,
       });
-      if (containers && module.name === MODULE_NAME_GLOBAL_SETTINGS) {
+      if (module.name === MODULE_NAME_GLOBAL_SETTINGS) {
         settings = withContainerModuleSet(settings);
       }
       const settingsFile = join(configDir, module.id, file);

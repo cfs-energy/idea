@@ -1,0 +1,45 @@
+# Terminal certificates add an authentication method; existing sshd/PAM restrictions remain.
+if ! command -v tmux >/dev/null || ! command -v python3 >/dev/null; then
+  if command -v apt-get >/dev/null; then
+    apt_update || log_warning "Unable to refresh apt indexes for Terminal"
+    DEBIAN_FRONTEND=noninteractive package_transaction apt-get -o DPkg::Lock::Timeout=300 install -y tmux python3 || log_error "Terminal packages could not be installed"
+  else
+    package_transaction yum install -y tmux python3 || log_error "Terminal packages could not be installed"
+  fi
+fi
+ssh-keygen -A
+export IDEA_CLUSTER_NAME IDEA_MODULE_NAME AWS_REGION AWS_DEFAULT_REGION
+install -D -m 0755 "${SCRIPT_DIR}/../common/terminal_host.py" /usr/local/libexec/idea-terminal-host.py
+cat > /etc/systemd/system/idea-terminal-trust.service <<'UNIT'
+[Unit]
+Description=Refresh IDEA terminal certificate trust on every boot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# simple, not oneshot: boot targets (and Ubuntu's cloud-final) must not wait on retries.
+# Exit 78 is a site configuration the helper must not override; retrying cannot fix it.
+Type=simple
+EnvironmentFile=/etc/environment
+ExecStart=/bin/sh -c 'until /usr/bin/python3 /usr/local/libexec/idea-terminal-host.py; do [ $$? -ne 78 ] || exit 78; sleep 30; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+for service in sshd ssh; do
+  rm -f "/etc/systemd/system/${service}.service.d/idea-terminal-trust.conf"
+done
+mkdir -p /usr/lib/systemd/system-sleep
+cat > /usr/lib/systemd/system-sleep/idea-terminal-trust <<'SLEEP'
+#!/bin/sh
+case "$1" in
+  pre) rm -f /run/idea-terminal-trust-ready ;;
+  post) systemctl --no-block restart idea-terminal-trust.service ;;
+esac
+SLEEP
+chmod 0755 /usr/lib/systemd/system-sleep/idea-terminal-trust
+systemctl daemon-reload
+systemctl enable idea-terminal-trust.service
+# Trust installs in the background and retries; its journal records failures.
+systemctl --no-block restart idea-terminal-trust.service || log_warning "Could not queue terminal trust refresh"

@@ -2,6 +2,7 @@
  * Two values are regenerated on every synth: the `UpdateToken` that makes the
  * private-IP custom resource re-run, and the uuid tail of the dashboard target group name, which
  * replaces that target group on every deploy so the endpoints lambda is re-pointed at a fresh one.
+ * Both exist only when `analytics.opensearch.endpoints.external.enabled` publishes the route.
  *
  * `analytics.opensearch.use_existing`, the GovCloud Kinesis branches, and the service-linked-role
  * branch require their respective configuration conditions.
@@ -83,7 +84,7 @@ export class AnalyticsStack extends IdeaBaseStack {
 
     if (this.context.config.getBool('analytics.opensearch.use_existing', false)) {
       this.opensearch = lookupExistingOpensearch(this.context, this.stack);
-      this.buildDashboardEndpoints(existingDomainDataNodes);
+      if (this.dashboardsPublished()) this.buildDashboardEndpoints(existingDomainDataNodes);
       this.addNagSuppression(
         [
           {
@@ -95,7 +96,7 @@ export class AnalyticsStack extends IdeaBaseStack {
       );
     } else {
       this.buildOpenSearch(!serviceLinkedRoleExists);
-      this.buildDashboardEndpoints();
+      if (this.dashboardsPublished()) this.buildDashboardEndpoints();
       this.addNagSuppression(
         [
           {
@@ -129,6 +130,15 @@ export class AnalyticsStack extends IdeaBaseStack {
 
     this.buildAnalyticsInputStream();
     this.buildClusterSettings();
+  }
+
+  /**
+   * The external ALB is internet-facing and the dashboard route carries no authentication, so
+   * the route is opt-in. Turning it off on an existing cluster drops the custom resource, whose
+   * delete removes the listener rule (and is a no-op when the rule is already gone).
+   */
+  dashboardsPublished(): boolean {
+    return this.context.config.getBool('analytics.opensearch.endpoints.external.enabled', false);
   }
 
   dataNodes(): number {

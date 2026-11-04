@@ -1,7 +1,15 @@
 import hashlib
+import itertools
 import json
+import time
+import uuid
 
 from ideasdk.metrics.datadog_api import DatadogAPI
+
+# DatadogAPI.log posts 500 series a request, so a saved batch is one request
+BATCH_SIZE = 500
+BATCH_KEY = 'batch-'
+_sequence = itertools.count()
 
 
 class CollectorOutbox:
@@ -41,45 +49,73 @@ class CollectorOutbox:
                 entries, synchronous=True
             )
 
+    def identity(self, entry):
+        identity = [entry.get('Namespace'), entry['MetricName'], entry['Dimensions']]
+        if self.historical:
+            identity.append(entry['Timestamp'])
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
     def save(self):
+        """
+        the run's points, one object per batch of at most BATCH_SIZE. a point saved
+        again (a correction, or a gauge's newer value) supersedes the earlier one,
+        within the run here and across pending batches at replay.
+        """
         if self.db is None:
             self.deliver(self.entries)
             return
+        latest = {}
         for entry in self.entries:
-            identity = [
-                entry.get('Namespace'),
-                entry['MetricName'],
-                entry['Dimensions'],
-            ]
-            if self.historical:
-                identity.append(entry['Timestamp'])
-            digest = hashlib.sha256(
-                json.dumps(identity, sort_keys=True).encode()
-            ).hexdigest()
+            latest.pop(self.identity(entry), None)
+            latest[self.identity(entry)] = entry
+        entries = list(latest.values())
+        # keys sort in save order; the suffix keeps two replicas' keys apart
+        stamp = f'{time.time_ns():020d}-{next(_sequence):010d}-{uuid.uuid4().hex[:8]}'
+        for index, offset in enumerate(range(0, len(entries), BATCH_SIZE)):
             self.client.put_object(
                 Bucket=self.bucket,
-                Key=f'{self.object_prefix}{digest}.json',
-                Body=json.dumps(entry, sort_keys=True).encode(),
+                Key=f'{self.object_prefix}{BATCH_KEY}{stamp}-{index:05d}.json',
+                Body=json.dumps(
+                    entries[offset : offset + BATCH_SIZE], sort_keys=True
+                ).encode(),
                 ContentType='application/json',
             )
 
     def replay(self):
+        """
+        deliver the pending batches oldest first, one request each, and retire a
+        batch only once it was accepted; a failure keeps it and every later batch for
+        the next replay. a point that a later batch saved again is left to that batch.
+        objects written by earlier releases hold one point each and count as oldest.
+        """
         if self.db is None:
             return
         # Retaining delivered points replays historical spend on every collection.
         # HTTP acceptance is required before durable points can be retired.
+        keys = []
         request = {'Bucket': self.bucket, 'Prefix': self.object_prefix}
         while True:
             page = self.client.list_objects_v2(**request)
-            for row in page.get('Contents', []):
-                response = self.client.get_object(Bucket=self.bucket, Key=row['Key'])
-                body = response['Body']
-                try:
-                    self.deliver([json.loads(body.read())])
-                    self.client.delete_object(Bucket=self.bucket, Key=row['Key'])
-                finally:
-                    body.close()
+            keys.extend(row['Key'] for row in page.get('Contents', []))
             token = page.get('NextContinuationToken')
             if not token:
                 break
             request['ContinuationToken'] = token
+        keys.sort(key=lambda key: (BATCH_KEY in key[len(self.object_prefix) :], key))
+        batches = []
+        for key in keys:
+            body = self.client.get_object(Bucket=self.bucket, Key=key)['Body']
+            try:
+                value = json.loads(body.read())
+            finally:
+                body.close()
+            batches.append((key, value if isinstance(value, list) else [value]))
+        last = {}
+        for position, (_, entries) in enumerate(batches):
+            for entry in entries:
+                last[self.identity(entry)] = position
+        for position, (key, entries) in enumerate(batches):
+            entries = [e for e in entries if last[self.identity(e)] == position]
+            if entries:
+                self.deliver(entries)
+            self.client.delete_object(Bucket=self.bucket, Key=key)

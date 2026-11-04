@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from ideadatamodel import SocaJob
+from ideadatamodel import SocaJob, exceptions
 from ideasdk.context import SocaContext, SocaContextOptions
 from ideasdk.auth import TokenService
 from ideasdk.client import AccountsClient, ProjectsClient, NotificationsAsyncClient
@@ -87,9 +87,13 @@ class SchedulerAppContext(SocaContext):
         return os.path.join(cluster_home_dir, self.module_id())
 
     def get_job_dir(self, job: SocaJob):
-        # this will be /apps/<cluster-name>/<module-id>/jobs/<job_id_or_job_group>
+        # Existing nodes retain the absolute path embedded in their bootstrap package.
         if job.is_ephemeral_capacity():
-            job_id_or_job_group = job.job_id
+            if not job.job_uid:
+                raise exceptions.invalid_job(
+                    'job_uid is required for ephemeral job resources'
+                )
+            job_id_or_job_group = f'{job.job_id}-{job.job_uid}'
         else:
             job_id_or_job_group = job.get_job_group()
         return os.path.join(self.get_scheduler_dir(), 'jobs', job_id_or_job_group)

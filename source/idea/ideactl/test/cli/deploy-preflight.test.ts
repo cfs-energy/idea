@@ -26,13 +26,13 @@ function deps(errors: string[]): Deps {
       async describeChangeSet() {
         return {};
       },
-      async executeChangeSet() {},
+      async executeChangeSet() { },
       async describeStack() {
         return {};
       },
     },
     s3: {
-      async putObject() {},
+      async putObject() { },
       async getObject() {
         return "";
       },
@@ -57,10 +57,10 @@ function deps(errors: string[]): Deps {
     async httpStatus() {
       return 200;
     },
-    async sleep() {},
+    async sleep() { },
     now: () => 0,
     uuid: () => "id",
-    out() {},
+    out() { },
     err(line: string) {
       errors.push(line);
     },
@@ -95,46 +95,36 @@ for (const enabled of [undefined, false]) {
   test(`new host deployment refuses before mutation with container setting=${enabled}`, async () => {
     const errors: string[] = [];
     const effects = deps(errors);
-    effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith(".modules")
-      ? [{ module_id: "scheduler", name: "scheduler", type: "app", status: "deployed" }]
-      : enabled === undefined ? [] : [{ key: "ecs.enabled", value: enabled }] });
+    effects.scan = async ({ TableName }) => ({
+      Items: TableName.endsWith(".modules")
+        ? [{ module_id: "scheduler", name: "scheduler", type: "app", status: "deployed" }]
+        : enabled === undefined ? [] : [{ key: "ecs.enabled", value: enabled }]
+    });
     effects.cfn.describeStack = async () => {
       throw Object.assign(new Error("Stack does not exist"), { name: "ValidationError" });
     };
     await assert.rejects(runDeploy(effects, ["all"], {
       clusterName: CLUSTER, awsRegion: REGION, moduleSet: "default", upgrade: true,
     }), { name: "ExitWithCode" });
-    assert.deepEqual(errors, ["New host-shaped deployments are no longer supported. An existing host cluster upgrades with upgrade-cluster."]);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /Complete the ECS migration with the 26.10.9 administrator/);
+    assert.match(errors[0], /IDEA_REVISION=v26\.10\.9/);
   });
 }
 
-test("an existing host stack passes the new deployment guard", async () => {
-  const errors: string[] = [];
-  const effects = deps(errors);
-  effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith(".modules")
-    ? [{ module_id: "scheduler", name: "scheduler", type: "app", status: "deployed" }]
-    : [] });
-  let reads = 0;
-  effects.cfn.describeStack = async () => { reads += 1; return { StackStatus: "CREATE_COMPLETE" }; };
-  await assert.rejects(runDeploy(effects, ["all"], {
-    clusterName: CLUSTER, awsRegion: REGION, moduleSet: "default",
-  }), { name: "ExitWithCode" });
-  assert.equal(reads, 1);
-  assert.deepEqual(errors, []);
-});
-
-test("a stack lookup failure is not treated as a missing host cluster", async () => {
-  const errors: string[] = [];
-  const effects = deps(errors);
-  effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith(".modules")
-    ? [{ module_id: "scheduler", name: "scheduler", type: "app" }] : [] });
-  const failure = new Error("Access denied");
-  effects.cfn.describeStack = async () => { throw failure; };
-  await assert.rejects(runDeploy(effects, ["all"], {
-    clusterName: CLUSTER, awsRegion: REGION, moduleSet: "default",
-  }), (error) => error === failure);
-  assert.deepEqual(errors, []);
-});
-
 import { hostPoolDeploymentTests } from "../support/host-pool-harness.ts";
 hostPoolDeploymentTests("deploy");
+
+test('A-2: direct module upgrade refuses retained rollback hosts before opening the helper', async () => {
+  const errors: string[] = [];
+  const effects = deps(errors);
+  effects.scan = async ({ TableName }) => ({ Items: TableName.endsWith('.modules')
+    ? [{ module_id: 'cluster-manager', name: 'cluster-manager', type: 'app', status: 'deployed', version: '26.10.9' }]
+    : [{ key: 'ecs.enabled', value: true }, { key: 'ecs.retain_existing_hosts', value: true }]
+  });
+  effects.accountId = async () => { throw new Error('deployment helper must not open'); };
+  await assert.rejects(runDeploy(effects, ['cluster-manager'], {
+    clusterName: CLUSTER, awsRegion: REGION, moduleSet: 'default', upgrade: true,
+  }), { name: 'ExitWithCode' });
+  assert.match(errors[0] ?? '', /26\.10\.9 administrator/);
+});

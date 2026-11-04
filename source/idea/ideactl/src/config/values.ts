@@ -8,17 +8,19 @@
  * that order decides which validation error an operator sees first.
  */
 
+import { HOST_CONTROL_PLANE_REFUSAL } from "../cli/upgrade-floor.ts";
+import * as yaml from 'js-yaml';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import * as yaml from 'js-yaml';
+import { isIPv4 } from 'node:net';
 
+import { ideaVersion } from '../version.ts';
 import { ClusterConfigError, GeneralException, isEmpty } from './cluster-config.ts';
 import { DATADOG_AGENT_IMAGE, isDigestPinnedImage } from './datadog-agent.ts';
 import { loadRegionAmiConfig, regionAmiConfigPath, resolveRegionAmi } from './region-ami.ts';
-import { ideaVersion } from '../version.ts';
 
 /** `exceptions.invalid_params` */
-export class InvalidParams extends Error {}
+export class InvalidParams extends Error { }
 
 export type UserValues = Record<string, unknown>;
 
@@ -264,6 +266,26 @@ function getList(key: string, obj: UserValues, def: unknown[] | null = null): un
   return value.length === 0 ? def : (unwrapPyFloat(value) as unknown[]);
 }
 
+/** Network allowlists must fail before a values-owned update can clear a stored restriction. */
+function getIpv4List(key: string, values: UserValues): string[] {
+  if (!(key in values)) return [];
+  const entries = values[key];
+  if (!Array.isArray(entries)) throw new InvalidParams(`${key} must be a list of IPv4 addresses or CIDRs`);
+  return [...new Set(entries.map((entry: unknown) => {
+    const invalid = () => new InvalidParams(`${key}: ${JSON.stringify(entry)} must be an IPv4 address or network CIDR without host bits`);
+    if (typeof entry !== 'string') throw invalid();
+    const parts = entry.split('/');
+    const address = parts[0] ?? '';
+    if (parts.length > 2 || !isIPv4(address) || (parts[1] !== undefined && !/^(0|[1-9][0-9]?)$/.test(parts[1]))) throw invalid();
+    const prefix = parts[1] === undefined ? 32 : Number(parts[1]);
+    if (prefix > 32) throw invalid();
+    const number = address.split('.').reduce((value, octet) => value * 256 + Number(octet), 0);
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    if (((number & mask) >>> 0) !== number) throw invalid();
+    return `${address}/${prefix}`;
+  }))];
+}
+
 // ---------------------------------------------------------------------------------------------
 // resource files
 // ---------------------------------------------------------------------------------------------
@@ -371,8 +393,8 @@ function getters(values: UserValues, options: BuildContextOptions) {
     storageDataProvider: () => getString('storage_data_provider', values, 'efs') as string,
     dataMountDir: () => getString('data_mount_dir', values, '/data') as string,
     prefixListIds: () => getList('prefix_list_ids', values, []) as unknown[],
-    clientIp: () => getList('client_ip', values, []) as unknown[],
-    sshClientIp: () => getList('ssh_client_ip', values, []) as unknown[],
+    clientIp: () => getIpv4List('client_ip', values),
+    sshClientIp: () => getIpv4List('ssh_client_ip', values),
 
     sshKeyPairName(): string {
       const value = getString('ssh_key_pair_name', values);
@@ -435,9 +457,12 @@ function getters(values: UserValues, options: BuildContextOptions) {
 
     identityProvider: () => getString('identity_provider', values, 'cognito-idp') as string,
     enableAwsBackup: () => getBool('enable_aws_backup', values, true),
-    // The ecs settings template writes `ecs.enabled` from this. The migration stages it false and
-    // flips it at its activation boundary, so regenerating values must not turn it on by itself.
-    enableEcs: () => getBool('enable_ecs', values, false),
+    enableEcs: () => {
+      if (!getBool('enable_ecs', values, true)) {
+        throw new ClusterConfigError(HOST_CONTROL_PLANE_REFUSAL);
+      }
+      return true;
+    },
     kmsKeyType: () => getString('kms_key_type', values, null),
     kmsKeyId: () => getString('kms_key_id', values, null),
     instanceType: () => getString('instance_type', values, 'm7i.large') as string,
@@ -448,14 +473,11 @@ function getters(values: UserValues, options: BuildContextOptions) {
       if (Object.hasOwn(EOL_BASEOS, baseOs)) {
         throw new ClusterConfigError(
           `base_os: ${baseOs} has reached end-of-life and is no longer supported by IDEA. ` +
-            `Update base_os to ${EOL_BASEOS[baseOs]} in values.yml and re-run.`,
+          `Update base_os to ${EOL_BASEOS[baseOs]} in values.yml and re-run.`,
         );
       }
       return baseOs;
     },
-
-    dcvConnectionGatewayVolumeSize: () =>
-      getInt('dcv_connection_gateway_volume_size', values, 200),
 
     instanceArchitecture: () =>
       getString('instance_architecture', values, ARCHITECTURE_X86_64) as string,
@@ -468,18 +490,6 @@ function getters(values: UserValues, options: BuildContextOptions) {
         g.baseOs(),
         g.instanceArchitecture(),
       );
-    },
-
-    dcvConnectionGatewayInstanceAmi(): string {
-      const value = getString('dcv_connection_gateway_instance_ami', values);
-      return isEmpty(value) ? g.regionAmi() : (value as string);
-    },
-
-    dcvBrokerVolumeSize: () => getInt('dcv_broker_volume_size', values, 200),
-
-    dcvBrokerInstanceAmi(): string {
-      const value = getString('dcv_broker_instance_ami', values);
-      return isEmpty(value) ? g.regionAmi() : (value as string);
     },
 
     instanceAmi(): string {
@@ -509,13 +519,13 @@ function getters(values: UserValues, options: BuildContextOptions) {
     },
 
     /** The container host pool runs the Datadog agent when the modules send to it. */
-    datadogAgent: () => g.enableEcs() && g.metricsProvider() === 'dogstatsd',
+    datadogAgent: () => g.metricsProvider() === 'dogstatsd',
 
     datadogApiKeySecretArn(): string | null {
       const value = getString('datadog_api_key_secret_arn', values);
       if (isEmpty(value) && g.datadogAgent()) {
         throw new GeneralException(
-          'datadog_api_key_secret_arn is required when metrics_provider = dogstatsd and enable_ecs = true',
+          'datadog_api_key_secret_arn is required when metrics_provider = dogstatsd',
         );
       }
       return value;
@@ -772,9 +782,5 @@ export function buildContext(
       g.dcvConnectionGatewayCustomCertificateCertificateSecretArn(),
     dcv_connection_gateway_custom_certificate_private_key_secret_arn:
       g.dcvConnectionGatewayCustomCertificatePrivateKeySecretArn(),
-    dcv_connection_gateway_instance_ami: g.dcvConnectionGatewayInstanceAmi(),
-    dcv_connection_gateway_volume_size: g.dcvConnectionGatewayVolumeSize(),
-    dcv_broker_instance_ami: g.dcvBrokerInstanceAmi(),
-    dcv_broker_volume_size: g.dcvBrokerVolumeSize(),
   };
 }

@@ -54,7 +54,9 @@ archive_logs() {
   if [[ "${name}" == compute_nodes ]]; then
     find "${directory}" -mindepth 1 -maxdepth 1 -type d -mtime +"${age}" -exec rm -rf {} +
   else
-    find "${directory}" -type f -mtime +"${age}" -delete
+    # .nfs* is NFS's stand-in for a deleted file something still holds open (the log
+    # tail sidecar); removing it fails as busy, and the client removes it on close
+    find "${directory}" -type f ! -name '.nfs*' -mtime +"${age}" -delete
   fi
 }
 archive_logs "${SCHEDULER_ACCOUNTING}" accounting

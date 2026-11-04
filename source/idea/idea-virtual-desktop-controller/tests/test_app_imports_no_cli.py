@@ -45,15 +45,10 @@ def test_admin_api_and_image_services_import_without_prettytable():
 
 def test_cli_main_imports_with_controller_dependencies():
     requirements = pathlib.Path(__file__).resolve().parents[4] / 'requirements'
-    assert (
-        'prettytable'
-        in (requirements / 'idea-virtual-desktop-controller.in')
-        .read_text()
-        .splitlines()
-    )
+    assert 'prettytable' in (requirements / 'runtime.in').read_text().splitlines()
     assert re.search(
         r'^prettytable==\d+\.\d+\.\d+$',
-        (requirements / 'idea-virtual-desktop-controller.txt').read_text(),
+        (requirements / 'runtime.txt').read_text(),
         re.M,
     )
     script = 'import ideavirtualdesktopcontroller.cli.cli_main\nprint("ok")\n'

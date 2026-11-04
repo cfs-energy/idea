@@ -27,11 +27,19 @@ from ideascheduler.app.api.scheduler_api import SchedulerAPI
 from test_compute_image_pipeline import service, row
 
 
+@pytest.mark.parametrize('maintenance', [False, True])
 @pytest.mark.parametrize(
     'failure',
     [None, 'ami', 'mount', 'output', 'exit', 'timeout', 'pbs', 'identity', 'cleanup'],
 )
-def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, failure):
+def test_canary_uses_validation_identity_and_requires_every_check(
+    context, monkeypatch, failure, maintenance
+):
+    from test_queuejob_maintenance import admission, enabled, ReachedValidation
+
+    api, hook, config = admission(context, monkeypatch, requestor='image-test')
+    config.put(module.PIPELINE_SETTINGS, {'validation_user': 'image-test'})
+    enabled(config, maintenance)
     svc = service()
     context = svc.context
     context.config().values.update(
@@ -96,6 +104,10 @@ def test_canary_uses_validation_identity_and_requires_every_check(monkeypatch, f
     finished = []
 
     def submit(self, request, job_owner, dry_run):
+        assert hook.event.requestor == job_owner
+        # Exercise the real queuejob maintenance gate at the qsub boundary.
+        with pytest.raises(ReachedValidation):
+            api.hook_validate_job(hook)
         script = base64.b64decode(request.job_script).decode()
         submission.append((script, request.project, job_owner))
         job = SocaJob(

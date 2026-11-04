@@ -3,8 +3,8 @@
  * loss classes the production table happens not to carry today.
  */
 
-import type { ConfigEntry } from "../../src/config/generator.ts";
 import type { ModuleInfo } from "../../src/config/cluster-config.ts";
+import type { ConfigEntry } from "../../src/config/generator.ts";
 import type { StackSettingsPlan } from "../../src/config/upgrade-drift.ts";
 
 export const CLUSTER = "idea-drift";
@@ -34,6 +34,7 @@ export interface OperatorEdit {
 
 /** Regenerated configuration the upgrade would sync after Phase 1. */
 export const GENERATED: ConfigEntry[] = [
+  { key: "cluster.network.ssh_client_ip", value: [] },
   { key: "global-settings.package_config.dcv.version", value: "2025.0" },
   { key: "global-settings.custom_tags", value: [] },
   { key: "global-settings.type_value", value: 1 },
@@ -47,29 +48,18 @@ export const GENERATED: ConfigEntry[] = [
   { key: "cluster-manager.logging.profile", value: "production" },
   { key: "cluster-manager.bedrock.enabled", value: false },
   { key: "cluster-manager.bedrock.model_ids", value: [] },
-  { key: "cluster-manager.ec2.autoscaling.instance_type", value: "m6i.large" },
-  { key: "cluster-manager.ec2.autoscaling.base_os", value: BASE_OS },
-  { key: "cluster-manager.ec2.autoscaling.instance_ami", value: RELEASE_AMI },
   { key: "directoryservice.ldap_base", value: "dc=idea,dc=local" },
   { key: "directoryservice.name", value: "idea.local" },
   { key: "directoryservice.instance_type", value: "m6i.large" },
-  { key: "scheduler.instance_type", value: "m6i.large" },
-  { key: "scheduler.instance_ami", value: RELEASE_AMI },
-  { key: "scheduler.base_os", value: BASE_OS },
   { key: "scheduler.compute_node_ami", value: RELEASE_AMI },
   { key: "scheduler.compute_node_os", value: BASE_OS },
   { key: "analytics.opensearch.data_node_instance_type", value: "m5.large.search" },
   { key: "analytics.opensearch.domain_name", value: "sample-domain" },
   { key: "vdc.server.usb_remotization", value: [] },
-  { key: "vdc.controller.autoscaling.instance_type", value: "m6i.large" },
-  { key: "vdc.dcv_broker.autoscaling.instance_type", value: "m6i.large" },
-  { key: "vdc.dcv_connection_gateway.autoscaling.instance_type", value: "m6i.large" },
-  { key: "bastion-host.instance_type", value: "m6i.large" },
   { key: "cluster.iam.ec2_managed_policy_arns", value: [] },
   { key: "ecs.datadog.enabled", value: true },
   { key: "metrics.provider", value: "dogstatsd" },
-  { key: "metrics.dogstatsd.url", value: "unix:///var/run/datadog/dsd.socket" },
-];
+  { key: "metrics.dogstatsd.url", value: "unix:///var/run/datadog/dsd.socket" }];
 
 /**
  * Every operator edit class the demonstration seeds.
@@ -78,6 +68,14 @@ export const GENERATED: ConfigEntry[] = [
  * Phases 2, 2b, 3, and a selected cluster-manager stack Update.
  */
 export const EDITS: OperatorEdit[] = [
+  {
+    id: "ssh-sources",
+    editClass: "VALUES_UPDATE",
+    key: "cluster.network.ssh_client_ip",
+    operatorValue: ["192.0.2.0/24"],
+    predictedSurvive: false,
+    note: "The values.yml list replaces a CLI override, including clearing the list.",
+  },
   {
     id: "global-custom-tags",
     editClass: "PRESERVE_DRIFT",
@@ -203,38 +201,6 @@ export const EDITS: OperatorEdit[] = [
     note: "Directory short name. Add-only keeps it.",
   },
   {
-    id: "instance-scheduler",
-    editClass: "PRESERVE_DRIFT",
-    key: "scheduler.instance_type",
-    operatorValue: "m5.2xlarge",
-    predictedSurvive: true,
-    note: "Larger than default. Phase 3 only rewrites the exact value m6i.large.",
-  },
-  {
-    id: "instance-vdc-controller",
-    editClass: "PRESERVE_DRIFT",
-    key: "vdc.controller.autoscaling.instance_type",
-    operatorValue: "m5.4xlarge",
-    predictedSurvive: true,
-    note: "Larger than default. Not the Phase 3 trigger value.",
-  },
-  {
-    id: "instance-vdc-broker",
-    editClass: "PRESERVE_DRIFT",
-    key: "vdc.dcv_broker.autoscaling.instance_type",
-    operatorValue: "r5.xlarge",
-    predictedSurvive: true,
-    note: "Larger than default. Not the Phase 3 trigger value.",
-  },
-  {
-    id: "instance-vdc-gateway",
-    editClass: "PRESERVE_DRIFT",
-    key: "vdc.dcv_connection_gateway.autoscaling.instance_type",
-    operatorValue: "c5.2xlarge",
-    predictedSurvive: true,
-    note: "Larger than default. Not the Phase 3 trigger value.",
-  },
-  {
     id: "instance-directory",
     editClass: "PRESERVE_DRIFT",
     key: "directoryservice.instance_type",
@@ -243,36 +209,12 @@ export const EDITS: OperatorEdit[] = [
     note: "Larger than default. Not the Phase 3 trigger value.",
   },
   {
-    id: "instance-bastion",
-    editClass: "PRESERVE_DRIFT",
-    key: "bastion-host.instance_type",
-    operatorValue: "r5.2xlarge",
-    predictedSurvive: true,
-    note: "Larger than default. Not the Phase 3 trigger value.",
-  },
-  {
-    id: "retained-m6i-default",
-    editClass: "PHASE3_OVERWRITE",
-    key: "cluster-manager.ec2.autoscaling.instance_type",
-    operatorValue: "m6i.large",
-    predictedSurvive: false,
-    note: "Retained old default. Phase 3 writes m7i.large when the region offers it.",
-  },
-  {
     id: "opensearch-old-default",
     editClass: "PHASE3_OVERWRITE",
     key: "analytics.opensearch.data_node_instance_type",
     operatorValue: "m5.large.search",
     predictedSurvive: false,
     note: "Retained old OpenSearch default. Phase 3 writes m7g.large.search when offered.",
-  },
-  {
-    id: "machine-image",
-    editClass: "PHASE3_OVERWRITE",
-    key: "scheduler.instance_ami",
-    operatorValue: OPERATOR_AMI,
-    predictedSurvive: false,
-    note: "Unrecognised custom image. Phase 3 writes the release AMI.",
   },
   {
     id: "metrics-provider-cutover",
@@ -345,8 +287,7 @@ export const EDITS: OperatorEdit[] = [
     operatorValue: "metrics-operator.example.invalid",
     predictedSurvive: true,
     note: "Unselected stack. Phase 4 does not run its custom resource. The preview is silent because it is owned but not selected.",
-  },
-];
+  }];
 
 export const MODULES: ModuleInfo[] = [
   { module_id: "cluster-manager", name: "cluster-manager", type: "app", status: "deployed" },

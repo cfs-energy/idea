@@ -569,12 +569,13 @@ def test_ubuntu2604_keeps_gi_and_system_python_for_migration(tmp_path):
 DCV_TARBALL = {
     'rhel10': 'nice-dcv-el10',
     'rocky10': 'nice-dcv-el10',
-    'ubuntu2604': 'nice-dcv-ubuntu2604',
+    # unsigned .debs: a versioned archive whose SHA-256 is pinned in settings
+    'ubuntu2604': '2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2604',
 }
 AGENT = {
     'rhel10': 'nice-dcv-session-manager-agent-el10',
     'rocky10': 'nice-dcv-session-manager-agent-el10',
-    'ubuntu2604': 'nice-dcv-session-manager-agent_amd64.ubuntu2604',
+    'ubuntu2604': 'nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2604',
 }
 
 
@@ -587,7 +588,8 @@ def test_dcv_server_installs_the_wayland_packages(base_os):
             f'https://d1uj6qtbmh3dt5.cloudfront.net/{DCV_TARBALL[base_os]}-{arch}.tgz"'
             in text
         )
-        assert f'{DCV_TARBALL[base_os]}-{arch}.tgz.sha256sum"' in text
+        if base_os != 'ubuntu2604':
+            assert f'{DCV_TARBALL[base_os]}-{arch}.tgz.sha256sum"' in text
     assert 'WaylandEnable=false' not in text
     assert '"nice-xdcv-*' not in text and 'nice-xdcv_*' not in text
     assert 'install_x_dummy_driver' not in text

@@ -5,6 +5,7 @@ trap 'rm -rf "$SMOKE_ROOT"' EXIT
 mkdir -p "$SMOKE_ROOT/config"
 cp source/idea/ideactl/test/cli/shell-path-values.yml "$SMOKE_ROOT/values.yml"
 # The pbs_server wrapper needs the /etc/pbs.conf the scheduler role writes at start; the binary answers alone.
+docker run --rm --network none --env IDEA_CLUSTER_NAME=smoke --env AWS_DEFAULT_REGION=us-east-1 --env AWS_EC2_METADATA_DISABLED=true --entrypoint python3.13 idea-control-plane-ci:latest -c 'import asyncssh, ideaclustermanager.app.cluster_manager_app, ideascheduler.app.scheduler_app, ideascheduler.app.sync_users, ideavirtualdesktopcontroller.app.virtual_desktop_controller_app'
 docker run --rm --entrypoint /bin/bash idea-control-plane-ci:latest -c '/opt/pbs/sbin/pbs_server.bin --version'
 docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work idea-control-plane-ci:latest ideactl about
 docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work \

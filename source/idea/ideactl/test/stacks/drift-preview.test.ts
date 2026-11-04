@@ -34,6 +34,7 @@ const REGION = "us-east-2";
 function completeInput(): UpgradeDriftInput {
   return {
     current: [
+      { key: "cluster.network.ssh_client_ip", value: ["192.0.2.0/24"], source: "cli" },
       { key: "global-settings.portal_text", value: "incident text", version: 4 },
       { key: "global-settings.type_value", value: "1", version: 2 },
       { key: "global-settings.removed", value: true, version: 3 },
@@ -47,6 +48,7 @@ function completeInput(): UpgradeDriftInput {
       { key: "metrics.provider", value: "cloudwatch", version: 1 },
     ],
     generated: [
+      { key: "cluster.network.ssh_client_ip", value: [] },
       { key: "global-settings.portal_text", value: "generated text" },
       { key: "global-settings.type_value", value: 1 },
       { key: "global-settings.same", value: [] },
@@ -124,7 +126,7 @@ function baseDeps(output: string[]): Deps {
     async httpStatus() {
       return 200;
     },
-    async sleep() {},
+    async sleep() { },
     now() {
       return 0;
     },
@@ -160,7 +162,7 @@ test("classifies every upgrade action and marks changed generator drift", (conte
 
   const rendered = renderUpgradeDrift(report);
   for (const action of UPGRADE_DRIFT_ACTIONS) assert.match(rendered, new RegExp(action));
-  assert.match(rendered, /Rows: 1 added, 6 changed, 2 deleted, 3 preserved/);
+  assert.match(rendered, /Rows: 1 added, 7 changed, 2 deleted, 3 preserved/);
   assert.doesNotMatch(rendered, /incident text|operator value|ami-manual|stack target/);
   context.diagnostic(rendered);
 });
@@ -177,7 +179,7 @@ test("registers and runs the standalone preview from injected reads", async () =
     clusterName: CLUSTER,
     awsRegion: REGION,
   });
-  assert.equal(report.findings.length, 12);
+  assert.equal(report.findings.length, 13);
   assert.equal(output.length, 1);
   assert.match(output[0] ?? "", /^Configuration preview/);
 
@@ -215,12 +217,13 @@ function upgradeHarness(answer: boolean): UpgradeHarness {
   const events: string[] = [];
   const tables: Record<string, Array<Record<string, unknown>>> = {
     [`${CLUSTER}.cluster-settings`]: [
+      { key: "ecs.enabled", value: true },
       // Maintenance recovery resolves its owner before the preview can complete.
       // Keep that required mapping even when no stack is selected in this fixture.
       { key: "global-settings.module_sets.default.cluster-manager.module_id", value: "cluster-manager" },
       { key: "cluster.base_os", value: "amazonlinux2023" },
     ],
-    [`${CLUSTER}.modules`]: [{ module_id: "cluster", name: "cluster", type: "stack", status: "deployed", version: "26.09.0" }],
+    [`${CLUSTER}.modules`]: [{ module_id: "cluster", name: "cluster", type: "stack", status: "deployed", version: "26.10.0" }],
   };
   const base = baseDeps(events);
   const deps: UpgradeDeps = {
@@ -316,7 +319,7 @@ test("--force with --accept-config-drift bypasses the preview confirmation", asy
     name: "virtual-desktop-controller",
     type: "stack",
     status: "deployed",
-    version: "26.09.0",
+    version: "26.10.0",
   });
   tables[`${CLUSTER}.vdc.controller.software-stacks`] = [{
     stack_id: "stack-old",
@@ -363,7 +366,7 @@ test("--force alone refuses the rows at risk and names the flag that accepts the
   const refuse = events.find((event) => event.includes("hold a value this upgrade overwrites"));
   assert.equal(
     refuse,
-    "4 configuration row(s) hold a value this upgrade overwrites, and the value differs from generated configuration: global-settings.portal_text, global-settings.type_value, scheduler.instance_ami, cluster-manager.endpoint",
+    "5 configuration row(s) hold a value this upgrade overwrites, and the value differs from generated configuration: global-settings.portal_text, global-settings.type_value, cluster.network.ssh_client_ip, scheduler.instance_ami, cluster-manager.endpoint",
   );
   assert.ok(events.some((event) => event.includes("--accept-config-drift")), "names the flag");
   assert.ok(!events.some((event) => event.endsWith("-write") || event === "deploy"), "no mutation");

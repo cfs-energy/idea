@@ -1,9 +1,0 @@
-name: 'Ruff'
-description: 'Runs Ruff Check and Ruff Format on the codebase'
-runs:
-  using: 'composite'
-  steps:
-    - uses: astral-sh/ruff-action@v4
-      with:
-        args: "format --check --diff"
-    - uses: astral-sh/ruff-action@v4

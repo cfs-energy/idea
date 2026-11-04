@@ -18,6 +18,7 @@ from ideadatamodel import (
     CustomFileLoggerParams,
     SocaJobState,
 )
+from ideadatamodel.reporting.efficiency import latest_run_id
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 from ideasdk.utils import Utils
 
@@ -48,8 +49,10 @@ class ProcessFinishedJob:
         job: SocaJob,
         job_export_logger: logging.Logger,
         metrics_context=None,
+        cached_fallback: bool = False,
     ):
         self._context = context
+        self._cached_fallback = cached_fallback
         self._metrics_context = metrics_context or context
         self._logger = logger
         self.job = job
@@ -62,48 +65,72 @@ class ProcessFinishedJob:
         """
         1. copies the execution data collected for the job from job execution event updates
         2. applies the execution data to the finished job
-        3. clears the execution data from JobCache
+        Execution data is cleared only after the finished record is persisted.
         """
-        # duration depends only on the job's own timestamps; a job-cache error below must
-        # never leave total_time_secs unset, or the walltime fallback will over-bill it.
         try:
-            if self.job.start_time is None:
-                # job was terminated before it started executing. no time was consumed,
-                # and the requested walltime must not be used as a substitute.
-                self._logger.info(
-                    f'{self.job.log_tag} finished with no start time; '
-                    f'total_time_secs set to 0, estimated cost left unset'
-                )
-                self.job.total_time_secs = 0
-            elif self.job.end_time:
-                delta = self.job.end_time - self.job.start_time
-                self.job.total_time_secs = int(delta.total_seconds())
-            else:
-                self.job.total_time_secs = None
-        except Exception as e:
-            self._logger.exception(
-                f'{self.job.log_tag} failed to compute job duration: {e}'
-            )
-
-        # execution hosts are cosmetic metadata; a fetch/clear failure here must not
-        # affect the duration computed above.
-        try:
-            self.job.execution_hosts = self._context.job_cache.get_job_execution_hosts(
+            hosts = self._context.job_cache.get_job_execution_hosts(
                 job_id=self.job.job_id
             )
-            self._context.job_cache.delete_job_execution_hosts(job_id=self.job.job_id)
+            if hosts:
+                self.job.execution_hosts = hosts
         except Exception as e:
             self._logger.exception(
                 f'{self.job.log_tag} failed to apply job execution hosts: {e}'
             )
 
+        # PBS history wins; persisted hooks recover jobs completed during a restart.
+        runs = [
+            run
+            for host in self.job.execution_hosts or []
+            if host.execution
+            for run in host.execution.runs or []
+        ]
+        # Duration and efficiency describe the latest attempt, excluding requeue waits.
+        latest = latest_run_id(run.run_id for run in runs)
+        runs = [run for run in runs if run.run_id == latest]
+        if runs and (
+            self._cached_fallback
+            or (self.job.start_time is None and self.job.end_time is None)
+        ):
+            # Select a pair, never fill an endpoint from another snapshot or attempt.
+            starts = [run.start for run in runs if run.start is not None]
+            ends = [run.end for run in runs if run.end is not None]
+            start = min(starts) if starts else None
+            end = max(ends) if ends else None
+            if self._cached_fallback and self.job.start_time is not None:
+                # All hooks for a newer cached attempt may have been lost.
+                if any(
+                    timestamp is not None and timestamp < self.job.start_time
+                    for timestamp in (start, end)
+                ):
+                    start = end = None
+            self.job.start_time = start
+            self.job.end_time = end
+        try:
+            if self.never_started(self.job):
+                self._logger.info(
+                    f'{self.job.log_tag} never started; no duration or estimated cost'
+                )
+                self.job.total_time_secs = 0
+            elif self.job.start_time is not None and self.job.end_time is not None:
+                seconds = (self.job.end_time - self.job.start_time).total_seconds()
+                self.job.total_time_secs = int(seconds) if seconds >= 0 else None
+            else:
+                self.job.total_time_secs = None
+                self._logger.warning(
+                    f'{self.job.log_tag} missing execution timestamp; duration unavailable'
+                )
+        except Exception as e:
+            self._logger.exception(
+                f'{self.job.log_tag} failed to compute job duration: {e}'
+            )
+
     @staticmethod
     def never_started(job: SocaJob) -> bool:
-        """
-        the scheduler stamps a start time only when a node begins executing the job.
-        a job that ran for less than a second still has one, so this does not catch it.
-        """
-        return job.start_time is None
+        """An end-only hook still proves execution, even if the begin hook was lost."""
+        return job.start_time is None and not any(
+            host.execution and host.execution.runs for host in job.execution_hosts or []
+        )
 
     def compute_and_apply_estimated_costs(self):
         try:
@@ -232,6 +259,15 @@ class ProcessFinishedJob:
     def publish_to_finished_jobs_db(self) -> bool:
         try:
             self._context.job_cache.add_finished_job(job=self.job)
+            try:
+                self._context.job_cache.delete_job_execution_hosts(
+                    job_id=self.job.job_id
+                )
+            except Exception as e:
+                self._logger.exception(
+                    f'{self.job.log_tag} failed to clear execution hosts: {e}'
+                )
+
             return True
         except Exception as e:
             self._logger.exception(
@@ -264,6 +300,9 @@ class ProcessFinishedJob:
         fallback is the requested walltime, which would invent a charge.
         """
         try:
+            self.apply_job_execution_context()
+            if not self.never_started(self.job):
+                return self.invoke()
             # read the disposition before the state is rewritten, so a job parked at the
             # provisioning retry cap still reports 'held' rather than 'deleted'.
             self.apply_disposition()
@@ -301,10 +340,11 @@ class ProcessFinishedJob:
 
     def invoke(self) -> Optional[SocaJob]:
         try:
-            self.apply_disposition()
-            if self.job.start_time is None and self.job.end_time is None:
-                self.job.end_time = arrow.utcnow().datetime
             self.apply_job_execution_context()
+            self.apply_disposition()
+            self.job.state = SocaJobState.FINISHED
+            if self.never_started(self.job) and self.job.end_time is None:
+                self.job.end_time = arrow.utcnow().datetime
 
             self.compute_and_apply_estimated_costs()
 
@@ -389,8 +429,8 @@ class FinishedJobProcessor:
                 if stored is not None:
                     recorded_jobs.append(stored)
                     continue
-                if finished_job.end_time is None:
-                    finished_job.end_time = cached.end_time
+                if not finished_job.execution_hosts:
+                    finished_job.execution_hosts = cached.execution_hosts
                 for field in (
                     'error_message',
                     'status_reason',
@@ -405,6 +445,7 @@ class FinishedJobProcessor:
                     job=finished_job,
                     job_export_logger=self._jobs_export_logger,
                     metrics_context=metrics_batch,
+                    cached_fallback=finished_job.job_id not in returned_ids,
                 ).invoke()
                 if recorded_job is not None:
                     recorded_jobs.append(recorded_job)

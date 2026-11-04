@@ -94,14 +94,24 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
         if not entries:
             return True
 
-        failed = []
-        offset = 0
+        # PutRecords can partially succeed and reorder records for the same key.
+        # Send only the first pending operation per document until it is acknowledged.
+        seen = set()
+        pending = []
+        for position, entry in enumerate(entries):
+            key = (entry.entry_content.index_id, entry.entry_id)
+            if key not in seen:
+                seen.add(key)
+                pending.append((position, entry))
+
+        delivered = set()
+        failed = False
         try:
             stream_name = self.context.config().get_string(
                 'analytics.kinesis.stream_name', required=True
             )
-            while offset < len(entries):
-                chunk = entries[offset : offset + 500]
+            for offset in range(0, len(pending), 500):
+                chunk = pending[offset : offset + 500]
                 records = [
                     {
                         'Data': Utils.to_bytes(
@@ -117,7 +127,7 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
                         ),
                         'PartitionKey': entry.entry_id,
                     }
-                    for entry in chunk
+                    for _, entry in chunk
                 ]
                 response = (
                     self.context.aws()
@@ -125,21 +135,27 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
                     .put_records(Records=records, StreamName=stream_name)
                 )
                 if response.get('FailedRecordCount', 0):
+                    failed = True
                     results = response.get('Records', [])
-                    failed.extend(
-                        entry
-                        for index, entry in enumerate(chunk)
-                        if index >= len(results) or 'ErrorCode' in results[index]
+                    delivered.update(
+                        position
+                        for index, (position, _) in enumerate(chunk)
+                        if index < len(results) and 'ErrorCode' not in results[index]
                     )
                     self._logger.warning(
                         f'Failed to post {response["FailedRecordCount"]} '
                         f'out of {len(chunk)} records to Kinesis stream'
                     )
-                offset += len(chunk)
+                else:
+                    delivered.update(position for position, _ in chunk)
         finally:
-            # Preserve failed and unsent entries ahead of concurrent additions.
+            # Preserve failed, deferred and unsent entries ahead of concurrent additions.
             with self._buffer_lock:
-                self._buffer = failed + entries[offset:] + self._buffer
+                self._buffer = [
+                    entry
+                    for position, entry in enumerate(entries)
+                    if position not in delivered
+                ] + self._buffer
         return not failed
 
     def _enforce_buffer_processing(self):

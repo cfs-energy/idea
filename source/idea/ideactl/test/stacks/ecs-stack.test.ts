@@ -25,6 +25,7 @@ import { Template } from "aws-cdk-lib/assertions";
 
 import { dockerLabels, addLogTailContainer, STREAM_PREFIX_APPLICATION, STREAM_PREFIX_OPENPBS, type ContainerScope, storageMounts } from "../../src/cdk/constructs/container.ts";
 import { EcsStack } from "../../src/cdk/stacks/ecs.ts";
+import { evaluateChangeSet } from "../../src/cli/cdk-invoker.ts";
 import type { SynthReads } from "../../src/cdk/synth-reads.ts";
 import { ideaVersion } from "../../src/version.ts";
 import { ECS_HOST_SETTINGS, ECS_TASK_SETTINGS } from "../support/ecs-settings.ts";
@@ -325,6 +326,19 @@ test("blocks task access to host metadata", () => {
   );
 });
 
+test("hosts carry the TCP SYN use-after-free network hardening", () => {
+  const userData = hostUserData(resourcesOf(synth()));
+  assert.match(userData, /net.mptcp.enabled = 0/);
+  assert.match(userData, /net.ipv4.tcp_migrate_req = 0/);
+  assert.match(userData, /sysctl -q -e -p \/etc\/sysctl.d\/90-idea-net-hardening.conf/);
+  assert.match(userData, /type filter hook prerouting priority -300; policy accept;/);
+  assert.match(userData, /ip hdrlength > 5 meta l4proto tcp counter drop/);
+  assert.match(userData, /systemctl enable --now idea-tcp-ip-options.service/);
+  const off = hostUserData(resourcesOf(synth(false, {"global-settings.kernel_hardening.drop_tcp_ip_options": false})));
+  assert.match(off, /net.mptcp.enabled = 0/);
+  assert.doesNotMatch(off, /idea_tcp_ip_options/);
+});
+
 test("never emits an account-level network interface trunking resource", () => {
   const resources = resourcesOf(synth());
   const accountSettingResources = Object.values(resources).filter((resource) => {
@@ -372,6 +386,19 @@ test("creates the host observability daemon only when enabled", () => {
     (container["MountPoints"] as Array<{ ContainerPath: string }>).some((mount) => mount.ContainerPath === "/var/run/datadog"),
     "the socket directory is mounted from the host",
   );
+  // Origin detection resolves a sender's PID to its container only through /host/proc; without it
+  // the agent knows each container's first process alone (agent env.IsHostProcAvailable).
+  const volumes = Object.fromEntries(
+    (record(task["Properties"], "task properties")["Volumes"] as Array<{ Name: string; Host: { SourcePath: string } }>)
+      .map((volume) => [volume.Name, volume.Host.SourcePath]),
+  );
+  const hostPaths = Object.fromEntries(
+    (container["MountPoints"] as Array<{ ContainerPath: string; SourceVolume: string; ReadOnly: boolean }>)
+      .map((mount) => [mount.ContainerPath, { source: volumes[mount.SourceVolume], readOnly: mount.ReadOnly }]),
+  );
+  assert.deepEqual(hostPaths["/host/proc"], { source: "/proc", readOnly: true });
+  assert.deepEqual(hostPaths["/host/sys/fs/cgroup"], { source: "/sys/fs/cgroup", readOnly: true });
+  assert.equal(hostPaths["/proc"], undefined, "host /proc over the agent's own /proc is not where it looks");
 });
 
 test("refuses an ECS deploy when effective account trunking is disabled", async () => {
@@ -790,3 +817,44 @@ for (const [enabled, logsEnabled] of [[true, true], [true, false], [false, true]
     }
   });
 }
+
+test("Container Insights is off when Datadog collects the same series, and toggles in place", () => {
+  const cluster = (datadogEnabled: boolean): [string, Json] => {
+    const found = byType(resourcesOf(synth(datadogEnabled)), "AWS::ECS::Cluster");
+    assert.equal(found.length, 1);
+    return found[0] as [string, Json];
+  };
+  const insights = (properties: Json): unknown => {
+    const clusterSettings = properties["ClusterSettings"];
+    assert.ok(Array.isArray(clusterSettings), "cluster settings");
+    return clusterSettings.find((entry) => isJson(entry) && entry["Name"] === "containerInsights")?.["Value"];
+  };
+  const [plainId, plain] = cluster(false);
+  const [datadogId, datadog] = cluster(true);
+  const plainProperties = record(plain["Properties"], "cluster properties");
+  const datadogProperties = record(datadog["Properties"], "cluster properties");
+  assert.equal(insights(plainProperties), "enabled");
+  // Explicitly disabled, not omitted, so an existing cluster turns it off on upgrade.
+  assert.equal(insights(datadogProperties), "disabled");
+  // Only ClusterSettings differs. ClusterName is the one create-only property of AWS::ECS::Cluster
+  // (CloudFormation resource schema); ClusterSettings is updated through ecs:UpdateClusterSettings.
+  assert.equal(datadogId, plainId);
+  assert.deepEqual(
+    { ...datadogProperties, ClusterSettings: undefined },
+    { ...plainProperties, ClusterSettings: undefined },
+  );
+  assert.deepEqual({ ...datadog, Properties: undefined }, { ...plain, Properties: undefined });
+  // CloudFormation reports that update as a Modify without replacement, which the guard passes.
+  const verdict = evaluateChangeSet({
+    Changes: [{
+      ResourceChange: {
+        Action: "Modify",
+        LogicalResourceId: datadogId,
+        ResourceType: "AWS::ECS::Cluster",
+        Replacement: "False",
+        Details: [{ Target: { Attribute: "Properties", Name: "ClusterSettings", RequiresRecreation: "Never" } }],
+      },
+    }],
+  });
+  assert.deepEqual(verdict.refusals, []);
+});

@@ -5,6 +5,7 @@
  * per-module CDK invocation live in `deployment-helper.ts` and `cdk-invoker.ts`.
  */
 
+import { HOST_CONTROL_PLANE_REFUSAL } from "../upgrade-floor.ts";
 import { refreshHostsCommand } from "../host-pool.ts";
 
 import { writeFileSync } from 'node:fs';
@@ -14,9 +15,9 @@ import type { Command } from 'commander';
 
 import { ClusterConfig } from '../../config/cluster-config.ts';
 import { InvalidParams } from '../../config/values.ts';
-import { buildBootstrapArgv, bootstrapTags, bootstrapStackName } from './bootstrap.ts';
-import { CdkInvoker, cdkBin, clusterCdkDir, ExitWithCode, setupClusterCdkDir, type Deps } from '../cdk-invoker.ts';
+import { cdkBin, CdkInvoker, clusterCdkDir, ExitWithCode, setupClusterCdkDir, type Deps } from '../cdk-invoker.ts';
 import { DeploymentHelper } from '../deployment-helper.ts';
+import { bootstrapStackName, bootstrapTags, buildBootstrapArgv } from './bootstrap.ts';
 import { checkAwsvpcTrunking } from './upgrade.ts';
 
 export interface DeployCommandOptions {
@@ -67,26 +68,9 @@ export async function runDeploy(deps: Deps, modules: readonly string[], options:
     moduleSet: options.moduleSet,
     scan: deps.scan,
   });
-  if (config.get('ecs.enabled') !== true) {
-    let existing = false;
-    for (const module of config.modules()) {
-      if (module.type === 'config') continue;
-      try {
-        const stack = await deps.cfn.describeStack(module.stack_name ?? `${options.clusterName}-${module.module_id}`);
-        if (stack.StackStatus && !['DELETE_COMPLETE', 'REVIEW_IN_PROGRESS'].includes(stack.StackStatus)) {
-          existing = true;
-          break;
-        }
-      } catch (error) {
-        if (!(error instanceof Error && error.name === 'ValidationError' && error.message.includes('does not exist'))) {
-          throw error;
-        }
-      }
-    }
-    if (!existing) {
-      deps.err('New host-shaped deployments are no longer supported. An existing host cluster upgrades with upgrade-cluster.');
-      throw new ExitWithCode(1);
-    }
+  if (config.get('ecs.enabled') !== true || config.get('ecs.retain_existing_hosts') === true) {
+    deps.err(HOST_CONTROL_PLANE_REFUSAL);
+    throw new ExitWithCode(1);
   }
   const helper = await DeploymentHelper.open({
     clusterName: options.clusterName,
@@ -192,9 +176,9 @@ export async function runBootstrap(
       ...(options.awsProfile === undefined
         ? {}
         : {
-            AWS_PROFILE: options.awsProfile,
-            AWS_DEFAULT_PROFILE: options.awsProfile,
-          }),
+          AWS_PROFILE: options.awsProfile,
+          AWS_DEFAULT_PROFILE: options.awsProfile,
+        }),
     },
   });
   if (code !== 0) throw new ExitWithCode(code);

@@ -1,9 +1,9 @@
 /**
- * Three EC2 host groups (controller, DCV broker, DCV connection gateway), the external network
+ * ECS services for the controller, DCV broker, and connection gateway, the external network
  * load balancer the gateway sits behind, the DCV host (VDI) identity used by session instances,
  * the SQS/SNS plumbing the controller listens on, and the scheduled-event transformer Lambda.
  *
- * Under the container flag this stack also runs the controller, the broker and the gateway as
+ * This stack runs the controller, the broker and the gateway as
  * tasks on the container stack's capacity. They are built here because each one reads this
  * module's own settings rows at boot, so it must not start before this stack has written them,
  * and because the gateway's target group needs the load balancer this stack owns.
@@ -15,10 +15,6 @@
  *
  * - the DCV broker *agent* endpoint registers itself as `broker-client-endpoint`; the name is the
  *   custom resource's physical identity, so correcting it would re-register the ALB rule;
- * - `instanceMonitoring` is passed alongside a launch template. `Monitoring.BASIC` is 0, so the
- *   CDK guard against launch-configuration properties does not fire; detailed monitoring would
- *   throw at synth. The config key the settings template writes never matches the one read here,
- *   so the value is always `BASIC`;
  * - `cluster.backups.enabled` is read with `getString`, so a boolean `false` arrives as the
  *   non-empty string `false` and passes the guard. The second guard on
  *   `vdi_host_backup.enabled` is what actually decides;
@@ -26,8 +22,7 @@
  *   part of the deployed template.
  */
 
-import { Aws, CustomResource, Duration, Fn, RemovalPolicy, Tags } from 'aws-cdk-lib';
-import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
+import { Aws, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -35,7 +30,6 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -47,13 +41,10 @@ import type { ClusterConfig } from '../../config/cluster-config.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
-import { buildBootstrapUserData } from '../userdata.ts';
-import {
-  IDEA_TAG_NAME,
-  IDEA_TAG_NODE_TYPE,
-  instanceProfileArn,
-} from '../constructs/base.ts';
 import { BackupPlan } from '../constructs/backup.ts';
+import {
+  instanceProfileArn
+} from '../constructs/base.ts';
 import {
   InstanceProfile,
   LambdaFunction,
@@ -63,15 +54,40 @@ import {
   SNSTopic,
   SQSQueue,
 } from '../constructs/common.ts';
+import {
+  addLogTailContainer,
+  addStorageMounts,
+  adoptedLogDriver,
+  applicationContainerSettings,
+  applicationTargetGroup,
+  attachApplicationFileLogs,
+  buildEc2Service,
+  buildExecutionRole,
+  buildTaskDefinition,
+  buildTaskRole,
+  commonEnvironment,
+  CONTAINER_STOP_SECONDS,
+  containerImage,
+  dockerLabels,
+  grantInjectedSecret,
+  healthCheckGrace,
+  requiredInt as requiredEcsInt,
+  roleSizing,
+  serviceArn,
+  STOP_SIGNAL_ENVIRONMENT,
+  stopSignalInit,
+  STREAM_PREFIX_APPLICATION,
+  STREAM_PREFIX_BROKER,
+  STREAM_PREFIX_GATEWAY,
+  type ContainerScope,
+} from '../constructs/container.ts';
 import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
   ExistingSocaCluster,
   lookupBackupRole,
   lookupClusterBackupVault,
   lookupClusterS3Bucket,
-  lookupEbsKmsKey,
-  lookupEc2StateChangeTopic,
-  lookupKeyPair,
+  lookupEc2StateChangeTopic
 } from '../constructs/existing-resources.ts';
 import {
   VirtualDesktopBastionAccessSecurityGroup,
@@ -79,33 +95,6 @@ import {
   VirtualDesktopPublicLoadBalancerAccessSecurityGroup,
   type SecurityGroup,
 } from '../constructs/network.ts';
-import {
-  STREAM_PREFIX_APPLICATION,
-  STREAM_PREFIX_BROKER,
-  STREAM_PREFIX_GATEWAY,
-  addLogTailContainer,
-  addStorageMounts,
-  adoptedLogDriver,
-  applicationTargetGroup,
-  CONTAINER_STOP_SECONDS,
-  STOP_SIGNAL_ENVIRONMENT,
-  stopSignalInit,
-  applicationContainerSettings,
-  attachApplicationFileLogs,
-  buildEc2Service,
-  buildExecutionRole,
-  grantInjectedSecret,
-  buildTaskDefinition,
-  buildTaskRole,
-  commonEnvironment,
-  containerImage,
-  dockerLabels,
-  healthCheckGrace,
-  requiredInt as requiredEcsInt,
-  roleSizing,
-  serviceArn,
-  type ContainerScope,
-} from '../constructs/container.ts';
 
 /** `constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER`. */
 const MODULE_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller';
@@ -113,16 +102,11 @@ const MODULE_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller';
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
 /** `constants.IDEA_TAG_MODULE_ID`, with `:` replaced by `_` for the SNS filter policy key. */
 const IDEA_TAG_MODULE_ID = 'idea:ModuleId';
-/** `constants.NODE_TYPE_APP` / `NODE_TYPE_INFRA`. */
-const NODE_TYPE_APP = 'app';
-const NODE_TYPE_INFRA = 'infra';
 /** `constants.SQS_MAX_RECEIVE_COUNT_DEFAULT` and `SQS_VISIBILITY_TIMEOUT_DEFAULT`. */
 const SQS_MAX_RECEIVE_COUNT_DEFAULT = 16;
 const SQS_VISIBILITY_TIMEOUT_DEFAULT = 30;
 /** GovCloud does not accept `Tags` on `AWS::Events::Rule`. */
 const AWS_PARTITION_GOVCLOUD = 'aws-us-gov';
-const OS_AMAZONLINUX2 = 'amazonlinux2';
-const OS_AMAZONLINUX2023 = 'amazonlinux2023';
 
 const COMPONENT_CONTROLLER = 'controller';
 const COMPONENT_DCV_BROKER = 'broker';
@@ -133,13 +117,6 @@ const COMPONENT_DCV_HOST = 'host';
 const GATEWAY_LOG_DIRECTORY = '/var/log/dcv-connection-gateway';
 /** The broker writes its log files here; a sidecar tails them into the agent-created group. */
 const BROKER_LOG_DIRECTORY = '/var/log/dcv-session-manager-broker';
-
-/** Component id -> the name the config keys use. */
-const CONFIG_MAPPING: Record<string, string> = {
-  [COMPONENT_CONTROLLER]: 'controller',
-  [COMPONENT_DCV_CONNECTION_GATEWAY]: 'dcv_connection_gateway',
-  [COMPONENT_DCV_BROKER]: 'dcv_broker',
-};
 
 /**
  * `get_bool(key, required=True)`, `get_int(...)` and `get_list(...)`. Unlike `getString`, these
@@ -159,19 +136,6 @@ function requiredList(config: ClusterConfig, key: string): string[] {
   return (config.getList as RequiredGet<string[]>)(key, undefined, { required: true });
 }
 
-/** `Utils.get_ec2_block_device_name`. */
-function ec2BlockDeviceName(baseOs: string): string {
-  return baseOs === OS_AMAZONLINUX2 || baseOs === OS_AMAZONLINUX2023 ? '/dev/xvda' : '/dev/sda1';
-}
-
-interface AutoScalingGroupOptions {
-  componentName: string;
-  securityGroup: SecurityGroup;
-  iamRole: Role;
-  substitutedUserdata: string;
-  nodeType: string;
-}
-
 export class VirtualDesktopControllerStack extends IdeaBaseStack {
   readonly cluster: ExistingSocaCluster;
   readonly arnBuilder: ArnBuilder;
@@ -181,18 +145,13 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
   readonly brokerAgentCommunicationPort: number;
   readonly brokerGatewayCommunicationPort: number;
   readonly clusterEndpointsLambdaArn: string;
-  private readonly ecsEnabled: boolean;
-  private readonly hostsPresent: boolean;
 
   oauth2ClientSecret!: OAuthClientIdAndSecret;
 
   dcvHostRole!: Role;
-  controllerRole!: Role;
-  dcvBrokerRole!: Role;
-  /** The task roles, when the components run as tasks; the settings below name whichever runs. */
-  private controllerTaskRole?: Role;
-  private dcvBrokerTaskRole?: Role;
-  dcvConnectionGatewayRole!: Role;
+  /** Task role identities used to authenticate controller queue messages. */
+  private controllerTaskRole!: Role;
+  private dcvBrokerTaskRole!: Role;
   scheduledEventTransformerLambdaRole!: Role;
   dcvHostInstanceProfile!: InstanceProfile;
   dcvHostPolicy!: ManagedPolicy;
@@ -204,7 +163,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
 
   dcvConnectionGatewaySelfSignedCert: CustomResource | undefined;
   externalNlb!: elbv2.NetworkLoadBalancer;
-  /** Present under the container flag: the three task services on the container stack's capacity. */
+  /** The ECS service: the three task services on the container stack's capacity. */
   controllerService: ecs.Ec2Service | undefined;
   dcvBrokerService: ecs.Ec2Service | undefined;
   dcvConnectionGatewayService: ecs.Ec2Service | undefined;
@@ -222,10 +181,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
   ssmCommandsSnsTopic!: SNSTopic;
   ssmCommandPassRole!: Role;
 
-  controllerAutoScalingGroup!: autoscaling.AutoScalingGroup;
-  dcvBrokerAutoScalingGroup!: autoscaling.AutoScalingGroup;
-  dcvConnectionGatewayAutoScalingGroup!: autoscaling.AutoScalingGroup;
-
   backupPlan: BackupPlan | undefined;
 
   constructor(props: StackBuildProps) {
@@ -239,13 +194,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     });
 
     const config = this.context.config;
-    this.ecsEnabled = config.getBool("ecs.enabled", false);
-    // `ecs.enabled` alone routes the endpoints to the container services and deletes the three host
-    // groups that serve them in one change set, so nothing proves the new targets before the old
-    // ones are gone. With `ecs.retain_existing_hosts` the same deploy routes the endpoints and keeps
-    // the groups, idle and unregistered, so a later deploy removes them once the containers are
-    // serving and turning the flag off puts the groups back in service.
-    this.hostsPresent = !this.ecsEnabled || config.getBool("ecs.retain_existing_hosts", false);
     this.brokerClientCommunicationPort = requiredInt(
       config,
       'virtual-desktop-controller.dcv_broker.client_communication_port',
@@ -302,46 +250,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     return securityGroup;
   }
 
-  /** The `http_proxy`/`https_proxy`/`no_proxy` block every host group shares. */
-  private proxyConfig(): Record<string, string> {
-    const httpsProxy = this.context.config.getString('cluster.network.https_proxy', '');
-    if (httpsProxy === '') return {};
-    return {
-      http_proxy: httpsProxy,
-      https_proxy: httpsProxy,
-      no_proxy: this.context.config.getString('cluster.network.no_proxy', ''),
-    };
-  }
-
-  /** A `<component>` config key under the module namespace. */
-  private componentKey(componentName: string, suffix: string): string {
-    return `virtual-desktop-controller.${CONFIG_MAPPING[componentName] as string}.${suffix}`;
-  }
-
-
-  /**
-   * Bootstrap package location for one desktop component.
-   *
-   * The deploy path uploads the package and passes its location as context. A standalone synthesis
-   * has no context, and this used to fall back to the literal string for absent, which rendered
-   * straight into host user data: the host then tried to download a package called "not-provided".
-   * It also made every comparison against a real cluster's deployed template report three
-   * differences that were the harness's fault rather than the port's. The sibling stacks derive the
-   * location from the deployment identifier instead, by the same naming rule the uploader uses, so
-   * this does too.
-   */
-  private componentBootstrapPackageUri(contextKey: string, componentSuffix: string): string {
-    const fromContext: unknown = this.stack.node.tryGetContext(contextKey);
-    if (typeof fromContext === 'string' && fromContext !== '') return fromContext;
-    const bucket = this.context.config.getString('cluster.cluster_s3_bucket', undefined, {
-      required: true,
-    }) as string;
-    return (
-      `s3://${bucket}/idea/bootstrap/bootstrap-${this.moduleId}-${componentSuffix}`
-      + `-${this.deploymentId}.tar.gz`
-    );
-  }
-
   private removeBastionHostIngressRule(securityGroup: SecurityGroup): void {
     const ingressRule = securityGroup.node.children.find(
       (child) =>
@@ -374,7 +282,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
 
   /** The controller's two IP target groups, created beside the endpoints that route to them. */
   private buildControllerTargetGroups(): void {
-    if (!this.ecsEnabled) return;
+
     const scope = this.containerScope;
     this.controllerTargetGroups = (['e', 'i'] as const).map((suffix) =>
       applicationTargetGroup(scope, {
@@ -388,7 +296,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
 
   /** The broker's three IP target groups, one per broker listener on the internal load balancer. */
   private buildBrokerTargetGroups(): void {
-    if (!this.ecsEnabled) return;
+
     const scope = this.containerScope;
     const ports: Array<[string, number]> = [
       ['c', this.brokerClientCommunicationPort],
@@ -415,7 +323,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
    * position the host holds.
    */
   private buildContainerServices(): void {
-    if (!this.ecsEnabled) return;
+
     this.controllerService = this.buildControllerService();
     this.dcvBrokerService = this.buildDcvBrokerService();
   }
@@ -702,10 +610,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         { policyTemplateName: 'controller-ssm-command-pass-role.yml' },
       ),
     );
-    this.ssmCommandPassRole.grantPassRole(this.controllerRole);
     // The controller task passes the same roles the controller host did; only the bedrock
     // project roles come through the policy template.
-    if (this.controllerTaskRole !== undefined) this.ssmCommandPassRole.grantPassRole(this.controllerTaskRole);
+    this.ssmCommandPassRole.grantPassRole(this.controllerTaskRole);
 
     this.ssmCommandsSnsTopic = new SNSTopic(
       this.context,
@@ -762,7 +669,6 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       role: this.scheduledEventTransformerLambdaRole,
       ideaCodeAsset: new IdeaCodeAsset('idea_controller_scheduled_event_transformer'),
     });
-
 
     const scheduleTriggerRule = new events.Rule(
       this.stack,
@@ -857,8 +763,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       COMPONENT_DCV_HOST,
     );
     this.dcvHostRole.addManagedPolicy(this.dcvHostPolicy);
-    this.dcvHostRole.grantPassRole(this.controllerRole);
-    if (this.controllerTaskRole !== undefined) this.dcvHostRole.grantPassRole(this.controllerTaskRole);
+    this.dcvHostRole.grantPassRole(this.controllerTaskRole);
 
     this.dcvHostInstanceProfile = new InstanceProfile(
       this.context,
@@ -879,29 +784,14 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         componentName: 'DCV Host',
       },
     );
+    this.dcvHostSecurityGroup.addIngressRule(ec2.SecurityGroup.fromSecurityGroupId(this.stack, 'terminal-cluster-manager-sg', this.context.config.getString('cluster-manager.security_group_id', undefined, { required: true }) as string), ec2.Port.tcp(22), 'Browser terminals from cluster-manager');
   }
 
   // --- DCV broker -------------------------------------------------------------------------------
 
   buildDcvBroker(): void {
     this.buildBrokerTargetGroups();
-    const clientTargetGroupArn = this.ecsEnabled
-      ? (this.brokerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn
-      : (() => {
-          const targetGroup = new elbv2.ApplicationTargetGroup(
-            this.stack,
-            `${COMPONENT_DCV_BROKER}-client-target-group`,
-            {
-              port: this.brokerClientCommunicationPort,
-              targetType: elbv2.TargetType.INSTANCE,
-              protocol: elbv2.ApplicationProtocol.HTTPS,
-              vpc: this.cluster.vpc,
-              targetGroupName: this.getTargetGroupName(`${COMPONENT_DCV_BROKER}-c`),
-            },
-          );
-          targetGroup.configureHealthCheck({ enabled: true, path: '/health' });
-          return targetGroup.targetGroupArn;
-        })();
+    const clientTargetGroupArn = (this.brokerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn;
 
     this.brokerEndpoints.push(new CustomResource(this.stack, 'dcv-broker-client-endpoint', {
       serviceToken: this.clusterEndpointsLambdaArn,
@@ -917,23 +807,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       resourceType: 'Custom::DcvBrokerClientEndpointInternal',
     }));
 
-    const agentTargetGroupArn = this.ecsEnabled
-      ? (this.brokerTargetGroups[1] as elbv2.ApplicationTargetGroup).targetGroupArn
-      : (() => {
-          const targetGroup = new elbv2.ApplicationTargetGroup(
-            this.stack,
-            `${COMPONENT_DCV_BROKER}-agent-target-group`,
-            {
-              port: this.brokerAgentCommunicationPort,
-              targetType: elbv2.TargetType.INSTANCE,
-              protocol: elbv2.ApplicationProtocol.HTTPS,
-              vpc: this.cluster.vpc,
-              targetGroupName: this.getTargetGroupName(`${COMPONENT_DCV_BROKER}-a`),
-            },
-          );
-          targetGroup.configureHealthCheck({ enabled: true, path: '/health' });
-          return targetGroup.targetGroupArn;
-        })();
+    const agentTargetGroupArn = (this.brokerTargetGroups[1] as elbv2.ApplicationTargetGroup).targetGroupArn;
 
     this.brokerEndpoints.push(new CustomResource(this.stack, 'dcv-broker-agent-endpoint', {
       serviceToken: this.clusterEndpointsLambdaArn,
@@ -951,23 +825,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       resourceType: 'Custom::DcvBrokerAgentEndpointInternal',
     }));
 
-    const gatewayTargetGroupArn = this.ecsEnabled
-      ? (this.brokerTargetGroups[2] as elbv2.ApplicationTargetGroup).targetGroupArn
-      : (() => {
-          const targetGroup = new elbv2.ApplicationTargetGroup(
-            this.stack,
-            `${COMPONENT_DCV_BROKER}-gateway-target-group`,
-            {
-              port: this.brokerGatewayCommunicationPort,
-              targetType: elbv2.TargetType.INSTANCE,
-              protocol: elbv2.ApplicationProtocol.HTTPS,
-              vpc: this.cluster.vpc,
-              targetGroupName: this.getTargetGroupName(`${COMPONENT_DCV_BROKER}-g`),
-            },
-          );
-          targetGroup.configureHealthCheck({ enabled: true, path: '/health' });
-          return targetGroup.targetGroupArn;
-        })();
+    const gatewayTargetGroupArn = (this.brokerTargetGroups[2] as elbv2.ApplicationTargetGroup).targetGroupArn;
 
     this.brokerEndpoints.push(new CustomResource(this.stack, 'dcv-broker-gateway-endpoint', {
       serviceToken: this.clusterEndpointsLambdaArn,
@@ -996,60 +854,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       },
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
-    if (!this.hostsPresent) this.removeBastionHostIngressRule(this.dcvBrokerSecurityGroup);
-
-    const dcvBrokerPackageUri = this.componentBootstrapPackageUri(
-      'dcv_broker_bootstrap_package_uri',
-      'dcv-broker',
-    );
-    const proxyConfig = this.proxyConfig();
-
-    const brokerUserdata = buildBootstrapUserData({
-      awsRegion: this.awsRegion,
-      bootstrapPackageUri: dcvBrokerPackageUri,
-      installCommands: ['/bin/bash dcv-broker/setup.sh'],
-      infraConfig: {
-        BROKER_CLIENT_TARGET_GROUP_ARN: '${__BROKER_CLIENT_TARGET_GROUP_ARN__}',
-        CONTROLLER_EVENTS_QUEUE_URL: '${__CONTROLLER_EVENTS_QUEUE_URL__}',
-      },
-      proxyConfig,
-      baseOs: this.requiredString('virtual-desktop-controller.dcv_broker.autoscaling.base_os'),
-    });
-    const substitutedUserdata = Fn.sub(brokerUserdata, {
-      __BROKER_CLIENT_TARGET_GROUP_ARN__: clientTargetGroupArn,
-      __CONTROLLER_EVENTS_QUEUE_URL__: this.eventSqsQueue.queueUrl,
-    });
-
-    this.dcvBrokerRole = this.buildIamRole(
-      `IAM role assigned to virtual-desktop-${COMPONENT_DCV_BROKER}`,
-      COMPONENT_DCV_BROKER,
-      'virtual-desktop-dcv-broker.yml',
-    );
-
-    if (!this.hostsPresent) return;
-
-    this.dcvBrokerAutoScalingGroup = this.buildAutoScalingGroup({
-      componentName: COMPONENT_DCV_BROKER,
-      securityGroup: this.dcvBrokerSecurityGroup,
-      iamRole: this.dcvBrokerRole,
-      substitutedUserdata,
-      nodeType: NODE_TYPE_INFRA,
-    });
-    this.dcvBrokerAutoScalingGroup.node.addDependency(this.eventSqsQueue);
-
-    // Under the container flag these ARNs are the container target groups, which take IP targets,
-    // so a retained group registers with nothing and stands idle until a rollback recreates its own.
-    if (this.ecsEnabled) return;
-
-    // An ASG cannot be added to a second target group through the L2, so the L1 property is
-    // written directly. The order is part of the deployed template.
-    (
-      this.dcvBrokerAutoScalingGroup.node.defaultChild as autoscaling.CfnAutoScalingGroup
-    ).targetGroupArns = [
-      agentTargetGroupArn,
-      clientTargetGroupArn,
-      gatewayTargetGroupArn,
-    ];
+    this.removeBastionHostIngressRule(this.dcvBrokerSecurityGroup);
   }
 
   // --- IAM --------------------------------------------------------------------------------------
@@ -1092,61 +897,10 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       },
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
-    if (!this.hostsPresent) this.removeBastionHostIngressRule(this.controllerSecurityGroup);
-
-    const controllerBootstrapPackageUri = this.componentBootstrapPackageUri(
-      'controller_bootstrap_package_uri',
-      'controller',
-    );
-
-    this.controllerRole = this.buildIamRole(
-      `IAM role assigned to virtual-desktop-${COMPONENT_CONTROLLER}`,
-      COMPONENT_CONTROLLER,
-      'virtual-desktop-controller.yml',
-    );
-
-    const proxyConfig = this.proxyConfig();
-
-    if (this.hostsPresent) {
-      this.controllerAutoScalingGroup = this.buildAutoScalingGroup({
-        componentName: COMPONENT_CONTROLLER,
-        securityGroup: this.controllerSecurityGroup,
-        iamRole: this.controllerRole,
-        substitutedUserdata: Fn.sub(
-          buildBootstrapUserData({
-            awsRegion: this.awsRegion,
-            bootstrapPackageUri: controllerBootstrapPackageUri,
-            installCommands: ['/bin/bash virtual-desktop-controller/setup.sh'],
-            proxyConfig,
-            baseOs: this.requiredString('virtual-desktop-controller.controller.autoscaling.base_os'),
-          }),
-        ),
-        nodeType: NODE_TYPE_APP,
-      });
-
-      this.controllerAutoScalingGroup.node.addDependency(this.eventSqsQueue);
-      this.controllerAutoScalingGroup.node.addDependency(this.controllerSqsQueue);
-    }
+    this.removeBastionHostIngressRule(this.controllerSecurityGroup);
 
     this.buildControllerTargetGroups();
-    const externalTargetGroupArn = this.ecsEnabled
-      ? (this.controllerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn
-      : (() => {
-          const targetGroup = new elbv2.ApplicationTargetGroup(
-            this.stack,
-            'controller-target-group-ext',
-            {
-              port: 8443,
-              protocol: elbv2.ApplicationProtocol.HTTPS,
-              protocolVersion: elbv2.ApplicationProtocolVersion.HTTP1,
-              targetType: elbv2.TargetType.INSTANCE,
-              vpc: this.cluster.vpc,
-              targetGroupName: this.getTargetGroupName('vdc-ext'),
-            },
-          );
-          targetGroup.configureHealthCheck({ enabled: true, path: '/healthcheck' });
-          return targetGroup.targetGroupArn;
-        })();
+    const externalTargetGroupArn = (this.controllerTargetGroups[0] as elbv2.ApplicationTargetGroup).targetGroupArn;
 
     this.controllerEndpoints.push(new CustomResource(this.stack, 'controller-endpoint-ext', {
       serviceToken: this.clusterEndpointsLambdaArn,
@@ -1168,24 +922,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       resourceType: 'Custom::ControllerEndpointExternal',
     }));
 
-    const internalTargetGroupArn = this.ecsEnabled
-      ? (this.controllerTargetGroups[1] as elbv2.ApplicationTargetGroup).targetGroupArn
-      : (() => {
-          const targetGroup = new elbv2.ApplicationTargetGroup(
-            this.stack,
-            'controller-target-group-int',
-            {
-              port: 8443,
-              protocol: elbv2.ApplicationProtocol.HTTPS,
-              protocolVersion: elbv2.ApplicationProtocolVersion.HTTP1,
-              targetType: elbv2.TargetType.INSTANCE,
-              vpc: this.cluster.vpc,
-              targetGroupName: this.getTargetGroupName('vdc-int'),
-            },
-          );
-          targetGroup.configureHealthCheck({ enabled: true, path: '/healthcheck' });
-          return targetGroup.targetGroupArn;
-        })();
+    const internalTargetGroupArn = (this.controllerTargetGroups[1] as elbv2.ApplicationTargetGroup).targetGroupArn;
 
     this.controllerEndpoints.push(new CustomResource(this.stack, 'controller-endpoint-int', {
       serviceToken: this.clusterEndpointsLambdaArn,
@@ -1209,171 +946,12 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
 
     // Under the container flag these ARNs are the container target groups, which take IP targets,
     // so a retained group registers with nothing and stands idle until a rollback recreates its own.
-    if (!this.ecsEnabled) {
-      (
-        this.controllerAutoScalingGroup.node.defaultChild as autoscaling.CfnAutoScalingGroup
-      ).targetGroupArns = [internalTargetGroupArn, externalTargetGroupArn];
-    }
-  }
 
-  // --- host groups ------------------------------------------------------------------------------
-
-  private buildAutoScalingGroup(options: AutoScalingGroupOptions): autoscaling.AutoScalingGroup {
-    const config = this.context.config;
-    const { componentName } = options;
-
-    const isPublic =
-      config.getBool(this.componentKey(componentName, 'autoscaling.public'), false) &&
-      this.cluster.publicSubnets.length > 0;
-    const vpcSubnets: ec2.SubnetSelection = isPublic
-      ? { subnets: this.cluster.publicSubnets }
-      : { subnets: this.cluster.privateSubnets };
-
-    const baseOs = this.requiredString(this.componentKey(componentName, 'autoscaling.base_os'));
-    const blockDeviceName = ec2BlockDeviceName(baseOs);
-    const blockDeviceTypeString = config.getString('virtual-desktop-controller.volume_type', 'gp3');
-    const blockDeviceVolumeType =
-      blockDeviceTypeString === 'gp3' ? ec2.EbsDeviceVolumeType.GP3 : ec2.EbsDeviceVolumeType.GP2;
-
-    const enableDetailedMonitoring = config.getBool(
-      this.componentKey(componentName, 'autoscaling.enable_detailed_monitoring'),
-      false,
-    );
-    const metadataHttpTokens = this.requiredString(
-      this.componentKey(componentName, 'autoscaling.metadata_http_tokens'),
-    );
-
-    const ebsKmsKey = lookupEbsKmsKey(this.context, this.stack, componentName);
-
-    const launchTemplate = new ec2.LaunchTemplate(this.stack, `${componentName}-lt`, {
-      instanceType: new ec2.InstanceType(
-        this.requiredString(this.componentKey(componentName, 'autoscaling.instance_type')),
-      ),
-      machineImage: ec2.MachineImage.genericLinux({
-        [this.awsRegion]: this.requiredString(
-          this.componentKey(componentName, 'autoscaling.instance_ami'),
-        ),
-      }),
-      securityGroup: options.securityGroup,
-      userData: ec2.UserData.custom(options.substitutedUserdata),
-      keyPair: lookupKeyPair(this.context, this.stack, `${componentName}-key-pair`),
-      blockDevices: [
-        {
-          deviceName: blockDeviceName,
-          volume: ec2.BlockDeviceVolume.ebs(
-            config.getInt(this.componentKey(componentName, 'autoscaling.volume_size'), 200),
-            { encrypted: true, kmsKey: ebsKmsKey, volumeType: blockDeviceVolumeType },
-          ),
-        },
-      ],
-      role: options.iamRole,
-      requireImdsv2: metadataHttpTokens === 'required',
-    });
-
-    const autoScalingGroup = new autoscaling.AutoScalingGroup(this.stack, `${componentName}-asg`, {
-      vpc: this.cluster.vpc,
-      vpcSubnets,
-      autoScalingGroupName: `${this.clusterName}-${this.moduleId}-${componentName}-asg`,
-      launchTemplate,
-      // `Monitoring.BASIC` is 0, which is why passing this alongside a launch template does not
-      // trip the CDK guard. Detailed monitoring would throw at synth.
-      instanceMonitoring: enableDetailedMonitoring
-        ? autoscaling.Monitoring.DETAILED
-        : autoscaling.Monitoring.BASIC,
-      groupMetrics: [autoscaling.GroupMetrics.all()],
-      minCapacity: config.getInt(this.componentKey(componentName, 'autoscaling.min_capacity'), 1),
-      maxCapacity: config.getInt(this.componentKey(componentName, 'autoscaling.max_capacity'), 3),
-      newInstancesProtectedFromScaleIn: config.getBool(
-        this.componentKey(componentName, 'autoscaling.new_instances_protected_from_scale_in'),
-        true,
-      ),
-      cooldown: Duration.minutes(
-        config.getInt(this.componentKey(componentName, 'autoscaling.cooldown_minutes'), 5),
-      ),
-      healthChecks: autoscaling.HealthChecks.withAdditionalChecks({
-        additionalTypes: [autoscaling.AdditionalHealthCheckType.ELB],
-        gracePeriod: Duration.minutes(
-          config.getInt(
-            this.componentKey(componentName, 'autoscaling.elb_healthcheck.grace_time_minutes'),
-            15,
-          ),
-        ),
-      }),
-      updatePolicy: autoscaling.UpdatePolicy.rollingUpdate({
-        maxBatchSize: config.getInt(
-          this.componentKey(componentName, 'autoscaling.rolling_update_policy.max_batch_size'),
-          1,
-        ),
-        minInstancesInService: config.getInt(
-          this.componentKey(
-            componentName,
-            'autoscaling.rolling_update_policy.min_instances_in_service',
-          ),
-          1,
-        ),
-        pauseTime: Duration.minutes(
-          config.getInt(
-            this.componentKey(componentName, 'autoscaling.rolling_update_policy.pause_time_minutes'),
-            15,
-          ),
-        ),
-      }),
-      terminationPolicies: [autoscaling.TerminationPolicy.DEFAULT],
-    });
-
-    autoScalingGroup.scaleOnCpuUtilization('cpu-utilization-scaling-policy', {
-      targetUtilizationPercent: config.getInt(
-        this.componentKey(
-          componentName,
-          'autoscaling.cpu_utilization_scaling_policy.target_utilization_percent',
-        ),
-        80,
-      ),
-      estimatedInstanceWarmup: Duration.minutes(
-        config.getInt(
-          this.componentKey(
-            componentName,
-            'autoscaling.cpu_utilization_scaling_policy.estimated_instance_warmup_minutes',
-          ),
-          15,
-        ),
-      ),
-    });
-
-    Tags.of(autoScalingGroup).add(IDEA_TAG_NODE_TYPE, options.nodeType);
-    Tags.of(autoScalingGroup).add(
-      IDEA_TAG_NAME,
-      `${this.clusterName}-${this.moduleId}-${componentName}`,
-    );
-
-    if (!enableDetailedMonitoring) {
-      this.addNagSuppression(
-        [
-          {
-            rule_id: 'AwsSolutions-EC28',
-            reason: 'detailed monitoring is a configurable option to save costs',
-          },
-        ],
-        autoScalingGroup,
-        true,
-      );
-    }
-
-    this.addNagSuppression(
-      [
-        {
-          rule_id: 'AwsSolutions-AS3',
-          reason: 'ASG notifications scaling notifications can be managed via AWS Console',
-        },
-      ],
-      autoScalingGroup,
-    );
-    return autoScalingGroup;
   }
 
   // --- DCV connection gateway -------------------------------------------------------------------
 
-  private buildDcvConnectionGatewayInstanceInfrastructure(): void {
+  private buildDcvConnectionGatewayIdentity(): void {
     this.dcvConnectionGatewaySecurityGroup = new VirtualDesktopPublicLoadBalancerAccessSecurityGroup(
       this.context,
       `${this.moduleId}-${COMPONENT_DCV_CONNECTION_GATEWAY}-security-group`,
@@ -1388,57 +966,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       },
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
-    if (!this.hostsPresent) this.removeBastionHostIngressRule(this.dcvConnectionGatewaySecurityGroup);
-
-    if (!this.hostsPresent) {
-      this.dcvConnectionGatewayRole = this.buildIamRole(
-        `IAM role assigned to virtual-desktop-${COMPONENT_DCV_CONNECTION_GATEWAY}`,
-        COMPONENT_DCV_CONNECTION_GATEWAY,
-        'virtual-desktop-dcv-connection-gateway.yml',
-      );
-      return;
-    }
-
-    const gatewayBootstrapPackageUri = this.componentBootstrapPackageUri(
-      'dcv_connection_gateway_package_uri',
-      'dcv-connection-gateway',
-    );
-
-    const proxyConfig = this.proxyConfig();
-
-    const connectionGatewayUserdata = buildBootstrapUserData({
-      awsRegion: this.awsRegion,
-      bootstrapPackageUri: gatewayBootstrapPackageUri,
-      installCommands: ['/bin/bash dcv-connection-gateway/setup.sh'],
-      infraConfig: {
-        CERTIFICATE_SECRET_ARN: '${__CERTIFICATE_SECRET_ARN__}',
-        PRIVATE_KEY_SECRET_ARN: '${__PRIVATE_KEY_SECRET_ARN__}',
-      },
-      proxyConfig,
-      baseOs: this.requiredString(
-        'virtual-desktop-controller.dcv_connection_gateway.autoscaling.base_os',
-      ),
-    });
-
-    const certificateSecrets = this.dcvConnectionGatewayCertificateSecretArns();
-    const substitutedUserdata = Fn.sub(connectionGatewayUserdata, {
-      __CERTIFICATE_SECRET_ARN__: certificateSecrets.certificate,
-      __PRIVATE_KEY_SECRET_ARN__: certificateSecrets.privateKey,
-    });
-
-    this.dcvConnectionGatewayRole = this.buildIamRole(
-      `IAM role assigned to virtual-desktop-${COMPONENT_DCV_CONNECTION_GATEWAY}`,
-      COMPONENT_DCV_CONNECTION_GATEWAY,
-      'virtual-desktop-dcv-connection-gateway.yml',
-    );
-
-    this.dcvConnectionGatewayAutoScalingGroup = this.buildAutoScalingGroup({
-      componentName: COMPONENT_DCV_CONNECTION_GATEWAY,
-      securityGroup: this.dcvConnectionGatewaySecurityGroup,
-      iamRole: this.dcvConnectionGatewayRole,
-      substitutedUserdata,
-      nodeType: NODE_TYPE_INFRA,
-    });
+    this.removeBastionHostIngressRule(this.dcvConnectionGatewaySecurityGroup);
   }
 
   private buildDcvConnectionGatewayNetworkInfrastructure(): void {
@@ -1452,7 +980,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
         loadBalancerName: `${this.clusterName}-${this.moduleId}-external-nlb`,
         vpc: this.cluster.vpc,
         internetFacing: isPublic,
-        crossZoneEnabled: this.ecsEnabled ? true : undefined,
+        crossZoneEnabled: true,
         vpcSubnets: { subnets: externalNlbSubnets },
       },
     );
@@ -1471,50 +999,28 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
     const tgSuffix = quicSupported ? 'TUN' : 'TN';
 
     let dcvConnectionGatewayTargetGroup: elbv2.NetworkTargetGroup;
-    if (this.ecsEnabled) {
-      // The task is an IP target, so it cannot share the host group's target group, whose target
-      // type is fixed at creation. The name differs as well: the two groups exist together for the
-      // moment the change set creates one before it deletes the other.
-      dcvConnectionGatewayTargetGroup = new elbv2.NetworkTargetGroup(
-        this.stack,
-        'dcv-connection-gateway-ecs-target-group-nlb',
-        {
-          port: 8443,
-          protocol,
-          targetType: elbv2.TargetType.IP,
-          vpc: this.cluster.vpc,
-          targetGroupName: this.getTargetGroupName(`gw-ecs-${tgSuffix}`),
-          healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP, interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
-          // The NLB resets a draining DCV connection at the end of the drain, so a longer drain
-          // only delays the client's reconnect to a gateway that is already healthy.
-          deregistrationDelay: Duration.seconds(CONTAINER_STOP_SECONDS),
-          connectionTermination: true,
-        },
-      );
-      dcvConnectionGatewayTargetGroup.setAttribute('stickiness.enabled', 'true');
-      dcvConnectionGatewayTargetGroup.setAttribute('stickiness.type', 'source_ip');
-    } else {
-      const targetGroup = new elbv2.NetworkTargetGroup(
-        this.stack,
-        'dcv-connection-gateway-target-group-nlb',
-        {
-          port: 8443,
-          protocol,
-          targetType: elbv2.TargetType.INSTANCE,
-          vpc: this.cluster.vpc,
-          targets: [this.dcvConnectionGatewayAutoScalingGroup],
-          targetGroupName: this.getTargetGroupName(
-            `${COMPONENT_DCV_CONNECTION_GATEWAY}-${tgSuffix}`,
-          ),
-          healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP },
-          connectionTermination: true,
-        },
-      );
-      // Stickiness attributes have no construct property on a network target group.
-      targetGroup.setAttribute('stickiness.enabled', 'true');
-      targetGroup.setAttribute('stickiness.type', 'source_ip');
-      dcvConnectionGatewayTargetGroup = targetGroup;
-    }
+
+    // The task is an IP target, so it cannot share the host group's target group, whose target
+    // type is fixed at creation. The name differs as well: the two groups exist together for the
+    // moment the change set creates one before it deletes the other.
+    dcvConnectionGatewayTargetGroup = new elbv2.NetworkTargetGroup(
+      this.stack,
+      'dcv-connection-gateway-ecs-target-group-nlb',
+      {
+        port: 8443,
+        protocol,
+        targetType: elbv2.TargetType.IP,
+        vpc: this.cluster.vpc,
+        targetGroupName: this.getTargetGroupName(`gw-ecs-${tgSuffix}`),
+        healthCheck: { port: '8989', protocol: elbv2.Protocol.TCP, interval: Duration.seconds(5), timeout: Duration.seconds(4), healthyThresholdCount: 2, unhealthyThresholdCount: 2 },
+        // The NLB resets a draining DCV connection at the end of the drain, so a longer drain
+        // only delays the client's reconnect to a gateway that is already healthy.
+        deregistrationDelay: Duration.seconds(CONTAINER_STOP_SECONDS),
+        connectionTermination: true,
+      },
+    );
+    dcvConnectionGatewayTargetGroup.setAttribute('stickiness.enabled', 'true');
+    dcvConnectionGatewayTargetGroup.setAttribute('stickiness.type', 'source_ip');
 
     new elbv2.NetworkListener(this.externalNlb, 'dcv-connection-gateway-nlb-listener', {
       loadBalancer: this.externalNlb,
@@ -1544,9 +1050,8 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       );
     }
 
-    if (this.ecsEnabled) {
-      this.buildDcvConnectionGatewayService(dcvConnectionGatewayTargetGroup);
-    }
+    this.buildDcvConnectionGatewayService(dcvConnectionGatewayTargetGroup);
+
   }
 
   /**
@@ -1715,7 +1220,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       this.buildSelfSignedCertForDcvConnectionGateway();
     }
 
-    this.buildDcvConnectionGatewayInstanceInfrastructure();
+    this.buildDcvConnectionGatewayIdentity();
     this.buildDcvConnectionGatewayNetworkInfrastructure();
   }
 
@@ -1760,11 +1265,9 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       dcv_host_role_name: this.dcvHostRole.roleName,
       dcv_host_role_id: this.dcvHostRole.roleId,
       dcv_host_policy_arn: this.dcvHostPolicy.managedPolicyArn,
-      dcv_broker_role_arn: this.dcvBrokerRole.roleArn,
-      dcv_broker_role_name: this.dcvBrokerRole.roleName,
       // The controller authenticates queue messages by the sender's role id, including its own
       // and the broker's. Under containers those senders are the task roles.
-      dcv_broker_role_id: (this.dcvBrokerTaskRole ?? this.dcvBrokerRole).roleId,
+      dcv_broker_role_id: this.dcvBrokerTaskRole.roleId,
       scheduled_event_transformer_lambda_role_arn: this.scheduledEventTransformerLambdaRole.roleArn,
       scheduled_event_transformer_lambda_role_name: this.scheduledEventTransformerLambdaRole.roleName,
       scheduled_event_transformer_lambda_role_id: this.scheduledEventTransformerLambdaRole.roleId,
@@ -1774,9 +1277,7 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       ssm_commands_pass_role_arn: this.ssmCommandPassRole.roleArn,
       ssm_commands_pass_role_id: this.ssmCommandPassRole.roleId,
       ssm_commands_pass_role_name: this.ssmCommandPassRole.roleName,
-      controller_iam_role_arn: this.controllerRole.roleArn,
-      controller_iam_role_name: this.controllerRole.roleName,
-      controller_iam_role_id: (this.controllerTaskRole ?? this.controllerRole).roleId,
+      controller_iam_role_id: this.controllerTaskRole.roleId,
       events_sqs_queue_url: this.eventSqsQueue.queueUrl,
       events_sqs_queue_arn: this.eventSqsQueue.queueArn,
       controller_sqs_queue_url: this.controllerSqsQueue.queueUrl,
@@ -1784,24 +1285,12 @@ export class VirtualDesktopControllerStack extends IdeaBaseStack {
       'external_nlb.load_balancer_dns_name': this.externalNlb.loadBalancerDnsName,
       // Literals under the container flag: each service has to start after this resource, because
       // its application reads its own rows from it, so this resource must not reference a service.
-      'controller.asg_name': this.ecsEnabled
-        ? this.componentServiceName(COMPONENT_CONTROLLER)
-        : this.controllerAutoScalingGroup.autoScalingGroupName,
-      'controller.asg_arn': this.ecsEnabled
-        ? serviceArn(this.containerScope, this.componentServiceName(COMPONENT_CONTROLLER))
-        : this.controllerAutoScalingGroup.autoScalingGroupArn,
-      'dcv_broker.asg_name': this.ecsEnabled
-        ? this.componentServiceName(COMPONENT_DCV_BROKER)
-        : this.dcvBrokerAutoScalingGroup.autoScalingGroupName,
-      'dcv_broker.asg_arn': this.ecsEnabled
-        ? serviceArn(this.containerScope, this.componentServiceName(COMPONENT_DCV_BROKER))
-        : this.dcvBrokerAutoScalingGroup.autoScalingGroupArn,
-      'dcv_connection_gateway.asg_name': this.ecsEnabled
-        ? this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY)
-        : this.dcvConnectionGatewayAutoScalingGroup.autoScalingGroupName,
-      'dcv_connection_gateway.asg_arn': this.ecsEnabled
-        ? serviceArn(this.containerScope, this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY))
-        : this.dcvConnectionGatewayAutoScalingGroup.autoScalingGroupArn,
+      'controller.asg_name': this.componentServiceName(COMPONENT_CONTROLLER),
+      'controller.asg_arn': serviceArn(this.containerScope, this.componentServiceName(COMPONENT_CONTROLLER)),
+      'dcv_broker.asg_name': this.componentServiceName(COMPONENT_DCV_BROKER),
+      'dcv_broker.asg_arn': serviceArn(this.containerScope, this.componentServiceName(COMPONENT_DCV_BROKER)),
+      'dcv_connection_gateway.asg_name': this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY),
+      'dcv_connection_gateway.asg_arn': serviceArn(this.containerScope, this.componentServiceName(COMPONENT_DCV_CONNECTION_GATEWAY)),
     };
 
     if (

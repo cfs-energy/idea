@@ -104,7 +104,7 @@ export class IdeaApiInvoker {
 
         let url = `${this.props.url}/${request.header!.namespace}`
 
-        if(this.logger.isTrace()) {
+        if(this.logger.isTrace() && !request.header?.namespace?.startsWith('Terminal.')) {
             this.logger.trace(`(req) ${JSON.stringify(request, null, 2)}`)
         }
 
@@ -127,7 +127,7 @@ export class IdeaApiInvoker {
             }
         }
 
-        if(this.logger.isTrace() && request.header?.namespace !== 'Auth.CreateApiToken') {
+        if(this.logger.isTrace() && request.header?.namespace !== 'Auth.CreateApiToken' && !request.header?.namespace?.startsWith('Terminal.')) {
             this.logger.trace(`(res) ${JSON.stringify(response, null, 2)}`)
         }
 

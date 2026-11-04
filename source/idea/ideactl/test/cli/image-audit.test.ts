@@ -13,6 +13,6 @@ const dockerfileUrl = new URL(
 test("removes build-only package payloads in their creating layers", async () => {
   const dockerfile = await readFile(dockerfileUrl, "utf8");
 
-  assert.match(dockerfile, /rm -rf \/root\/\.cache\/pip;/);
+  assert.match(dockerfile, /rm -rf [^;\n]*\/root\/\.cache\/pip;/);
   assert.match(dockerfile, /find node_modules -type f -name '\*\.d\.ts' -delete;/);
 });

@@ -293,3 +293,46 @@ def test_failed_rebuild_is_retried_on_the_next_leader_tick(monkeypatch):
     assert app._software_stacks_reindexed
     assert len(calls) == 2
     assert entry_ids(context, EntryAction.CREATE_ENTRY) == ['ss-1']
+
+
+def test_software_stack_updates_send_the_same_complete_document_as_creates():
+    from ideadatamodel import Project, SocaMemory, SocaMemoryUnit
+    from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
+        VirtualDesktopSoftwareStackDB,
+    )
+
+    context = Mock()
+    context.config().get_string.return_value = SOFTWARE_STACK_ALIAS
+    context.software_stack_template_version = 3
+    context.projects_client.get_project.return_value.project = Project(
+        project_id='research', name='research', title='Research'
+    )
+    db = object.__new__(VirtualDesktopSoftwareStackDB)
+    db.context = context
+    db._logger = Mock()
+    utils = object.__new__(VirtualDesktopSoftwareStackUtils)
+    utils.context = context
+    utils._software_stack_db = db
+    stack = VirtualDesktopSoftwareStack(
+        stack_id='ss-base-rocky9-x86-64-base',
+        name='Rocky Linux 9',
+        base_os='rocky9',
+        architecture='x86_64',
+        ami_id='ami-example',
+        min_storage=SocaMemory(value=20, unit=SocaMemoryUnit.GB),
+        min_ram=SocaMemory(value=4, unit=SocaMemoryUnit.GB),
+        enabled=True,
+        projects=[Project(project_id='research')],
+    )
+    utils.index_software_stack_entry_to_opensearch(stack)
+    utils.update_software_stack_entry_to_opensearch(stack)
+    create, update = [
+        call.args[0] for call in context.analytics_service().post_entry.call_args_list
+    ]
+    assert update.entry_action == EntryAction.UPDATE_ENTRY
+    assert update.entry_content.entry_record == create.entry_content.entry_record
+    document = update.entry_content.entry_record
+    assert document['stack_id'] == stack.stack_id
+    assert document['ami_id'] == stack.ami_id
+    assert document['base_os'] == 'rocky9'
+    assert document['projects'][0]['project_id'] == 'research'

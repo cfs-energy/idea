@@ -15,6 +15,8 @@ import {applyDensity, applyMode, Density, Mode} from "@cloudscape-design/global-
 import React, {Component, RefObject} from 'react'
 
 import {Button, Popover, TopNavigation} from "@cloudscape-design/components";
+import {bastionAvailable, shellStore} from "../../pages/home/terminal/shell-store";
+import {hasAccess} from "../../navigation/task-navigation";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
 import IdeaForm from "../form";
@@ -75,6 +77,8 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
             this.setThemeMode(darkMode)
             this.setThemeDensity(compactMode)
         })
+        this.unsubscribeShell = shellStore.subscribe(() => this.forceUpdate())
+        if (hasAccess(AppContext.get(), 'cluster')) void shellStore.loadTargets(AppContext.get().client().terminal())
         this.refreshTicker()
         this.tickerPoll = setInterval(() => {
             if (document.visibilityState === 'visible') this.refreshTicker()
@@ -84,12 +88,14 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
 
     private disposed = false
     private unsubscribeCosts?: () => void
+    private unsubscribeShell?: () => void
     private tickerPoll?: ReturnType<typeof setInterval>
     private tickerRetry?: ReturnType<typeof setTimeout>
 
     componentWillUnmount() {
         this.disposed = true
         this.unsubscribeCosts?.()
+        this.unsubscribeShell?.()
         clearInterval(this.tickerPoll)
         clearTimeout(this.tickerRetry)
         document.removeEventListener('visibilitychange', this.onVisibilityChange)
@@ -294,6 +300,13 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                             },
                             items: getNotifications()
                         },
+                        ...(bastionAvailable(shellStore.get()) && hasAccess(AppContext.get(), 'cluster') ? [{
+                            type: 'button' as const,
+                            text: 'Shell',
+                            iconName: 'command-prompt' as const,
+                            ariaLabel: 'Open a shell on the bastion',
+                            onClick: () => shellStore.open('bastion', 'Bastion')
+                        }] : []),
                         ...(showTicker ? [{
                             type: 'button' as const,
                             text: `${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency}).format(ticker.total!)} · ${ticker.period}`,

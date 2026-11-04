@@ -21,3 +21,8 @@ class DynamoDBStreamSubscriber(ABC):
 
     @abstractmethod
     def on_delete(self, entry: Dict): ...
+
+    @abstractmethod
+    def on_reset(self):
+        """Reload the current snapshot after stream history is lost."""
+        ...

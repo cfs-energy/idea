@@ -70,8 +70,16 @@ function fixtureAccount(): string {
   return (readJson(SYNTH_READS)[CALLER_IDENTITY_KEY] as Json).account as string;
 }
 
+/**
+ * demo1 was captured with the dashboard route on the external load balancer, which is opt-in
+ * now, so every synthesis here opts in to stay comparable with the recorded template.
+ * analytics-dashboard-route.test.ts covers the default.
+ */
+const PUBLISHED_DASHBOARD: Record<string, Json> = { 'analytics.opensearch.endpoints.external.enabled': { BOOL: true } };
+
 /** Copies the demo1 settings scan, replacing the value of each named key (adding it if absent). */
-function configWith(overrides: Record<string, Json>): string {
+function configWith(requested: Record<string, Json>): string {
+  const overrides = { ...PUBLISHED_DASHBOARD, ...requested };
   const scan = readJson(CONFIG_FILE);
   const remaining = new Set(Object.keys(overrides));
   for (const item of scan.Items as Json[]) {
@@ -108,7 +116,7 @@ interface AnalyticsSynthOptions {
 async function synthAnalyticsUncached(
   options: AnalyticsSynthOptions = {},
 ): Promise<{ template: Json; manifest: Json }> {
-  const configFile = options.configFile ?? CONFIG_FILE;
+  const configFile = options.configFile ?? configWith({});
   const synthReadsFile = options.synthReadsFile ?? SYNTH_READS;
   const workdir = scratch('app');
   cpSync(CONTEXT_FILE, join(workdir, 'cdk.context.json'));
@@ -172,7 +180,7 @@ async function synthAnalytics(
 function synthDirect(
   options: { configFile?: string; awsRegion?: string; serviceLinkedRoleExists?: boolean } = {},
 ): Json {
-  const configFile = options.configFile ?? CONFIG_FILE;
+  const configFile = options.configFile ?? configWith({});
   const outdir = join(scratch('direct'), 'out');
   const app = new App({
     context: { 'aws:cdk:enable-path-metadata': true, ...readJson(CONTEXT_FILE) },

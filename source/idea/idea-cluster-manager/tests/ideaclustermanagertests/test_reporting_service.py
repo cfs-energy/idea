@@ -1123,6 +1123,64 @@ def test_summary_sources_include_storage_only_users_in_selected_period():
     assert result['coverage']['storage'] == 'ready'
 
 
+def test_storage_reads_only_the_period_share_rows_with_the_same_result():
+    days = ['2023-12-31', '2024-01-31', '2024-02-01', '2024-02-15', '2024-02-29']
+    days += ['2024-03-01', '2024-11-02']
+    stored = sorted(
+        (
+            dict(
+                record=f'share:{day}:{fs_id}',
+                payload=json.dumps({'users': {f'{fs_id}@{day}': 1}}),
+            )
+            for day in days
+            for fs_id in ('fs-0a1', 'fs-zz9', 'volume')
+        ),
+        key=lambda row: row['record'],
+    )
+    read = []
+
+    def records(subject, prefix, last=None):
+        # the store's key condition: begins_with, or between inclusive
+        for row in stored:
+            key = row['record']
+            if key.startswith(prefix) if last is None else prefix <= key <= last:
+                read.append(key)
+                yield row
+
+    costs = SimpleNamespace(
+        table=Mock(scan=Mock(return_value={'Items': []})),
+        records=records,
+        resolve_source=lambda subject, value: value,
+    )
+    context = SimpleNamespace(
+        accounts=SimpleNamespace(
+            list_users=lambda request: SimpleNamespace(listing=[], paginator=None)
+        ),
+        projects=SimpleNamespace(
+            list_projects=lambda request: SimpleNamespace(listing=[], paginator=None)
+        ),
+        personal_costs_store=costs,
+        config=lambda: SimpleNamespace(is_module_enabled=lambda module: False),
+    )
+    selected = period()
+    result = ReportingSources(context).read(
+        selected, time.monotonic() + 30, include_storage=True
+    )
+    # what a read of every share row filtered to the period returns
+    expected = [
+        dict(json.loads(row['payload']), date=row['record'].split(':')[1])
+        for row in stored
+        if selected.start_date <= row['record'].split(':')[1] <= selected.end_date
+    ]
+    assert len(expected) == 9
+    assert result['storage'] == expected
+    assert read == [
+        row['record']
+        for row in stored
+        if row['record'].split(':')[1] in ('2024-02-01', '2024-02-15', '2024-02-29')
+    ]
+
+
 def test_an_unreadable_source_is_logged(caplog):
     import logging
 

@@ -24,7 +24,9 @@ from threading import Thread, Event
 console = ConsoleLogger('instance_monitor')
 
 INSTANCE_MONITOR_INTERVAL_SECS = 30
-PAGE_SIZE = 20
+# DescribeInstances returns at most 1000 per page; every page counts against the regional
+# Describe* throttle that provisioning shares.
+PAGE_SIZE = 1000
 
 
 class InstanceMonitor(SocaService):

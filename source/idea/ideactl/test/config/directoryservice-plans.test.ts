@@ -45,12 +45,12 @@ const directoryProviders: Array<{
   provider: string | undefined;
   pythonUploads: boolean;
 }> = [
-  { provider: "openldap", pythonUploads: true },
-  { provider: "activedirectory", pythonUploads: false },
-  { provider: "aws_managed_activedirectory", pythonUploads: false },
-  { provider: "unknown-provider", pythonUploads: false },
-  { provider: undefined, pythonUploads: false },
-];
+    { provider: "openldap", pythonUploads: true },
+    { provider: "activedirectory", pythonUploads: false },
+    { provider: "aws_managed_activedirectory", pythonUploads: false },
+    { provider: "unknown-provider", pythonUploads: false },
+    { provider: undefined, pythonUploads: false },
+  ];
 
 test("the previous implementation names exactly three directory providers", () => {
   assert.match(pythonConstants, /DIRECTORYSERVICE_OPENLDAP = 'openldap'/);
@@ -80,49 +80,8 @@ describe("directoryservice plans match the previous implementation", () => {
   }
 });
 
-const hostModules: Array<{
-  moduleName: string;
-  moduleId: string;
-  components: string[][];
-}> = [
-  {
-    moduleName: "cluster-manager",
-    moduleId: "cluster-manager",
-    components: [["cluster-manager"]],
-  },
-  {
-    moduleName: "scheduler",
-    moduleId: "scheduler",
-    components: [["scheduler"]],
-  },
-  {
-    moduleName: "bastion-host",
-    moduleId: "bastion-host",
-    components: [["common", "bastion-host"]],
-  },
-  {
-    moduleName: "virtual-desktop-controller",
-    moduleId: "vdc",
-    components: [
-      ["virtual-desktop-controller"],
-      ["dcv-broker"],
-      ["dcv-connection-gateway"],
-    ],
-  },
-];
-
-describe("other host modules keep their plans on every directory provider", () => {
-  for (const host of hostModules) {
-    for (const row of directoryProviders) {
-      const label = row.provider ?? "undefined";
-      test(`${host.moduleName} with provider ${label}`, () => {
-        assert.deepEqual(
-          planSummary(
-            bootstrapPackagePlans(host.moduleName, host.moduleId, DEPLOYMENT_ID, row.provider),
-          ),
-          host.components,
-        );
-      });
-    }
-  }
-});
+for (const module of ["cluster-manager", "scheduler", "bastion-host", "virtual-desktop-controller"]) {
+  test(`${module} has no host bootstrap plan`, () => {
+    for (const { provider } of directoryProviders) assert.deepEqual(bootstrapPackagePlans(module, module, DEPLOYMENT_ID, provider), []);
+  });
+}

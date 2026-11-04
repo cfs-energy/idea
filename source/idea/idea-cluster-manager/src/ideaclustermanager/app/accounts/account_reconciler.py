@@ -107,6 +107,12 @@ class AccountReconciler(SocaService):
             'ec2-user',
             'ssm-user',
             'centos',
+            'rocky',
+            'ubuntu',
+            'almalinux',
+            'debian',
+            'fedora',
+            'cloud-user',
         }
 
     def upstream(self, user, metadata=None, settings=None):

@@ -695,8 +695,6 @@ class DesktopImagePipeline:
     def _release_trigger(self):
         config = self.context.config()
         baked = config.get_string(BAKED_RELEASE_KEY, default=None)
-        if baked == self.version:
-            return
         rows = self.seed_rows()
         # a row baked today waits for tomorrow's tick; the release stays unsettled till then
         waiting = False
@@ -709,7 +707,11 @@ class DesktopImagePipeline:
             ):
                 if self.queue(record, ImageBuildTrigger.RELEASE)[0] == 'baked_today':
                     waiting = True
-        if not waiting and all(not r.is_in_flight() for r in self.managed()):
+        if (
+            baked != self.version
+            and not waiting
+            and all(not r.is_in_flight() for r in self.managed())
+        ):
             self._set_config(BAKED_RELEASE_KEY, self.version)
             self._logger.info(f'every desktop image row is settled for {self.version}')
 

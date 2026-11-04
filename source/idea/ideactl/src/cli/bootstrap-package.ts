@@ -76,26 +76,10 @@ export interface UploadBootstrapPackageOptions {
   logger?: (message: string) => void;
 }
 
-export interface UploadReleasePackageOptions {
-  client: BootstrapPackageUploadClient;
-  clusterS3Bucket: string;
-  packageDistDir: string;
-  packageName: string;
-  upload?: boolean;
-  logger?: (message: string) => void;
-}
-
 export interface BuildAndUploadBootstrapPackageOptions extends BootstrapPackageBuildOptions {
   client: BootstrapPackageUploadClient;
   clusterS3Bucket: string;
   upload?: boolean;
-}
-
-export interface BootstrapPackageUris {
-  bootstrapPackageUri?: string;
-  controllerBootstrapPackageUri?: string;
-  dcvBrokerBootstrapPackageUri?: string;
-  dcvConnectionGatewayPackageUri?: string;
 }
 
 export interface BootstrapPackagePlan {
@@ -123,10 +107,7 @@ interface TarHeaderValues {
 const TAR_BLOCK_SIZE = 512;
 
 /** Invalid bootstrap package input. */
-export class BootstrapPackageError extends Error {}
-
-/** Missing release archive. */
-export class PackageNotFoundError extends Error {}
+export class BootstrapPackageError extends Error { }
 
 /**
  * Returns names for each host role's rendered bootstrap tree. The caller
@@ -134,19 +115,13 @@ export class PackageNotFoundError extends Error {}
  */
 export function bootstrapPackageBasenames(moduleId: string, deploymentId: string): {
   standard: string;
-  controller: string;
-  dcvBroker: string;
-  dcvConnectionGateway: string;
 } {
   return {
     standard: `bootstrap-${moduleId}-${deploymentId}`,
-    controller: `bootstrap-${moduleId}-controller-${deploymentId}`,
-    dcvBroker: `bootstrap-${moduleId}-dcv-broker-${deploymentId}`,
-    dcvConnectionGateway: `bootstrap-${moduleId}-dcv-connection-gateway-${deploymentId}`,
   };
 }
 
-/** Per-module build inputs used by `upload-packages` and deploy. The builder prepends `common` when needed. */
+/** Per-module bootstrap inputs used by deploy. The builder prepends `common` when needed. */
 export function bootstrapPackagePlans(
   moduleName: string,
   moduleId: string,
@@ -165,68 +140,12 @@ export function bootstrapPackagePlans(
       ? [{ basename: names.standard, components: ["common", "openldap-server"], contextParameter: "bootstrap_package_uri" }]
       : [];
   }
-  if (moduleName === "cluster-manager") {
-    return [{ basename: names.standard, components: ["cluster-manager"], contextParameter: "bootstrap_package_uri" }];
-  }
-  if (moduleName === "scheduler") {
-    return [{ basename: names.standard, components: ["scheduler"], contextParameter: "bootstrap_package_uri" }];
-  }
-  if (moduleName === "bastion-host") {
-    return [{ basename: names.standard, components: ["common", "bastion-host"], contextParameter: "bootstrap_package_uri" }];
-  }
-  if (moduleName === "virtual-desktop-controller") {
-    return [
-      {
-        basename: names.controller,
-        components: ["virtual-desktop-controller"],
-        contextParameter: "controller_bootstrap_package_uri",
-      },
-      {
-        basename: names.dcvBroker,
-        components: ["dcv-broker"],
-        contextParameter: "dcv_broker_bootstrap_package_uri",
-      },
-      {
-        basename: names.dcvConnectionGateway,
-        components: ["dcv-connection-gateway"],
-        contextParameter: "dcv_connection_gateway_package_uri",
-      },
-    ];
-  }
   return [];
-}
-
-/** Release archives uploaded by `upload-packages` for each module. */
-export function releasePackageNames(moduleName: string, releaseVersion: string): string[] {
-  const packageNameByModule: Record<string, string[]> = {
-    "cluster-manager": ["idea-cluster-manager"],
-    scheduler: ["idea-scheduler"],
-    "virtual-desktop-controller": ["idea-virtual-desktop-controller", "idea-dcv-connection-gateway"],
-  };
-  return (packageNameByModule[moduleName] ?? []).map((packageName) => `${packageName}-${releaseVersion}.tar.gz`);
 }
 
 /** The S3 URI returned after a bootstrap archive is uploaded. */
 export function bootstrapPackageUri(clusterS3Bucket: string, archiveFile: string): string {
   return `s3://${clusterS3Bucket}/idea/bootstrap/${basename(archiveFile)}`;
-}
-
-/** Returns the release-package URI, whether the package is uploaded or not. */
-export function releasePackageUri(clusterS3Bucket: string, packageName: string): string {
-  return `s3://${clusterS3Bucket}/idea/releases/${packageName}`;
-}
-
-/** Returns context arguments in insertion order. Host modules use one URI and eVDI uses three role-specific URIs. */
-export function bootstrapContextParameterArgs(uris: BootstrapPackageUris): string[] {
-  const values: Array<[string, string | undefined]> = [
-    ["bootstrap_package_uri", uris.bootstrapPackageUri],
-    ["controller_bootstrap_package_uri", uris.controllerBootstrapPackageUri],
-    ["dcv_broker_bootstrap_package_uri", uris.dcvBrokerBootstrapPackageUri],
-    ["dcv_connection_gateway_package_uri", uris.dcvConnectionGatewayPackageUri],
-  ];
-  return values
-    .filter((entry): entry is [string, string] => entry[1] !== undefined)
-    .map(([key, value]) => `-c ${key}=${value}`);
 }
 
 /**
@@ -498,25 +417,4 @@ export async function buildAndUploadBootstrapPackage(
     archiveFile,
     logger: options.logger,
   });
-}
-
-/** Uploads a release package to `idea/releases/` after checking that it exists. */
-export async function uploadReleasePackage(options: UploadReleasePackageOptions): Promise<string> {
-  const packageFile = join(options.packageDistDir, options.packageName);
-  if (!existsSync(packageFile)) {
-    throw new PackageNotFoundError(`package not found: ${packageFile}`);
-  }
-  const key = `idea/releases/${basename(packageFile)}`;
-  const uri = `s3://${options.clusterS3Bucket}/${key}`;
-  if (options.upload !== false) {
-    options.logger?.(`uploading release package: ${uri} ...`);
-    await options.client.send(
-      new PutObjectCommand({
-        Bucket: options.clusterS3Bucket,
-        Key: key,
-        Body: readFileSync(packageFile),
-      }),
-    );
-  }
-  return uri;
 }

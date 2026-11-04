@@ -1,10 +1,9 @@
 """
-PuTTY private key files (.ppk) written in process, for a host without puttygen.
+PuTTY private key files (.ppk) written in process, for the control-plane container.
 
 The layout is PuTTY's version 2 as puttygen -o writes it for a key without a passphrase:
 every PuTTY, WinSCP and MobaXterm loads it. The control-plane image is Amazon Linux 2023,
-which ships no putty package, so the container takes this path; a host with puttygen on
-its PATH keeps using it.
+which ships no putty package.
 """
 
 import base64

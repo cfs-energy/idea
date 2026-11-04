@@ -13,8 +13,8 @@
 # AWS_ACCOUNT_ID, IDEA_ROUTE53_ZONE_ID, SCHED_TIMEOUT, IDEA_ROLE_SOURCE.
 #
 # IDEA_ROLE_SOURCE is the image's role material in the working tree. It is mounted over the copy
-# baked into the image so the run exercises the entrypoint, role scripts and user sync as they
-# stand here, which is what a rebuilt image would carry.
+# baked into the image so the run exercises the current entrypoint and role scripts. The image
+# must be rebuilt after scheduler package changes, including ideascheduler.app.sync_users.
 
 set -euo pipefail
 
@@ -52,7 +52,7 @@ cp "$(dirname "$0")/iam-endpoint.py" "${WORK}/iam-endpoint.py"
 
 # The image chmods this material at build time, so stage an executable copy to mount.
 mkdir -p "${WORK}/image"
-cp -R "${SRC}/entrypoint.sh" "${SRC}/sync_users.py" "${SRC}/roles" "${WORK}/image/"
+cp -R "${SRC}/entrypoint.sh" "${SRC}/roles" "${WORK}/image/"
 chmod +x "${WORK}/image/entrypoint.sh" "${WORK}/image/roles/"*.sh
 
 FAILED=0
@@ -136,7 +136,6 @@ run_scheduler() {
   d run -d --name "${TAG}-sched" --network "${NET}" \
     -v "${TAG}-apps":/apps -v "${TAG}-pbs":/var/spool/pbs \
     -v "${WORK}/image/entrypoint.sh":/opt/idea/entrypoint.sh:ro \
-    -v "${WORK}/image/sync_users.py":/opt/idea/sync_users.py:ro \
     -v "${WORK}/image/roles":/opt/idea/roles:ro \
     -e AWS_DEFAULT_REGION="${REGION}" \
     -e AWS_ENDPOINT_URL=http://iam:8099 \
@@ -222,7 +221,6 @@ for ROLE in cluster-manager vdc; do
   d run -d --name "${TAG}-${ROLE}" --network "${NET}" \
     -v "${TAG}-apps2":/apps \
     -v "${WORK}/image/entrypoint.sh":/opt/idea/entrypoint.sh:ro \
-    -v "${WORK}/image/sync_users.py":/opt/idea/sync_users.py:ro \
     -v "${WORK}/image/roles":/opt/idea/roles:ro \
     -e AWS_DEFAULT_REGION="${REGION}" -e AWS_ENDPOINT_URL=http://iam:8099 \
     -e AWS_ACCESS_KEY_ID=task -e AWS_SECRET_ACCESS_KEY=task -e AWS_EC2_METADATA_DISABLED=true \

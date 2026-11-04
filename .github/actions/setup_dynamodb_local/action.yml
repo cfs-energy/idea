@@ -1,0 +1,13 @@
+name: Setup DynamoDB Local
+description: Cache and install the versioned, checksum-verified test database
+runs:
+  using: composite
+  steps:
+    - name: Cache DynamoDB Local
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.idea/lib/dynamodb-local
+        key: dynamodb-local-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('source/idea/idea-test-utils/src/ideatestutils/dynamodb/install.py') }}
+    - name: Install DynamoDB Local
+      shell: bash
+      run: python3 "$GITHUB_WORKSPACE/source/idea/idea-test-utils/src/ideatestutils/dynamodb/install.py"

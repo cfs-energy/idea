@@ -66,9 +66,11 @@ ${body}`], {
           assert.match(readFileSync(join(home, files[0]!), "utf8"), /compute_node/);
         } else {
           // An existing datastore keeps its server and queue policy; only hooks (re-imported when
-          // the image changed them) and the manager list are refreshed on every start.
+          // the image changed them), the manager list and a PBS-default log_events are refreshed on
+          // every start.
           assert.ok(calls.startsWith("daemons\n"), calls);
-          assert.doesNotMatch(calls, /set server (?!managers)|create queue|set queue|set sched/);
+          assert.doesNotMatch(calls, /set server (?!managers|log_events = 255\n)|create queue|set queue|set sched/);
+          assert.match(calls, /^-c set server log_events = 255$/m);
           for (const file of files.filter((f) => f !== "pbs_environment")) assert.equal(readFileSync(join(home, file), "utf8"), "operator configuration\n");
           // pbs_environment is rewritten from the image on every start, after a timestamped copy.
           assert.ok(readdirSync(home).some((f) => f.startsWith("pbs_environment.") && readFileSync(join(home, f), "utf8") === "operator configuration\n"));

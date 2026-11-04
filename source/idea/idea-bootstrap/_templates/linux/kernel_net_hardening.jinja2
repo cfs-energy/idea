@@ -1,0 +1,87 @@
+# Begin: Kernel Network Hardening
+{# Interim mitigations for CVE-2026-98432 (use-after-free in IPv4 SYN handling). Neither closes the
+   bug; a fixed kernel does. Shared by first bootstrap and the running-desktop refresh, which renders
+   without the cluster config and passes the flag as a variable. POSIX: the refresh runs under dash. #}
+{% if drop_tcp_ip_options is not defined %}
+{% set drop_tcp_ip_options = context.config.get_bool('global-settings.kernel_hardening.drop_tcp_ip_options', default=True) if context.config is defined else True %}
+{% endif %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+# Writes stdin to $1 only when it differs, so a re-run (the refresh) changes nothing. 0 = written.
+idea_net_write() {
+  idea_net_new=$(cat)
+  [ "$(cat "$1" 2>/dev/null)" != "${idea_net_new}" ] || return 1
+  mkdir -p "$(dirname "$1")" && printf '%s\n' "${idea_net_new}" > "$1"
+}
+# An MPTCP listener is the demonstrated remote-root path (Go 1.24+ listens with MPTCP when the
+# kernel allows it) and request migration is a second trigger. No IDEA service needs either.
+# -e: a kernel without MPTCP has no net.mptcp key, which must not stop the other setting.
+idea_net_write /etc/sysctl.d/90-idea-net-hardening.conf << 'IDEA_SYSCTL_EOF' || true
+# IDEA-managed: CVE-2026-98432 interim hardening. Not a fix; a patched kernel is.
+net.mptcp.enabled = 0
+net.ipv4.tcp_migrate_req = 0
+IDEA_SYSCTL_EOF
+sysctl -q -e -p /etc/sysctl.d/90-idea-net-hardening.conf > /dev/null 2>&1 || log_warning "network hardening sysctls not fully applied"
+{% if drop_tcp_ip_options %}
+# Drop IPv4 TCP packets that carry IP options before they reach TCP; legitimate TCP does not use
+# them. Host network namespace only. Off: global-settings.kernel_hardening.drop_tcp_ip_options.
+if ! command -v nft > /dev/null 2>&1; then
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=300 nftables > /dev/null 2>&1 || true
+{% else %}
+  # the refresh runs without bootstrap_common.sh and its retrying wrapper
+  command -v package_transaction > /dev/null 2>&1 || package_transaction() { "$@"; }
+  package_transaction dnf install -y nftables > /dev/null 2>&1 || true
+{% endif %}
+fi
+if command -v nft > /dev/null 2>&1; then
+  IDEA_NET_CHANGED=no
+  # add, delete, define: one atomic transaction, so loading it again replaces the table
+  idea_net_write /etc/idea/idea-tcp-ip-options.nft << 'IDEA_NFT_EOF' && IDEA_NET_CHANGED=yes
+table inet idea_tcp_ip_options
+delete table inet idea_tcp_ip_options
+table inet idea_tcp_ip_options {
+  chain prerouting {
+    type filter hook prerouting priority -300; policy accept;
+    ip hdrlength > 5 meta l4proto tcp counter drop
+  }
+}
+IDEA_NFT_EOF
+  # nftables.service flushes the whole ruleset when it starts, so this loads after it
+  if idea_net_write /etc/systemd/system/idea-tcp-ip-options.service << 'IDEA_UNIT_EOF'
+[Unit]
+Description=IDEA: drop IPv4 TCP packets carrying IP options (CVE-2026-98432 interim)
+Wants=network-pre.target
+Before=network-pre.target
+After=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/idea/idea-tcp-ip-options.nft
+ExecStop=-/usr/sbin/nft delete table inet idea_tcp_ip_options
+
+[Install]
+WantedBy=multi-user.target
+IDEA_UNIT_EOF
+  then
+    IDEA_NET_CHANGED=yes
+    systemctl daemon-reload
+  fi
+  systemctl is-enabled idea-tcp-ip-options.service > /dev/null 2>&1 || systemctl enable idea-tcp-ip-options.service > /dev/null 2>&1 || log_warning "unable to enable idea-tcp-ip-options.service"
+  # the unit stays active after an nftables restart drops the table, so check the table itself
+  if [ "${IDEA_NET_CHANGED}" = yes ] || ! nft list table inet idea_tcp_ip_options > /dev/null 2>&1; then
+    systemctl restart idea-tcp-ip-options.service || log_warning "IP options drop rule not loaded"
+  fi
+else
+  log_warning "nftables unavailable; IPv4 TCP IP options drop rule not installed"
+fi
+{% else %}
+if [ -f /etc/systemd/system/idea-tcp-ip-options.service ]; then
+  systemctl disable --now idea-tcp-ip-options.service > /dev/null 2>&1 || true
+  rm -f /etc/systemd/system/idea-tcp-ip-options.service /etc/idea/idea-tcp-ip-options.nft
+  systemctl daemon-reload
+fi
+! command -v nft > /dev/null 2>&1 || nft delete table inet idea_tcp_ip_options > /dev/null 2>&1 || true
+{% endif %}
+{% endif %}
+# End: Kernel Network Hardening

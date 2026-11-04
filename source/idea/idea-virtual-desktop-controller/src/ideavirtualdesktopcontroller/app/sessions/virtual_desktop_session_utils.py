@@ -1037,19 +1037,27 @@ class VirtualDesktopSessionUtils:
                 fail_response_list.append(session)
                 continue
 
+            session.server.idea_session_id = session.idea_session_id
             servers_to_start.append(session.server)
             session_server_map[session.server.instance_id] = session
 
-        response = self._server_utils.start_dcv_hosts(servers_to_start)
-
         for server in servers_to_start:
+            response = self._server_utils.start_dcv_hosts(
+                [server],
+                hibernation_enabled=bool(
+                    session_server_map[server.instance_id].hibernation_enabled
+                ),
+            )
             if 'ERROR' in response:
                 session_server_map[
                     server.instance_id
                 ].failure_reason = Utils.get_value_as_string(
                     'ERROR', response, 'There is an error, please check with Admin.'
                 )
-                fail_response_list.append(session_server_map[server.instance_id])
+                session = self._session_db.update(
+                    session_server_map[server.instance_id]
+                )
+                fail_response_list.append(session)
             else:
                 session_server_map[
                     server.instance_id

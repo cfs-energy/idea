@@ -97,6 +97,6 @@ deployment/regional-s3-assets/
 .ipynb_checkpoints/
 
 # Local development
-tasks/local_dev.py
+mise.local.toml
 build-dev-mode/
 codebuild_build.sh

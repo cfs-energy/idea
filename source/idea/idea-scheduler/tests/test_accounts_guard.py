@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 from ideadatamodel import SocaJob, SocaJobState, exceptions
+from ideadatamodel.scheduler import SubmitJobRequest
 from ideascheduler.app.accounts_guard import require_enabled, sweep_disabled_jobs
 from ideascheduler.app.api.scheduler_api import SchedulerAPI
 from ideascheduler.app.api.opepbs_api import OpenPBSAPI
@@ -67,14 +68,17 @@ def test_lookup_failure_does_not_delete_jobs():
     ctx.scheduler.delete_job.assert_not_called()
 
 
-def test_api_refuses_before_submission():
+@pytest.mark.parametrize('client_submission_id', [None, 'submission-1'])
+def test_api_refuses_before_submission(client_submission_id):
     api = SchedulerAPI.__new__(SchedulerAPI)
     api.context = context()
     api.check_maintenance = Mock()
     api._submit_job = Mock()
     invocation = Mock()
     invocation.get_username.return_value = 'user'
-    invocation.get_request_payload_as.return_value = SimpleNamespace(job_owner='user')
+    invocation.get_request_payload_as.return_value = SubmitJobRequest(
+        job_owner='user', client_submission_id=client_submission_id
+    )
     with pytest.raises(exceptions.SocaException):
         api.submit_job(invocation)
     api._submit_job.assert_not_called()

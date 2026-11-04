@@ -435,7 +435,13 @@ class ReportingSources:
                 from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
 
                 rows = []
-                for row in store.records(SYSTEM, 'share:'):
+                # share:<day>:<fs id>, so a key range reads only the period's days; '~'
+                # sorts after every character a filesystem id holds
+                for row in store.records(
+                    SYSTEM,
+                    f'share:{period.start_date}',
+                    f'share:{period.end_date}~',
+                ):
                     check_deadline(deadline)
                     day = row['record'].split(':')[1]
                     if period.start_date <= day <= period.end_date:

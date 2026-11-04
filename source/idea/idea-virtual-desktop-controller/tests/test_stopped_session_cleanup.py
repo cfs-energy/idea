@@ -177,7 +177,7 @@ class FakeClock:
 
 
 class FakeServerUtils:
-    def start_dcv_hosts(self, servers) -> Dict:
+    def start_dcv_hosts(self, servers, hibernation_enabled=False) -> Dict:
         return {}
 
 

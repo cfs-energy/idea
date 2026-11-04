@@ -231,7 +231,7 @@ Compare local `config/` files to the settings table as MODIFIED, DELETED, or ADD
 
 ## `config preview-upgrade`
 
-Print the configuration drift an upgrade would apply, without writing it. Missing or unverifiable release images appear as blocking findings; the complete preview is printed before exiting with code 1. `--skip-release-image-check` skips the registry lookup, logs that the image was not verified, and keeps the proposed image move.
+Print the configuration drift an upgrade would apply, without writing it. Missing or unverifiable release images appear as blocking findings; the complete preview is printed before exiting with code 1. `--skip-release-image-check` skips the registry lookup, logs that the image was not verified, and keeps the proposed image move, except on GovCloud when `ecs.image_repositories.aws-us-gov` is unset: the public fallback is always resolved to a manifest digest and written as `tag@sha256:...`.
 
 **Usage:** `ideactl config preview-upgrade [options] [modules...]`
 
@@ -374,7 +374,7 @@ Render the CDK toolkit template and run `cdk bootstrap` for the cluster.
 
 ## `deploy`
 
-New host-shaped deployments are no longer supported; existing host clusters upgrade with `upgrade-cluster`.
+Host control-plane deployments and upgrades were removed in 26.11. Complete the ECS migration with the 26.10.9 administrator first. See the [recovery command](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md#recovery-with-the-26109-administrator).
 
 Deploy module stacks. `all` may be the only module id and means every undeployed module (or every module with `--upgrade`).
 
@@ -414,13 +414,11 @@ A change set that would replace or remove a stateful resource is refused unless 
 
 Replace one stateful component, deliberately. An upgrade and a migration never replace one: the change-set guard refuses it, and the synthesized templates carry `UpdateReplacePolicy: Retain` on the resources an upgrade has never replaced, so an accidental replacement stops rather than proceeding. This is the path for the case where it is intended.
 
-The jump host and the scheduler host are listed here but are outside that protection: an ordinary upgrade replaces both, so they carry no retain policy and this command is simply the deliberate way to do on purpose what an upgrade does on its own.
-
 **Usage:** `ideactl replace [options] <component>`
 
 | Argument | Required | Help text |
 | --- | --- | --- |
-| `component` | yes | one of: jump-host, search-domain, directory, user-pool, scheduler-host, shared-file-system, backup-vault |
+| `component` | yes | one of: search-domain, directory, user-pool, shared-file-system, backup-vault |
 
 | Flag | Value | Default | Required |
 | --- | --- | --- | --- |
@@ -510,7 +508,7 @@ Drain and remove a container host the host group holds beyond its minimum. Manag
 
 ## `upgrade-cluster`
 
-Upgrade an existing cluster: refuse a cluster with any deployed module below 25.11.0 or an unreadable version, refuse EOL base OS that is still referenced, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, AMI and instance-type keys, then module deploy). Empty `modules` means every module. Clusters below 26.09.0 require complete deployed-module coverage and a read-only plan of settings, values, templates, EOL tables, IAM policy capacity, image metadata and instance protection before mutation. Global replacement, full sync and AMI/settings updates cannot be skipped in this mode. The old scheduler periodic interval is copied to the reconciler interval only when absent; conflicts are reported and both keys remain. Settings and deployed module versions are read back before success. A values upload failure after deployment is a warning with a recovery command.
+Upgrade an ECS cluster: refuse any deployed module below 26.10.0 or with an unreadable version, refuse host-mode and incomplete host-migration settings, check end-of-life OS references, preview drift, then run phases 1 to 4 (values base OS, global settings backup and rewrite, optional full config sync, compute and directory AMIs, then module deployment). Empty `modules` means every module. Settings and deployed module versions are read back before success. A values upload failure after deployment is a warning with a recovery command.
 
 After the ECS stack deploys, a configured directory provider checks the host pool: hosts on an old launch template that have not published `idea.directory=joined` stop the command with a rerun command. `--refresh-hosts` opts into an instance refresh of the host group when a host is outdated (every host is replaced, new hosts first; hosts protected by managed termination are replaced after managed draining moves their tasks); operators may instead refresh the host group themselves and rerun. Refresh progress prints every minute and times out after 90 minutes. Right before the bastion-host module, every host must carry `idea.directory=joined`: joins are checked every 30 seconds, pending hosts print every two minutes, and the wait fails after 45 minutes with `idea-directory-join.service` diagnostics. An API rejection of `MaxHealthyPercentage` is reported before retrying without it and retaining `MinHealthyPercentage: 100`.
 
@@ -542,33 +540,12 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--skip-release-image-check` | no | none | no |
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
-| `--drain` | no | none | no |
-| `--drain-timeout-minutes <minutes>` | yes | 240 minutes (effective) | no |
-| `--skip-drain-check` | no | none | no |
 
 Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. `--no-optimize-deployment` deploys one stack at a time.
 
-Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move.
+Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move, except on GovCloud when `ecs.image_repositories.aws-us-gov` is unset: the public fallback is always resolved to a manifest digest and written as `tag@sha256:...`.
 
-With `enable_ecs: true`, the bastion moves into a service in its existing module stack. Its address and SSH fingerprint change once, then persist across task replacements. The cutover and later task revisions need no bastion replacement override.
-
-**Reads:** cluster tables, `values.yml`, AMI maps, EC2 images and instance types, OpenSearch instance types, eVDI software-stack tables, and the host scheduler's PBS job inventory over Systems Manager when a scheduler cutover is pending. **Changes:** `values.yml`, a `config.golden.<timestamp>/` copy, DynamoDB settings, instance termination protection (cleared then restored), module stacks, and an upload of `values.yml` to the cluster bucket. When the run moves the scheduler from a host to a container, it closes submission before reading the host's inventory, including when that inventory is empty. A non-empty inventory without `--drain` restores the previous maintenance state and refuses deployment; `--drain` waits for it to empty. `--skip-drain-check` skips the inventory read but still closes submission for the whole run. **Exit codes:** 1 on the release floor refusal, EOL refusal, missing AMI, unsupported instance type, or differing operator or unknown-source configuration rows the run would overwrite without `--accept-config-drift`; 0 if a confirmation is declined. A change set that would replace or remove a stateful resource (a historical run with containers disabled replaces the bastion instance through its AMI and instance-type moves) is refused unless that logical id is passed to `--allow-replacement`.
-
-The cutover gate and Phase 0 DNS retention apply when the scheduler is in scope (explicitly or
-through all modules), ECS will be enabled at synthesis (`enable_ecs: true` in `values.yml`, or an
-ECS module row plus `ecs.enabled: true` in settings), and the scheduler stack still has an EC2
-host. This includes scheduler-only runs after ECS capacity has already deployed. Both steps are
-skipped once the scheduler host is gone.
-
-Before closing submission, the upgrade saves its original enabled flag and message as JSON in
-`cluster-manager.maintenance.upgrade_baseline`. Failed runs preserve that row and leave submission
-closed. Retries keep the original baseline. Successful completion, including a retry after the
-host is gone, restores both maintenance values and deletes the baseline after the values upload.
-A refusal on a retry preserves an earlier failed run's baseline and closure.
-
-ECS module-set rows remain held until cluster-manager's modules-table row records `deployed` at
-the target release, even if the ECS stack has already deployed. Held rows are checked again after
-deployment. A scoped run that excludes cluster-manager does not publish them.
+A leftover `*.maintenance.upgrade_baseline` or `cluster.upgrade_historical_pending` row stops the upgrade. Recover and complete the previous upgrade with the 26.10.9 administrator first. See the [recovery command](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md#recovery-with-the-26109-administrator).
 
 **Example:** `ideactl upgrade-cluster --cluster-name sample-cluster --aws-region us-east-2 --base-os amazonlinux2023 --force`
 
@@ -948,7 +925,7 @@ Deploy standalone account spend collection in a commercial billing account, with
 
 **Reads:** caller identity, subnet route tables and CloudFormation change sets. **Changes:** one stack containing a log group, ECS cluster, Fargate service, two-container task, security group and IAM roles. Deploy prepares a change set and applies the existing guard before execution; task definition revisions are allowed. It waits for stack completion.
 
-The agent image defaults to Datadog's official public ECR image at the version the release pins; any override must be a digest-pinned reference, never a tag, because the agent runs with the host's Docker socket. Both images must support Linux arm64; the task runs on Graviton like the control-plane image. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog. The standard agent uses US1 (`datadoghq.com`); the deployment does not configure `DD_SITE`. Follow the [image preparation and cost verification runbook](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/move-to-containers.md#spend-and-storage), using the multi-architecture index digest from the `datadog/agent` repository.
+The agent image defaults to Datadog's official public ECR image at the version the release pins; any override must be a digest-pinned reference, never a tag, because the agent runs with the host's Docker socket. Both images must support Linux arm64; the task runs on Graviton like the control-plane image. The secret must contain the raw Datadog API key, reside in the deployment region, and permit the execution role to decrypt it if a custom KMS key policy restricts access. Subnets must share a VPC and be all public or all private. Public IPs are assigned when the effective route tables have an internet gateway route; private subnets need NAT access. The service stops its old task before starting a replacement to prevent duplicate collection. The cluster name is only the `idea_cluster` metric tag, not a spend filter. Historical ingestion for `idea.cost` must be enabled in Datadog. The standard agent uses US1 (`datadoghq.com`); the deployment does not configure `DD_SITE`. Follow the [image preparation and cost verification runbook](../../../../docs/first-time-users/cluster-operations/update-idea-cluster/ecs-control-plane.md#spend-and-storage), using the multi-architecture index digest from the `datadog/agent` repository.
 
 **Example:**
 
@@ -974,5 +951,3 @@ Remove only the named collector stack. No image, secret or subnet flags are need
 **Reads:** caller identity and the named stack. **Changes:** deletes the collector stack and its logs after confirmation; `--force` skips the prompt. The supplied secret and image repositories remain. **Example:** `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`
 
 Existing ECS hosts created before the storage mount correction must follow [manual host replacement](ECS-HOST-REPLACEMENT.md) before application deployment. Collector retry and retention behavior is described in [collector delivery](COLLECTOR-DELIVERY.md).
-
-The scheduler cutover gate resolves maintenance through the selected module set. The settings API requires application authentication unavailable to the upgrade identity, so the gate uses two empty PBS inventory reads at least 30 seconds apart after writing maintenance. A nonempty read resets that sequence; an unreadable inventory fails the upgrade. This propagation fallback is not an acknowledged scheduler barrier. ECS enters the module set only after the cluster-manager stack is `CREATE_COMPLETE` or `UPDATE_COMPLETE` with the target release tag and module version.

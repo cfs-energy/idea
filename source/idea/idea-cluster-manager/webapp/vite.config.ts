@@ -3,6 +3,7 @@ import { loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { jinjaPlaceholderGuard } from './build-support/jinja-placeholder-guard'
+import { ghosttyWasm } from './build-support/ghostty-wasm'
 
 // REACT_APP_* vars referenced in src; missing ones compile to `undefined`,
 // matching CRA's DefinePlugin behavior for unset environment variables.
@@ -14,7 +15,7 @@ const KNOWN_ENV_KEYS = [
 ]
 
 export default defineConfig(({ mode }) => {
-    // CRA compatibility: .env keeps the REACT_APP_ prefix (tasks/tools/build_tool.py
+    // CRA compatibility: .env keeps the REACT_APP_ prefix (scripts/tooling/modules.mjs
     // writes REACT_APP_IDEA_RELEASE_VERSION into it) and source reads process.env.*,
     // so map each var to a build-time constant instead of migrating to import.meta.env.
     const env = loadEnv(mode, process.cwd(), 'REACT_APP_')
@@ -33,9 +34,11 @@ export default defineConfig(({ mode }) => {
 
     return {
         base: './',
+        optimizeDeps: {exclude: ['ghostty-web']},
         define: define,
         plugins: [
             react(),
+            ghosttyWasm(),
             // replaces CRA's workbox-webpack-plugin InjectManifest build of
             // src/service-worker.ts; registration stays manual (service-worker-registration.ts)
             VitePWA({
@@ -61,7 +64,7 @@ export default defineConfig(({ mode }) => {
             port: 3000
         },
         build: {
-            // tasks/tools/build_tool.py packages webapp/build as-is; keep the CRA
+            // scripts/tooling/modules.mjs packages webapp/build as-is; keep the CRA
             // output contract: build/ root, static/{js,css,media} asset layout.
             outDir: 'build',
             sourcemap: false,

@@ -378,38 +378,6 @@ package_config:
       # compat-openssl11 and ec2-hibinit-agent are not shipped for EL10
       - chkconfig
 
-    # used by cluster-manager to convert .pem files to .ppk files
-    putty:
-      - putty
-
-  # Keep version/nvm_version aligned with software_versions.yml, which pins the
-  # same toolchain for the installer container and CI.
-  nodejs:
-    version: "26.8.2"
-    nvm_version: "0.40.7"
-    npm_version: "11.19.1"
-    url: "https://raw.githubusercontent.com/nvm-sh/nvm/"
-  openmpi:
-    version: "5.0.7"
-    url: "https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-5.0.7.tar.gz"
-    checksum: "51be23bb79f9f978696689bbbc6bc65b7b0df67f0f5b502b83513c8e098a7e53cfa73d14aaae5fffc407e79eb9422a85"
-    checksum_method: sha384
-
-  # url must pin the versioned directory, never /latest/: upstream redirects /latest/ to the current
-  # release, so a pinned filename under /latest/ 404s as soon as a new PuTTY ships.
-  putty:
-    version: "0.85"
-    url: "https://the.earth.li/~sgtatham/putty/0.85/putty-0.85.tar.gz"
-    checksum: "be24753dae138a870299ce3b63267c337cd14811efef667d0e2a5efe34645eaf67e7a1d51349a2272250d42332291d1f"
-    checksum_method: sha384
-
-  # Keep aligned with software_versions.yml python_version.
-  python:
-    version: "3.13.15"
-    url: "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tgz"
-    checksum: "085f0529892b35064abbc73c53129e504cf5223a656674b8990dd3bd53017db945dbbcdb286c0a6da6c13eccc3dded66"
-    checksum_method: sha384
-
   {% if metrics_provider and 'prometheus' in metrics_provider %}
   # Held on the Prometheus 2.53 LTS line; 3.x is a breaking major (removed flags,
   # changed remote-write defaults and UI) and is not part of this release.
@@ -462,8 +430,11 @@ package_config:
   {% endif %}
 
   {% if 'virtual-desktop-controller' in enabled_modules %}
+  # DCV packages are checked against the NICE key in the bootstrap bundle, not a downloaded key.
+  # NICE does not sign the Ubuntu 24.04 and 26.04 .debs, so those entries name a versioned URL and
+  # their sha256sum is the SHA-256 itself; a new DCV release for them changes both values together
+  # (in this file for a release, or with ideactl config set on a cluster).
   dcv:
-    gpg_key: https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
     x86_64:
       linux:
         al2023:
@@ -483,11 +454,11 @@ package_config:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-x86_64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-x86_64.tgz.sha256sum
         ubuntu2404:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-x86_64.tgz.sha256sum
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2404-x86_64.tgz
+          sha256sum: 4694071af44270952e375aceeddf402e90aaa110b2c586ae973aa3e503d907e7
         ubuntu2604:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-x86_64.tgz
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-x86_64.tgz.sha256sum
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2604-x86_64.tgz
+          sha256sum: 92765147dc09f1b2a6c08c7d35fc81f7cad810dcd43d0a5fb6c8cc244094afde
     aarch64:
       linux:
         al2023:
@@ -506,11 +477,11 @@ package_config:
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-aarch64.tgz
           sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2204-aarch64.tgz.sha256sum
         ubuntu2404:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-aarch64.tgz
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2404-aarch64.tgz.sha256sum
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2404-aarch64.tgz
+          sha256sum: 8010ea95cfa6b11c2904e37ad50bd1d7d19040f2631eca9099a023e65aa7c65e
         ubuntu2604:
-          url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-aarch64.tgz
-          sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu2604-aarch64.tgz.sha256sum
+          url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/Servers/nice-dcv-2026.0-25174-ubuntu2604-aarch64.tgz
+          sha256sum: 589431ebd3818ec7b14a8c61e6cf18caf1fe4af34fa60993f6f80059d082be17
     agent:
       x86_64:
         linux:
@@ -531,11 +502,11 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2204.deb
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2204.deb.sha256sum
           ubuntu2404:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2404.deb.sha256sum
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2404.deb
+            sha256sum: f9aa283bb06c8712ea24ce51a4629f9091e97052e2e1cda83e7451595dafb8b5
           ubuntu2604:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2604.deb
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_amd64.ubuntu2604.deb.sha256sum
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_amd64.ubuntu2604.deb
+            sha256sum: fb1349024ed196bbfe296f6197322afe2f9d9de9ac989790dee2afa0c4061f96
       aarch64:
         linux:
           al2023:
@@ -554,11 +525,11 @@ package_config:
             url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2204.deb
             sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2204.deb.sha256sum
           ubuntu2404:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2404.deb
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2404.deb.sha256sum
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_arm64.ubuntu2404.deb
+            sha256sum: 67367504faca6bf133d3fcada7aa1ecdc245eb5db80bd86477b92fd2ffb064ec
           ubuntu2604:
-            url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2604.deb
-            sha256sum: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent_arm64.ubuntu2604.deb.sha256sum
+            url: https://d1uj6qtbmh3dt5.cloudfront.net/2026.0/SessionManagerAgents/nice-dcv-session-manager-agent_2026.0.920-1_arm64.ubuntu2604.deb
+            sha256sum: 9eaa17391f29b8bced8c18b02e9581a3f2a9a570b03e6ac772a98f1c4a612965
     connection_gateway:
       x86_64:
         linux:
@@ -637,6 +608,28 @@ package_config:
           label: Ubuntu 24.04
           url: https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-viewer_amd64.ubuntu2404.deb
   {% endif %}
+
+kernel_hardening:
+  # drop IPv4 TCP packets that carry IP options on every Linux host IDEA configures (an
+  # nftables table, idea_tcp_ip_options): the interim mitigation for CVE-2026-98432 until the
+  # hosts run a fixed kernel. false removes the table on the next bootstrap or desktop refresh.
+  drop_tcp_ip_options: true
+  # refuse to load algif_aead, esp4 and esp6 (a modprobe.d install rule) on every Linux host IDEA
+  # bootstraps and on running desktops through the refresh: interim local privilege escalation
+  # hardening until the hosts run a fixed kernel. Nothing IDEA runs uses them. An already loaded
+  # module stays loaded. false removes the rule on the next bootstrap or desktop refresh.
+  block_modules: true
+  # kernel series an Ubuntu desktop bake refuses, per base OS: Canonical no longer ships security
+  # fixes for them on that release, so an image on one could never be patched
+  eol_kernel_series:
+    ubuntu2204: ['6.2', '6.5']
+    ubuntu2404: ['6.11', '6.14', '6.17']
+
+host_hardening:
+  # stop daemons Ubuntu desktops and compute nodes carry that no IDEA service uses (cups-browsed,
+  # postgresql, sendmail) at bootstrap, image bake and desktop refresh. false puts back what was
+  # stopped on the next bootstrap or desktop refresh.
+  disable_unused_services: true
 
 gpu_settings:
   # fail bootstrap when a node reports GPU hardware and no usable driver was installed,

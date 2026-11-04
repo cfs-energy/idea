@@ -12,10 +12,8 @@ import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 import {
   type BootstrapPackageUploadClient,
-  PackageNotFoundError,
   buildAndUploadBootstrapPackage,
-  uploadBootstrapPackage,
-  uploadReleasePackage,
+  uploadBootstrapPackage
 } from "../../src/cli/bootstrap-package.ts";
 import { withWorkdirAsync } from "./bootstrap-helpers.ts";
 
@@ -167,23 +165,6 @@ test("PutObject is sent without a checksum or compare-and-swap header", async ()
     const client = new MemoryBucket();
     await uploadBootstrapPackage({ client, clusterS3Bucket: "sample-bucket", archiveFile });
     assert.deepEqual(client.puts[0]?.extras, {});
-  });
-});
-
-test("a missing release package fails before any put", async () => {
-  await withWorkdirAsync(async (directory) => {
-    const client = new MemoryBucket();
-    await assert.rejects(
-      () =>
-        uploadReleasePackage({
-          client,
-          clusterS3Bucket: "sample-bucket",
-          packageDistDir: directory,
-          packageName: "idea-scheduler-26.09.0.tar.gz",
-        }),
-      PackageNotFoundError,
-    );
-    assert.equal(client.puts.length, 0);
   });
 });
 

@@ -37,8 +37,8 @@ function assertMatchesLive(template: Json, stack: string, logicalIds: string[]):
   }
 }
 
-describe('Role, Policy and InstanceProfile: the bastion-host IAM trio', () => {
-  // `bastion_host_stack.build_iam_roles()`, which is nothing but these three constructs.
+describe('Role, Policy and InstanceProfile: compatibility constructs', () => {
+  // Retain captured role/profile identities while exercising a live policy template.
   const build = (): Json => {
     const h = harness({ moduleId: 'bastion-host', moduleName: 'bastion-host' });
     const role = new Role(h.ctx, 'bastion-host-role', h.base.stack, {
@@ -47,19 +47,23 @@ describe('Role, Policy and InstanceProfile: the bastion-host IAM trio', () => {
       managedPolicies: h.base.getEc2InstanceManagedPolicies(),
     });
     role.attachInlinePolicy(
-      new Policy(h.ctx, 'bastion-host-policy', h.base.stack, { policyTemplateName: 'bastion-host.yml' }),
+      new Policy(h.ctx, 'bastion-host-policy', h.base.stack, { policyTemplateName: 'log-retention.yml' }),
     );
     const instanceProfile = new InstanceProfile(h.ctx, 'bastion-host-instance-profile', h.base.stack, [role]);
     instanceProfile.node.addDependency(role);
     return h.template();
   };
 
-  test('role, inline policy and instance profile equal the deployed resources', () => {
+  test('role and instance profile retain their captured identities', () => {
     assertMatchesLive(build(), 'bastion-host', [
       'bastionhostrole430C4862',
-      'bastionhostpolicy211766EC',
       'bastionhostinstanceprofile',
     ]);
+  });
+
+  test('the inline policy uses the live log-retention template', () => {
+    const policy = (build().Resources as Json).bastionhostpolicy211766EC as Json;
+    assert.ok(JSON.stringify(policy.Properties.PolicyDocument).includes('logs:PutRetentionPolicy'));
   });
 
   test('the instance profile carries no hash: it is an L1 child of the stack', () => {

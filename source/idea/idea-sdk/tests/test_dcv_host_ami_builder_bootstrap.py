@@ -425,18 +425,19 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
     assert 'findmnt -rn -t lustre --mountpoint "/lustre"' in checks
 
 
-# EL kernel snapshots from 81d856e9, updated only to defer reboot until cloud-final exits.
+# EL kernel snapshots from 81d856e9, updated to defer reboot until cloud-final exits and to
+# install the newest kernel of the target series before locking it.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
         (
             'amazonlinux2023',
-            '36c9f9c95552f62ae279ca039d96f72f74f91d2990e827d384c01c903efcd292',
+            'ca5197809b391c3daf0057fb2aaeb72c19d37964bbe50b61b723e79374c12e8f',
         ),
-        ('rhel8', '9d74e3bb04021634acf1796ac5af170a4b9574f028a81b4c3cc291a9b6f2d53f'),
-        ('rocky8', '9d74e3bb04021634acf1796ac5af170a4b9574f028a81b4c3cc291a9b6f2d53f'),
-        ('rhel9', '04c17982890718982d8e4b6a8bc7e1cc87341c36b0999e31951e26d0c66e2b47'),
-        ('rocky9', '04c17982890718982d8e4b6a8bc7e1cc87341c36b0999e31951e26d0c66e2b47'),
+        ('rhel8', 'a6539a5649dd64b73022c743a077711f064c6c9c0b4b652af3949718254a64a8'),
+        ('rocky8', 'a6539a5649dd64b73022c743a077711f064c6c9c0b4b652af3949718254a64a8'),
+        ('rhel9', '5057eabf0c153e63dae4c76be293ae7b1353498828c4ae476362033ebceb4732'),
+        ('rocky9', '5057eabf0c153e63dae4c76be293ae7b1353498828c4ae476362033ebceb4732'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
@@ -466,7 +467,8 @@ def test_ubuntu_bake_pins_supported_kernel_without_rebooting(
         FSX_ABIS='7.0.0-1014-aws 6.17.0-1020-aws 6.8.0-1050-aws 6.8.0-1057-aws',
         IMAGE_ABIS='7.0.0-1014-aws 6.17.0-1020-aws 6.8.0-1050-aws 6.8.0-1057-aws 6.8.0-1063-aws',
     )
-    target = '6.8.0-1057-aws' if running.endswith('1063-aws') else running
+    # the newest ABI with an FSx module, whatever the image boots: a bake carries the latest fixes
+    target = '6.8.0-1057-aws'
     assert code == 0, calls
     assert (
         f'apt-mark hold linux-image-{target} linux-headers-{target} linux-modules-{target}'
@@ -671,7 +673,7 @@ def test_ubuntu_bake_without_lustre_never_selects_or_installs_lustre(tmp_path, b
         'image_checks',
     ):
         text = render(f'dcv-host-ami-builder/{name}.sh.jinja2', base_os, lustre=False)
-        assert 'apt-cache pkgnames' not in text
+        assert 'apt-cache pkgnames lustre-client-modules-' not in text
         assert 'lustre-client-' not in text
         assert 'lustre-module-missing' not in text
         assert 'check lustre ' not in text

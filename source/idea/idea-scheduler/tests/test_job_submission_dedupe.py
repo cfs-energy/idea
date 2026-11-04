@@ -254,3 +254,66 @@ def test_the_dedupe_window_outlasts_the_client_timeout():
         f'dedupe ttl {scheduler_api.JOB_SUBMISSION_DEDUPE_TTL_SECONDS}s must exceed the '
         f'webapp reply timeout {reply_timeout}s'
     )
+
+
+def test_committed_submission_replays_during_maintenance(context, monkeypatch):
+    from ideadatamodel import GetUserResult, User
+    from ideasdk.api import ApiInvocationContext
+    from test_job_submission_maintenance import build_invocation_context
+
+    monkeypatch.setattr(ApiInvocationContext, 'get_username', lambda _: 'mockuser')
+    context.accounts_client.get_user.return_value = GetUserResult(
+        user=User(enabled=True, sudo=False)
+    )
+    api = SchedulerAPI(context)
+    result = build_result(accepted=True)
+    recorder = SubmitJobRecorder([result])
+    monkeypatch.setattr(api, '_submit_job', recorder)
+    request = build_request()
+    initial = build_invocation_context(context, request.model_dump())
+    api.submit_job(initial)
+    context.config().put(scheduler_api.MAINTENANCE_ENABLED_CONFIG_KEY, True)
+    replay = build_invocation_context(context, request.model_dump())
+    api.submit_job(replay)
+    assert replay.response['success'] is True
+    assert replay.response['payload'] == initial.response['payload']
+    assert replay.response['payload']['job']['job_id'] == '1001'
+    assert len(recorder.calls) == 1
+
+
+@pytest.mark.parametrize('changed', ['id', 'script', 'user', 'dry_run'])
+def test_maintenance_blocks_new_work_and_releases_reservation(
+    context, monkeypatch, changed
+):
+    from ideadatamodel import GetUserResult, User
+    from ideasdk.api import ApiInvocationContext
+    from test_job_submission_maintenance import build_invocation_context
+
+    username = 'mockuser'
+    monkeypatch.setattr(ApiInvocationContext, 'get_username', lambda _: username)
+    context.accounts_client.get_user.return_value = GetUserResult(
+        user=User(enabled=True, sudo=False)
+    )
+    api = SchedulerAPI(context)
+    recorder = SubmitJobRecorder([build_result(True), build_result(True, '1002')])
+    monkeypatch.setattr(api, '_submit_job', recorder)
+    request = build_request()
+    api.submit_job(build_invocation_context(context, request.model_dump()))
+    context.config().put(scheduler_api.MAINTENANCE_ENABLED_CONFIG_KEY, True)
+    if changed == 'id':
+        request.client_submission_id = 'new-submission'
+    elif changed == 'script':
+        request.job_script = OTHER_JOB_SCRIPT
+    elif changed == 'user':
+        username = 'another-user'
+    else:
+        request.dry_run = True
+    for _ in range(2):
+        with pytest.raises(exceptions.SocaException) as error:
+            api.submit_job(build_invocation_context(context, request.model_dump()))
+        assert error.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
+        assert 'maintenance' in error.value.message
+    assert len(recorder.calls) == 1
+    context.config().put(scheduler_api.MAINTENANCE_ENABLED_CONFIG_KEY, False)
+    api.submit_job(build_invocation_context(context, request.model_dump()))
+    assert len(recorder.calls) == 2

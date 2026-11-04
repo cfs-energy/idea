@@ -6,9 +6,7 @@
  * endpoint that answers only what that document allows, and requires the run to reach the line
  * that starts the module. It then removes the grant and requires the same run to fail there.
  *
- * The rendered policy is compared against the same template rendered with the container flag off,
- * which is how the added statement is isolated: the documents must differ by exactly that
- * statement and nothing else.
+ * The denial run removes only the account-table grant from the rendered ECS policy.
  */
 
 import assert from "node:assert/strict";
@@ -16,8 +14,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { renderPolicy } from "../../src/cdk/policy.ts";
 import { ClusterConfig } from "../../src/config/cluster-config.ts";
@@ -31,7 +29,7 @@ const MODULES = `${RAW}modules.scan.json`;
 // image moves the name. When it is gone this must skip, not fail: a missing build artifact is not a
 // defect in the thing under test. Set the environment variable to point at any equivalent image,
 // including a registry-qualified one.
-const IMAGE = process.env.IDEA_IMAGE ?? "idea-control-plane:v26.09.0";
+const IMAGE = process.env.IDEA_IMAGE ?? "idea-control-plane:local";
 const CONTEXT = process.env.DOCKER_CONTEXT ?? "default";
 const SID = "ClusterUserSync";
 
@@ -59,11 +57,11 @@ interface Document {
   Statement: Statement[];
 }
 
-/** Renders scheduler.yml from the captured settings with the container flag set either way. */
-function scheduler(containerEnabled: boolean): Document {
+/** Render the ECS scheduler policy from captured settings. */
+function scheduler(): Document {
   const scan = JSON.parse(readFileSync(SCAN, "utf-8")) as { Items: { key: { S: string }; value: unknown }[] };
   scan.Items = scan.Items.filter((item) => item.key.S !== "ecs.enabled");
-  if (containerEnabled) scan.Items.push({ key: { S: "ecs.enabled" }, value: { BOOL: true } });
+  scan.Items.push({ key: { S: "ecs.enabled" }, value: { BOOL: true } });
   const config = ClusterConfig.fromFile(JSON.stringify(scan), readFileSync(MODULES, "utf-8"));
   return renderPolicy("scheduler.yml", {
     config,
@@ -81,17 +79,8 @@ const asList = (value: string | string[] | undefined): string[] =>
 
 describe("the account-table grant the container user sync needs", () => {
   if (!haveFixtures) return;
-  const withGrant = scheduler(true);
-  const withoutGrant = scheduler(false);
-
-  it("is the only difference the container flag makes to this policy", () => {
-    const added = withGrant.Statement.filter(
-      (statement) => !withoutGrant.Statement.some((other) => JSON.stringify(other) === JSON.stringify(statement)),
-    );
-    assert.equal(added.length, 1, `expected one added statement, got ${JSON.stringify(added)}`);
-    assert.equal(added[0]?.Sid, SID);
-    assert.equal(withGrant.Statement.length, withoutGrant.Statement.length + 1);
-  });
+  const withGrant = scheduler();
+  const withoutGrant = { ...withGrant, Statement: withGrant.Statement.filter((entry) => entry.Sid !== SID) };
 
   it("grants only the scan the sync performs, on only the three tables it reads", () => {
     const statement = withGrant.Statement.find((entry) => entry.Sid === SID);

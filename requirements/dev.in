@@ -1,12 +1,6 @@
--r idea-dev-lambda.in
--r idea-scheduler.in
--r idea-virtual-desktop-controller.in
--r idea-cluster-manager.in
--r doc.in
--r tests.in
-pip-tools
-invoke
-pyfiglet
+-r runtime.in
 openapi-pydantic
-pylint
-wheel
+pytest
+pytest-mock
+pytest-cov
+moto==5.2.4

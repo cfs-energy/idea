@@ -373,7 +373,14 @@ start_and_configure_dcv_agent_service
 
 # run user customizations if available
 if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
-  /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1 || log_warning "userdata customizations failed; continuing host bootstrap"
+  # Terminal trust edits sshd_config in the background under this lock; take it so
+  # neither side overwrites the other's edit. A stuck holder must not skip the hook, and
+  # the hook gets no copy of the lock, so processes it leaves running cannot hold it.
+  (
+    { exec 9>>/run/idea-terminal-trust.lock && flock -w 120 9; } 2>/dev/null \
+      || log_warning "terminal trust lock unavailable; running userdata customizations anyway"
+    /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh 9>&- >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
+  ) || log_warning "userdata customizations failed; continuing host bootstrap"
 else
   log_info "no userdata customizations"
 fi

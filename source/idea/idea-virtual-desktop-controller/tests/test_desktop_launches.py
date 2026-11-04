@@ -218,13 +218,59 @@ def test_a_completed_reader_and_backfill_write_nothing_on_second_run():
     launches = DesktopLaunches(history.context, sleep=lambda _: None)
     assert history.backfill_instance_ids(launches) is True
     assert len(history._table_obj.updates) == written
-    assert len(cloudtrail.requests) == 2
+    # every row was matched or marked: CloudTrail is not read again
+    assert len(cloudtrail.requests) == 1
     # run rows and rows written since 26.10.6 never needed it
     history._table_obj.rows[('user-c', 'sess-3#run#1')] = dict(
         owner='user-c', idea_session_id='sess-3#run#1', run_of='sess-3'
     )
+    launches = DesktopLaunches(history.context, sleep=lambda _: None)
     assert history.backfill_instance_ids(launches) is True
-    assert len(cloudtrail.requests) == 2
+    assert len(cloudtrail.requests) == 1
+
+
+class CountingHistoryTable(FakeHistoryTable):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.scans = 0
+
+    def scan(self, **kwargs):
+        self.scans += 1
+        return super().scan(**kwargs)
+
+
+def test_a_leader_start_after_the_backfill_makes_no_cloudtrail_call():
+    created = arrow.utcnow().shift(days=-10)
+    table = CountingHistoryTable(
+        [
+            row('sess-1', 'user-a', created, instance_id='i-0abc'),
+            row('sess-2', 'user-b', created, instance_unknown=True),
+        ]
+    )
+    history, cloudtrail, _, done = backfill(
+        [], [[launch('user-a', created, 'i-0abc')]], table=table
+    )
+    assert done is True
+    assert cloudtrail.requests == []
+    assert table.scans == 1
+
+
+def test_an_unfinished_backfill_reads_cloudtrail_and_scans_once_per_pass():
+    created = arrow.utcnow().shift(days=-10)
+    table = CountingHistoryTable([row('sess-1', 'user-a', created)])
+    cloudtrail = FakeCloudTrail([[], [launch('user-a', created, 'i-0abc')]])
+    context = FakeContext(cloudtrail)
+    history = VirtualDesktopSessionHistoryDB(context, logger=Mock())
+    history._table_obj = table
+    history._initialized = True
+    clock = iter(range(0, 1000, 20))
+    launches = DesktopLaunches(context, sleep=lambda _: None, clock=lambda: next(clock))
+    # a slice reads one page, so the first call stops before CloudTrail is complete
+    assert history.backfill_instance_ids(launches) is False
+    assert (len(cloudtrail.requests), table.scans) == (1, 1)
+    assert history.backfill_instance_ids(launches) is True
+    assert (len(cloudtrail.requests), table.scans) == (2, 2)
+    assert stored(history, 'sess-1')['instance_id'] == 'i-0abc'
 
 
 def test_reading_resumes_from_the_page_it_stopped_at():
@@ -292,7 +338,7 @@ def test_desktops_deleted_since_runs_were_recorded_are_not_looked_up():
     flagged = row('sess-flagged', 'user-a', now.shift(days=-2), never_ran=True)
     history, cloudtrail, _, done = backfill([run, newer, flagged], [[]])
     assert done
-    assert len(cloudtrail.requests) == 1
+    assert cloudtrail.requests == []
     assert history._table_obj.updates == []
 
 
@@ -453,7 +499,7 @@ def test_refused_token_without_progress_is_cleared_for_next_slice():
 def test_backfill_does_not_scan_until_cloudtrail_is_complete():
     history = VirtualDesktopSessionHistoryDB.__new__(VirtualDesktopSessionHistoryDB)
     history.list_all = Mock(side_effect=AssertionError('premature scan'))
-    launches = Mock()
+    launches = Mock(rows_checked=True)
     launches.read.return_value = False
     assert history.backfill_instance_ids(launches) is False
     history.list_all.assert_not_called()

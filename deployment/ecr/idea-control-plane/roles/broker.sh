@@ -104,18 +104,25 @@ chown root:dcvsmbroker "${CONF}"
 chmod 640 "${CONF}"
 
 # The vendor logback.xml logs every load balancer health check and agent heartbeat at INFO, about
-# 42k lines per 15 minutes. Set the root level and hold those two loggers at WARN. The vendor file is
-# edited in place (it is read by the launcher through -Dlogback.configurationFile).
+# 42k lines per 15 minutes, and four lines per desktop heartbeat from SessionsUpdateRequestHandler.
+# Set the root level and hold those three loggers at WARN. The vendor file is edited in place (it is
+# read by the launcher through -Dlogback.configurationFile).
+# The vendor root logger writes every line twice, to stdout and to DcvSmBroker.log, and both reach the
+# log group and Datadog. Only the files are kept: the broker-file-logs sidecar ships them, including
+# DcvSmBrokerCli.log from register-auth-server, whose stdout the CLI wrapper filters. stdout still
+# carries this script, the launcher and anything the JVM prints outside logback.
 LOGBACK="${IDEA_BROKER_LOGBACK_FILE:-/etc/dcv-session-manager-broker/logback.xml}"
 BROKER_LOG_LEVEL="$(printf '%s' "${DCV_BROKER_LOG_LEVEL:-info}" | tr '[:lower:]' '[:upper:]')"
 [[ "${BROKER_LOG_LEVEL}" =~ ^(TRACE|DEBUG|INFO|WARN|ERROR)$ ]] || { log "ERROR: DCV_BROKER_LOG_LEVEL must be trace, debug, info, warn or error"; exit 1; }
 if [ -f "${LOGBACK}" ]; then
   # Written back with cat so the file keeps its owner and mode; sed -i differs between GNU and BSD.
   sed -E \
-    -e '/<logger name="(io\.swagger\.api\.HealthApi|dcv\.sm\.filters\.LogRequestFilter)"/d' \
+    -e '/<logger name="(io\.swagger\.api\.HealthApi|dcv\.sm\.filters\.LogRequestFilter|dcv\.sm\.agent\.handlers\.SessionsUpdateRequestHandler)"/d' \
+    -e '/<appender-ref ref="STDOUT"/d' \
     -e "s|<root level=\"[A-Za-z]+\"|<root level=\"${BROKER_LOG_LEVEL}\"|" \
     -e 's|</configuration>|    <logger name="io.swagger.api.HealthApi" level="WARN" />\
     <logger name="dcv.sm.filters.LogRequestFilter" level="WARN" />\
+    <logger name="dcv.sm.agent.handlers.SessionsUpdateRequestHandler" level="WARN" />\
 </configuration>|' \
     "${LOGBACK}" > "${LOGBACK}.new"
   cat "${LOGBACK}.new" > "${LOGBACK}"

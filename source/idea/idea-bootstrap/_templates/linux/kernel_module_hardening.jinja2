@@ -1,0 +1,28 @@
+# Begin: Kernel Module Hardening
+{# Interim mitigation for local privilege escalation through the AF_ALG AEAD socket interface and
+   the IPsec ESP transforms: those modules can no longer be loaded. Nothing IDEA runs uses them (no
+   IPsec, no AF_ALG consumer); a fixed kernel is the fix. A module that is already loaded stays
+   loaded, since unloading it under a running workload is not safe, and the host says so. Shared
+   by first bootstrap and the running-desktop refresh, which renders without the cluster config
+   and passes the flag as a variable. POSIX: the refresh runs under dash. #}
+{% if block_kernel_modules is not defined %}
+{% set block_kernel_modules = context.config.get_bool('global-settings.kernel_hardening.block_modules', default=True) if context.config is defined else True %}
+{% endif %}
+{% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+{% if block_kernel_modules %}
+idea_modules_conf='# IDEA-managed: interim kernel hardening. Not a fix; a patched kernel is.
+install algif_aead /bin/false
+install esp4 /bin/false
+install esp6 /bin/false'
+if [ "$(cat /etc/modprobe.d/90-idea-kernel-modules.conf 2>/dev/null)" != "${idea_modules_conf}" ]; then
+  mkdir -p /etc/modprobe.d && printf '%s\n' "${idea_modules_conf}" > /etc/modprobe.d/90-idea-kernel-modules.conf
+fi
+for idea_module in algif_aead esp4 esp6; do
+  [ ! -d "/sys/module/${idea_module}" ] || log_warning "${idea_module} is already loaded; it stays loaded until the next boot"
+done
+{% else %}
+# global-settings.kernel_hardening.block_modules is off: the modules load again
+rm -f /etc/modprobe.d/90-idea-kernel-modules.conf
+{% endif %}
+{% endif %}
+# End: Kernel Module Hardening

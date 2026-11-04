@@ -97,7 +97,7 @@ class JobCompletionMetrics(BaseMetrics):
         if job.start_time is None or job.end_time is None:
             return None
         seconds = (job.end_time - job.start_time).total_seconds()
-        return seconds if seconds > 0 else None
+        return seconds if seconds >= 0 else None
 
     @classmethod
     def cpu_efficiency(cls, job: SocaJob) -> Optional[float]:
@@ -143,13 +143,14 @@ class JobCompletionMetrics(BaseMetrics):
 
         efficiency = self.cpu_efficiency(job)
         if efficiency is not None:
-            self._log(
-                MetricName='job.cpu_efficiency',
-                Timestamp=timestamp,
-                Value=efficiency,
-                MetricType='Summary',
-                Unit='None',
-            )
+            for name in ('job.cpu_efficiency', 'job.cpu_efficiency.measured'):
+                self._log(
+                    MetricName=name,
+                    Timestamp=timestamp,
+                    Value=efficiency,
+                    MetricType='Summary',
+                    Unit='None',
+                )
 
         # Unique job labels persist indefinitely in pull-based exporters.
         # Only the event transport can carry detail without retaining every job locally.

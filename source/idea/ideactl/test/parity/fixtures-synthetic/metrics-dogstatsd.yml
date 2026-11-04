@@ -1,2 +1,3 @@
 # DogStatsD. No CloudWatch dashboard, no prometheus package config.
 metrics_provider: dogstatsd
+datadog_api_key_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:datadog-sample-ABCDEF

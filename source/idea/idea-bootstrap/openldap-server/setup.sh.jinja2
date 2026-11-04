@@ -72,6 +72,10 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 {% include '_templates/linux/restrict_ssh.jinja2' %}
 
+{% include '_templates/linux/kernel_net_hardening.jinja2' %}
+
+{% include '_templates/linux/kernel_module_hardening.jinja2' %}
+
 {% if context.is_metrics_provider_prometheus() %}
   {% include '_templates/linux/prometheus.jinja2' %}
   {% include '_templates/linux/prometheus_node_exporter.jinja2' %}

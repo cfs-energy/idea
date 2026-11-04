@@ -370,7 +370,7 @@ class OpenPBSJob(SocaBaseModel):
             soca_execution_hosts.append(execution_host)
 
             # todo - array jobs
-            run_id = '1'
+            run_id = str(self.run_count or 1)
 
             if event.type == 'execjob_begin':
                 run = SocaJobExecutionRun(
@@ -419,6 +419,7 @@ class OpenPBSJob(SocaBaseModel):
 
                 run = SocaJobExecutionRun(
                     run_id=run_id,
+                    start=self.parse_pbs_datetime(self.stime),
                     end=arrow.get(str(event.timestamp), 'x').datetime,
                     exit_code=exit_code,
                     status=status,
@@ -450,7 +451,7 @@ class OpenPBSJob(SocaBaseModel):
 
     @staticmethod
     def parse_pbs_datetime(value: Optional[Union[int, str]]) -> Optional[datetime]:
-        if value is None:
+        if value is None or str(value) == '0':
             return None
 
         if Utils.is_int(value):
@@ -470,6 +471,12 @@ class OpenPBSJob(SocaBaseModel):
         resources_used = self.resources_used
         if resources_used is None:
             return None
+        if isinstance(resources_used, str):
+            resources_used = dict(
+                token.split('=', 1)
+                for token in resources_used.split(',')
+                if '=' in token
+            )
         return Utils.get_value_as_string('walltime', resources_used)
 
     def as_soca_job(
@@ -523,7 +530,10 @@ class OpenPBSJob(SocaBaseModel):
         # a job terminated before its execution host reported resources_used has no walltime.
         # mtime is the time such a job entered the finished state.
         end_time = None
-        if state == SocaJobState.FINISHED and start_time is not None:
+        if (
+            state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+            and start_time is not None
+        ):
             resources_used_walltime = self.get_resources_used_wall_time()
             if Utils.is_not_empty(resources_used_walltime):
                 total_seconds = Utils.walltime_to_seconds(resources_used_walltime)

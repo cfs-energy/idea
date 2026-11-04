@@ -18,7 +18,7 @@ import Utils from "../../../common/utils";
 import 'moment-timezone';
 import moment from 'moment';
 import {AppContext} from "../../../common";
-import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, KeyValuePairs, Link, Popover, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, KeyValuePairs, Link, Popover, SpaceBetween, Spinner, StatusIndicator} from "@cloudscape-design/components";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {
     faClock,
@@ -35,6 +35,8 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import VirtualDesktopSessionStatusIndicator from "./virtual-desktop-session-status-indicator";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
+import {desktopTerminalReason, shellStore, terminalEnabled} from "../../home/terminal/shell-store";
+import {hasAccess} from "../../../navigation/task-navigation";
 
 interface VirtualDesktopSessionCardProps {
     virtualDesktopClient: VirtualDesktopClient
@@ -159,6 +161,32 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         return this.props.session
     }
 
+    private unsubscribeShell?: () => void
+
+    // Terminal is for the owner's Linux desktops; shared desktops never show it.
+    showTerminal = () => !this.props.isSharedSession && terminalEnabled() && hasAccess(AppContext.get(), 'cluster')
+
+    terminalReason = () => desktopTerminalReason(this.getSession(), shellStore.get())
+
+    openTerminal = () => shellStore.open(`desktop:${this.getSession().idea_session_id}`, this.getSession().name || 'My desktop')
+
+    componentDidMount() {
+        if (!this.showTerminal()) return
+        this.unsubscribeShell = shellStore.subscribe(() => this.forceUpdate())
+        void shellStore.loadTargets(AppContext.get().client().terminal())
+    }
+
+    componentDidUpdate(previous: VirtualDesktopSessionCardProps) {
+        // A desktop that just became ready may not have been a target when the list was read.
+        if (this.showTerminal() && previous.session.state !== this.getSession().state && this.getSession().state === 'READY') {
+            void shellStore.loadTargets(AppContext.get().client().terminal(), true)
+        }
+    }
+
+    componentWillUnmount() {
+        this.unsubscribeShell?.()
+    }
+
     canConnect = (): boolean => this.props.session.state === 'READY' && !this.props.session.recovering
 
     canDownloadDcvSessionFile = () => this.canConnect()
@@ -236,13 +264,24 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         const details = [Utils.getOsTitle(session.software_stack?.base_os), session.server?.instance_type].filter(Utils.isNotEmpty).join(' · ')
         return <SpaceBetween size="xs" direction="vertical">
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px'}}>
-                <Box variant="h3">
-                    {session.name}{this.props.isSharedSession && `: ${session.owner}`}
-                </Box>
-                <Button
-                    variant={primary.action === 'info' ? 'normal' : 'primary'}
-                    disabled={primary.action === undefined}
-                    onClick={() => this.onPrimaryAction(primary.action)}>{primary.label}</Button>
+                {/* a long name wraps inside its own column; the buttons never move to a new line */}
+                <div style={{minWidth: 0, overflowWrap: 'anywhere'}}>
+                    <Box variant="h3">
+                        {session.name}{this.props.isSharedSession && `: ${session.owner}`}
+                    </Box>
+                </div>
+                <div style={{display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, whiteSpace: 'nowrap'}}>
+                    {/* always rendered while Terminal applies, so the card does not shift once access is known */}
+                    {this.showTerminal() && <Button variant="icon" iconName="command-prompt"
+                            ariaLabel={`Open a shell on ${session.name || 'My desktop'}`}
+                            disabled={!!this.terminalReason()}
+                            disabledReason={this.terminalReason()}
+                            onClick={this.openTerminal}/>}
+                    <Button
+                        variant={primary.action === 'info' ? 'normal' : 'primary'}
+                        disabled={primary.action === undefined}
+                        onClick={() => this.onPrimaryAction(primary.action)}>{primary.label}</Button>
+                </div>
             </div>
             <SpaceBetween size="s" direction="horizontal" alignItems="center">
                 <VirtualDesktopSessionStatusIndicator state={session.state!} hibernation_enabled={session.hibernation_enabled!} updated_on={session.updated_on}/>
@@ -284,23 +323,30 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         }
         if (Utils.isEmpty(imageUrl)) {
             const session = this.getSession()
-            const placeholders: { [state: string]: string } = {
-                CREATING: 'Creating your desktop',
-                INITIALIZING: 'Initializing your desktop',
-                PROVISIONING: 'Provisioning your desktop',
-                RESUMING: 'Starting',
-                READY: 'Preview not captured yet',
-                STOPPING: session.hibernation_enabled ? 'Hibernating' : 'Stopping',
-                STOPPED: session.hibernation_enabled ? 'Hibernated' : 'Stopped',
-                DELETING: 'Terminating',
-                DELETED: 'Terminating'
+            // In-between states get a spinner; settled states only text. Both stay centered and padded.
+            const transitions: { [state: string]: string } = {
+                CREATING: 'Creating…',
+                INITIALIZING: 'Initializing…',
+                PROVISIONING: 'Provisioning…',
+                RESUMING: 'Starting…',
+                STOPPING: session.hibernation_enabled ? 'Hibernating…' : 'Stopping…',
+                DELETING: 'Terminating…',
+                DELETED: 'Terminating…'
             }
+            const settled: { [state: string]: string } = {
+                READY: 'Preview not captured yet',
+                STOPPED: session.hibernation_enabled ? 'Hibernated' : 'Stopped'
+            }
+            const transition = session.recovering ? 'Restarting…' : transitions[session.state ?? '']
             return <div className="virtual-desktop-placeholder-image" onClick={() => {
                 if (this.canConnect()) {
                     this.props.onLaunchSession(this.getSession()).finally()
                 }
             }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
-                {session.recovering ? 'Your desktop session is restarting. Connect will be available when it is ready.' : placeholders[session.state ?? ''] ?? 'No preview'}
+                <div className="virtual-desktop-placeholder-status">
+                    {transition && <Spinner size="large"/>}
+                    <div>{transition ?? settled[session.state ?? ''] ?? 'No preview'}</div>
+                </div>
             </div>
         }
         return <img alt="Desktop preview" src={imageUrl} onLoad={(event) => {
@@ -367,6 +413,16 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 disabled: !this.canConnect(),
                 iconSvg: <FontAwesomeIcon icon={faDesktop} size="xs"/>
             }]
+
+        if (this.showTerminal()) {
+            dropDownItems.push({
+                id: "terminal",
+                text: "Terminal",
+                disabled: !!this.terminalReason(),
+                disabledReason: this.terminalReason(),
+                iconName: "command-prompt"
+            })
+        }
 
         if (!this.props.isSharedSession) {
             dropDownItems.push(
@@ -458,6 +514,8 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                                 if (this.props.onDeleteSession) {
                                     this.props.onDeleteSession(this.getSession()).finally()
                                 }
+                            } else if (event.detail.id === 'terminal') {
+                                this.openTerminal()
                             } else if (event.detail.id === 'connect') {
                                 this.props.onLaunchSession(this.getSession()).finally()
                             } else if (event.detail.id === 'stop') {

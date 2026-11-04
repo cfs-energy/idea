@@ -14,15 +14,21 @@ import { renderTable } from './config.ts';
 
 const MODULE_TYPE_APP = 'app';
 
+/** The dashboard route on the external load balancer is opt-in; see the analytics stack. */
+function dashboardsPublished(config: ClusterConfig, moduleId: string): boolean {
+  return config.getBool(`${moduleId}.opensearch.endpoints.external.enabled`, false) === true;
+}
+
 /**
- * `check_cluster_status`'s endpoint list: the analytics dashboard, then one `/healthcheck` per app
- * module, in modules-table order.
+ * `check_cluster_status`'s endpoint list: the analytics dashboard when it is published, then one
+ * `/healthcheck` per app module, in modules-table order.
  */
 export function statusEndpoints(config: ClusterConfig): Array<{ name: string; endpoint: string }> {
   const clusterEndpoint = config.getClusterExternalEndpoint();
   const endpoints: Array<{ name: string; endpoint: string }> = [];
   for (const module of config.modules()) {
     if (module.name === 'analytics') {
+      if (!dashboardsPublished(config, module.module_id)) continue;
       endpoints.push({ name: 'OpenSearch Service Dashboard', endpoint: `${clusterEndpoint}/_dashboards/` });
     } else if (module.type === MODULE_TYPE_APP) {
       endpoints.push({
@@ -170,6 +176,7 @@ export function connectionInfo(
     if (module.name === 'cluster-manager') {
       entries.push({ key: 'Web Portal', value: clusterEndpoint, weight: 0 });
     } else if (module.name === 'analytics') {
+      if (!dashboardsPublished(config, module.module_id)) continue;
       entries.push({ key: 'Analytics Dashboard', value: `${clusterEndpoint}/_dashboards`, weight: 3 });
     } else if (module.name === 'bastion-host') {
       const keyPairName = config.getString('cluster.network.ssh_key_pair');
