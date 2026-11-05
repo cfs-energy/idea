@@ -178,8 +178,8 @@ log_archive:
   # days the daily copy of the scheduler logs is kept in the cluster bucket (logs/<module id>/).
   # 0 keeps it forever, otherwise at least 30: the scheduler keeps 10 days on disk and uploads
   # what the bucket lacks, so a shorter expiry only has it uploaded again. the bucket rule is
-  # applied by the bootstrap stack update that runs with a deploy or upgrade.
-  s3_retention_days: 90
+  # applied by the bootstrap stack update (`ideactl bootstrap`, or a full deploy), not by upgrade-cluster.
+  s3_retention_days: 400
 
 # Elastic Fabric Adapter (EFA) config
 # applies to jobs submitted with efa_support=true

@@ -133,7 +133,7 @@ export async function runBootstrap(
     schedulerModules.length === 0
       ? 0
       : schedulerLogRetentionDays(
-          config.getInt('scheduler.log_archive.s3_retention_days', 90, { moduleId: schedulerModules[0].module_id }),
+          config.getInt('scheduler.log_archive.s3_retention_days', 400, { moduleId: schedulerModules[0].module_id }),
         );
   writeFileSync(
     templatePath,

@@ -31,12 +31,12 @@ describe("scheduler log archive expiry", () => {
     const rendered = renderBootstrapStack({
       ...base,
       schedulerLogModuleIds: ["scheduler"],
-      schedulerLogRetentionDays: 90,
+      schedulerLogRetentionDays: 400,
     });
     const found = rules(rendered);
     const expire = found.find((rule) => rule.Id === "ExpireSchedulerLogArchive1");
     assert.equal(expire?.Prefix, "logs/scheduler/");
-    assert.equal(expire?.ExpirationInDays, 90);
+    assert.equal(expire?.ExpirationInDays, 400);
     assert.equal(expire?.Status, "Enabled");
     assert.deepEqual(expire?.NoncurrentVersionExpiration, { NoncurrentDays: 1 });
     const markers = found.find((rule) => rule.Id === "ExpireSchedulerLogDeleteMarkers1");
