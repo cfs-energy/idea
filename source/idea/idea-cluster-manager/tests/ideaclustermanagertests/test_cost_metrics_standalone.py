@@ -13,6 +13,7 @@ from ideaclustermanager.app.metrics import standalone
 from ideaclustermanager.app.metrics.cost_metrics_service import (
     CostMetrics,
     CostMetricsService,
+    CostRow,
 )
 
 
@@ -194,3 +195,68 @@ def test_missing_datadog_key_is_named():
         standalone.EnvironmentConfig({}).get_secret(
             'ecs.datadog.api_key_secret_arn', required=True
         )
+
+
+def backfill_env(**overrides):
+    return environment(IDEA_COST_METRICS_BACKFILL_DAYS='31', **overrides)
+
+
+def run_with_fake_reader(monkeypatch, env, rows):
+    reader = Mock()
+    reader.fetch_all.return_value = rows
+    monkeypatch.setattr(CostMetricsService, 'reader', lambda self: reader)
+    transport = Mock()
+    transport.log.side_effect = lambda batch, on_sent: on_sent(len(batch))
+    monkeypatch.setattr(
+        'ideasdk.metrics.history_backfill.DatadogAPI.from_context',
+        lambda context: transport,
+    )
+    context = standalone.StandaloneContext(env)
+    return standalone.run_backfill(context, env), transport, reader
+
+
+def cost_row():
+    return CostRow('cost', '2025-09-02', {'module': 'scheduler'}, 1.25, 2.5)
+
+
+def test_backfill_is_dry_unless_asked(monkeypatch):
+    code, transport, reader = run_with_fake_reader(
+        monkeypatch, backfill_env(), [cost_row()]
+    )
+    assert code == 0
+    assert reader.fetch_all.called
+    transport.log.assert_not_called()
+
+
+def test_backfill_applies_and_sends_timestamped_points(monkeypatch):
+    code, transport, _ = run_with_fake_reader(
+        monkeypatch, backfill_env(IDEA_COST_METRICS_BACKFILL_APPLY='true'), [cost_row()]
+    )
+    assert code == 0
+    assert transport.log.called
+
+
+def test_backfill_failure_exits_nonzero(monkeypatch):
+    reader = Mock()
+    reader.fetch_all.side_effect = RuntimeError('cost explorer down')
+    monkeypatch.setattr(CostMetricsService, 'reader', lambda self: reader)
+    env = backfill_env()
+    assert standalone.run_backfill(standalone.StandaloneContext(env), env) == 1
+
+
+def test_backfill_rejects_a_window_past_fifteen_months(monkeypatch):
+    env = environment(IDEA_COST_METRICS_BACKFILL_DAYS='9999')
+    with pytest.raises(Exception, match='days must be an integer'):
+        standalone.run_backfill(standalone.StandaloneContext(env), env)
+
+
+def test_a_backfill_task_does_not_start_the_collector_loop(monkeypatch):
+    monkeypatch.setattr(standalone, 'run_backfill', lambda context, environ: 7)
+    monkeypatch.setattr(
+        standalone,
+        'CostMetricsService',
+        Mock(side_effect=AssertionError('collector started')),
+    )
+    for name, value in backfill_env().items():
+        monkeypatch.setenv(name, value)
+    assert standalone.main() == 7
