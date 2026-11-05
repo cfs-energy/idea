@@ -112,7 +112,7 @@ def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
     db = cache._jobs_db
     assert Path(db._db_file) == tmp_path / 'db/job-cache-v3.db'
     assert Path(db._backup_file) == tmp_path / 'pbs/idea/db/job-cache-v3.db'
-    assert db._backup_interval == 300
+    assert db._backup_interval == 3600
     assert db._backup_thread.is_alive()
     assert (
         list(cache.get_connection().query('PRAGMA journal_mode'))[0]['journal_mode']
@@ -750,3 +750,21 @@ def test_backup_does_not_block_a_writer_or_lose_its_commit(tmp_path, monkeypatch
 
     with closing(sqlite3.connect(db._backup_file)) as copy:
         assert copy.execute('SELECT count(*) FROM finished_jobs').fetchone()[0] == 150
+
+
+def test_stop_saves_what_the_hourly_copy_had_not_reached(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-1'), ecs_enabled=True)
+    )
+    assert cache._jobs_db._backup_interval == 3600
+    add_finished_job_aged(cache, 'before', 1)
+    assert cache._jobs_db.backup() is True
+    add_finished_job_aged(cache, 'after', 1)
+    cache.stop()
+
+    replacement = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-2'), ecs_enabled=True)
+    )
+    assert finished_job_ids(replacement) == {'before', 'after'}
+    replacement.stop()

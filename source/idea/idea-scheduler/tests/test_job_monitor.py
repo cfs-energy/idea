@@ -44,6 +44,10 @@ class FakeJobCache:
         self.jobs = {}
         self.synced_job_ids = []
         self.retry_counts = {}
+        self.license_job_ids = []
+
+    def add_active_licenses(self, jobs):
+        self.license_job_ids.extend(job.job_id for job in jobs)
 
     def get_job(self, job_id):
         return self.jobs.get(job_id)
@@ -471,3 +475,18 @@ def test_disabled_owner_is_deleted_with_a_reason(monitor, fake_context):
     assert saved['error_code'] == 'JOB_DELETED_DISABLED_OWNER'
     assert 'owner is disabled' in saved['message']
     assert fake_context.provisioning_queue.put_job_ids == []
+
+
+def test_start_restores_licenses_of_provisioned_jobs_a_restored_cache_lacks(
+    monitor, fake_context
+):
+    fake_context.queue_profiles.queue_profiles = [
+        SimpleNamespace(name='compute', enabled=True, queues=['normal']),
+    ]
+    provisioned = make_job('600')
+    provisioned.provisioned = True
+    fake_context.scheduler.jobs_by_id = {'600': provisioned, '601': make_job('601')}
+
+    monitor._sync_all_jobs()
+
+    assert fake_context.job_cache.license_job_ids == ['600']

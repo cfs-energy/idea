@@ -385,6 +385,7 @@
     "scheduler.hostname",
     "scheduler.instance_ami",
     "scheduler.instance_type",
+    "scheduler.job_cache.backup_interval_seconds",
     "scheduler.job_cache.finished_job_retention_days",
     "scheduler.job_provisioning.batch_provisioning_wait_interval_seconds",
     "scheduler.job_provisioning.dry_run_cache_ttl_seconds",
