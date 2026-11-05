@@ -3493,6 +3493,14 @@ _ROWS = [
         False,
     ),
     (
+        'scheduler.log_archive.s3_retention_days',
+        'integer',
+        'deployment',
+        'monitoring',
+        True,
+        False,
+    ),
+    (
         'scheduler.provisioning_lifecycle_events.retention_days',
         'integer',
         'runtime',
