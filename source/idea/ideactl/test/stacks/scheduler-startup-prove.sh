@@ -36,7 +36,7 @@ NET="${TAG}-net"
 
 d() { docker --context "${CTX}" "$@"; }
 
-# shellcheck disable=SC2317  # invoked by the trap below
+# shellcheck disable=SC2317,SC2329  # invoked by the trap below
 cleanup() {
   d rm -f "${TAG}-ddb" "${TAG}-iam" "${TAG}-sched" "${TAG}-cluster-manager" "${TAG}-vdc" >/dev/null 2>&1 || true
   d volume rm -f "${TAG}-apps" "${TAG}-pbs" "${TAG}-apps2" >/dev/null 2>&1 || true
