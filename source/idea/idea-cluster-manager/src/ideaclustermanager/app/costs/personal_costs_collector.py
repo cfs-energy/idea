@@ -64,6 +64,12 @@ SETTLE_DAYS = 3
 # Cost Explorer and the CUR stay estimated until the month's bill is finalized after it
 # ends, so every day of a month is recomputed once more on the 5th of the next month.
 MONTH_CLOSE_DAYS = 4
+# A sweep names the users it observed; their inventory record is only written when it
+# changes and once a day, so disk_day rebuilds one sample per sweep from the two.
+INVENTORY_SWEEP = 'inventory-sweep:'
+# ponytail: a killed task loses at most this much of a run's sweep: those users get a
+# 15 minute unknown gap, never an invented interval. Write per user if that ever matters.
+SWEEP_FLUSH_SECONDS = 60
 
 
 class _FaultLog:
@@ -119,11 +125,18 @@ class DailyCostsCalculator(MonthlyCostsService):
         self.computed_days = 0
         self.stored_days = 0
         self._run_shared = {}
+        # as_of -> this process's sweep. Kept until written, then for the rest of the run.
+        self._sweeps = {}
+        self._sweeps_flushed = None
 
     def begin(self):
         self.computed_days = 0
         self.stored_days = 0
         self._run_shared = {}
+        self._sweeps = {
+            as_of: sweep for as_of, sweep in self._sweeps.items() if sweep['dirty']
+        }
+        self._sweeps_flushed = time.monotonic()
         self._run_reads.clear()
         self._reads.pop(('storage-rates',), None)
         self._reported = set()
@@ -410,6 +423,28 @@ class DailyCostsCalculator(MonthlyCostsService):
         ]
         return mine, disks
 
+    def _inventory_rows(self, username, day):
+        key = ('disk-history', username, day)
+        if key not in self._run_reads:
+            if len(self._run_reads) >= 64:
+                self._run_reads.pop(next(iter(self._run_reads)))
+            self._run_reads[key] = [
+                self.store.resolve_source(username, json.loads(row['payload']))
+                for row in self.store.records(username, 'inventory:' + day + ':')
+            ]
+        return self._run_reads[key]
+
+    def _inventory_body(self, snapshot):
+        # What a disk's cost is computed from. EC2 does not promise a listing order, and
+        # a false difference only costs one more record.
+        body = json.loads(
+            self.store.encode(
+                {key: value for key, value in snapshot.items() if key != 'as_of'}
+            )
+        )
+        body['volumes'] = sorted(body['volumes'], key=lambda v: v['VolumeId'])
+        return json.dumps(body, sort_keys=True)
+
     def capture_inventory(self, username, now):
         # Retain each observed day. No current inventory is used to fabricate history.
         try:
@@ -420,58 +455,120 @@ class DailyCostsCalculator(MonthlyCostsService):
         if value is not None:
             instances, volumes = value
             now = (self._inventory_as_of or now).to(now.tzinfo)
-            self._run_reads = {
-                key: value
-                for key, value in self._run_reads.items()
-                if key[:2] != ('disk-history', username)
-            }
-            self.store.put_source(
-                username,
-                'inventory:' + now.format('YYYY-MM-DD') + ':' + str(now.int_timestamp),
-                {
-                    'as_of': now.isoformat(),
-                    'instances': {
-                        key: {
-                            'State': item.get('State', {}),
-                            'Tags': item.get('Tags', []),
-                        }
-                        for key, item in instances.items()
-                    },
-                    'volumes': [
-                        {
-                            key: arrow.get(v[key]).isoformat()
-                            if key == 'CreateTime'
-                            else v[key]
-                            for key in (
-                                'VolumeId',
-                                'VolumeType',
-                                'Size',
-                                'CreateTime',
-                                'Attachments',
-                                'Tags',
-                            )
-                            if key in v
-                        }
-                        for v in volumes
-                    ],
+            day = now.format('YYYY-MM-DD')
+            snapshot = {
+                'as_of': now.isoformat(),
+                'instances': {
+                    key: {
+                        'State': item.get('State', {}),
+                        'Tags': item.get('Tags', []),
+                    }
+                    for key, item in instances.items()
                 },
+                'volumes': [
+                    {
+                        key: arrow.get(v[key]).isoformat()
+                        if key == 'CreateTime'
+                        else v[key]
+                        for key in (
+                            'VolumeId',
+                            'VolumeType',
+                            'Size',
+                            'CreateTime',
+                            'Attachments',
+                            'Tags',
+                        )
+                        if key in v
+                    }
+                    for v in volumes
+                ],
+            }
+            rows = self._inventory_rows(username, day)
+            latest = max(
+                rows,
+                key=lambda row: arrow.get(row['as_of']).float_timestamp,
+                default=None,
             )
+            if latest is None or self._inventory_body(latest) != self._inventory_body(
+                snapshot
+            ):
+                self.store.put_source(
+                    username, f'inventory:{day}:{now.int_timestamp}', snapshot
+                )
+                rows.append(json.loads(self.store.encode(snapshot)))
+            sweep = self._sweeps.setdefault(
+                snapshot['as_of'], dict(day=day, users=set(), dirty=True)
+            )
+            sweep['users'].add(username)
+            sweep['dirty'] = True
+            if (
+                self._sweeps_flushed is None
+                or time.monotonic() - self._sweeps_flushed >= SWEEP_FLUSH_SECONDS
+            ):
+                self._sweeps_flushed = time.monotonic()
+                self.flush_sweeps()
+
+    def flush_sweeps(self):
+        for as_of, sweep in self._sweeps.items():
+            if not sweep['dirty']:
+                continue
+            try:
+                self.store.put_source(
+                    SYSTEM,
+                    f'{INVENTORY_SWEEP}{sweep["day"]}:{arrow.get(as_of).int_timestamp}',
+                    dict(as_of=as_of, users=sorted(sweep['users'])),
+                )
+                sweep['dirty'] = False
+            except Exception:
+                # Kept dirty: the next flush writes it, and this run still reads it here.
+                self._log.exception('Inventory sweep not stored; retrying')
+
+    def _observations(self, username, day):
+        stored = self._shared(
+            ('inventory-sweeps', day),
+            lambda: [
+                (value['as_of'], frozenset(value['users']))
+                for value in (
+                    self.store.resolve_source(SYSTEM, json.loads(row['payload']))
+                    for row in self.store.records(SYSTEM, f'{INVENTORY_SWEEP}{day}:')
+                )
+            ],
+        )
+        seen = [as_of for as_of, users in stored if username in users]
+        seen.extend(
+            as_of
+            for as_of, sweep in self._sweeps.items()
+            if sweep['day'] == day and username in sweep['users']
+        )
+        return seen
+
+    def _inventory_samples(self, username, start):
+        # A record before 26.11.2 is one sample. Since then a record holds until the next
+        # one and each sweep naming the user is a sample of it, so both read the same way
+        # and one observation is one sample whichever way it was stored.
+        changes, seen = [], {}
+        for day in (start.shift(days=-1), start):
+            day = day.format('YYYY-MM-DD')
+            changes.extend(self._inventory_rows(username, day))
+            for as_of in self._observations(username, day):
+                seen[arrow.get(as_of).float_timestamp] = as_of
+        changes.sort(key=lambda row: arrow.get(row['as_of']).float_timestamp)
+        for row in changes:
+            seen[arrow.get(row['as_of']).float_timestamp] = row['as_of']
+        samples, current, index = [], None, 0
+        for stamp in sorted(seen):
+            while (
+                index < len(changes)
+                and arrow.get(changes[index]['as_of']).float_timestamp <= stamp
+            ):
+                current = changes[index]
+                index += 1
+            if current is not None:
+                samples.append(dict(current, as_of=seen[stamp]))
+        return samples
 
     def disk_day(self, username, start, end):
-        snapshots = []
-        for day in (start.shift(days=-1), start):
-            key = ('disk-history', username, day.format('YYYY-MM-DD'))
-            if key not in self._run_reads:
-                if len(self._run_reads) >= 64:
-                    self._run_reads.pop(next(iter(self._run_reads)))
-                self._run_reads[key] = [
-                    self.store.resolve_source(username, json.loads(row['payload']))
-                    for row in self.store.records(
-                        username, 'inventory:' + day.format('YYYY-MM-DD') + ':'
-                    )
-                ]
-            snapshots.extend(self._run_reads[key])
-        snapshots.sort(key=lambda item: arrow.get(item['as_of']).float_timestamp)
+        snapshots = self._inventory_samples(username, start)
         amounts, missing, dates = [], 0, []
         for index, snapshot in enumerate(snapshots):
             observed = arrow.get(snapshot['as_of'])
@@ -1234,9 +1331,29 @@ class PersonalCostsCollector:
                 self.logger.exception(
                     'Desktop idle time unavailable; collecting the remaining facets'
                 )
+        try:
+            finished = self._collect(selected, state, timezone)
+        finally:
+            self.calculator.flush_sweeps()
+        if not finished:
+            return
+        state['last_duration'] = max(1, int(time.monotonic() - started))
+        state.pop('run_started', None)
+        # At most half the time busy: a run longer than the period waits as long again.
+        state['next_run'] = max(
+            arrow.utcnow().shift(seconds=state['last_duration']), now.shift(minutes=15)
+        ).isoformat()
+        self.logger.info(
+            f'Personal costs collected for {len(selected)} users in '
+            f'{state["last_duration"]}s: {self.calculator.computed_days} days computed, '
+            f'{self.calculator.stored_days} settled days reused'
+        )
+        self.store.put(SYSTEM, 'state', state)
+
+    def _collect(self, selected, state, timezone):
         for index, username in enumerate(selected):
             if self._stop.is_set() or not self.context.is_leader():
-                return
+                return False
             local = arrow.utcnow().to(timezone)
             start = local.floor('month')
             request = self.store.get(username, 'refresh')
@@ -1312,7 +1429,7 @@ class PersonalCostsCollector:
                         incomplete=any(p.incomplete for p in pieces),
                     )
                 if not self.context.is_leader():
-                    return
+                    return False
                 self.context.distributed_lock().assert_held(
                     key='personal-costs-collector'
                 )
@@ -1334,15 +1451,4 @@ class PersonalCostsCollector:
                     selected.insert(index + 1, user)
             state['heartbeat'] = arrow.utcnow().isoformat()
             self.store.put(SYSTEM, 'state', state)
-        state['last_duration'] = max(1, int(time.monotonic() - started))
-        state.pop('run_started', None)
-        # At most half the time busy: a run longer than the period waits as long again.
-        state['next_run'] = max(
-            arrow.utcnow().shift(seconds=state['last_duration']), now.shift(minutes=15)
-        ).isoformat()
-        self.logger.info(
-            f'Personal costs collected for {len(selected)} users in '
-            f'{state["last_duration"]}s: {self.calculator.computed_days} days computed, '
-            f'{self.calculator.stored_days} settled days reused'
-        )
-        self.store.put(SYSTEM, 'state', state)
+        return True
