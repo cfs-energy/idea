@@ -110,6 +110,22 @@ class ImageCiTests(unittest.TestCase):
         for line in installs:
             self.assertLess(check, text.index(line))
 
+    def test_release_tag_read_back_retries_stale_ecr_manifests(self):
+        text = (ROOT / '.github/workflows/build_push.yaml').read_text()
+        step = text.split('- name: Tag the candidate image as the release', 1)[1]
+        step = step.split('- name: Publish the release', 1)[0]
+        # the candidate check stays a single strict comparison
+        self.assertIn(
+            'test "$(digest "${REPOSITORY}:${CANDIDATE_TAG#v}")" = "${IMAGE#*@}"\n',
+            step,
+        )
+        loop = step[step.index('for TAG in'):]
+        self.assertIn('for TRY in 1 2 3 4 5 6; do', loop)
+        self.assertIn('sleep 10', loop)
+        self.assertIn('continue 2', loop)
+        # exhausting the tries must fail the step
+        self.assertLess(loop.index('done'), loop.index('exit 1'))
+
     def test_unused_signer_is_absent_from_runtime_and_dev(self):
         for name in ('runtime.in', 'runtime.txt', 'dev.txt'):
             self.assertNotIn(
