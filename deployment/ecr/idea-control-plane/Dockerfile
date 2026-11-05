@@ -115,7 +115,7 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
-ARG UV_VERSION=0.13.5
+ARG UV_VERSION=0.13.6
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
