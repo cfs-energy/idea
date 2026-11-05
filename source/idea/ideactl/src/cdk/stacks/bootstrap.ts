@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { Stack } from "aws-cdk-lib";
 
+import { GeneralException } from '../../config/cluster-config.ts';
 import { jinjaEnv, renderTemplate } from '../../config/jinja.ts';
 import { resourcesDir } from '../policy.ts';
 import type { StackBuildProps } from "../app.ts";
@@ -22,6 +23,10 @@ export interface BootstrapStackVars {
   awsElbAccountId?: string;
   /** `CdkInvoker.custom_permissions_boundary`; Python default `None`, which Jinja/nunjucks print as `''`. */
   inputPermissionsBoundary?: string;
+  /** Module ids of the scheduler modules, whose `logs/<id>/` archive prefix expires. */
+  schedulerLogModuleIds?: string[];
+  /** Days the scheduler log archive is kept. Unset or 0 keeps it forever, as before. */
+  schedulerLogRetentionDays?: number;
 }
 
 /** `resources/cdk/cdk_toolkit_stack.yml`'s directory, for the `FileSystemLoader` root. */
@@ -73,6 +78,25 @@ export function elbAccountIdForRegion(region: string, path: string = regionElbAc
   return config[region];
 }
 
+/**
+ * The scheduler uploads a copy of each day's logs daily and keeps ten days on disk. Expiring the copy
+ * sooner than twice that would only have the next sync upload what is still on disk again.
+ */
+export const SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS = 30;
+
+/**
+ * `scheduler.log_archive.s3_retention_days`: 0 keeps the archive forever; otherwise at least
+ * `SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS`.
+ */
+export function schedulerLogRetentionDays(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || (value > 0 && value < SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS)) {
+    throw new GeneralException(
+      `scheduler.log_archive.s3_retention_days must be 0 (keep forever) or at least ${SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS}, got ${value}`,
+    );
+  }
+  return value;
+}
+
 /** Renders `cdk_toolkit_stack.yml`. */
 export function renderBootstrapStack(vars: BootstrapStackVars, templateDir: string = bootstrapTemplateDir()): string {
   const env = jinjaEnv(templateDir);
@@ -81,6 +105,8 @@ export function renderBootstrapStack(vars: BootstrapStackVars, templateDir: stri
     aws_dns_suffix: vars.awsDnsSuffix,
     aws_elb_account_id: vars.awsElbAccountId,
     input_permissions_boundary: vars.inputPermissionsBoundary,
+    scheduler_log_module_ids: vars.schedulerLogModuleIds ?? [],
+    scheduler_log_retention_days: vars.schedulerLogRetentionDays ?? 0,
   });
 }
 

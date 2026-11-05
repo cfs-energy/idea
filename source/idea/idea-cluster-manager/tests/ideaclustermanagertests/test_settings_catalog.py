@@ -228,6 +228,7 @@ def test_catalog_count_contract_and_explicit_dispositions():
         'identity-provider.cognito.operations_leads_group_name',
         'cluster.costs.compute_rate_multiplier',
         'cluster.network.ssh_client_ip',
+        'scheduler.log_archive.s3_retention_days',
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
     assert len(DESTINATION_SECTIONS) == 37
@@ -235,7 +236,7 @@ def test_catalog_count_contract_and_explicit_dispositions():
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == '6e8dca909911d3fe74178b1ce5d26ed7b693b78c906a88a52689cbd0cfd5656d'
+        == '5f2a2e16983beab3e3930b2404492f5a38a0cd5c1d272082a19fc3478e01336f'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'

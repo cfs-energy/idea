@@ -123,7 +123,18 @@ export async function runBootstrap(
 
   // Re-rendered on every bootstrap, as `bootstrap_cluster` does: the permissions boundary and the
   // region's ELB account id are command-line and release inputs, not stack state.
-  const { elbAccountIdForRegion, renderBootstrapStack } = await import('../../cdk/stacks/bootstrap.ts');
+  const { elbAccountIdForRegion, renderBootstrapStack, schedulerLogRetentionDays } = await import(
+    '../../cdk/stacks/bootstrap.ts'
+  );
+  // An upgraded cluster has no row for the setting until the settings sync adds it; the default
+  // here is the same as the template's, so the two never disagree.
+  const schedulerModules = config.modules().filter((module) => module.name === 'scheduler');
+  const retentionDays =
+    schedulerModules.length === 0
+      ? 0
+      : schedulerLogRetentionDays(
+          config.getInt('scheduler.log_archive.s3_retention_days', 90, { moduleId: schedulerModules[0].module_id }),
+        );
   writeFileSync(
     templatePath,
     renderBootstrapStack({
@@ -131,6 +142,8 @@ export async function runBootstrap(
       awsDnsSuffix: config.getString('cluster.aws.dns_suffix', 'amazonaws.com'),
       awsElbAccountId: elbAccountIdForRegion(options.awsRegion),
       inputPermissionsBoundary: options.customPermissionsBoundary,
+      schedulerLogModuleIds: schedulerModules.map((module) => module.module_id),
+      schedulerLogRetentionDays: retentionDays,
     }),
   );
   deps.out(
