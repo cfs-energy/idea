@@ -10,6 +10,18 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 
 **Highlights for users**
 
+* My costs, **Storage usage** lists every top-level folder of your home, largest first, and lets you look inside folders. **Refresh** runs a longer study and shows its progress. Your total also shows how much of your storage is outside your home folder.
+
+* IDEA-324: storage usage reads folder sizes from ONTAP File System Analytics when it is on for the volume, and totals NFS and SMB quota bytes for a user. With analytics off it uses the short scan with the new layout. Turning analytics on needs no redeploy; it is picked up within 5 minutes.
+* IDEA-307: finished jobs are removed from the job cache after 400 days (`scheduler.job_cache.finished_job_retention_days`) and its backup copy is written compacted. The copy to EFS runs hourly instead of every five minutes (`scheduler.job_cache.backup_interval_seconds`). A restored scheduler learns finished jobs from OpenSearch instead of repeating their completion emails and metrics, and restores license usage for provisioned jobs.
+* IDEA-308, IDEA-309, IDEA-311: personal costs store desktop inventory changes instead of a snapshot every 15 minutes, and admin reports, Insights and the admin user costs page read stored records instead of scanning the table. Costs are unchanged. Going back to 26.11.1 afterwards undercounts disk costs on open days and in the month-close pass.
+* IDEA-310: Bedrock usage aggregation scans only new log time, and unchanged month rollups are no longer rewritten.
+* IDEA-312: the scheduler log archive copies only changed files. The cluster bucket expires `logs/<scheduler module id>/` after 400 days (`scheduler.log_archive.s3_retention_days`, 0 keeps it forever). The rule is applied by `ideactl bootstrap` or a full deploy, not by `upgrade-cluster`, and the first apply deletes logs older than that.
+* IDEA-239: `idea.session.count` reports desktops by state, OS and project on DogStatsD clusters. `idea.job.cpu_efficiency.measured` leaves out jobs that recorded zero CPU. The cost collector re-reads seven days of Cost Explorer by default, so tax posted late for the first of the month lands. Backfilled cost for multi-day jobs priced before 26.08.0 is corrected for the whole days those prices dropped.
+* The standalone cost collector can backfill cost history as a one-off task: set `IDEA_COST_METRICS_BACKFILL_DAYS` on the `cost-metrics` container, and `IDEA_COST_METRICS_BACKFILL_APPLY=true` to send points. It is a dry run otherwise.
+* IDEA-323: the release job retries its tag read-back when public ECR serves a stale manifest.
+* Tools and Python locks are updated. `.ruff.toml` holds the lint rule set the repository already enforces under ruff 0.17.
+
 ## [26.11.1] - 2026-11-04
 
 > **Upgrade floor: 26.10.0.** 26.11.1 upgrades only clusters whose modules are all on 26.10.0 or later, and refuses before changing anything otherwise. A cluster on an older release upgrades to 26.10.9 first (that release also completes the move to ECS), then to 26.11.1. Clusters on 25.11.0 or newer reach 26.10.9 directly; older clusters follow each intervening release's upgrade instructions first (see [Full IDEA Upgrade](first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md)).
