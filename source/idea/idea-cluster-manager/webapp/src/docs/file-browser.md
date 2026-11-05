@@ -10,6 +10,6 @@ ONTAP quota reports show used space, files, limit and report time. When ONTAP st
 
 In Files, select one folder and choose **Delete folder** from the toolbar, **Actions**, or the right-click menu. The confirmation shows size, file count, last change and measurement time. Type the folder name exactly to confirm permanent deletion of the folder and everything inside it.
 
-Scans stop at 100,000 entries or ten seconds and limit directory depth to 128. Unreadable data also produces partial results. Partial sizes read **At least** and are lower bounds. Deletion stays disabled until a complete measurement and folder identity are available.
+Folder sizes come from ONTAP File System Analytics when it is on for the volume: every folder you can open, largest first, with no file scan. Without it, a short scan lists your whole home folder and measures what it can in ten seconds or 100,000 entries, one scan at a time. Sizes that scan did not finish read **At least**, and folders it did not reach read **Not measured yet**. Deletion stays disabled until a complete measurement and folder identity are available.
 
 Only folders inside your home directory can be deleted this way. **Folder changed since it was measured** means the directory device or inode no longer matches. Close the confirmation and measure and review the folder again. This check does not detect every change to files inside the folder.

@@ -43,10 +43,31 @@ export interface StorageFolderUsage {
     oldest_mtime: number | null
     unchanged_90_days_bytes: number
     partial: boolean
+    measured?: boolean
+    unreadable?: boolean
+    subfolders?: number
+}
+
+export interface StorageStudyProgress {
+    running: boolean
+    step: string
+    done: number
+    total: number
+    started_at: number
+    steps: {label: string, state: 'done' | 'running' | 'waiting'}[]
 }
 
 export interface StorageUsageResult {
-    state: 'computing' | 'ready' | 'error'
+    state: 'computing' | 'ready' | 'error' | 'unavailable'
+    source?: 'analytics' | 'scan'
+    analytics_progress?: number
+    scanned_files?: number
+    outside_home_bytes?: number
+    unattributed_quota_bytes?: number
+    files_here?: {bytes: number, files: number}
+    largest?: StorageFolderUsage[]
+    shared?: StorageFolderUsage[]
+    progress?: StorageStudyProgress
     home: string
     measured_at?: number
     partial?: boolean
@@ -63,8 +84,8 @@ export interface FileBrowserClientProps extends IdeaBaseClientProps {
 
 class FileBrowserClient extends IdeaBaseClient<FileBrowserClientProps> {
 
-    getStorageUsage(req: {folder?: string} = {}): Promise<StorageUsageResult> {
-        return this.apiInvoker.invoke_alt<{folder?: string}, StorageUsageResult>('FileBrowser.GetStorageUsage', req)
+    getStorageUsage(req: {folder?: string, refresh?: boolean} = {}): Promise<StorageUsageResult> {
+        return this.apiInvoker.invoke_alt<{folder?: string, refresh?: boolean}, StorageUsageResult>('FileBrowser.GetStorageUsage', req)
     }
 
     deleteFolder(req: {path: string, identity: {device: string, inode: string}}): Promise<DeleteFilesResult> {
