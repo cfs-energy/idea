@@ -1,6 +1,7 @@
 __all__ = (
     'BedrockUsageService',
     'INVOCATION_QUERY',
+    'INVOCATION_QUERY_HOURLY',
     'CALLER_ARN_RE',
     'INSTANCE_ID_RE',
     'USAGE_WINDOW',
@@ -32,6 +33,7 @@ from ideaclustermanager.app.projects.bedrock_invocation_logging import (
 )
 from ideaclustermanager.app.projects.db.bedrock_usage_dao import (
     BedrockInstanceOwnerDAO,
+    SCAN_STATE_ID,
     UNATTRIBUTED_USER,
     build_day_key,
     build_project_key,
@@ -42,6 +44,8 @@ from ideaclustermanager.app.projects.db.bedrock_usage_dao import (
 
 import arrow
 import botocore.exceptions
+import hashlib
+import json
 import re
 import threading
 from typing import Dict, List, Optional, Set, Tuple
@@ -60,6 +64,22 @@ INVOCATION_QUERY = """fields identity.arn as caller_arn, modelId as model_id, in
 | stats sum(in_tokens) as input_tokens, sum(out_tokens) as output_tokens, count(*) as invocations by caller_arn, model_id, bin(1d) as usage_day
 | sort invocations desc
 | limit {limit}"""
+
+# the same query binned by the hour. the incremental scan reads this one so an hour can be
+# settled once it is old enough that late arriving records are no longer expected.
+INVOCATION_QUERY_HOURLY = INVOCATION_QUERY.replace('bin(1d)', 'bin(1h)')
+
+# records are matched to an hour by the time they were logged, not the time they reach
+# cloudwatch logs, so a late record lands in an hour that was already scanned. an hour is
+# settled (counted once, never scanned again) only once it is this old.
+DEFAULT_OVERLAP_MINUTES = 60
+# every project is rebuilt from the whole lookback window at least this often, which
+# bounds how long a record that arrives later than the overlap can stay uncounted.
+DEFAULT_FULL_RESCAN_HOURS = 24
+# dynamodb items are capped at 400 KB. past this the state is not kept and the next run
+# scans the whole window, as it did before the scan was incremental.
+SCAN_STATE_MAX_BYTES = 300000
+ROLLUP_COUNTERS = ('invocations', 'input_tokens', 'output_tokens', 'total_tokens')
 
 # a trailing window rather than the calendar month, so a project last used a few weeks
 # ago still reads as used on the first of a month.
@@ -107,6 +127,14 @@ def _row_counters(row: Dict) -> Dict[str, int]:
         key: Utils.get_value_as_int(key, row, 0)
         for key in ('invocations', 'input_tokens', 'output_tokens')
     }
+
+
+def _usage_time(usage_day: str) -> int:
+    """epoch seconds of a logs insights bin such as '2026-11-05 13:00:00.000'."""
+    try:
+        return arrow.get(usage_day[:19], 'YYYY-MM-DD HH:mm:ss').int_timestamp
+    except Exception:
+        return arrow.get(usage_day[:10], 'YYYY-MM-DD').int_timestamp
 
 
 def usage_window_dates(days: int = USAGE_WINDOW_DAYS) -> Tuple[str, str]:
@@ -296,6 +324,29 @@ class BedrockUsageService(SocaService):
         """whether the query hit its row limit, so what came back is a partial window."""
         return len(records) >= self.get_max_query_results()
 
+    def get_overlap_seconds(self) -> int:
+        return (
+            max(
+                0,
+                self.context.config().get_int(
+                    self._config_key('usage.overlap_minutes'), DEFAULT_OVERLAP_MINUTES
+                ),
+            )
+            * 60
+        )
+
+    def get_full_rescan_seconds(self) -> int:
+        return (
+            max(
+                1,
+                self.context.config().get_int(
+                    self._config_key('usage.full_rescan_hours'),
+                    DEFAULT_FULL_RESCAN_HOURS,
+                ),
+            )
+            * 3600
+        )
+
     def get_query_timeout_seconds(self) -> int:
         return self.context.config().get_int(
             self._config_key('usage.query_timeout_seconds'), 300
@@ -374,12 +425,54 @@ class BedrockUsageService(SocaService):
 
         role_index, profile_index = self.build_indexes(projects)
         days = self.build_window_days()
-        start_time = arrow.get(days[0]).int_timestamp
+        window_start = arrow.get(days[0]).int_timestamp
         end_time = Utils.current_time()
 
-        records = self.query_invocation_records(log_group_name, start_time, end_time)
+        # only the time since the last settled hour is scanned. anything older is held
+        # in each project's scan state, so the totals written are the same ones a scan
+        # of the whole window would give.
+        fingerprint = self.build_fingerprint(role_index, profile_index)
+        states = self.load_scan_states(
+            projects, fingerprint, window_start, end_time, days[0]
+        )
+        floors = {
+            project.project_id: states[project.project_id]['settled_through']
+            if states.get(project.project_id) is not None
+            else window_start
+            for project in projects
+        }
+        start_time = min(floors.values())
+        overlap_through = (
+            (end_time - self.get_overlap_seconds()) // 3600
+        ) * 3600
+        settle_before = {
+            project_id: max(floor, overlap_through)
+            for project_id, floor in floors.items()
+        }
+
+        records = self.query_invocation_records(
+            log_group_name, start_time, end_time, INVOCATION_QUERY_HOURLY
+        )
+        incremental = True
+        if self.is_truncated(records):
+            # an hourly answer has more groups than a daily one and can hit the limit
+            # a daily one would not. fall back to the daily scan of the whole window.
+            incremental = False
+            floors = {project_id: window_start for project_id in floors}
+            states = {}
+            records = self.query_invocation_records(
+                log_group_name, window_start, end_time
+            )
+        settled_users: Dict[str, Dict] = {}
+        settled_jobs: Dict[str, Dict] = {}
         aggregates, job_aggregates, skipped = self.attribute(
-            records, role_index, profile_index
+            records,
+            role_index,
+            profile_index,
+            floors=floors if incremental else None,
+            settle_before=settle_before if incremental else None,
+            settled_users=settled_users,
+            settled_jobs=settled_jobs,
         )
         if skipped > 0:
             self.logger.info(
@@ -411,6 +504,11 @@ class BedrockUsageService(SocaService):
             indexed_mappings.setdefault(project.project_id, set()).add(
                 f'profile:{profile}'
             )
+        keep_state = incremental and len(records) > 0 and not truncated
+        if keep_state:
+            # an empty answer stays empty: nothing settled can be added to it, or a
+            # missing log group would overwrite stored usage with the settled part only.
+            self.add_settled(aggregates, job_aggregates, states)
         self.store(
             projects,
             aggregates,
@@ -419,6 +517,182 @@ class BedrockUsageService(SocaService):
             job_aggregates=job_aggregates,
             reconcile=not truncated,
         )
+        if keep_state:
+            # after the rows: a run that dies in between is repeated from the old state
+            # and derives the same totals, where state first would skip the hours.
+            self.save_scan_states(
+                projects,
+                states,
+                settled_users,
+                settled_jobs,
+                settle_before,
+                fingerprint,
+                end_time,
+                days[0],
+            )
+
+    # scan state
+
+    @staticmethod
+    def build_fingerprint(role_index, profile_index) -> str:
+        # settled usage was attributed to projects by these mappings. when one changes,
+        # settled hours would keep the old attribution, so they are scanned again.
+        mappings = sorted(
+            [['role', key, project.project_id] for key, project in role_index.items()]
+            + [
+                ['profile', key, project.project_id, model_id]
+                for key, (project, model_id) in profile_index.items()
+            ]
+        )
+        return hashlib.sha256(json.dumps(mappings).encode()).hexdigest()
+
+    @staticmethod
+    def _encode_settled(rows: Dict[Tuple[str, str, str], Dict]) -> List[List]:
+        return [
+            [
+                *key,
+                counters['invocations'],
+                counters['input_tokens'],
+                counters['output_tokens'],
+                counters.get('attribution_mappings', []),
+            ]
+            for key, counters in sorted(rows.items())
+        ]
+
+    @staticmethod
+    def _decode_settled(entries: List[List], first_day: str) -> Dict:
+        rows: Dict[Tuple[str, str, str], Dict] = {}
+        for entry in entries:
+            if len(entry) != 7 or entry[0] < first_day:
+                continue
+            rows[(entry[0], entry[1], entry[2])] = {
+                'invocations': entry[3],
+                'input_tokens': entry[4],
+                'output_tokens': entry[5],
+                'attribution_mappings': entry[6],
+            }
+        return rows
+
+    def load_scan_states(
+        self,
+        projects: List[Project],
+        fingerprint: str,
+        window_start: int,
+        now: int,
+        first_day: str,
+    ) -> Dict[str, Optional[Dict]]:
+        """
+        the settled usage per project, or None where a project has none that can be
+        trusted: no state yet (the first run after an upgrade), a changed attribution
+        mapping, a full rescan that is due, or a state that does not fit the window.
+        """
+        states: Dict[str, Optional[Dict]] = {}
+        rescan = self.get_full_rescan_seconds()
+        for project in projects:
+            state = None
+            try:
+                item = self.usage_dao.get_scan_state(project.project_id)
+                if item is not None:
+                    through = Utils.get_value_as_int('settled_through', item, 0)
+                    scanned = Utils.get_value_as_int('full_scan_at', item, 0)
+                    if (
+                        Utils.get_value_as_string('fingerprint', item) == fingerprint
+                        and window_start <= through <= now
+                        and now - scanned < rescan
+                    ):
+                        settled = json.loads(
+                            Utils.get_value_as_string('settled', item, '{}')
+                        )
+                        state = {
+                            'settled_through': through,
+                            'full_scan_at': scanned,
+                            'users': self._decode_settled(
+                                settled.get('users', []), first_day
+                            ),
+                            'jobs': self._decode_settled(
+                                settled.get('jobs', []), first_day
+                            ),
+                        }
+            except Exception as e:
+                self.logger.warning(
+                    f'scan state for project {project.project_id} is unreadable: {e}. '
+                    f'scanning the whole window.'
+                )
+            states[project.project_id] = state
+        return states
+
+    @staticmethod
+    def add_settled(aggregates, job_aggregates, states):
+        for project_id, state in states.items():
+            if state is None:
+                continue
+            for target, rows in (
+                (aggregates, state['users']),
+                (job_aggregates, state['jobs']),
+            ):
+                project_rows = target.setdefault(project_id, {})
+                for key, counters in rows.items():
+                    _add_counters(
+                        project_rows.setdefault(key, _new_counters()), counters
+                    )
+
+    def save_scan_states(
+        self,
+        projects,
+        states,
+        settled_users,
+        settled_jobs,
+        settle_before,
+        fingerprint,
+        now,
+        first_day,
+    ):
+        ttl = self.get_row_ttl()
+        for project in projects:
+            project_id = project.project_id
+            state = states.get(project_id)
+            through = settle_before[project_id]
+            if state is not None and state['settled_through'] == through:
+                continue
+            users = dict(state['users']) if state is not None else {}
+            jobs = dict(state['jobs']) if state is not None else {}
+            users = {key: dict(value) for key, value in users.items()}
+            jobs = {key: dict(value) for key, value in jobs.items()}
+            for target, rows in (
+                (users, settled_users.get(project_id, {})),
+                (jobs, settled_jobs.get(project_id, {})),
+            ):
+                for key, counters in rows.items():
+                    if key[0] >= first_day:
+                        _add_counters(
+                            target.setdefault(key, _new_counters()), counters
+                        )
+            settled = json.dumps(
+                {
+                    'users': self._encode_settled(users),
+                    'jobs': self._encode_settled(jobs),
+                }
+            )
+            if len(settled) > SCAN_STATE_MAX_BYTES:
+                self.logger.warning(
+                    f'scan state for project {project_id} is too large to keep. the '
+                    f'whole window is scanned on every run for this project.'
+                )
+                continue
+            self.usage_dao.put_rows(
+                [
+                    {
+                        'project_id': project_id,
+                        'usage_id': SCAN_STATE_ID,
+                        'settled_through': through,
+                        'full_scan_at': state['full_scan_at'] if state else now,
+                        'fingerprint': fingerprint,
+                        'settled': settled,
+                        'updated_on': Utils.current_time_ms(),
+                        'ttl': ttl,
+                    }
+                ]
+            )
 
     def list_bedrock_projects(self) -> List[Project]:
         return list_bedrock_projects(self.projects_service.projects_dao)
@@ -448,10 +722,14 @@ class BedrockUsageService(SocaService):
         ]
 
     def query_invocation_records(
-        self, log_group_name: str, start_time: int, end_time: int
+        self,
+        log_group_name: str,
+        start_time: int,
+        end_time: int,
+        query: str = INVOCATION_QUERY,
     ) -> List[List[Dict]]:
         logs = self.context.aws().logs()
-        query_string = INVOCATION_QUERY.format(limit=self.get_max_query_results())
+        query_string = query.format(limit=self.get_max_query_results())
         try:
             response = logs.start_query(
                 logGroupName=log_group_name,
@@ -505,7 +783,17 @@ class BedrockUsageService(SocaService):
         records: List[List[Dict]],
         role_index: Dict[str, Project],
         profile_index: Dict[str, Tuple[Project, str]],
+        floors: Optional[Dict[str, int]] = None,
+        settle_before: Optional[Dict[str, int]] = None,
+        settled_users: Optional[Dict[str, Dict]] = None,
+        settled_jobs: Optional[Dict[str, Dict]] = None,
     ):
+        """
+        floors and settle_before are epoch seconds per project, for hourly records. an
+        hour before its project's floor is already held as settled usage and is skipped.
+        an hour before settle_before is also added to settled_users and settled_jobs, so
+        the caller can keep it and not scan it again.
+        """
         parsed = []
         instance_ids = set()
         skipped = 0
@@ -534,9 +822,13 @@ class BedrockUsageService(SocaService):
             if Utils.is_empty(model_id):
                 model_id = raw_model_id
 
-            usage_date = Utils.get_as_string(row.get('usage_day'), '')[:10]
+            usage_day = Utils.get_as_string(row.get('usage_day'), '')
+            usage_date = usage_day[:10]
             if len(usage_date) != 10:
                 skipped += 1
+                continue
+            usage_time = _usage_time(usage_day)
+            if floors is not None and usage_time < floors.get(project.project_id, 0):
                 continue
 
             instance_id = None
@@ -548,6 +840,7 @@ class BedrockUsageService(SocaService):
                 (
                     project.project_id,
                     usage_date,
+                    usage_time,
                     model_id,
                     instance_id,
                     {
@@ -563,18 +856,29 @@ class BedrockUsageService(SocaService):
 
         aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
         job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
-        for project_id, usage_date, model_id, instance_id, counters in parsed:
+        for project_id, usage_date, usage_time, model_id, instance_id, counters in parsed:
             attribution = owners.get(instance_id) or ('', '')
             username = attribution[0] or UNATTRIBUTED_USER
-            project_rows = aggregates.setdefault(project_id, {})
+            settles = (
+                settle_before is not None
+                and usage_time < settle_before.get(project_id, 0)
+            )
             key = (usage_date, username, model_id)
-            _add_counters(project_rows.setdefault(key, _new_counters()), counters)
-
+            targets = [(aggregates, key)]
+            if settles and settled_users is not None:
+                targets.append((settled_users, key))
             job_id = attribution[1]
+            job_key = (usage_date, job_id, model_id)
+            job_targets = []
             if Utils.is_not_empty(job_id):
-                job_rows = job_aggregates.setdefault(project_id, {})
-                job_key = (usage_date, job_id, model_id)
-                _add_counters(job_rows.setdefault(job_key, _new_counters()), counters)
+                job_targets.append((job_aggregates, job_key))
+                if settles and settled_jobs is not None:
+                    job_targets.append((settled_jobs, job_key))
+            for target, target_key in targets + job_targets:
+                project_rows = target.setdefault(project_id, {})
+                _add_counters(
+                    project_rows.setdefault(target_key, _new_counters()), counters
+                )
 
         return aggregates, job_aggregates, skipped
 
@@ -831,6 +1135,7 @@ class BedrockUsageService(SocaService):
 
         project_key = build_project_key(period)
         if len(by_user) > 0:
+            desired_keys.add(project_key)
             rows.append(
                 {
                     'project_id': project_id,
@@ -846,13 +1151,38 @@ class BedrockUsageService(SocaService):
                 }
             )
 
-        self.usage_dao.put_rows(rows)
+        existing_rollups = self.usage_dao.query_user_rollups(
+            project_id, period
+        ) + self.usage_dao.query_job_rollups(project_id, period)
+        project_rollup = self.usage_dao.get_project_rollup(project_id, period)
+        if project_rollup is not None:
+            existing_rollups.append(project_rollup)
+        stored = {
+            Utils.get_value_as_string('usage_id', row): row for row in existing_rollups
+        }
 
-        stale = {
-            Utils.get_value_as_string('usage_id', row)
-            for row in self.usage_dao.query_user_rollups(project_id, period)
-            + self.usage_dao.query_job_rollups(project_id, period)
-        } - desired_keys
+        # a rollup that came out the same is not written again. its time to live is
+        # renewed once half of it is gone, so an idle month still outlives the window.
+        renew_before = Utils.current_time() + (ttl - Utils.current_time()) // 2
+        changed = [
+            row
+            for row in rows
+            if not self._rollup_unchanged(stored.get(row['usage_id']), row, renew_before)
+        ]
+        self.usage_dao.put_rows(changed)
+
+        stale = set(stored) - desired_keys
         if len(by_user) == 0:
             stale.add(project_key)
         self.usage_dao.delete_rows(project_id, stale)
+
+    @staticmethod
+    def _rollup_unchanged(stored: Optional[Dict], row: Dict, renew_before: int) -> bool:
+        if stored is None:
+            return False
+        if Utils.get_value_as_int('ttl', stored, 0) < renew_before:
+            return False
+        return all(
+            Utils.get_value_as_int(key, stored, -1) == row[key]
+            for key in ROLLUP_COUNTERS
+        )
