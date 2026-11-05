@@ -3186,6 +3186,14 @@ _ROWS = [
         True,
     ),
     (
+        'scheduler.job_cache.backup_interval_seconds',
+        'integer',
+        'restart',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
         'scheduler.job_cache.finished_job_retention_days',
         'integer',
         'runtime',

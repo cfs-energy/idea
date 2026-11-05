@@ -8,7 +8,7 @@ finished jobs table with its provisioning error rather than be deleted from the 
 
 from ideasdk.config.soca_config import SocaConfig
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import arrow
 import pytest
@@ -94,6 +94,13 @@ class FakeDocumentStore:
 
     def __init__(self):
         self.indexed: List[SocaJob] = []
+        self.jobs_by_uid: Dict[str, SocaJob] = {}
+        self.lookup_error: Optional[Exception] = None
+
+    def get_job(self, job_uid=None, **_):
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        return self.jobs_by_uid.get(job_uid)
 
     def add_jobs(self, jobs: List[SocaJob], **_):
         self.indexed.extend(jobs)
@@ -1237,3 +1244,53 @@ def test_recovery_uses_latest_real_pbs_attempt_after_restart(
     if latest_hooks != 'both':
         assert recorded.estimated_bom_cost is None
         assert recorded.end_time is None
+
+
+# ------------------------------------------------------------ restore from an older copy
+
+
+def test_a_restored_job_the_index_holds_is_not_processed_twice(
+    fake_context, pricing_spy
+):
+    """
+    the copy predates the job finishing: its row is still in the jobs table with no finished
+    record. the index already has the job, so the owner gets no second completion email.
+    """
+    recorded = make_job(job_uid='uid-1', state=SocaJobState.FINISHED)
+    fake_context.document_store.jobs_by_uid['uid-1'] = recorded
+
+    ids = build_poller(fake_context)._process_finished_jobs(
+        [make_job(provisioned=True, job_uid='uid-1')]
+    )
+
+    assert ids == ['14906']
+    assert fake_context.job_notifications.completed == []
+    assert fake_context.job_cache.finished_jobs == [recorded]
+    assert fake_context.job_cache.pending_jobs == []
+
+
+def test_a_restored_unprovisioned_job_the_index_holds_is_not_processed_twice(
+    fake_context, pricing_spy
+):
+    recorded = make_job(job_uid='uid-2', state=SocaJobState.FINISHED)
+    fake_context.document_store.jobs_by_uid['uid-2'] = recorded
+
+    ids = build_poller(fake_context)._process_unprovisioned_jobs(
+        [make_job(job_uid='uid-2')]
+    )
+
+    assert ids == ['14906']
+    assert fake_context.job_cache.finished_jobs == [recorded]
+    assert fake_context.job_cache.pending_jobs == []
+
+
+def test_a_failed_index_lookup_still_records_the_job(fake_context, pricing_spy):
+    fake_context.document_store.lookup_error = RuntimeError('index unreachable')
+
+    ids = build_poller(fake_context)._process_finished_jobs(
+        [make_job(provisioned=True, job_uid='uid-3')]
+    )
+
+    assert ids == ['14906']
+    assert [job.job_uid for job in fake_context.job_cache.finished_jobs] == ['uid-3']
+    assert fake_context.job_notifications.completed == ['14906']

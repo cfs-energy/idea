@@ -401,6 +401,28 @@ class FinishedJobProcessor:
             )
         )
 
+    def _recorded_job(self, job_uid: Optional[str]) -> Optional[SocaJob]:
+        """
+        the finished record for a job, or None if it still has to be processed.
+
+        a task restored from a copy holds jobs in the jobs table that finished after the
+        copy was taken. the document store knows those, and re-learning the record here
+        keeps a restore from repeating the completion email and metrics. a failed lookup
+        repeats them, which is better than losing the record.
+        """
+        stored = self._context.job_cache.get_completed_job_by_uid(job_uid)
+        if stored is not None or Utils.is_empty(job_uid):
+            return stored
+        try:
+            indexed = self._context.document_store.get_job(job_uid=job_uid)
+        except Exception as e:
+            self._logger.warning(f'(JobUid: {job_uid}) index lookup failed: {e}')
+            return None
+        if indexed is not None:
+            self._context.job_cache.add_finished_job(indexed)
+            self._context.job_cache.mark_job_indexed(indexed)
+        return indexed
+
     def _process_finished_jobs(self, jobs: List[SocaJob]):
         if len(jobs) == 0:
             return []
@@ -423,9 +445,7 @@ class FinishedJobProcessor:
             try:
                 # Preserve the reason alongside the scheduler's execution timestamps.
                 cached = cached_jobs[finished_job.job_id]
-                stored = self._context.job_cache.get_completed_job_by_uid(
-                    cached.job_uid
-                )
+                stored = self._recorded_job(cached.job_uid)
                 if stored is not None:
                     recorded_jobs.append(stored)
                     continue
@@ -469,7 +489,7 @@ class FinishedJobProcessor:
         recorded_jobs = []
         for job in jobs:
             try:
-                stored = self._context.job_cache.get_completed_job_by_uid(job.job_uid)
+                stored = self._recorded_job(job.job_uid)
                 if stored is not None:
                     recorded_jobs.append(stored)
                     continue

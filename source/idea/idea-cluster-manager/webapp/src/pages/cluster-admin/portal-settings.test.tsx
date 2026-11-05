@@ -787,6 +787,7 @@ scheduler.fair_share.score_type|15|Score type|enum|restart|0|hidden|69
 scheduler.fair_share.start_score|15|Start score|integer|restart|0|hidden|69
 scheduler.instance_ami|18|Instance AMI|string|deployment|1|read_only|137
 scheduler.instance_type|18|Instance type|string|deployment|1|read_only|137
+scheduler.job_cache.backup_interval_seconds|18|Backup interval (seconds)|integer|restart|1|editable|later
 scheduler.job_cache.finished_job_retention_days|18|Finished job retention (days)|integer|runtime|1|editable|later
 scheduler.job_provisioning.batch_provisioning_wait_interval_seconds|18|Batch provisioning wait interval (seconds)|integer|runtime|1|hidden|70
 scheduler.job_provisioning.dry_run_cache_ttl_seconds|18|Dry run cache TTL (seconds)|integer|runtime|1|hidden|70

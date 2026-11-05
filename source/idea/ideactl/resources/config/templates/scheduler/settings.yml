@@ -81,6 +81,9 @@ images:
   legacy_cleanup_min_age_days: 30
 
 job_cache:
+  # how often the job cache is copied to the scheduler-pbs volume when it changed; a task that dies
+  # without an orderly stop restores a copy up to this old. each copy writes the whole file to EFS.
+  backup_interval_seconds: 3600
   # finished jobs are deleted from the scheduler's job cache this many days after they end; 0 keeps them
   finished_job_retention_days: 400
 

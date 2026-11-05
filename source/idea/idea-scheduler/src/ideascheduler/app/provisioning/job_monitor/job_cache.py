@@ -88,11 +88,16 @@ class JobsDB:
     """
     The live cache is a SQLite file on local disk, where it is fast. A container's local
     disk goes with every task replacement, so there a copy is kept under PBS_HOME (the
-    scheduler-pbs volume, which outlives the task): refreshed by SQLite's online backup
-    every five minutes when something changed, and on an orderly stop, and restored on a
-    start that finds no local file. At most the last five minutes of cache are lost when a
-    task dies without an orderly stop, and no network filesystem locking sits in the hot
-    path. Each refresh copies the whole file, so the interval sets the EFS write volume.
+    scheduler-pbs volume, which outlives the task): refreshed hourly when something changed,
+    and on an orderly stop, and restored on a start that finds no local file. No network
+    filesystem locking sits in the hot path. Each refresh copies the whole file, so the
+    interval sets the EFS write volume; a job or hook event in most hours means nearly
+    every refresh runs, and only the interval lowers the volume.
+
+    At most the last hour is lost when a task dies without an orderly stop, and most of
+    that comes back: PBS re-supplies active jobs and their licenses, the document store
+    answers for jobs it already holds (see FinishedJobProcessor._recorded_job), and SQS
+    keeps undelivered hook events.
 
     Finished jobs older than the retention are deleted in small batches. The live file
     keeps the freed pages for new rows and is never vacuumed in place, because that would
@@ -100,7 +105,9 @@ class JobsDB:
     it shrinks at its next refresh, and a replacement task starts from that smaller file.
     """
 
-    DEFAULT_BACKUP_INTERVAL_SECONDS = 300
+    # ponytail: whole-file copy, so bytes grow with retained rows: about 8 GB/day at 64k rows.
+    # Copy finished-job deltas instead if the EFS burst balance trends toward empty.
+    DEFAULT_BACKUP_INTERVAL_SECONDS = 3600
     DEFAULT_FINISHED_JOB_RETENTION_DAYS = 400
     PRUNE_INTERVAL_SECONDS = 3600
     PRUNE_BATCH_SIZE = 500

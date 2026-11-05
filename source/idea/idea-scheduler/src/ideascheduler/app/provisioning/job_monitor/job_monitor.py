@@ -259,6 +259,11 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     jobs = self._context.scheduler.list_jobs(queue=queue)
 
                     self._context.job_cache.sync(jobs=jobs)
+                    # a restored cache can predate a job's provisioning, and only that
+                    # records its licenses. without this the license check over-admits.
+                    self._context.job_cache.add_active_licenses(
+                        [job for job in jobs if job.is_provisioned()]
+                    )
 
                     for job in jobs:
                         if self._provisioning_retries_exhausted(job):
