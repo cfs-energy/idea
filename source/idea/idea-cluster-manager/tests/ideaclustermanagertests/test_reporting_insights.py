@@ -660,6 +660,7 @@ def test_sources_scope_projection_desktop_and_history_reads(username):
         subject='user-a', record='head', payload=json.dumps({'parts': {'costs': 0}})
     )
     context.personal_costs_store.records.return_value = [head]
+    context.personal_costs_store.head_subjects.return_value = None
     context.personal_costs_store.table.scan.return_value = {'Items': [head]}
     history = context.aws().dynamodb_table().Table.return_value
     read = history.query if username else history.scan
@@ -690,7 +691,7 @@ def test_sources_scope_projection_desktop_and_history_reads(username):
     else:
         context.personal_costs_store.records.assert_not_called()
         history.query.assert_not_called()
-        assert query == {'match_all': {}}
+        assert 'match_all' not in str(query)
 
 
 @pytest.mark.parametrize('allowed', [False, True])

@@ -1316,8 +1316,13 @@ class PersonalCostsCollector:
         self.store.put(SYSTEM, 'state', state)
         timezone = self.context.config().get_string('cluster.timezone', 'UTC') or 'UTC'
         local = now.to(timezone)
-        start = local.floor('month')
         self.calculator.begin()
+        try:
+            if self.store.seed_head_subjects():
+                self.logger.info('Personal cost head index seeded')
+        except Exception:
+            # readers keep scanning until this succeeds on a later run
+            self.logger.exception('Personal cost head index not seeded')
         try:
             self.calculator.capture_storage(users, local)
         except Exception:

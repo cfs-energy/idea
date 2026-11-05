@@ -107,6 +107,16 @@ class ReportingSources:
         with ThreadPoolExecutor(max_workers=segments) as pool:
             return [row for rows in pool.map(segment, range(segments)) for row in rows]
 
+    def read_heads(self, usernames, deadline):
+        store = self.context.personal_costs_store
+        subjects = store.head_subjects()
+        if subjects is None:
+            # before the collector's first run on this version
+            return self.scan_heads(store.table, deadline)
+        return store.batch_heads(
+            set(subjects) | set(usernames), lambda: check_deadline(deadline)
+        )
+
     @staticmethod
     def listing(read, request_type, deadline):
         cursor = None
@@ -159,6 +169,151 @@ class ReportingSources:
                 except Exception:
                     pass
         check_deadline(deadline)
+
+    @staticmethod
+    def desktop_period_query(period, scope_username):
+        """
+        session documents that can matter to the period. a document is left out only when
+        it says it was created after the period, or stopped before it on a date it gave.
+        whatever cannot say so stays in: no date at all is counted with unknown hours,
+        and a live desktop runs on from a last write of any age.
+        """
+        from ideaclustermanager.app.costs.my_costs_service import LIVE_SESSION_STATES
+
+        start_ms = int(timestamp(period.start) * 1000)
+        end_ms = int(timestamp(period.end) * 1000)
+
+        def absent(field):
+            return {'bool': {'must_not': [{'exists': {'field': field}}]}}
+
+        return {
+            'bool': {
+                'filter': (
+                    [{'term': {'owner.raw': scope_username}}]
+                    if scope_username is not None
+                    else []
+                )
+                + [
+                    {
+                        'bool': {
+                            'minimum_should_match': 1,
+                            'should': [
+                                absent('created_on'),
+                                {'range': {'created_on': {'lt': end_ms}}},
+                            ],
+                        }
+                    },
+                    {
+                        'bool': {
+                            'minimum_should_match': 1,
+                            'should': [
+                                absent('updated_on'),
+                                {'range': {'updated_on': {'lte': 0}}},
+                                *(
+                                    {'range': {field: {'gte': start_ms}}}
+                                    for field in (
+                                        'updated_on',
+                                        'stopped_on',
+                                        'cleanup_warning_stop_time',
+                                        'deleted_on',
+                                    )
+                                ),
+                                {'terms': {'state.raw': sorted(LIVE_SESSION_STATES)}},
+                            ],
+                        }
+                    },
+                ]
+            }
+        }
+
+    def whole_sessions(self, index, hits, runs, activity, period, deadline, scope):
+        """
+        every document of the sessions the period filter cannot judge from one document.
+        a stale generation of the index can still say READY for a desktop a newer document
+        says stopped before the period, so a session kept on an old write needs all of its
+        documents for the newest to win. the same for a desktop whose run overlaps the
+        period, or that the activity checks saw, whatever its documents said.
+        """
+        start = timestamp(period.start)
+        end = timestamp(period.end)
+        wanted = set(activity)
+        for hit in hits:
+            source = hit.get('_source', {})
+            updated = timestamp(source.get('updated_on'))
+            if updated is None or updated < start:
+                wanted.add(source.get('idea_session_id'))
+        for row in runs:
+            started = timestamp(row.get('started_on'))
+            stopped = timestamp(row.get('stopped_on'))
+            if (
+                started is not None
+                and started < end
+                and (stopped is None or stopped >= start)
+            ):
+                wanted.add(row.get('run_of'))
+        wanted = sorted(name for name in wanted if name)
+        seen = {(hit.get('_index'), hit.get('_id')) for hit in hits}
+        found = []
+        for offset in range(0, len(wanted), 1000):
+            for hit in self.search(
+                index,
+                {
+                    'bool': {
+                        'filter': (
+                            [{'term': {'owner.raw': scope}}]
+                            if scope is not None
+                            else []
+                        )
+                        + [
+                            {
+                                'terms': {
+                                    'idea_session_id.raw': wanted[
+                                        offset : offset + 1000
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                },
+                deadline,
+            ):
+                if (hit.get('_index'), hit.get('_id')) not in seen:
+                    seen.add((hit.get('_index'), hit.get('_id')))
+                    found.append(hit)
+        return found
+
+    def desktop_shapes(self, index, deadline):
+        """
+        each owner and project on any session document, without the documents: the report
+        keeps a row for every one of them, with or without activity in its period.
+        """
+        client = self.context.analytics_service().os_client.os_client
+        sources = [
+            {name: {'terms': {'field': field, 'missing_bucket': True}}}
+            for name, field in (
+                ('owner', 'owner.raw'),
+                ('project_id', 'project.project_id.raw'),
+                ('name', 'project.name.raw'),
+            )
+        ]
+        shapes, after = [], None
+        while True:
+            check_deadline(deadline)
+            composite = dict(size=1000, sources=sources)
+            if after:
+                composite['after'] = after
+            page = client.search(
+                index=index,
+                request_timeout=max(0.1, deadline - time.monotonic()),
+                body={'size': 0, 'aggs': {'shapes': {'composite': composite}}},
+            )
+            if page.get('timed_out') or page.get('_shards', {}).get('failed', 0):
+                raise ValueError('Incomplete index read')
+            shapes_page = page.get('aggregations', {}).get('shapes', {})
+            shapes.extend(bucket['key'] for bucket in shapes_page.get('buckets', []))
+            after = shapes_page.get('after_key')
+            if not after or not shapes_page.get('buckets'):
+                return shapes
 
     def projection(self, username, head, deadline):
         store = self.context.personal_costs_store
@@ -266,9 +421,7 @@ class ReportingSources:
                 for row in (
                     self.context.personal_costs_store.records(scope_username, 'head')
                     if scope_username is not None
-                    else self.scan_heads(
-                        self.context.personal_costs_store.table, deadline
-                    )
+                    else self.read_heads(result['users'], deadline)
                 )
                 if row.get('record') == 'head'
                 and subject(row.get('subject'))
@@ -367,9 +520,7 @@ class ReportingSources:
                 lambda: list(
                     self.search(
                         index,
-                        {'bool': {'filter': [{'term': {'owner.raw': scope_username}}]}}
-                        if scope_username is not None
-                        else {'match_all': {}},
+                        self.desktop_period_query(period, scope_username),
                         deadline,
                     )
                 ),
@@ -386,9 +537,7 @@ class ReportingSources:
                 'desktop_history',
                 lambda: list(self.scan(table, deadline, scope_username)),
             )
-            result['desktops'].extend(
-                {'_history': True, '_source': row} for row in history
-            )
+            activity_sessions = set()
             if insights:
 
                 def activity():
@@ -415,14 +564,49 @@ class ReportingSources:
                                 if entry.get('owner') == scope_username
                             }
                         rows.append(dict(date=row['record'][5:], sessions=sessions))
+                        activity_sessions.update(sessions)
                     return rows
 
                 result['desktop_activity'] = optional('desktop_activity', activity)
+            if result['coverage']['desktops'] == 'ready':
+                documents = result['desktops']
+                more = optional(
+                    'desktops',
+                    lambda: self.whole_sessions(
+                        index,
+                        documents,
+                        [row for row in history if row.get('run_of')],
+                        activity_sessions,
+                        period,
+                        deadline,
+                        scope_username,
+                    ),
+                )
+                if result['coverage']['desktops'] == 'ready' and not insights:
+                    result['desktop_shapes'] = optional(
+                        'desktops', lambda: self.desktop_shapes(index, deadline)
+                    )
+                if result['coverage']['desktops'] == 'ready':
+                    documents.extend(more)
+                else:
+                    # as when the one read failed: the source is missing, not partial
+                    result['desktops'] = []
+                    result['desktop_shapes'] = []
+            result['desktops'].extend(
+                {'_history': True, '_source': row} for row in history
+            )
         else:
             result['coverage']['desktops'] = 'not_applicable'
             result['coverage']['desktop_history'] = 'not_applicable'
         for hit in [] if insights else result['jobs'] + result['desktops']:
             owner = hit.get('_source', {}).get('owner')
+            if subject(owner):
+                result['users'].setdefault(owner, owner)
+                result['projections'].setdefault(
+                    owner, dict(costs=None, head=None, state='collecting')
+                )
+        for shape in result.get('desktop_shapes', []):
+            owner = shape.get('owner')
             if subject(owner):
                 result['users'].setdefault(owner, owner)
                 result['projections'].setdefault(
