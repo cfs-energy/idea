@@ -25,6 +25,30 @@ HEAD_SUBJECT = 'head-subject:'
 HEAD_SUBJECTS_SEEDED = 'head-subjects-seeded'
 
 
+def window_storage(costs, start_date, end_date):
+    """
+    the stored daily storage amounts in a window, and the bytes behind the current month.
+    a day with no stored amount adds nothing; no amount at all is unknown, not zero.
+    """
+    # ponytail: only this month and last are stored, so on march 1 the window's
+    # first day (january 31) is never counted; read older generations if it matters.
+    amounts = [
+        day.amount
+        for month in (costs.previous, costs.current)
+        if month is not None
+        for day in month.shared_storage.daily
+        if start_date <= day.date <= end_date and day.amount is not None
+    ]
+    if not amounts:
+        return None, None
+    month = costs.current
+    return round(sum(amounts), 4), round(
+        sum(item.used_bytes or 0 for item in (month.storage if month else []))
+        / (1024**3),
+        2,
+    )
+
+
 class PersonalCostsStore:
     def __init__(self, context):
         self.context = context
@@ -141,7 +165,7 @@ class PersonalCostsStore:
                 break
             request['ExclusiveStartKey'] = page['LastEvaluatedKey']
 
-    def publish(self, subject, costs, summary, tickers=None):
+    def publish(self, subject, costs, summary, tickers=None, listing=None):
         """A failed part write leaves the old head intact; no active record expires."""
         generation = f'{int(time.time() * 1000):013d}-{uuid.uuid4().hex}'
         costs = costs.model_copy(deep=True)
@@ -171,6 +195,8 @@ class PersonalCostsStore:
             incomplete=costs.current.incomplete,
             tickers=tickers or {},
         )
+        if listing:
+            head['listing'] = listing
         self.put(subject, 'head', head)
         self.prune(subject, generation)
         return head
@@ -351,6 +377,16 @@ class StoredPersonalCostsService:
                 **self.store.projection(username, head, 'summary')
             )
         return GetMyCostsSummaryResult(username=username, window='last_30_days')
+
+    def listing_heads(self):
+        """subject -> head for the admin listing, or None until the head index is seeded"""
+        subjects = self.store.head_subjects()
+        if subjects is None:
+            return None
+        return {
+            row['subject']: json.loads(row['payload'])
+            for row in self.store.batch_heads(subjects)
+        }
 
     def get_ticker(self, username):
         self.authorize(username)

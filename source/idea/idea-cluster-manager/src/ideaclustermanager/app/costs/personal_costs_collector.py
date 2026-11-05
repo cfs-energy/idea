@@ -33,8 +33,11 @@ from ideaclustermanager.app.costs.monthly_costs_service import (
     DESKTOP_NOTE,
     AI_NOTE,
 )
-from ideaclustermanager.app.costs.my_costs_service import MyCostsService
-from ideaclustermanager.app.costs.personal_costs_store import SYSTEM
+from ideaclustermanager.app.costs.my_costs_service import (
+    LIVE_SESSION_STATES,
+    MyCostsService,
+)
+from ideaclustermanager.app.costs.personal_costs_store import SYSTEM, window_storage
 from ideaclustermanager.app.costs.desktop_activity import DesktopActivity
 from ideaclustermanager.app.costs.storage_rates import daily_storage_rate
 from ideaclustermanager.app.metrics.storage_metrics_service import normalize_user
@@ -1145,6 +1148,32 @@ class DailyCostsCalculator(MonthlyCostsService):
         )
 
 
+def listing_entry(summary, records, costs, now):
+    """
+    what the admin listing shows for this user over the summary's window. it goes in the
+    head, which every run writes anyway, so it has to stay small.
+    """
+    desktops = summary.desktops
+    if records is None or desktops is None or desktops.is_unavailable:
+        return None
+    storage_cost, storage_gb = window_storage(
+        costs, summary.start_date, summary.end_date
+    )
+    return dict(
+        as_of=now.isoformat(),
+        start_date=summary.start_date,
+        end_date=summary.end_date,
+        has_records=records,
+        session_count=desktops.session_count,
+        hours=desktops.hours,
+        cost=desktops.cost,
+        unpriced_sessions=desktops.unpriced_sessions,
+        live=any(s.state in LIVE_SESSION_STATES for s in desktops.sessions or []),
+        storage_cost=storage_cost,
+        storage_gb=storage_gb,
+    )
+
+
 class PersonalCostsCollector:
     def __init__(self, context, store, calculator=None):
         self.context, self.store = context, store
@@ -1407,8 +1436,10 @@ class PersonalCostsCollector:
                     previous=previous,
                 )
                 # Compatibility keeps its trailing window, independently of calendar months.
+                reader = MyCostsService(self.context)
+                measured = arrow.utcnow()
                 try:
-                    summary = MyCostsService(self.context).get_summary(username)
+                    summary = reader.get_summary(username)
                 except Exception:
                     summary = GetMyCostsSummaryResult(
                         username=username,
@@ -1438,7 +1469,13 @@ class PersonalCostsCollector:
                 self.context.distributed_lock().assert_held(
                     key='personal-costs-collector'
                 )
-                self.store.publish(username, result, summary, tickers)
+                self.store.publish(
+                    username,
+                    result,
+                    summary,
+                    tickers,
+                    listing_entry(summary, reader.desktop_records, result, measured),
+                )
                 self.store.acknowledge(username, request)
             except Exception:
                 self.logger.exception(
