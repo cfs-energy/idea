@@ -340,8 +340,12 @@ class StorageMetricsService(SocaService):
                 and record.get('users')
                 and (record['users'][0].get('name') or '').startswith('S-1-')
             ):
-                found['bytes'] += record.get('space', {}).get('used', {}).get('total', 0)
-                found['files'] += record.get('files', {}).get('used', {}).get('total', 0)
+                found['bytes'] += (
+                    record.get('space', {}).get('used', {}).get('total', 0)
+                )
+                found['files'] += (
+                    record.get('files', {}).get('used', {}).get('total', 0)
+                )
         return found
 
     def refresh_quota_reports(self, max_age: int = QUOTA_MAX_AGE_SECONDS) -> None:

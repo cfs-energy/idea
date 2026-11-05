@@ -146,7 +146,7 @@ class FolderAnalytics:
             mount = (config.get_string(f'{prefix}.mount_dir') or '').rstrip('/')
             export = config.get_string(f'{prefix}.fsx_netapp_ontap.volume.volume_path')
             if mount and export and (path == mount or path.startswith(f'{mount}/')):
-                return target, f'{export.rstrip("/")}{path[len(mount):]}'
+                return target, f'{export.rstrip("/")}{path[len(mount) :]}'
         return None, None
 
     def _volume_list(self, target):

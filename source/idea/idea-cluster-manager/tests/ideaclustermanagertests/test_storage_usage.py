@@ -111,7 +111,11 @@ def test_folders_are_largest_first(tree):
     with open(tree + '/aaa-small/file', 'wb') as stream:
         stream.write(b'x')
     result = storage_usage.walk_home(tree, now=NOW)
-    assert [row['name'] for row in result['folders']] == ['reports', 'aaa-small', 'empty']
+    assert [row['name'] for row in result['folders']] == [
+        'reports',
+        'aaa-small',
+        'empty',
+    ]
 
 
 def test_unreadable_folder_does_not_expose_contents(tree, monkeypatch):
@@ -528,7 +532,12 @@ def test_analytics_on_but_first_scan_unfinished_is_initializing(monkeypatch, tre
 
 def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):
     off = [
-        dict(name='profiles', uuid='u-1', nas=dict(path='/profiles'), analytics=dict(state='off'))
+        dict(
+            name='profiles',
+            uuid='u-1',
+            nas=dict(path='/profiles'),
+            analytics=dict(state='off'),
+        )
     ]
     analytics = fake_analytics(monkeypatch, tree, volumes=off)
     assert analytics.status(tree) == dict(state='off')
@@ -601,9 +610,7 @@ def test_analytics_view_hides_folders_the_person_cannot_open(monkeypatch, tree):
         service._workers.shutdown()
 
 
-@pytest.mark.parametrize(
-    'folder', ['/other/place', '../bob', 123, '/', '/tmp/../etc']
-)
+@pytest.mark.parametrize('folder', ['/other/place', '../bob', 123, '/', '/tmp/../etc'])
 def test_drill_down_cannot_leave_shared_storage(monkeypatch, tree, folder):
     service, source = analytics_service(monkeypatch, tree, {})
     try:
@@ -618,8 +625,7 @@ def test_drill_down_cannot_leave_shared_storage(monkeypatch, tree, folder):
 def test_drill_down_through_a_symlink_is_refused(monkeypatch, tree, tmp_path):
     os.symlink(tmp_path, tree + '/escape')
     folders = {
-        tree
-        + '/escape': dict(
+        tree + '/escape': dict(
             self=row(tree + '/escape', 1), children=[], measured_at=NOW
         )
     }
@@ -662,7 +668,9 @@ def test_study_finds_biggest_folders_with_ontap_calls_only(monkeypatch, tree):
             measured_at=NOW,
         ),
         nested: dict(self=row(nested, 85 * 2**20), children=[], measured_at=NOW),
-        tree + '/empty': dict(self=row(tree + '/empty', 2**20), children=[], measured_at=NOW),
+        tree + '/empty': dict(
+            self=row(tree + '/empty', 2**20), children=[], measured_at=NOW
+        ),
     }
     service, source = analytics_service(monkeypatch, tree, folders)
     monkeypatch.setattr(

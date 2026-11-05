@@ -123,9 +123,7 @@ def walk_home(
                         if len(stack) >= MAX_DEPTH - 1:
                             child['partial'] = True
                             continue
-                        enter(
-                            child_path, os.open(entry.name, flags, dir_fd=fd), stack
-                        )
+                        enter(child_path, os.open(entry.name, flags, dir_fd=fd), stack)
                     elif stat.S_ISREG(info.st_mode):
                         measure(row, info)
                 except OSError:
@@ -391,9 +389,7 @@ class StorageUsageService:
                     continue
                 large = [c for c in found['children'] if c['bytes'] >= floor]
                 # A folder with no single dominant child is where the deletion decision sits.
-                if path != home and (
-                    not large or large[0]['bytes'] < -size // 2
-                ):
+                if path != home and (not large or large[0]['bytes'] < -size // 2):
                     hot.append(row)
                 for child in large:
                     heapq.heappush(queue, (-child['bytes'], child['path'], child))
@@ -423,13 +419,10 @@ class StorageUsageService:
         with self._lock:
             study = self._studies.get(username)
             # A running study or one this recent already answers a Refresh.
-            stale = (
-                study is None
-                or (
-                    study['finished'] is not None
-                    and now - study['finished']
-                    >= (STUDY_REFRESH_SECONDS if refresh else STUDY_SECONDS)
-                )
+            stale = study is None or (
+                study['finished'] is not None
+                and now - study['finished']
+                >= (STUDY_REFRESH_SECONDS if refresh else STUDY_SECONDS)
             )
             if stale:
                 study = dict(
