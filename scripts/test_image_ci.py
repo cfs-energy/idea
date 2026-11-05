@@ -119,7 +119,7 @@ class ImageCiTests(unittest.TestCase):
             'test "$(digest "${REPOSITORY}:${CANDIDATE_TAG#v}")" = "${IMAGE#*@}"\n',
             step,
         )
-        loop = step[step.index('for TAG in'):]
+        loop = step[step.index('for TAG in') :]
         self.assertIn('for TRY in 1 2 3 4 5 6; do', loop)
         self.assertIn('sleep 10', loop)
         self.assertIn('continue 2', loop)
