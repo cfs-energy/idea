@@ -767,11 +767,15 @@ def test_archive_script_copies_only_changed_files_after_a_successful_run(tmp_pat
     assert not any(' sync ' in call for call in calls)
     copied = [call for call in calls if ' cp ' in call]
     assert any(
-        call.endswith(f'{server}/20260105 s3://cluster-bucket/logs/scheduler/server_logs/20260105')
+        call.endswith(
+            f'{server}/20260105 s3://cluster-bucket/logs/scheduler/server_logs/20260105'
+        )
         for call in copied
     )
     assert any(
-        call.endswith('s3://cluster-bucket/logs/scheduler/compute_nodes/node-a/boot.log')
+        call.endswith(
+            's3://cluster-bucket/logs/scheduler/compute_nodes/node-a/boot.log'
+        )
         for call in copied
     )
     assert not any('20260101' in call for call in copied)

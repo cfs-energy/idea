@@ -1773,9 +1773,7 @@ def test_a_changed_rollup_is_written(monkeypatch):
     )
     service.aggregate()
     written = {
-        call[1]['usage_id']
-        for call in usage_dao.table.calls
-        if call[0] == 'put_item'
+        call[1]['usage_id'] for call in usage_dao.table.calls if call[0] == 'put_item'
     }
     assert f'user#{PERIOD}#alice' in written
     assert f'project#{PERIOD}' in written

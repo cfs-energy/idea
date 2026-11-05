@@ -442,9 +442,7 @@ class BedrockUsageService(SocaService):
             for project in projects
         }
         start_time = min(floors.values())
-        overlap_through = (
-            (end_time - self.get_overlap_seconds()) // 3600
-        ) * 3600
+        overlap_through = ((end_time - self.get_overlap_seconds()) // 3600) * 3600
         settle_before = {
             project_id: max(floor, overlap_through)
             for project_id, floor in floors.items()
@@ -664,9 +662,7 @@ class BedrockUsageService(SocaService):
             ):
                 for key, counters in rows.items():
                     if key[0] >= first_day:
-                        _add_counters(
-                            target.setdefault(key, _new_counters()), counters
-                        )
+                        _add_counters(target.setdefault(key, _new_counters()), counters)
             settled = json.dumps(
                 {
                     'users': self._encode_settled(users),
@@ -856,12 +852,18 @@ class BedrockUsageService(SocaService):
 
         aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
         job_aggregates: Dict[str, Dict[Tuple[str, str, str], Dict]] = {}
-        for project_id, usage_date, usage_time, model_id, instance_id, counters in parsed:
+        for (
+            project_id,
+            usage_date,
+            usage_time,
+            model_id,
+            instance_id,
+            counters,
+        ) in parsed:
             attribution = owners.get(instance_id) or ('', '')
             username = attribution[0] or UNATTRIBUTED_USER
-            settles = (
-                settle_before is not None
-                and usage_time < settle_before.get(project_id, 0)
+            settles = settle_before is not None and usage_time < settle_before.get(
+                project_id, 0
             )
             key = (usage_date, username, model_id)
             targets = [(aggregates, key)]
@@ -1167,7 +1169,9 @@ class BedrockUsageService(SocaService):
         changed = [
             row
             for row in rows
-            if not self._rollup_unchanged(stored.get(row['usage_id']), row, renew_before)
+            if not self._rollup_unchanged(
+                stored.get(row['usage_id']), row, renew_before
+            )
         ]
         self.usage_dao.put_rows(changed)
 
