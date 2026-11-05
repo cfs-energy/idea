@@ -179,8 +179,8 @@ def test_contending_callers_refresh_under_lock(directory):
         assert lock.acquire(timeout=5)
 
     directory.context.distributed_lock().acquire.side_effect = acquire
-    directory.context.distributed_lock().release.side_effect = (
-        lambda key: lock.release()
+    directory.context.distributed_lock().release.side_effect = lambda key: (
+        lock.release()
     )
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [

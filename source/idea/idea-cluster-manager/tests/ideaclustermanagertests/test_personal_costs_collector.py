@@ -810,8 +810,8 @@ def test_storage_day_tolerates_entries_without_a_costs_block(setup, monkeypatch)
     tree = ConfigFactory.parse_string(
         'data { provider = fsx_netapp_ontap, mount_dir = /data, fsx_netapp_ontap { file_system_id = fs-1 } }'
     )
-    context.config().get_config = (
-        lambda key, default=None: tree if key == 'shared-storage' else default
+    context.config().get_config = lambda key, default=None: (
+        tree if key == 'shared-storage' else default
     )
     calc = DailyCostsCalculator(context, store)
     seen = []

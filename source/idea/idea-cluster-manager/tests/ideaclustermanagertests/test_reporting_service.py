@@ -1511,8 +1511,9 @@ def read_report(docs, unfiltered, history, heads, activity=None, insights=False)
             os_client=SimpleNamespace(os_client=index)
         ),
         config=lambda: SimpleNamespace(
-            is_module_enabled=lambda module: module
-            == constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+            is_module_enabled=lambda module: (
+                module == constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+            ),
             get_string=lambda key, required=False: 'sessions',
             get_module_id=lambda module: 'vdc',
         ),

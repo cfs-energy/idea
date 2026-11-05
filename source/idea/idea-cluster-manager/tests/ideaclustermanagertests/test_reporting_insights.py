@@ -462,8 +462,8 @@ def test_sources_fetch_retained_storage_and_scope_job_query():
     from ideaclustermanager.app.reporting.reporting_sources import ReportingSources
 
     context = Mock()
-    context.config().is_module_enabled.side_effect = (
-        lambda module: module == constants.MODULE_SCHEDULER
+    context.config().is_module_enabled.side_effect = lambda module: (
+        module == constants.MODULE_SCHEDULER
     )
     context.accounts.list_users.return_value = SimpleNamespace(
         listing=[], paginator=None
@@ -479,8 +479,8 @@ def test_sources_fetch_retained_storage_and_scope_job_query():
         ),
         dict(record='share:2024-01-31:fs-a', payload='{}'),
     ]
-    context.personal_costs_store.resolve_source.side_effect = (
-        lambda subject, value: value
+    context.personal_costs_store.resolve_source.side_effect = lambda subject, value: (
+        value
     )
     sources = ReportingSources(context)
     sources.search = Mock(return_value=[])
@@ -795,10 +795,8 @@ def idle_data():
 
 def priced_context():
     context = Mock()
-    context.aws_util().get_ec2_instance_type_unit_price.side_effect = (
-        lambda instance: SimpleNamespace(ondemand=2)
-        if instance == 'g6.xlarge'
-        else None
+    context.aws_util().get_ec2_instance_type_unit_price.side_effect = lambda instance: (
+        SimpleNamespace(ondemand=2) if instance == 'g6.xlarge' else None
     )
     return context
 

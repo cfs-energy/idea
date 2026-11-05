@@ -1539,12 +1539,14 @@ class InstanceTypesParamBuilder(BaseParamBuilder):
             + queue_hint(
                 queues_where(
                     self.soca_context,
-                    lambda defaults: common_architectures
-                    & set.intersection(
-                        *[
-                            self._get_supported_architectures(instance_type=t)
-                            for t in defaults.instance_types
-                        ]
+                    lambda defaults: (
+                        common_architectures
+                        & set.intersection(
+                            *[
+                                self._get_supported_architectures(instance_type=t)
+                                for t in defaults.instance_types
+                            ]
+                        )
                     ),
                 ),
                 '/'.join(sorted(common_architectures)),

@@ -1183,8 +1183,9 @@ def test_the_monthly_check_runs_once_when_the_settings_copy_lags(monkeypatch):
     monkeypatch.setattr(
         module,
         'resolve_stock_image',
-        lambda ec2, base_os, arch, logger: checks.append(base_os)
-        or {'ImageId': f'ami-stock-{base_os}'},
+        lambda ec2, base_os, arch, logger: (
+            checks.append(base_os) or {'ImageId': f'ami-stock-{base_os}'}
+        ),
     )
     due = datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc)
     h.pipeline.tick(now=due)

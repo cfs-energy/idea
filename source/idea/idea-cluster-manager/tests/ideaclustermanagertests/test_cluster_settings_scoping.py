@@ -425,8 +425,8 @@ class TestEffectiveSettingsValidation(unittest.TestCase):
             'apps': {'provider': 'efs'},
             'data': {'provider': 'fsx_netapp_ontap'},
         }
-        self.context.config.return_value.get_config.side_effect = (
-            lambda key, **kwargs: storage if key == 'shared-storage' else None
+        self.context.config.return_value.get_config.side_effect = lambda key, **kwargs: (
+            storage if key == 'shared-storage' else None
         )
         with patch(
             'ideaclustermanager.app.api.cluster_settings_api.settings_catalog',
@@ -438,8 +438,8 @@ class TestEffectiveSettingsValidation(unittest.TestCase):
         )
 
     def test_email_master_validates_enabled_events_without_cross_module_writes(self):
-        self.context.config.return_value.get_module_id.side_effect = (
-            lambda module: 'vdc' if module == 'virtual-desktop-controller' else module
+        self.context.config.return_value.get_module_id.side_effect = lambda module: (
+            'vdc' if module == 'virtual-desktop-controller' else module
         )
         self.stored['vdc.dcv_session.notifications.ready.enabled'] = True
         self.stored['vdc.dcv_session.notifications.ready.email_template'] = 'missing'
@@ -484,8 +484,8 @@ def test_fetch_application_scope_is_module_read():
     invocation.is_administrator.return_value = False
     invocation.is_manager.return_value = False
     invocation.is_authorized_app.return_value = True
-    invocation.is_scope_authorized.side_effect = (
-        lambda scope: scope == 'cluster-manager/read'
+    invocation.is_scope_authorized.side_effect = lambda scope: (
+        scope == 'cluster-manager/read'
     )
     invocation.is_authorized = lambda **kwargs: ApiInvocationContext.is_authorized(
         invocation, **kwargs

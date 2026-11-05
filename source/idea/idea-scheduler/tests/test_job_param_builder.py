@@ -1873,8 +1873,9 @@ def test_job_builder_instance_types_mixed_gpu_vendor_invalid(context, monkeypatc
     monkeypatch.setattr(
         aws_util,
         'is_instance_type_valid',
-        lambda instance_type: instance_type == 'g4ad.xlarge'
-        or is_instance_type_valid(instance_type),
+        lambda instance_type: (
+            instance_type == 'g4ad.xlarge' or is_instance_type_valid(instance_type)
+        ),
     )
 
     result = build_and_validate(

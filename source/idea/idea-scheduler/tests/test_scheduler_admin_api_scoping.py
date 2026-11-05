@@ -73,9 +73,9 @@ def test_the_image_listing_carries_the_compute_os_and_the_supported_set():
     context = Mock()
     context.module_id.return_value = 'scheduler'
     context.config.return_value.get_string.side_effect = (
-        lambda key, default=None, required=False: 'amazonlinux2023'
-        if key == 'scheduler.compute_node_os'
-        else default
+        lambda key, default=None, required=False: (
+            'amazonlinux2023' if key == 'scheduler.compute_node_os' else default
+        )
     )
     api = SchedulerAdminAPI(context=context)
     api._compute_images = Mock()

@@ -557,7 +557,9 @@ class ConditionTable(FakeTable):
         python = expression
         python = re.sub(
             r'attribute_not_exists\(([#\w]+)\)',
-            lambda m: f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)',
+            lambda m: (
+                f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)'
+            ),
             python,
         )
         python = re.sub(r'NOT (#\w+) IN \(([^)]*)\)', r'(\1 not in [\2])', python)
