@@ -494,3 +494,91 @@ def test_fifty_users_listing_requests_per_view(monkeypatch, capsys):
     assert 'session-history Scan' not in after_counts
     assert after_counts.get('personal-costs GetItem', 0) <= 8
     assert before_counts['personal-costs GetItem'] >= 50
+
+
+def test_a_former_user_with_only_desktop_history_keeps_their_row(monkeypatch, capsys):
+    docs, history = world()
+    context, store, counts, _ = build(monkeypatch, docs, history)
+    # accounts gone before any head was written, their documents gone from the window
+    history.extend(
+        [
+            dict(
+                owner='history-only',
+                session_id='s2',
+                idea_session_id='gone',
+                name='gone',
+                base_os='linux',
+                created_on=ms(NOW.shift(days=-7)),
+                deleted_on=ms(NOW.shift(days=-6)),
+                stopped_on=ms(NOW.shift(days=-6)),
+                instance_type='m5.large',
+                instance_id='i-gone',
+            ),
+            run('gone', 'history-only', NOW.shift(days=-7), NOW.shift(days=-6)),
+            run('older', 'history-zero', NOW.shift(days=-300), NOW.shift(days=-299)),
+        ]
+    )
+    collect(context, store, COLLECTED)
+    context.accounts = SimpleNamespace(
+        list_users=lambda request: SimpleNamespace(
+            listing=[SimpleNamespace(username='settled-user')], paginator=None
+        )
+    )
+    context.is_leader = lambda: True
+    context.distributed_lock = lambda: Mock(spec=['acquire', 'release', 'assert_held'])
+    calculator = Mock()
+    calculator.month.return_value = month(NOW.floor('month'), NOW, 0.25)
+    worker = PersonalCostsCollector(context, store, calculator)
+    worker.activity.capture = lambda *args: None
+    worker.check()
+
+    expected = rows(view(context, heads=None))
+    by_name = {row['username']: row for row in expected['listing']}
+    assert by_name['history-only']['desktop_hours'] == pytest.approx(24)
+    assert by_name['history-only']['desktop_cost'] == pytest.approx(2.4)
+    assert by_name['history-zero']['desktop_hours'] == 0
+    counts.clear()
+    assert rows(view(context)) == expected
+    # no scan on the view: the collector's daily read found them
+    assert 'session-history Scan' not in counts
+    with capsys.disabled():
+        print(f'\nlisting view with 2 history-only users: {sorted(counts.items())}')
+
+    # once a day: the next run of the same day does not read the table again
+    counts.clear()
+    worker.check()
+    assert 'session-history Scan' not in counts
+    monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(days=1))
+    counts.clear()
+    worker.check()
+    assert counts['session-history Scan'] == 1
+
+
+def test_a_failed_history_read_leaves_readers_on_the_full_read(monkeypatch):
+    docs, history = world()
+    context, store, _, _ = build(monkeypatch, docs, history)
+    store.table.delete_item(Key=dict(subject=SYSTEM, record=HEAD_SUBJECTS_SEEDED))
+    store.table.scan = lambda **kwargs: dict(Items=[])
+    context.accounts = SimpleNamespace(
+        list_users=lambda request: SimpleNamespace(listing=[], paginator=None)
+    )
+    context.is_leader = lambda: True
+    context.distributed_lock = lambda: Mock(spec=['acquire', 'release', 'assert_held'])
+    worker = PersonalCostsCollector(context, store, Mock())
+    worker.activity.capture = lambda *args: None
+    monkeypatch.setattr(
+        MyCostsService, 'history_owners', Mock(side_effect=RuntimeError('throttled'))
+    )
+    worker._startup = True
+    context.accounts.list_users = lambda request: SimpleNamespace(
+        listing=[SimpleNamespace(username='settled-user')], paginator=None
+    )
+    worker.calculator.month.return_value = month(NOW.floor('month'), NOW, 0.25)
+    worker.check()
+    # not seeded: no reader can trust an index missing these owners, and it is tried again
+    assert store.head_subjects() is None
+    assert 'history_owners_on' not in store.get(SYSTEM, 'state')
+    monkeypatch.setattr(MyCostsService, 'history_owners', lambda self: {'history-only'})
+    monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(minutes=16))
+    worker.check()
+    assert 'history-only' in store.head_subjects()

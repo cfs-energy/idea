@@ -679,6 +679,28 @@ class MyCostsService:
                 break
         return rows
 
+    def history_owners(self) -> set:
+        """every owner in the history table. raises if it cannot be read in full."""
+        table = self._history_table()
+        if table is None:
+            return set()
+        request = {
+            'ProjectionExpression': '#owner',
+            'ExpressionAttributeNames': {'#owner': 'owner'},
+        }
+        owners = set()
+        try:
+            while True:
+                page = table.scan(**request)
+                owners.update(row['owner'] for row in page.get('Items', []))
+                if not page.get('LastEvaluatedKey'):
+                    return owners
+                request['ExclusiveStartKey'] = page['LastEvaluatedKey']
+        except Exception as e:
+            if source_not_created(e):
+                return set()
+            raise
+
     @staticmethod
     def _newest_per_session(hits) -> List[Dict]:
         """
