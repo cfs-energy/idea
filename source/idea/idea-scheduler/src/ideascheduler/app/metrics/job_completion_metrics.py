@@ -9,6 +9,10 @@ import time
 
 from ideadatamodel.reporting.efficiency import job_efficiency
 
+# Priced into every BOM line with the runtime (pricing_helper.py); the template default.
+EC2_BOOT_PENALTY_SECONDS = 300
+SECONDS_IN_DAY = 86400
+
 
 class JobCompletionMetrics(BaseMetrics):
     """
@@ -104,6 +108,33 @@ class JobCompletionMetrics(BaseMetrics):
         pct = job_efficiency(job)['cpu_efficiency_pct']
         return pct / 100 if pct is not None else None
 
+    @classmethod
+    def cost_scale(cls, job: SocaJob) -> float:
+        """
+        Jobs priced before 26.08.0 kept total_time_secs as the wall clock modulo a day, so a 50
+        hour job was billed as 2. Every BOM line is linear in that runtime plus the boot penalty,
+        so one ratio corrects the bill when history is replayed. A current job records the wall
+        clock and scales by 1. A job held at its limit never ran but can span days with a zero
+        runtime, so a sub-minute runtime counts only when the job left CPU accounting.
+        """
+        wall = cls.wall_seconds(job)
+        recorded = job.total_time_secs
+        if wall is None or recorded is None or wall < SECONDS_IN_DAY or recorded >= wall:
+            return 1
+        if recorded < 60 and cls.used_cpu_seconds(job) <= 0:
+            return 1
+        if abs(recorded - wall % SECONDS_IN_DAY) > 120:
+            return 1
+        return (wall + EC2_BOOT_PENALTY_SECONDS) / (recorded + EC2_BOOT_PENALTY_SECONDS)
+
+    @staticmethod
+    def used_cpu_seconds(job: SocaJob) -> int:
+        return sum(
+            (run.resources_used.cpu_time_secs or 0) if run.resources_used else 0
+            for host in job.execution_hosts or []
+            for run in (host.execution.runs if host.execution else None) or []
+        )
+
     def publish(self):
         job = self.job
         # A completion record without an end stamp is still a completed job; its points
@@ -118,12 +149,15 @@ class JobCompletionMetrics(BaseMetrics):
             )
 
         cost = job.estimated_bom_cost
+        scale = self.cost_scale(job)
         if cost is not None and cost.price_unavailable:
             self.count(MetricName='job.price_unavailable', Value=1, Timestamp=timestamp)
         elif cost is not None:
             if cost.total is not None and cost.total.amount is not None:
                 self.count(
-                    MetricName='job.cost', Value=cost.total.amount, Timestamp=timestamp
+                    MetricName='job.cost',
+                    Value=cost.total.amount * scale,
+                    Timestamp=timestamp,
                 )
             if (
                 cost.line_items_total is not None
@@ -131,13 +165,13 @@ class JobCompletionMetrics(BaseMetrics):
             ):
                 self.count(
                     MetricName='job.cost_ondemand',
-                    Value=cost.line_items_total.amount,
+                    Value=cost.line_items_total.amount * scale,
                     Timestamp=timestamp,
                 )
             if cost.savings_total is not None and cost.savings_total.amount is not None:
                 self.count(
                     MetricName='job.savings',
-                    Value=cost.savings_total.amount,
+                    Value=cost.savings_total.amount * scale,
                     Timestamp=timestamp,
                 )
 
@@ -168,7 +202,7 @@ class JobCompletionMetrics(BaseMetrics):
             try:
                 self.count(
                     MetricName='job.detail.cost',
-                    Value=cost.total.amount,
+                    Value=cost.total.amount * scale,
                     Timestamp=timestamp,
                 )
             finally:
