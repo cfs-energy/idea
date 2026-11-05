@@ -91,7 +91,31 @@ def test_entry_cap_returns_partial_counts(tree):
 def test_time_cap_returns_partial_instead_of_waiting(tree):
     result = storage_usage.walk_home(tree, max_seconds=0, now=NOW)
     assert result['partial']
-    assert result['total']['files'] == 0
+    assert result['total']['files'] == 1
+
+
+def test_cutoff_still_lists_every_top_level_folder(tree):
+    for index in range(20):
+        os.mkdir(f'{tree}/z-folder-{index}')
+    for limits in (dict(max_seconds=0), dict(max_entries=1)):
+        result = storage_usage.walk_home(tree, now=NOW, **limits)
+        names = {row['name'] for row in result['folders']}
+        assert {'reports', 'empty'} <= names and len(names) == 22
+        assert result['partial']
+        assert any(row.get('measured') is False for row in result['folders'])
+        assert result['scanned_files'] == result['total']['files']
+
+
+def test_folders_are_largest_first(tree):
+    os.mkdir(tree + '/aaa-small')
+    with open(tree + '/aaa-small/file', 'wb') as stream:
+        stream.write(b'x')
+    result = storage_usage.walk_home(tree, now=NOW)
+    assert [row['name'] for row in result['folders']] == [
+        'reports',
+        'aaa-small',
+        'empty',
+    ]
 
 
 def test_unreadable_folder_does_not_expose_contents(tree, monkeypatch):
@@ -199,7 +223,7 @@ def test_api_uses_caller_and_includes_only_available_quotas():
     invocation.get_username.return_value = 'alice'
     invocation.is_authorized_user.return_value = True
     api.invoke(invocation)
-    api.storage_usage.get_usage.assert_called_once_with('alice', None)
+    api.storage_usage.get_usage.assert_called_once_with('alice', None, False)
     collector.get_user_quotas.assert_called_once_with('alice')
     assert invocation.success.call_args.args[0]['quotas'] == [{'used_bytes': 123}]
     assert invocation.success.call_args.args[0]['quota_status'] == 'available'
@@ -379,3 +403,336 @@ def test_delete_accepts_an_identity_measured_by_another_task(monkeypatch, tree):
             )
     finally:
         service._workers.shutdown()
+
+
+MONTHS = ['2026-W45', '2026-W44', '2026-W43', '2026-W42', '2026-W41', '2026-11', '2026-10', '2026-09',
+          '2026-Q4', '2026-Q3', '2026-Q2', '2026-Q1', '2026', '2025', '2024', '2023', '--2022', 'unknown']  # fmt: skip
+
+
+def analytics_row(name, used, files, values=None, **kwargs):
+    # Shape captured from ONTAP 9.18.1P7 on FSx for ONTAP.
+    return dict(
+        name=name,
+        type='directory',
+        is_junction=False,
+        analytics=dict(
+            bytes_used=used,
+            file_count=files,
+            subdir_count=2,
+            incomplete_data=False,
+            by_modified_time=dict(
+                bytes_used=dict(
+                    values=values or [0] * 18,
+                    newest_label='2026-W45',
+                    oldest_label='2024',
+                )
+            ),
+        ),
+        **kwargs,
+    )
+
+
+class FakeTarget:
+    name = 'data'
+    endpoint = 'svm.fs-1.fsx.example.invalid'
+    username = 'reader'
+    password_key = 'key'
+
+
+def fake_analytics(monkeypatch, tree, volumes=None, pages=None, calls=None):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    root = os.path.dirname(os.path.dirname(tree))
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path):
+            return volumes or [
+                dict(
+                    name='profiles',
+                    uuid='u-1',
+                    nas=dict(path='/profiles'),
+                    files=dict(used=100),
+                    analytics=dict(state='on', file_count=100),
+                )
+            ]
+
+        def first_page(self, path):
+            if 'return_metadata' in path:
+                return dict(
+                    records=[
+                        dict(
+                            analytics=dict(
+                                by_modified_time=dict(bytes_used=dict(labels=MONTHS))
+                            )
+                        )
+                    ]
+                )
+            if calls is not None:
+                calls.append(path)
+            return (pages or {}).get('page', dict(records=[]))
+
+    monkeypatch.setattr(ontap_analytics, 'OntapClient', Client)
+    config = Mock()
+    config.get_string.side_effect = lambda key, default=None: {
+        'shared-storage.data.mount_dir': root,
+        'shared-storage.data.fsx_netapp_ontap.volume.volume_path': '/profiles/Users',
+    }.get(key, default)
+    collector = Mock(targets=lambda: [FakeTarget()])
+    context = Mock(config=lambda: config)
+    return ontap_analytics.FolderAnalytics(context, collector)
+
+
+def test_analytics_rolls_up_without_touching_files_and_is_cached(monkeypatch, tree):
+    calls = []
+    values = [0] * 18
+    values[5] = 100  # 2026-11
+    values[7] = 50  # 2026-09
+    values[17] = 10  # unknown
+    pages = dict(
+        page=dict(
+            records=[
+                analytics_row('..', 9999, 999),
+                analytics_row('.', 1000, 40, values),
+                analytics_row('reports', 700, 30),
+                analytics_row('link-target', 1, 1) | {'is_junction': True},
+                dict(name='unscanned', type='directory', is_junction=False),
+            ]
+        )
+    )
+    analytics = fake_analytics(monkeypatch, tree, pages=pages, calls=calls)
+    found = analytics.folder(tree)
+    assert found['self']['bytes'] == 1000
+    assert found['self']['unchanged_90_days_bytes'] == 840
+    assert [row['name'] for row in found['children']] == ['reports', 'unscanned']
+    assert found['children'][1]['measured'] is False and found['children'][1]['partial']
+    assert analytics.folder(tree) is found
+    assert len(calls) == 1
+    assert 'order_by=analytics.bytes_used%20desc' in calls[0]
+    assert 'owner' not in calls[0]
+
+
+def test_analytics_on_but_first_scan_unfinished_is_initializing(monkeypatch, tree):
+    volumes = [
+        dict(
+            name='profiles',
+            uuid='u-1',
+            nas=dict(path='/profiles'),
+            files=dict(used=1000),
+            analytics=dict(state='on', file_count=430),
+        )
+    ]
+    analytics = fake_analytics(monkeypatch, tree, volumes=volumes)
+    status = analytics.status(tree)
+    assert status == dict(state='initializing', progress=43)
+    assert analytics.folder(tree) is None
+
+
+def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):
+    off = [
+        dict(
+            name='profiles',
+            uuid='u-1',
+            nas=dict(path='/profiles'),
+            analytics=dict(state='off'),
+        )
+    ]
+    analytics = fake_analytics(monkeypatch, tree, volumes=off)
+    assert analytics.status(tree) == dict(state='off')
+    assert analytics.folder(tree) is None
+    analytics = fake_analytics(monkeypatch, tree)
+    analytics._volume_list = Mock(side_effect=RuntimeError('unreachable'))
+    assert analytics.status(tree) == dict(state='unavailable')
+    analytics._volume_list = Mock(side_effect=AssertionError('backs off'))
+    assert analytics.status(tree) == dict(state='unavailable')
+
+
+def test_bucket_labels_end_where_they_should():
+    from ideaclustermanager.app.filesystem.ontap_analytics import bucket_end
+    from datetime import date
+
+    assert bucket_end('2026-W45') == date(2026, 11, 8)
+    assert bucket_end('2026-09') == date(2026, 10, 1)
+    assert bucket_end('2026-Q4') == date(2027, 1, 1)
+    assert bucket_end('--2022') == date(2022, 12, 31)
+    assert bucket_end('unknown') is None
+
+
+def analytics_service(monkeypatch, tree, folders):
+    service, _, _ = make_service(monkeypatch, tree)
+    source = Mock()
+    source.folder.side_effect = lambda path, fresh=False: folders.get(path)
+    source.status.return_value = dict(state='on', volume='profiles')
+    service._analytics_source = source
+    return service, source
+
+
+def row(path, size, files=1):
+    return dict(
+        path=path,
+        name=os.path.basename(path),
+        bytes=size,
+        files=files,
+        newest_mtime=None,
+        oldest_mtime=None,
+        unchanged_90_days_bytes=0,
+        partial=False,
+        subfolders=0,
+    )
+
+
+def test_analytics_view_hides_folders_the_person_cannot_open(monkeypatch, tree):
+    os.mkdir(tree + '/secret')
+    os.chmod(tree + '/secret', 0)
+    folders = {
+        tree: dict(
+            self=row(tree, 900, 9),
+            children=[row(tree + '/secret', 800, 8), row(tree + '/reports', 13, 1)],
+            measured_at=NOW,
+        )
+    }
+    service, source = analytics_service(monkeypatch, tree, folders)
+    try:
+        if os.geteuid() == 0:
+            pytest.skip('root opens anything')
+        result = service.get_usage('alice')
+        rows = {item['name']: item for item in result['folders']}
+        assert result['source'] == 'analytics' and not result['partial']
+        assert rows['secret']['unreadable'] and rows['secret']['bytes'] == 0
+        assert rows['reports']['bytes'] == 13
+        assert 'files_here' not in result
+        assert result['total']['identity']['inode'] == str(os.stat(tree).st_ino)
+    finally:
+        os.chmod(tree + '/secret', 0o700)
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+@pytest.mark.parametrize('folder', ['/other/place', '../bob', 123, '/', '/tmp/../etc'])
+def test_drill_down_cannot_leave_shared_storage(monkeypatch, tree, folder):
+    service, source = analytics_service(monkeypatch, tree, {})
+    try:
+        with pytest.raises(Exception):
+            service.get_usage('alice', folder)
+        source.folder.assert_not_called()
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_drill_down_through_a_symlink_is_refused(monkeypatch, tree, tmp_path):
+    os.symlink(tmp_path, tree + '/escape')
+    folders = {
+        tree + '/escape': dict(
+            self=row(tree + '/escape', 1), children=[], measured_at=NOW
+        )
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    try:
+        with pytest.raises(exceptions.SocaException):
+            service.get_usage('alice', tree + '/escape')
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_outside_home_without_analytics_says_so_and_does_not_walk(monkeypatch, tree):
+    service, source = analytics_service(monkeypatch, tree, {})
+    monkeypatch.setattr(
+        storage_usage, 'scan_as_user', Mock(side_effect=AssertionError('no walk'))
+    )
+    sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    try:
+        result = service.get_usage('alice', sibling)
+        assert result['state'] == 'unavailable'
+        assert 'storage analytics' in result['message']
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_study_finds_biggest_folders_with_ontap_calls_only(monkeypatch, tree):
+    reports = tree + '/reports'
+    nested = reports + '/nested'
+    folders = {
+        tree: dict(
+            self=row(tree, 100 * 2**20),
+            children=[row(reports, 90 * 2**20), row(tree + '/empty', 2**20)],
+            measured_at=NOW,
+        ),
+        reports: dict(
+            self=row(reports, 90 * 2**20),
+            children=[row(nested, 85 * 2**20)],
+            measured_at=NOW,
+        ),
+        nested: dict(self=row(nested, 85 * 2**20), children=[], measured_at=NOW),
+        tree + '/empty': dict(
+            self=row(tree + '/empty', 2**20), children=[], measured_at=NOW
+        ),
+    }
+    service, source = analytics_service(monkeypatch, tree, folders)
+    monkeypatch.setattr(
+        storage_usage, 'walk_home', Mock(side_effect=AssertionError('no walk'))
+    )
+    try:
+        first = service.get_usage('alice')
+        assert first['progress']['steps'][0]['label'] == 'Read your quota total'
+        service._study_workers.shutdown(wait=True)
+        result = service.get_usage('alice')
+        assert not result['progress']['running']
+        assert result['progress']['done'] == 4
+        # reports is dominated by nested, so nested is what to look at.
+        assert [item['name'] for item in result['largest']] == ['nested', 'empty']
+    finally:
+        service._workers.shutdown()
+
+
+def test_refresh_requeries_ontap_without_multiplying_studies(monkeypatch, tree):
+    folders = {tree: dict(self=row(tree, 10), children=[], measured_at=NOW)}
+    service, source = analytics_service(monkeypatch, tree, folders)
+    try:
+        service.get_usage('alice')
+        study = service._studies['alice']
+        service.get_usage('alice')
+        assert service._studies['alice'] is study
+        service.get_usage('alice', refresh=True)
+        assert any(call.kwargs.get('fresh') for call in source.folder.call_args_list)
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_one_scan_at_a_time_as_the_fallback(monkeypatch, tree):
+    service, _, _ = make_service(monkeypatch, tree)
+    try:
+        assert service._workers._max_workers == 1
+    finally:
+        service._workers.shutdown()
+        service._study_workers.shutdown()
+
+
+def test_api_reports_bytes_outside_home_and_refresh():
+    collector = Mock()
+    collector.has_ontap_storage.return_value = True
+    collector.get_user_quotas.return_value = [
+        dict(used_bytes=1000, volume='profiles', files=5)
+    ]
+    collector.unattributed_quota.return_value = dict(bytes=77, files=1)
+    api = ClusterFileBrowserAPI(SimpleNamespace(storage_metrics=collector))
+    api.storage_usage = Mock()
+    api.storage_usage.get_usage.side_effect = lambda *args: dict(
+        state='ready', total=dict(bytes=400), volume='profiles'
+    )
+    invocation = Mock(
+        namespace='FileBrowser.GetStorageUsage', request_payload={'refresh': True}
+    )
+    invocation.get_username.return_value = 'alice'
+    invocation.is_authorized_user.return_value = True
+    api.invoke(invocation)
+    api.storage_usage.get_usage.assert_called_once_with('alice', None, True)
+    result = invocation.success.call_args.args[0]
+    assert result['outside_home_bytes'] == 600
+    assert result['unattributed_quota_bytes'] == 77
+    assert 'volume' not in result

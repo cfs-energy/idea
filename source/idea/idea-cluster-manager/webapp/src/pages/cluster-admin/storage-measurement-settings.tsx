@@ -15,7 +15,7 @@ export default function StorageMeasurementSettings(props: React.ComponentProps<t
         {!attachments.length && <Alert type="info">No ONTAP attachments configured. EFS and Lustre do not use these measurement credentials.</Alert>}
         {!supported && <Alert type="info">Storage measurement requires the dogstatsd or cloudwatch metrics provider. The current provider does not support measurement.</Alert>}
         {(!props.values['cluster-manager']?.metrics?.storage?.enabled || incomplete) && <Alert type="info" header="Set up ONTAP measurement">
-            Grant a read-only SVM REST user access to quota reports and volumes. Configure user quotas and network access to SVM HTTPS. Store its password in Secrets Manager with the cluster and module tags granting cluster-manager access. Enter the username and password secret ARN for each attachment, save, then restart. Keep TLS verification configured for the SVM certificate.
+            Grant a read-only SVM REST user access to /api/storage/quota/reports and /api/storage/volumes. That also lets folder sizes come from ONTAP File System Analytics once it is on for the volume. Configure user quotas and network access to SVM HTTPS. Store its password in Secrets Manager with the cluster and module tags granting cluster-manager access. Enter the username and password secret ARN for each attachment, save, then restart. Keep TLS verification configured for the SVM certificate.
         </Alert>}
     </CatalogSettingsSection>;
 }

@@ -350,6 +350,74 @@ def test_latest_reports_are_retained_per_target_and_joined_by_user(monkeypatch):
     assert rows[0]['limit_bytes'] is None
 
 
+def test_user_quota_sums_nfs_and_smb_rows_and_ignores_duplicate_targets():
+    service = StorageMetricsService(FakeContext({}))
+    rows = [
+        quota('alice', 'profiles', 100, 3),
+        quota('DOMAIN\\Alice', 'profiles', 20, 2),
+        quota('bob', 'profiles', 999, 9),
+    ]
+    service._quota_reports = {'apps': (10, rows), 'data': (20, rows)}
+    found = service.get_user_quotas('alice')
+    assert len(found) == 1
+    assert found[0]['target'] == 'data'
+    assert found[0]['used_bytes'] == 120
+    assert found[0]['files'] == 5
+
+
+def test_owners_known_only_as_a_sid_are_counted_as_unattributed():
+    service = StorageMetricsService(FakeContext({}))
+    service._quota_reports = {
+        'data': (
+            5,
+            [
+                quota('S-1-5-21-9', 'profiles', 70, 2),
+                quota('alice', 'profiles', 10, 1),
+                quota('S-1-5-21-9', 'apps', 500, 5),
+            ],
+        )
+    }
+    assert service.unattributed_quota('profiles') == dict(bytes=70, files=2)
+    assert service.get_user_quotas('s-1-5-21-9')[0]['used_bytes'] == 70
+
+
+def test_any_task_can_read_quotas_and_failure_is_soft(monkeypatch):
+    context = FakeContext(
+        {
+            'cluster-manager.metrics.storage.enabled': True,
+            'metrics.provider': 'cloudwatch',
+            'shared-storage': {
+                'data': {'provider': 'fsx_netapp_ontap'},
+            },
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.metrics.password_secret_arn': 'secret',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+        }
+    )
+    service = StorageMetricsService(context)
+    calls = []
+
+    def read(_):
+        calls.append(1)
+        return [quota('alice', 'profiles', 7, 1)]
+
+    monkeypatch.setattr(OntapClient, 'quota_reports', read)
+    monkeypatch.setattr(context.config(), 'get_secret', lambda _: 'pw', raising=False)
+    service.refresh_quota_reports()
+    service.refresh_quota_reports()
+    assert len(calls) == 1
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 7
+
+    def fail(_):
+        raise RuntimeError('unreachable')
+
+    monkeypatch.setattr(OntapClient, 'quota_reports', fail)
+    service._quota_reports = {}
+    service._quota_attempted = 0
+    service.refresh_quota_reports()
+    assert service.get_user_quotas('alice') == []
+
+
 def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
     service = StorageMetricsService(FakeContext({}))
     targets = [

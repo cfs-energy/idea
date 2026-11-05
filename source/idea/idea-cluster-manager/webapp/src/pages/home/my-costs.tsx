@@ -109,7 +109,7 @@ function MyCosts(props: MyCostsProps) {
                     overviewTiles={calendarMonth ? <MonthTiles costs={costs} previous={period.period === 'last_month'} computeRate={computeRate}/> : undefined}
                     overviewExtra={!calendarMonth && <SpaceBetween size="m"><Header variant="h2">This month</Header><MonthTiles costs={costs} computeRate={computeRate}/></SpaceBetween>}
                     storageExtra={<ExpandableSection headerText="Storage usage: folders and quotas" expanded={storageOpen} onChange={({detail}) => setStorageOpen(detail.expanded)}>
-                        {storageOpen && <StorageUsage compact/>}
+                        {storageOpen && <StorageUsage compact refreshSignal={reload}/>}
                     </ExpandableSection>}/>}
             </SpaceBetween>
         </SpaceBetween>}/>;
