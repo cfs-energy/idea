@@ -3,7 +3,7 @@
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/arm64 \
 #     --build-context dcv-packages=/path/to/dcv-packages \
-#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.1 .
+#     -f deployment/ecr/idea-control-plane/Dockerfile --build-arg IDEA_VERSION=26.11.2 .
 # Copy the release tarballs into this directory before the build.
 # The dcv-packages context contains checksums.txt, the broker RPM, both gateway RPMs,
 # and both DCV archives. checksums.txt covers each package file, one sha256sum entry

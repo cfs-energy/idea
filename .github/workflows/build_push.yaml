@@ -500,8 +500,15 @@ jobs:
             --tag "${REPOSITORY}:v${VERSION}" \
             --tag "${REPOSITORY}:${VERSION}" \
             --tag "${REPOSITORY}:latest" "$IMAGE"
+          # public ECR can serve a stale manifest for a few seconds after the tags move
           for TAG in "v${VERSION}" "${VERSION}" latest; do
-            test "$(digest "${REPOSITORY}:${TAG}")" = "${IMAGE#*@}"
+            for TRY in 1 2 3 4 5 6; do
+              test "$(digest "${REPOSITORY}:${TAG}")" = "${IMAGE#*@}" && continue 2
+              echo "::warning::${TAG} does not read back as ${IMAGE#*@} yet (try ${TRY}/6)"
+              test "$TRY" -lt 6 && sleep 10
+            done
+            echo "::error::${REPOSITORY}:${TAG} never read back as ${IMAGE#*@}."
+            exit 1
           done
       - name: Publish the release
         env:

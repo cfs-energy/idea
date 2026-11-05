@@ -6,6 +6,10 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
+## [26.11.2] - unreleased
+
+**Highlights for users**
+
 ## [26.11.1] - 2026-11-04
 
 > **Upgrade floor: 26.10.0.** 26.11.1 upgrades only clusters whose modules are all on 26.10.0 or later, and refuses before changing anything otherwise. A cluster on an older release upgrades to 26.10.9 first (that release also completes the move to ECS), then to 26.11.1. Clusters on 25.11.0 or newer reach 26.10.9 directly; older clusters follow each intervening release's upgrade instructions first (see [Full IDEA Upgrade](first-time-users/cluster-operations/update-idea-cluster/upgrade-cluster.md)).

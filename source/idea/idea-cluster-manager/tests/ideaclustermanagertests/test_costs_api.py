@@ -83,7 +83,7 @@ class RecordingService:
         self.summary_calls.append(username)
         return GetMyCostsSummaryResult(username=username)
 
-    def list_user_costs(self):
+    def list_user_costs(self, heads=None):
         self.list_calls += 1
         return ListUserCostsResult(listing=[])
 
@@ -189,7 +189,7 @@ def stored_month(start_date, end_date, daily, storage=None):
 
 
 def listing_for_window(start_date='2026-08-24', end_date='2026-09-22', total=4.0):
-    return lambda: ListUserCostsResult(
+    return lambda heads=None: ListUserCostsResult(
         start_date=start_date,
         end_date=end_date,
         listing=[UserCosts(username='user-a', total_cost=total)],
@@ -274,7 +274,7 @@ def test_list_user_costs_adds_cached_shared_storage_to_each_row(has_items):
 @pytest.mark.parametrize('enabled,targets', [(False, [object()]), (True, [])])
 def test_disabled_storage_skips_reads_even_for_an_empty_listing(enabled, targets):
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(listing=[])
+    api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(listing=[])
     api.context.storage_metrics.is_enabled.return_value = enabled
     api.context.storage_metrics.targets.return_value = targets
     api.monthly_costs = Mock()
@@ -290,7 +290,9 @@ def test_disabled_storage_skips_reads_even_for_an_empty_listing(enabled, targets
 def test_disabled_storage_preserves_history_and_labels_the_current_subtotal():
     api, _ = build_costs_api()
     historical = UserCosts(username='user-a', storage_cost=3.0, total_cost=7.0)
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(listing=[historical])
+    api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
+        listing=[historical]
+    )
     api.context.storage_metrics.is_enabled.return_value = False
     api.monthly_costs = Mock()
     context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
@@ -306,7 +308,7 @@ def test_disabled_storage_preserves_history_and_labels_the_current_subtotal():
 
 def test_enabled_storage_without_collected_data_is_not_a_read_failure():
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+    api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
         listing=[UserCosts(username='user-a', total_cost=4.0)]
     )
     api.monthly_costs = Mock()
@@ -326,7 +328,7 @@ def test_enabled_storage_without_collected_data_is_not_a_read_failure():
 
 def test_no_usage_data_is_missing_not_measured_zero():
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+    api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
         listing=[UserCosts(username='user-a', total_cost=4.0)]
     )
     api.monthly_costs = Mock()
@@ -357,7 +359,7 @@ def test_no_usage_data_is_missing_not_measured_zero():
 
 def test_storage_read_failure_is_unavailable_not_zero():
     api, _ = build_costs_api()
-    api.my_costs.list_user_costs = lambda: ListUserCostsResult(
+    api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
         listing=[UserCosts(username='user-a', total_cost=4.0)]
     )
     api.monthly_costs = Mock()
