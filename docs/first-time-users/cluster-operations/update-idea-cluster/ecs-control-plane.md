@@ -19,9 +19,11 @@ Duration, cost and efficiency describe the latest execution attempt. See [Job co
 | Metric | Samples included |
 | --- | --- |
 | `idea.job.cpu_efficiency` | Existing rule: measured CPU seconds divided by allocated CPU seconds. Missing or invalid measurements are omitted; measured zero CPU is included as zero. |
-| `idea.job.cpu_efficiency.measured` | Explicit measured-only series for dashboards replacing IDEAL. Uses the same formula and validity checks, includes measured zero CPU, and omits jobs without a usable CPU measurement. |
+| `idea.job.cpu_efficiency.measured` | Measured-only series for dashboards replacing IDEAL. Uses the same formula and validity checks, and omits jobs without a usable CPU measurement and, from 26.11.2, jobs that recorded zero CPU. |
 
-Both are ratios from 0 to 1 with identical tags and job-end timestamps. They currently contain the same samples; the existing series never substituted zero for missing measurements. Multi-node partial measurements and impossible ratios are excluded from both. Select one series per dashboard, without combining them.
+`idea.session.count` is a gauge of desktops by `state`, `base_os` and `project`, read from the sessions table every five minutes by one controller task on DogStatsD clusters. Filter it by `idea_cluster`; it has no `env`. A tag set that empties reads zero once and then stops.
+
+Both efficiency series are ratios from 0 to 1 with identical tags and job-end timestamps. They differ only in zero-CPU jobs; the existing series never substituted zero for missing measurements. Multi-node partial measurements and impossible ratios are excluded from both. Select one series per dashboard, without combining them.
 
 ### Once per cluster
 

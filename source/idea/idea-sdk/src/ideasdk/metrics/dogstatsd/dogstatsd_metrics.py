@@ -72,7 +72,7 @@ class DogStatsdMetrics(DatadogFormat, MetricsProviderProtocol):
         if value is None:
             return None
         metric_type = _METRIC_TYPES.get(entry.get('MetricType'), 'g')
-        collector = name.startswith(('cost.', 'storage.'))
+        collector = name.startswith(('cost.', 'storage.', 'session.'))
         metric_name, tags = self.name_and_tags(entry)
         line = f'{metric_name}:{self._value(value)}|{metric_type}'
         if len(tags) > 0:

@@ -55,6 +55,9 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_
     VirtualDesktopSessionCounterDB,
 )
 from ideavirtualdesktopcontroller.app.sessions.desktop_launches import DesktopLaunches
+from ideavirtualdesktopcontroller.app.sessions.session_metrics import (
+    SessionCountPublisher,
+)
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
@@ -76,6 +79,9 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 import os
 import yaml
+
+
+SESSION_COUNTS_SECONDS = 300
 
 
 class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
@@ -337,6 +343,7 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._image_pipeline = None
         self._runs_reconciled = False
         self._history_backfilled = False
+        self._session_counts = None
         self._desktop_launches = None
         self.context.event_queue_monitor_service = EventsQueueMonitoringService(
             context=self.context
@@ -349,6 +356,7 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         # Leadership may settle after startup, and replicas must not multiply the
         # command limit. Waiting here leaves desktop provisioning off this path.
         next_refresh = 0
+        next_session_counts = 0
         while not self._bootstrap_exit.is_set():
             # Reuse the minute loop so a later election or failover still rebuilds once.
             self._reindex_software_stacks()
@@ -407,6 +415,19 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             except Exception as e:
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Desktop history backfill failed: {" ".join(str(e).splitlines())}'
+                )
+            # one publisher, or the replicas' gauges would add up
+            try:
+                if time.monotonic() >= next_session_counts and self.context.is_leader():
+                    next_session_counts = time.monotonic() + SESSION_COUNTS_SECONDS
+                    if self._session_counts is None:
+                        self._session_counts = SessionCountPublisher(
+                            self.context, self._session_db
+                        )
+                    self._session_counts.publish()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Session counts failed: {" ".join(str(e).splitlines())}'
                 )
             # desktop image pipeline: resume, triggers (release, monthly), start queued
             # rows, cleanup. bakes run in their own threads; this never waits on one
