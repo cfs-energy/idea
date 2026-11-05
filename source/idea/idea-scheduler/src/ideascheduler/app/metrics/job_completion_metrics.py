@@ -182,7 +182,12 @@ class JobCompletionMetrics(BaseMetrics):
 
         efficiency = self.cpu_efficiency(job)
         if efficiency is not None:
-            for name in ('job.cpu_efficiency', 'job.cpu_efficiency.measured'):
+            # A job that recorded no CPU says nothing about how well it used what it asked for,
+            # so the measured series leaves it out; the existing series keeps it as zero.
+            names = ['job.cpu_efficiency']
+            if efficiency > 0:
+                names.append('job.cpu_efficiency.measured')
+            for name in names:
                 self._log(
                     MetricName=name,
                     Timestamp=timestamp,

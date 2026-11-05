@@ -374,7 +374,7 @@ def test_never_started_job_explicitly_has_no_duration(context, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    'cpu_time, expected', [(None, None), (0, 0), (10800, 0.75), (5000000, None)]
+    'cpu_time, expected', [(None, None), (10800, 0.75), (5000000, None)]
 )
 def test_both_cpu_series_preserve_measurement_rules(
     context, monkeypatch, cpu_time, expected
@@ -395,6 +395,16 @@ def test_both_cpu_series_preserve_measurement_rules(
         assert legacy['Dimensions'] == measured['Dimensions']
         assert legacy['Timestamp'] == measured['Timestamp']
         assert legacy['MetricType'] == measured['MetricType'] == 'Summary'
+
+
+def test_zero_cpu_job_stays_out_of_the_measured_series(context, monkeypatch):
+    entries = _published(context, monkeypatch, 'dogstatsd', _job(cpu_time_secs=0))
+    series = {
+        e['MetricName']: e['Value']
+        for e in entries
+        if 'cpu_efficiency' in e['MetricName']
+    }
+    assert series == {'job.cpu_efficiency': 0}
 
 
 def _priced_job(wall_secs, total_time_secs, cpu_time_secs=3600):
