@@ -5501,7 +5501,7 @@ _DESCRIPTIONS = {
     'cluster.costs.compute_rate_multiplier': 'Multiplies the on-demand instance rate for job and desktop compute, e.g. 0.72 when savings plans cut compute about 28%. 1.0 shows list price. Must be above 0 and at most 1.5, otherwise it is ignored. Storage and spot are not scaled. Jobs keep the rate in force when they finished; desktop costs pick up a change on the next 15-minute collection.',
     'cluster-manager.metrics.cost.enabled': 'Collect Cost Explorer daily totals in the commercial AWS partition with the dogstatsd metrics provider. Other partitions and providers do not support this collection.',
     'cluster-manager.metrics.cost.by_account': "Split cost metrics by linked AWS account; only a payer account that can see other accounts' spend needs this.",
-    'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history.",
+    'cluster-manager.metrics.cost.lookback_days': "Trailing full days of Cost Explorer data re-read on each run. Re-reading replaces each day's totals; it does not add them again or limit displayed history. Cost Explorer can post a month's first-day tax several days late, so a shorter window can leave a day short.",
     'cluster-manager.metrics.cost.interval_hours': 'Hours between collection runs.',
     'scheduler.cost_estimation.fsx_lustre': 'USD per GB-hour for job scratch storage. Fetch assumes SCRATCH_2/SSD and divides the monthly price by 730 hours as an estimation convention.',
     'scheduler.cost_estimation.provisioned_iops': 'USD per provisioned io1 IOPS-month; fractional rates are preserved.',

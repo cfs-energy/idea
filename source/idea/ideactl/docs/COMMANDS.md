@@ -916,7 +916,7 @@ Deploy standalone account spend collection in a commercial billing account, with
 | `--datadog-api-key-secret-arn <arn>` | yes | none | yes |
 | `--subnet-ids <ids...>` | yes | none | yes |
 | `--interval-hours <hours>` | yes | `6` | no |
-| `--lookback-days <days>` | yes | `3` | no |
+| `--lookback-days <days>` | yes | `7` | no |
 | `--module-tag <key>` | yes | `"idea:ModuleId"` | no |
 | `--project-tag <key>` | yes | `"idea:Project"` | no |
 | `--owner-tag <key>` | yes | `"idea:JobOwner"` | no |

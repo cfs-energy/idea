@@ -754,7 +754,7 @@ describe('cost settings keep shipped defaults', () => {
       const flat = flattenConfigDir(outDir);
       const expected = {
         'cluster-manager.metrics.cost.enabled': false,
-        'cluster-manager.metrics.cost.lookback_days': 3,
+        'cluster-manager.metrics.cost.lookback_days': 7,
         'cluster-manager.metrics.cost.interval_hours': 24,
         'cluster-manager.metrics.cost.by_account': false,
         'cluster-manager.metrics.storage.enabled': false,

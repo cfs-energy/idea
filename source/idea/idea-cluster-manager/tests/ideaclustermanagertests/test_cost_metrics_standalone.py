@@ -33,7 +33,7 @@ def test_environment_configuration_and_defaults(monkeypatch):
     service = CostMetricsService(context)
     assert service.is_enabled()
     assert service.get_interval_seconds() == 24 * 3600
-    assert service.get_lookback_days() == 3
+    assert service.get_lookback_days() == 7
     reader = service.reader()
     assert (reader.module_tag, reader.project_tag, reader.owner_tag) == (
         'idea:ModuleId',
