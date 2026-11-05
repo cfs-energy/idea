@@ -119,7 +119,12 @@ class JobCompletionMetrics(BaseMetrics):
         """
         wall = cls.wall_seconds(job)
         recorded = job.total_time_secs
-        if wall is None or recorded is None or wall < SECONDS_IN_DAY or recorded >= wall:
+        if (
+            wall is None
+            or recorded is None
+            or wall < SECONDS_IN_DAY
+            or recorded >= wall
+        ):
             return 1
         if recorded < 60 and cls.used_cpu_seconds(job) <= 0:
             return 1
