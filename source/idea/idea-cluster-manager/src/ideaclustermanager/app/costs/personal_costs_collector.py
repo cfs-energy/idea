@@ -1347,6 +1347,14 @@ class PersonalCostsCollector:
         local = now.to(timezone)
         self.calculator.begin()
         try:
+            # An account gone before it ever had a head still has desktop history, and
+            # the admin listing still shows it. Such an owner cannot appear later without
+            # a session document the listing's own search sees, so once a day is enough.
+            today = local.format('YYYY-MM-DD')
+            if state.get('history_owners_on') != today:
+                for owner in MyCostsService(self.context).history_owners():
+                    self.store.register_head_subject(owner)
+                state['history_owners_on'] = today
             if self.store.seed_head_subjects():
                 self.logger.info('Personal cost head index seeded')
         except Exception:

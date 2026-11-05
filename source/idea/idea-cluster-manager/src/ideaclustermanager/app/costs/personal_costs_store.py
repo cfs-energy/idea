@@ -19,8 +19,9 @@ from ideadatamodel import (
 )
 
 SYSTEM = '!collector'
-# One empty record per subject that has ever had a head: a head never expires, and a
-# deleted account's head stays readable. Readers scan until the marker says it is complete.
+# One empty record per subject that has ever had a head (a head never expires, and a
+# deleted account's stays readable) or has desktop history, which may have no head at all.
+# Readers scan until the marker says it is complete.
 HEAD_SUBJECT = 'head-subject:'
 HEAD_SUBJECTS_SEEDED = 'head-subjects-seeded'
 
@@ -379,14 +380,17 @@ class StoredPersonalCostsService:
         return GetMyCostsSummaryResult(username=username, window='last_30_days')
 
     def listing_heads(self):
-        """subject -> head for the admin listing, or None until the head index is seeded"""
+        """subject -> head or None for the admin listing; None until the index is seeded"""
         subjects = self.store.head_subjects()
         if subjects is None:
             return None
-        return {
-            row['subject']: json.loads(row['payload'])
+        # a subject with desktop history and no head is listed too: None, nothing stored
+        heads = dict.fromkeys(subjects)
+        heads.update(
+            (row['subject'], json.loads(row['payload']))
             for row in self.store.batch_heads(subjects)
-        }
+        )
+        return heads
 
     def get_ticker(self, username):
         self.authorize(username)

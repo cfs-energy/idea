@@ -52,6 +52,8 @@ class CostsAPI(BaseAPI):
 
     def _stored_storage(self, row, heads, start_date, end_date):
         # the head says it for this window when the collector has been through today
+        if heads is not None and row.username in heads and not heads[row.username]:
+            return None, None  # no head: nothing stored, as get_costs would answer
         entry = ((heads or {}).get(row.username) or {}).get('listing')
         if (
             entry
