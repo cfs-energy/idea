@@ -5,7 +5,10 @@ from ideadatamodel import exceptions, GetUserCostsSummaryRequest
 from ideasdk.utils import Utils
 
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
-from ideaclustermanager.app.costs.personal_costs_store import StoredPersonalCostsService
+from ideaclustermanager.app.costs.personal_costs_store import (
+    StoredPersonalCostsService,
+    window_storage,
+)
 
 
 class CostsAPI(BaseAPI):
@@ -40,8 +43,28 @@ class CostsAPI(BaseAPI):
             },
         }
 
+    def _listing_heads(self):
+        try:
+            return self.monthly_costs.listing_heads()
+        except Exception as e:
+            self.context.logger().warning(f'failed to read stored heads: {e}')
+            return None
+
+    def _stored_storage(self, row, heads, start_date, end_date):
+        # the head says it for this window when the collector has been through today
+        entry = ((heads or {}).get(row.username) or {}).get('listing')
+        if (
+            entry
+            and entry.get('start_date') == start_date
+            and entry.get('end_date') == end_date
+        ):
+            return entry.get('storage_cost'), entry.get('storage_gb')
+        costs = self.monthly_costs.get_costs(row.username)
+        return window_storage(costs, start_date, end_date)
+
     def list_user_costs(self, context: ApiInvocationContext):
-        result = self.my_costs.list_user_costs()
+        heads = self._listing_heads()
+        result = self.my_costs.list_user_costs(heads)
         storage_metrics = getattr(self.context, 'storage_metrics', None)
         configuration = (
             storage_metrics.configuration_status()
@@ -69,7 +92,9 @@ class CostsAPI(BaseAPI):
         storage_unavailable = False
         for row in result.listing or []:
             try:
-                costs = self.monthly_costs.get_costs(row.username)
+                cost, gigabytes = self._stored_storage(
+                    row, heads, result.start_date, result.end_date
+                )
             except Exception as e:
                 self.context.logger().warning(
                     f'failed to read stored costs for {row.username}: {e}'
@@ -79,28 +104,12 @@ class CostsAPI(BaseAPI):
                 continue
             # the stored daily storage amounts that fall in the listing's own window, so
             # storage is summed over the same days as jobs and desktops, not month to date.
-            # a day with no stored amount adds nothing, as a partial month did before.
-            # ponytail: only this month and last are stored, so on march 1 the window's
-            # first day (january 31) is never counted; read older generations if it matters.
-            amounts = [
-                day.amount
-                for month in (costs.previous, costs.current)
-                if month is not None
-                for day in month.shared_storage.daily
-                if result.start_date <= day.date <= result.end_date
-                and day.amount is not None
-            ]
-            if not amounts:
+            if cost is None:
                 row.total_cost_excludes_storage = True
                 continue
             result.storage_data_available = True
-            row.storage_cost = round(sum(amounts), 4)
-            month = costs.current
-            row.storage_gb = round(
-                sum(item.used_bytes or 0 for item in (month.storage if month else []))
-                / (1024**3),
-                2,
-            )
+            row.storage_cost = cost
+            row.storage_gb = gigabytes
             row.storage_cost_period = f'{result.start_date} through {result.end_date}'
             row.total_cost = round((row.total_cost or 0) + (row.storage_cost or 0), 2)
         result.storage_unavailable = storage_unavailable

@@ -19,12 +19,41 @@ from ideadatamodel import (
 )
 
 SYSTEM = '!collector'
+# One empty record per subject that has ever had a head: a head never expires, and a
+# deleted account's head stays readable. Readers scan until the marker says it is complete.
+HEAD_SUBJECT = 'head-subject:'
+HEAD_SUBJECTS_SEEDED = 'head-subjects-seeded'
+
+
+def window_storage(costs, start_date, end_date):
+    """
+    the stored daily storage amounts in a window, and the bytes behind the current month.
+    a day with no stored amount adds nothing; no amount at all is unknown, not zero.
+    """
+    # ponytail: only this month and last are stored, so on march 1 the window's
+    # first day (january 31) is never counted; read older generations if it matters.
+    amounts = [
+        day.amount
+        for month in (costs.previous, costs.current)
+        if month is not None
+        for day in month.shared_storage.daily
+        if start_date <= day.date <= end_date and day.amount is not None
+    ]
+    if not amounts:
+        return None, None
+    month = costs.current
+    return round(sum(amounts), 4), round(
+        sum(item.used_bytes or 0 for item in (month.storage if month else []))
+        / (1024**3),
+        2,
+    )
 
 
 class PersonalCostsStore:
     def __init__(self, context):
         self.context = context
         self.table = None
+        self._head_subjects = None
 
     def get_table_name(self):
         return f'{self.context.cluster_name()}.cluster-manager.personal-costs'
@@ -136,7 +165,7 @@ class PersonalCostsStore:
                 break
             request['ExclusiveStartKey'] = page['LastEvaluatedKey']
 
-    def publish(self, subject, costs, summary, tickers=None):
+    def publish(self, subject, costs, summary, tickers=None, listing=None):
         """A failed part write leaves the old head intact; no active record expires."""
         generation = f'{int(time.time() * 1000):013d}-{uuid.uuid4().hex}'
         costs = costs.model_copy(deep=True)
@@ -155,6 +184,7 @@ class PersonalCostsStore:
                 self.put(
                     subject, f'g:{generation}:{kind}:{index}', part, immutable=True
                 )
+        self.register_head_subject(subject)
         head = dict(
             generation=generation,
             parts=manifest,
@@ -165,9 +195,73 @@ class PersonalCostsStore:
             incomplete=costs.current.incomplete,
             tickers=tickers or {},
         )
+        if listing:
+            head['listing'] = listing
         self.put(subject, 'head', head)
         self.prune(subject, generation)
         return head
+
+    def _known_head_subjects(self):
+        if self._head_subjects is None:
+            self._head_subjects = {
+                row['record'][len(HEAD_SUBJECT) :]
+                for row in self.records(SYSTEM, HEAD_SUBJECT)
+            }
+        return self._head_subjects
+
+    def register_head_subject(self, subject):
+        # written before the head, so a head is never missing from the index
+        if subject not in self._known_head_subjects():
+            self.put(SYSTEM, HEAD_SUBJECT + subject, {})
+            self._head_subjects.add(subject)
+
+    def seed_head_subjects(self):
+        """once per table: every head written before the index existed, by one scan"""
+        if self.get(SYSTEM, HEAD_SUBJECTS_SEEDED):
+            return False
+        from ideaclustermanager.app.reporting.reporting_sources import ReportingSources
+
+        for row in ReportingSources.scan_heads(self.table, time.monotonic() + 600):
+            self.register_head_subject(row['subject'])
+        self.put(SYSTEM, HEAD_SUBJECTS_SEEDED, {'as_of': arrow.utcnow().isoformat()})
+        return True
+
+    def head_subjects(self):
+        """every subject with a head, or None until the collector has seeded the index"""
+        rows = list(self.records(SYSTEM, 'head-subject'))
+        names = [row['record'] for row in rows]
+        if HEAD_SUBJECTS_SEEDED not in names:
+            return None
+        return [
+            name[len(HEAD_SUBJECT) :] for name in names if name.startswith(HEAD_SUBJECT)
+        ]
+
+    def batch_heads(self, subjects, check=lambda: None):
+        """the head records of these subjects; a subject without one returns nothing"""
+        keys = [{'subject': name, 'record': 'head'} for name in sorted(set(subjects))]
+        name = self.table.name
+        rows = []
+        for offset in range(0, len(keys), 100):
+            request = {
+                name: {'Keys': keys[offset : offset + 100], 'ConsistentRead': True}
+            }
+            for attempt in range(8):
+                check()
+                if attempt:
+                    time.sleep(min(0.05 * 2**attempt, 1))
+                response = (
+                    self.context.aws()
+                    .dynamodb_table()
+                    .batch_get_item(RequestItems=request)
+                )
+                rows.extend(response.get('Responses', {}).get(name, []))
+                request = response.get('UnprocessedKeys') or {}
+                if not request.get(name, {}).get('Keys'):
+                    break
+            else:
+                # a short answer here would read as users without costs
+                raise RuntimeError('Personal cost heads left unprocessed')
+        return rows
 
     def projection(self, subject, head, kind):
         return json.loads(
@@ -283,6 +377,16 @@ class StoredPersonalCostsService:
                 **self.store.projection(username, head, 'summary')
             )
         return GetMyCostsSummaryResult(username=username, window='last_30_days')
+
+    def listing_heads(self):
+        """subject -> head for the admin listing, or None until the head index is seeded"""
+        subjects = self.store.head_subjects()
+        if subjects is None:
+            return None
+        return {
+            row['subject']: json.loads(row['payload'])
+            for row in self.store.batch_heads(subjects)
+        }
 
     def get_ticker(self, username):
         self.authorize(username)
