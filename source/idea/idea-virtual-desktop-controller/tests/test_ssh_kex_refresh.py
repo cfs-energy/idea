@@ -205,6 +205,17 @@ def test_background_sweep_waits_for_leadership_and_survives_failure(refresh_loop
     assert app.context.logger().warning.call_count == 2
 
 
+def test_session_counts_publish_every_five_minutes_on_the_leader(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    calls = []
+    app._session_counts.publish.side_effect = lambda: calls.append(clock.now)
+    app._refresh_bootstrap_loop()
+    # the loop wakes at 0, 60, 21599, 21600, 21660, 43200: not before leadership, and
+    # not again within five minutes of the last publish
+    assert calls == [60, 21599, 43200]
+
+
 def test_runs_are_reconciled_once_and_only_on_the_leader(refresh_loop):
     app, clock = refresh_loop
     app.context.is_leader.side_effect = lambda: clock.now >= 60
