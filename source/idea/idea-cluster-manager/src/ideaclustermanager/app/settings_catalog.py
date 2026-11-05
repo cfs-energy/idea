@@ -3186,6 +3186,14 @@ _ROWS = [
         True,
     ),
     (
+        'scheduler.job_cache.finished_job_retention_days',
+        'integer',
+        'runtime',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
         'scheduler.job_provisioning.batch_provisioning_wait_interval_seconds',
         'integer',
         'runtime',

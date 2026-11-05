@@ -80,6 +80,10 @@ images:
   # this many days old and nothing references them; 0 keeps them
   legacy_cleanup_min_age_days: 30
 
+job_cache:
+  # finished jobs are deleted from the scheduler's job cache this many days after they end; 0 keeps them
+  finished_job_retention_days: 400
+
 job_provisioning:
   # Determine if AWS Service Quotas should be used:
   # True (default) - query AWS service quotas API to make sure an incoming job can be deployed.
