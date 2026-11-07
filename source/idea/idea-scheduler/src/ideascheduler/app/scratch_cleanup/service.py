@@ -1326,9 +1326,7 @@ class ScratchCleanupService:
         self._forget_absent(absent, due, limits, file_system)
         ready = sorted(
             self._told_and_due(scan, limits, now, unfinished), key=_oldest_first
-        )[
-            : limits.max_folders_per_run
-        ]
+        )[: limits.max_folders_per_run]
         run['kept_folders'] = (
             sum(1 for row in scan.rows if row.action == 'keep') + scan.truncated_rows
         )
