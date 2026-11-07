@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 import pytest
 
 from ideascheduler.app.scratch_cleanup import filesystem as module
@@ -345,6 +346,35 @@ def test_a_replacement_directory_during_inspection_is_not_measured(root, monkeyp
         assert inspect(folder_fd).unreadable
     finally:
         os.close(folder_fd)
+
+
+def test_a_replacement_given_the_same_inode_is_not_traversed(root, monkeypatch):
+    # what ext4 does with a freed inode: only the ctime tells the two apart
+    mount, fd = root
+    folder, _ = replacement_tree(mount)
+    folder_fd, identity = open_for_removal(fd, 'job')
+    real_fstat = os.fstat
+    sub_inode = os.stat(folder / 'sub').st_ino
+
+    def fstat(target):
+        info = real_fstat(target)
+        if info.st_ino != sub_inode:
+            return info
+        return SimpleNamespace(
+            st_dev=info.st_dev,
+            st_ino=info.st_ino,
+            st_uid=info.st_uid,
+            st_ctime=info.st_ctime,
+            st_ctime_ns=info.st_ctime_ns + 1,
+        )
+
+    monkeypatch.setattr(module.os, 'fstat', fstat)
+    try:
+        with pytest.raises(FolderInUse):
+            remove_folder(fd, 'job', folder_fd, identity, nothing, **ANY_TIME)
+    finally:
+        os.close(folder_fd)
+    assert (folder / 'sub' / 'own.dat').exists()
 
 
 def test_a_subfolder_given_to_another_owner_after_the_check_stops_it(root, monkeypatch):

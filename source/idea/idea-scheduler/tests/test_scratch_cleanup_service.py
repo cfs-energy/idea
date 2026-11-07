@@ -353,13 +353,24 @@ def told_about(
         else [stem]
     )
     return {
-        f'{file_system}|{name}|{os.stat(owner_dir / name).st_ino}': {
+        '{}|{}|{}|{}'.format(
+            file_system,
+            name,
+            os.stat(owner_dir / name).st_ino,
+            os.stat(owner_dir / name).st_ctime_ns,
+        ): {
             'first_notice_at': first,
             'final_notice_at': final,
         }
         for name in names
         if (owner_dir / name).exists()
     }
+
+
+def re_tell(world):
+    """a fixture that fills a folder after its record: the notices are about what it now holds"""
+    for row in world.store.removals.values():
+        row['targets'] = told_about(world, row['job_id'], row['owner'])
 
 
 def put_event(world, made, **overrides):
@@ -650,6 +661,7 @@ def test_a_kill_switch_stops_a_removal_in_the_middle(world, monkeypatch):
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
     real = module.remove_folder
 
     def flipping(*args, **kwargs):
@@ -667,6 +679,7 @@ def test_a_stopped_removal_resumes_after_every_check_passes(world, monkeypatch):
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
     real = module.remove_folder
 
     def flipping(*args, **kwargs):
@@ -1168,6 +1181,7 @@ def test_a_job_appearing_during_removal_stops_it(world, monkeypatch, became):
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
 
     def appear(calls):
         if calls == 3:
@@ -1185,6 +1199,7 @@ def test_state_unavailable_during_removal_stops_it(world, monkeypatch):
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
 
     def fail(calls):
         if calls == 3:
@@ -1227,6 +1242,7 @@ def test_the_audit_row_tracks_the_last_removal(world, monkeypatch):
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
     seen = []
     real = world.store.put_audit
 
@@ -1391,6 +1407,7 @@ def test_a_job_mentioning_the_folder_during_removal_stops_it(world, monkeypatch)
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
 
     def appear(calls):
         if calls == 3:
@@ -1437,6 +1454,7 @@ def test_an_owner_starting_a_job_during_removal_stops_it(world, monkeypatch):
     folder = job_folder(world)
     for index in range(1500):
         (folder / f'f{index}').touch()
+    re_tell(world)
 
     def start(calls):
         if calls == 3:
@@ -1950,6 +1968,7 @@ def test_a_subjob_starting_during_removal_stops_it(world, monkeypatch):
     folders = array_of(world, indices=(1,))
     for index in range(1500):
         (folders[1] / f'f{index}').touch()
+    re_tell(world)
 
     def appear(calls):
         if calls == 3:
@@ -2601,12 +2620,29 @@ def test_a_file_system_that_cannot_be_read_keeps_the_record(world, tmp_path):
 def test_a_folder_replaced_under_its_name_is_told_about_again(world):
     digests_on(world)
     folder = job_folder(world)
+    # on ext4 the new directory usually gets the old inode back
     shutil.rmtree(folder)
+    time.sleep(0.05)
     replacement = folder_on(world.mount)
     assert run(world)['removed_folders'] == 0
     assert replacement.exists()
-    row = next(iter(world.store.removals.values()))
-    assert all(
-        str(os.stat(replacement).st_ino) in key or not value.get('final_notice_at')
-        for key, value in row['targets'].items()
-    )
+
+
+def test_the_inode_alone_does_not_identify_a_folder():
+    same = dict(file_system='scratch', name='123', inode=7)
+    assert module._target_key(
+        SimpleNamespace(ctime_ns=1, **same)
+    ) != module._target_key(SimpleNamespace(ctime_ns=2, **same))
+
+
+def test_a_folder_changed_since_the_scan_is_left_alone(world, monkeypatch):
+    folder = job_folder(world)
+    real_remove = world.service._remove_opened
+
+    def remove(root_device, chain, row, *rest):
+        row.ctime_ns += 1
+        return real_remove(root_device, chain, row, *rest)
+
+    monkeypatch.setattr(world.service, '_remove_opened', remove)
+    assert run(world)['removed_folders'] == 0
+    assert folder.exists()

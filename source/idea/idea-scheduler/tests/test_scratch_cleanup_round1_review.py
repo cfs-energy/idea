@@ -435,6 +435,7 @@ def test_a_removal_that_outlives_its_hold_stops_before_the_next_file(
     folder = job_folder(world)
     for index in range(50):
         (folder / f'f{index}').touch()
+    base.re_tell(world)
     holds = world.service._holds
     real = module.remove_folder
 
@@ -455,6 +456,7 @@ def test_a_removal_too_long_for_its_owners_jobs_stops_and_resumes_later(
     folder = job_folder(world)
     for index in range(300):
         (folder / f'f{index}').touch()
+    base.re_tell(world)
     outcome = run(world)
     assert outcome['status'] == 'stopped' and 'longer' in outcome['message']
     assert folder.exists()

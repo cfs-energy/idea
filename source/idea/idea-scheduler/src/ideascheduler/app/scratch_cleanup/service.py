@@ -154,6 +154,7 @@ class Row:
     owner: Optional[str] = None
     device: int = 0
     inode: int = 0
+    ctime_ns: int = 0
     records: List[JobRecord] = field(default_factory=list)
     end_time: Optional[datetime] = None
     size_bytes: int = 0
@@ -741,6 +742,7 @@ class ScratchCleanupService:
         try:
             info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
             row.device, row.inode = info.st_dev, info.st_ino
+            row.ctime_ns = info.st_ctime_ns
         except OSError:
             scan.keep(row, Reason.UNREADABLE)
             return
@@ -1322,7 +1324,9 @@ class ScratchCleanupService:
         self._stop_if_blind(scan)
         self._note_kept(scan, now)
         self._forget_absent(absent, due, limits, file_system)
-        ready = sorted(self._told_and_due(scan, limits, now), key=_oldest_first)[
+        ready = sorted(
+            self._told_and_due(scan, limits, now, unfinished), key=_oldest_first
+        )[
             : limits.max_folders_per_run
         ]
         run['kept_folders'] = (
@@ -1348,7 +1352,9 @@ class ScratchCleanupService:
         run['used_percent_after'] = round(after, 1)
         metrics.level('used_percent', after)
 
-    def _told_and_due(self, scan: Scan, limits: Limits, now: datetime) -> List[Row]:
+    def _told_and_due(
+        self, scan: Scan, limits: Limits, now: datetime, unfinished: Dict
+    ) -> List[Row]:
         """
         the rows that can go: each folder needs both notices itself. A different folder under the
         same name, or one on another file system, has been told nothing. Stale notices for its
@@ -1359,6 +1365,9 @@ class ScratchCleanupService:
             if row.reason != Reason.ELIGIBLE:
                 continue
             notices = _notices_of(row)
+            if not notices and _resume_until(row, unfinished):
+                # its own removal changed the folder: it is still the one its owner was told of
+                notices = _notices_of_inode(row)
             if not (notices.get('first_notice_at') and notices.get('final_notice_at')):
                 if _forget_replaced(row):
                     self._put_removal(row.record_key, row.record)
@@ -1742,7 +1751,11 @@ class ScratchCleanupService:
 
     def _remove_opened(self, root_device, chain, row, limits, aliases, run):
         identity = identity_of(chain.folder_fd)
-        if (identity.device, identity.inode) != (row.device, row.inode):
+        if (identity.device, identity.inode, os.fstat(chain.folder_fd).st_ctime_ns) != (
+            row.device,
+            row.inode,
+            row.ctime_ns,
+        ):
             self._logger.info(
                 f'{row.path} is not the folder that was checked; left alone'
             )
@@ -2190,12 +2203,24 @@ def _check_is_due(record: Dict, now: datetime) -> bool:
 
 
 def _target_key(row: Row) -> str:
-    """one folder: its file system, its name, and which directory has that name"""
-    return f'{row.file_system}|{row.name}|{row.inode}'
+    """
+    one folder: its file system, its name, and which directory has that name. File systems reuse an
+    inode as soon as it is free, so the inode alone cannot say; a directory's ctime moves when it is
+    made, and when anything in it changes, after which it stays anyway.
+    """
+    return f'{row.file_system}|{row.name}|{row.inode}|{row.ctime_ns}'
 
 
 def _notices_of(row: Row) -> Dict:
     return (row.record.get('targets') or {}).get(_target_key(row)) or {}
+
+
+def _notices_of_inode(row: Row) -> Dict:
+    prefix = f'{row.file_system}|{row.name}|{row.inode}|'
+    for key, notices in (row.record.get('targets') or {}).items():
+        if key.startswith(prefix):
+            return notices
+    return {}
 
 
 def _forget_replaced(row: Row) -> bool:

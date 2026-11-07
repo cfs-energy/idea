@@ -83,10 +83,12 @@ def _open_as_inspected(parent_fd: int, name: str, seen: os.stat_result) -> int:
     """the subfolder that was inspected, or NotASafeTarget: something else now has its name."""
     fd = open_child_dir(parent_fd, name)
     opened = os.fstat(fd)
-    if (opened.st_dev, opened.st_ino, opened.st_uid) != (
+    # the ctime too: a directory made in its place can be given the same inode
+    if (opened.st_dev, opened.st_ino, opened.st_uid, opened.st_ctime_ns) != (
         seen.st_dev,
         seen.st_ino,
         seen.st_uid,
+        seen.st_ctime_ns,
     ):
         os.close(fd)
         raise NotAsInspected(f'{name!r} is not the directory that was inspected')
