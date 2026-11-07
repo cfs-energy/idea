@@ -18,6 +18,7 @@ import ideascheduler
 
 from ideadatamodel import exceptions, SocaJob, SocaJobState, JobUpdates, JobUpdate
 from ideasdk.service import SocaService
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 from ideascheduler.app.app_protocols import JobMonitorProtocol
 from ideascheduler.app.provisioning.job_monitor.finished_job_processor import (
@@ -458,6 +459,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             queue=queue, log_tag='job-reconciler'
                         )
                         if adopted > 0:
+                            HealthMetrics(self._context).add(
+                                'orphan_sweep', adopted, kind='job'
+                            )
                             self._logger.info(
                                 f'job reconciler adopted {adopted} orphaned job(s) in queue: {queue}'
                             )

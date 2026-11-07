@@ -38,7 +38,7 @@ describe('idea api invoker', () => {
         await vi.advanceTimersByTimeAsync(60001);
         const error: any = await settled;
         expect(error.errorCode).toBe('REQUEST_TIMEOUT');
-        expect(error.message).toBe('Request timed-out');
+        expect(error.message).toBe('The portal took too long to respond. Try again.');
     });
 
     it('returns the payload when the service worker replies', async () => {
@@ -88,6 +88,15 @@ describe('idea api invoker', () => {
         await vi.advanceTimersByTimeAsync(2);
         const error: any = await settled;
         expect(error.errorCode).toBe('REQUEST_TIMEOUT');
-        expect(error.message).toBe('Request timed-out');
+        expect(error.message).toBe('The portal took too long to respond. Try again.');
+    });
+});
+
+describe('error reporting call', () => {
+    it('does not end the session or throw when the token has expired', async () => {
+        const authContext: any = {invoke: vi.fn().mockResolvedValue({success: false, error_code: 'AUTH_TOKEN_EXPIRED'}), logout: vi.fn()};
+        const invoker = new IdeaApiInvoker({name: 'test', url: 'https://portal/api', authContext});
+        await expect(invoker.invoke_quiet('Portal.ReportClientError', {})).resolves.toBeUndefined();
+        expect(authContext.logout).not.toHaveBeenCalled();
     });
 });

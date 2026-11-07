@@ -1,7 +1,7 @@
 /** ECS parity after sunset, with reviewed release and browser-terminal additions. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -11,6 +11,8 @@ import { load } from 'js-yaml';
 import { elbAccountIdForRegion, renderBootstrapStack } from '../../src/cdk/stacks/bootstrap.ts';
 import { CostCollectorStack } from '../../src/cdk/stacks/cost-collector.ts';
 import { rehearseDayZero } from '../../tools/day-zero/rehearse.ts';
+
+const RELEASE = readFileSync(new URL('../../../../../IDEA_VERSION.txt', import.meta.url), 'utf8').trim();
 
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
@@ -33,7 +35,10 @@ export function templateDigest(template: any): string {
     assert.match(resources.ideatest1userpooldomainEB5B2B9B.Properties.Domain, /^idea-test1-[0-9a-f-]+$/);
     resources.ideatest1userpooldomainEB5B2B9B.Properties.Domain = 'idea-test1-<random-uuid>';
   }
-  return createHash('sha256').update(JSON.stringify(canonical(template))).digest('hex');
+  // Every stack names the release, so without this each version bump moves all eleven digests and
+  // a real template change among them cannot be seen.
+  const text = JSON.stringify(canonical(template)).replaceAll(RELEASE, '<release>');
+  return createHash('sha256').update(text).digest('hex');
 }
 
 // Compared against the original v26.10.9 synth: only release versions/images and the
@@ -43,6 +48,10 @@ export function templateDigest(template: any): string {
 // The bastion task also carries IDEA_VPC_CIDRS and IDEA_SSH_CLIENT_CIDRS, the sources sshd never penalizes.
 // The scheduler and VDC roles no longer carry policy writes on service-linked roles.
 // Analytics builds no dashboard route on the external load balancer unless it is enabled.
+// The scheduler role can reach its scratch cleanup table and describe data repository associations.
+// The cluster manager gets a policy for the health collectors; the bastion, their switch.
+// The scheduler and VDC roles can read the console of this cluster's instances, the scheduler its
+// builder log, and the VDC the digest checkpoint.
 // Keep hashing every field except the three validated random values above.
 test('all eleven ECS module templates match the reviewed v26.11.1 baseline', async () => {
   const baseline = JSON.parse(readFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), 'utf8'));
@@ -56,8 +65,11 @@ test('all eleven ECS module templates match the reviewed v26.11.1 baseline', asy
       const files = readdirSync(join(root, directory)).filter(name => name.endsWith('.template.json'));
       assert.equal(files.length, 1);
       const template = JSON.parse(readFileSync(join(root, directory, files[0]), 'utf8'));
-      assert.equal(templateDigest(template), baseline[directory.slice(8)], directory);
+      const digest = templateDigest(template);
+      if (process.env.RECORD_DIGESTS) baseline[directory.slice(8)] = digest;
+      assert.equal(digest, baseline[directory.slice(8)], directory);
     }
+    if (process.env.RECORD_DIGESTS) writeFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), JSON.stringify(baseline, null, 2) + '\n');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -67,7 +67,10 @@ export function describeListingFailure(path: string, error: any): string {
     if (error != null && error.errorCode === 'UNAUTHORIZED_ACCESS') {
         // One error code covers "no such directory", "not a directory" and
         // "not yours", so the message must not claim to know which.
-        return `Cannot open ${path}. It does not exist, is not a directory, or you do not have access to it.`
+        return `Cannot open ${path}. It does not exist, is not a folder, or you do not have access. If you need it, ask the folder's owner.`
+    }
+    if (error != null && error.errorCode === 'FILE_OPERATION_TIMED_OUT') {
+        return `${path} took too long to list. To see it, run this in a terminal: ls '${path.replace(/'/g, `'\\''`)}'`
     }
     const message = error != null && typeof error.message === 'string' ? error.message.trim() : ''
     return message.length > 0 ? `Cannot open ${path}: ${message}` : `Cannot open ${path}.`

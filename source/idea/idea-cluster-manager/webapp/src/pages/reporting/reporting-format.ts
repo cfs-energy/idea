@@ -3,6 +3,9 @@ import {ReportingCoverage, ReportingNumber} from '../../client/reporting-model';
 
 export const numeric = (value: ReportingNumber | null | undefined): number | null => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
 export const money = (value: ReportingNumber | null | undefined, currency = 'USD') => numeric(value) == null ? '—' : new Intl.NumberFormat('en-US', {style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2}).format(Number(value));
+// Headline figures: cents stop meaning anything above a thousand dollars. Tables and CSV keep them.
+export const wholeMoney = (value: ReportingNumber | null | undefined, currency = 'USD') => numeric(value) != null && Math.abs(Number(value)) >= 1000 ? new Intl.NumberFormat('en-US', {style: 'currency', currency, maximumFractionDigits: 0}).format(Number(value)) : money(value, currency);
+export const axisMoney = (value: number, currency = 'USD') => Math.abs(value) >= 1000 ? new Intl.NumberFormat('en-US', {style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1}).format(value) : money(value, currency);
 export const hours = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : Number(value) > 0 && Number(value) < 0.05 ? '<0.1' : new Intl.NumberFormat('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 1}).format(Number(value));
 export const percent = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : Number(value) > 0 && Number(value) < 1 ? '<1%' : `${Math.round(Number(value))}%`;
 export const bytes = (value: ReportingNumber | null | undefined) => numeric(value) == null ? '—' : `${(Number(value) / (Number(value) >= 2 ** 40 ? 2 ** 40 : 2 ** 30)).toFixed(1)} ${Number(value) >= 2 ** 40 ? 'TiB' : 'GiB'}`;

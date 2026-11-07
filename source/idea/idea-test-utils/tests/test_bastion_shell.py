@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -146,18 +147,14 @@ class SshdSourceLimits(unittest.TestCase):
     def test_limits_bite_only_sustained_failures(self):
         settings = self.settings(self.render('10.7.0.0/16')[0])
         self.assertEqual(settings['MaxStartups'], '50:30:200')
-        self.assertEqual(settings['PerSourceMaxStartups'], '30')
+        # a per-source slot limit refused the health check's own connections and killed the task
+        self.assertNotIn('PerSourceMaxStartups', settings)
         # one address per source: users behind one NAT address are not grouped with neighbours
         self.assertEqual(settings['PerSourceNetBlockSize'], '32:128')
         penalties = dict(
             item.split(':', 1) for item in settings['PerSourcePenalties'].split()
         )
         self.assertEqual(penalties, {'authfail': '2s', 'min': '30s', 'max': '10m'})
-        # a source holds fewer unauthenticated slots than the point where drops start for all
-        self.assertLess(
-            int(settings['PerSourceMaxStartups']),
-            int(settings['MaxStartups'].split(':')[0]),
-        )
 
     def test_loopback_and_the_vpc_are_exempt(self):
         config, _ = self.render('10.7.0.0/16,100.64.0.0/24')
@@ -425,3 +422,169 @@ class SshdHealthCheckLines(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BastionMetrics(unittest.TestCase):
+    """the separate process that counts sessions and drops, and cannot reach sshd's log path"""
+
+    def module(self):
+        return load(
+            'bastion_metrics',
+            'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
+        )
+
+    def test_sessions_are_logged_in_connections_only(self):
+        metrics = self.module()
+        with tempfile.TemporaryDirectory() as proc:
+            titles = {
+                '1': b'sshd: /usr/sbin/sshd -D -e [listener] 0 of 50-200 startups\0',
+                '2': b'sshd-session: alice [priv]\0',
+                '3': b'sshd-session: alice@pts/0\0',
+                '4': b'sshd: bob@notty\0',
+                '5': b'python3.13\0',
+            }
+            for pid, title in titles.items():
+                (Path(proc) / pid).mkdir()
+                (Path(proc) / pid / 'cmdline').write_bytes(title)
+            (Path(proc) / 'self').mkdir()
+            self.assertEqual(metrics.active_sessions(proc), 2)
+
+    def test_established_counts_port_22_only(self):
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('w') as table:
+            table.write('  sl  local_address rem_address   st\n')
+            table.write('   0: 0100007F:0016 0100007F:AAAA 01 x\n')
+            table.write('   1: 0100007F:0016 0100007F:AAAB 0A x\n')
+            table.write('   2: 0100007F:1F90 0100007F:AAAC 01 x\n')
+            table.flush()
+            self.assertEqual(metrics.established_connections(table.name), 1)
+
+    def test_drops_are_each_counted_once_with_their_kind_and_the_file_stays_bounded(
+        self,
+    ):
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+            drops.write(
+                b'from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups\n'
+                b'past Maxstartups\npast Maxstartups\n'
+                b'Timeout before authentication\nTimeout, client not responding\n'
+            )
+            drops.flush()
+            self.assertEqual(
+                tally.read(),
+                {
+                    ('maxstartups', 'loopback'): 1,
+                    ('maxstartups', 'remote'): 2,
+                    ('auth_timeout', 'remote'): 1,
+                    ('client_timeout', 'remote'): 1,
+                },
+            )
+            self.assertEqual(tally.read(), {})
+            drops.write(b'past Maxstartups\n' * 70000)
+            drops.flush()
+            self.assertEqual(tally.read(), {('maxstartups', 'remote'): 70000})
+            self.assertEqual(Path(drops.name).stat().st_size, 0)
+            self.assertEqual(tally.offset, 0)
+
+    def test_the_tally_holds_no_address_or_name_only_the_phrase(self):
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = text.index('SSHD_HEALTH_CHECK_LINES=')
+        end = text.index('metrics_pid=\n')
+        with tempfile.TemporaryDirectory() as folder:
+            drops = Path(folder) / 'drops'
+            script = (
+                'set -euo pipefail\n'
+                + text[start:end]
+                + f'export SSHD_DROPS_FILE={shlex.quote(str(drops))}\n'
+                + 'printf "%s\\n" "$@" | sshd_log_filter 2>/dev/null\nsleep 1\n'
+            )
+            subprocess.run(
+                [
+                    'bash',
+                    '-c',
+                    script,
+                    'x',
+                    'drop connection #0 from [131.2.3.4]:5 on [10.0.0.1]:22 past Maxstartups',
+                    'drop connection #0 from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups',
+                    'Timeout, client not responding from user alice 131.2.3.4 port 5',
+                ],
+                check=True,
+            )
+            written = drops.read_text()
+        self.assertNotIn('131.2.3.4', written)
+        self.assertNotIn('alice', written)
+        self.assertEqual(written.count('past Maxstartups'), 2)
+        self.assertIn('Timeout, client not responding', written)
+
+    # real lines: the first from idea-com's bastion, on the image's OpenSSH 9.9, the second from a
+    # local run of OpenSSH 10.5 with no LogLevel set, whose wording leaves out "past"
+    REAL_DROPS = (
+        'drop connection #0 from [127.0.0.1]:38122 on [127.0.0.1]:22 past Maxstartups',
+        'drop connection #1 from [127.0.0.1]:49327 on [127.0.0.1]:22222 Maxstartups',
+    )
+
+    def test_the_log_filter_and_the_tally_count_what_sshd_really_prints(self):
+        script = (
+            ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
+        ).read_text()
+        patterns = next(
+            line.split('=', 1)[1].strip("'")
+            for line in script.splitlines()
+            if line.startswith('SSHD_DROP_LINES=')
+        )
+        metrics = self.module()
+        for line in self.REAL_DROPS:
+            kept = subprocess.run(
+                ['grep', '-oE', patterns],
+                input=line + '\n',
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertNotEqual(kept, '', line)
+            with tempfile.NamedTemporaryFile('ab') as drops:
+                drops.write(kept.encode())
+                drops.flush()
+                self.assertEqual(
+                    metrics.DropTally(drops.name).read(),
+                    {('maxstartups', 'loopback'): 1},
+                )
+        remote = (
+            'drop connection #0 from [131.0.2.9]:5 on [10.0.0.1]:22 past Maxstartups'
+        )
+        kept = subprocess.run(
+            ['grep', '-oE', patterns],
+            input=remote + '\n',
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn('131.0.2.9', kept)
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            drops.write(kept.encode())
+            drops.flush()
+            self.assertEqual(
+                metrics.DropTally(drops.name).read(), {('maxstartups', 'remote'): 1}
+            )
+
+    def test_no_line_carries_a_hostname_derived_tag(self):
+        metrics = self.module()
+        metrics.sshd_check = lambda: (True, 0.01)
+        metrics.active_sessions = lambda proc_root: 3
+        metrics.established_connections = lambda: 4
+        tally = SimpleNamespace(read=lambda: {('maxstartups', 'remote'): 2})
+        found = metrics.lines('idea-com', tally)
+        base = '#idea_cluster:idea-com'
+        self.assertIn(f'idea.health.bastion.sshd_up:1|g|{base}|card:none', found)
+        self.assertIn(f'idea.health.bastion.sessions:3|g|{base}|card:none', found)
+        self.assertIn(
+            'idea.health.bastion.connection_drops:2|c|'
+            f'{base},reason:maxstartups,source:remote|card:none',
+            found,
+        )
+        self.assertFalse([line for line in found if 'task:' in line])
+
+    def test_a_collector_with_nothing_to_do_is_not_respawned(self):
+        script = (
+            ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
+        ).read_text()
+        self.assertIn('bastion_metrics.py && break', script)

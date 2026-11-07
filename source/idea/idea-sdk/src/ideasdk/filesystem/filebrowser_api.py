@@ -59,8 +59,10 @@ class FileBrowserAPI(BaseAPI):
     def download_files(self, context: ApiInvocationContext):
         helper = FileSystemHelper(self.context, context.get_username())
         request = context.get_request_payload_as(DownloadFilesRequest)
-        download_file = helper.download_files(request)
-        context.success(DownloadFilesResult(download_url=download_file))
+        download_file, skipped_files = helper.create_download_archive(request)
+        context.success(
+            DownloadFilesResult(download_url=download_file, skipped_files=skipped_files)
+        )
 
     def create_file(self, context: ApiInvocationContext):
         helper = FileSystemHelper(self.context, context.get_username())

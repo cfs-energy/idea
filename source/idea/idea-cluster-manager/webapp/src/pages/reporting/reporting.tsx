@@ -6,7 +6,7 @@ import {Alert, Box, Button, CollectionPreferencesProps, ContentLayout, Header, S
 import {AppContext} from '../../common';
 import IdeaAppLayout, {IdeaAppLayoutProps} from '../../components/app-layout';
 import {ReportingColumn, ReportingInsights, ReportingRows, ReportingSummary, ReportingSummaryRequest, ReportingTable as TableKind} from '../../client/reporting-model';
-import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from './reporting-period-picker';
+import ReportingPeriodPicker, {datesPicked, REPORTING_PERIODS, validateReportingPeriod} from './reporting-period-picker';
 import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS} from './reporting-table';
 import {InfoTitle, InsightTab} from './insights-components';
 import {readPreferences, savePreferences} from './insights-table';
@@ -167,8 +167,9 @@ export function ReportingContent() {
     };
 
     if (!auth.isReportingResolved()) return <StatusIndicator type="loading">Checking access</StatusIndicator>;
+    if (auth.isReportingCheckFailed()) return <Alert type="error" action={<Button onClick={() => window.location.reload()}>Reload page</Button>}>We couldn't check your access to reports. Reload the page to try again.</Alert>;
     if (!allowed) return <Alert type="error">Access denied. Ask your administrator for reporting access.</Alert>;
-    const error = validation || summaryError || exportError || rowError;
+    const error = (datesPicked(period) ? validation : undefined) || summaryError || exportError || rowError;
     return <ContentLayout header={<SpaceBetween size="m"><Header variant="h1" description={costsDescription(computeRate)} actions={<SpaceBetween direction="horizontal" size="s">
         <Button onClick={() => setReload(value => value + 1)} disabled={summaryBusy}>Reload</Button>
         {tableVisible && <Button onClick={exportCsv} loading={exportBusy} disabled={exportBusy}>Export CSV</Button>}
@@ -201,7 +202,7 @@ export function ReportingContent() {
                     onPage={page => setPaging(previous => ({...previous, page}))}
                     onSort={(column, descending) => {const next = new URLSearchParams(query); next.set('sort_by', column); next.set('descending', String(descending)); setQuery(next);}}
                     onPreferences={(pageSize, columns) => {setPageSize(pageSize); setColumns(columns); savePreferences(`reporting.breakdown.${table}`, {pageSize, columns});}}/>
-                    : <InsightTab canOpenJobs={hasAccess(context, 'jobs-admin')} username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone} computeRate={computeRate}/>}
+                    : <InsightTab canOpenJobs={hasAccess(context, 'jobs-admin')} username={username} userRow={data?.listing.find(row => row.key === username)} loading={summaryBusy || rowsBusy} tab={tab} insights={insights} summary={summary} timezone={summary.timezone} computeRate={computeRate}/>}
             </SpaceBetween>}
             <div role="status" aria-label="CSV download status" aria-live="polite">{exportStatus}</div>
         </SpaceBetween>

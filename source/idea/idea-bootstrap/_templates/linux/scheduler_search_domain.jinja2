@@ -34,6 +34,12 @@ else
     [[ -n "${NM_CONNECTION}" ]] || NM_CONNECTION=$(nmcli -g NAME,TYPE connection show --active | awk -F: '$2 != "loopback" {print $1; exit}')
     if [[ -n "${NM_CONNECTION}" ]] && ! nmcli -g ipv4.dns-search connection show "${NM_CONNECTION}" | grep -qw '{{ private_zone }}'; then
       nmcli connection modify "${NM_CONNECTION}" +ipv4.dns-search '{{ private_zone }}'
+      # modify only edits the saved profile. The next reload writes resolv.conf from the settings
+      # the device is using, which took the zone away from a running RHEL 8 node's mom: its
+      # first connection to the short server name then failed for good and the node never joined.
+      if [[ -n "${NM_DEVICE}" ]]; then
+        nmcli device reapply "${NM_DEVICE}" || log_warning "unable to apply the search domain to ${NM_DEVICE}"
+      fi
     fi
   fi
 fi

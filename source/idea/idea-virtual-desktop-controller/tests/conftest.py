@@ -248,6 +248,7 @@ def refresh_loop(monkeypatch, refresh):
     app._runs_reconciled = False
     app._history_backfilled = False
     app._session_counts = Mock()
+    app._stack_expiry = Mock()
     app._desktop_launches = None
     app._bootstrap_exit = BootstrapRefreshLoopExit(
         clock, [60, 21599, 21600, 21660, 43200]

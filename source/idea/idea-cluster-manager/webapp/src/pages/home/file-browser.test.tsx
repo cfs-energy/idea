@@ -8,7 +8,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { vi } from 'vitest';
 import { ToastContainer } from 'react-toastify';
 import Uppy from '@uppy/core';
-import FileBrowser from './file-browser';
+import FileBrowser, { decodeFileContent, describeUploadFailure, describeUploadOutcome, encodeFileContent } from './file-browser';
 import { FILE_BROWSER_PAGE_SIZE } from './file-browser-table';
 import { initTestAppContext } from '../../test-support';
 
@@ -83,6 +83,10 @@ interface HarnessOptions {
     cwd?: string;
     url?: string;
     schedulerDeployed?: boolean;
+    /** Bastion host settings; absent by default, which disables the File Transfer tab. */
+    bastion?: any;
+    /** The first listing fails this way, before the page has shown anything. */
+    listFailure?: any;
     /** The signed-in user's home directory. Unknown by default, which leaves the trail starting at root. */
     home?: string;
 }
@@ -96,7 +100,11 @@ function renderFileBrowser(options: HarnessOptions = {}) {
     const context = initTestAppContext();
     const clusterSettings = context.getClusterSettingsService() as any;
     // The Bastion Host module gates the File Transfer tab; absent by default.
-    vi.spyOn(clusterSettings, 'getModuleSettings').mockRejectedValue({ errorCode: 'MODULE_NOT_FOUND' });
+    if (options.bastion != null) {
+        vi.spyOn(clusterSettings, 'getModuleSettings').mockResolvedValue(options.bastion);
+    } else {
+        vi.spyOn(clusterSettings, 'getModuleSettings').mockRejectedValue({ errorCode: 'MODULE_NOT_FOUND' });
+    }
     vi.spyOn(clusterSettings, 'isSchedulerDeployed').mockReturnValue(options.schedulerDeployed === true);
 
     const client = context.client().fileBrowser();
@@ -114,6 +122,10 @@ function renderFileBrowser(options: HarnessOptions = {}) {
         } as any),
         checkFilesPermissions: vi.spyOn(client, 'checkFilesPermissions').mockResolvedValue({ results: [] } as any)
     };
+
+    if (options.listFailure != null) {
+        api.listFiles.mockRejectedValueOnce(options.listFailure);
+    }
 
     vi.spyOn(context.auth(), 'getAccessToken').mockResolvedValue('test-access-token');
     if (options.home != null) {
@@ -418,7 +430,7 @@ function reportedItemCount(): number | null {
 
 /** The empty-directory message. */
 function showsEmptyState(): boolean {
-    return browserText().includes('Nothing to show');
+    return browserText().includes('This folder is empty.');
 }
 
 /** Uppy mounts its dashboard outside the React tree; RTL cleanup misses it. */
@@ -599,6 +611,73 @@ describe('file browser', () => {
         });
     });
 
+    describe('the file transfer tab', () => {
+        const BASTION = { ssh_hostname: 'ssh.cluster.example', public: true, public_ip: '203.0.113.10' };
+
+        it('gives the same host as the SSH access page', async () => {
+            const { user } = renderFileBrowser({ bastion: BASTION });
+
+            await waitForRow('notes.txt');
+            await user.click(await screen.findByRole('tab', { name: 'File transfer' }));
+
+            expect((await screen.findAllByText('ssh.cluster.example')).length).toBeGreaterThan(0);
+            expect(screen.queryByText('203.0.113.10')).toBeNull();
+        });
+
+        it('says when a key could not be downloaded', async () => {
+            const { user, context } = renderFileBrowser({ bastion: BASTION });
+            vi.spyOn(context.auth(), 'downloadPrivateKey').mockRejectedValue({ message: 'key service is down' });
+
+            await waitForRow('notes.txt');
+            await user.click(await screen.findByRole('tab', { name: 'File transfer' }));
+            await user.click((await screen.findAllByRole('button', { name: /Download key file \(\.pem/ }))[0]);
+
+            expect(await screen.findByText(/Could not download your key: key service is down/)).toBeInTheDocument();
+        });
+
+        it('shows the AWS Transfer setup only to administrators', async () => {
+            const { user, context } = renderFileBrowser({ bastion: BASTION });
+            const isAdmin = vi.spyOn(context.auth(), 'isAdmin').mockReturnValue(false);
+
+            await waitForRow('notes.txt');
+            await user.click(await screen.findByRole('tab', { name: 'File transfer' }));
+            expect((await screen.findAllByText('FileZilla')).length).toBeGreaterThan(0);
+            expect(screen.queryByText('AWS Transfer')).toBeNull();
+
+            isAdmin.mockReturnValue(true);
+            await user.click(screen.getByText('WinSCP'));
+            expect(screen.getAllByText('AWS Transfer').length).toBeGreaterThan(0);
+        });
+    });
+
+    describe('naming a new folder', () => {
+        it('explains a name it cannot take, without asking the server', async () => {
+            const { api, user } = renderFileBrowser();
+
+            await waitForRow('notes.txt');
+            await user.click(requireToolbarButton('Create folder'));
+            const dialog = await findDialogContaining('Folder name');
+            await user.type(within(dialog).getByRole('textbox'), 'my data');
+            await user.click(within(dialog).getByRole('button', { name: /submit|create/i }));
+
+            expect((await within(dialog).findAllByText(/can only contain letters, numbers/)).length).toBeGreaterThan(0);
+            expect(api.createFile).not.toHaveBeenCalled();
+        });
+
+        it('drops the internal prefix from what the server says', async () => {
+            const { api, user } = renderFileBrowser();
+
+            await waitForRow('notes.txt');
+            api.createFile.mockRejectedValue({ errorCode: 'INVALID_PARAMS', message: 'Invalid params: directory: runs already exists under: /x' });
+            await user.click(requireToolbarButton('Create folder'));
+            const dialog = await findDialogContaining('Folder name');
+            await user.type(within(dialog).getByRole('textbox'), 'runs');
+            await user.click(within(dialog).getByRole('button', { name: /submit|create/i }));
+
+            expect(await within(dialog).findByText('directory: runs already exists under: /x')).toBeInTheDocument();
+        });
+    });
+
     describe('uploading', () => {
         it('offers an upload dialog that targets the current directory', async () => {
             const useSpy = vi.spyOn(Uppy.prototype, 'use');
@@ -622,6 +701,66 @@ describe('file browser', () => {
             );
             expect(uploadOptions[0].method).toBe('PUT');
             expect(uploadOptions[0].headers.Authorization).toBe('Bearer test-access-token');
+        });
+
+        it('targets a folder whose name has special characters', async () => {
+            const useSpy = vi.spyOn(Uppy.prototype, 'use');
+            const { user } = renderFileBrowser({ cwd: '/data/a&b' });
+
+            await waitForRow('notes.txt');
+            await user.click(requireToolbarButton('Upload files'));
+            await waitFor(() => expect(document.querySelector('.uppy-Dashboard')).not.toBeNull(), { timeout: 10000 });
+
+            const options = useSpy.mock.calls.map((call) => call[1] as any).find((item) => item && item.endpoint);
+            expect(new URL(options.endpoint).searchParams.get('cwd')).toBe('/data/a&b');
+        });
+
+        it('shows why an upload failed in the dialog', async () => {
+            const onSpy = vi.spyOn(Uppy.prototype, 'on');
+            const infoSpy = vi.spyOn(Uppy.prototype, 'info').mockImplementation(() => {});
+            const { user } = renderFileBrowser();
+
+            await waitForRow('notes.txt');
+            await user.click(requireToolbarButton('Upload files'));
+            await waitFor(() => expect(onSpy.mock.calls.some((call) => call[0] === 'upload-error')).toBe(true));
+
+            // the last one registered is the page's: Uppy listens to its own events too
+            const handler = onSpy.mock.calls.filter((call) => call[0] === 'upload-error').pop()![1] as any;
+            handler({}, new Error('network'), { responseText: JSON.stringify({ error_code: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' }) });
+
+            expect(infoSpy).toHaveBeenCalledWith("You don't have permission to add files to this folder.", 'error', 15000);
+        });
+
+        it('says when an upload was saved under another name', async () => {
+            const onSpy = vi.spyOn(Uppy.prototype, 'on');
+            const infoSpy = vi.spyOn(Uppy.prototype, 'info').mockImplementation(() => {});
+            const { user } = renderFileBrowser();
+
+            await waitForRow('notes.txt');
+            await user.click(requireToolbarButton('Upload files'));
+            await waitFor(() => expect(onSpy.mock.calls.some((call) => call[0] === 'complete')).toBe(true));
+            const handler = (name: string) => onSpy.mock.calls.filter((call) => call[0] === name).pop()![1] as any;
+
+            handler('upload-success')({}, { body: { payload: {
+                files_renamed: [{ original_name: 'my data.csv', final_name: 'my_data.csv' }],
+                files_skipped: ['µ']
+            } } });
+            handler('complete')({});
+
+            expect(infoSpy).toHaveBeenCalledWith(
+                'Saved my data.csv as my_data.csv. Skipped µ: no usable characters in the name.',
+                'warning',
+                15000
+            );
+        });
+
+        it('says nothing when every file kept its name', () => {
+            expect(describeUploadOutcome({ files_renamed: [], files_skipped: [] })).toBeNull();
+        });
+
+        it('falls back to plain words for an answer it cannot read', () => {
+            expect(describeUploadFailure('<html>Bad Gateway</html>')).toBe('The upload failed. Try again.');
+            expect(describeUploadFailure(JSON.stringify({ error_code: 'INVALID_PARAMS', message: 'cwd parameter is required' }))).toBe('cwd parameter is required');
         });
     });
 
@@ -686,6 +825,19 @@ describe('file browser', () => {
             expect(headers.indexOf('Preparing download')).toBeLessThan(headers.indexOf('Download ready'));
         });
 
+        it('says when the zip is missing files that could not be read', async () => {
+            const { api, user, flashbarSeen } = renderFileBrowser({ listing: [dir('reports')] });
+
+            await waitForRow('reports');
+            api.downloadFiles.mockResolvedValue({ download_url: '/data/home/x/idea_downloads/a.zip', skipped_files: 3 } as any);
+            await chooseFromContextMenu(user, 'reports', 'Download files');
+
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download ready'));
+            expect(flashbarSeen.find((item) => item.header === 'Download ready')!.content).toBe(
+                'Your zip is ready. 3 files could not be read and are not in it.'
+            );
+        });
+
         it('surfaces a failure to prepare the archive', async () => {
             const { api, user, flashbarSeen } = renderFileBrowser({ listing: [dir('reports')] });
 
@@ -701,7 +853,110 @@ describe('file browser', () => {
         });
     });
 
+    describe('a refused download', () => {
+        const refused = () => ({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ success: false, error_code: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' })
+        });
+
+        it('hands the browser nothing and says why', async () => {
+            const { user, fetchMock, anchorClicks } = renderFileBrowser();
+
+            await waitForRow('notes.txt');
+            fetchMock.mockResolvedValue(refused());
+            await chooseFromContextMenu(user, 'notes.txt', 'Download files');
+
+            expect(await screen.findByText(/You do not have access to notes\.txt/)).toBeInTheDocument();
+            expect(anchorClicks).toHaveLength(0);
+        });
+
+        it('does not call a large file ready when it was refused', async () => {
+            const { user, fetchMock, anchorClicks, flashbarSeen } = renderFileBrowser({
+                listing: [entry('big.dat', { size: 20 * 1024 * 1024 })]
+            });
+
+            await waitForRow('big.dat');
+            fetchMock.mockResolvedValue(refused());
+            await chooseFromContextMenu(user, 'big.dat', 'Download files');
+
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download failed'));
+            await new Promise((resolve) => setTimeout(resolve, 600));
+            expect(flashbarSeen.map((item) => item.header)).not.toContain('Download ready');
+            expect(anchorClicks).toHaveLength(0);
+        });
+
+        it('reports an archive that was built but could not be handed over', async () => {
+            const { user, fetchMock, flashbarSeen } = renderFileBrowser({ listing: [dir('reports')] });
+
+            await waitForRow('reports');
+            fetchMock.mockResolvedValue(refused());
+            await chooseFromContextMenu(user, 'reports', 'Download files');
+
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download failed'));
+            expect(flashbarSeen.map((item) => item.header)).not.toContain('Download ready');
+        });
+
+        it('says an archive that ran out of time is about size, not access', async () => {
+            const { api, user, flashbarSeen } = renderFileBrowser({ listing: [dir('reports')] });
+
+            await waitForRow('reports');
+            api.downloadFiles.mockRejectedValue({ errorCode: 'FILE_OPERATION_TIMED_OUT', message: 'stopped' });
+            await chooseFromContextMenu(user, 'reports', 'Download files');
+
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download failed'));
+            expect(flashbarSeen.find((item) => item.header === 'Download failed')!.content).toMatch(/took too long to prepare.*SSH access page/);
+        });
+
+        it('never shows an error code', async () => {
+            const { api, user, flashbarSeen } = renderFileBrowser({ listing: [dir('reports')] });
+
+            await waitForRow('reports');
+            api.downloadFiles.mockRejectedValue({ errorCode: 'GENERAL_ERROR', message: 'disk full' });
+            await chooseFromContextMenu(user, 'reports', 'Download files');
+
+            await waitFor(() => expect(flashbarSeen.map((item) => item.header)).toContain('Download failed'));
+            const failed = flashbarSeen.find((item) => item.header === 'Download failed')!;
+            expect(failed.content).toBe('Could not download reports: disk full');
+        });
+    });
+
     describe('deleting', () => {
+        it('says what could not be deleted and refreshes the list', async () => {
+            const { api, user } = renderFileBrowser();
+
+            await waitForRow('notes.txt');
+            api.deleteFiles.mockRejectedValue({
+                errorCode: 'DELETE_FAILED',
+                message: 'Could not delete 1 of 1: notes.txt (permission denied)'
+            });
+            await chooseFromContextMenu(user, 'notes.txt', 'Delete files');
+            const dialog = await findDialogContaining('This cannot be undone');
+            const callsBefore = api.listFiles.mock.calls.length;
+            await user.click(within(dialog).getByRole('button', { name: /delete|confirm|yes|ok/i }));
+
+            expect(await screen.findByText('Could not delete 1 of 1: notes.txt (permission denied)')).toBeInTheDocument();
+            await waitFor(() => expect(api.listFiles.mock.calls.length).toBeGreaterThan(callsBefore));
+        });
+
+        it('keeps the folder dialog open when part of the folder could not be deleted', async () => {
+            const { api, user } = renderFileBrowser();
+            await waitForRow('reports');
+            api.getStorageUsage.mockResolvedValue({
+                state: 'ready', home: HOME, measured_at: Date.now() / 1000,
+                folder: { identity: { device: '1', inode: '2' }, path: `${HOME}/reports`, name: 'reports', bytes: 1, files: 1, newest_mtime: null, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: false }
+            } as any);
+            api.deleteFolder.mockRejectedValue({ errorCode: 'DELETE_FAILED', message: 'Could not delete 1 of 1' });
+
+            await selectEntry(user, 'reports');
+            await chooseFromToolbarMenu(user, 'Delete folder');
+            const dialog = await findDialogContaining('Permanently delete');
+            await user.type(await within(dialog).findByLabelText(/Type reports to confirm/), 'reports');
+            await user.click(within(dialog).getByRole('button', { name: 'Delete folder' }));
+
+            expect(await within(dialog).findByText("Some of this folder could not be deleted. What's left is still there.")).toBeInTheDocument();
+        });
+
         it('keeps the toolbar stable and enables Delete folder under Actions for one selected folder', async () => {
             const {user} = renderFileBrowser();
             await waitForRow('reports');
@@ -777,7 +1032,7 @@ describe('file browser', () => {
             const dialog = await findDialogContaining('Permanently delete');
             await user.type(within(dialog).getByRole('textbox'), 'reports');
             expect(within(dialog).getByRole('button', {name: 'Delete folder'})).toBeDisabled();
-            expect(within(dialog).getByText(/Complete usage is unavailable/)).toBeInTheDocument();
+            expect(within(dialog).getByText(/too large to measure/)).toBeInTheDocument();
             await user.click(within(dialog).getByRole('button', {name: 'Cancel'}));
             expect(api.deleteFolder).not.toHaveBeenCalled();
         });
@@ -801,7 +1056,7 @@ describe('file browser', () => {
             await chooseFromContextMenu(user, 'notes.txt', 'Delete files');
 
             const dialog = await findDialogContaining('Delete these files?');
-            expect(within(dialog).getByText('Delete files')).toBeInTheDocument();
+            expect(within(dialog).getByText('Delete 1 file')).toBeInTheDocument();
             expect(within(dialog).getByText('notes.txt')).toBeInTheDocument();
 
             api.listFiles.mockClear();
@@ -1004,6 +1259,14 @@ describe('file browser', () => {
             expect(await screen.findByText(`${HOME}/notes.txt`)).toBeInTheDocument();
         });
 
+        it('keeps characters outside plain ASCII when reading and saving', () => {
+            // the base64 of the UTF-8 bytes of "1 µm → 2 Å", as the server sends it
+            const fromServer = 'MSDCtW0g4oaSIDIgw4U=';
+
+            expect(decodeFileContent(fromServer)).toBe('1 µm → 2 Å');
+            expect(encodeFileContent('1 µm → 2 Å')).toBe(fromServer);
+        });
+
         it('saves the edited file back to the same path', async () => {
             const { api, user } = renderFileBrowser();
 
@@ -1033,18 +1296,35 @@ describe('file browser', () => {
         });
 
         it('refuses to open a file too large to edit, and does not fetch it', async () => {
-            const { api, user } = renderFileBrowser({
+            const { api, user, anchorClicks } = renderFileBrowser({
                 listing: [entry('huge.log', { size: 6 * 1024 * 1024 })]
             });
 
             await waitForRow('huge.log');
             await openEntry(user, 'huge.log');
 
-            expect(await screen.findByText(/File is too large \(6\.00MB\)/)).toBeInTheDocument();
+            const dialog = await findDialogContaining('huge.log is 6.0 MB');
             expect(api.readFile).not.toHaveBeenCalled();
+
+            await user.click(within(dialog).getByRole('button', { name: 'Watch the end of the file' }));
+            await waitFor(() => expect(anchorClicks).toHaveLength(1));
+            expect(anchorClicks[0].href).toContain(`/#/home/file-browser/tail?file=${HOME}/huge.log`);
         });
 
-        it('downloads a file that turns out not to be text', async () => {
+        it('offers a download for a file too large to edit', async () => {
+            const { user, fetchMock } = renderFileBrowser({
+                listing: [entry('huge.log', { size: 6 * 1024 * 1024 })]
+            });
+
+            await waitForRow('huge.log');
+            await openEntry(user, 'huge.log');
+
+            const dialog = await findDialogContaining('huge.log is 6.0 MB');
+            await user.click(within(dialog).getByRole('button', { name: 'Download' }));
+            await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+        });
+
+        it('says a file is not text and downloads it only when asked', async () => {
             const { api, user, fetchMock } = renderFileBrowser({
                 listing: [entry('image.png', { size: 1024 })]
             });
@@ -1053,6 +1333,10 @@ describe('file browser', () => {
             api.readFile.mockRejectedValue({ errorCode: 'NOT_A_TEXT_FILE', message: 'not text' });
 
             await openEntry(user, 'image.png');
+
+            const dialog = await findDialogContaining("image.png isn't a text file");
+            expect(fetchMock).not.toHaveBeenCalled();
+            await user.click(within(dialog).getByRole('button', { name: 'Download' }));
 
             await waitFor(() => expect(fetchMock).toHaveBeenCalled());
             expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ file: `${HOME}/image.png` });
@@ -1076,11 +1360,51 @@ describe('file browser', () => {
             const { user, anchorClicks } = renderFileBrowser();
 
             await waitForRow('notes.txt');
-            await chooseFromContextMenu(user, 'notes.txt', 'Tail file');
+            await chooseFromContextMenu(user, 'notes.txt', 'Watch end of file');
 
             await waitFor(() => expect(anchorClicks).toHaveLength(1));
             expect(anchorClicks[0].href).toBe(`/#/home/file-browser/tail?file=${HOME}/notes.txt&cwd=${HOME}`);
             expect(anchorClicks[0].target).toBe('_blank');
+        });
+
+        it('keeps special characters in a name when opening other views', async () => {
+            const { user, anchorClicks } = renderFileBrowser({ listing: [entry('a&b+c#d.log')] });
+
+            await waitForRow('a&b+c#d.log');
+            await chooseFromContextMenu(user, 'a&b+c#d.log', 'Watch end of file');
+
+            await waitFor(() => expect(anchorClicks).toHaveLength(1));
+            const query = anchorClicks[0].href.split('?')[1];
+            expect(new URLSearchParams(query).get('file')).toBe(`${HOME}/a&b+c#d.log`);
+        });
+
+        it('does not offer file actions on a folder', async () => {
+            const { user } = renderFileBrowser({ schedulerDeployed: true });
+
+            await waitForRow('reports');
+            await user.pointer({ target: requireRow('reports'), keys: '[MouseRight]' });
+            await waitFor(() => expect(openMenuItem('Copy path')).not.toBeNull());
+
+            for (const label of ['Watch end of file', 'Open in script editor', 'Submit job']) {
+                expect(openMenuItem(label)).toBeNull();
+            }
+            expect(openMenuItem('Copy path')).not.toBeNull();
+        });
+
+        it('does not offer one-thing actions for several files', async () => {
+            const { user } = renderFileBrowser({
+                schedulerDeployed: true,
+                listing: [entry('a.txt'), entry('b.txt')]
+            });
+
+            await waitForRow('a.txt');
+            await selectEntry(user, 'a.txt');
+            await addToSelection(user, 'b.txt');
+            await openContextMenu(user, 'b.txt');
+
+            for (const label of ['Watch end of file', 'Open in script editor', 'Submit job', 'Copy path']) {
+                expect(openMenuItem(label)).toBeNull();
+            }
         });
 
         it('hands a text file to the script workbench', async () => {
@@ -1143,7 +1467,7 @@ describe('file browser', () => {
 
             await replaceText(user, searchBox(), 'item');
             await waitForRow('item-d.txt');
-            expect(row('apple.txt')).toBeNull();
+            await waitForNoRow('apple.txt');
 
             // The anchor ('apple.txt') is filtered out of view, so this
             // Shift-click must fall through to a plain single click on
@@ -1183,6 +1507,21 @@ describe('file browser', () => {
     });
 
     describe('favourites', () => {
+        it('submits a favourite with the file filled in', async () => {
+            const { user } = renderFileBrowser({ schedulerDeployed: true });
+
+            await waitForRow('notes.txt');
+            await selectEntry(user, 'notes.txt');
+            await chooseFromToolbarMenu(user, 'Add to favorites');
+            await user.click(screen.getByRole('tab', { name: 'Favorites' }));
+            await waitForRow(`(${HOME}) notes.txt`);
+            await selectEntry(user, `(${HOME}) notes.txt`);
+            await chooseFromToolbarMenu(user, 'Submit job');
+
+            await waitFor(() => expect(urlQuery()).toBe(`?input_file=${HOME}/notes.txt`));
+        });
+
+
         it('remembers a favourite and shows it on the Favorites tab', async () => {
             const { user } = renderFileBrowser();
 
@@ -1192,6 +1531,19 @@ describe('file browser', () => {
 
             await user.click(screen.getByRole('tab', { name: 'Favorites' }));
             await waitForRow(`(${HOME}) notes.txt`);
+        });
+
+        it('offers job submission only for a favourite file', async () => {
+            const { user } = renderFileBrowser({ schedulerDeployed: true });
+            await waitForRow('reports');
+            await selectEntry(user, 'reports');
+            await chooseFromToolbarMenu(user, 'Add to favorites');
+            await user.click(screen.getByRole('tab', { name: 'Favorites' }));
+            await waitForRow(`(${HOME}) reports`);
+            await selectEntry(user, `(${HOME}) reports`);
+            await openActionsMenu(user);
+            await waitFor(() => expect(openMenuItem('Submit job')).not.toBeNull());
+            expect(openMenuItem('Submit job')!.getAttribute('aria-disabled')).toBe('true');
         });
 
         it('survives a reload, because favourites are stored per user', async () => {
@@ -1243,19 +1595,112 @@ describe('file browser', () => {
         });
     });
 
+    describe('searching and empty folders', () => {
+        it('drops the search text on entering another folder', async () => {
+            const { api, user } = renderFileBrowser({ listing: [dir('reports'), entry('notes.txt')] });
+
+            await waitForRow('reports');
+            await user.type(searchBox(), 'rep');
+            await waitForNoRow('notes.txt');
+
+            api.listFiles.mockResolvedValue({ cwd: `${HOME}/reports`, listing: [entry('summary.txt')] } as any);
+            await openEntry(user, 'reports');
+
+            await waitForRow('summary.txt');
+            expect((searchBox() as HTMLInputElement).value).toBe('');
+        });
+
+        it('filters shortly after typing stops, not on every keystroke', async () => {
+            const { user } = renderFileBrowser({ listing: [entry('alpha.txt'), entry('beta.txt')] });
+
+            await waitForRow('alpha.txt');
+            await user.click(searchBox());
+            await user.paste('alpha');
+            expect(row('beta.txt')).not.toBeNull();
+
+            await waitForNoRow('beta.txt');
+        });
+
+        it('says when nothing matches, and offers to clear', async () => {
+            const { user } = renderFileBrowser({ listing: [entry('notes.txt')] });
+
+            await waitForRow('notes.txt');
+            await user.type(searchBox(), 'zzz');
+
+            expect(await screen.findByText('No names here match "zzz".')).toBeInTheDocument();
+            await user.click(screen.getByRole('button', { name: 'Clear' }));
+            await waitForRow('notes.txt');
+        });
+
+        it('says when a folder holds only hidden files, and offers to show them', async () => {
+            const { user } = renderFileBrowser({ listing: [entry('.bashrc', { is_hidden: true })] });
+
+            expect(await screen.findByText('Only hidden files here.')).toBeInTheDocument();
+            await user.click(screen.getByRole('button', { name: 'Show hidden files' }));
+            await waitForRow('.bashrc');
+        });
+    });
+
     describe('when the API fails', () => {
         it('tells the user why a directory would not open', async () => {
             const { api, user } = renderFileBrowser();
 
             await waitForRow('reports');
-            api.listFiles.mockRejectedValue({ errorCode: 'UNAUTHORIZED_ACCESS', message: 'Permission denied' });
+            api.listFiles.mockRejectedValue({ errorCode: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' });
 
             await openEntry(user, 'reports');
 
-            expect(await screen.findByText('Permission denied')).toBeInTheDocument();
+            expect(await screen.findByText(/Cannot open \/home\/testuser\/reports\. It does not exist, is not a folder, or you do not have access/)).toBeInTheDocument();
+            expect(screen.queryByText('Unauthorized Access')).toBeNull();
             // and leaves the user where they were
             expect(row('reports')).not.toBeNull();
             expect(breadcrumbTrail()).toEqual(['root', 'home', 'testuser']);
+        });
+
+        it('keeps the reason on screen, and clears it when a folder opens', async () => {
+            const { api, user } = renderFileBrowser();
+
+            await waitForRow('reports');
+            api.listFiles.mockRejectedValueOnce({ errorCode: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' });
+            await openEntry(user, 'reports');
+            await screen.findByText(/It does not exist/);
+
+            await new Promise((resolve) => setTimeout(resolve, 2100));
+            expect(screen.getByText(/It does not exist/)).toBeInTheDocument();
+
+            await user.click(requireToolbarButton('Refresh'));
+            await waitFor(() => expect(screen.queryByText(/It does not exist/)).toBeNull());
+        });
+
+        it('says a listing that ran out of time took too long', async () => {
+            const { api, user } = renderFileBrowser();
+
+            await waitForRow('reports');
+            api.listFiles.mockRejectedValue({ errorCode: 'FILE_OPERATION_TIMED_OUT', message: 'stopped' });
+            await openEntry(user, 'reports');
+
+            expect(await screen.findByText(/took too long to list\. To see it, run this in a terminal: ls/)).toBeInTheDocument();
+        });
+
+        it('does not blame the open folder, which is empty, for a failed move to another', async () => {
+            const { user, api } = renderFileBrowser({ listing: [] });
+            await waitFor(() => expect(api.listFiles).toHaveBeenCalled());
+            await waitFor(() => expect(browserText()).not.toContain('Loading'));
+            api.listFiles.mockRejectedValueOnce({ errorCode: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' });
+            await user.click(screen.getByRole('button', { name: /Refresh/ }));
+            expect(await screen.findByText(/Cannot open/)).toBeInTheDocument();
+            expect(browserText()).not.toContain('This folder could not be opened.');
+        });
+
+        it('does not call a folder that failed to open empty', async () => {
+            renderFileBrowser({
+                url: '/?cwd=/data/shared/locked',
+                listFailure: { errorCode: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' }
+            });
+
+            expect(await screen.findByText(/Cannot open \/data\/shared\/locked/)).toBeInTheDocument();
+            expect(browserText()).toContain('This folder could not be opened.');
+            expect(showsEmptyState()).toBe(false);
         });
 
         it('tells the user why a rename could not be attempted', async () => {
@@ -1278,7 +1723,7 @@ describe('file browser', () => {
 
             await openEntry(user, 'notes.txt');
 
-            expect(await screen.findByText('read failed')).toBeInTheDocument();
+            expect(await screen.findByText('Could not open notes.txt: read failed')).toBeInTheDocument();
         });
     });
 
@@ -1343,6 +1788,21 @@ describe('file browser', () => {
         function manyEntries(count: number) {
             return Array.from({ length: count }, (_, index) => entry(`file-${String(index).padStart(4, '0')}.txt`));
         }
+
+        it('says all pages are selected, and the delete dialog counts them without listing them all', async () => {
+            const count = FILE_BROWSER_PAGE_SIZE + 20;
+            const { user } = renderFileBrowser({ listing: manyEntries(count) });
+
+            await waitForRow('file-0000.txt');
+            await user.click(headerSelectAllCheckbox());
+            expect(browserText()).toContain(`All ${count} in this view are selected, not just this page.`);
+
+            await chooseFromContextMenu(user, 'file-0000.txt', 'Delete files');
+            const dialog = await findDialogContaining('Delete these files?');
+            expect(within(dialog).getByText(`Delete ${count} files`)).toBeInTheDocument();
+            expect(dialog.querySelectorAll('li')).toHaveLength(21);
+            expect(within(dialog).getByText(`and ${count - 20} more`)).toBeInTheDocument();
+        });
 
         it('covers the whole directory from the header checkbox, not just the page on screen', async () => {
             const count = FILE_BROWSER_PAGE_SIZE + 20;
@@ -1432,7 +1892,7 @@ describe('file browser', () => {
                 return result;
             };
             const selectionActions = ['Open', 'Download files', 'Copy path', 'Rename', 'Add to favorites', 'Submit job',
-                'Tail file', 'Open in script editor', 'Delete files'];
+                'Watch end of file', 'Open in script editor', 'Delete files'];
             expect(await enabledIn([...selectionActions, 'Show hidden files'])).toEqual([...selectionActions.map(() => false), true]);
 
             await selectEntry(user, 'notes.txt');

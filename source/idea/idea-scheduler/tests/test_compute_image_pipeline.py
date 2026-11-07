@@ -1,6 +1,6 @@
 """Compute row queuing, validation gates, target guards and leader scheduling."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import pytest
@@ -368,7 +368,7 @@ def test_rollback_refuses_a_row_that_is_not_idle(monkeypatch, status):
     svc.context.aws().dynamodb().transact_write_items.assert_not_called()
 
 
-def test_monthly_checks_only_changed_inputs_and_release_works_when_disabled(
+def test_monthly_rebakes_unchanged_rows_and_release_still_needs_a_change(
     monkeypatch,
 ):
     svc = service()
@@ -384,8 +384,14 @@ def test_monthly_checks_only_changed_inputs_and_release_works_when_disabled(
     svc._enqueue = Mock()
     svc._setting = Mock()
     svc.tick(datetime(2026, 10, 4, 2, tzinfo=timezone.utc))
-    svc._enqueue.assert_called_once_with(changed, None, 'monthly')
+    # repositories move between vendor images: an unchanged row is baked too
+    assert svc._enqueue.call_count == 2
+    svc._enqueue.assert_any_call(unchanged, None, 'monthly')
+    svc._enqueue.assert_any_call(changed, None, 'monthly')
     svc._enqueue.reset_mock()
+    # not due again this month: nothing unchanged is baked on an ordinary tick
+    svc.tick(datetime(2026, 10, 4, 3, tzinfo=timezone.utc))
+    svc._enqueue.assert_not_called()
     svc.context.config().values[
         'virtual-desktop-controller.software_stacks.image_refresh_schedule'
     ] = {'enabled': False}
@@ -394,6 +400,31 @@ def test_monthly_checks_only_changed_inputs_and_release_works_when_disabled(
     svc.tick(datetime(2026, 10, 4, 2, tzinfo=timezone.utc))
     assert svc._enqueue.call_count == 2
     svc._enqueue.assert_any_call(unchanged, None, 'release')
+
+
+def test_monthly_waits_for_a_bake_in_flight_without_claiming_the_month(monkeypatch):
+    svc = service()
+    svc.context.config().values['scheduler.images.refreshed_release'] = (
+        module.__version__
+    )
+    idle = row(source_ami='ami-stock', release=module.__version__)
+    baking = row(
+        base_os='ubuntu2404',
+        status='test_launching',
+        source_ami='ami-stock',
+        release=module.__version__,
+    )
+    rows = [idle, baking]
+    svc.list_rows = lambda: rows
+    monkeypatch.setattr(module, 'find_latest_stock_ami', lambda *args: 'ami-stock')
+    svc._enqueue = Mock()
+    svc.tick(datetime(2026, 10, 4, 2, tzinfo=timezone.utc))
+    svc._enqueue.assert_not_called()
+    entries = svc.context.config().db.entries
+    assert 'scheduler.images.image_refresh_last_run_on' not in entries
+    baking.status = 'current'
+    svc.tick(datetime(2026, 10, 4, 2, 30, tzinfo=timezone.utc))
+    assert svc._enqueue.call_count == 2
 
 
 def test_the_monthly_check_runs_once_when_the_settings_copy_lags(monkeypatch):
@@ -472,7 +503,13 @@ def test_partial_progress_does_not_overwrite_concurrent_pin_or_promoted_target()
         not {'pinned', 'rollback_hold', 'current_image_id', 'previous_image_id'}
         & touched
     )
-    assert update['ConditionExpression'] == 'started_on = :started'
+    condition = update['ConditionExpression']
+    assert condition.startswith('started_on = :started AND #row_status IN (')
+    allowed = {
+        update['ExpressionAttributeValues'][name]
+        for name in condition.split('IN (')[1].rstrip(')').split(', ')
+    }
+    assert allowed == set(IMAGE_ROW_IN_FLIGHT)
 
 
 def test_pinned_scheduler_default_is_not_in_promotion_transaction():
@@ -564,7 +601,9 @@ def test_scheduler_pipeline_api_bodies_return_the_contract_payload(
     assert getattr(invocation.success.call_args.args[0], response_field) is not None
 
 
-def test_builder_sweep_stops_only_orphaned_builders_past_any_real_bake(monkeypatch):
+def test_builder_sweep_terminates_only_orphaned_builders_past_any_real_bake(
+    monkeypatch,
+):
     from datetime import timedelta
 
     now = datetime.now(timezone.utc)
@@ -586,15 +625,15 @@ def test_builder_sweep_stops_only_orphaned_builders_past_any_real_bake(monkeypat
         ]
     }
     svc.context.aws.return_value.ec2.return_value = ec2
-    stopped = []
+    terminated = []
     monkeypatch.setattr(
         module,
-        'stop_builder',
-        lambda context, instance_id, logger: stopped.append(instance_id),
+        'terminate_builder',
+        lambda context, instance_id, logger: terminated.append(instance_id),
     )
     monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
     svc.sweep_builders(now)
-    assert stopped == ['i-orphan']
+    assert terminated == ['i-orphan']
 
 
 def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch):
@@ -623,6 +662,58 @@ def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch)
     )
     svc.sweep_builders(datetime.now(timezone.utc))
     assert reaped == ['iv-left']
+
+
+def _capacity_instance(queue, stack='idea-stack', running=True):
+    return Mock(
+        instance_id='i-capacity',
+        soca_job_queue=queue,
+        soca_compute_stack=stack,
+        is_running=running,
+    )
+
+
+def test_builder_sweep_removes_capacity_a_reaped_validation_queue_left_behind(
+    monkeypatch,
+):
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {}
+    svc.context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    svc.context.queue_profiles.list_queue_profiles.return_value = []
+    svc.context.instance_cache.list_compute_instances.return_value = [
+        _capacity_instance('iv-gone', 'stack-gone'),
+        _capacity_instance('iv-live', 'stack-live'),
+        _capacity_instance('normal', 'stack-normal'),
+        _capacity_instance('iv-stopped', 'stack-stopped', running=False),
+        _capacity_instance('iv-nostack', None),
+    ]
+    live = {'iv-live'}
+    svc.context.scheduler.get_queue.side_effect = lambda queue: (
+        Mock() if queue in live else None
+    )
+    delete = svc.context.aws_util.return_value.cloudformation_delete_stack
+    svc.sweep_builders(datetime.now(timezone.utc))
+    delete.assert_called_once_with(stack_name='stack-gone')
+
+
+def test_a_failed_capacity_lookup_does_not_stop_the_builder_sweep(monkeypatch):
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {}
+    svc.context.aws.return_value.ec2.return_value = ec2
+    terminated = []
+    monkeypatch.setattr(
+        module,
+        'terminate_old_stopped_builders',
+        lambda *a: terminated.append(True) or [],
+    )
+    svc.context.queue_profiles.list_queue_profiles.return_value = []
+    svc.context.instance_cache.list_compute_instances.side_effect = RuntimeError('x')
+    svc.sweep_builders(datetime.now(timezone.utc))
+    assert terminated == [True]
+    svc.context.aws_util.return_value.cloudformation_delete_stack.assert_not_called()
 
 
 def test_sweep_removes_failed_candidates_and_generations_older_than_previous(
@@ -844,3 +935,310 @@ def test_sweep_cleans_legacy_compute_images_with_the_setting_and_bakes_in_flight
     svc.context.config().values['scheduler.images.legacy_cleanup_min_age_days'] = 0
     svc.sweep_builders(datetime.now(timezone.utc))
     assert calls == [(0, {'idea-compute-node-rhel9-baking'})]
+
+
+# the bake time limit
+
+LIMIT_NOW = datetime(2026, 11, 6, 15, 0, tzinfo=timezone.utc)
+
+
+def stuck_row(**kwargs):
+    started_on = kwargs.get('started_on', LIMIT_NOW - timedelta(hours=24))
+    return row(
+        **{
+            'status': 'test_launching',
+            'image_id': 'ami-candidate',
+            'instance_id': 'i-builder',
+            'release': '26.11.1',
+            'started_on': started_on,
+            'attempt_started_on': started_on,
+            **kwargs,
+        }
+    )
+
+
+def test_a_row_with_no_clock_gets_one_and_no_failure():
+    # hours in the queue behind other rows, then the upgrade replaced the task
+    svc = service()
+    svc.records.put(stuck_row(attempt_started_on=None))
+    svc._enforce_time_limit(LIMIT_NOW)
+    stored = svc.records.get('rocky9', 'x86_64')
+    assert stored.status == 'test_launching'
+    assert stored.attempt_started_on == LIMIT_NOW
+    # and that clock still ends a bake that is really stuck
+    svc._enforce_time_limit(LIMIT_NOW + timedelta(hours=2, minutes=1))
+    assert svc.records.get('rocky9', 'x86_64').status == 'failed'
+
+
+@pytest.mark.parametrize(
+    'status', ['resolving', 'building', 'checking', 'test_launching', 'promoting']
+)
+def test_a_row_past_the_limit_fails_instead_of_resuming(status):
+    svc = service()
+    svc.records.put(stuck_row(status=status))
+    svc._start_row = Mock()
+    svc._enforce_time_limit(LIMIT_NOW)
+    stored = svc.records.get('rocky9', 'x86_64')
+    assert stored.status == 'failed'
+    assert '120 minute limit' in stored.error and status in stored.error
+    assert stored.finished_on == LIMIT_NOW
+    assert stored.checks[-1].name == 'time_limit' and stored.checks[-1].ok is False
+    svc.tick(LIMIT_NOW)
+    svc._start_row.assert_not_called()
+
+
+def test_a_hung_worker_past_the_limit_gives_its_slot_back():
+    svc = service()
+    svc.records.put(stuck_row())
+    svc._live[('rocky9', 'x86_64')] = Mock(is_alive=lambda: True)
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert ('rocky9', 'x86_64') not in svc._live
+
+
+def test_a_hung_worker_cannot_fill_the_bake_slots_of_other_rows():
+    svc = service()
+    svc.context.config().values['scheduler.images'] = {'max_concurrent_bakes': 1}
+    svc.records.put(stuck_row())
+    healthy = row(
+        base_os='ubuntu2404',
+        status='queued',
+        release=module.__version__,
+        started_on=LIMIT_NOW,
+    )
+    svc.records.put(healthy)
+    svc._live[('rocky9', 'x86_64')] = Mock(is_alive=lambda: True)
+    svc._start_row = Mock()
+    svc.list_rows = lambda: []
+    svc._setting = Mock()
+    svc.tick(LIMIT_NOW)
+    assert [c.args[0].base_os for c in svc._start_row.call_args_list] == ['ubuntu2404']
+
+
+def test_the_limit_leaves_a_healthy_bake_and_a_queued_row_alone():
+    svc = service()
+    # the longest real compute bake took 41 minutes
+    svc.records.put(stuck_row(started_on=LIMIT_NOW - timedelta(minutes=55)))
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert svc.records.get('rocky9', 'x86_64').status == 'test_launching'
+    svc.records.put(stuck_row(status='queued'))
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert svc.records.get('rocky9', 'x86_64').status == 'queued'
+
+
+def test_the_limit_is_read_from_the_pipeline_setting():
+    svc = service()
+    svc.context.config().values[module.PIPELINE_SETTINGS] = {
+        'bake_time_limit_minutes': 30
+    }
+    svc.records.put(stuck_row(started_on=LIMIT_NOW - timedelta(minutes=31)))
+    svc._enforce_time_limit(LIMIT_NOW)
+    stored = svc.records.get('rocky9', 'x86_64')
+    assert stored.status == 'failed' and '30 minute limit' in stored.error
+
+
+def test_a_custom_build_is_not_the_pipelines_to_time_out():
+    svc = service()
+    custom = stuck_row(architecture='x86_64#custom')
+    svc.records.put(custom)
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert svc.records.get('rocky9', 'x86_64#custom').status == 'test_launching'
+
+
+def conditional_failure():
+    return ClientError(
+        {'Error': {'Code': 'ConditionalCheckFailedException', 'Message': 'no'}},
+        'UpdateItem',
+    )
+
+
+def test_a_worker_that_wakes_after_the_limit_cannot_bring_its_row_back(monkeypatch):
+    svc = service()
+    table = Mock()
+    table.update_item.side_effect = conditional_failure()
+    monkeypatch.setattr(ComputeImageService, 'table', table)
+    candidate = row(status='checking', started_on=LIMIT_NOW)
+    with pytest.raises(module.RowMoved):
+        ComputeImageService._save(svc, candidate)
+    # the worker stops quietly, without writing a second time
+    svc._save = lambda record: ComputeImageService._save(svc, record)
+    table.update_item.reset_mock()
+    svc._run_pipeline(row(status='test_launching', started_on=LIMIT_NOW, image_id=None))
+    assert table.update_item.call_count == 1
+    svc._logger.exception.assert_not_called()
+
+
+# failing disposes what the bake made
+
+
+def builder_ec2(tags):
+    ec2 = FakeEc2()
+    ec2.terminate_instances = Mock()
+    ec2.describe_instances = Mock(
+        return_value={
+            'Reservations': [{'Instances': [{'InstanceId': 'i-builder', 'Tags': tags}]}]
+        }
+    )
+    return ec2
+
+
+OWN_BUILDER_TAGS = [
+    {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
+    {'Key': 'idea:ModuleId', 'Value': 'scheduler'},
+]
+
+
+def test_the_time_limit_terminates_the_builder_and_brings_the_sweep_forward():
+    svc = service()
+    ec2 = builder_ec2(OWN_BUILDER_TAGS)
+    svc.context.aws.return_value.ec2.return_value = ec2
+    svc.records.put(stuck_row())
+    svc._enforce_time_limit(LIMIT_NOW)
+    ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-builder'])
+    assert svc._last_sweep == float('-inf')
+
+
+@pytest.mark.parametrize(
+    'tags',
+    [
+        [],
+        [
+            {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
+            {'Key': 'idea:ModuleId', 'Value': 'vdc'},
+        ],
+    ],
+)
+def test_a_failed_bake_leaves_an_instance_it_cannot_prove_is_its_builder(tags):
+    svc = service()
+    ec2 = builder_ec2(tags)
+    svc.context.aws.return_value.ec2.return_value = ec2
+    svc.records.put(stuck_row())
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert svc.records.get('rocky9', 'x86_64').status == 'failed'
+    ec2.terminate_instances.assert_not_called()
+
+
+def test_a_bake_that_fails_on_its_own_disposes_too(monkeypatch):
+    svc = service()
+    ec2 = builder_ec2(OWN_BUILDER_TAGS)
+    svc.context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *a: None, raising=False
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *a: None)
+    monkeypatch.setattr(
+        module.ComputeImageCanary,
+        'validate',
+        Mock(side_effect=exceptions.general_exception('the canary failed')),
+    )
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    stored = svc.records.get('rocky9', 'x86_64')
+    assert stored.status == 'failed' and stored.error == 'the canary failed'
+    ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-builder'])
+    assert svc._last_sweep == float('-inf')
+
+
+# a failed bake reaches a person
+
+
+def alert_lines(svc):
+    return [
+        call.args[0]
+        for call in svc._logger.error.call_args_list
+        if call.args[0].startswith('IDEA_IMAGE_BAKE_FAILED compute ')
+    ]
+
+
+def test_a_bake_past_the_limit_logs_the_line_the_monitor_matches():
+    svc = service()
+    svc.records.put(stuck_row())
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert len(alert_lines(svc)) == 1
+    assert alert_lines(svc)[0].startswith(
+        'IDEA_IMAGE_BAKE_FAILED compute rocky9/x86_64 release 26.11.1: '
+    )
+
+
+def test_a_bake_that_fails_on_its_own_logs_the_line_the_monitor_matches(monkeypatch):
+    svc = service()
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *a: None, raising=False
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *a: None)
+    monkeypatch.setattr(
+        module.ComputeImageCanary,
+        'validate',
+        Mock(side_effect=exceptions.general_exception('the canary failed')),
+    )
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    assert alert_lines(svc) == [
+        'IDEA_IMAGE_BAKE_FAILED compute rocky9/x86_64 release 26.11.1: the canary failed'
+    ]
+
+
+# a failed bake explains itself
+
+PANIC = 'Likely cause: the operating system crashed while starting (kernel panic).'
+
+
+def test_a_failing_builder_is_read_before_it_goes_and_the_row_says_why(monkeypatch):
+    svc = service()
+    terminated = []
+    monkeypatch.setattr(
+        module, 'dispose_builder', lambda _, instance, __: terminated.append(instance)
+    )
+    seen = []
+
+    def capture(context, logger, host):
+        seen.append((host, list(terminated)))
+        return PANIC
+
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    monkeypatch.setattr(svc, 'default_base_ami', lambda *a: 'ami-stock')
+    builder = Mock()
+    builder.get_ami_full_name.return_value = 'idea-rocky9-1'
+
+    def build(progress):
+        progress({'instance_id': 'i-builder'})
+        raise exceptions.general_exception('the builder never finished')
+
+    builder.build.side_effect = build
+    record = row(status='queued', current_image_id='ami-old')
+    svc.records.put(record)
+    svc._run_pipeline(record, builder)
+    host, terminated_before = seen[0]
+    assert terminated_before == [] and terminated == ['i-builder']
+    assert host.kind == 'compute_bake' and host.instance_id == 'i-builder'
+    assert host.log_group.endswith('/ami-builder')
+    stored = svc.records.get('rocky9', 'x86_64')
+    assert stored.status == 'failed'
+    assert stored.error == f'the builder never finished {PANIC}'
+
+
+def test_a_canary_failure_does_not_read_the_builder_again(monkeypatch):
+    svc = service()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *a: None, raising=False
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *a: None)
+    monkeypatch.setattr(
+        module.ComputeImageCanary,
+        'validate',
+        Mock(side_effect=exceptions.general_exception('the canary failed')),
+    )
+    record = stuck_row(
+        status='test_launching',
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    capture.assert_not_called()

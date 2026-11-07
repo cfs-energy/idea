@@ -372,7 +372,6 @@ export function parseSetEntries(entries: readonly string[]): Array<{ key: string
     const tokens = splitN(entry, ',', 3);
     const key = afterPrefix(tokens[0], 'Key=', index, 'Key');
     const rawType = afterPrefix(tokens[1], 'Type=', index, 'Type');
-    const rawValue = afterPrefix(tokens[2], 'Value=', index, 'Value');
 
     if (key.includes(',') || key.includes(':')) {
       throw new ClusterConfigError(
@@ -381,6 +380,10 @@ export function parseSetEntries(entries: readonly string[]): Array<{ key: string
     }
 
     const { dataType, isList } = normalizeType(rawType, index);
+    // `Value=` on a string clears it, as the maintenance message needs. Blank and absent stay typos.
+    const rawValue = tokens[2] === 'Value=' && dataType === 'str' && !isList
+      ? ''
+      : afterPrefix(tokens[2], 'Value=', index, 'Value');
     if (isList) {
       const items = rawValue
         .split(',')

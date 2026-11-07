@@ -19,12 +19,15 @@ import {AuthClient, ProjectsClient, VirtualDesktopClient} from "../../../client"
 import {AppContext} from "../../../common";
 import {Constants} from "../../../common/constants";
 import VirtualDesktopUtilsClient from "../../../client/virtual-desktop-utils-client";
+import {IdeaFormValidate} from "../../../components/form-field/form-field";
 
 export interface VirtualDesktopCreateSessionFormProps {
     projects?: Project[]
     defaultName?: string
     maxRootVolumeMemory: number
     isAdminView?: boolean
+    // the page could not load this person's projects, which is not the same as them having none
+    projectsLoadFailed?: boolean
     onSubmit: (session_name: string, username: string, project_id: string, base_os: VirtualDesktopBaseOS, software_stack_id: string, session_type: VirtualDesktopSessionType, instance_type: string, storage_size: number, hibernation_enabled: boolean, vpc_subnet_id: string, admin_custom_instance_type?: boolean) => Promise<boolean>
     onDismiss: () => void
 }
@@ -38,12 +41,13 @@ export interface DCVSessionTypeChoice {
 export interface VirtualDesktopCreateSessionFormState {
     showModal: boolean
     softwareStacks: { [k: string]: VirtualDesktopSoftwareStack }
-    defaultProject: Project | undefined
     supportedOsChoices: SocaUserInputChoice[]
     dcvSessionTypeChoice: DCVSessionTypeChoice
     eVDIUsers: User[]
     allowCustomInstanceType: boolean
     softwareStacksByOS: { [os: string]: VirtualDesktopSoftwareStack[] }
+    // a project was chosen and what it offers has been read: an empty list now means it offers nothing
+    osChoicesLoaded: boolean
 }
 
 class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSessionFormProps, VirtualDesktopCreateSessionFormState> {
@@ -59,7 +63,6 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         this.state = {
             showModal: false,
             softwareStacks: {},
-            defaultProject: {},
             supportedOsChoices: [],
             eVDIUsers: [],
             dcvSessionTypeChoice: {
@@ -68,7 +71,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 disabled: false
             },
             allowCustomInstanceType: false,
-            softwareStacksByOS: {}
+            softwareStacksByOS: {},
+            osChoicesLoaded: false
         }
         this.instanceTypesInfo = {}
         this.defaultInstanceTypeChoices = []
@@ -106,17 +110,40 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         return this.form.current!
     }
 
+    // an empty dropdown after a failed request would read as nothing being available
+    loadFailed = (what: string) => (error: any) => {
+        this.getForm()?.setError(error?.errorCode, `${what} could not be loaded. Close this form and try again.`)
+    }
+
+    projectsEmptyLabel(): string {
+        if (this.props.projectsLoadFailed) {
+            return 'Your projects could not be loaded. Close this form and try again.'
+        }
+        if (this.props.isAdminView) {
+            return 'Choose a user who is in a project.'
+        }
+        return "You aren't in a project yet. Ask your administrator to add you."
+    }
+
     showModal() {
         this.setState({
             showModal: true
         }, () => {
             this.getForm().showModal()
+            if (this.props.projectsLoadFailed) {
+                this.getForm().setError('', this.projectsEmptyLabel())
+            }
 
             // Make sure hibernation is disabled initially when form opens
             setTimeout(() => {
                 const hibernation = this.getForm()?.getFormField('hibernate_instance');
                 if (hibernation) {
                     hibernation.disable(true);
+                }
+
+                // One project means no choice to make, and the operating systems load from it.
+                if (this.props.projects?.length === 1) {
+                    this.getForm()?.getFormField('project_id')?.setValue(this.props.projects[0].project_id)
                 }
             }, 100);
         })
@@ -125,15 +152,6 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
     componentDidMount() {
         // We're not loading global instance types here anymore
         // We'll only load them after both OS and software stack are selected
-
-        this.getProjectsClient().getProject({
-            project_name: 'default'
-        }).then(result => {
-            this.setState({
-                defaultProject: result.project
-            })
-            // Removed OS choices initialization - will be empty until project selected
-        })
 
         let groups: string[] = [Utils.getUserGroupName(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)), Utils.getAdministratorGroup(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER))]
         this.getAuthClient().listUsersInGroup({
@@ -149,7 +167,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                     listing: Utils.generateUserSelectionChoices(this.state.eVDIUsers)
                 })
             })
-        })
+        }).catch(this.loadFailed('The list of users'))
 
         // Initially disable hibernation until software stack is selected
         setTimeout(() => {
@@ -237,7 +255,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         enabledStacks?.forEach((stack) => {
             softwareStackChoices.push({
                 title: stack.description,
-                description: `Name: ${stack.name}, AMI ID: ${stack.ami_id}, OS: ${stack.base_os}`,
+                description: stack.expiry_warning ? `${stack.name} – ${stack.expiry_warning}` : stack.name,
                 value: stack.stack_id
             })
         })
@@ -406,7 +424,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             this.setState({
                 softwareStacks: softwareStacks
             })
-        })
+        }).catch(this.loadFailed('The software list'))
     }
 
     updateRootVolumeSizeIfRequired() {
@@ -478,17 +496,17 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
         formParams.push({
             name: 'session_name',
-            title: 'Session Name',
-            description: 'Enter a name for the virtual desktop',
+            title: 'Desktop name',
             data_type: 'str',
             param_type: 'text',
-            help_text: 'Session Name is required and cannot exceed more than 24 characters',
+            help_text: 'Use 3 to 24 characters.',
             default: this.props.defaultName!,
             auto_focus: true,
             validate: {
                 required: true,
-                regex: '^.{3,24}$'
-            }
+                regex: '^.{3,24}$',
+                message: 'Use 3 to 24 characters.'
+            } as IdeaFormValidate
         })
 
         if (this.props.isAdminView) {
@@ -507,21 +525,21 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         formParams.push({
             name: 'project_id',
             title: 'Project',
-            description: 'Select the project under which the session will get created',
+            description: 'The project this desktop belongs to',
             data_type: 'str',
             param_type: 'select',
+            choices_empty_label: this.projectsEmptyLabel(),
             validate: {
                 required: true
             },
-            default: this.state.defaultProject?.project_id,
             choices: this.buildProjectChoices(this.props.projects!)
         })
         formParams.push({
             name: 'base_os',
-            title: 'Operating System',
-            description: 'Select the operating system for the virtual desktop',
+            title: 'Operating system',
             data_type: 'str',
             param_type: 'select',
+            choices_empty_label: this.state.osChoicesLoaded ? 'No software is set up for this project. Ask your administrator.' : 'Choose a project first.',
             validate: {
                 required: true
             },
@@ -529,10 +547,10 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         })
         formParams.push({
             name: 'software_stack',
-            title: 'Software Stack',
-            description: 'Select the software stack for your virtual desktop',
+            title: 'Software',
             data_type: 'str',
             param_type: 'select',
+            choices_empty_label: 'Choose an operating system first.',
             validate: {
                 required: true
             },
@@ -540,8 +558,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         })
         formParams.push({
             name: 'hibernate_instance',
-            title: 'Enable Instance Hibernation',
-            description: 'Hibernation saves the contents from the instance memory (RAM) to your Amazon Elastic Block Store (Amazon EBS) root volume. You can not change instance type if you enable this option.',
+            title: 'Hibernate',
+            description: "Save your open work when the desktop stops. The size can't be changed later.",
             data_type: 'bool',
             param_type: 'confirm',
             default: false,
@@ -557,10 +575,11 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
         formParams.push({
             name: 'instance_type',
-            title: 'Virtual Desktop Size',
-            description: this.state.allowCustomInstanceType ? 'Enter any valid EC2 instance type' : 'Select a virtual desktop instance type',
+            title: 'Desktop size',
+            description: this.state.allowCustomInstanceType ? 'Enter any valid EC2 instance type' : undefined,
             data_type: 'str',
             param_type: this.state.allowCustomInstanceType ? 'text' : 'select',
+            choices_empty_label: 'No sizes to show. Choose your software first, or ask your administrator.',
             validate: {
                 required: showInstanceType // Only required if OS and stack are selected
             },
@@ -568,8 +587,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         })
         formParams.push({
             name: 'root_storage_size',
-            title: 'Storage Size (GB)',
-            description: 'Enter the storage size for your virtual desktop in GBs',
+            title: 'Storage (GB)',
             data_type: 'int',
             param_type: 'text',
             default: 10,
@@ -580,7 +598,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         })
         formParams.push({
             name: 'advanced_options',
-            title: 'Show Advanced Options',
+            title: 'Show advanced options',
             data_type: 'bool',
             param_type: 'confirm',
             validate: {
@@ -609,8 +627,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
         formParams.push({
             name: 'dcv_session_type',
-            title: 'DCV Session Type',
-            description: 'Select the DCV Session Type',
+            title: 'Session type',
+            description: 'Leave this as it is unless your administrator says otherwise.',
             data_type: 'str',
             param_type: 'select',
             readonly: this.state.dcvSessionTypeChoice.disabled,
@@ -626,8 +644,8 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         })
         formParams.push({
             name: 'vpc_subnet_id',
-            title: 'VPC Subnet Id',
-            description: 'Launch your virtual desktop in a specific subnet',
+            title: 'Network subnet',
+            description: 'Leave this empty unless your administrator gave you a subnet to use.',
             data_type: 'str',
             param_type: 'text',
             when: {
@@ -688,7 +706,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         this.getVirtualDesktopUtilsClient().listSupportedOS({}).then(osResult => {
             // Now get all enabled software stacks for the project to determine which OS options have stacks
             // Use a large page size to get all stacks in one request
-            this.getVirtualDesktopClient().listSoftwareStacks({
+            return this.getVirtualDesktopClient().listSoftwareStacks({
                 disabled_also: false, // Only get enabled stacks
                 project_id: project_id,
                 paginator: {
@@ -730,14 +748,15 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
                 this.setState({
                     supportedOsChoices,
-                    softwareStacksByOS // Cache the software stacks by OS
+                    softwareStacksByOS, // Cache the software stacks by OS
+                    osChoicesLoaded: true
                 }, () => {
                     this.getForm()?.getFormField('base_os')?.setOptions({
                         listing: supportedOsChoices
                     });
                 });
             });
-        });
+        }).catch(this.loadFailed('The operating systems'));
     }
 
     render() {
@@ -747,7 +766,9 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                 ref={this.form}
                 name="create-session"
                 modal={true}
-                title="Launch New Virtual Desktop"
+                title="Launch desktop"
+                primaryCtaTitle="Launch desktop"
+                submittingText="Requesting your desktop. This can take up to a minute."
                 modalSize="medium"
                 onStateChange={(event) => {
                     if (event.param.name === 'base_os') {
@@ -819,7 +840,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
 
                                     // Make instance_type field required now that we have selected both OS and software stack
                                     instance_type?.validate();
-                                });
+                                }).catch(this.loadFailed('The desktop sizes'));
                             }
                         }
 
@@ -888,7 +909,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                                     if (instance_type?.getValueAsString()) {
                                         this.updateSessionTypeChoicesIfRequired();
                                     }
-                                })
+                                }).catch(this.loadFailed('The desktop sizes'))
                             }
                         } else {
                             this.updateRootVolumeSizeIfRequired()
@@ -975,7 +996,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                                     })
 
                                     this.updateRootVolumeSizeIfRequired()
-                                })
+                                }).catch(this.loadFailed('The desktop sizes'))
                             } else {
                                 // If either software stack or base OS is not selected yet, just clear instance type
                                 const instanceType = this.getForm()?.getFormField('instance_type');
@@ -994,7 +1015,7 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
                             this.getForm()?.getFormField('project_id')?.setOptions({
                                 listing: this.buildProjectChoices(result.projects!)
                             })
-                        })
+                        }).catch(this.loadFailed("This person's projects"))
                     } else if (event.param.name === 'allow_custom_instance_type') {
                         // Just update the state - the field will be updated according to buildFormParams()
                         this.setState({

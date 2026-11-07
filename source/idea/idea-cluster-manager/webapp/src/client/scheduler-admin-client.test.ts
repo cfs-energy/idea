@@ -30,6 +30,12 @@ describe('SchedulerAdminClient', () => {
         ['rollbackImage', 'RollbackImage', { row: { base_os: 'rocky9', architecture: 'x86_64', variant: 'cpu' } }],
         ['setImagePinned', 'SetImagePinned', { row: { base_os: 'rocky9', architecture: 'x86_64' }, pinned: true }],
         ['getImageSchedule', 'GetImageSchedule', {}],
+        ['getScratchCleanupStatus', 'GetScratchCleanupStatus', {}],
+        ['previewScratchCleanup', 'PreviewScratchCleanup', { file_system: 'scratch' }],
+        ['listScratchCleanupPreview', 'ListScratchCleanupPreview', { preview_id: 'p', action: 'remove' }],
+        ['backfillScratchCleanup', 'BackfillScratchCleanup', { preview_id: 'p', confirm_phrase: 'schedule 1' }],
+        ['listScratchCleanupUpcoming', 'ListScratchCleanupUpcoming', {}],
+        ['listScratchCleanupAudit', 'ListScratchCleanupAudit', {}],
     ])('%s invokes SchedulerAdmin.%s', async (method, api, req) => {
         const invoke_alt = vi.fn().mockResolvedValue({})
         const client = Object.create(SchedulerAdminClient.prototype) as any

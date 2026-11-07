@@ -28,10 +28,13 @@ export interface IdeaTableProps<T = any> {
     selectionType?: TableProps.SelectionType
     showPreferences?: boolean
     preferencesKey?: string
+    defaultPageSize?: number
+    filteringPlaceholder?: string
     onPreferenceChange?: (detail: CollectionPreferencesProps.Preferences<T>) => void
     onSelectionChange?: TableProps<T>['onSelectionChange']
     columnDefinitions?: ReadonlyArray<TableProps.ColumnDefinition<T>>
     loading?: boolean
+    loadingText?: string
     showFilters?: boolean
     filterType?: 'text' | 'property' | 'select'
     filters?: SocaFilter[]
@@ -50,6 +53,14 @@ export interface IdeaTableProps<T = any> {
     stickyHeader?: boolean
     defaultSortingColumn?: string;
     defaultSortingDescending?: boolean;
+    // the server orders the rows: the header reflects this and nothing sorts in the browser
+    serverSorting?: {
+        sortingColumn: TableProps.SortingColumn<T>
+        sortingDescending: boolean
+        onSortingChange: NonNullable<TableProps<T>['onSortingChange']>
+    }
+    // the listing is one page of many: sorting it would misorder the list
+    clientSortingDisabled?: boolean
 }
 
 export interface IdeaTableState<T = any> {
@@ -314,7 +325,7 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
             return (
                 <TextFilter
                     filteringText={this.state.filteringText}
-                    filteringPlaceholder="Search"
+                    filteringPlaceholder={this.props.filteringPlaceholder ?? "Search"}
                     onChange={(event) => {
                         this.setState({
                             filteringText: event.detail.filteringText
@@ -393,12 +404,13 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
     }
 
     getPageSizePreferenceFromLocalStorage(): number {
+        const defaultPageSize = this.props.defaultPageSize ?? 10
         if (this.props.preferencesKey === undefined)
-            return 10
+            return defaultPageSize
 
         let pageSize = AppContext.get().localStorage().getItem(`${this.getPreferencesKey()}-table-pageSize`)
         if (pageSize === undefined || pageSize === null) {
-            return 10
+            return defaultPageSize
         }
         return Utils.asNumber(pageSize)
     }
@@ -478,18 +490,19 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
                     })
                 }}
                 pageSizePreference={{
-                    title: "Select page size",
+                    title: "Rows per page",
                     options: [
-                        {value: 10, label: "10 resources"},
-                        {value: 20, label: "20 resources"},
-                        {value: 50, label: "50 resources"},
-                        {value: 100, label: "100 resources"}
+                        {value: 10, label: "10 rows"},
+                        {value: 20, label: "20 rows"},
+                        {value: 30, label: "30 rows"},
+                        {value: 50, label: "50 rows"},
+                        {value: 100, label: "100 rows"}
                     ]
                 }}
                 visibleContentPreference={{
-                    title: "Select visible content",
+                    title: "Columns to show",
                     options: [{
-                        label: "Table Columns",
+                        label: "Columns",
                         options: columnPreferences
                     }]
                 }}
@@ -502,6 +515,7 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
             <Table
                 {...(this.props.collectionProps || {})}
                 loading={this.props.loading}
+                loadingText={this.props.loadingText}
                 selectionType={this.props.selectionType}
                 variant={(this.props.variant) ? this.props.variant : 'full-page'}
                 stickyHeader={(typeof this.props.stickyHeader !== 'undefined') ? this.props.stickyHeader : true}
@@ -538,7 +552,7 @@ export class IdeaTableClass extends Component<IdeaTableClassProps, IdeaTableStat
 const IdeaTableWrapper = React.forwardRef<IdeaTableRef, IdeaTableProps>((props, ref) => {
     // Get sorted items using the collection hook, but disable pagination
     const { items, collectionProps } = useCollection(props.listing, {
-        sorting: props.defaultSortingColumn ? {
+        sorting: props.serverSorting || props.clientSortingDisabled ? undefined : props.defaultSortingColumn ? {
             defaultState: {
                 sortingColumn: {
                     sortingField: props.defaultSortingColumn
@@ -570,7 +584,7 @@ const IdeaTableWrapper = React.forwardRef<IdeaTableRef, IdeaTableProps>((props, 
         ref={tableRef}
         {...props}
         listing={items as any[]}
-        collectionProps={collectionProps}
+        collectionProps={{...collectionProps, ...props.serverSorting}}
     />;
 });
 

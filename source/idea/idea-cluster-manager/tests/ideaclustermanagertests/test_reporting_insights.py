@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from ideadatamodel import ReportingPeriodRequest, exceptions
+from ideaclustermanager.app.reporting import insights_service
 from ideaclustermanager.app.reporting.insights_service import (
     InsightsService,
     ranked,
@@ -85,6 +86,24 @@ def build(value=None, username=None, context=None):
     return InsightsService(context or Mock()).build(
         value or data(), period(), 'USD', 'UTC', time.monotonic() + 30, username
     )
+
+
+def test_a_refresh_right_after_a_build_does_not_build_again(monkeypatch):
+    context = Mock()
+    context.config().get_string.return_value = 'UTC'
+    context.projects.get_user_projects.return_value = SimpleNamespace(projects=[])
+    sources = Mock()
+    sources.read.return_value = data()
+    service = InsightsService(context, sources)
+    clock = [1000.0]
+    monkeypatch.setattr(insights_service.time, 'monotonic', lambda: clock[0])
+    service.get_insights(request(), lambda: True, 'user-a')
+    assert sources.read.call_count == 1
+    service.get_insights(request(), lambda: True, 'user-a', fresh=True)
+    assert sources.read.call_count == 1
+    clock[0] += insights_service.REFRESH_FLOOR_SECONDS + 1
+    service.get_insights(request(), lambda: True, 'user-a', fresh=True)
+    assert sources.read.call_count == 2
 
 
 def test_mean_weighting_and_waste_cost():
@@ -421,10 +440,9 @@ def test_desktop_top_ten_users_uses_period_totals():
     value = data()
     value['projections'] = {f'user-{i:02}': projection(str(i)) for i in range(12)}
     result = build(value)
-    assert len(result.desktops.daily_top_users) == 10
-    assert {p.user for p in result.desktops.daily_top_users} == {
-        f'user-{i:02}' for i in range(2, 12)
-    }
+    named = [p for p in result.desktops.daily_top_users if p.user != 'Other']
+    assert len(named) == 10
+    assert {p.user for p in named} == {f'user-{i:02}' for i in range(2, 12)}
 
 
 def test_budget_sort_missing_and_shared_budget_fetch_once():
@@ -911,3 +929,90 @@ def test_insights_job_cost_agrees_with_the_reporting_summary():
     )
     summary = sum(job_values(hit['_source'], 'USD')['cost'] for hit in value['jobs'])
     assert build(value).jobs.cost == summary == Decimal('41.5')
+
+
+def test_a_source_that_failed_is_named_and_a_priceless_job_is_counted():
+    value = data()
+    value['coverage'] = {'jobs': 'unavailable', 'storage': 'ready'}
+    priceless = job('2')
+    priceless['_source']['estimated_bom_cost'] = None
+    value['jobs'] = [job('1'), priceless]
+    result = build(value)
+    assert result.unavailable == ['jobs']
+    assert result.jobs.count == 2
+    assert result.jobs.unpriced == 1
+
+
+def test_desktop_costs_say_how_far_back_they_go_and_which_days_are_missing():
+    value = data()
+    value['projections'] = {
+        'user-a': dict(
+            costs=dict(
+                currency='USD',
+                timezone='UTC',
+                current=dict(
+                    desktops=dict(
+                        daily=[
+                            dict(date='2024-02-10', amount=5.0, status='ready'),
+                            dict(date='2024-02-11', amount=None, status='unavailable'),
+                        ]
+                    )
+                ),
+            )
+        )
+    }
+    result = build(value)
+    assert str(result.desktops.available_from) == '2024-02-10'
+    assert result.desktops.missing_days == 1
+
+
+def budget_service(budgets_get_budget):
+    context = Mock()
+    context.aws_util.return_value.budgets_get_budget = budgets_get_budget
+    return InsightsService(context, sources=Mock())
+
+
+def test_one_budget_read_failure_does_not_take_the_report_down():
+    service = budget_service(Mock(side_effect=RuntimeError('ThrottlingException')))
+    result = SimpleNamespace(unavailable=[])
+    rows = service.budgets(
+        [dict(project_id='p', budget=dict(budget_name='b'))],
+        'USD',
+        time.monotonic() + 60,
+        result,
+    )
+    assert rows == []
+    assert result.unavailable == ['budgets']
+
+
+def test_no_forecast_near_the_limit_is_not_within_budget():
+    value = dict(
+        budget_name='b',
+        budget_limit=dict(amount=100, unit='USD'),
+        actual_spend=dict(amount=99, unit='USD'),
+    )
+    assert budget_row('project-a', value, 'USD')['status'] == 'watch'
+
+
+def test_daily_desktop_chart_adds_up_when_more_than_ten_people_have_costs():
+    value = data()
+    value['projections'] = {
+        f'user-{index:02d}': dict(
+            costs=dict(
+                currency='USD',
+                timezone='UTC',
+                current=dict(
+                    desktops=dict(
+                        daily=[dict(date='2024-02-10', amount=1.0, status='ready')]
+                    )
+                ),
+            )
+        )
+        for index in range(30)
+    }
+    result = build(value)
+    assert (
+        sum(point.cost for point in result.desktops.daily_top_users)
+        == result.desktops.cost
+    )
+    assert any(point.user == 'Other' for point in result.desktops.daily_top_users)

@@ -27,6 +27,7 @@ def submit(variables, interactive=True, event_type='queuejob'):
             'is_applicable': lambda e: True,
             'PRE_EXECUTION_HOOKS': ['queuejob', 'modifyjob', 'movejob'],
             'HOOK_EVENT_QUEUEJOB': 'queuejob',
+            'HOOK_EVENT_RUNJOB': 'runjob',
             'HOOK_EVENT_MODIFYJOB': 'modifyjob',
             'invoke_soca_scheduler': lambda e: {
                 'success': True,

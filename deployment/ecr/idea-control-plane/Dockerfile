@@ -115,7 +115,7 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
-ARG UV_VERSION=0.13.6
+ARG UV_VERSION=0.13.7
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
@@ -209,7 +209,20 @@ COPY deployment/ecr/idea-control-plane/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deployment/ecr/idea-control-plane/entrypoint.sh /opt/idea/entrypoint.sh
 COPY deployment/ecr/idea-control-plane/roles /opt/idea/roles
 COPY source/idea/idea-bootstrap/common/terminal_host.py /opt/idea/roles/terminal_host.py
-RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh
+COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl
+RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh /usr/local/bin/ideactl
+
+# The base image pins dnf to its AL2023 release, so a package fixed in a later release stays out
+# until the digest moves, and sshd on this image faces the internet. Take the newest OpenSSH and
+# every security update from the latest release. A build passes a new value each run: the
+# layer cache would otherwise keep the first answer. The release workflow then fails an image
+# whose OpenSSH is behind.
+ARG IDEA_PACKAGE_REFRESH=local
+RUN set -eux; \
+    echo "package refresh ${IDEA_PACKAGE_REFRESH}"; \
+    dnf upgrade -y --releasever=latest 'openssh*'; \
+    dnf upgrade -y --releasever=latest --security; \
+    dnf clean all
 
 # module 8443; broker 8444/8445/8446 client/agent/gateway and 47100/47500 between brokers;
 # gateway 8443 web and QUIC and 8989 health.

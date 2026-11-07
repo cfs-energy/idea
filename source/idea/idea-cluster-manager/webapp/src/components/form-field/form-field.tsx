@@ -17,7 +17,8 @@ import {
     GetParamDefaultRequest, GetParamDefaultResult, GetParamsRequest, GetParamsResult, SetParamRequest, SetParamResult,
     SocaUserInputGroupMetadata,
     SocaUserInputParamMetadata,
-    SocaUserInputSectionMetadata
+    SocaUserInputSectionMetadata,
+    SocaUserInputValidate
 } from "../../client/data-model";
 
 import Utils from '../../common/utils'
@@ -37,6 +38,11 @@ import {
 import {faAdd, faRemove} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import ReactMarkdown from "react-markdown";
+
+/** A param's validation, with the words to show when its regex does not match. */
+export interface IdeaFormValidate extends SocaUserInputValidate {
+    message?: string
+}
 
 export interface IdeaFormFieldSyncAPI {
     getParamDefault(req: GetParamDefaultRequest): Promise<GetParamDefaultResult>
@@ -195,6 +201,9 @@ export class IdeaFormFieldRegistry {
 
 
 class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
+
+    // a slower answer to earlier typing must not replace the current suggestions
+    private autoCompleteLookup = 0
 
     constructor(props: IdeaFormFieldProps) {
         super(props)
@@ -441,7 +450,11 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
     setValue(value: any) {
         this.setState({
             value: value
-        }, this.setStateCallback)
+        }, () => {
+            // a select shows its selected option, not its value
+            this.updateSelectedOptions()
+            this.setStateCallback()
+        })
     }
 
     setNull(): Promise<any> {
@@ -779,7 +792,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                     errorMessage = `${displayTitle} must be less than or equal to ${this.props.param.validate?.max}`
                     break
                 case 'REGEX':
-                    errorMessage = `${displayTitle} must satisfy regex: ${this.props.param.validate?.regex}`
+                    errorMessage = (this.props.param.validate as IdeaFormValidate | undefined)?.message ?? `${displayTitle} must satisfy regex: ${this.props.param.validate?.regex}`
                     break
                 /*case 'CUSTOM_FAILED':
                     errorMessage = this.props.param.validate?.custom?.error_message
@@ -1281,8 +1294,10 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                          }}
                          onLoadItems={(event) => {
                              if (this.props.onFetchOptions) {
+                                 const lookup = ++this.autoCompleteLookup
                                  this.setState({
                                      options: [],
+                                     errorMessage: null,
                                      dynamicOptionsLoading: true
                                  }, () => {
                                      this.props.onFetchOptions!({
@@ -1294,11 +1309,20 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                                              }
                                          ]
                                      }).then(result => {
-                                         this.setOptions(result)
+                                         if (lookup === this.autoCompleteLookup) {
+                                             this.setOptions(result)
+                                         }
+                                     }).catch(error => {
+                                         console.error(error)
+                                         if (lookup === this.autoCompleteLookup) {
+                                             this.setState({errorMessage: 'Choices could not be loaded. Try again.'})
+                                         }
                                      }).finally(() => {
-                                         this.setState({
-                                             dynamicOptionsLoading: false
-                                         })
+                                         if (lookup === this.autoCompleteLookup) {
+                                             this.setState({
+                                                 dynamicOptionsLoading: false
+                                             })
+                                         }
                                      })
                                  })
                              }

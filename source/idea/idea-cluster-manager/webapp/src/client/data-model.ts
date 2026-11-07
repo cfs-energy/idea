@@ -292,6 +292,31 @@ export interface VirtualDesktopSoftwareStack {
   launch_tenancy?: VirtualDesktopTenancy;
   allowed_instance_types?: string[];
   image_pinned?: boolean;
+  owner?: string;
+  expires_on?: string;
+  clear_expires_on?: boolean;
+  effective_expires_on?: string;
+  expiry_state?: string;
+  expiry_warning?: string;
+}
+export interface VirtualDesktopOrphanInstance {
+  instance_id?: string;
+  name?: string;
+  instance_type?: string;
+  state?: string;
+  launched_on?: string;
+}
+export interface ExtendSoftwareStackRequest {
+  stack_id?: string;
+  base_os?: string;
+  days?: number;
+}
+export interface ExtendSoftwareStackResponse {
+  software_stack?: VirtualDesktopSoftwareStack;
+}
+export interface ListOrphanInstancesRequest {}
+export interface ListOrphanInstancesResponse {
+  listing?: VirtualDesktopOrphanInstance[];
 }
 export interface Project {
   last_task_failure?: {
@@ -453,6 +478,7 @@ export interface ImageBuildRecord {
   log_link?: string;
   attempts?: number;
   retry_after?: string;
+  attempt_started_on?: string;
   trigger?: ImageBuildTrigger;
   pinned?: boolean;
   rollback_hold?: boolean;
@@ -1205,6 +1231,8 @@ export interface GetJobResult {
   job?: SocaJob;
 }
 export interface SocaJob {
+  scratch_removed_at?: string;
+  scratch_partly_removed_at?: string;
   cluster_name?: string;
   cluster_version?: string;
   job_id?: string;
@@ -2706,4 +2734,144 @@ export interface VirtualDesktopApplicationProfile {}
 export interface VirtualDesktopSessionBatchResponsePayload {
   failed?: VirtualDesktopSession[];
   success?: VirtualDesktopSession[];
+}
+export interface ScratchCleanupFileSystem {
+  name?: string;
+  title?: string;
+  mount_dir?: string;
+  selected?: boolean;
+  problem?: string;
+  capacity_bytes?: number;
+  used_bytes?: number;
+  used_percent?: number;
+  usage_read_at?: string;
+}
+export interface ScratchCleanupSettings {
+  enabled?: boolean;
+  dry_run?: boolean;
+  kill_switch?: boolean;
+  file_systems?: string[];
+  success_retention_days?: number;
+  failed_retention_days?: number;
+  max_folders_per_run?: number;
+  max_run_bytes_percent?: number;
+  max_run_share_percent?: number;
+  digest_weekday?: number;
+  problem?: string;
+}
+export interface ScratchCleanupProgress {
+  operation?: string;
+  file_system?: string;
+  phase?: string;
+  done?: number;
+  total?: number;
+  current?: string;
+  started_at?: string;
+}
+export interface ScratchCleanupRun {
+  run_id?: string;
+  file_system?: string;
+  trigger?: string;
+  requested_by?: string;
+  status?: string;
+  dry_run?: boolean;
+  started_at?: string;
+  finished_at?: string;
+  removed_folders?: number;
+  removed_bytes?: number;
+  would_remove_folders?: number;
+  noticed_folders?: number;
+  scheduled_folders?: number;
+  skipped_folders?: number;
+  partial_folders?: number;
+  kept_folders?: number;
+  used_percent_before?: number;
+  used_percent_after?: number;
+  message?: string;
+}
+export interface ScratchCleanupRow {
+  file_system?: string;
+  path?: string;
+  owner?: string;
+  job_id?: string;
+  job_uid?: string;
+  job_end_time?: string;
+  size_bytes?: number;
+  entries?: number;
+  action?: string;
+  reason?: string;
+  reason_text?: string;
+  remove_after?: string;
+  started_at?: string;
+  finished_at?: string;
+  run_id?: string;
+  requested_by?: string;
+  removed_entries?: number;
+  outcome?: string;
+  first_notice_at?: string;
+  final_notice_at?: string;
+}
+export interface ScratchCleanupPreviewSummary {
+  preview_id?: string;
+  file_system?: string;
+  created_at?: string;
+  expires_at?: string;
+  action_counts?: {[k: string]: number};
+  action_bytes?: {[k: string]: number};
+  reason_counts?: {[k: string]: number};
+  reason_text?: {[k: string]: string};
+  confirm_phrase?: string;
+  problem?: string;
+  truncated_rows?: number;
+  other_kept?: number;
+}
+export interface GetScratchCleanupStatusRequest {}
+export interface GetScratchCleanupStatusResult {
+  available?: boolean;
+  message?: string;
+  file_systems?: ScratchCleanupFileSystem[];
+  settings?: ScratchCleanupSettings;
+  progress?: ScratchCleanupProgress;
+  previews?: ScratchCleanupPreviewSummary[];
+  runs?: ScratchCleanupRun[];
+  failed_folders?: number;
+  scheduled_folders?: number;
+}
+export interface ListScratchCleanupUpcomingRequest {
+  paginator?: SocaPaginator;
+}
+export interface ListScratchCleanupUpcomingResult {
+  paginator?: SocaPaginator;
+  listing?: ScratchCleanupRow[];
+  next_token?: string;
+}
+export interface PreviewScratchCleanupRequest {
+  file_system?: string;
+}
+export interface PreviewScratchCleanupResult {
+  started?: boolean;
+}
+export interface ListScratchCleanupPreviewRequest {
+  paginator?: SocaPaginator;
+  preview_id?: string;
+  action?: string;
+}
+export interface ListScratchCleanupPreviewResult {
+  paginator?: SocaPaginator;
+  listing?: ScratchCleanupRow[];
+}
+export interface BackfillScratchCleanupRequest {
+  preview_id?: string;
+  confirm_phrase?: string;
+}
+export interface BackfillScratchCleanupResult {
+  run_id?: string;
+}
+export interface ListScratchCleanupAuditRequest {
+  paginator?: SocaPaginator;
+}
+export interface ListScratchCleanupAuditResult {
+  paginator?: SocaPaginator;
+  listing?: ScratchCleanupRow[];
+  next_token?: string;
 }

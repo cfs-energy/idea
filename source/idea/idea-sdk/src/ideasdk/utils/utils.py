@@ -56,6 +56,19 @@ DIRECTORY_TREE_LAST = '└── '
 # noinspection InsecureHash
 class Utils:
     @staticmethod
+    def scan_all(table, scan_request: Optional[Dict] = None) -> List[Dict]:
+        """every item of a DynamoDB scan. one response stops at 1 MB, before any filter."""
+        request = dict(scan_request or {})
+        items = []
+        while True:
+            page = table.scan(**request)
+            items.extend(page.get('Items') or [])
+            last_evaluated_key = page.get('LastEvaluatedKey')
+            if not last_evaluated_key:
+                return items
+            request['ExclusiveStartKey'] = last_evaluated_key
+
+    @staticmethod
     def is_empty(value: Optional[Union[Any]]) -> bool:
         return ModelUtils.is_empty(value)
 

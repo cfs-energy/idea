@@ -13,6 +13,10 @@ from abc import abstractmethod
 from typing import Dict, Optional, Tuple
 
 
+class TaskCannotSucceed(Exception):
+    """retrying cannot help, and a retry holds up every later task of its FIFO group."""
+
+
 class BaseTask:
     @abstractmethod
     def get_name(self) -> str: ...

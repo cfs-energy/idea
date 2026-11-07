@@ -434,7 +434,8 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             return True
 
         self.add_validation_entry(
-            param=param, message=f'Job parameter: [{param}] is required.'
+            param=param,
+            message=f'This job needs {param}. Set it with #PBS -l {param}=<value>.',
         )
         return False
 
@@ -547,8 +548,8 @@ class BaseParamBuilder(ParamBuilderProtocol, ABC):
             ):
                 self.add_validation_entry(
                     param=param_name_to_check,
-                    message=f'{param_name_to_check} is restricted for queue: ({job_queue}) '
-                    f'and cannot be submitted as a job parameter by the user.',
+                    message=f"Queue {job_queue} doesn't let jobs set {param_name_to_check}. "
+                    f'Remove it from your job script.',
                 )
                 return True
             return False
@@ -715,8 +716,9 @@ class CpusParamBuilder(BaseParamBuilder):
                 )
             else:
                 message = (
-                    f'Invalid {constants.JOB_PARAM_CPUS}: ({cpus}). One of the instance types: [{",".join(instance_types)}]'
-                    f' do not have enough CPUs: ({min_cpus}). ht_support={enable_ht_support}'
+                    f'This job asks for {cpus} CPUs per machine, and the smallest of '
+                    f'{", ".join(instance_types)} has {min_cpus}. Ask for {min_cpus} or fewer, '
+                    f'or choose a larger instance type.'
                 )
             self.add_validation_entry(
                 param=constants.JOB_PARAM_CPUS,
@@ -800,8 +802,9 @@ class MemoryParamBuilder(BaseParamBuilder):
         if memory > min_memory:
             self.add_validation_entry(
                 param=constants.JOB_PARAM_MEMORY,
-                message=f'applicable instance types do not have sufficient memory requested for this job. '
-                f'requested memory: {memory}, instance type memory (min): {min_memory}',
+                message=f'This job asks for {memory} of memory per machine, and the smallest '
+                f'instance type for it has {min_memory}. Ask for less, or choose a larger '
+                f'instance type.',
             )
             return False
 

@@ -15,7 +15,7 @@ from ideadatamodel import (
     MyCostsStorageShare,
 )
 from ideaclustermanager.app.api.costs_api import CostsAPI
-from ideaclustermanager.app.costs import my_costs_service
+from ideaclustermanager.app.costs import my_costs_service, personal_costs_store
 from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from ideaclustermanager.app.costs.personal_costs_collector import (
     FACETS,
@@ -55,7 +55,8 @@ class SessionIndex(PeriodIndex):
         if 'aggs' not in body:
             self.document_reads += 1
             matched = [d for d in self.docs if self.matches(body['query'], d)]
-            return {'hits': {'hits': [{'_source': d} for d in matched]}}
+            matched.sort(key=lambda d: d['created_on'], reverse=True)
+            return {'hits': {'hits': [{'_source': d} for d in matched[: body['size']]]}}
         self.change_reads += 1
         latest = {}
         for doc in self.docs:
@@ -297,7 +298,11 @@ def collect(context, store, usernames):
             costs,
             summary,
             listing=listing_entry(
-                summary, reader.desktop_records, costs, arrow.utcnow()
+                summary,
+                reader.desktop_records,
+                costs,
+                arrow.utcnow(),
+                reader.desktops_complete,
             ),
         )
 
@@ -363,7 +368,7 @@ def test_stored_listing_matches_measuring_everything_as_time_moves_on(monkeypatc
     # nothing scanned, and only the users whose figure can have moved are read again
     assert 'session-history Scan' not in counts
     assert counts['session-history Query'] == 3  # live, former, headless
-    assert index.document_reads == 3
+    assert index.document_reads == 1
     # the users without a stored window: former-user and headless-user
     assert counts.get('personal-costs GetItem', 0) <= 8
 
@@ -381,6 +386,95 @@ def test_a_desktop_started_after_the_head_is_measured_now(monkeypatch):
     assert actual == expected
     quiet = next(r for r in actual['listing'] if r['username'] == 'quiet-a')
     assert quiet['desktop_hours'] == pytest.approx(5 / 60, abs=0.001)
+
+
+def test_many_live_desktops_cost_one_search_and_one_metric_read(monkeypatch):
+    docs, history = world()
+    live = [f'live-{i:02d}' for i in range(20)]
+    # plenty of quiet users, so the listing measures only the live ones
+    quiet = [f'quiet-{i:02d}' for i in range(40)]
+    start = NOW.shift(days=-2)
+    for name in live:
+        # its first hours have no run: only the CPU metric can say how long it ran
+        docs.append(session(name, name, 'READY', start, start))
+        history.append(run(name, name, start.shift(hours=2)))
+    for name in quiet:
+        docs.append(
+            session(
+                name,
+                name,
+                'STOPPED',
+                NOW.shift(days=-10),
+                NOW.shift(days=-9),
+                stopped_on=ms(NOW.shift(days=-9)),
+            )
+        )
+        history.append(run(name, name, NOW.shift(days=-10), NOW.shift(days=-9)))
+    context, store, counts, index = build(monkeypatch, docs, history)
+    collect(context, store, live + quiet)
+    monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(minutes=10))
+    my_costs_service._cpu_hours_cache.clear()
+    counts.clear()
+    index.document_reads = 0
+    result = rows(view(context))
+    assert index.document_reads == 1
+    assert counts['GetMetricData'] == 1
+    assert {r['username'] for r in result['listing']} >= set(live)
+
+
+def many_stopped_desktops(owner, count):
+    # two index generations of each desktop: the summary's 200 documents are 100 desktops
+    start = NOW.shift(days=-5)
+    return [
+        session(
+            f'many-{i}',
+            owner,
+            'STOPPED',
+            start.shift(minutes=i),
+            start.shift(hours=1, minutes=i, seconds=generation),
+            stopped_on=ms(start.shift(hours=1, minutes=i)),
+        )
+        for i in range(count)
+        for generation in (0, 1)
+    ], [
+        run(f'many-{i}', owner, start.shift(minutes=i), start.shift(hours=1, minutes=i))
+        for i in range(count)
+    ]
+
+
+def test_a_truncated_summary_is_never_the_listing_total(monkeypatch):
+    docs, history = many_stopped_desktops('busy-user', 101)
+    context, store, counts, _ = build(monkeypatch, docs, history)
+    collect(context, store, ('busy-user', 'quiet-a', 'quiet-b', 'quiet-c', 'quiet-d'))
+    listing = store.get('busy-user', 'head')['listing']
+    # the summary itself stops at its cap and has to say so
+    assert listing['session_count'] == 100
+    assert listing['complete'] is False
+    monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(minutes=10))
+    actual = rows(view(context))
+    assert actual['listing'][0]['username'] == 'busy-user'
+    assert actual['listing'][0]['desktop_session_count'] == 101
+
+
+def test_a_summary_under_the_cap_is_complete(monkeypatch):
+    docs, history = many_stopped_desktops('busy-user', 99)
+    context, store, counts, _ = build(monkeypatch, docs, history)
+    collect(context, store, ('busy-user',))
+    listing = store.get('busy-user', 'head')['listing']
+    assert listing['session_count'] == 99
+    assert listing['complete'] is True
+
+
+def test_a_figure_stored_before_completeness_was_recorded_is_measured(monkeypatch):
+    docs, history = many_stopped_desktops('busy-user', 101)
+    context, store, counts, _ = build(monkeypatch, docs, history)
+    collect(context, store, ('busy-user', 'quiet-a', 'quiet-b', 'quiet-c', 'quiet-d'))
+    head = store.get('busy-user', 'head')
+    del head['listing']['complete']
+    store.put('busy-user', 'head', head)
+    monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(minutes=10))
+    actual = rows(view(context))
+    assert actual['listing'][0]['desktop_session_count'] == 101
 
 
 def test_a_stale_window_reads_everything_and_says_the_same(monkeypatch):
@@ -552,6 +646,110 @@ def test_a_former_user_with_only_desktop_history_keeps_their_row(monkeypatch, ca
     counts.clear()
     worker.check()
     assert counts['session-history Scan'] == 1
+
+
+def failing_history(table_query):
+    def query(**kwargs):
+        raise RuntimeError('throttled')
+
+    return query
+
+
+def seeding_table(store, pages):
+    """a table scanned a page at a time; each segment answers its pages in order"""
+    calls = []
+
+    def scan(**kwargs):
+        calls.append(kwargs)
+        segment = kwargs.get('Segment', 0)
+        start = (kwargs.get('ExclusiveStartKey') or {}).get('page', 0)
+        items = pages.get(segment, [[]])
+        answer = {'Items': [dict(subject=s, record='head') for s in items[start]]}
+        if start + 1 < len(items):
+            answer['LastEvaluatedKey'] = {'page': start + 1}
+        return answer
+
+    store.table.scan = scan
+    return calls
+
+
+def test_the_head_index_seed_resumes_where_it_stopped(monkeypatch):
+    docs, history = world()
+    _, store, _, _ = build(monkeypatch, docs, history)
+    store.table.delete_item(Key=dict(subject=SYSTEM, record=HEAD_SUBJECTS_SEEDED))
+    calls = seeding_table(store, {0: [['a'], ['b']], 3: [['c']]})
+    clock = [0.0]
+    monkeypatch.setattr(personal_costs_store.time, 'monotonic', lambda: clock[0])
+
+    def tick():
+        clock[0] += 70
+
+    assert store.seed_head_subjects(on_progress=tick, budget_seconds=50) is False
+    assert store.head_subjects() is None, 'readers keep scanning until it is complete'
+    assert len(calls) == 1
+    calls.clear()
+    assert store.seed_head_subjects(on_progress=tick, budget_seconds=100000) is True
+    # not from the top: the second page of the first segment is where it left off
+    assert calls[0]['Segment'] == 0 and calls[0]['ExclusiveStartKey'] == {'page': 1}
+    assert set(store.head_subjects()) >= {'a', 'b', 'c'}
+    assert store.seed_head_subjects() is False
+    assert not list(store.records(SYSTEM, 'seed-head-subjects:'))
+
+
+def test_a_long_seed_does_not_read_as_a_stalled_collector(monkeypatch):
+    docs, history = world()
+    context, store, _, _ = build(monkeypatch, docs, history)
+    store.table.delete_item(Key=dict(subject=SYSTEM, record=HEAD_SUBJECTS_SEEDED))
+    moments = [NOW.shift(seconds=140 * step) for step in range(1, 9)]
+    seen = []
+    real_scan_pages = {segment: [[f's{segment}']] for segment in range(8)}
+    calls = seeding_table(store, real_scan_pages)
+    inner = store.table.scan
+
+    def slow_scan(**kwargs):
+        now = moments[min(len(calls), len(moments) - 1)]
+        monkeypatch.setattr(arrow, 'utcnow', lambda: now)
+        seen.append(store.collecting().collecting_delayed)
+        return inner(**kwargs)
+
+    store.table.scan = slow_scan
+    context.accounts = SimpleNamespace(
+        list_users=lambda request: SimpleNamespace(
+            listing=[SimpleNamespace(username='settled-user')], paginator=None
+        )
+    )
+    context.is_leader = lambda: True
+    context.distributed_lock = lambda: Mock(spec=['acquire', 'release', 'assert_held'])
+    worker = PersonalCostsCollector(context, store, Mock())
+    worker.activity.capture = lambda *args: None
+    worker._startup = True
+    worker.calculator.month.return_value = month(NOW.floor('month'), NOW, 0.25)
+    worker.check()
+    assert len(seen) == 8 and not any(seen)
+
+
+def test_a_failed_history_read_never_stores_a_complete_zero(monkeypatch):
+    # every desktop this user had has been deleted, so only the history table knows them
+    docs, history = world()
+    context, store, _, _ = build(monkeypatch, docs, history)
+    resource = context.aws().dynamodb_table()
+    resource.Table = lambda name: SimpleNamespace(
+        scan=failing_history(None), query=failing_history(None)
+    )
+    collect(context, store, ('deleted-user',))
+    assert 'listing' not in store.get('deleted-user', 'head')
+
+
+def test_a_failed_history_read_is_not_a_listing_of_zero(monkeypatch):
+    docs, history = world()
+    context, store, _, _ = build(monkeypatch, docs, history)
+    collect(context, store, COLLECTED)
+    resource = context.aws().dynamodb_table()
+    resource.Table = lambda name: SimpleNamespace(
+        scan=failing_history(None), query=failing_history(None)
+    )
+    monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(minutes=10))
+    assert view(context).desktops_unavailable is True
 
 
 def test_a_failed_history_read_leaves_readers_on_the_full_read(monkeypatch):

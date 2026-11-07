@@ -33,6 +33,10 @@ LABELS_SECONDS = 3600
 MONTH = re.compile(r'^\d{4}-\d{2}$')
 SCAN_COMPLETE_FRACTION = 0.9
 MAX_ROWS = 1000
+# a folder's listing is read to its end: what is left out would count as files directly in it.
+# these bound one read, and a folder past them says so.
+MAX_PAGES = 5
+MAX_READ_SECONDS = 30
 FOLDER_SECONDS = 900
 REFRESHED_SECONDS = 60
 VOLUME_SECONDS = 300
@@ -256,6 +260,28 @@ class FolderAnalytics:
         self._labels[uuid] = (time.monotonic(), labels)
         return labels
 
+    def _listing(self, client, request):
+        """(every record, whether any are left out). A later page that fails leaves the folder
+        partial rather than unavailable: its largest rows are already in hand."""
+        deadline = time.monotonic() + MAX_READ_SECONDS
+        page = client.first_page(request)
+        records = list(page.get('records', []))
+        for _ in range(MAX_PAGES - 1):
+            following = ((page.get('_links') or {}).get('next') or {}).get('href')
+            if not following:
+                return records, False
+            if time.monotonic() >= deadline:
+                return records, True
+            try:
+                page = client.first_page(following)
+            except Exception as e:
+                self.logger.warning(
+                    f'storage analytics page read failed: {type(e).__name__}'
+                )
+                return records, True
+            records.extend(page.get('records', []))
+        return records, bool((page.get('_links') or {}).get('next'))
+
     def _read(self, status, path):
         now = time.time()
         relative = quote(status['relative'] or '/', safe='')
@@ -268,7 +294,7 @@ class FolderAnalytics:
             with self._reads:
                 client = self._client(status['target'])
                 labels = self._bucket_labels(client, status['uuid'])
-                page = client.first_page(request)
+                records, truncated = self._listing(client, request)
         except FileNotFoundError:
             return None
         except Exception as e:
@@ -276,7 +302,7 @@ class FolderAnalytics:
             return None
         own = None
         children = []
-        for record in page.get('records', []):
+        for record in records:
             name = record.get('name')
             if name == '.':
                 own = to_row(path, path.rsplit('/', 1)[-1], record, labels, now)
@@ -287,6 +313,6 @@ class FolderAnalytics:
         return dict(
             self=own,
             children=children,
-            truncated=bool((page.get('_links') or {}).get('next')),
+            truncated=truncated,
             measured_at=now,
         )

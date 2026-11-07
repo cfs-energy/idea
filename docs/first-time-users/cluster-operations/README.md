@@ -1,6 +1,7 @@
 # Cluster operations
 
 * [Backfill metrics history](metrics-history.md)
+* [Cluster health metrics](cluster-health-metrics.md)
 * [Application levels and Datadog container logs](logging.md)
 
 Use [Settings](settings.md) for the searchable administrative page, its groups and save controls.

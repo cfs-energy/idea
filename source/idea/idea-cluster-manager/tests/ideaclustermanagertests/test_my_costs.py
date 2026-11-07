@@ -1385,12 +1385,15 @@ def test_a_history_read_that_fails_leaves_the_live_desktops_alone():
         },
         prices={'m5.large': 0.1},
     )
-    # the fake context has no history table wired for this case; the read fails and is
-    # swallowed, because history is additive and must not take the page down
+    # the page stays up with what is known, and says it is not the whole figure
+    service._history_table = lambda: (_ for _ in ()).throw(RuntimeError('throttled'))
     desktops = service.get_summary(USER).desktops
 
     assert desktops.session_count == 1
     assert desktops.sessions[0].name == 'sess-live'
+    assert desktops.is_unavailable is True
+    assert service.desktops_complete is False
+    assert service.desktop_records is None
 
 
 @pytest.mark.parametrize('real_stop_hours', [24, None, 96])

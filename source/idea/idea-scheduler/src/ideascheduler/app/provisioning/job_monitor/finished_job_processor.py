@@ -37,6 +37,17 @@ from ideascheduler.app.provisioning.lifecycle_events import (
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
 
+def record_scratch_outcome(context, logger, job: SocaJob):
+    """a job's scratch folder must never get in the way of finishing the job"""
+    scratch_cleanup = getattr(context, 'scratch_cleanup', None)
+    if scratch_cleanup is None:
+        return
+    try:
+        scratch_cleanup.record_job_finished(job)
+    except Exception as e:
+        logger.error(f'{job.log_tag} scratch record failed: {e}')
+
+
 class ProcessFinishedJob:
     """
     Finished Job Post-Processing
@@ -275,6 +286,9 @@ class ProcessFinishedJob:
             )
             return False
 
+    def record_scratch_outcome(self):
+        record_scratch_outcome(self._context, self._logger, self.job)
+
     def log_job_complete(self):
         log_msg = f'{self.job.log_tag} JobCompleted'
         if self._logger.isEnabledFor(logging.DEBUG):
@@ -353,6 +367,8 @@ class ProcessFinishedJob:
             if not self.publish_to_finished_jobs_db():
                 return None
 
+            self.record_scratch_outcome()
+
             self.log_job_complete()
 
             self.publish_job_metrics()
@@ -407,8 +423,9 @@ class FinishedJobProcessor:
 
         a task restored from a copy holds jobs in the jobs table that finished after the
         copy was taken. the document store knows those, and re-learning the record here
-        keeps a restore from repeating the completion email and metrics. a failed lookup
-        repeats them, which is better than losing the record.
+        keeps a restore from repeating the completion email and metrics, while its scratch
+        folder still goes on the record. a failed lookup repeats them, which is better than
+        losing the record.
         """
         stored = self._context.job_cache.get_completed_job_by_uid(job_uid)
         if stored is not None or Utils.is_empty(job_uid):
@@ -421,7 +438,11 @@ class FinishedJobProcessor:
         if indexed is not None:
             self._context.job_cache.add_finished_job(indexed)
             self._context.job_cache.mark_job_indexed(indexed)
+            self._record_scratch_outcome(indexed)
         return indexed
+
+    def _record_scratch_outcome(self, job: SocaJob):
+        record_scratch_outcome(self._context, self._logger, job)
 
     def _process_finished_jobs(self, jobs: List[SocaJob]):
         if len(jobs) == 0:

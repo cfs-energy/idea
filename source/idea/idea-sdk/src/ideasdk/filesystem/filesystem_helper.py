@@ -40,6 +40,8 @@ from ideasdk.filesystem.user_identity import UserIdentity
 
 import arrow
 import mimetypes
+import re
+import secrets
 import shutil
 import time
 from typing import Dict, List, Tuple
@@ -86,6 +88,14 @@ RESTRICTED_ROOT_FOLDERS = [
     'var',
 ]
 
+# <name>_<time>_<token>.zip: the token is what tells an archive built here from a person's own zip
+GENERATED_ARCHIVE_NAME = re.compile(
+    r'_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[0-9a-f]{12}\.zip$'
+)
+
+# Names listed in the message when a delete partly fails
+MAX_DELETE_FAILURES_SHOWN = 5
+
 # Global rate limiting storage
 _tail_rate_limits: Dict[str, List[float]] = {}
 _active_tail_users: set = set()
@@ -119,6 +129,8 @@ class FileSystemHelper:
         # Permission cache: {(file_path, username, check_type): (result, timestamp)}
         self._permission_cache: Dict[Tuple[str, str, str], Tuple[bool, float]] = {}
         self._last_permission_cleanup = 0
+        self._archive_being_written = None
+        self._files_left_out = 0
 
     def run_as_user(self, operation):
         if self._identity is None:
@@ -424,7 +436,7 @@ class FileSystemHelper:
             # Use efficient tail algorithm that reads from end of file
             prefetch_lines = self._tail_file_efficiently(file, max_line_count)
             for line in prefetch_lines:
-                lines.append(line.strip())
+                lines.append(line.rstrip())
 
             # Get file size for cursor position
             with open(file, 'r') as f:
@@ -559,8 +571,33 @@ class FileSystemHelper:
 
         return SaveFileResult()
 
-    @as_user
     def download_files(self, request: DownloadFilesRequest) -> str:
+        return self.create_download_archive(request)[0]
+
+    def _downloads_dir(self) -> str:
+        return os.path.join(self.get_user_home(), 'idea_downloads')
+
+    def is_generated_archive(self, path: str) -> bool:
+        """
+        An archive this class built for a download, as opposed to anything else a person keeps
+        in that folder: only these may be removed once they have been handed over.
+        """
+        return (
+            GENERATED_ARCHIVE_NAME.search(os.path.basename(path)) is not None
+            and os.path.dirname(path) == self._downloads_dir()
+            and not os.path.islink(path)
+        )
+
+    @as_user
+    def remove_generated_archive(self, path: str) -> None:
+        if self.is_generated_archive(path):
+            os.remove(path)
+
+    @as_user
+    def create_download_archive(self, request: DownloadFilesRequest) -> Tuple[str, int]:
+        """
+        :return: the archive's path, and how many files could not be read and were left out
+        """
         files = Utils.get_as_list(request.files, [])
         if not files:
             raise exceptions.invalid_params('file is required')
@@ -611,7 +648,7 @@ class FileSystemHelper:
 
             download_list.append(file)
 
-        downloads_dir = os.path.join(self.get_user_home(), 'idea_downloads')
+        downloads_dir = self._downloads_dir()
         if Utils.is_symlink(downloads_dir):
             # prevent symlink/hijack attacks
             raise exceptions.invalid_params(
@@ -669,7 +706,10 @@ class FileSystemHelper:
             else:
                 zip_filename = f'idea_download_{timestamp}.zip'
 
+        zip_filename = f'{zip_filename[: -len(".zip")]}_{secrets.token_hex(6)}.zip'
         zip_file_path = os.path.join(downloads_dir, zip_filename)
+        self._archive_being_written = zip_file_path
+        self._files_left_out = 0
 
         if self.logger.isEnabledFor(logging.DEBUG):
             if len(download_list) == 1:
@@ -699,23 +739,31 @@ class FileSystemHelper:
 
         # Use streaming zip creation to prevent OOM on large files
         # Enable ZIP64 for large files/archives (>4GB or >65k files)
-        with ZipFile(
-            zip_file_path,
-            'w',
-            compression=ZIP_DEFLATED,
-            compresslevel=1,
-            allowZip64=True,
-        ) as zip_archive:
-            # Track file names to avoid conflicts
-            used_names = set()
+        try:
+            with ZipFile(
+                zip_file_path,
+                'w',
+                compression=ZIP_DEFLATED,
+                compresslevel=1,
+                allowZip64=True,
+            ) as zip_archive:
+                # Track file names to avoid conflicts
+                used_names = set()
 
-            for download_item in download_list:
-                if Utils.is_file(download_item):
-                    # Handle single file
-                    self._add_file_to_zip(zip_archive, download_item, used_names)
-                elif Utils.is_dir(download_item):
-                    # Handle directory recursively
-                    self._add_directory_to_zip(zip_archive, download_item, used_names)
+                for download_item in download_list:
+                    if Utils.is_file(download_item):
+                        # Handle single file
+                        self._add_file_to_zip(zip_archive, download_item, used_names)
+                    elif Utils.is_dir(download_item):
+                        # Handle directory recursively
+                        self._add_directory_to_zip(
+                            zip_archive, download_item, used_names
+                        )
+        except BaseException:
+            # includes being stopped for taking too long: half an archive is only quota used up
+            if os.path.exists(zip_file_path):
+                os.remove(zip_file_path)
+            raise
 
         # Log successful completion of large downloads
         zip_size = os.path.getsize(zip_file_path)
@@ -725,7 +773,7 @@ class FileSystemHelper:
                 f'Archive size: {zip_size // 1024 // 1024}MB from source: {total_size // 1024 // 1024}MB'
             )
 
-        return zip_file_path
+        return zip_file_path, self._files_left_out
 
     @as_user
     def create_file(self, request: CreateFileRequest) -> CreateFileResult:
@@ -787,7 +835,8 @@ class FileSystemHelper:
         if Utils.is_empty(files):
             raise exceptions.invalid_params('files[] is required')
 
-        deletion_errors = []
+        # what could not be deleted, and in a word or two why
+        failures = []
         successfully_deleted = []
 
         for file in files:
@@ -816,48 +865,56 @@ class FileSystemHelper:
                     self.logger.info(f'{self.username} deleted file: "{file}"')
                     successfully_deleted.append(file)
                 else:
-                    # File doesn't exist or is not a recognizable type
                     self.logger.warning(
                         f'{self.username} attempted to delete non-existent or unrecognized file: "{file}"'
                     )
-                    deletion_errors.append(
-                        f'File not found or unrecognized type: {file}'
-                    )
+                    failures.append((file, 'not found'))
 
             except FileNotFoundError:
                 # File was already deleted or never existed
                 self.logger.warning(
                     f'{self.username} attempted to delete already deleted file: "{file}"'
                 )
-                deletion_errors.append(f'File not found: {file}')
+                failures.append((file, 'not found'))
             except PermissionError as e:
-                # Permission denied during deletion
                 self.logger.error(
                     f'{self.username} permission denied deleting file: "{file}" - {str(e)}'
                 )
-                deletion_errors.append(f'Permission denied: {file}')
+                failures.append((file, 'permission denied'))
+            except exceptions.SocaException as e:
+                self.logger.warning(
+                    f'{self.username} not allowed to delete file: "{file}" - {e.message}'
+                )
+                failures.append((file, 'permission denied'))
             except OSError as e:
                 # Other OS-level errors (file in use, I/O errors, etc.)
                 self.logger.error(
                     f'{self.username} OS error deleting file: "{file}" - {str(e)}'
                 )
-                deletion_errors.append(f'OS error: {file} - {str(e)}')
+                failures.append((file, e.strerror or str(e)))
             except Exception as e:
-                # Catch any other unexpected errors
                 self.logger.error(
                     f'{self.username} unexpected error deleting file: "{file}" - {str(e)}',
                     exc_info=True,
                 )
-                deletion_errors.append(f'Unexpected error: {file} - {str(e)}')
+                failures.append((file, 'unexpected error'))
 
-        # Log summary of deletion operation
-        if deletion_errors:
+        if failures:
             self.logger.warning(
-                f'{self.username} deletion completed with {len(deletion_errors)} errors. Successfully deleted: {len(successfully_deleted)}, Errors: {len(deletion_errors)}'
+                f'{self.username} deletion completed with {len(failures)} errors. Successfully deleted: {len(successfully_deleted)}, Errors: {len(failures)}'
+            )
+            shown = ', '.join(
+                f'{os.path.basename(file.rstrip("/"))} ({reason})'
+                for file, reason in failures[:MAX_DELETE_FAILURES_SHOWN]
+            )
+            more = len(failures) - MAX_DELETE_FAILURES_SHOWN
+            if more > 0:
+                shown += f', and {more} more'
+            raise exceptions.soca_exception(
+                error_code=errorcodes.FILE_BROWSER_DELETE_FAILED,
+                message=f'Could not delete {len(failures)} of {len(files)}: {shown}',
             )
 
-        # For now, return success even with some errors (backward compatibility)
-        # Consider adding error details to the result model if needed
         return DeleteFilesResult()
 
     @as_user
@@ -1217,11 +1274,21 @@ class FileSystemHelper:
 
         _last_global_cleanup = current_time
 
+    def _skip_generated_archives(self, start: str, root: str, files: List[str]) -> None:
+        """
+        Archives built here don't belong in a new one, unless the downloads folder is what
+        was asked for; a person's own files always do. Call from inside an os.walk.
+        """
+        downloads_dir = self._downloads_dir()
+        if root == downloads_dir and start != downloads_dir:
+            files[:] = [f for f in files if not GENERATED_ARCHIVE_NAME.search(f)]
+
     def _calculate_directory_size(self, directory_path: str) -> int:
         """Calculate the total size of all files in a directory recursively"""
         total_size = 0
         try:
             for dirpath, dirnames, filenames in os.walk(directory_path):
+                self._skip_generated_archives(directory_path, dirpath, filenames)
                 for filename in filenames:
                     file_path = os.path.join(dirpath, filename)
                     try:
@@ -1369,6 +1436,7 @@ class FileSystemHelper:
             # Walk through the directory and add all files
             files_added = 0
             for root, dirs, files in os.walk(directory_path):
+                self._skip_generated_archives(directory_path, root, files)
                 # Calculate relative path from the source directory
                 rel_dir = os.path.relpath(root, directory_path)
                 if rel_dir == '.':
@@ -1386,6 +1454,8 @@ class FileSystemHelper:
                 # Add all files in this directory
                 for filename in files:
                     file_path = os.path.join(root, filename)
+                    if file_path == self._archive_being_written:
+                        continue
                     archive_file_path = os.path.join(archive_dir, filename).replace(
                         '\\', '/'
                     )
@@ -1401,6 +1471,7 @@ class FileSystemHelper:
                                 self.logger.debug(
                                     f'Skipping file (no read permission) - User: {self.username}, File: {file_path}'
                                 )
+                            self._files_left_out += 1
                             continue
 
                         # Check if we can read this file
@@ -1432,6 +1503,7 @@ class FileSystemHelper:
                         self.logger.warning(
                             f'Skipping file in archive - User: {self.username}, File: {file_path}, Error: {str(e)}'
                         )
+                        self._files_left_out += 1
                         continue
 
             # Log completion

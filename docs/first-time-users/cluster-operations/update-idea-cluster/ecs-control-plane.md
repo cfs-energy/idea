@@ -106,6 +106,17 @@ security login rest-role create -vserver <SVM> -role idea-metrics -api /api/stor
 security login create -vserver <SVM> -user-or-group-name idea-metrics -application http -authentication-method password -role idea-metrics
 ```
 
+Folder sizes in the Storage usage pane come from ONTAP File System Analytics, read through this login. Open that path on the home volume only. The wildcard needs its quotes. A proven dev check: the home volume answers 200, another volume 403.
+
+```bash
+security login rest-role create -vserver <SVM> -role idea-metrics -api "/api/storage/volumes/*/files" -access none
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/storage/volumes/<HOME_VOLUME_UUID>/files -access readonly
+```
+
+ONTAP cannot separate listing a folder from reading a file on this path, so this role alone could read file contents on the home volume. IDEA never does: its ONTAP client refuses any read that could reach file contents. Security audit logging of those reads is not available on FSx for ONTAP.
+
+The directory checks in [cluster health metrics](../cluster-health-metrics.md) read through this same login and need four more paths on its role.
+
 ```bash
 aws --profile <PROFILE> --region <REGION> secretsmanager create-secret --name idea-<CLUSTER_NAME>-ontap-metrics-<NAME> --secret-string '<password>' \
   --tags Key=idea:ClusterName,Value=<CLUSTER_NAME> Key=idea:ModuleName,Value=cluster-manager --query ARN

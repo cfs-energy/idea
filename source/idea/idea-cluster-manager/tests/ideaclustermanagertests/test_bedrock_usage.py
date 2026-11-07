@@ -1718,6 +1718,55 @@ def test_a_full_rescan_is_made_daily_and_picks_up_a_very_late_record(monkeypatch
     assert len(full) == 2
 
 
+def test_a_long_catch_up_that_would_truncate_still_saves_its_state(monkeypatch):
+    # more groups across the window than one query can answer, few enough for each day of it
+    day = 24 * HOUR
+    events = [
+        {
+            'ts': SIM_START - offset * day + HOUR * minute,
+            'visible_at': SIM_START - offset * day + HOUR * minute,
+            'caller': caller_arn(),
+            'model': MODEL_A,
+            'in': 1,
+            'out': 1,
+        }
+        for offset in range(1, 9)
+        for minute in range(3)
+    ]
+    clock = SimClock(SIM_START)
+    service, logs, usage = sim_service(
+        monkeypatch,
+        clock,
+        events,
+        {
+            f'{MODULE_ID}.bedrock.usage.overlap_minutes': 60,
+            f'{MODULE_ID}.bedrock.usage.max_query_results': 10,
+            f'{MODULE_ID}.bedrock.usage.lookback_days': 30,
+            f'{MODULE_ID}.bedrock.usage.full_rescan_hours': 10**4,
+        },
+    )
+    service.aggregate()
+    # the whole window would not fit, so it was read again a day at a time
+    assert len(logs.spans) > 2 and all(span <= day for span in logs.spans[1:])
+    assert sum(
+        item.get('invocations', 0) for item in stored_usage(usage).values()
+    ) >= len(events)
+    # the state was kept, so the next run reads only what is new
+    clock.now += 15 * 60
+    logs.spans.clear()
+    service.aggregate()
+    assert max(logs.spans) <= 3 * HOUR
+
+
+def test_each_day_of_a_catch_up_counts_only_its_own_time():
+    from ideaclustermanager.app.projects import bedrock_usage_service
+
+    query = bedrock_usage_service.window_query(1000, 2000)
+    assert '@timestamp >= 1000000 and @timestamp < 2000000' in query
+    assert query.index('@timestamp') < query.index('| stats')
+    assert 'bin(1h)' in query
+
+
 def test_a_changed_project_mapping_scans_the_whole_window_again(monkeypatch):
     clock = SimClock(SIM_START)
     service, logs, _ = sim_service(

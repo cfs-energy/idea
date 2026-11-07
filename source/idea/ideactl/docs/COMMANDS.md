@@ -155,6 +155,8 @@ Write one or more typed settings keys.
 
 **Reads:** nothing local. **Changes:** DynamoDB settings rows via `setConfigEntry`. **Exit codes:** 1 on a malformed entry; 0 if the confirm prompt is declined.
 
+An exact `Value=` on a `str` key writes an empty string. Any other type, and a blank `Value= `, is refused.
+
 **Example:** `ideactl config set --cluster-name sample-cluster --aws-region us-east-2 --force 'Key=cluster.locale,Type=str,Value=en_US'`
 
 `list<bool>` is accepted and stored as a list of strings. Keys may not contain `,` or `:`.
@@ -680,7 +682,7 @@ No command-specific options. **Example:** `ideactl shared-storage -h`
 
 ## `shared-storage add-file-system`
 
-Interactive questionnaire to create a new file system in cluster settings, then optionally deploy the shared-storage module.
+This command is not available in `ideactl`: its adapters were not carried over. It fails with an error and changes nothing. Write the same `shared-storage.<NAME>.*` rows with `config set` instead; see [storage management](../../../../docs/modules/storage/storage-management.md).
 
 **Usage:** `ideactl shared-storage add-file-system [options]`
 
@@ -691,11 +693,10 @@ Interactive questionnaire to create a new file system in cluster settings, then 
 | `--aws-profile <aws-profile>` | yes | none | no |
 | `--kms-key-id <kms-key-id>` | yes | none | no |
 
-**Reads:** prompts; optional EFS/FSx describe calls. The live adapter still requires a cluster name even though the parser does not. **Changes:** shared-storage settings keys, and a module deploy if the operator picks that next step. **Example:** `ideactl shared-storage add-file-system --cluster-name sample-cluster --aws-region us-east-2`
 
 ## `shared-storage attach-file-system`
 
-Same questionnaire as add-file-system, for an existing file system (`use_existing_fs: true`).
+This command is not available in `ideactl`: its adapters were not carried over. It fails with an error and changes nothing. Write the same `shared-storage.<NAME>.*` rows with `config set` instead; see [storage management](../../../../docs/modules/storage/storage-management.md).
 
 **Usage:** `ideactl shared-storage attach-file-system [options]`
 
@@ -706,7 +707,6 @@ Same questionnaire as add-file-system, for an existing file system (`use_existin
 | `--aws-profile <aws-profile>` | yes | none | no |
 | `--kms-key-id <kms-key-id>` | yes | none | no |
 
-**Reads:** prompts plus EFS/FSx describe. **Changes:** shared-storage settings. Does not offer the deploy next step. **Example:** `ideactl shared-storage attach-file-system --cluster-name sample-cluster --aws-region us-east-2`
 
 ## `utils`
 

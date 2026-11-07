@@ -2,7 +2,7 @@ import React, {useEffect, useRef, useState} from 'react';
 import {Alert, Button} from '@cloudscape-design/components';
 import type {Terminal, FitAddon} from 'ghostty-web';
 import {colorBackgroundContainerContent, colorTextBodyDefault} from '@cloudscape-design/design-tokens';
-import {Navigate, useSearchParams} from 'react-router-dom';
+import {Link, Navigate, useSearchParams} from 'react-router-dom';
 import TerminalClient from '../../client/terminal-client';
 import {ConnectionState, TerminalConnection} from './terminal/connection';
 import {KeyBar, modifiedInput} from './terminal/key-bar';
@@ -14,20 +14,20 @@ export {terminalEnabled};
 
 const labels: Record<ConnectionState, string> = {
     disconnected: 'Disconnected', connecting: 'Connecting…', connected: 'Connected', reconnecting: 'Reconnecting…',
-    ended: 'Connection ended. Close this tab and open it again.', denied: 'Terminal access was denied.'
+    ended: 'Connection ended.', denied: "You don't have access to this terminal."
 };
 const reasonLabels: Record<string, string> = {
-    'idle-timeout': 'Closed after the input-idle limit. Close this tab and open it again to return.',
-    'max-duration': 'Closed after the maximum connection duration. Close this tab and open it again to return.',
-    'shell-exited': 'Your shell exited. Close this tab and open it again for a new one.',
-    'access-denied': 'Terminal access was denied. Check that Terminal and your account are enabled and that you own the target.',
-    'unavailable': 'The target is temporarily unavailable or the terminal limit has been reached. Close any extra terminals. Retrying…',
-    'trust-not-ready': 'The target is refreshing terminal access. Retrying…',
-    'target-stopped': 'This desktop is stopped. Start it from My desktops, then close this tab and open it again.',
-    'target-error': 'This desktop is in an error or deleting state. Check it in My desktops.',
-    'target-misconfigured': 'The target needs administrator attention. Ask your administrator to check terminal SSH trust and infrastructure configuration.',
-    'ack-timeout': 'Terminal stopped accepting output. Close this tab and open it again.',
-    'retry-exhausted': 'Unable to connect after 8 attempts. Check the target and your network, then close this tab and open it again.',
+    'idle-timeout': 'Closed because nothing was typed for a while.',
+    'max-duration': 'Closed because it reached the time limit for one connection.',
+    'shell-exited': 'Your shell exited.',
+    'access-denied': "You don't have access to this terminal. If you need it, contact your administrator.",
+    'unavailable': 'The terminal is busy or unavailable. Close any extra terminals. Retrying…',
+    'trust-not-ready': 'Terminal access is being refreshed. Retrying…',
+    'target-stopped': 'This desktop is stopped. Start it from My desktops, then reconnect.',
+    'target-error': 'This desktop has failed or is being terminated. Check it in My desktops.',
+    'target-misconfigured': 'This terminal needs an administrator. Ask your administrator to check its setup.',
+    'ack-timeout': 'The terminal stopped accepting output.',
+    'retry-exhausted': 'Unable to connect after 8 attempts. Check your network, then reconnect.',
     'server-shutdown': 'The terminal service is restarting. Reconnecting…',
 };
 
@@ -128,7 +128,7 @@ export function TerminalView({client, target, visible = true}: {client: Terminal
     }, []);
     useEffect(() => {if (terminal.current) {terminal.current.options.fontSize = fontSize; fit.current?.fit();}}, [fontSize]);
     useEffect(() => {if (visible && terminal.current) {fit.current?.fit(); terminal.current.focus();}}, [visible]);
-    // Opening a tab connects and closing it disconnects; there is no manual connect control.
+    // Opening a tab connects and closing it disconnects; Reconnect appears only once a connection has ended.
     useEffect(() => {
         if (!ready) return;
         const next = new TerminalConnection({
@@ -149,6 +149,7 @@ export function TerminalView({client, target, visible = true}: {client: Terminal
     return <section ref={panel} className="terminal-panel" aria-label="Browser terminal">
         <div className="terminal-controls">
             <div role="status" aria-live="polite" className="terminal-status">{ready ? reasonLabels[reason] ?? labels[state] : 'Loading terminal…'}</div>
+            {state === 'ended' && <Button onClick={() => {connection.current?.start(); terminal.current?.focus();}}>Reconnect</Button>}
             <Button ariaLabel="Smaller terminal text" variant="icon" iconName="zoom-out" disabled={!ready || fontSize <= MIN_FONT} onClick={() => changeFont(fontSize - 1)}/>
             <Button ariaLabel="Larger terminal text" variant="icon" iconName="zoom-in" disabled={!ready || fontSize >= MAX_FONT} onClick={() => changeFont(fontSize + 1)}/>
         </div>
@@ -260,14 +261,19 @@ export const openBastion = () => shellStore.open('bastion', 'Bastion');
 /** Old bookmarks of the Terminal page open the dock instead. */
 export function TerminalRedirect({client}: {client: TerminalClient}) {
     const [params] = useSearchParams();
+    const wanted = params.get('target');
+    const [checked, setChecked] = useState<'waiting' | 'found' | 'gone'>(wanted && terminalEnabled() ? 'waiting' : 'found');
     useEffect(() => {
         if (!terminalEnabled()) return;
-        const wanted = params.get('target');
         void shellStore.loadTargets(client).then(() => {
-            const targets = shellStore.get().targets ?? [];
-            const target = targets.find(item => item.id === wanted) ?? targets.find(item => item.id === 'bastion');
+            const {targets = [], targetsFailed} = shellStore.get();
+            // a bookmark to a desktop that has gone must not quietly open somewhere else
+            const target = wanted ? targets.find(item => item.id === wanted) : targets.find(item => item.id === 'bastion');
             if (target) shellStore.open(target.id, target.id === 'bastion' ? 'Bastion' : target.label);
+            setChecked(wanted && !target && !targetsFailed ? 'gone' : 'found');
         });
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
-    return <Navigate to={params.get('target')?.startsWith('desktop:') ? '/home/virtual-desktops' : '/'} replace/>;
+    if (checked === 'waiting') return null;
+    if (checked === 'gone') return <Alert type="warning">That desktop is not available for a terminal. It may have been stopped or removed. See <Link to="/home/virtual-desktops">My desktops</Link>.</Alert>;
+    return <Navigate to={wanted?.startsWith('desktop:') ? '/home/virtual-desktops' : '/'} replace/>;
 }

@@ -19,6 +19,8 @@ QALTER_ERROR_CODE_JOB_IS_RUNNING = 167
 QMGR_ERROR_CODE_OBJECT_BUSY = 179
 
 QSTAT = '/opt/pbs/bin/qstat'
+QSELECT = '/opt/pbs/bin/qselect'
+PRINTJOB = '/opt/pbs/bin/printjob'
 QMGR = '/opt/pbs/bin/qmgr'
 PBSNODES = '/opt/pbs/bin/pbsnodes'
 QALTER = '/opt/pbs/bin/qalter'

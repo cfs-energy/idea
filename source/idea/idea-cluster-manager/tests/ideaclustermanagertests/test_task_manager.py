@@ -14,9 +14,12 @@ from ideadatamodel import constants
 from ideaclustermanager.app.accounts import account_tasks
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideaclustermanager.app.accounts.db.group_dao import GroupDAO
+from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+    PasswordRefused,
+)
 from ideaclustermanager.app.projects import project_tasks
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
-from ideaclustermanager.app.tasks.base_task import BaseTask
+from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 from ideaclustermanagertests.metrics_fakes import FakeConfig
 
@@ -128,6 +131,70 @@ def test_ldap_absence_only_discarded_when_account_is_deleted(deleted):
     task.invoke.side_effect = ldap.NO_SUCH_OBJECT()
     manager.execute_task(message)
     assert context.aws().sqs().delete_message.call_count == int(deleted)
+
+
+def test_a_task_that_cannot_succeed_is_recorded_and_stops_blocking_its_group():
+    manager, context, task, message = build('accounts.sync-password')
+    task.entity_ref.return_value = None
+    task.invoke.side_effect = TaskCannotSucceed('the directory refused the password')
+    manager.execute_task(message)
+    context.aws().sqs().delete_message.assert_called_once()
+    context.logger().exception.assert_not_called()
+
+
+def refused_password_task(tmp_path, side_effect):
+    automation = tmp_path / 'automation'
+    folder = automation / 'abc'
+    folder.mkdir(parents=True)
+    password = folder / 'password.txt'
+    password.write_text('secret-value')
+    context = Mock()
+    context.config.return_value = FakeConfig(
+        {'directoryservice.automation_dir': str(automation)}
+    )
+    context.ldap_client.change_password.side_effect = side_effect
+    return account_tasks.SyncPasswordInDirectoryServiceTask(context), password
+
+
+def test_a_password_the_directory_refuses_is_not_retried_and_leaves_no_file(tmp_path):
+    task, password = refused_password_task(tmp_path, PasswordRefused())
+    with pytest.raises(TaskCannotSucceed) as raised:
+        task.invoke({'username': 'user', 'password_file': str(password)})
+    assert 'secret-value' not in str(raised.value)
+    assert not password.exists()
+
+
+def test_any_other_directory_failure_keeps_the_file_for_the_retry(tmp_path):
+    task, password = refused_password_task(tmp_path, RuntimeError('directory busy'))
+    with pytest.raises(RuntimeError):
+        task.invoke({'username': 'user', 'password_file': str(password)})
+    assert password.exists()
+
+
+def test_the_directory_client_says_when_a_password_is_refused():
+    from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+        ActiveDirectoryClient,
+    )
+
+    class UserDoesNotExist(Exception):
+        pass
+
+    class InvalidPassword(Exception):
+        pass
+
+    client = ActiveDirectoryClient.__new__(ActiveDirectoryClient)
+    client.context = Mock()
+    client.logger = Mock()
+    client.options = Mock(directory_id='d-1')
+    client.context.config().get_string.return_value = (
+        constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY
+    )
+    ds = client.context.aws().ds()
+    ds.exceptions.UserDoesNotExistException = UserDoesNotExist
+    ds.exceptions.InvalidPasswordException = InvalidPassword
+    ds.reset_user_password.side_effect = InvalidPassword()
+    with pytest.raises(PasswordRefused):
+        client.change_password('user', 'weak')
 
 
 def test_full_pool_warning_once_per_episode(monkeypatch):

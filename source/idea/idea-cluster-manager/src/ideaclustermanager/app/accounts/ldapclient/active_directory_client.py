@@ -25,6 +25,10 @@ import time
 from typing import List
 
 
+class PasswordRefused(Exception):
+    """the directory will not take this password, and asking again gets the same answer."""
+
+
 class ActiveDirectoryClient(AbstractLDAPClient):
     def __init__(self, context: SocaContext, options: LdapClientOptions, logger=None):
         if logger is None:
@@ -238,6 +242,8 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                     error_code=errorcodes.AUTH_USER_NOT_FOUND,
                     message=f'{username} is not yet synced with AD Domain Controllers. Please wait for a few minutes and try again.',
                 )
+            except self.context.aws().ds().exceptions.InvalidPasswordException:
+                raise PasswordRefused() from None
         else:
             raise exceptions.soca_exception(
                 error_code=errorcodes.VALIDATION_FAILED,

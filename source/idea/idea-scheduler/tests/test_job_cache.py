@@ -27,6 +27,7 @@ from ideadatamodel import (
     SocaJobExecutionHost,
     SocaJobExecutionRun,
 )
+from ideascheduler.app.provisioning.job_monitor import job_cache as job_cache_module
 from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
 
 
@@ -613,6 +614,20 @@ def test_prune_deletes_only_finished_jobs_past_the_retention(job_cache):
     assert job_cache.get_completed_job_by_uid('uid-old') is None
 
 
+def test_each_prune_pass_says_what_it_did(job_cache, monkeypatch):
+    add_finished_job_aged(job_cache, 'kept', 1)
+    db = job_cache._jobs_db
+    lines = []
+    monkeypatch.setattr(db._logger, 'info', lines.append)
+    assert db.prune_finished_jobs() == 0
+    assert lines == ['finished job prune: nothing older than 400 days']
+
+
+def test_prune_before_the_first_finished_job_is_not_an_error(job_cache):
+    # the table has no job_data column yet, which failed every hour on a new cluster
+    assert job_cache._jobs_db.prune_finished_jobs() == 0
+
+
 def test_prune_falls_back_to_queue_time_and_keeps_a_job_with_no_time(job_cache):
     never_ran = build_job('never-ran', state=SocaJobState.FINISHED)
     never_ran.queue_time = arrow.utcnow().shift(days=-500).datetime
@@ -653,6 +668,62 @@ def test_a_large_backlog_is_pruned_over_several_bounded_passes(job_cache, monkey
     assert [db.prune_finished_jobs() for _ in range(4)] == [4, 1, 0, 0]
 
     assert finished_job_ids(job_cache) == {'kept'}
+
+
+def add_finished_job_undated(job_cache, job_id):
+    add_finished_job_aged(job_cache, job_id, 1)
+    db = job_cache._jobs_db
+    conn = db.db.engine.raw_connection()
+    try:
+        conn.execute(
+            f"UPDATE {job_cache_module.FINISHED_JOBS_TABLE} SET job_data = '{{}}' "
+            'WHERE id = (SELECT MAX(id) FROM '
+            f'{job_cache_module.FINISHED_JOBS_TABLE})'
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_undated_rows_at_the_front_cannot_stop_the_prune(job_cache, monkeypatch):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 2)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    # four rows, two batches, one pass: the expired row is out of reach of the first
+    for _ in range(4):
+        add_finished_job_undated(job_cache, f'undated-{_}')
+    add_finished_job_aged(job_cache, 'old', 500)
+    assert db.prune_finished_jobs() == 0
+    assert db.prune_finished_jobs() == 1
+    assert 'old' not in finished_job_ids(job_cache)
+
+
+def test_the_walk_wraps_at_the_end_and_finds_what_expired_behind_it(
+    job_cache, monkeypatch
+):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 2)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 3)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    add_finished_job_aged(job_cache, 'first', 1)
+    assert db.prune_finished_jobs() == 0
+    assert db._prune_cursor == 0
+    add_finished_job_aged(job_cache, 'second', 500)
+    assert db.prune_finished_jobs() == 1
+
+
+def test_one_pass_stays_inside_its_budget(job_cache, monkeypatch):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 1)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    for index in range(5):
+        add_finished_job_aged(job_cache, f'recent-{index}', 1)
+    db.prune_finished_jobs()
+    assert db._prune_cursor == 2
+    db.prune_finished_jobs()
+    assert db._prune_cursor == 4
 
 
 def test_prune_does_not_hold_the_database_lock_between_batches(job_cache, monkeypatch):

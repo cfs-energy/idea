@@ -517,3 +517,13 @@ def test_a_missing_private_zone_degrades_the_refresh(refresh):
     assert '/etc/ssh/sshd_config.d/10-idea-kex.conf' in payload
     assert 's/^PBS_SERVER=.*/PBS_SERVER=scheduler.private_dns_name/' in payload
     assert 'idea-scheduler.conf' not in payload
+
+
+def test_stack_expiry_runs_on_the_leader_and_a_failure_costs_only_itself(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    app._stack_expiry.tick.side_effect = RuntimeError('no table')
+    app._refresh_bootstrap_loop()
+    # the loop wakes at 0, 60, 21599, 21600, 21660, 43200; not before leadership
+    assert app._stack_expiry.tick.call_count == 5
+    assert app._session_counts.publish.call_count == 3

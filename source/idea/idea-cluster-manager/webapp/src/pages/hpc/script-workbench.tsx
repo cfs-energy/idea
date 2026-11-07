@@ -10,7 +10,8 @@ import {
     Header,
     Link,
     SpaceBetween,
-    Table
+    Table,
+    StatusIndicator
 } from "@cloudscape-design/components";
 import { v4 as uuid } from "uuid";
 import { Project, SubmitJobResult } from "../../client/data-model";
@@ -534,22 +535,29 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                         <div>
                             <Box variant="awsui-key-label">Total</Box>
                             <Box variant="h2">
-                                ${this.formatCurrency(costData.line_items_total?.amount || 0)} {costData.line_items_total?.unit || 'USD'}
+                                {costData.price_unavailable ? 'Price not available' : `$${this.formatCurrency(costData.line_items_total?.amount || 0)} ${costData.line_items_total?.unit || 'USD'}`}
                             </Box>
                         </div>
                         {budget && (
                             <div>
                                 <Box variant="awsui-key-label">Budget</Box>
-                                <Box variant="h3">{budget.budget_name || 'N/A'}</Box>
-                                <Box variant="small" color="text-body-secondary">
-                                    ${this.formatCurrency(budget.actual_spend?.amount || 0)} spent of
-                                    ${this.formatCurrency(budget.budget_limit?.amount || 0)} {budget.budget_limit?.unit || 'USD'}
-                                </Box>
+                                {(budget as any).is_missing
+                                    ? <StatusIndicator type="error">
+                                        Budget not found: <strong>{budget.budget_name}</strong>.
+                                        The configured budget no longer exists in AWS Budgets.
+                                    </StatusIndicator>
+                                    : <>
+                                        <Box variant="h3">{budget.budget_name || 'N/A'}</Box>
+                                        <Box variant="small" color="text-body-secondary">
+                                            ${this.formatCurrency(budget.actual_spend?.amount || 0)} spent of
+                                            ${this.formatCurrency(budget.budget_limit?.amount || 0)} {budget.budget_limit?.unit || 'USD'}
+                                        </Box>
+                                    </>}
                             </div>
                         )}
                     </ColumnLayout>
 
-                    {costData.line_items && costData.line_items.length > 0 && (
+                    {!costData.price_unavailable && costData.line_items && costData.line_items.length > 0 && (
                         <Table
                             header={<Header variant="h3">By resource</Header>}
                             columnDefinitions={[

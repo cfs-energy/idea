@@ -1,5 +1,6 @@
 import {buildBudgetUsage} from '../../components/job-budget-usage';
 import {render, screen} from '@testing-library/react';
+import createWrapper from '@cloudscape-design/components/test-utils/dom';
 import {JobInfo, JobWaitingSignals, JobStatus, JobCosts, JobBudgetImpact} from './jobs';
 import {SocaJob} from '../../client/data-model';
 import {initTestAppContext} from '../../test-support';
@@ -130,7 +131,7 @@ describe('job waiting signals', () => {
         })} now={NOW}/>);
         // asserted over the whole rendered text: a threshold or a usage count added to
         // the signal would have to show up here
-        expect(container.textContent).toBe('waiting 45 min \u00b7 queue limit: max_provisioned_instances');
+        expect(container.textContent).toBe('waiting 45 min \u00b7 The queue is at its limit for machines. Your job starts when others finish. Nothing to do.');
     });
 
     it('renders nothing for a running job', () => {
@@ -150,18 +151,80 @@ describe('job waiting signals', () => {
             blocking_limit_type: 'max_running_jobs'
         })} now={NOW}/>);
         expect(valueOf('Provisioning Attempt')).toBe('attempt 3 of 3');
-        expect(valueOf('Blocking Queue Limit')).toBe('max_running_jobs');
+        expect(screen.getByText(/The queue is at its limit for running jobs\. Your job starts when others finish\. Nothing to do\./)).toBeInTheDocument();
     });
 
     it('omits both rows on a job that is not waiting to be provisioned', () => {
         render(<JobInfo job={{job_id: '2347', state: 'running', start_time: '2026-08-19T11:00:00Z'}} now={NOW}/>);
         expect(screen.queryByText('Provisioning Attempt')).toBeNull();
-        expect(screen.queryByText('Blocking Queue Limit')).toBeNull();
+        expect(screen.queryByText(/at its limit/)).toBeNull();
+    });
+});
+
+describe('active job costs', () => {
+    beforeEach(() => initTestAppContext());
+
+    it('says when the cost comes rather than showing an empty table', () => {
+        render(<JobCosts job={{job_id: '2345', state: 'running'}}/>);
+        expect(screen.getByText('Cost is calculated when the job finishes.')).toBeInTheDocument();
+        expect(screen.queryByRole('table')).toBeNull();
+    });
+
+    it('still shows no price on a finished job with no estimate', () => {
+        render(<JobCosts job={{job_id: '2345', state: 'finished'}}/>);
+        expect(screen.getByText('Price not available')).toBeInTheDocument();
+    });
+});
+
+describe('job info panel words', () => {
+    beforeEach(() => initTestAppContext());
+
+    const job: SocaJob = {
+        job_id: '2345', name: 'plasma', state: 'finished', start_time: '2026-08-19T09:00:00Z', exit_status: 271,
+        disposition: 'failed', reason_class: 'unknown', job_group: 'abc123', queue_type: 'compute', scaling_mode: 'single-job', comment: 'qstat comment'
+    };
+
+    it('reads the status a person reads, not the raw state', () => {
+        render(<JobInfo job={job} now={NOW}/>);
+        expect(screen.getByText('Failed (exit 271)')).toBeInTheDocument();
+        expect(screen.queryByText('State')).toBeNull();
+    });
+
+    it('keeps internal fields behind Technical details, closed until asked for', () => {
+        const {container} = render(<JobInfo job={job} now={NOW}/>);
+        const toggle = screen.getByRole('button', {name: 'Technical details'});
+        expect(toggle).toHaveAttribute('aria-expanded', 'false');
+        const section = createWrapper(container).findExpandableSection()!.findContent().getElement();
+        for (const title of ['Disposition', 'Reason Class', 'Comment', 'Job Group', 'Queue Type', 'Scaling Mode']) {
+            expect(section).toHaveTextContent(title);
+        }
+    });
+
+    it('says the same reason once', () => {
+        render(<JobInfo job={{job_id: '2346', state: 'held', status_reason: 'Held after attempt 3 of 3: Capacity unavailable.', error_message: 'Held after attempt 3 of 3: Capacity unavailable.'}} now={NOW}/>);
+        expect(screen.getAllByText(/Capacity unavailable/)).toHaveLength(1);
     });
 });
 
 describe('job status and costs', () => {
     beforeEach(() => initTestAppContext());
+
+    it('gives a failed job a next step', () => {
+        render(<JobStatus job={{job_id: '2345', name: 'plasma', state: 'finished', start_time: '2026-08-19T09:00:00Z', exit_status: 2}}/>);
+        expect(screen.getByText('Failed (exit 2)')).toBeInTheDocument();
+        expect(screen.getByText(/plasma\.o2345 and plasma\.e2345/)).toBeInTheDocument();
+    });
+
+    it('explains exit 271 as a signal, not as the script', () => {
+        render(<JobStatus job={{job_id: '2345', name: 'plasma', state: 'finished', start_time: '2026-08-19T09:00:00Z', exit_status: 271}}/>);
+        expect(screen.getByText('Failed (exit 271)')).toBeInTheDocument();
+        expect(screen.getByText('Stopped by a signal, often the walltime limit.')).toBeInTheDocument();
+    });
+
+    it('gives no failure advice to a job the owner deleted', () => {
+        render(<JobStatus job={{job_id: '2345', name: 'plasma', state: 'finished', disposition: 'deleted', exit_status: 271}}/>);
+        expect(screen.queryByText(/signal/)).toBeNull();
+    });
 
     it('shows the scheduler reason for a held job without a command prompt', () => {
         render(<JobStatus job={{state: 'held', status_reason: 'Held after attempt 3 of 3: Capacity unavailable.', comment: 'See qstat -f'}}/>);
@@ -177,7 +240,7 @@ describe('job status and costs', () => {
 
     it('shows the status reason and disposition in detail', () => {
         render(<JobInfo job={{state: 'finished', disposition: 'deleted', status_reason: 'Cancelled by the owner.'}} now={NOW}/>);
-        expect(valueOf('Status Reason')).toBe('Cancelled by the owner.');
+        expect(screen.getByText('Cancelled by the owner.')).toBeInTheDocument();
         expect(valueOf('Disposition')).toBe('deleted');
     });
 

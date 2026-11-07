@@ -140,6 +140,7 @@ class JobsDB:
         )
         self._stop = Event()
         self._prune_thread: Optional[Thread] = None
+        self._prune_cursor = 0
         self._backup_thread: Optional[Thread] = None
         self._backup_connection: Optional[sqlite3.Connection] = None
         self._backed_up_version = None
@@ -258,10 +259,11 @@ class JobsDB:
 
     def prune_finished_jobs(self) -> int:
         """
-        Delete finished jobs older than the retention, oldest first, within a fixed budget
-        per pass. The age lives in job_data, so rows are walked by id, which follows the
-        order they were recorded in, and a batch with nothing to delete ends the walk. A row
-        with no readable time is kept. The database lock is held only for each delete, and
+        Delete finished jobs older than the retention, within a fixed budget per pass. The age
+        lives in job_data, so rows are walked by id, and each pass goes on from where the last
+        stopped, wrapping at the end: a stretch with nothing to delete, such as rows with no
+        readable time, which are kept, cannot hide what lies behind it. The cursor is only this
+        process's: a restart walks from the start. The database lock is held only for each delete, and
         a pass that deletes nothing writes nothing, so it does not trigger a backup.
         :return: the number of rows deleted
         """
@@ -273,28 +275,31 @@ class JobsDB:
             return 0
         cutoff = arrow.utcnow().shift(days=-retention_days)
         deleted = 0
-        last_id = 0
         conn = self.db.engine.raw_connection()
         try:
-            for batch in range(self.PRUNE_MAX_BATCHES):
+            # the first finished job adds this column; until then there is nothing to read
+            columns = conn.execute(f'PRAGMA table_info({FINISHED_JOBS_TABLE})')
+            has_jobs = any(column[1] == 'job_data' for column in columns.fetchall())
+            for batch in range(self.PRUNE_MAX_BATCHES if has_jobs else 0):
                 if batch > 0 and self._stop.wait(self.PRUNE_BATCH_PAUSE_SECONDS):
                     break
                 # table names are module-level constants; identifiers cannot be bound
                 rows = conn.execute(
                     f'SELECT id, job_data FROM {FINISHED_JOBS_TABLE} '
                     'WHERE id > ? ORDER BY id LIMIT ?',
-                    (last_id, self.PRUNE_BATCH_SIZE),
+                    (self._prune_cursor, self.PRUNE_BATCH_SIZE),
                 ).fetchall()
                 if not rows:
+                    self._prune_cursor = 0
                     break
-                last_id = rows[-1][0]
+                self._prune_cursor = rows[-1][0]
                 expired = []
                 for row_id, job_data in rows:
                     finished = self._finished_job_time(job_data)
                     if finished is not None and finished < cutoff:
                         expired.append((row_id,))
                 if not expired:
-                    break
+                    continue
                 with self._db_lock:
                     conn.executemany(
                         f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
@@ -306,6 +311,11 @@ class JobsDB:
         if deleted > 0:
             self._logger.info(
                 f'pruned {deleted} finished jobs older than {retention_days} days'
+            )
+        else:
+            # one line an hour, so a running prune is visible when there is nothing to delete
+            self._logger.info(
+                f'finished job prune: nothing older than {retention_days} days'
             )
         return deleted
 

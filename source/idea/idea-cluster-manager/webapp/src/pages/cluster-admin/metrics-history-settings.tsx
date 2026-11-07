@@ -5,8 +5,9 @@ import {hasAccess} from '../../navigation/task-navigation';
 import {MetricsBackfillStatus} from '../../client/metrics-backfill';
 
 const today = () => new Date().toISOString().slice(0, 10);
+const STATES: Record<MetricsBackfillStatus['state'], string> = {idle: 'not run yet', running: 'running', completed: 'completed', failed: 'failed', interrupted: 'interrupted'};
 const describe = (label: string, status: MetricsBackfillStatus | null) => status
-    ? `${label}: ${status.state}${status.dry_run ? ' (dry run)' : ''}, ${status.jobs_scanned} scanned, ${status.points_built} points built, ${status.points_sent} sent, ${status.points_skipped} skipped, ${status.errors} errors${status.last_error ? ` (${status.last_error})` : ''}`
+    ? `${label}: ${STATES[status.state] ?? status.state}${status.dry_run ? ' (dry run)' : ''}, ${status.jobs_scanned} scanned, ${status.points_built} points built, ${status.points_sent} sent, ${status.points_skipped} skipped, ${status.errors} errors${status.last_error ? ` (${status.last_error})` : ''}`
     : `${label}: status unavailable`;
 
 export function MetricsHistorySettings({active}: {active: boolean}) {
@@ -75,7 +76,7 @@ export function MetricsHistorySettings({active}: {active: boolean}) {
     if (!active || (!canJobs && !canCost)) return null;
     return <div id="backfill-history"><Container header={<Header variant="h2">History backfill</Header>}>
         <SpaceBetween size="m">
-            <div>Enable historical ingestion for each idea.* metric in Datadog before running.</div>
+            <div>Before running, turn on historical ingestion in Datadog for each idea.* metric.</div>
 
             {canJobs && <SpaceBetween direction="horizontal" size="m">
                 <FormField label="Start date (UTC)"><DatePicker ariaLabel="Start date" value={start} onChange={e => setStart(e.detail.value)}/></FormField>
@@ -87,12 +88,12 @@ export function MetricsHistorySettings({active}: {active: boolean}) {
             <Checkbox checked={dryRun} onChange={e => setDryRun(e.detail.checked)}>Dry run</Checkbox>
             {canJobs && <SpaceBetween size="s">
             {errors.jobs && <Alert type="error">Jobs: {errors.jobs}</Alert>}
-            <Button disabled={!canJobs || !jobs || !validJobs || busy.jobs || jobs.state === 'running'} loading={busy.jobs} onClick={() => run('jobs')}>Run jobs</Button>
+            <Button disabled={!canJobs || !jobs || !validJobs || busy.jobs || jobs.state === 'running'} loading={busy.jobs} onClick={() => run('jobs')}>Backfill job history</Button>
             <div role="status">{describe('Jobs', jobs)}</div>
             </SpaceBetween>}
             {canCost && <SpaceBetween size="s">
             {errors.cost && <Alert type="error">Cost: {errors.cost}</Alert>}
-            <Button disabled={!canCost || !cost || !validCost || busy.cost || cost.state === 'running'} loading={busy.cost} onClick={() => run('cost')}>Run cost</Button>
+            <Button disabled={!canCost || !cost || !validCost || busy.cost || cost.state === 'running'} loading={busy.cost} onClick={() => run('cost')}>Backfill cost history</Button>
             <div role="status">{describe('Cost rows', cost)}</div>
             </SpaceBetween>}
         </SpaceBetween>

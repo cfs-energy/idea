@@ -463,3 +463,15 @@ def test_sub_minute_runtime_scales_only_with_cpu_accounting():
     assert JobCompletionMetrics.cost_scale(job) == pytest.approx(
         (86414 + 300) / (14 + 300)
     )
+
+
+def test_the_scale_uses_the_boot_penalty_the_job_was_priced_with(context, monkeypatch):
+    # a cluster with no penalty billed a 50 hour job as 2 hours: exactly 25 times too little
+    context.config().put('scheduler.cost_estimation.ec2_boot_penalty_seconds', 0)
+    job = _priced_job(wall_secs=50 * 3600, total_time_secs=2 * 3600, cpu_time_secs=3600)
+    metrics = JobCompletionMetrics(context=context, job=job)
+    assert metrics.boot_penalty_seconds() == 0
+    assert JobCompletionMetrics.cost_scale(job, 0) == pytest.approx(25)
+    assert JobCompletionMetrics.cost_scale(job) == pytest.approx(
+        (50 * 3600 + 300) / (2 * 3600 + 300)
+    )

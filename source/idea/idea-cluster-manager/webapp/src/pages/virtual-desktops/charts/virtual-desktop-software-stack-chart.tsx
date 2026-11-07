@@ -53,7 +53,8 @@ class VirtualDesktopSoftwareStackChart extends VirtualDesktopBaseChart<VirtualDe
                         "aggs": {
                             "software_stack": {
                                 "terms": {
-                                    "field": "software_stack.name.raw"
+                                    "field": "software_stack.name.raw",
+                                    "size": 100
                                 }
                             }
                         }

@@ -8,6 +8,10 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock
 
+import pytest
+
+from ideadatamodel import errorcodes, exceptions
+
 from ideaclustermanager.app.api.cluster_settings_api import ClusterSettingsAPI
 from ideadatamodel.cluster_settings import GetModuleSettingsRequest
 
@@ -791,3 +795,63 @@ def test_maintenance_end_time_is_validated_before_persistence():
     with pytest.raises(exceptions.SocaException):
         ClusterSettingsAPI(app).update_module_settings(invocation)
     app.config().db.sync_cluster_settings_in_db.assert_not_called()
+
+
+class _ReachedValidation(Exception):
+    pass
+
+
+def _update_settings(settings, administrator, module='scheduler'):
+    from unittest.mock import patch
+    from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
+
+    api = ClusterSettingsAPI(Mock())
+    invocation = Mock()
+    invocation.is_authorized.return_value = True
+    invocation.is_administrator.return_value = administrator
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id=module, settings=settings
+    )
+    with (
+        patch.object(api, 'get_module_name', return_value=module),
+        patch.object(api, 'catalog_module_name', return_value=module),
+        patch.object(api, 'validate_settings_allowed', side_effect=_ReachedValidation),
+    ):
+        api.update_module_settings(invocation)
+
+
+@pytest.mark.parametrize(
+    'settings',
+    [
+        {'scratch_cleanup': {'enabled': True}},
+        {'scratch_cleanup': {'dry_run': False}},
+        {'scratch_cleanup': {'file_systems': ['scratch']}},
+        {'scratch_cleanup': {'kill_switch': False}},
+        {'scratch_cleanup': {'kill_switch': True, 'enabled': True}},
+        {'scratch_cleanup.enabled': True},
+        {'scratch_cleanup.kill_switch': False},
+    ],
+)
+def test_only_an_administrator_can_arm_scratch_cleanup(settings):
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False)
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True)
+
+
+def test_a_module_administrator_can_stop_scratch_cleanup():
+    with pytest.raises(_ReachedValidation):
+        _update_settings(
+            {'scratch_cleanup': {'kill_switch': True}}, administrator=False
+        )
+
+
+def test_other_scheduler_settings_stay_with_module_administrators():
+    with pytest.raises(_ReachedValidation):
+        _update_settings({'compute_node_ami': 'ami-1'}, administrator=False)
+
+
+def test_a_dotted_key_cannot_reach_administrator_only_settings():
+    with pytest.raises(exceptions.SocaException):
+        _update_settings({'iam.roles': {}}, administrator=False, module='cluster')

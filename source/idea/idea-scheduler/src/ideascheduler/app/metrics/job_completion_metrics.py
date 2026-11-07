@@ -11,6 +11,7 @@ from ideadatamodel.reporting.efficiency import job_efficiency
 
 # Priced into every BOM line with the runtime (pricing_helper.py); the template default.
 EC2_BOOT_PENALTY_SECONDS = 300
+BOOT_PENALTY_KEY = 'scheduler.cost_estimation.ec2_boot_penalty_seconds'
 SECONDS_IN_DAY = 86400
 
 
@@ -109,13 +110,18 @@ class JobCompletionMetrics(BaseMetrics):
         return pct / 100 if pct is not None else None
 
     @classmethod
-    def cost_scale(cls, job: SocaJob) -> float:
+    def cost_scale(
+        cls, job: SocaJob, boot_penalty_seconds: int = EC2_BOOT_PENALTY_SECONDS
+    ) -> float:
         """
         Jobs priced before 26.08.0 kept total_time_secs as the wall clock modulo a day, so a 50
         hour job was billed as 2. Every BOM line is linear in that runtime plus the boot penalty,
         so one ratio corrects the bill when history is replayed. A current job records the wall
         clock and scales by 1. A job held at its limit never ran but can span days with a zero
         runtime, so a sub-minute runtime counts only when the job left CPU accounting.
+
+        Only these replayed metrics are corrected. My Costs and reports read the stored
+        estimated_bom_cost as it is, so for such a job they show less than Datadog does.
         """
         wall = cls.wall_seconds(job)
         recorded = job.total_time_secs
@@ -130,7 +136,12 @@ class JobCompletionMetrics(BaseMetrics):
             return 1
         if abs(recorded - wall % SECONDS_IN_DAY) > 120:
             return 1
-        return (wall + EC2_BOOT_PENALTY_SECONDS) / (recorded + EC2_BOOT_PENALTY_SECONDS)
+        return (wall + boot_penalty_seconds) / (recorded + boot_penalty_seconds)
+
+    def boot_penalty_seconds(self) -> int:
+        return self._context.config().get_int(
+            BOOT_PENALTY_KEY, default=EC2_BOOT_PENALTY_SECONDS
+        )
 
     @staticmethod
     def used_cpu_seconds(job: SocaJob) -> int:
@@ -154,7 +165,7 @@ class JobCompletionMetrics(BaseMetrics):
             )
 
         cost = job.estimated_bom_cost
-        scale = self.cost_scale(job)
+        scale = self.cost_scale(job, self.boot_penalty_seconds())
         if cost is not None and cost.price_unavailable:
             self.count(MetricName='job.price_unavailable', Value=1, Timestamp=timestamp)
         elif cost is not None:

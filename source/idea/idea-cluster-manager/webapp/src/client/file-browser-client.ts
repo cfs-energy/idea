@@ -65,6 +65,7 @@ export interface StorageUsageResult {
     outside_home_bytes?: number
     unattributed_quota_bytes?: number
     files_here?: {bytes: number, files: number}
+    truncated?: boolean
     largest?: StorageFolderUsage[]
     shared?: StorageFolderUsage[]
     progress?: StorageStudyProgress
@@ -99,8 +100,8 @@ class FileBrowserClient extends IdeaBaseClient<FileBrowserClientProps> {
         )
     }
 
-    downloadFiles(req: DownloadFilesRequest): Promise<DownloadFilesResult> {
-        return this.apiInvoker.invoke_alt<DownloadFilesRequest, DownloadFilesResult>(
+    downloadFiles(req: DownloadFilesRequest): Promise<DownloadFilesResult & {skipped_files?: number}> {
+        return this.apiInvoker.invoke_alt<DownloadFilesRequest, DownloadFilesResult & {skipped_files?: number}>(
             'FileBrowser.DownloadFiles',
             req
         )

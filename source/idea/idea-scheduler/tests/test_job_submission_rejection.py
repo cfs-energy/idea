@@ -106,7 +106,7 @@ def test_refused_submission_raises_job_submission_failed(
     assert exc_info.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
     # the hook's text verbatim: the shell result repr would also contain it, so the
     # equality is what tells the two apart
-    assert exc_info.value.message == f'Failed to submit job: {QSUB_REFUSAL}'
+    assert exc_info.value.message == QSUB_REFUSAL.removeprefix('qsub: ')
     assert submitted_scripts(tmp_path) == []
 
 
@@ -173,5 +173,5 @@ def test_refused_submission_leaves_no_job_id_on_the_result(
         api._submit_job(request=build_request(), job_owner='mockuser', dry_run=None)
 
     # qsub wrote to stdout rather than stderr; the reason must still reach the caller
-    assert exc_info.value.message == f'Failed to submit job: {QSUB_REFUSAL}'
+    assert exc_info.value.message == QSUB_REFUSAL.removeprefix('qsub: ')
     assert submitted_scripts(tmp_path) == []

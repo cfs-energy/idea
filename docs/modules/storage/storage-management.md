@@ -59,6 +59,10 @@ Queue Profile scoped shared storage mounts are applicable for all Compute Nodes 
 
 ## Add or Attach Shared Storage to Cluster
 
+{% hint style="warning" %}
+`ideactl shared-storage add-file-system` and `attach-file-system`, described below, are not available in `ideactl` and fail with an error. Until they are, write the same `shared-storage.<NAME>.*` settings with `config set`, using the keys and values shown in the example configurations below, then deploy the affected modules. On FSx for ONTAP, the settings of an attached file system are `provider`, `mount_dir`, `mount_options`, `scope`, `title` and `fsx_netapp_ontap.*`.
+{% endhint %}
+
 The **idea-admin.sh shared-storage** utility enables admins to generate configurations for:
 
 * Provisioning new file systems

@@ -142,6 +142,9 @@ class MyCostsService:
         self.logger = context.logger('my-costs')
         # whether the last _desktops read found any record of the user's desktops
         self.desktop_records = None
+        # False unless the last summary read every document it could have: the cap is on
+        # documents, and a desktop can have several, so its session count cannot show this
+        self.desktops_complete = False
 
     # opensearch
 
@@ -479,20 +482,28 @@ class MyCostsService:
         end_ms: int,
         size: int = None,
         all_users: bool = False,
+        owners: Optional[List[str]] = None,
     ):
         """
         raw session documents overlapping the window. the admin listing asks for every
-        user by saying so; a missing username is a bug, never a wildcard. no state is
-        filtered: a desktop deleted after running in the window still cost what it cost.
+        user, or a list of them, by saying so; a missing username is a bug, never a
+        wildcard. no state is filtered: a desktop deleted after running in the window
+        still cost what it cost.
         """
-        if not all_users and Utils.is_empty(username):
+        if not all_users and not owners and Utils.is_empty(username):
             raise exceptions.unauthorized_access()
         index = self.context.config().get_string(
             'virtual-desktop-controller.opensearch.dcv_session.alias'
         )
         if Utils.is_empty(index):
             return None
-        owner = [] if all_users else [{'term': {'owner.raw': username}}]
+        owner = (
+            []
+            if all_users
+            else [{'terms': {'owner.raw': owners}}]
+            if owners
+            else [{'term': {'owner.raw': username}}]
+        )
         response = self._search(
             index,
             {
@@ -558,7 +569,19 @@ class MyCostsService:
         if hits is None:
             return MyCostsDesktops(is_unavailable=True)
 
-        hits = list(hits) + self._history_hits(username, start_ms, end_ms)
+        try:
+            history = self._history_hits(username, start_ms, end_ms, strict=True)
+        except Exception as e:
+            # what is known still shows, marked: without the deleted desktops it is not a figure
+            # to store or to read as complete
+            self.logger.warning(f'failed to read desktop session history: {e}')
+            totals = self._desktop_totals(
+                self._sessions_from(list(hits), start_ms, end_ms)
+            )
+            totals.is_unavailable = True
+            return totals
+        self.desktops_complete = len(hits) < MAX_SESSIONS
+        hits = list(hits) + history
         self.desktop_records = bool(hits)
         return self._desktop_totals(self._sessions_from(hits, start_ms, end_ms))
 
@@ -580,10 +603,12 @@ class MyCostsService:
         start_ms: int,
         end_ms: int,
         all_users: bool = False,
+        strict: bool = False,
     ) -> List[Dict]:
         """
         desktops that ran in the window and have since been deleted; this record is the
         only evidence left of them. shaped like a search hit so one builder serves both.
+        strict raises when it cannot be read: a total without it must not pass for complete.
         """
         if not all_users and Utils.is_empty(username):
             raise exceptions.unauthorized_access()
@@ -596,6 +621,10 @@ class MyCostsService:
             else:
                 rows = self._history_rows(table, username)
         except Exception as e:
+            if source_not_created(e):
+                return []
+            if strict:
+                raise
             # additive: a history read that fails leaves the live sessions intact
             self.logger.warning(f'failed to read desktop session history: {e}')
             return []
@@ -1228,7 +1257,14 @@ class MyCostsService:
         if hits is None:
             return True
 
-        hits = list(hits) + self._history_hits(None, start_ms, end_ms, all_users=True)
+        try:
+            history = self._history_hits(
+                None, start_ms, end_ms, all_users=True, strict=True
+            )
+        except Exception as e:
+            self.logger.warning(f'failed to read desktop session history: {e}')
+            return True
+        hits = list(hits) + history
 
         self._prefetch_running_hours(
             self._newest_per_session(hits),
@@ -1306,6 +1342,10 @@ class MyCostsService:
         it still holds unless a desktop is live or a document changed since; those users
         are measured now, the same way. False: too many of them to be worth it, or the
         search cannot say which: the caller reads everything.
+
+        ponytail: a head with no listing for this window (a deleted account, a history-only
+        owner) is measured on every view. Past half the heads this path gives way to the full
+        read, with the same numbers. Add a stored marker for them if that read becomes slow.
         """
         start_ms = window_start.int_timestamp * 1000
         end_ms = window_end.int_timestamp * 1000
@@ -1334,7 +1374,8 @@ class MyCostsService:
                 # a deleted account's head stays behind, for a window long gone
                 measure.add(owner)
         for owner, entry in stored.items():
-            if entry.get('live') or entry.get('session_count', 0) >= MAX_SESSIONS:
+            # a figure stored before 26.11.2 does not say, so it is not trusted either
+            if entry.get('live') or not entry.get('complete'):
                 measure.add(owner)
         for owner, latest in changes.items():
             entry = stored.get(owner)
@@ -1346,22 +1387,50 @@ class MyCostsService:
 
         for owner in measure:
             stored.pop(owner, None)
-            try:
-                hits = self._desktop_hits(
-                    owner, start_ms, end_ms, size=MAX_ADMIN_SESSIONS
+        try:
+            found = (
+                self._desktop_hits(
+                    None,
+                    start_ms,
+                    end_ms,
+                    size=MAX_ADMIN_SESSIONS,
+                    owners=sorted(measure),
                 )
-            except Exception as e:
-                if not source_not_created(e):
-                    self.logger.warning(
-                        f'failed to read desktop sessions for {owner}: {e}'
-                    )
-                return False
-            if hits is None:
-                return False
-            hits = list(hits) + self._history_hits(owner, start_ms, end_ms)
+                if measure
+                else []
+            )
+        except Exception as e:
+            if not source_not_created(e):
+                self.logger.warning(f'failed to read desktop sessions: {e}')
+            return False
+        if found is None or len(found) >= MAX_ADMIN_SESSIONS:
+            return False
+        by_owner: Dict[str, List] = {owner: [] for owner in measure}
+        for hit in found:
+            owner = Utils.get_value_as_string(
+                'owner', Utils.get_value_as_dict('_source', hit, {}), ''
+            )
+            if owner in by_owner:
+                by_owner[owner].append(hit)
+        try:
+            for owner, hits in by_owner.items():
+                hits.extend(self._history_hits(owner, start_ms, end_ms, strict=True))
+        except Exception as e:
+            self.logger.warning(f'failed to read desktop session history: {e}')
+            return False
+        # one bounded read for all of them, or this view waits a deadline per user
+        every_hit = [hit for hits in by_owner.values() for hit in hits]
+        self._prefetch_running_hours(
+            self._newest_per_session(every_hit),
+            self._runs_by_session(every_hit),
+            start_ms,
+            end_ms,
+            time.monotonic() + CPU_PREFETCH_SECONDS,
+        )
+        for owner, hits in by_owner.items():
             if hits:
                 totals = self._desktop_totals(
-                    self._sessions_from(hits, start_ms, end_ms)
+                    self._sessions_from(hits, start_ms, end_ms, prefetch=False)
                 )
                 stored[owner] = dict(
                     session_count=totals.session_count,

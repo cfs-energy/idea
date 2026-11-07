@@ -62,3 +62,16 @@ describe('VirtualDesktopAdminClient', () => {
         expect(invoke_alt).toHaveBeenCalledWith(`VirtualDesktopAdmin.${api}`, req)
     })
 })
+
+describe('VirtualDesktopAdminClient expiry and orphan calls', () => {
+    it.each([
+        ['extendSoftwareStack', 'VirtualDesktopAdmin.ExtendSoftwareStack', {stack_id: 's', base_os: 'rocky9'}],
+        ['listOrphanInstances', 'VirtualDesktopAdmin.ListOrphanInstances', {}],
+    ])('%s calls %s', async (method, namespace, request) => {
+        const invoke_alt = vi.fn().mockResolvedValue({})
+        const client = Object.create(VirtualDesktopAdminClient.prototype) as any
+        client.apiInvoker = {invoke_alt}
+        await client[method](request)
+        expect(invoke_alt).toHaveBeenCalledWith(namespace, request)
+    })
+})

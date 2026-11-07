@@ -67,6 +67,9 @@ GID_MIN = 5000
 GID_MAX = 65533
 
 
+ROOT_BIND_TIMEOUT_SECONDS = 10
+
+
 class AbstractLDAPClient:
     def __init__(self, context: SocaContext, options: LdapClientOptions, logger=None):
         self.context = context
@@ -471,6 +474,9 @@ class AbstractLDAPClient:
         """Try a bind as the root user with a candidate password, outside the connection pool."""
         try:
             conn = ldap.initialize(self.ldap_uri)
+            # a half-open connection to a directory otherwise waits for ever
+            conn.set_option(ldap.OPT_NETWORK_TIMEOUT, ROOT_BIND_TIMEOUT_SECONDS)
+            conn.set_option(ldap.OPT_TIMEOUT, ROOT_BIND_TIMEOUT_SECONDS)
             conn.bind_s(who=self.ldap_root_bind, cred=password, method=ldap.AUTH_SIMPLE)
             conn.unbind_ext_s()
             return True

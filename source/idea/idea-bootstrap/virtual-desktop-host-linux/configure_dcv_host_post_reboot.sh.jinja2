@@ -30,6 +30,8 @@ fi
 # Clear reboot flag and clean up reboot history since we completed successfully
 echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 rm -f ${BOOTSTRAP_DIR}/reboot_history.log
+# no reboot now, but the next one boots whatever is the default
+ensure_boot_kernel_bootable
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 

@@ -561,6 +561,17 @@ def test_retained_heads_include_former_users_and_exclude_reserved_subjects():
     assert result['coverage']['jobs'] == 'not_applicable'
 
 
+def test_a_failed_read_of_empty_desktop_rows_keeps_the_desktops_that_were_read():
+    sources = ReportingSources(SimpleNamespace())
+    sources.desktop_shapes = Mock(side_effect=RuntimeError('unavailable'))
+    result = dict(coverage=dict(desktops='ready'), warnings=[], desktops=[{'kept': 1}])
+    sources.add_desktop_shapes(result, 'index', time.monotonic() + 30)
+    assert result['desktop_shapes'] == []
+    assert result['coverage']['desktops'] == 'ready'
+    assert result['desktops'] == [{'kept': 1}]
+    assert result['warnings']
+
+
 def test_reporting_sources_have_no_fresh_collection_dependencies():
     import inspect
     from ideaclustermanager.app.reporting import reporting_sources
@@ -766,7 +777,7 @@ def test_build_timeout_bounds_blocked_source_reads_without_publication(monkeypat
 @pytest.mark.parametrize('kind', ['users', 'projects'])
 @pytest.mark.parametrize('through_adapter', [False, True])
 def test_real_listing_models_continue_two_dao_pages(kind, through_adapter):
-    from ideadatamodel import ListUsersRequest, ListProjectsRequest, SocaPaginator
+    from ideadatamodel import ListUsersRequest, ListProjectsRequest
     from ideaclustermanager.app.accounts.db.user_dao import UserDAO
     from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 
@@ -807,11 +818,10 @@ def test_real_listing_models_continue_two_dao_pages(kind, through_adapter):
     if through_adapter:
         rows = list(ReportingSources.listing(read, request_type, time.monotonic() + 30))
     else:
-        first = read(request_type())
-        second = read(
-            request_type(paginator=SocaPaginator(cursor=first.paginator.cursor))
-        )
-        rows = [row.model_dump() for row in first.listing + second.listing]
+        # the DAO reads every scan page itself, so one call is the whole listing
+        result = read(request_type())
+        assert result.paginator.cursor is None
+        rows = [row.model_dump() for row in result.listing]
     assert [row[field] for row in rows] == ['first', 'second']
     assert len(calls) == 2
 
@@ -919,8 +929,8 @@ def test_custom_period_retains_stored_spend_and_explains_unstored_dates(start, m
         ['jobs'],
     )
     exported = list(csv.DictReader(io.StringIO(result.content.lstrip('\ufeff'))))[0]
-    assert Decimal(exported['jobs']) == row['spend_by_facet']['jobs']
-    assert json.loads(exported['coverage']) == row['coverage']
+    assert Decimal(exported['Job spend']) == row['spend_by_facet']['jobs']
+    assert exported['Complete'].startswith('Partial')
 
 
 def test_saturated_report_workers_fail_busy_and_recover():

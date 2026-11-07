@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import createWrapper from '@cloudscape-design/components/test-utils/dom';
 import VirtualDesktopSessionCard, { describeSchedule, primaryAction } from './components/virtual-desktop-session-card';
@@ -132,6 +132,32 @@ describe('virtual desktop session card', () => {
         expect(handlers.onStartSession).toHaveBeenCalled();
     });
 
+    it.each([
+        ['READY', 'Connect', 'onLaunchSession'],
+        ['STOPPED', 'Start', 'onStartSession']
+    ])('%s shows progress on %s and ignores a second click until the answer', async (state, name, handler) => {
+        let answer: (value: boolean) => void = () => {};
+        const request = vi.fn(() => new Promise<boolean>(resolve => { answer = resolve; }));
+        renderCard(state, { [handler]: request });
+        const button = screen.getByRole('button', { name });
+        fireEvent.click(button);
+        fireEvent.click(button);
+        expect(request).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(createWrapper(button.parentElement!).findButton()!.findLoadingIndicator()).not.toBeNull());
+        await act(async () => answer(true));
+        expect(createWrapper(button.parentElement!).findButton()!.findLoadingIndicator()).toBeNull();
+        fireEvent.click(button);
+        expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not start a second connect from the preview while one is out', async () => {
+        const request = vi.fn(() => new Promise<boolean>(() => {}));
+        renderCard('READY', { onLaunchSession: request });
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+        fireEvent.click(screen.getByText('Preview not captured yet'));
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
     it('disables the primary button while a desktop is changing state', () => {
         renderCard('STOPPING');
         expect(screen.getByRole('button', { name: 'Stopping' })).toBeDisabled();
@@ -140,6 +166,13 @@ describe('virtual desktop session card', () => {
     it('shows a placeholder that matches the state', () => {
         renderCard('READY');
         expect(screen.getByText('Preview not captured yet')).toBeInTheDocument();
+    });
+
+    it('says a preview failed instead of waiting for it forever, and still connects', async () => {
+        const handlers = renderCard('READY', { previewFailed: true });
+        expect(screen.queryByText('Preview not captured yet')).not.toBeInTheDocument();
+        await userEvent.setup().click(screen.getByText('Preview unavailable. You can still connect.'));
+        expect(handlers.onLaunchSession).toHaveBeenCalled();
     });
 
     it('connects from the not-captured placeholder like the preview', async () => {
@@ -181,14 +214,70 @@ describe('virtual desktop session card', () => {
         expect(handlers.onConnectHelp).toHaveBeenCalled();
     });
 
-    it('shows every info field with human labels', async () => {
+    it('leads the info view with plain facts and puts ids behind Technical details', async () => {
         renderCard('ERROR');
-        await userEvent.setup().click(screen.getByRole('button', { name: 'Show info' }));
-        for (const label of ['Desktop ID', 'DCV session ID', 'Project', 'State', 'Operating system', 'Instance type', 'Instance ID', 'Private IP', 'AMI ID', 'Tenancy', 'Created']) {
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Show info' }));
+        for (const label of ['Project', 'State', 'Operating system', 'Size', 'Created']) {
+            expect(screen.getByText(label)).toBeInTheDocument();
+        }
+        expect(screen.getAllByText('Failed')).toHaveLength(2);
+        expect(screen.queryByText('ERROR')).not.toBeInTheDocument();
+        for (const hidden of ['DCV session ID', 'AMI ID', 'Tenancy']) {
+            expect(screen.queryByText(hidden)).not.toBeInTheDocument();
+        }
+        const section = createWrapper().findExpandableSection()!;
+        expect(section.findExpandedContent()).toBeNull();
+        expect(section.findHeaderText()!.getElement()).toHaveTextContent('Technical details');
+        await user.click(screen.getByText('Technical details'));
+        for (const label of ['Desktop ID', 'Remote session ID', 'Instance ID', 'Private IP', 'Image ID']) {
             expect(screen.getByText(label)).toBeInTheDocument();
         }
         expect(screen.getByText('session-1')).toBeInTheDocument();
         expect(screen.getByText('10.0.0.5')).toBeInTheDocument();
+    });
+
+    it('shows the plain word for the state in the info view', async () => {
+        renderCard('READY');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Actions' }));
+        await user.click(screen.getByRole('menuitem', { name: 'Show info' }));
+        expect(screen.getAllByText('Ready')).toHaveLength(2);
+        expect(screen.queryByText('READY')).not.toBeInTheDocument();
+    });
+
+    // the reason only renders on hover in a browser, so read it from the card
+    const reasons = (session: any, isActiveDirectory = false) => {
+        const card = new (VirtualDesktopSessionCard as any)({ session: { ...BASE, ...session }, isActiveDirectory });
+        return { share: card.canUpdateSessionPermission() ? undefined : card.sharingDisabledReason(), update: card.canUpdateSession() ? undefined : card.updateDisabledReason() };
+    };
+
+    it('explains a disabled menu item with its actual cause', () => {
+        expect(reasons({ state: 'DELETING' })).toEqual({ share: 'This desktop is being terminated.', update: 'This desktop is being terminated.' });
+        expect(reasons({ state: 'READY' }).update).toBe('Stop the desktop to rename or resize it.');
+        expect(reasons({ state: 'READY', base_os: 'windows2022' }).share).toMatch(/Windows desktops can only be shared/);
+        expect(reasons({ state: 'READY', base_os: 'windows2022' }, true).share).toBeUndefined();
+    });
+});
+
+describe('a failed desktop', () => {
+    const NEXT_STEP = 'This desktop failed. Reboot it, or terminate it and launch a new one. Your shared storage is not affected.';
+
+    it('says what to do even when no reason was recorded', () => {
+        renderCard('ERROR', { session: { ...BASE, state: 'ERROR' } });
+        expect(screen.getByText(NEXT_STEP)).toBeInTheDocument();
+    });
+
+    it('adds the reason without the log location meant for administrators', () => {
+        renderCard('ERROR', { session: { ...BASE, state: 'ERROR', failure_reason: 'The host did not finish starting up. The host startup log is kept in CloudWatch Logs: log group /idea-test/vdc/dcv-host, stream bootstrap_i-0123.' } });
+        expect(screen.getByText(NEXT_STEP)).toBeInTheDocument();
+        expect(screen.getByText('The host did not finish starting up.')).toBeInTheDocument();
+        expect(screen.queryByText(/CloudWatch/)).not.toBeInTheDocument();
+    });
+
+    it('says nothing of the kind on a running desktop', () => {
+        renderCard('READY');
+        expect(screen.queryByText(/This desktop failed/)).not.toBeInTheDocument();
     });
 });
 
@@ -201,18 +290,33 @@ describe('preview placeholder', () => {
     };
 
     it.each([
-        ['CREATING', {}, 'Creating…'],
-        ['INITIALIZING', {}, 'Initializing…'],
-        ['PROVISIONING', {}, 'Provisioning…'],
+        ['CREATING', {}, 'Setting up…'],
+        ['INITIALIZING', {}, 'Setting up…'],
+        ['PROVISIONING', {}, 'Setting up…'],
         ['RESUMING', {}, 'Starting…'],
         ['STOPPING', {}, 'Stopping…'],
         ['STOPPING', { hibernation_enabled: true }, 'Hibernating…'],
         ['DELETING', {}, 'Terminating…'],
         ['DELETED', {}, 'Terminating…'],
         ['READY', { recovering: true }, 'Restarting…']
-    ])('%s %o shows a spinner over a short centered line', (state, extra, text) => {
+    ])('%s %o shows a spinner over a short centered line', (state, extra: any, text) => {
         renderCard(state, { session: { ...BASE, state, ...extra } });
         expect(createWrapper(preview(text)).findSpinner()).not.toBeNull();
+        expect(preview(text)).toHaveTextContent(extra.recovering ? 'Try again in a few minutes.' : 'You can leave this page.');
+    });
+
+    it.each([
+        ['PROVISIONING', {}, 'Setting up', 'Setting up'],
+        ['CREATING', {}, 'Setting up', 'Setting up'],
+        ['INITIALIZING', {}, 'Setting up', 'Setting up'],
+        ['RESUMING', {}, 'Starting', 'Starting'],
+        ['STOPPING', {}, 'Stopping', 'Stopping'],
+        ['DELETING', {}, 'Terminating', 'Terminating']
+    ])('%s %o says the same word on the button and the status line', (state, extra, button, status) => {
+        renderCard(state, { session: { ...BASE, state, ...extra } });
+        expect(screen.getByRole('button', { name: button })).toBeDisabled();
+        expect(screen.getAllByText(status).length).toBe(2);
+        expect(screen.queryByText(/Provisioning|Initializing|Creating|Resuming|Deleting/)).not.toBeInTheDocument();
     });
 
     it.each([
@@ -240,8 +344,14 @@ describe('desktop recovery', () => {
         renderCard('INITIALIZING', { session: { ...BASE, state: 'INITIALIZING', recovering: true } });
         expect(screen.getByText('Restarting…')).toBeInTheDocument();
         expect(createWrapper().findSpinner()).not.toBeNull();
-        expect(screen.getByRole('button', { name: 'Session restarting' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Restarting' })).toBeDisabled();
         expect(screen.queryByText('Preview not captured yet')).not.toBeInTheDocument();
+    });
+
+    it('never says Ready beside a restarting session', () => {
+        renderCard('READY', { session: { ...BASE, state: 'READY', recovering: true } });
+        expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+        expect(screen.getByText('Try again in a few minutes.')).toBeInTheDocument();
     });
 
     it('keeps the READY placeholder clickable', async () => {

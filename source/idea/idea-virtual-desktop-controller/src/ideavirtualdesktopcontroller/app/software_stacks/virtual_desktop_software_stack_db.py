@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+from datetime import datetime
 from typing import List, Optional, Dict
 
 import hashlib
@@ -533,6 +534,16 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                 db_entry,
                 False,
             ),
+            owner=Utils.get_value_as_string(
+                software_stacks_constants.SOFTWARE_STACK_DB_OWNER_KEY, db_entry
+            ),
+            expires_on=Utils.to_datetime(
+                Utils.get_value_as_int(
+                    software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, db_entry
+                )
+            )
+            if db_entry.get(software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY)
+            else None,
         )
 
         for project_id in Utils.get_value_as_list(
@@ -667,6 +678,16 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         if software_stack.image_pinned is not None:
             db_dict[software_stacks_constants.SOFTWARE_STACK_DB_IMAGE_PINNED_KEY] = (
                 software_stack.image_pinned
+            )
+
+        # only when set: a row from before these fields stays as it was
+        if software_stack.owner is not None:
+            db_dict[software_stacks_constants.SOFTWARE_STACK_DB_OWNER_KEY] = (
+                software_stack.owner
+            )
+        if software_stack.expires_on is not None:
+            db_dict[software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY] = (
+                Utils.to_milliseconds(software_stack.expires_on)
             )
 
         project_ids = []
@@ -850,6 +871,45 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             new_entry=db_entry,
         )
         return self.convert_db_dict_to_software_stack_object(db_entry)
+
+    def set_expiry(
+        self,
+        software_stack: VirtualDesktopSoftwareStack,
+        expires_on: Optional[datetime],
+    ) -> VirtualDesktopSoftwareStack:
+        """writes only the date, so an edit or repoint made since the caller read it stays.
+        None removes it: an update can only set what the stack holds."""
+        k = software_stacks_constants
+        values = {':upd': Utils.current_time_ms()}
+        if expires_on is not None:
+            values[':exp'] = Utils.to_milliseconds(expires_on)
+        result = self._table.update_item(
+            Key={
+                k.SOFTWARE_STACK_DB_HASH_KEY: software_stack.base_os,
+                k.SOFTWARE_STACK_DB_RANGE_KEY: software_stack.stack_id,
+            },
+            UpdateExpression=(
+                'SET #upd = :upd REMOVE #exp'
+                if expires_on is None
+                else 'SET #exp = :exp, #upd = :upd'
+            ),
+            ConditionExpression='attribute_exists(#id)',
+            ExpressionAttributeNames={
+                '#exp': k.SOFTWARE_STACK_DB_EXPIRES_ON_KEY,
+                '#upd': k.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
+                '#id': k.SOFTWARE_STACK_DB_RANGE_KEY,
+            },
+            ExpressionAttributeValues=values,
+            ReturnValues='ALL_NEW',
+        )
+        new_entry = result['Attributes']
+        self.trigger_update_event(
+            software_stack.base_os,
+            software_stack.stack_id,
+            old_entry=dict(new_entry),
+            new_entry=new_entry,
+        )
+        return self.convert_db_dict_to_software_stack_object(new_entry)
 
     def repoint_image(
         self,

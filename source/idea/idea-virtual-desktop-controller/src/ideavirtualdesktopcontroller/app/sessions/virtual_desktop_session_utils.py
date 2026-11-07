@@ -59,10 +59,18 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
     BOOTSTRAP_REFRESH_VERSION,
     VirtualDesktopSSMCommandsUtils,
 )
+from ideasdk.aws.failure_capture import FailedHost, capture_failure
+from ideavirtualdesktopcontroller.app.sessions.session_metrics import (
+    publish_provisioning_failure,
+)
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
+    BOOTSTRAP_LOG_STREAM,
+    BOOTSTRAP_STATUS_MESSAGES,
     VirtualDesktopControllerUtils,
     build_bootstrap_failure_message,
     build_bootstrap_log_hint,
+    dcv_host_cloudwatch_logs_enabled,
+    dcv_host_log_group,
     resolve_project_instance_profile_arn,
 )
 
@@ -230,12 +238,19 @@ class VirtualDesktopSessionUtils:
         except exceptions.SocaException as e:
             # the plain reason built while provisioning. str() would prefix the error code.
             session.failure_reason = e.message
+            publish_provisioning_failure(
+                self.context,
+                session,
+                getattr(e, 'launch_error_code', None) or 'create_failed',
+            )
             return session
         except Exception as e:
             session.failure_reason = f'{e}'
+            publish_provisioning_failure(self.context, session, 'internal')
             return session
 
         if not session.server:
+            publish_provisioning_failure(self.context, session, 'no_host')
             session.failure_reason = (
                 'Unable to create DCV host. Contact the Administrator.'
             )
@@ -512,13 +527,25 @@ class VirtualDesktopSessionUtils:
         failure_reason: str,
         bootstrap_status: Optional[str],
     ):
-        session.failure_reason = failure_reason + build_bootstrap_log_hint(
-            self.context, session.server.instance_id
+        cause = self._capture_failed_host(session, failure_reason)
+        session.failure_reason = (
+            failure_reason
+            + (f' {cause}' if cause else '')
+            + build_bootstrap_log_hint(self.context, session.server.instance_id)
         )
         session.state = VirtualDesktopSessionState.ERROR
+        if Utils.is_empty(bootstrap_status):
+            reason = 'timeout'
+        else:
+            reason = (
+                bootstrap_status
+                if bootstrap_status in BOOTSTRAP_STATUS_MESSAGES
+                else 'bootstrap_other'
+            )
+        publish_provisioning_failure(self.context, session, reason)
 
         self._logger.error(
-            f'session {session.idea_session_id} for {session.owner} failed while '
+            f'session {session.idea_session_id} failed while '
             f'provisioning on host {session.server.instance_id}, bootstrap status: '
             f'{bootstrap_status if Utils.is_not_empty(bootstrap_status) else "none"}. '
             f'{session.failure_reason}'
@@ -533,6 +560,37 @@ class VirtualDesktopSessionUtils:
                 f'could not release host {session.server.instance_id} of session '
                 f'{session.idea_session_id}: {Utils.get_value_as_string("ERROR", response)}'
             )
+
+    def _capture_failed_host(
+        self, session: VirtualDesktopSession, failure_reason: str
+    ) -> Optional[str]:
+        """read while the host exists. returns a plain sentence for the desktop's owner, if any."""
+        try:
+            stack = session.software_stack
+            instance_id = session.server.instance_id
+            return capture_failure(
+                self.context,
+                self._logger,
+                FailedHost(
+                    kind='desktop',
+                    identifier=session.idea_session_id,
+                    instance_id=instance_id,
+                    failure=failure_reason,
+                    os=getattr(session.base_os, 'value', session.base_os),
+                    arch=getattr(getattr(stack, 'architecture', None), 'value', None),
+                    ami=getattr(stack, 'ami_id', None),
+                    instance_type=session.server.instance_type,
+                    release=self.context.module_version(),
+                    log_group=dcv_host_log_group(self.context)
+                    if dcv_host_cloudwatch_logs_enabled(self.context)
+                    else None,
+                    log_stream=BOOTSTRAP_LOG_STREAM.format(instance_id=instance_id),
+                    owner=session.owner,
+                ),
+            )
+        except Exception as e:
+            self._logger.warning(f'could not read the failed host: {type(e).__name__}')
+            return None
 
     def fail_bootstrap_aborted_sessions(self) -> int:
         """
@@ -946,8 +1004,12 @@ class VirtualDesktopSessionUtils:
                 VirtualDesktopSessionState.READY,
                 VirtualDesktopSessionState.RESUMING,
             }:
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't stop. Wait for it to be READY or RESUMING."
-                self._logger.error(session.failure_reason)
+                session.failure_reason = (
+                    "This desktop isn't running, so it can't be stopped right now."
+                )
+                self._logger.error(
+                    f'cannot stop {session.idea_session_id}:{session.name} for user: {session.owner}: state is {session.state}'
+                )
                 fail_response_list.append(session)
                 continue
 
@@ -1032,8 +1094,12 @@ class VirtualDesktopSessionUtils:
 
             if session.state not in {VirtualDesktopSessionState.STOPPED}:
                 # trying to resume a session that is not stopped. Error.
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't resume a session not in STOPPED state"
-                self._logger.error(session.failure_reason)
+                session.failure_reason = (
+                    "This desktop isn't stopped, so it can't be started right now."
+                )
+                self._logger.error(
+                    f'cannot resume {session.idea_session_id}:{session.name} for user: {session.owner}: state is {session.state}'
+                )
                 fail_response_list.append(session)
                 continue
 
@@ -1102,8 +1168,12 @@ class VirtualDesktopSessionUtils:
                 VirtualDesktopSessionState.READY,
                 VirtualDesktopSessionState.ERROR,
             }:
-                session.failure_reason = f"IDEA session id: {session.idea_session_id}:{session.name} for user: {session.owner} is in {session.state} state. Can't reboot. Wait for it to be READY or ERROR."
-                self._logger.error(session.failure_reason)
+                session.failure_reason = (
+                    "This desktop isn't running, so it can't be rebooted right now."
+                )
+                self._logger.error(
+                    f'cannot reboot {session.idea_session_id}:{session.name} for user: {session.owner}: state is {session.state}'
+                )
                 fail_response_list.append(session)
                 continue
 
@@ -1121,8 +1191,10 @@ class VirtualDesktopSessionUtils:
 
         for session in sessions_with_count:
             if session.connection_count > 0:
-                session.failure_reason = f'There exists {session.connection_count} active connection(s) for idea_session_id: {session.idea_session_id}:{session.name}. Please terminate.'
-                self._logger.error(session.failure_reason)
+                session.failure_reason = f'{session.connection_count} connection(s) are open on this desktop.'
+                self._logger.error(
+                    f'{session.connection_count} active connection(s) on {session.idea_session_id}:{session.name}'
+                )
                 fail_response_list.append(session)
                 continue
 

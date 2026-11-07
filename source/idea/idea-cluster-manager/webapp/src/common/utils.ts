@@ -1023,7 +1023,10 @@ class Utils {
     }
 
     static hideLoadingAnimation() {
-        document.getElementById('app-loading')!.style.display = 'none'
+        const loading = document.getElementById('app-loading')
+        if (loading) {
+            loading.style.display = 'none'
+        }
     }
 
     static isSsoEnabled(): boolean {

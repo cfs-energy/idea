@@ -341,6 +341,22 @@ class ReportingSources:
                     break
         return dict(head=head, costs=None, state='unavailable')
 
+    def add_desktop_shapes(self, result, index, deadline):
+        """these only add empty rows: losing them loses no desktop that was read"""
+        try:
+            result['desktop_shapes'] = self.desktop_shapes(index, deadline)
+        except exceptions.SocaException as error:
+            if error.error_code in ('REPORT_TIMEOUT', 'REPORT_TOO_LARGE'):
+                raise
+            result['desktop_shapes'] = []
+            result['warnings'].append('Desktop shapes unavailable.')
+        except Exception:
+            logging.getLogger(__name__).warning(
+                'desktop shapes unavailable', exc_info=True
+            )
+            result['desktop_shapes'] = []
+            result['warnings'].append('Desktop shapes unavailable.')
+
     def read(
         self, period, deadline, username=None, insights=False, include_storage=False
     ):
@@ -583,9 +599,7 @@ class ReportingSources:
                     ),
                 )
                 if result['coverage']['desktops'] == 'ready' and not insights:
-                    result['desktop_shapes'] = optional(
-                        'desktops', lambda: self.desktop_shapes(index, deadline)
-                    )
+                    self.add_desktop_shapes(result, index, deadline)
                 if result['coverage']['desktops'] == 'ready':
                     documents.extend(more)
                 else:

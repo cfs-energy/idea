@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import arrow
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 from ideadatamodel import (
@@ -24,6 +24,9 @@ SYSTEM = '!collector'
 # Readers scan until the marker says it is complete.
 HEAD_SUBJECT = 'head-subject:'
 HEAD_SUBJECTS_SEEDED = 'head-subjects-seeded'
+SEED_CHECKPOINT = 'seed-head-subjects:'
+SEED_SEGMENTS = 8
+SEED_BUDGET_SECONDS = 120
 
 
 def window_storage(costs, start_date, end_date):
@@ -216,15 +219,49 @@ class PersonalCostsStore:
             self.put(SYSTEM, HEAD_SUBJECT + subject, {})
             self._head_subjects.add(subject)
 
-    def seed_head_subjects(self):
-        """once per table: every head written before the index existed, by one scan"""
+    def seed_head_subjects(
+        self, on_progress=lambda: None, budget_seconds=SEED_BUDGET_SECONDS
+    ):
+        """
+        once per table: every head written before the index existed. On a table grown under an
+        earlier release this outlasts any run, so it spends a budget per run and each segment
+        records where it reached. True once it finishes; readers scan until then.
+        """
         if self.get(SYSTEM, HEAD_SUBJECTS_SEEDED):
             return False
-        from ideaclustermanager.app.reporting.reporting_sources import ReportingSources
-
-        for row in ReportingSources.scan_heads(self.table, time.monotonic() + 600):
-            self.register_head_subject(row['subject'])
+        deadline = time.monotonic() + budget_seconds
+        for segment in range(SEED_SEGMENTS):
+            mark = f'{SEED_CHECKPOINT}{segment}'
+            reached = self.get(SYSTEM, mark) or {}
+            if reached.get('done'):
+                continue
+            request = dict(
+                ConsistentRead=True,
+                Segment=segment,
+                TotalSegments=SEED_SEGMENTS,
+                FilterExpression=Attr('record').eq('head'),
+            )
+            if reached.get('last_key'):
+                request['ExclusiveStartKey'] = reached['last_key']
+            while True:
+                if time.monotonic() >= deadline:
+                    return False
+                page = self.table.scan(**request)
+                for row in page.get('Items', []):
+                    self.register_head_subject(row['subject'])
+                last_key = page.get('LastEvaluatedKey')
+                self.put(
+                    SYSTEM, mark, {'last_key': last_key} if last_key else {'done': True}
+                )
+                on_progress()
+                if not last_key:
+                    break
+                request['ExclusiveStartKey'] = last_key
         self.put(SYSTEM, HEAD_SUBJECTS_SEEDED, {'as_of': arrow.utcnow().isoformat()})
+        for segment in range(SEED_SEGMENTS):
+            self.table.delete_item(
+                Key={'subject': SYSTEM, 'record': f'{SEED_CHECKPOINT}{segment}'}
+            )
         return True
 
     def head_subjects(self):

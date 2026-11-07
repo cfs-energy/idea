@@ -343,7 +343,16 @@ class StorageUsageService:
                 folders=children,
                 measured_at=found['measured_at'],
             )
-            if len(readable) == len(names):
+            truncated = bool(found.get('truncated'))
+            view['truncated'] = truncated
+            # the rest of the parent's total is direct files only if every child is here, with its
+            # size known and visible to this person
+            if (
+                not truncated
+                and len(readable) == len(names)
+                and not found['self'].get('partial')
+                and not any(row.get('partial') for row in found['children'])
+            ):
                 view['files_here'] = dict(
                     bytes=max(
                         0,
@@ -363,10 +372,14 @@ class StorageUsageService:
         return view
 
     def _study(self, study, username, identity, mount, home, fresh):
-        """Largest-first descent: ONTAP calls only, no file is touched, so it can run for everyone."""
+        """Largest-first descent: ONTAP calls only, no file is touched, so it can run for everyone.
+        ONTAP's login sees the whole SVM, so a folder is opened as this person before it is entered
+        or named in the progress they poll."""
         progress = study['progress']
         analytics = self._analytics()
         try:
+            if not readable_paths_as_user(identity, mount, [home]):
+                return
             root = analytics.folder(home, fresh=fresh)
             if root is None:
                 return
@@ -388,6 +401,13 @@ class StorageUsageService:
                 if found is None:
                     continue
                 large = [c for c in found['children'] if c['bytes'] >= floor]
+                if large:
+                    readable = set(
+                        readable_paths_as_user(
+                            identity, mount, [c['path'] for c in large]
+                        )
+                    )
+                    large = [c for c in large if c['path'] in readable]
                 # A folder with no single dominant child is where the deletion decision sits.
                 if path != home and (not large or large[0]['bytes'] < -size // 2):
                     hot.append(row)
@@ -459,10 +479,12 @@ class StorageUsageService:
             source='analytics',
             home=home,
             measured_at=view['measured_at'],
-            partial=False,
+            partial=bool(view['truncated'] or view['total'].get('partial')),
             total=view['total'],
             folders=view['folders'],
         )
+        if view['truncated']:
+            result['truncated'] = True
         if 'files_here' in view:
             result['files_here'] = view['files_here']
         if folder is not None:
@@ -474,7 +496,11 @@ class StorageUsageService:
         result['progress'] = running['progress']
         if running['largest']:
             result['largest'] = running['largest']
-        result['volume'] = self._analytics().status(home).get('volume')
+        status = self._analytics().status(home)
+        result['volume'] = status.get('volume')
+        target = status.get('target')
+        if target is not None:
+            result['volume_endpoint'] = target.endpoint
         try:
             shared = self._view(
                 username, identity, mount, os.path.join(mount, SHARED_FOLDER), refresh
@@ -485,7 +511,9 @@ class StorageUsageService:
             result['shared'] = shared['folders']
         return result
 
-    def get_usage(self, username, folder=None, refresh=False, study=True):
+    def get_usage(
+        self, username, folder=None, refresh=False, study=True, scan_only=False
+    ):
         helper = FileSystemHelper(self.context, username)
         home = helper.get_user_home()
         home = os.path.normpath(home)
@@ -500,8 +528,12 @@ class StorageUsageService:
             if os.path.commonpath([mount, folder]) != mount or folder in (home, mount):
                 raise exceptions.unauthorized_access()
         identity = UserIdentity(self.context.accounts, username)
-        from_analytics = self._usage_from_analytics(
-            username, identity, mount, home, folder, refresh, study
+        from_analytics = (
+            None
+            if scan_only
+            else self._usage_from_analytics(
+                username, identity, mount, home, folder, refresh, study
+            )
         )
         if from_analytics is not None:
             return from_analytics
@@ -512,7 +544,12 @@ class StorageUsageService:
                 message='Sizes for folders outside your home folder need storage analytics, which is not on for this volume.',
             )
         if folder is not None:
-            result = scan_as_user(identity, home, folder)
+            try:
+                result = scan_as_user(identity, home, folder)
+            except OSError:
+                raise exceptions.invalid_params(
+                    'That folder no longer exists or cannot be opened.'
+                )
             result['folder'] = result['total']
             result['home'] = home
             result['source'] = 'scan'
@@ -561,8 +598,9 @@ class StorageUsageService:
         return response
 
     def measure_for_costs(self, username):
-        """Wait only in a background cost worker, using the browser's identical scan."""
-        result = self.get_usage(username, study=False)
+        """Wait only in a background cost worker, using the browser's identical scan. Always the
+        scan: analytics reports different bytes, and turning it on must not move a user's share."""
+        result = self.get_usage(username, study=False, scan_only=True)
         if result['state'] == 'computing':
             with self._lock:
                 entry = self._cache.get((username, result['home']))

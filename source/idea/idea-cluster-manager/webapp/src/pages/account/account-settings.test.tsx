@@ -23,6 +23,7 @@ const stubAccountPage = (context: AppContext, clusterManagerSettings: any) => {
     vi.spyOn(context.auth(), 'getUser').mockResolvedValue({username: 'user-a', group_name: 'user-a-group'});
     vi.spyOn(context.auth(), 'getUsername').mockReturnValue('user-a');
     vi.spyOn(context.auth(), 'isPasswordExpirationApplicable').mockReturnValue(false);
+    vi.spyOn(context.client().auth(), 'listApiTokens').mockResolvedValue({listing: []});
 };
 
 const renderAccountSettings = () => {
@@ -79,6 +80,17 @@ describe('account settings my projects models', () => {
         expect(screen.getByRole('option', {name: 'Cluster default'})).toBeInTheDocument();
         expect(screen.queryByRole('option', {name: 'Home'})).not.toBeInTheDocument();
     });
+
+    it('never shows Reports as chosen when it is not offered', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        vi.spyOn(context.getClusterSettingsService(), 'isCustomDashboardEnabled').mockReturnValue(false);
+        vi.mocked(context.auth().getUser).mockResolvedValue({username: 'user-a', landing_page: 'reports'});
+        renderAccountSettings();
+        await userEvent.click(await screen.findByRole('button', {name: /Landing page/}));
+        expect(screen.queryByRole('option', {name: 'Reports'})).not.toBeInTheDocument();
+        expect(screen.getByRole('option', {name: 'Cluster default', selected: true})).toBeInTheDocument();
+    });
 });
 
 
@@ -112,6 +124,7 @@ describe('account settings model invocation guidance', () => {
         vi.spyOn(context.auth(), 'getUser').mockResolvedValue({username: 'user-a', group_name: 'user-a-group'});
         vi.spyOn(context.auth(), 'getUsername').mockReturnValue('user-a');
         vi.spyOn(context.auth(), 'isPasswordExpirationApplicable').mockReturnValue(false);
+    vi.spyOn(context.client().auth(), 'listApiTokens').mockResolvedValue({listing: []});
     };
 
     it('says the profile is what to pass, because the model name alone is denied', async () => {
@@ -131,5 +144,68 @@ describe('account settings model invocation guidance', () => {
 
         expect(await screen.findByText(/application-inference-profile\/abcd1234/)).toBeInTheDocument();
         expect(await screen.findByText('vendor.model-a')).toBeInTheDocument();
+    });
+});
+
+describe('account settings profile', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        delete (window as any).idea.app.sso;
+    });
+
+    it('says when the profile did not load, and retries', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        const getUser = vi.spyOn(context.auth(), 'getUser').mockRejectedValueOnce(new Error('down'));
+        renderAccountSettings();
+
+        expect(await screen.findByText('Could not load your profile.')).toBeInTheDocument();
+
+        getUser.mockResolvedValue({username: 'user-a', group_name: 'user-a-group'} as any);
+        await userEvent.click(screen.getByRole('button', {name: 'Retry'}));
+        expect(await screen.findByText('user-a-group')).toBeInTheDocument();
+    });
+
+    it('says when group members did not load, instead of showing none', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        vi.spyOn(context.client().auth(), 'listUsersInGroup').mockRejectedValue(new Error('down'));
+        renderAccountSettings();
+
+        expect(await screen.findByText('Could not load group members.')).toBeInTheDocument();
+    });
+
+    it('uses plain labels and leaves you out of your own group list', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        vi.spyOn(context.client().auth(), 'listUsersInGroup').mockResolvedValue({listing: [{username: 'user-a'}, {username: 'user-b'}]});
+        renderAccountSettings();
+
+        expect(await screen.findByText('Other people in my group')).toBeInTheDocument();
+        expect(await screen.findByText('user-b')).toBeInTheDocument();
+        expect(screen.getByText('Linux account')).toBeInTheDocument();
+        expect(screen.queryByText('LDAP Info')).toBeNull();
+        expect(screen.queryByText('Is Administrator?')).toBeNull();
+        const group = screen.getByText('Other people in my group').parentElement!;
+        expect(group.textContent).not.toContain('user-a');
+    });
+
+    it('offers no password change with single sign-on', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        (window as any).idea.app.sso = true;
+        renderAccountSettings();
+
+        await screen.findByText('Linux account');
+        expect(screen.queryByRole('button', {name: 'Change Password'})).toBeNull();
+    });
+
+    it('offers a password change without single sign-on', async () => {
+        const context = initTestAppContext();
+        stubAccountPage(context, {});
+        (window as any).idea.app.sso = false;
+        renderAccountSettings();
+
+        expect(await screen.findByRole('button', {name: 'Change Password'})).toBeInTheDocument();
     });
 });

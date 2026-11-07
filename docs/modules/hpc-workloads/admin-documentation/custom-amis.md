@@ -57,7 +57,7 @@ Rows that are in progress, pinned or unsupported cannot be selected or rebuilt.
 A row is rebuilt when one of these happens:
 
 1. **Upgrade.** After an upgrade to a new release, every row is rebuilt and validated. The upgrade does not wait for this; check the Images page afterwards.
-2. **Monthly vendor check.** On the first Sunday of each month at 02:00 cluster time, IDEA looks for newer vendor images. Only rows whose vendor published a newer base image are rebuilt. Each month's check runs once, even if the controller restarts.
+2. **Monthly rebuild.** On the first Sunday of each month at 02:00 cluster time, IDEA rebuilds every row, whether or not its vendor image changed, so images pick up package fixes. It waits for any bake in flight, and pinned and held rows are skipped. Each month's rebuild runs once, even if the controller restarts.
 3. **Refresh and validate.** Use the buttons above the table:
    * **Refresh and validate all** queues every row. With a filter set, it reads **Refresh and validate shown (***n***)** and queues only the rows shown.
    * **Refresh and validate selected** queues the selected rows.

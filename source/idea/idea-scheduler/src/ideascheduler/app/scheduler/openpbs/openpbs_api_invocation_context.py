@@ -478,10 +478,14 @@ class OpenPBSAPIInvocationContext:
                         not_requested = result.find_insufficient_quotas()
 
                         if len(not_requested) > 0:
-                            message = f'Following AWS Service Quota needs to be requested from AWS: {os.linesep}'
                             table = self.get_quotas_as_table(not_requested)
-                            message += str(table)
-                            message += f'{os.linesep} Please contact administrator to request these AWS Service Quotas.'
+                            self.app_context.logger().warning(
+                                f'{self.job.log_tag} - quota too low:{os.linesep}{table}'
+                            )
+                            message = (
+                                'This job needs more AWS capacity than this cluster is '
+                                'allowed. Ask an administrator to request a higher quota.'
+                            )
                             self.add_incidentals_validation_entry(
                                 error_code='ServiceQuota', message=message
                             )
@@ -524,11 +528,15 @@ class OpenPBSAPIInvocationContext:
                     GetHpcLicenseResourceRequest(name=license_ask.name)
                 )
             except exceptions.SocaException as e:
+                self.app_context.logger().warning(
+                    f'{self.job.log_tag} - license {license_ask.name}: {e.message}'
+                )
                 licenses_resolved = False
                 self.add_incidentals_validation_entry(
                     error_code='Licenses.NotFound',
-                    message=f'License resource: ({license_ask.name}) is not configured. '
-                    f'The job can never be provisioned. Err: {e.message}',
+                    message=f"License {license_ask.name} isn't set up on this cluster, so this "
+                    f'job could never start. Remove it from your job script, or ask an '
+                    f'administrator.',
                 )
 
         if not licenses_resolved:

@@ -155,7 +155,7 @@ class LicenseResourcesDAO:
         if Utils.is_not_empty(cursor):
             last_evaluated_key = Utils.from_json(Utils.base64_decode(cursor))
         if last_evaluated_key is not None:
-            scan_request['LastEvaluatedKey'] = last_evaluated_key
+            scan_request['ExclusiveStartKey'] = last_evaluated_key
 
         scan_filter = None
         if Utils.is_not_empty(request.filters):
@@ -174,19 +174,13 @@ class LicenseResourcesDAO:
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
 
-        scan_result = self.table.scan(**scan_request)
+        db_license_resources = Utils.scan_all(self.table, scan_request)
 
-        db_license_resources = Utils.get_value_as_list('Items', scan_result, [])
         license_resources = []
         for db_license_resource in db_license_resources:
             license_resource = self.convert_from_db(db_license_resource)
             license_resources.append(license_resource)
 
-        response_cursor = None
-        last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', scan_result)
-        if last_evaluated_key is not None:
-            response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
-
         return ListHpcLicenseResourcesResult(
-            listing=license_resources, paginator=SocaPaginator(cursor=response_cursor)
+            listing=license_resources, paginator=SocaPaginator()
         )

@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import {LONG_REQUEST_TIMEOUT} from "../common/authentication-context";
 import {
     CreateUserRequest,
     CreateUserResult,
@@ -81,7 +82,8 @@ class AccountsClient extends IdeaBaseClient<AuthAdminClientProps>{
     }
 
     reconcileUsers(req: {dry_run: boolean; override_max_disable_fraction?: boolean}): Promise<ReconcileReport> {
-        return this.apiInvoker.invoke_alt('Accounts.ReconcileUsers', req);
+        // reads every user from the directory before it answers
+        return this.apiInvoker.invoke_alt('Accounts.ReconcileUsers', req, false, LONG_REQUEST_TIMEOUT);
     }
 
     getModuleInfo(): Promise<GetModuleInfoRequest> {

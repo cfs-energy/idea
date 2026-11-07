@@ -21,6 +21,7 @@ from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, unquote
 import arrow
 import threading
 
@@ -49,6 +50,9 @@ def fs_id_from_host(host: str) -> str:
     return ''
 
 
+CONTENT_PARAMETERS = {'byte_offset', 'length', 'stream_name'}
+
+
 def normalize_user(name: Optional[str], user_id: Optional[str]) -> str:
     """one tag per human: MIXED volumes report windows names as DOMAIN\\name and unix names
     bare, so the domain goes and the case folds. An unresolved identity keeps its id."""
@@ -62,6 +66,32 @@ def normalize_user(name: Optional[str], user_id: Optional[str]) -> str:
 def tag_value(value) -> str:
     text = str(value).strip().lower() if value is not None else ''
     return text.replace(' ', '_') if text else 'unknown'
+
+
+class FileContentsRefused(Exception):
+    """a request that could read a file on the SVM. The role cannot stop this on every volume."""
+
+
+def refuse_file_contents(path: str) -> None:
+    """
+    file contents are never examined. The metrics login can read them on a volume its role
+    opens for analytics, so the check is here: no content parameter on anything, and under
+    /files only a directory listing, its next page, or metadata.
+    """
+    base, _, query = path.partition('?')
+    params = {
+        name.lower(): value.lower()
+        for name, value in parse_qsl(query.replace(';', '&'), keep_blank_values=True)
+    }
+    listing = (
+        params.get('type') == 'directory'
+        or params.get('return_metadata') == 'true'
+        or 'start.iter_key' in params
+    )
+    if CONTENT_PARAMETERS & params.keys() or (
+        '/files/' in unquote(base).lower() and not listing
+    ):
+        raise FileContentsRefused('This read could reach file contents.')
 
 
 class OntapClient:
@@ -80,18 +110,25 @@ class OntapClient:
         self.verify_tls = verify_tls
         self.timeout = timeout
 
+    def _read(self, path: str):
+        """the one way to ONTAP, so a next link goes through the same check as a first path."""
+        refuse_file_contents(path)
+        if not self.verify_tls:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(
+            self.base + path,
+            auth=self.auth,
+            verify=self.verify_tls,
+            timeout=self.timeout,
+            # ONTAP serves a file's bytes only as multipart: this asks for what it can't send
+            headers={'Accept': 'application/json'},
+        )
+
     def get(self, path: str) -> List[Dict]:
         """one collection, every page."""
         records: List[Dict] = []
         while Utils.is_not_empty(path):
-            if not self.verify_tls:
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            response = requests.get(
-                self.base + path,
-                auth=self.auth,
-                verify=self.verify_tls,
-                timeout=self.timeout,
-            )
+            response = self._read(path)
             if response.status_code != 200:
                 raise RuntimeError(
                     f'GET {path}: {response.status_code}: {response.text[:200]}'
@@ -108,14 +145,7 @@ class OntapClient:
 
     def first_page(self, path: str) -> Dict:
         """one page of a listing, for a caller that asked for its largest rows first."""
-        if not self.verify_tls:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        response = requests.get(
-            self.base + path,
-            auth=self.auth,
-            verify=self.verify_tls,
-            timeout=self.timeout,
-        )
+        response = self._read(path)
         if response.status_code == 404:
             raise FileNotFoundError()
         if response.status_code != 200:
@@ -283,13 +313,16 @@ class StorageMetricsService(SocaService):
     def get_user_quotas(self, username: str) -> List[Dict]:
         """one row per volume and qtree. A person on a MIXED volume has a row for the files they
         wrote over NFS and another, under DOMAIN\\name, for those they wrote over SMB; both count
-        against them. Attachments on the same SVM report the same volumes, so the newest wins."""
+        against them. Attachments on the same SVM report the same volumes, so the newest wins;
+        a volume of the same name on another SVM is another volume."""
         user = normalize_user(username, None)
         with self._quota_lock:
             snapshots = list(self._quota_reports.items())
-        quotas: Dict[Tuple[str, str], Dict] = {}
+        endpoints = {target.name: target.endpoint for target in self.targets()}
+        quotas: Dict[Tuple[Optional[str], str, str], Dict] = {}
         for target, (measured_at, reports) in snapshots:
-            found: Dict[Tuple[str, str], Dict] = {}
+            endpoint = endpoints.get(target)
+            found: Dict[Tuple[Optional[str], str, str], Dict] = {}
             for record in reports:
                 if record.get('type') != 'user':
                     continue
@@ -300,6 +333,7 @@ class StorageMetricsService(SocaService):
                     continue
                 space = record.get('space', {})
                 key = (
+                    endpoint,
                     record.get('volume', {}).get('name', ''),
                     record.get('qtree', {}).get('name', ''),
                 )
@@ -307,8 +341,9 @@ class StorageMetricsService(SocaService):
                     key,
                     dict(
                         target=target,
-                        volume=key[0],
-                        qtree=key[1],
+                        endpoint=endpoint,
+                        volume=key[1],
+                        qtree=key[2],
                         used_bytes=0,
                         files=0,
                         limit_bytes=None,
@@ -325,12 +360,18 @@ class StorageMetricsService(SocaService):
                     quotas[key] = row
         return list(quotas.values())
 
-    def unattributed_quota(self, volume: str) -> Dict[str, int]:
+    def unattributed_quota(
+        self, volume: str, endpoint: Optional[str] = None
+    ) -> Dict[str, int]:
         """bytes ONTAP could not put a name to on this volume: owners it reports only as a SID,
         such as Windows accounts that no longer resolve, so they count against nobody."""
         with self._quota_lock:
-            snapshots = list(self._quota_reports.values())
-        newest = max(snapshots, key=lambda item: item[0], default=(0, []))[1]
+            reports = dict(self._quota_reports)
+        # attachments on one SVM report the same volumes, so the newest of that SVM's will do
+        if endpoint is not None:
+            names = {t.name for t in self.targets() if t.endpoint == endpoint}
+            reports = {name: seen for name, seen in reports.items() if name in names}
+        newest = max(reports.values(), key=lambda item: item[0], default=(0, []))[1]
         found = dict(bytes=0, files=0)
         for record in newest:
             if (

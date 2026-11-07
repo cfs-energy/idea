@@ -118,6 +118,129 @@ function install_matching_kernel_devel() {
   return 1
 }
 
+# A kernel without its initramfs does not boot: GRUB reports the file missing and the kernel panics
+# on the root file system, and nothing can reach a host in that state. Anything can leave such a
+# kernel as the default: a package update, a transaction that failed halfway, dracut failing on a
+# full /boot with the transaction still exiting 0. So ensure_boot_kernel_bootable checks what the
+# boot loader will actually boot, whoever selected it, before every bootstrap reboot and at the end
+# of every bootstrap that does not reboot.
+function kernel_initramfs_ready () {
+  local version="${1}" boot="${KERNEL_BOOT_DIR:-/boot}"
+  if command -v grubby > /dev/null 2>&1; then
+    [[ -s "${boot}/initramfs-${version}.img" ]] && return 0
+    log_warning "Kernel ${version} has no initramfs; building it"
+    timeout 300 dracut -f "${boot}/initramfs-${version}.img" "${version}" || true
+    [[ -s "${boot}/initramfs-${version}.img" ]]
+  else
+    [[ -s "${boot}/initrd.img-${version}" ]] && return 0
+    log_warning "Kernel ${version} has no initrd; building it"
+    timeout 300 update-initramfs -c -k "${version}" || true
+    [[ -s "${boot}/initrd.img-${version}" ]]
+  fi
+}
+
+# The kernel GRUB's generated menu selects, including saved entries and nested menu titles and ids.
+function grub_default_kernel () {
+  GRUB_DIR="${GRUB_DIR:-/boot/grub}" "${BAKE_PYTHON:-python3}" - <<'PY'
+import os
+import re
+import shlex
+import subprocess
+from pathlib import Path
+
+config = Path(f"{os.environ['GRUB_DIR']}/grub.cfg").read_text()
+settings = dict(line.split('=', 1) for line in subprocess.check_output(
+    ['grub-editenv', f"{os.environ['GRUB_DIR']}/grubenv", 'list'], text=True).splitlines() if '=' in line)
+defaults = re.findall(r'^\s*set default="([^"]+)"', config, re.M)
+# Stock GRUB selects next_entry first, then saved_entry or the configured literal.
+selection = settings.get('next_entry') or next(
+    (settings.get('saved_entry') if d == '${saved_entry}' else d
+     for d in defaults if d != '${next_entry}'), None)
+if not selection or '$' in selection:
+    raise SystemExit('Cannot resolve default GRUB entry')
+entries, stack, counts = [], [], {(): 0}
+depth = 0
+for line in config.splitlines():
+    stripped = line.strip()
+    words = stripped.split()
+    if stripped.startswith(('menuentry ', 'submenu ')):
+        parts = shlex.split(stripped)
+        parent = tuple(item[0] for item in stack)
+        index = counts.get(parent, 0)
+        counts[parent] = index + 1
+        ident = ''
+        for i, part in enumerate(parts[:-1]):
+            if part in ('--id', '$menuentry_id_option'):
+                ident = parts[i + 1]
+            elif part.startswith('--id='):
+                ident = part[5:]
+        stack.append((index, parts[1], ident, depth))
+    # grub.cfg separates the command from its arguments with tabs
+    if len(words) > 1 and words[0] in ('linux', 'linuxefi'):
+        kernel = words[1].rsplit('/', 1)[-1]
+        entries.append((list(stack), kernel.removeprefix('vmlinuz-')))
+    depth += line.count('{') - line.count('}')
+    while stack and depth <= stack[-1][3]:
+        stack.pop()
+for path, kernel in entries:
+    keys = selection.split('>')
+    if len(keys) == len(path) and all(k in (str(i), title, ident) for k, (i, title, ident, _) in zip(keys, path)):
+        print(kernel)
+        break
+else:
+    raise SystemExit('Default GRUB entry has no kernel')
+PY
+}
+
+function boot_loader_default_kernel () {
+  local kernel
+  if command -v grubby > /dev/null 2>&1; then
+    kernel=$(grubby --default-kernel 2>/dev/null) || return 1
+    echo "${kernel##*/vmlinuz-}"
+  else
+    grub_default_kernel 2>/dev/null
+  fi
+}
+
+function restore_default_kernel () {
+  if command -v grubby > /dev/null 2>&1; then
+    grubby --set-default "${KERNEL_BOOT_DIR:-/boot}/vmlinuz-${1}" || return 1
+  else
+    sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${1}\"/" "${GRUB_DEFAULTS_FILE:-/etc/default/grub}" || return 1
+    update-grub || return 1
+  fi
+  [[ "$(boot_loader_default_kernel)" == "${1}" ]]
+}
+
+function ensure_boot_kernel_bootable () {
+  local next running
+  next=$(boot_loader_default_kernel) || next=""
+  if [[ -z "${next}" ]]; then
+    log_warning "Could not read which kernel this host boots next, so it was not checked"
+    return 0
+  fi
+  kernel_initramfs_ready "${next}" && return 0
+  running=$(uname -r)
+  log_warning "Kernel ${next} has no initramfs and none could be built; keeping ${running}"
+  if [[ "${next}" != "${running}" ]] && kernel_initramfs_ready "${running}" && restore_default_kernel "${running}"; then
+    return 0
+  fi
+  echo -n "no" > "${BOOTSTRAP_DIR}/reboot_required.txt"
+  fail_bootstrap kernel-boot-mismatch "Kernel ${next} would not boot: it has no initramfs, one could not be built, and the running kernel could not be made the default."
+}
+
+# /boot is a 1 GB partition on EL images and a generic desktop initramfs passed 260 MB. With a
+# second kernel the rebuild a later package triggers (it writes a new copy beside the old one)
+# ran out of room. A rescue image, one per machine id, has no use on an instance nobody can
+# choose a boot entry on, so drop them and stop new ones being made.
+function drop_rescue_images () {
+  local boot="${KERNEL_BOOT_DIR:-/boot}"
+  local conf="${DRACUT_CONF_DIR:-/etc/dracut.conf.d}"
+  mkdir -p "${conf}"
+  echo 'dracut_rescue_image="no"' > "${conf}/90-idea-no-rescue.conf"
+  rm -f "${boot}"/*-0-rescue-* "${boot}"/.vmlinuz-0-rescue-* "${boot}"/loader/entries/*-0-rescue.conf
+}
+
 function set_reboot_required () {
   log_info "Reboot Required: ${1}"
   echo -n "yes" > ${BOOTSTRAP_DIR}/reboot_required.txt
@@ -163,6 +286,7 @@ function complete_bootstrap_reboot () {
       || fail_bootstrap reboot-failed "Unable to read cloud-final state"
     # Cron can run before cloud-final starts: an inactive unit with a queued job is not finished.
     if grep -Eq '^SubState=(exited|dead|failed)$' <<< "${state}" && ! grep -Eq '^Job=[1-9]' <<< "${state}"; then
+      ensure_boot_kernel_bootable
       log_info "cloud-final finished; requesting bootstrap reboot"
       timeout 30 /sbin/reboot || fail_bootstrap reboot-failed "Bootstrap reboot request failed"
       sleep 60

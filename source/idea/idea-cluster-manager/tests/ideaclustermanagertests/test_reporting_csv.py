@@ -13,6 +13,7 @@ from ideadatamodel import (
     exceptions,
 )
 from ideaclustermanager.app.reporting.csv_export import export_csv
+from ideaclustermanager.app.reporting.csv_export import completeness
 from ideaclustermanager.app.reporting.reporting_service import ReportingService, new_row
 from ideaclustermanagertests.test_reporting_snapshot_store import store
 
@@ -50,8 +51,8 @@ def test_csv_all_rows_same_order_as_pages_and_totals():
     )
     content = list(csv.DictReader(io.StringIO(exported.content)))
     assert exported.row_count == 251
-    assert sum(int(row['spend_total']) for row in content) == sum(range(251))
-    assert list(content[0])[-2:] == ['label', 'spend_total']
+    assert sum(int(row['Total spend']) for row in content) == sum(range(251))
+    assert list(content[0])[-2:] == ['Name', 'Total spend']
     collected, cursor = [], None
     while True:
         page = service.list_rows(
@@ -65,9 +66,9 @@ def test_csv_all_rows_same_order_as_pages_and_totals():
         cursor = page.paginator.cursor
         if cursor is None:
             break
-    assert collected == [row['label'] for row in content]
-    assert content[0]['currency'] == 'USD'
-    assert 'spend_total' in content[0]['coverage']
+    assert collected == [row['Name'] for row in content]
+    assert content[0]['Currency'] == 'USD'
+    assert content[0]['Complete'].startswith(('Complete', 'Partial'))
 
 
 @pytest.mark.parametrize(
@@ -75,7 +76,7 @@ def test_csv_all_rows_same_order_as_pages_and_totals():
 )
 def test_untrusted_formula_prefixes_are_neutralized(label):
     result = export_csv(summary(), [new_row('key', label)], 'user', ['label'])
-    assert list(csv.DictReader(io.StringIO(result.content)))[0]['label'] == "'" + label
+    assert list(csv.DictReader(io.StringIO(result.content)))[0]['Name'] == "'" + label
 
 
 def test_null_zero_quotes_newlines_and_unicode():
@@ -84,9 +85,9 @@ def test_null_zero_quotes_newlines_and_unicode():
     result = export_csv(summary(), [row], 'user', ['label', 'job_count', 'spend_total'])
     assert result.content.encode('utf-8').startswith(b'\xef\xbb\xbf')
     data = list(csv.DictReader(io.StringIO(result.content.lstrip('\ufeff'))))[0]
-    assert data['label'] == row['label']
-    assert data['job_count'] == '0'
-    assert data['spend_total'] == ''
+    assert data['Name'] == row['label']
+    assert data['Jobs'] == '0'
+    assert data['Total spend'] == ''
     assert result.filename == 'reporting-user-2024-01-01-2024-01-31.csv'
     assert result.content_type == 'text/csv;charset=utf-8'
 
@@ -142,7 +143,7 @@ def test_filtered_export_contains_only_selected_user(username, expected):
     )
     exported = service.export('reader', request, lambda: True)
     content = list(csv.DictReader(io.StringIO(exported.content.lstrip('\ufeff'))))
-    assert [row['label'] for row in content] == expected
+    assert [row['Name'] for row in content] == expected
     assert exported.row_count == len(expected)
     assert exported.filename == f'reporting-user-2024-01-01-2024-01-31-{username}.csv'
     with pytest.raises(exceptions.SocaException):
@@ -206,3 +207,13 @@ def test_rows_filter_on_server_and_bind_cursor_to_username():
                 ListReportingRowsRequest(**request, username='user-250'),
                 lambda: allowed,
             )
+
+
+def test_csv_says_in_words_whether_a_row_is_complete():
+    assert completeness({}) == 'Complete'
+    assert completeness({'jobs': {'status': 'ready', 'missing_days': 0}}) == 'Complete'
+    assert completeness({'jobs': {'status': 'partial'}}) == 'Partial'
+    assert (
+        completeness({'jobs': {'status': 'partial', 'missing_days': 12}})
+        == 'Partial: missing 12 days'
+    )

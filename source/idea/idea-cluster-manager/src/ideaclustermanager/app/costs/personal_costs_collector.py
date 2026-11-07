@@ -1148,7 +1148,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         )
 
 
-def listing_entry(summary, records, costs, now):
+def listing_entry(summary, records, costs, now, complete):
     """
     what the admin listing shows for this user over the summary's window. it goes in the
     head, which every run writes anyway, so it has to stay small.
@@ -1164,6 +1164,7 @@ def listing_entry(summary, records, costs, now):
         start_date=summary.start_date,
         end_date=summary.end_date,
         has_records=records,
+        complete=complete,
         session_count=desktops.session_count,
         hours=desktops.hours,
         cost=desktops.cost,
@@ -1327,6 +1328,10 @@ class PersonalCostsCollector:
         )
         return retained
 
+    def _beat(self):
+        # a long seed is work, not a stalled collector, and users are shown the difference
+        self.store.put(SYSTEM, 'heartbeat', {'as_of': arrow.utcnow().isoformat()})
+
     def _check_leader(self):
         now = arrow.utcnow()
         state = self.store.get(SYSTEM, 'state') or {}
@@ -1355,7 +1360,7 @@ class PersonalCostsCollector:
                 for owner in MyCostsService(self.context).history_owners():
                     self.store.register_head_subject(owner)
                 state['history_owners_on'] = today
-            if self.store.seed_head_subjects():
+            if self.store.seed_head_subjects(on_progress=self._beat):
                 self.logger.info('Personal cost head index seeded')
         except Exception:
             # readers keep scanning until this succeeds on a later run
@@ -1482,7 +1487,13 @@ class PersonalCostsCollector:
                     result,
                     summary,
                     tickers,
-                    listing_entry(summary, reader.desktop_records, result, measured),
+                    listing_entry(
+                        summary,
+                        reader.desktop_records,
+                        result,
+                        measured,
+                        reader.desktops_complete,
+                    ),
                 )
                 self.store.acknowledge(username, request)
             except Exception:

@@ -520,6 +520,53 @@ def test_job_builder_ht_support_disabled_invalid_cpus(context):
     ) in get_validation_messages(result)
 
 
+def test_too_many_cpus_says_what_to_ask_for(context):
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 4,
+            'instance_type': 't3.micro',
+            'ht_support': 'true',
+        },
+    )
+    assert result.success is False
+    assert (
+        'This job asks for 4 CPUs per machine, and the smallest of t3.micro has 2. '
+        'Ask for 2 or fewer, or choose a larger instance type.'
+    ) in get_validation_messages(result)
+
+
+def test_too_much_memory_says_what_to_do(context):
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro', 'memory': 2048},
+    )
+    assert result.success is False
+    messages = ' '.join(get_validation_messages(result))
+    assert 'This job asks for' in messages
+    assert 'Ask for less, or choose a larger instance type.' in messages
+    assert 'requested memory' not in messages
+
+
+def test_restricted_param_says_to_remove_it(context):
+    result = build_and_validate(
+        context=context,
+        params={'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=['instance_types']
+            ),
+        ),
+    )
+    assert result.success is False
+    assert any(
+        "doesn't let jobs set instance_types. Remove it from your job script." in m
+        for m in get_validation_messages(result)
+    )
+
+
 def test_job_builder_basic_invalid_no_of_cpus(context):
     """
     no. of cpus requested are not available for the given instance type

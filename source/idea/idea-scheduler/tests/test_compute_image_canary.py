@@ -565,3 +565,62 @@ def test_a_stale_project_description_is_brought_up_to_date(monkeypatch):
     # only the description: an update with other fields would rewrite them
     assert update.ldap_groups is None and update.enable_budgets is None
     assert project.description == VALIDATION_PROJECT_DESCRIPTION
+
+
+def test_a_hung_shared_home_fails_the_canary_before_it_creates_anything(monkeypatch):
+    svc = service()
+    context = svc.context
+    context.config().values.update(
+        {
+            module.PIPELINE_SETTINGS: {},
+            'shared-storage.data.mount_dir': '/data',
+            'shared-storage': {'data': {'mount_dir': '/data', 'scope': ['cluster']}},
+        }
+    )
+    monkeypatch.setattr(
+        module, 'ensure_validation_identity', lambda *a: Mock(project_id='p')
+    )
+    monkeypatch.setattr(module, 'wait_for_local_user', lambda *a: None)
+    monkeypatch.setattr(module, 'path_answers', lambda path: False)
+    source = Mock(default_job_params=None)
+    source.name = 'compute'
+    context.queue_profiles.list_queue_profiles.return_value = [source]
+    context.queue_profiles.create_queue_profile = Mock()
+    monkeypatch.setattr(module.ComputeImageCanary, '_source_profile', lambda *a: source)
+    canary = module.ComputeImageCanary(context)
+    record = row(status='test_launching', image_id='ami-candidate')
+    with pytest.raises(exceptions.SocaException) as raised:
+        canary.validate(record, Mock())
+    assert '/data/home/idea-validate did not answer' in raised.value.message
+    context.queue_profiles.create_queue_profile.assert_not_called()
+
+
+def test_a_node_that_never_registered_is_found_by_its_job_tag_and_read(monkeypatch):
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {
+        'Reservations': [{'Instances': [{'InstanceId': 'i-node'}]}]
+    }
+    context = Mock()
+    context.aws.return_value.ec2.return_value = ec2
+    context.cluster_name.return_value = 'c'
+    seen = []
+    monkeypatch.setattr(
+        module,
+        'capture_failure',
+        lambda ctx, logger, host: seen.append(host) or 'Likely cause: x.',
+    )
+    canary = ComputeImageCanary(svc.context)
+    canary.context = context
+    cause = canary._capture_failed_node(
+        row(image_id='ami-candidate', release='26.11.2'),
+        'job-7',
+        None,
+        exceptions.general_exception('The validation job timed out before completion.'),
+    )
+    assert cause == 'Likely cause: x.'
+    assert seen[0].instance_id == 'i-node' and seen[0].ami == 'ami-candidate'
+    assert seen[0].kind == 'compute_bake' and seen[0].log_group is None
+    filters = ec2.describe_instances.call_args.kwargs['Filters']
+    assert {'Name': 'tag:idea:JobId', 'Values': ['job-7']} in filters
+    assert {'Name': 'tag:idea:ClusterName', 'Values': ['c']} in filters

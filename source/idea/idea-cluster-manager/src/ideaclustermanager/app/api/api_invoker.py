@@ -42,6 +42,7 @@ from ideaclustermanager.app.api.costs_api import CostsAPI
 from ideaclustermanager.app.api.reporting_api import ReportingAPI
 
 from ideaclustermanager.app.api.terminal_api import TerminalAPI
+from ideaclustermanager.app.api.client_errors_api import ClientErrorsAPI
 
 from typing import Optional, Dict
 
@@ -61,6 +62,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
         self.costs_api = CostsAPI(context)
         self.reporting_api = ReportingAPI(context)
         self.terminal_api = TerminalAPI(context)
+        self.client_errors_api = ClientErrorsAPI(context)
         self.max_listings_for_logging = 10
         self.auto_truncate_responses = {
             'Accounts.ListUsers': ListUsersResult,
@@ -76,7 +78,7 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     ) -> Optional[Dict]:
         namespace = context.namespace
 
-        if namespace.startswith(('Reporting.', 'Terminal.')):
+        if namespace.startswith(('Reporting.', 'Terminal.', 'Portal.')):
             request = context.get_request(deep_copy=True)
             request['payload'] = {'redacted': True}
             return request
@@ -229,3 +231,5 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             self.reporting_api.invoke(context)
         elif namespace.startswith('Terminal.'):
             self.terminal_api.invoke(context)
+        elif namespace.startswith('Portal.'):
+            self.client_errors_api.invoke(context)

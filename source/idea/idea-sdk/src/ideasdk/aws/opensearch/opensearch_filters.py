@@ -51,7 +51,8 @@ class FreeTextFilter:
         self.text = text
 
     def get_free_text_filter(self) -> Dict:
-        return {'query_string': {'fields': [], 'query': self.text}}
+        # people type into this: simple_query_string does not fail on a stray character
+        return {'simple_query_string': {'query': self.text, 'lenient': True}}
 
 
 class SortOrder(str, Enum):
@@ -68,4 +69,6 @@ class SortFilter:
         self.order = order
 
     def get_sort_filter(self) -> str:
-        return f'{self.key}:{self.order}'
+        # .value: formatting the enum gives "SortOrder.DESC", which OpenSearch ignores
+        # without an error
+        return f'{self.key}:{SortOrder(self.order).value}'

@@ -49,7 +49,8 @@ export function useStorageUsage(folder?: string, refreshSignal = 0) {
                 refresh = false;
                 const result = await AppContext.get().client().fileBrowser().getStorageUsage(request);
                 if (!active) return;
-                setUsage(result);
+                // a refresh with no answer yet keeps what is on screen
+                setUsage(previous => result.state === 'computing' && previous?.state === 'ready' ? previous : result);
                 if (result.state === 'computing') timer = setTimeout(fetchUsage, 2000);
                 else if (result.progress?.running) timer = setTimeout(fetchUsage, 1000);
                 if (result.state === 'error') setError(result.message || 'Storage usage could not be read.');
@@ -102,8 +103,8 @@ function FolderTable(props: {items: StorageFolderUsage[], empty: string, showPat
                 ? <Link onFollow={event => {event.preventDefault(); props.onOpen(item.path);}} href="#">{props.showPath ? item.path : item.name}</Link>
                 : (props.showPath ? item.path : item.name)},
             {id: 'bytes', header: 'Size', cell: sizeCell},
-            {id: 'files', header: 'Files', cell: item => item.unreadable || item.measured === false ? '' : item.files.toLocaleString()},
-            {id: 'unchanged', header: props.fromAnalytics ? 'Unchanged 3+ months' : 'Unchanged 90 days', cell: item => item.unreadable || item.measured === false ? '' : storageSize(item.unchanged_90_days_bytes)},
+            {id: 'files', header: 'Files', cell: item => item.unreadable || item.measured === false ? '' : `${item.partial ? 'At least ' : ''}${item.files.toLocaleString()}`},
+            {id: 'unchanged', header: props.fromAnalytics ? 'Unchanged 3+ months' : 'Unchanged 90 days', cell: item => item.unreadable || item.measured === false ? '' : `${item.partial ? 'At least ' : ''}${storageSize(item.unchanged_90_days_bytes)}`},
             {id: 'newest', header: 'Last changed', cell: item => item.unreadable || item.measured === false ? '' : `${props.fromAnalytics && item.newest_mtime !== null ? 'About ' : ''}${storageAge(item.newest_mtime)}`},
             {id: 'open', header: 'Browse', cell: item => item.unreadable ? '' : <Link href={`#/home/file-browser?cwd=${encodeURIComponent(item.path)}`}>Open in Files</Link>}
         ]}
@@ -113,10 +114,11 @@ function FolderTable(props: {items: StorageFolderUsage[], empty: string, showPat
 export function storageScanSentence(usage: StorageUsageResult): string | null {
     if (usage.source === 'analytics' || !usage.partial || !usage.total) return null;
     const scanned = (usage.scanned_files ?? usage.total.files).toLocaleString();
-    const quotaFiles = usage.quotas?.reduce((sum, quota) => sum + quota.files, 0);
+    // a qtree's row repeats files the volume's own row already counts
+    const quotaFiles = usage.quotas?.filter(quota => !quota.qtree).reduce((sum, quota) => sum + quota.files, 0);
     return quotaFiles
-        ? `Scanned ${scanned} of about ${aboutCount(quotaFiles)} files, then stopped at the time limit. Sizes are lower bounds.`
-        : `Scanned ${scanned} files, then stopped at the time limit. Sizes are lower bounds.`;
+        ? `Scanned ${scanned} of about ${aboutCount(quotaFiles)} files, then stopped at the time limit. Sizes are lower bounds. Refresh repeats this same short scan; open a folder below to measure it on its own.`
+        : `Scanned ${scanned} files, then stopped at the time limit. Sizes are lower bounds. Refresh repeats this same short scan; open a folder below to measure it on its own.`;
 }
 
 export default function StorageUsage({compact = false, refreshSignal = 0}: {compact?: boolean, refreshSignal?: number}) {
@@ -139,21 +141,22 @@ export default function StorageUsage({compact = false, refreshSignal = 0}: {comp
             {usage?.progress?.running && <StudyProgress progress={usage.progress}/>}
             {quotaHasBytes && <SpaceBetween size="xxs">
                 {usage?.quotas?.map((quota, index) => <Box variant="strong" key={index}>
-                    {storageSize(quota.used_bytes)} in {aboutCount(quota.files)} files on {[quota.volume, quota.qtree].filter(Boolean).join('/')}{quota.limit_bytes == null ? '' : ` (limit ${storageSize(quota.limit_bytes)})`}
+                    {storageSize(quota.used_bytes)} in {aboutCount(quota.files)} files{usage?.quotas!.length > 1 ? ` on ${[quota.volume, quota.qtree].filter(Boolean).join('/')}` : ''}{quota.limit_bytes == null ? '' : ` (limit ${storageSize(quota.limit_bytes)})`}
                 </Box>)}
-                <Box>Your ONTAP quota counts everything you own on this volume, including outside your home folder.</Box>
+                <Box>Your storage quota counts everything you own on this volume, including outside your home folder.</Box>
             </SpaceBetween>}
-            {usage?.state === 'ready' && !quotaHasBytes && usage.quota_status === 'unavailable' && <Box>{compact ? 'ONTAP quota: No data' : 'ONTAP quota: unavailable. No quota report is available for your account.'}</Box>}
+            {usage?.state === 'ready' && !quotaHasBytes && usage.quota_status === 'unavailable' && <Box>{compact ? 'Storage quota: not available' : 'Your storage quota is not available right now.'}</Box>}
             {usage?.outside_home_bytes !== undefined && usage.outside_home_bytes > 0 && !folder && <Box>
-                {storageSize(usage.outside_home_bytes)} of that is outside your home folder. ONTAP totals what you own but can't say which folders hold it.
+                {storageSize(usage.outside_home_bytes)} of that is outside your home folder. The quota totals what you own but can't say which folders hold it.
             </Box>}
             {!!usage?.unattributed_quota_bytes && !folder && <Box color="text-body-secondary" fontSize="body-s">
-                ONTAP can't name the owner of another {storageSize(usage.unattributed_quota_bytes)} on this volume, so it isn't in anyone's total. Files you wrote from Windows could be part of it.
+                Another {storageSize(usage.unattributed_quota_bytes)} on this volume has no named owner, so it isn't in anyone's total. Files you wrote from Windows could be part of it.
             </Box>}
             {usage?.state === 'unavailable' && <Alert type="info">{usage.message}</Alert>}
+            {folder && (error || usage?.state === 'unavailable') && <Button variant="link" onClick={() => setFolder(undefined)}>Back to your home folder</Button>}
             {usage?.state === 'ready' && usage.total && <SpaceBetween size="s">
                 {scanSentence && <Box>{scanSentence}</Box>}
-                {usage.analytics_progress !== undefined && <Box>Storage analytics is being set up ({usage.analytics_progress}% done). Until it finishes, these sizes come from a short scan.</Box>}
+                {usage.analytics_progress !== undefined && <Box>Faster folder sizes are being set up ({usage.analytics_progress}% done). Until that finishes, these sizes come from a short scan.</Box>}
                 {folder && !outsideHome && <BreadcrumbGroup ariaLabel="Folder path" items={crumbs} onFollow={event => {
                     event.preventDefault();
                     setFolder(event.detail.href === home ? undefined : event.detail.href);
@@ -161,6 +164,7 @@ export default function StorageUsage({compact = false, refreshSignal = 0}: {comp
                 {outsideHome && <Button variant="link" onClick={() => setFolder(undefined)}>Back to your home folder</Button>}
                 <Box>{folder ? folder : `Home folder ${usage.home}`}: {usage.partial ? 'at least ' : ''}{storageSize(usage.total.bytes)} in {usage.total.files.toLocaleString()} files. {storageSize(usage.total.unchanged_90_days_bytes)} has not changed in {fromAnalytics ? '3 months or more' : '90 days'}.</Box>
                 <FolderTable items={usage.folders || []} empty="No folders here." canOpen fromAnalytics={fromAnalytics} onOpen={setFolder}/>
+                {usage.truncated && <Box>This folder has more subfolders than can be listed, so only the largest are shown.</Box>}
                 {usage.files_here && usage.files_here.files > 0 && <Box>Files directly in this folder: {storageSize(usage.files_here.bytes)} in {usage.files_here.files.toLocaleString()} files.</Box>}
                 {!folder && !!usage.largest?.length && <SpaceBetween size="xs">
                     <Header variant="h3">Biggest folders anywhere in your home</Header>

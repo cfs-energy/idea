@@ -69,6 +69,23 @@ INVOCATION_QUERY = """fields identity.arn as caller_arn, modelId as model_id, in
 # settled once it is old enough that late arriving records are no longer expected.
 INVOCATION_QUERY_HOURLY = INVOCATION_QUERY.replace('bin(1d)', 'bin(1h)')
 
+# a query that hits the row limit across more than this is read again a day at a time, where
+# each day may not. if it could not be, no scan state would ever be saved and every run would
+# repeat the whole window.
+CATCH_UP_CHUNK_SECONDS = 86400
+
+
+def window_query(start_time: int, end_time: int) -> str:
+    """the hourly query for one chunk. the time range of a query includes its end, so its own
+    filter is what keeps an event on a boundary out of the next chunk."""
+    return INVOCATION_QUERY_HOURLY.replace(
+        '\n| stats',
+        f'\n| filter @timestamp >= {start_time * 1000} and @timestamp < {end_time * 1000}'
+        '\n| stats',
+        1,
+    )
+
+
 # records are matched to an hour by the time they were logged, not the time they reach
 # cloudwatch logs, so a late record lands in an hour that was already scanned. an hour is
 # settled (counted once, never scanned again) only once it is this old.
@@ -448,11 +465,9 @@ class BedrockUsageService(SocaService):
             for project_id, floor in floors.items()
         }
 
-        records = self.query_invocation_records(
-            log_group_name, start_time, end_time, INVOCATION_QUERY_HOURLY
-        )
+        records, truncated = self.query_hourly(log_group_name, start_time, end_time)
         incremental = True
-        if self.is_truncated(records):
+        if truncated:
             # an hourly answer has more groups than a daily one and can hit the limit
             # a daily one would not. fall back to the daily scan of the whole window.
             incremental = False
@@ -461,6 +476,7 @@ class BedrockUsageService(SocaService):
             records = self.query_invocation_records(
                 log_group_name, window_start, end_time
             )
+            truncated = self.is_truncated(records)
         settled_users: Dict[str, Dict] = {}
         settled_jobs: Dict[str, Dict] = {}
         aggregates, job_aggregates, skipped = self.attribute(
@@ -482,7 +498,6 @@ class BedrockUsageService(SocaService):
         # a query that answered with nothing, or was cut off, cannot say what is stale:
         # a missing log group reads exactly like a quiet window. stored usage is updated
         # and left in place rather than reconciled away, because nothing would restore it.
-        truncated = self.is_truncated(records)
         if len(records) == 0:
             self.logger.info(
                 'the model invocation log query returned no records for this window. '
@@ -716,6 +731,35 @@ class BedrockUsageService(SocaService):
             today.shift(days=-offset).format('YYYY-MM-DD')
             for offset in range(lookback - 1, -1, -1)
         ]
+
+    def query_hourly(
+        self, log_group_name: str, start_time: int, end_time: int
+    ) -> Tuple[List[List[Dict]], bool]:
+        """(records, whether the answer is still cut off at the row limit)."""
+        records = self.query_invocation_records(
+            log_group_name, start_time, end_time, INVOCATION_QUERY_HOURLY
+        )
+        if (
+            not self.is_truncated(records)
+            or end_time - start_time <= CATCH_UP_CHUNK_SECONDS
+        ):
+            return records, self.is_truncated(records)
+        records = []
+        for chunk_start in range(start_time, end_time, CATCH_UP_CHUNK_SECONDS):
+            chunk_end = min(chunk_start + CATCH_UP_CHUNK_SECONDS, end_time)
+            # the last chunk includes its end, as a single query would
+            chunk = self.query_invocation_records(
+                log_group_name,
+                chunk_start,
+                chunk_end,
+                window_query(
+                    chunk_start, chunk_end + 1 if chunk_end == end_time else chunk_end
+                ),
+            )
+            if self.is_truncated(chunk):
+                return records + chunk, True
+            records.extend(chunk)
+        return records, False
 
     def query_invocation_records(
         self,

@@ -87,6 +87,26 @@ job_cache:
   # finished jobs are deleted from the scheduler's job cache this many days after they end; 0 keeps them
   finished_job_retention_days: 400
 
+scratch_cleanup:
+  # when a job finishes, its numbered scratch folder on the Lustre file systems named below gets a
+  # removal date. Off until an administrator turns it on, and a dry run until told otherwise
+  enabled: false
+  dry_run: true
+  # stops every removal within a couple of seconds, in the middle of a folder if need be
+  kill_switch: false
+  # shared-storage names to clean, for example [scratch]; nothing is cleaned while this is empty
+  file_systems: []
+  # days after a job ends: exit status 0, or anything else that ran, including killed and deleted
+  success_retention_days: 30
+  failed_retention_days: 60
+  # the weekly owner digest and administrator summary go on this day: 0 is Monday, 6 is Sunday
+  digest_weekday: 0
+  # how many removals one hourly check can make; the rest wait for the next
+  max_folders_per_run: 25
+  # a check or backfill that would remove more than this share stops instead, and alerts
+  max_run_bytes_percent: 25
+  max_run_share_percent: 50
+
 job_provisioning:
   # Determine if AWS Service Quotas should be used:
   # True (default) - query AWS service quotas API to make sure an incoming job can be deployed.

@@ -30,6 +30,7 @@ Statement:
       - ec2:DescribeSpotFleetRequestHistory
       - ec2:DescribeTags
       - fsx:DescribeFileSystems
+      - fsx:DescribeDataRepositoryAssociations
       - iam:GetInstanceProfile
       - autoscaling:DescribeAutoScalingGroups
       - autoscaling:DescribeScalingActivities

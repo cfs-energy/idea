@@ -922,6 +922,8 @@ class SocaServer(SocaService):
         Stream-based file upload handler that processes large files without loading them into RAM.
         Uses multipart streaming to handle file uploads efficiently.
         """
+        username = None
+        cwd = None
         try:
             username = self._api_invocation_handler.get_username(http_request)
             if Utils.is_empty(username):
@@ -950,8 +952,10 @@ class SocaServer(SocaService):
             self._logger.error(
                 f'Streaming file upload failed - User: {username}, Directory: {cwd}, Error: {e.message}'
             )
+            # a 200 would read as a finished upload in the browser
             return sanic.response.json(
                 {'error_code': e.error_code, 'message': e.message, 'success': False},
+                status=403 if e.error_code == errorcodes.UNAUTHORIZED_ACCESS else 400,
                 dumps=Utils.to_json,
             )
         except Exception as e:
@@ -964,6 +968,7 @@ class SocaServer(SocaService):
                     'message': str(e),
                     'success': False,
                 },
+                status=500,
                 dumps=Utils.to_json,
             )
 
@@ -1073,8 +1078,8 @@ class SocaServer(SocaService):
                             )
                             current_file = file_path
 
-                            # Track renamed files
-                            if was_renamed:
+                            # Track renamed files, by the name clash or by the name clean-up
+                            if was_renamed or secure_filename != filename:
                                 files_renamed.append(
                                     {
                                         'original_name': filename,
@@ -1330,6 +1335,7 @@ class SocaServer(SocaService):
             )
 
     async def file_download_route(self, http_request, **_):
+        # the browser saves whatever a 200 carries as the file, so every refusal here is a real status
         username = None
 
         # Try Bearer token first (for API calls)
@@ -1375,6 +1381,7 @@ class SocaServer(SocaService):
                             'message': 'Download link expired',
                             'success': False,
                         },
+                        status=401,
                         dumps=Utils.to_json,
                     )
                 except jwt.InvalidTokenError as e:
@@ -1386,6 +1393,7 @@ class SocaServer(SocaService):
         if Utils.is_empty(username):
             return sanic.response.json(
                 {'error_code': errorcodes.UNAUTHORIZED_ACCESS, 'success': False},
+                status=401,
                 dumps=Utils.to_json,
             )
 
@@ -1404,6 +1412,7 @@ class SocaServer(SocaService):
                     'message': 'file parameter is required',
                     'success': False,
                 },
+                status=400,
                 dumps=Utils.to_json,
             )
 
@@ -1420,6 +1429,7 @@ class SocaServer(SocaService):
             )
             return sanic.response.json(
                 {'error_code': e.error_code, 'message': e.message, 'success': False},
+                status=403,
                 dumps=Utils.to_json,
             )
 
@@ -1434,6 +1444,7 @@ class SocaServer(SocaService):
                     'message': f'File not found: {download_file}',
                     'success': False,
                 },
+                status=404,
                 dumps=Utils.to_json,
             )
 
@@ -1468,7 +1479,13 @@ class SocaServer(SocaService):
                     )
 
                 return await self._stream_file_download(
-                    zip_file_path, zip_filename, zip_size, username
+                    zip_file_path,
+                    zip_filename,
+                    zip_size,
+                    username,
+                    after_streamed=lambda: helper.remove_generated_archive(
+                        zip_file_path
+                    ),
                 )
 
             except Exception as e:
@@ -1481,6 +1498,7 @@ class SocaServer(SocaService):
                         'message': f'Failed to create directory archive: {str(e)}',
                         'success': False,
                     },
+                    status=500,
                     dumps=Utils.to_json,
                 )
         else:
@@ -1500,8 +1518,17 @@ class SocaServer(SocaService):
 
             # Use file_stream for ALL downloads to provide consistent browser progress bars
             # This ensures users always get download progress regardless of file size
+            # an archive built for this download: it has done its job once it has been sent
             return await self._stream_file_download(
-                download_file, filename, file_size, username
+                download_file,
+                filename,
+                file_size,
+                username,
+                after_streamed=(
+                    (lambda: helper.remove_generated_archive(download_file))
+                    if helper.is_generated_archive(download_file)
+                    else None
+                ),
             )
 
     def _get_adaptive_chunk_size(self, file_size: int) -> int:
@@ -1536,7 +1563,12 @@ class SocaServer(SocaService):
             return 2 * 1024 * 1024
 
     async def _stream_file_download(
-        self, file_path: str, filename: str, file_size: int, username: str = None
+        self,
+        file_path: str,
+        filename: str,
+        file_size: int,
+        username: str = None,
+        after_streamed=None,
     ):
         """
         Stream file downloads using Sanic's file_stream with proper headers for browser progress.
@@ -1577,11 +1609,26 @@ class SocaServer(SocaService):
 
         # Use Sanic's built-in file_stream which handles chunking efficiently
         # Adding Content-Length header automatically disables chunked encoding
-        return await sanic.response.file_stream(
+        response = await sanic.response.file_stream(
             file_path,
             chunk_size=chunk_size,  # Adaptive chunk size for optimal throughput
             headers=headers,
         )
+        if after_streamed is not None:
+            send = response.streaming_fn
+
+            # not on a cancelled download: the file is still there to try again
+            async def send_then_clean_up(stream):
+                await send(stream)
+                try:
+                    after_streamed()
+                except Exception as e:
+                    self._logger.warning(
+                        f'Clean up after download failed - File: {file_path}, Error: {e}'
+                    )
+
+            response.streaming_fn = send_then_clean_up
+        return response
 
     def _get_jwt_signing_secret(self) -> str:
         """

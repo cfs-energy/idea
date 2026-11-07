@@ -1,0 +1,631 @@
+"""
+The collectors the cluster manager runs for the cluster as a whole: one per concern, each a
+read, each reporting through ideasdk.metrics.health. The module has the rights these need and
+holds the directory agent and the ONTAP metrics login already. See docs for what each emits.
+"""
+
+from ideaclustermanager.app.accounts.auth_constants import USER_HOME_DIR_BASE
+from ideaclustermanager.app.metrics.storage_metrics_service import (
+    OntapClient,
+    fs_id_from_host,
+    tag_value,
+)
+from ideasdk.metrics.health import (
+    HOME_PROBE_REASONS,
+    HOME_PROBE_SCRIPT,
+    HealthCollector,
+    HealthMetrics,
+    IsolatedProbe,
+    SECONDS_PER_DAY,
+    bucket_of,
+    failure_reason,
+    pem_days_left,
+    python_probe,
+)
+from ideasdk.utils import Utils
+
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Set, Tuple
+import re
+import time
+
+LISTENERS = {
+    'cluster.load_balancers.external_alb.https_listener_arn': 'external_alb',
+    'cluster.load_balancers.internal_alb.https_listener_arn': 'internal_alb',
+    'cluster.load_balancers.internal_alb.dcv_broker_client_listener_arn': 'internal_alb',
+    'cluster.load_balancers.internal_alb.dcv_broker_agent_listener_arn': 'internal_alb',
+    'cluster.load_balancers.internal_alb.dcv_broker_gateway_listener_arn': 'internal_alb',
+}
+DOMAIN_ONLY = re.compile(r'[^a-z0-9.*_-]')
+
+# ListTasks keeps a stopped task for at least an hour. A bucket is only sent while every task in
+# it must still be listed: older, and a later read could rewrite it with a smaller total.
+STOPPED_WINDOW_SECONDS = 50 * 60
+DESCRIBE_TASKS_BATCH = 100
+DESCRIBE_SERVICES_BATCH = 10
+
+# fields, not text: an event's log_message and parameters can carry a username or a path.
+# ponytail: newest 1000 events in one read; past that in 50 minutes a burst is undercounted.
+EMS_PATH = (
+    '/api/support/ems/events?message.name=secd.*&return_records=true&max_records=1000'
+    '&order_by=time%20desc&fields=message.name,time'
+)
+LDAP_PATH = '/api/name-services/ldap?fields=svm.name,status&return_records=true'
+CIFS_PATH = (
+    '/api/protocols/cifs/services?fields=svm.name,security.session_security'
+    '&return_records=true'
+)
+DNS_PATH = '/api/name-services/dns?fields=svm.name,servers&return_records=true'
+
+
+def service_of(group: Optional[str], cluster: str) -> Optional[str]:
+    """service:idea-com-bastion-host is bastion-host; a standalone task has no service."""
+    if not group or not group.startswith('service:'):
+        return None
+    return group[len('service:') :].removeprefix(f'{cluster}-')
+
+
+def classify_stopped_task(task: Dict) -> str:
+    """why ECS stopped a task, in one word. An out of memory kill also reads as a plain exit."""
+    reason = task.get('stoppedReason') or ''
+    code = task.get('stopCode') or ''
+    for container in task.get('containers') or []:
+        if (container.get('reason') or '').startswith('OutOfMemory'):
+            return 'oom'
+        if container.get('exitCode') == 137 and code == 'EssentialContainerExited':
+            return 'oom'
+    lowered = reason.lower()
+    if 'health check' in lowered:
+        return 'health_check'
+    if 'deployment' in lowered:
+        return 'deployment'
+    if 'maintenance' in lowered or code == 'TerminationNotice':
+        return 'maintenance'
+    return {
+        'EssentialContainerExited': 'container_exit',
+        'TaskFailedToStart': 'failed_to_start',
+        'UserInitiated': 'user_stop',
+        'ServiceSchedulerInitiated': 'scheduler',
+        'SpotInterruption': 'spot',
+    }.get(code, 'other')
+
+
+class EcsTasksCollector(HealthCollector):
+    """
+    Every stopped task and rollout, read from ECS itself, so no event is sampled and none is
+    counted twice across a change of leader. Needs nothing beyond the module's ECS read.
+    """
+
+    name = 'ecs'
+    interval_seconds = 300
+    time_limit_seconds = 120
+
+    def __init__(self, context):
+        self.context = context
+        self._rollouts: Dict[Tuple[int, str], Set] = {}
+
+    def _client(self):
+        return self.context.aws().get_client('ecs')
+
+    def stopped_tasks(self, client, cluster: str) -> List[Dict]:
+        arns: List[str] = []
+        for page in client.get_paginator('list_tasks').paginate(
+            cluster=cluster, desiredStatus='STOPPED'
+        ):
+            arns.extend(page.get('taskArns', []))
+        tasks: List[Dict] = []
+        for start in range(0, len(arns), DESCRIBE_TASKS_BATCH):
+            tasks.extend(
+                client.describe_tasks(
+                    cluster=cluster, tasks=arns[start : start + DESCRIBE_TASKS_BATCH]
+                ).get('tasks', [])
+            )
+        return tasks
+
+    def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
+        cluster = self.context.config().get_string('ecs.cluster_name')
+        if Utils.is_empty(cluster):
+            return
+        now = now or time.time()
+        client = self._client()
+        cluster_name = self.context.cluster_name()
+        totals: Counter = Counter()
+        for task in self.stopped_tasks(client, cluster):
+            stopped_at = task.get('stoppedAt')
+            if task.get('lastStatus') != 'STOPPED' or stopped_at is None:
+                continue  # still stopping: the next read sees it finished
+            service = service_of(task.get('group'), cluster_name) or 'standalone'
+            totals[
+                (
+                    bucket_of(stopped_at.timestamp()),
+                    service,
+                    classify_stopped_task(task),
+                )
+            ] += 1
+        oldest = now - STOPPED_WINDOW_SECONDS
+        for (bucket, service, reason), total in totals.items():
+            if bucket >= oldest:
+                metrics.add(
+                    'ecs.task_stops',
+                    total,
+                    timestamp=bucket,
+                    service=service,
+                    reason=reason,
+                )
+        self._services(client, cluster, cluster_name, metrics, oldest)
+
+    def _services(self, client, cluster, cluster_name, metrics, oldest):
+        arns: List[str] = []
+        for page in client.get_paginator('list_services').paginate(cluster=cluster):
+            arns.extend(page.get('serviceArns', []))
+        # a bucket's count is sent whole each time, and ECS forgets a finished deployment once the
+        # next finishes, so what was seen stays until the bucket is too old to send
+        rollouts = self._rollouts
+        for start in range(0, len(arns), DESCRIBE_SERVICES_BATCH):
+            for service in client.describe_services(
+                cluster=cluster, services=arns[start : start + DESCRIBE_SERVICES_BATCH]
+            ).get('services', []):
+                name = service['serviceName'].removeprefix(f'{cluster_name}-')
+                metrics.level(
+                    'ecs.tasks_running', service.get('runningCount', 0), service=name
+                )
+                metrics.level(
+                    'ecs.tasks_desired', service.get('desiredCount', 0), service=name
+                )
+                metrics.level(
+                    'ecs.tasks_pending', service.get('pendingCount', 0), service=name
+                )
+                deployments = service.get('deployments') or []
+                states = [d.get('rolloutState') for d in deployments]
+                metrics.level(
+                    'ecs.rollout_in_progress',
+                    1 if 'IN_PROGRESS' in states else 0,
+                    service=name,
+                )
+                metrics.level(
+                    'ecs.rollout_failed', 1 if 'FAILED' in states else 0, service=name
+                )
+                for deployment in deployments:
+                    created = deployment.get('createdAt')
+                    if created is not None:
+                        rollouts.setdefault(
+                            (bucket_of(created.timestamp()), name), set()
+                        ).add(deployment.get('id') or created)
+        for key in [key for key in rollouts if key[0] < oldest]:
+            del rollouts[key]
+        for (bucket, name), seen in rollouts.items():
+            metrics.add('ecs.rollouts', len(seen), timestamp=bucket, service=name)
+
+
+# the file is on the shared mount: read in a child, so a hung read cannot take this thread with it.
+# bounded below the pipe's buffer, which the parent only reads once the child has exited
+CERTIFICATE_PROBE_SCRIPT = """
+import sys
+try:
+    with open(sys.argv[1], 'rb') as certificate:
+        sys.stdout.buffer.write(certificate.read(60000))
+except FileNotFoundError:
+    sys.exit(3)
+"""
+CERTIFICATE_NOT_THERE = 3
+
+
+class CertificatesCollector(HealthCollector):
+    """days left on what the load balancers serve and on the certificates IDEA reads itself."""
+
+    name = 'certificates'
+    interval_seconds = 3600
+    time_limit_seconds = 90
+    PROBE_SECONDS = 15
+
+    def __init__(self, context):
+        self.context = context
+        self._probe: Optional[IsolatedProbe] = None
+
+    def _listener_certificates(self) -> Tuple[Dict[str, str], Optional[Exception]]:
+        config = self.context.config()
+        found: Dict[str, str] = {}
+        failure = None
+        provided = config.get_string(
+            'cluster.load_balancers.external_alb.certificates.acm_certificate_arn'
+        )
+        if Utils.is_not_empty(provided):
+            found[provided] = 'external_alb'
+        client = self.context.aws().elbv2()
+        for key, load_balancer in LISTENERS.items():
+            listener = config.get_string(key)
+            if Utils.is_empty(listener):
+                continue
+            try:
+                marker = None
+                while True:
+                    kwargs = {'Marker': marker} if marker else {}
+                    page = client.describe_listener_certificates(
+                        ListenerArn=listener, **kwargs
+                    )
+                    for certificate in page.get('Certificates', []):
+                        found.setdefault(certificate['CertificateArn'], load_balancer)
+                    marker = page.get('NextMarker')
+                    if not marker:
+                        break
+            except Exception as e:  # the other listeners still report
+                failure = e
+        return found, failure
+
+    def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
+        now = now or time.time()
+        arns, failure = self._listener_certificates()
+        client = self.context.aws().acm()
+        for arn, load_balancer in sorted(arns.items()):
+            if ':acm:' not in arn:
+                metrics.level('cert.unread', 1, lb=load_balancer, source='iam')
+                continue
+            try:
+                detail = client.describe_certificate(CertificateArn=arn)['Certificate']
+                not_after = detail.get('NotAfter')
+                if not_after is None:
+                    metrics.level('cert.unread', 1, lb=load_balancer, source='acm')
+                    continue
+                metrics.level(
+                    'cert.days_to_expiry',
+                    (not_after.timestamp() - now) / SECONDS_PER_DAY,
+                    source='acm',
+                    lb=load_balancer,
+                    cert=DOMAIN_ONLY.sub(
+                        '_', (detail.get('DomainName') or 'unknown').lower()
+                    ),
+                    type=str(detail.get('Type') or 'unknown').lower(),
+                )
+            except Exception as e:
+                failure = e
+        for read in (self._directory_certificate, self._module_certificate):
+            # each on its own: one that will not read does not cost the other
+            try:
+                certificate = read(metrics, now)
+            except Exception as e:
+                failure = e
+                continue
+            if certificate is not None:
+                metrics.level(
+                    'cert.days_to_expiry',
+                    certificate[1],
+                    source='idea',
+                    lb='none',
+                    cert=certificate[0],
+                )
+        if failure is not None:
+            raise failure
+
+    def _directory_certificate(self, metrics, now: float):
+        secret_arn = self.context.config().get_string(
+            'directoryservice.tls_certificate_secret_arn'
+        )
+        if Utils.is_empty(secret_arn):
+            return None
+        value = (
+            self.context.aws()
+            .secretsmanager()
+            .get_secret_value(SecretId=secret_arn)
+            .get('SecretString')
+        )
+        return 'directory_ldap', pem_days_left(value.encode(), now)
+
+    def _module_certificate(self, metrics, now: float):
+        path = self.context.config().get_string(
+            f'{self.context.module_id()}.server.tls_certificate_file'
+        )
+        if Utils.is_empty(path):
+            return None
+        if self._probe is None:
+            self._probe = IsolatedProbe(
+                python_probe(CERTIFICATE_PROBE_SCRIPT, path), self.PROBE_SECONDS
+            )
+        result = self._probe.run()
+        if result.status == 'ok':
+            return 'module_tls', pem_days_left(result.output.encode(), now)
+        if result.returncode != CERTIFICATE_NOT_THERE:
+            metrics.level(
+                'cert.unread', 1, lb='none', source='module_tls', reason=result.status
+            )
+        return None
+
+
+class SecretsCollector(HealthCollector):
+    """how long since each of the cluster's secrets changed. Metadata: no secret value is read."""
+
+    name = 'secrets'
+    interval_seconds = 6 * 3600
+    time_limit_seconds = 60
+    MAX_SECRETS = 60
+
+    def __init__(self, context):
+        self.context = context
+
+    def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
+        now = now or time.time()
+        cluster = self.context.cluster_name()
+        client = self.context.aws().secretsmanager()
+        secrets: List[Dict] = []
+        for page in client.get_paginator('list_secrets').paginate(
+            Filters=[
+                {'Key': 'tag-key', 'Values': ['idea:ClusterName']},
+                {'Key': 'tag-value', 'Values': [cluster]},
+            ]
+        ):
+            secrets.extend(page.get('SecretList', []))
+        for secret in sorted(secrets, key=lambda s: s.get('Name', ''))[
+            : self.MAX_SECRETS
+        ]:
+            name = tag_value(secret.get('Name', '').removeprefix(f'{cluster}-'))
+            changed = secret.get('LastChangedDate') or secret.get('CreatedDate')
+            if changed is not None:
+                metrics.level(
+                    'secret.age_days',
+                    (now - changed.timestamp()) / SECONDS_PER_DAY,
+                    secret=name,
+                )
+            next_rotation = secret.get('NextRotationDate')
+            if next_rotation is not None:
+                metrics.level(
+                    'secret.days_to_rotation',
+                    (next_rotation.timestamp() - now) / SECONDS_PER_DAY,
+                    secret=name,
+                )
+
+
+class AdAutomationCollector(HealthCollector):
+    """the agent's queue and whether its loop still reaches the queue at all."""
+
+    name = 'ad_automation'
+    interval_seconds = 60
+    time_limit_seconds = 30
+
+    def __init__(self, context):
+        self.context = context
+
+    def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
+        agent = getattr(self.context, 'ad_automation_agent', None)
+        if agent is None:
+            return
+        now = now or time.time()
+        attributes = (
+            self.context.aws()
+            .sqs()
+            .get_queue_attributes(
+                QueueUrl=agent.ad_automation_sqs_queue_url,
+                AttributeNames=[
+                    'ApproximateNumberOfMessages',
+                    'ApproximateNumberOfMessagesNotVisible',
+                ],
+            )
+            .get('Attributes', {})
+        )
+        metrics.level(
+            'ad.queue_depth', int(attributes.get('ApproximateNumberOfMessages', 0))
+        )
+        metrics.level(
+            'ad.queue_in_flight',
+            int(attributes.get('ApproximateNumberOfMessagesNotVisible', 0)),
+        )
+        metrics.level('ad.seconds_since_queue_read', now - agent.last_queue_read)
+        if agent.password_days_left is not None:
+            metrics.level('ad.admin_password_days_to_expiry', agent.password_days_left)
+
+
+def ems_bucket_counts(records: List[Dict]) -> Dict[Tuple[int, str], int]:
+    """(bucket, event name) totals. Only the name and the time are ever looked at."""
+    totals: Counter = Counter()
+    for record in records:
+        name = Utils.get_value_as_string(
+            'name', Utils.get_value_as_dict('message', record, {})
+        )
+        when = Utils.get_value_as_string('time', record)
+        if Utils.is_empty(name) or Utils.is_empty(when):
+            continue
+        epoch = datetime.fromisoformat(when).astimezone(timezone.utc).timestamp()
+        totals[(bucket_of(epoch), name)] += 1
+    return totals
+
+
+class DirectoryCollector(HealthCollector):
+    """
+    What makes a file server lose the directory, read over the existing metrics login, every
+    check on its own so one the login's role lacks reports as forbidden and the others go on.
+    Reads settings and event names and times; never a file, a user or an event's text.
+    """
+
+    name = 'directory'
+    interval_seconds = 300
+    time_limit_seconds = 120
+    READ_TIMEOUT_SECONDS = 10
+
+    def __init__(self, context, storage_metrics):
+        self.context = context
+        self.storage_metrics = storage_metrics
+
+    def domain_controller_addresses(self) -> Optional[Set[str]]:
+        directory_id = self.context.config().get_string('directoryservice.directory_id')
+        if Utils.is_empty(directory_id):
+            return None
+        described = (
+            self.context.aws()
+            .ds()
+            .describe_directories(DirectoryIds=[directory_id])
+            .get('DirectoryDescriptions', [])
+        )
+        return set(described[0].get('DnsIpAddrs', [])) if described else None
+
+    def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
+        now = now or time.time()
+        try:
+            controllers = self.domain_controller_addresses()
+        except Exception as e:
+            controllers = None
+            metrics.level(
+                'directory.check_ok', 0, check='dc_addresses', reason=failure_reason(e)
+            )
+        verify_tls = self.context.config().get_bool(
+            f'{self.context.module_id()}.metrics.storage.verify_tls', False
+        )
+        for target in self.storage_metrics.targets():
+            password = self.context.config().get_secret(target.password_key)
+            if Utils.is_empty(password):
+                metrics.level(
+                    'directory.check_ok',
+                    0,
+                    check='login',
+                    reason='no_password',
+                    filesystem=target.name,
+                )
+                continue
+            client = OntapClient(
+                target.endpoint,
+                target.username,
+                password,
+                verify_tls=verify_tls,
+                timeout=self.READ_TIMEOUT_SECONDS,
+            )
+            filesystem = tag_value(fs_id_from_host(target.endpoint)) or tag_value(
+                target.name
+            )
+            self._check(metrics, client, filesystem, 'ldap', LDAP_PATH, self._ldap)
+            self._check(
+                metrics, client, filesystem, 'cifs_security', CIFS_PATH, self._cifs
+            )
+            self._check(
+                metrics,
+                client,
+                filesystem,
+                'dns',
+                DNS_PATH,
+                lambda m, f, records: self._dns(m, f, records, controllers),
+            )
+            self._check(
+                metrics,
+                client,
+                filesystem,
+                'secd_events',
+                EMS_PATH,
+                lambda m, f, records: self._secd(m, f, records, now),
+            )
+
+    @staticmethod
+    def _check(metrics, client, filesystem, check, path, read):
+        try:
+            records = Utils.get_value_as_list('records', client.first_page(path), [])
+            read(metrics, filesystem, records)
+            metrics.level(
+                'directory.check_ok', 1, check=check, reason='ok', filesystem=filesystem
+            )
+        except Exception as e:
+            metrics.level(
+                'directory.check_ok',
+                0,
+                check=check,
+                reason=DirectoryCollector._reason(e),
+                filesystem=filesystem,
+            )
+
+    @staticmethod
+    def _reason(error: Exception) -> str:
+        if isinstance(error, FileNotFoundError):
+            return 'unsupported'
+        text = str(error)
+        if '401' in text:
+            return 'unauthorized'
+        if '403' in text:
+            return 'forbidden'
+        name = type(error).__name__
+        return 'unreachable' if 'imeout' in name or 'Connection' in name else 'error'
+
+    @staticmethod
+    def _svm(record) -> str:
+        return tag_value(
+            Utils.get_value_as_string(
+                'name', Utils.get_value_as_dict('svm', record, {})
+            )
+        )
+
+    def _ldap(self, metrics, filesystem, records):
+        for record in records:
+            state = Utils.get_value_as_string(
+                'state', Utils.get_value_as_dict('status', record, {})
+            )
+            if Utils.is_empty(state):
+                continue  # a release without the field says nothing either way
+            metrics.level(
+                'directory.ldap_up',
+                1 if state == 'up' else 0,
+                svm=self._svm(record),
+                filesystem=filesystem,
+            )
+
+    def _cifs(self, metrics, filesystem, records):
+        for record in records:
+            value = Utils.get_value_as_string(
+                'session_security', Utils.get_value_as_dict('security', record, {})
+            )
+            if Utils.is_empty(value):
+                continue
+            metrics.level(
+                'directory.ldap_session_signed',
+                0 if value == 'none' else 1,
+                svm=self._svm(record),
+                filesystem=filesystem,
+            )
+
+    def _dns(self, metrics, filesystem, records, controllers):
+        if controllers is None:
+            return  # not a managed directory, or its addresses could not be read
+        for record in records:
+            servers = set(Utils.get_value_as_list('servers', record, []))
+            metrics.level(
+                'directory.dns_on_domain_controllers',
+                1 if servers and servers <= controllers else 0,
+                svm=self._svm(record),
+                filesystem=filesystem,
+            )
+
+    def _secd(self, metrics, filesystem, records, now):
+        oldest = now - STOPPED_WINDOW_SECONDS
+        for (bucket, name), total in ems_bucket_counts(records).items():
+            if bucket >= oldest:
+                metrics.add(
+                    'directory.secd_events',
+                    total,
+                    timestamp=bucket,
+                    event=name,
+                    filesystem=filesystem,
+                )
+
+
+class HomeDirectoryCollector(HealthCollector):
+    """
+    A timed look at the home directory, in its own process with a hard limit: a stat on a dead
+    server never returns. One process per task at most, whatever the server does.
+    """
+
+    name = 'home_probe'
+    interval_seconds = 300
+    time_limit_seconds = 30
+    PROBE_SECONDS = 15
+
+    def __init__(self, context):
+        self.context = context
+        self._probe: Optional[IsolatedProbe] = None
+
+    def collect(self, metrics: HealthMetrics) -> None:
+        if self._probe is None:
+            self._probe = IsolatedProbe(
+                python_probe(HOME_PROBE_SCRIPT, USER_HOME_DIR_BASE), self.PROBE_SECONDS
+            )
+        result = self._probe.run()
+        reason = result.status
+        if result.status == 'failed':
+            reason = HOME_PROBE_REASONS.get(result.returncode, 'error')
+        metrics.level(
+            'directory.home_stat_ok', 1 if result.status == 'ok' else 0, reason=reason
+        )
+        if result.seconds is not None:
+            metrics.level('directory.home_stat_seconds', result.seconds)

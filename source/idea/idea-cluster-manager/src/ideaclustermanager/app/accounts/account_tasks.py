@@ -22,7 +22,10 @@ from ideasdk.utils import Utils
 from ideadatamodel import exceptions, errorcodes
 
 import ideaclustermanager
-from ideaclustermanager.app.tasks.base_task import BaseTask
+from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+    PasswordRefused,
+)
+from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
 from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirectory
 
 from typing import Dict
@@ -213,9 +216,20 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         with open(password_file, 'r') as f:
             password = f.read()
 
-        self.context.ldap_client.change_password(username, password)
+        try:
+            self.context.ldap_client.change_password(username, password)
+        except PasswordRefused:
+            # the same password is refused every time, and each retry would hold up this
+            # user's home folder and any later password behind it
+            self._remove_password_file(password_file)
+            raise TaskCannotSucceed(
+                'The directory refused this password, so it was not synced. '
+                'Desktop and SSH sign-in keep the old password until a new one is set.'
+            ) from None
 
-        # clean up password file
+        self._remove_password_file(password_file)
+
+    def _remove_password_file(self, password_file: str):
         password_file_path = pathlib.Path(password_file)
         ds_automation_dir = self.context.config().get_string(
             'directoryservice.automation_dir', required=True

@@ -2,6 +2,7 @@ from typing import List, Optional
 
 import ideascheduler
 from ideadatamodel import SocaJob, SocaJobState
+from ideascheduler.app.job_messages import HELD_JOB_NEXT_STEP
 
 MAX_PROVISIONING_RETRIES_KEY = 'scheduler.job_provisioning.max_provisioning_retries'
 MAX_PROVISIONING_RETRIES_DEFAULT = 3
@@ -126,8 +127,11 @@ def build_status_reason(
             f'Held after attempt {attempt} of {cap}' if attempt and cap else 'Job held'
         )
         error = (job.error_message or 'provisioning stopped').split('Last error: ')[-1]
-        error = error.split(' Use qdel')[0].rstrip('. ')
-        return f'{prefix}: {error}.'
+        # jobs held before this wording carry the older next step
+        error = (
+            error.split(' Use qdel')[0].split(f' {HELD_JOB_NEXT_STEP}')[0].rstrip('. ')
+        )
+        return f'{prefix}: {error}. {HELD_JOB_NEXT_STEP}'
     if limit_info is not None:
         types = (
             ', '.join(job.params.instance_types or [])

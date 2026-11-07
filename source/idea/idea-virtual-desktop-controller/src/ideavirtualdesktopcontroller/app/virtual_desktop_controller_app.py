@@ -17,6 +17,9 @@ from ideasdk.client import (
     SocaClientOptions,
     AccountsClient,
 )
+from ideadatamodel import ImageKind
+from ideasdk.aws.image_builds import ImageRowsCollector
+from ideasdk.metrics.health import CollectorRunner
 from ideasdk.utils import Utils, GroupNameHelper
 from ideasdk.auth import TokenService, TokenServiceOptions
 from ideasdk.server import SocaServerOptions
@@ -55,7 +58,11 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_
     VirtualDesktopSessionCounterDB,
 )
 from ideavirtualdesktopcontroller.app.sessions.desktop_launches import DesktopLaunches
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import (
+    StackExpiryService,
+)
 from ideavirtualdesktopcontroller.app.sessions.session_metrics import (
+    GatewayCertificateCollector,
     SessionCountPublisher,
 )
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
@@ -344,6 +351,7 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._runs_reconciled = False
         self._history_backfilled = False
         self._session_counts = None
+        self._stack_expiry = None
         self._desktop_launches = None
         self.context.event_queue_monitor_service = EventsQueueMonitoringService(
             context=self.context
@@ -351,6 +359,13 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self.context.controller_queue_monitor_service = ControllerQueueMonitorService(
             context=self.context
         )
+
+    def _stack_expiry_service(self) -> StackExpiryService:
+        if self._stack_expiry is None:
+            self._stack_expiry = StackExpiryService(
+                self.context, self._software_stack_db, self._session_db
+            )
+        return self._stack_expiry
 
     def _refresh_bootstrap_loop(self):
         # Leadership may settle after startup, and replicas must not multiply the
@@ -429,6 +444,13 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Session counts failed: {" ".join(str(e).splitlines())}'
                 )
+            try:
+                if self.context.is_leader():
+                    self._stack_expiry_service().tick()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Stack expiry failed: {type(e).__name__}'
+                )
             # desktop image pipeline: resume, triggers (release, monthly), start queued
             # rows, cleanup. bakes run in their own threads; this never waits on one
             try:
@@ -468,8 +490,23 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self.context.event_queue_monitor_service.start()
         self.context.controller_queue_monitor_service.start()
         self._bootstrap_thread.start()
+        self._health_collectors = CollectorRunner(
+            self.context,
+            [
+                ImageRowsCollector(
+                    ImageKind.DESKTOP,
+                    lambda: self._desktop_image_pipeline().managed(),
+                    release=ideavirtualdesktopcontroller.__version__,
+                ),
+                GatewayCertificateCollector(self.context),
+                self._stack_expiry_service(),
+            ],
+        )
+        self._health_collectors.start()
 
     def app_stop(self):
+        if getattr(self, '_health_collectors', None) is not None:
+            self._health_collectors.stop()
         self._bootstrap_exit.set()
         self._bootstrap_thread.join()
         if Utils.is_not_empty(self.context.event_queue_monitor_service):
