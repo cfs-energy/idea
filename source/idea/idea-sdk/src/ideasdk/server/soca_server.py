@@ -949,9 +949,7 @@ class SocaServer(SocaService):
             return sanic.response.json(result, dumps=Utils.to_json)
 
         except exceptions.SocaException as e:
-            self._logger.error(
-                f'Streaming file upload failed - User: {username}, Directory: {cwd}, Error: {e.message}'
-            )
+            self._logger.error(f'Streaming file upload failed: {e.error_code}')
             # a 200 would read as a finished upload in the browser
             return sanic.response.json(
                 {'error_code': e.error_code, 'message': e.message, 'success': False},

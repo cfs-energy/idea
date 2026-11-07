@@ -1469,7 +1469,7 @@ class FileSystemHelper:
                         if not can_read:
                             if self.logger.isEnabledFor(logging.DEBUG):
                                 self.logger.debug(
-                                    f'Skipping file (no read permission) - User: {self.username}, File: {file_path}'
+                                    'Skipping a file with no read permission'
                                 )
                             self._files_left_out += 1
                             continue
@@ -1501,7 +1501,7 @@ class FileSystemHelper:
                     except (OSError, IOError, PermissionError) as e:
                         # Skip files that can't be read, but log the issue
                         self.logger.warning(
-                            f'Skipping file in archive - User: {self.username}, File: {file_path}, Error: {str(e)}'
+                            f'Skipping a file in an archive: {type(e).__name__}'
                         )
                         self._files_left_out += 1
                         continue
