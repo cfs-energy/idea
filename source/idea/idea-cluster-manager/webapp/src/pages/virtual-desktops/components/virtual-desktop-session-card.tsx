@@ -18,7 +18,7 @@ import Utils from "../../../common/utils";
 import 'moment-timezone';
 import moment from 'moment';
 import {AppContext} from "../../../common";
-import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, KeyValuePairs, Link, Popover, SpaceBetween, Spinner, StatusIndicator} from "@cloudscape-design/components";
+import {Badge, Box, Button, ButtonDropdown, CopyToClipboard, ExpandableSection, KeyValuePairs, Link, Popover, SpaceBetween, Spinner, StatusIndicator} from "@cloudscape-design/components";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {
     faClock,
@@ -33,7 +33,7 @@ import {
     faPowerOff,
     faShareFromSquare
 } from "@fortawesome/free-solid-svg-icons";
-import VirtualDesktopSessionStatusIndicator from "./virtual-desktop-session-status-indicator";
+import VirtualDesktopSessionStatusIndicator, {desktopStateLabel} from "./virtual-desktop-session-status-indicator";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import {desktopTerminalReason, shellStore, terminalEnabled} from "../../home/terminal/shell-store";
 import {hasAccess} from "../../../navigation/task-navigation";
@@ -47,6 +47,7 @@ interface VirtualDesktopSessionCardProps {
     idleAutoStopDelayMax?: number
     workingHours?: WorkingHours
     screenshot?: string
+    previewFailed?: boolean
     onDeleteSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStartSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStopSession?: (session: VirtualDesktopSession) => Promise<boolean>
@@ -62,6 +63,8 @@ interface VirtualDesktopSessionCardProps {
 interface VirtualDesktopSessionCardState {
     view: string
     blackScreenshot?: string
+    // the slow request this card is waiting on: start or connect behind the primary button, or the client file
+    pending?: 'primary' | 'download'
 }
 
 const DAYS: (keyof VirtualDesktopWeekSchedule)[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
@@ -118,6 +121,11 @@ function describeDay(schedule: VirtualDesktopSchedule | undefined, workingHours?
     return 'No schedule'
 }
 
+/** The reason as the desktop's owner reads it. The log location at its end is for administrators. */
+export function reasonForOwner(reason?: string): string {
+    return (reason ?? '').replace(/\s*The host startup log is kept in CloudWatch Logs:[\s\S]*$/, '')
+}
+
 export interface PrimaryAction {
     label: string
     action?: 'connect' | 'start' | 'info'
@@ -125,27 +133,16 @@ export interface PrimaryAction {
 
 /** The one button a card leads with: what the user can do next, or what is happening right now. */
 export function primaryAction(session: VirtualDesktopSession, canStart: boolean, infoShown: boolean): PrimaryAction {
-    if (session.recovering) return {label: 'Session restarting'}
+    if (session.recovering) return {label: 'Restarting'}
     switch (session.state) {
         case 'READY':
             return {label: 'Connect', action: 'connect'}
         case 'STOPPED':
-            return canStart ? {label: 'Start', action: 'start'} : {label: session.hibernation_enabled ? 'Hibernated' : 'Stopped'}
+            return canStart ? {label: 'Start', action: 'start'} : {label: desktopStateLabel(session.state, session.hibernation_enabled)}
         case 'ERROR':
             return {label: infoShown ? 'Show preview' : 'Show info', action: 'info'}
-        case 'PROVISIONING':
-        case 'CREATING':
-        case 'INITIALIZING':
-            return {label: 'Setting up'}
-        case 'RESUMING':
-            return {label: 'Starting'}
-        case 'STOPPING':
-            return {label: session.hibernation_enabled ? 'Hibernating' : 'Stopping'}
-        case 'DELETING':
-        case 'DELETED':
-            return {label: 'Terminating'}
     }
-    return {label: 'Unavailable'}
+    return {label: session.state ? desktopStateLabel(session.state, session.hibernation_enabled) : 'Unavailable'}
 }
 
 class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps, VirtualDesktopSessionCardState> {
@@ -197,8 +194,24 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         if (this.getSession().base_os?.includes('windows') && !this.props.isActiveDirectory) {
             return false
         }
-        return !(this.getSession().state === 'DELETING' || this.getSession().state === 'DELETED')
+        return !this.isTerminating()
     }
+
+    isTerminating = () => this.getSession().state === 'DELETING' || this.getSession().state === 'DELETED'
+
+    connectDisabledReason = () => {
+        if (this.isTerminating()) return 'This desktop is being terminated.'
+        if (this.getSession().recovering) return 'Restarting. Try again in a few minutes.'
+        return 'You can connect when the desktop is ready.'
+    }
+
+    sharingDisabledReason = () => this.isTerminating()
+        ? 'This desktop is being terminated.'
+        : 'Windows desktops can only be shared on a cluster that uses Active Directory.'
+
+    updateDisabledReason = () => this.isTerminating()
+        ? 'This desktop is being terminated.'
+        : 'Stop the desktop to rename or resize it.'
 
     canReboot = () => this.getSession().state === 'READY' || this.getSession().state === 'ERROR'
 
@@ -246,11 +259,31 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         </Box>
     }
 
+    // A second click while the request is out does nothing. The flag is not state, which would only
+    // update after the click that needs to see it.
+    private requestOut = false
+
+    private runOnce = (pending: 'primary' | 'download', request: () => Promise<boolean> | undefined) => {
+        if (this.requestOut) return
+        const result = request()
+        if (!result) return
+        this.requestOut = true
+        this.setState({pending})
+        result.finally(() => {
+            this.requestOut = false
+            this.setState({pending: undefined})
+        })
+    }
+
+    connect = () => this.runOnce('primary', () => this.props.onLaunchSession(this.getSession()))
+
+    start = () => this.runOnce('primary', () => this.props.onStartSession?.(this.getSession()))
+
     onPrimaryAction = (action: PrimaryAction['action']) => {
         if (action === 'connect') {
-            this.props.onLaunchSession(this.getSession()).finally()
+            this.connect()
         } else if (action === 'start') {
-            this.props.onStartSession?.(this.getSession()).finally()
+            this.start()
         } else if (action === 'info') {
             this.toggleInfo()
         }
@@ -280,11 +313,12 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                     <Button
                         variant={primary.action === 'info' ? 'normal' : 'primary'}
                         disabled={primary.action === undefined}
+                        loading={this.state.pending === 'primary'}
                         onClick={() => this.onPrimaryAction(primary.action)}>{primary.label}</Button>
                 </div>
             </div>
             <SpaceBetween size="s" direction="horizontal" alignItems="center">
-                <VirtualDesktopSessionStatusIndicator state={session.state!} hibernation_enabled={session.hibernation_enabled!} updated_on={session.updated_on}/>
+                <VirtualDesktopSessionStatusIndicator state={session.state!} hibernation_enabled={session.hibernation_enabled!} updated_on={session.updated_on} recovering={session.recovering}/>
                 {details && <Box variant="small" color="text-body-secondary">{details}</Box>}
                 {Utils.isNotEmpty(session.project?.title) && <Badge>{session.project?.title}</Badge>}
             </SpaceBetween>
@@ -293,9 +327,13 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 <StatusIndicator type="warning">This desktop cannot use the project's AI models yet. {this.canStart()
                     ? 'Start it and it will come up with them.'
                     : 'It is moved onto them automatically, usually within 30 minutes.'}</StatusIndicator>}
-            {/* the state badge only says "Error", which is not enough to act on */}
-            {session.state === 'ERROR' && Utils.isNotEmpty(session.failure_reason) &&
-                <StatusIndicator type="error">{session.failure_reason}</StatusIndicator>}
+            {/* the state alone is not enough to act on, and many failures come with no reason at all */}
+            {session.state === 'ERROR' && <SpaceBetween size="xxs">
+                <StatusIndicator type="error">This desktop failed. {this.props.isSharedSession
+                    ? `Ask ${session.owner} to reboot it.`
+                    : 'Reboot it, or terminate it and launch a new one. Your shared storage is not affected.'}</StatusIndicator>
+                {Utils.isNotEmpty(reasonForOwner(session.failure_reason)) && <Box variant="small" color="text-body-secondary">{reasonForOwner(session.failure_reason)}</Box>}
+            </SpaceBetween>}
         </SpaceBetween>
     }
 
@@ -312,7 +350,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         if (imageUrl && this.state.blackScreenshot === imageUrl) {
             return <div className="virtual-desktop-placeholder-image" onClick={() => {
                 if (this.canConnect()) {
-                    this.props.onLaunchSession(this.getSession()).finally()
+                    this.connect()
                 }
             }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
                 <Box textAlign="center" padding="m" color="inherit">
@@ -324,28 +362,21 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         if (Utils.isEmpty(imageUrl)) {
             const session = this.getSession()
             // In-between states get a spinner; settled states only text. Both stay centered and padded.
-            const transitions: { [state: string]: string } = {
-                CREATING: 'Creating…',
-                INITIALIZING: 'Initializing…',
-                PROVISIONING: 'Provisioning…',
-                RESUMING: 'Starting…',
-                STOPPING: session.hibernation_enabled ? 'Hibernating…' : 'Stopping…',
-                DELETING: 'Terminating…',
-                DELETED: 'Terminating…'
-            }
+            const changing = ['CREATING', 'INITIALIZING', 'PROVISIONING', 'RESUMING', 'STOPPING', 'DELETING', 'DELETED'].includes(session.state ?? '')
             const settled: { [state: string]: string } = {
-                READY: 'Preview not captured yet',
-                STOPPED: session.hibernation_enabled ? 'Hibernated' : 'Stopped'
+                READY: this.props.previewFailed ? 'Preview unavailable. You can still connect.' : 'Preview not captured yet',
+                STOPPED: desktopStateLabel(session.state, session.hibernation_enabled)
             }
-            const transition = session.recovering ? 'Restarting…' : transitions[session.state ?? '']
+            const transition = session.recovering ? 'Restarting…' : changing ? `${desktopStateLabel(session.state, session.hibernation_enabled)}…` : undefined
             return <div className="virtual-desktop-placeholder-image" onClick={() => {
                 if (this.canConnect()) {
-                    this.props.onLaunchSession(this.getSession()).finally()
+                    this.connect()
                 }
             }} style={{cursor: this.canConnect() ? 'pointer' : 'default'}}>
                 <div className="virtual-desktop-placeholder-status">
                     {transition && <Spinner size="large"/>}
                     <div>{transition ?? settled[session.state ?? ''] ?? 'No preview'}</div>
+                    {transition && <div>{session.recovering ? 'Try again in a few minutes.' : 'You can leave this page.'}</div>}
                 </div>
             </div>
         }
@@ -367,7 +398,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             }
         }} onClick={() => {
             if (this.canConnect()) {
-                this.props.onLaunchSession(this.getSession()).finally()
+                this.connect()
             }
         }} style={{
             cursor: 'pointer',
@@ -388,19 +419,24 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
         const created = session.created_on ? new Date(session.created_on) : undefined
         return (
             <Box padding={{vertical: 'm'}}>
-                <KeyValuePairs columns={2} items={[
-                    copyable('Desktop ID', session.idea_session_id),
-                    copyable('DCV session ID', session.dcv_session_id),
-                    text('Project', session.project?.title),
-                    text('State', session.state),
-                    text('Operating system', Utils.getOsTitle(session.software_stack?.base_os)),
-                    text('Instance type', session.server?.instance_type),
-                    copyable('Instance ID', session.server?.instance_id),
-                    copyable('Private IP', session.server?.private_ip),
-                    text('AMI ID', session.software_stack?.ami_id),
-                    text('Tenancy', session.software_stack?.launch_tenancy),
-                    text('Created', created && !isNaN(created.getTime()) ? created.toLocaleString() : undefined)
-                ]}/>
+                <SpaceBetween size="m">
+                    <KeyValuePairs columns={2} items={[
+                        text('Project', session.project?.title),
+                        text('State', session.recovering ? 'Restarting' : desktopStateLabel(session.state, session.hibernation_enabled)),
+                        text('Operating system', Utils.getOsTitle(session.software_stack?.base_os)),
+                        text('Size', session.server?.instance_type),
+                        text('Created', created && !isNaN(created.getTime()) ? created.toLocaleString() : undefined)
+                    ]}/>
+                    <ExpandableSection headerText="Technical details">
+                        <KeyValuePairs columns={2} items={[
+                            copyable('Desktop ID', session.idea_session_id),
+                            copyable('Remote session ID', session.dcv_session_id),
+                            copyable('Instance ID', session.server?.instance_id),
+                            copyable('Private IP', session.server?.private_ip),
+                            text('Image ID', session.software_stack?.ami_id)
+                        ]}/>
+                    </ExpandableSection>
+                </SpaceBetween>
             </Box>
         )
     }
@@ -411,6 +447,7 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                 id: "connect",
                 text: "Connect",
                 disabled: !this.canConnect(),
+                disabledReason: this.connectDisabledReason(),
                 iconSvg: <FontAwesomeIcon icon={faDesktop} size="xs"/>
             }]
 
@@ -428,9 +465,9 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             dropDownItems.push(
                 {
                     id: "session-permissions",
-                    text: "Session permissions",
+                    text: "Share desktop",
                     disabled: !this.canUpdateSessionPermission(),
-                    disabledReason: "Windows sessions support session sharing for active directory only",
+                    disabledReason: this.sharingDisabledReason(),
                     iconSvg: <FontAwesomeIcon icon={faShareFromSquare} size="xs"/>
                 })
         }
@@ -449,9 +486,9 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             })
             dropDownItems.push({
                 id: "update-session",
-                text: "Update session",
+                text: "Rename or resize",
                 disabled: !this.canUpdateSession(),
-                disabledReason: "Stop the desktop to update it.",
+                disabledReason: this.updateDisabledReason(),
                 iconSvg: <FontAwesomeIcon icon={faGear} size="xs"/>
             })
             dropDownItems.push({
@@ -494,7 +531,8 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             <SpaceBetween size="xs" direction="horizontal" alignItems="center">
                 <Button iconName="download"
                         disabled={!this.canDownloadDcvSessionFile()}
-                        onClick={() => this.props.onDownloadDcvSessionFile(this.getSession()).finally()}>
+                        loading={this.state.pending === 'download'}
+                        onClick={() => this.runOnce('download', () => this.props.onDownloadDcvSessionFile(this.getSession()))}>
                     DCV client file</Button>
                 <Popover
                     dismissAriaLabel="Close"
@@ -517,15 +555,13 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
                             } else if (event.detail.id === 'terminal') {
                                 this.openTerminal()
                             } else if (event.detail.id === 'connect') {
-                                this.props.onLaunchSession(this.getSession()).finally()
+                                this.connect()
                             } else if (event.detail.id === 'stop') {
                                 if (this.props.onStopSession) {
                                     this.props.onStopSession(this.getSession()).finally()
                                 }
                             } else if (event.detail.id === 'start') {
-                                if (this.props.onStartSession) {
-                                    this.props.onStartSession(this.getSession()).finally()
-                                }
+                                this.start()
                             } else if (event.detail.id === 'reboot') {
                                 if (this.props.onRebootSession) {
                                     this.props.onRebootSession(this.getSession()).finally()

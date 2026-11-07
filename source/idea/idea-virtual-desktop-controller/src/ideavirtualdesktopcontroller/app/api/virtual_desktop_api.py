@@ -79,6 +79,7 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils imp
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
     VirtualDesktopSoftwareStackDB,
 )
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import StackExpiry
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_utils import (
     VirtualDesktopSoftwareStackUtils,
 )
@@ -631,7 +632,10 @@ class VirtualDesktopAPI(BaseAPI):
             and (session.owner not in cluster_administrator)
             and not session.owner.startswith('clusteradmin')
         ):
-            session.failure_reason = f'User {session.owner} does not belong in project_id {session.project.project_id}'
+            session.failure_reason = "You aren't a member of this project."
+            self._logger.info(
+                f'user {session.owner} does not belong in project_id {session.project.project_id}'
+            )
             return session, False
 
         # Check the Project budget if we are enabled for budget enforcement
@@ -709,6 +713,11 @@ class VirtualDesktopAPI(BaseAPI):
             return session, False
 
         session.software_stack = software_stack
+
+        refusal = StackExpiry(self.context).refusal(software_stack)
+        if refusal is not None:
+            session.failure_reason = refusal
+            return session, False
 
         # Validate hibernation value
         if Utils.is_empty(session.hibernation_enabled):
@@ -1296,6 +1305,9 @@ class VirtualDesktopAPI(BaseAPI):
             self._logger.error(new_software_stack.failure_reason)
             return new_software_stack
 
+        # the person whose desktop it came from answers for it unless told otherwise
+        new_software_stack.owner = new_software_stack.owner or session.owner
+
         # Simplified Windows detection to match all Windows variations
         is_windows = 'windows' in str(session.base_os).lower()
 
@@ -1405,6 +1417,16 @@ class VirtualDesktopAPI(BaseAPI):
         self, request: ListSoftwareStackRequest
     ) -> ListSoftwareStackResponse:
         return self.software_stack_db.list_from_index(request)
+
+    def _annotate_software_stacks(
+        self, response: ListSoftwareStackResponse
+    ) -> ListSoftwareStackResponse:
+        """an expiry date is a convenience on a listing: failing to work it out loses only that"""
+        try:
+            StackExpiry(self.context).annotate(response.listing or [])
+        except Exception as e:
+            self._logger.warning(f'could not annotate stacks: {type(e).__name__}')
+        return response
 
     def _get_session_connection_info(
         self,

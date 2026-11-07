@@ -53,13 +53,11 @@ class IdeaAuthChallenge extends Component<IdeaAuthProps, IdeaAuthState> {
                 if (!this.passwordStrengthCheck.current!.checkPassword(values.password)){
                     return
                 }
-                AppContext.get().auth().respondToAuthChallenge(values.password).then(_ => {
-                    this.props.navigate('/')
-                }).catch(error => {
+                AppContext.get().auth().respondToAuthChallenge(values.password).catch(error => {
                     if (error.errorCode === AUTH_LOGIN_CHALLENGE) {
                         this.props.navigate('/auth/challenge')
                     } else if(error.errorCode === NETWORK_ERROR || error.errorCode === REQUEST_TIMEOUT) {
-                        this.getForm().setError(error.errorCode, `Failed to communicate with backend service: ${error.message}`)
+                        this.getForm().setError(error.errorCode, error.message)
                     } else {
                         this.getForm().setError(error.errorCode, error.message)
                     }

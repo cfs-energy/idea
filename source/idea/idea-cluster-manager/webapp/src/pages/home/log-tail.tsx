@@ -38,14 +38,33 @@ export interface IdeaLogTailState {
 
     pollingStatus: boolean
     emptyReceives: number
+    fileIsEmpty: boolean
 }
 
 const MAX_LINE_COUNT = 1000
 const MAX_EMPTY_RECEIVES = 10
 const DEFAULT_POLLING_INTERVAL = 10000 // 10 seconds
-const POLLING_INTERVAL = parseInt(process.env.REACT_APP_TAIL_POLLING_INTERVAL || DEFAULT_POLLING_INTERVAL.toString())
+const POLLING_INTERVAL = parseInt(process.env.REACT_APP_TAIL_POLLING_INTERVAL || '') || DEFAULT_POLLING_INTERVAL
 
-class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
+/** What a failed read means for the person watching, and what they can do about it. */
+export function describeTailFailure(error: {errorCode?: string, message?: string}): {type: StatusIndicatorProps.Type, text: string} {
+    switch (error?.errorCode) {
+        case 'TAIL_THROTTLE':
+            return {type: 'warning', text: 'Too many live views are open. Close one if you have several. This one keeps trying.'}
+        case 'FILE_NOT_FOUND':
+            return {type: 'error', text: 'This file is gone or was moved. Close this view and go back to Files.'}
+        case 'NOT_A_TEXT_FILE':
+            return /too large/i.test(error.message ?? '')
+                ? {type: 'error', text: 'This file is too large to watch here. Download it from Files instead.'}
+                : {type: 'error', text: "This isn't a text file, so it can't be shown here. Download it from Files instead."}
+        case 'UNAUTHORIZED_ACCESS':
+            return {type: 'error', text: 'You do not have access to this file. If you need it, ask its owner.'}
+        default:
+            return {type: 'error', text: `Could not read this file: ${error?.message ?? 'unknown error'}`}
+    }
+}
+
+export class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
 
     logEntries: RefObject<HTMLDivElement | null>
     interval: any
@@ -69,11 +88,15 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
             statusDescription: '',
             statusVisible: true,
             pollingStatus: true,
-            emptyReceives: 0
+            emptyReceives: 0,
+            fileIsEmpty: false
         }
     }
 
     startPolling() {
+        if (this.interval != null) {
+            return
+        }
         this.interval = setInterval(() => {
             if (Utils.isEmpty(this.state.next_token)) {
                 return
@@ -81,7 +104,7 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
             this.setState({
                 statusVisible: true,
                 statusType: "loading",
-                statusDescription: 'fetching new entries ...',
+                statusDescription: 'Checking for new lines',
                 pollingStatus: true
             }, () => {
                 AppContext.get().client().fileBrowser().tailFile({
@@ -102,34 +125,44 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
                     this.setState({
                         statusVisible: false,
                         emptyReceives: emptyReceives,
+                        fileIsEmpty: this.state.fileIsEmpty && lines.length === 0,
                         next_token: Utils.asString(result.next_token)
                     }, () => {
                         if(this.state.emptyReceives > MAX_EMPTY_RECEIVES) {
-                            console.log(`reached max empty receives: ${MAX_EMPTY_RECEIVES}. stop polling.`)
                             this.stopPolling()
+                            this.setState({
+                                statusVisible: true,
+                                statusType: 'info',
+                                statusDescription: 'Paused: no new lines for 2 minutes. Tick Auto-refresh to keep watching.'
+                            })
                         }
                     })
                 }).catch((error) => {
+                    const failure = describeTailFailure(error)
                     this.setState({
                         statusVisible: true,
-                        statusType: 'error',
-                        statusDescription: error.message,
+                        statusType: failure.type,
+                        statusDescription: failure.text,
                         emptyReceives: this.state.emptyReceives + 1
                     }, () => {
                         if(this.state.emptyReceives > MAX_EMPTY_RECEIVES) {
                             this.stopPolling()
+                            this.setState({
+                                statusVisible: true,
+                                statusType: 'error',
+                                statusDescription: `${failure.text} Stopped trying. Tick Auto-refresh to try again.`
+                            })
                         }
                     })
                 })
             })
         }, POLLING_INTERVAL)
-        console.log(`polling started with interval: ${POLLING_INTERVAL}ms`)
     }
 
     stopPolling() {
         if (this.interval != null) {
             clearInterval(this.interval)
-            console.log('polling stopped')
+            this.interval = null
             this.setState({
                 pollingStatus: false,
                 emptyReceives: 0
@@ -138,7 +171,8 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
     }
 
     newLogEntry = (line: string) => {
-        this.terminal.writeln(line.trim())
+        // leading space is part of the log: a traceback without it is unreadable
+        this.terminal.writeln(line.trimEnd())
     }
 
     componentDidMount() {
@@ -166,25 +200,35 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
             this.xtermFitAddon.fit()
         }
 
-        let lines: string[]
+        this.loadEndOfFile(file)
+    }
+
+    /** The first read: the end of the file, and the position to poll from. */
+    loadEndOfFile(file: string) {
         AppContext.get().client().fileBrowser().tailFile({
             line_count: MAX_LINE_COUNT,
             file: file
         }).then(result => {
-            lines = result.lines!
+            const lines = result.lines!
             lines.forEach(line => {
                 this.newLogEntry(line)
             })
             this.setState({
                 next_token: Utils.asString(result.next_token),
                 statusVisible: false,
+                fileIsEmpty: lines.length === 0,
+                pollingStatus: true
             }, () => {
                 this.startPolling()
             })
         }).catch((error) => {
+            const failure = describeTailFailure(error)
+            // nothing is polling yet, so the box must not claim otherwise; ticking it tries again
             this.setState({
-                statusType: 'error',
-                statusDescription: error.message
+                statusVisible: true,
+                statusType: failure.type,
+                statusDescription: failure.text,
+                pollingStatus: false
             })
         })
     }
@@ -211,7 +255,7 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
                 ]}
                 disableGutters={true}>
                     <Box className={"idea-log-tail-header"}>
-                        <span className={"title"}>Log Tail</span>
+                        <span className={"title"}>End of file, from the last {MAX_LINE_COUNT.toLocaleString()} lines</span>
                         <span className={"file-name"}>{this.state.logFile}</span>
                         <span>
                             <input type={"checkbox"} checked={this.state.pollingStatus} onChange={(event) => {
@@ -219,30 +263,30 @@ class IdeaLogTail extends Component<IdeaLogTailProps, IdeaLogTailState> {
                                     pollingStatus: event.target.checked
                                 }, () => {
                                     if(event.target.checked) {
-                                        this.startPolling()
+                                        this.setState({statusVisible: false})
+                                        if (Utils.isEmpty(this.state.next_token)) {
+                                            this.loadEndOfFile(this.state.logFile)
+                                        } else {
+                                            this.startPolling()
+                                        }
                                     } else {
                                         this.stopPolling()
                                     }
                                 })
                             }}/> Auto-refresh
                         </span>
+                        {this.state.fileIsEmpty && <StatusIndicator type="info">This file is empty. New lines will appear here.</StatusIndicator>}
                         {this.state.statusVisible && <StatusIndicator type={this.state.statusType}>{this.state.statusDescription}</StatusIndicator>}
                     </Box>
 
                     <Box textAlign={"right"} padding={{top: "xxs", right: "xs"}}>
                         <Button variant={"primary"} onClick={() => {
-                            this.setState({
-                                statusVisible: true,
-                                statusType: 'loading',
-                                statusDescription: 'destroying log tail instance ...'
-                            }, () => {
-                                this.destroy().then(() => {
-                                    let url = '/home/file-browser'
-                                    if (Utils.isNotEmpty(this.state.cwd)) {
-                                        url = `${url}?cwd=${this.state.cwd}`
-                                    }
-                                    this.props.navigate(url)
-                                })
+                            this.destroy().then(() => {
+                                let url = '/home/file-browser'
+                                if (Utils.isNotEmpty(this.state.cwd)) {
+                                    url = `${url}?cwd=${encodeURIComponent(this.state.cwd)}`
+                                }
+                                this.props.navigate(url)
                             })
                         }}>Close</Button>
                     </Box>

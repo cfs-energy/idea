@@ -63,9 +63,11 @@ def sort_rows(rows, sort_by, descending):
     return (
         sorted(
             known,
-            key=lambda row: column_value(row, sort_by)
-            if sort_by in text_columns
-            else Decimal(str(column_value(row, sort_by))),
+            key=lambda row: (
+                column_value(row, sort_by)
+                if sort_by in text_columns
+                else Decimal(str(column_value(row, sort_by)))
+            ),
             reverse=descending,
         )
         + missing

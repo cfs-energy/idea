@@ -24,6 +24,7 @@ import {EnabledDisabledStatusIndicator} from "../../components/common";
 import VirtualDesktopPermissionProfileForm from "./forms/virtual-desktop-permission-profile-form";
 import {VirtualDesktopAdminClient} from "../../client";
 import {withRouter} from "../../navigation/navigation-utils";
+import {DetailLoadState, DetailLoadStatus} from "./components/detail-load-state";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
 
 export interface VirtualDesktopPermissionProfileDetailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -34,6 +35,7 @@ interface VirtualDesktopPermissionProfileDetailState {
     settings: any
     settingsLoaded: boolean
     showEditPermissionProfileForm: boolean
+    loadStatus: DetailLoadStatus
 }
 
 class VirtualDesktopPermissionProfileDetail extends Component<VirtualDesktopPermissionProfileDetailProps, VirtualDesktopPermissionProfileDetailState> {
@@ -46,7 +48,8 @@ class VirtualDesktopPermissionProfileDetail extends Component<VirtualDesktopPerm
             permissionProfile: {},
             settings: {},
             settingsLoaded: false,
-            showEditPermissionProfileForm: false
+            showEditPermissionProfileForm: false,
+            loadStatus: 'loading'
         }
     }
 
@@ -62,12 +65,20 @@ class VirtualDesktopPermissionProfileDetail extends Component<VirtualDesktopPerm
             })
         })
 
+        this.loadPermissionProfile()
+    }
+
+    loadPermissionProfile = () => {
+        this.setState({loadStatus: 'loading'})
         this.getVirtualDesktopUtilsClient().getPermissionProfile({
             profile_id: this.getProfileID()
         }).then(result => {
             this.setState({
-                permissionProfile: result.profile!
+                permissionProfile: result.profile!,
+                loadStatus: 'ready'
             })
+        }).catch(() => {
+            this.setState({loadStatus: 'error'})
         })
     }
 
@@ -217,22 +228,24 @@ class VirtualDesktopPermissionProfileDetail extends Component<VirtualDesktopPerm
                         href: '#/virtual-desktop/permission-profiles'
                     },
                     {
-                        text: this.getProfileID(),
+                        text: this.state.permissionProfile.title ?? 'Permission profile',
                         href: ''
                     }
                 ]}
                 header={
                     <Header
                         variant={"h1"}
-                        actions={this.buildHeaderActions()}
+                        actions={this.state.loadStatus === 'ready' && this.buildHeaderActions()}
                     >
-                        Permission Profile: {this.state.permissionProfile.title}
+                        {this.state.permissionProfile.title ? `Permission Profile: ${this.state.permissionProfile.title}` : 'Permission profile'}
                     </Header>
                 }
                 contentType={"default"}
                 content={
                     <div>
-                        {this.buildDetails()}
+                        {this.state.loadStatus === 'ready'
+                            ? this.buildDetails()
+                            : <DetailLoadState status={this.state.loadStatus} loadingText="Loading this permission profile" errorText="This permission profile could not be loaded." onRetry={this.loadPermissionProfile}/>}
                         {this.state.showEditPermissionProfileForm && this.buildEditForm()}
                     </div>
                 }

@@ -798,7 +798,8 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
     }),
     sharedStorage: async () => {
       throw new GeneralException(
-        "shared-storage requires the EFS and FSx client adapters, which are not ported",
+        "shared-storage add-file-system and attach-file-system are not available in ideactl. " +
+          "Write the shared-storage.<NAME>.* settings with config set; see docs/modules/storage/storage-management.md",
       );
     },
     utils: async (options) => {

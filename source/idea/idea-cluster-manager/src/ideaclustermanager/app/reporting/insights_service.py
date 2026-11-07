@@ -1,5 +1,6 @@
 """Selected-period insights built from retained activity and current budgets."""
 
+import logging
 import time
 from collections import defaultdict, OrderedDict
 from datetime import date, datetime, timezone
@@ -15,6 +16,8 @@ from ideaclustermanager.app.costs.my_costs_service import MyCostsService
 from .reporting_service import resolve_period, known_sum, selected_money
 from .reporting_sources import ReportingSources, number, timestamp, subject, user_label
 from .snapshot_store import BUILD_SECONDS, TTL_SECONDS, check_deadline
+
+REFRESH_FLOOR_SECONDS = 30
 
 FINISHED = {'finished', 'exit', 'success', 'failed', 'failure', 'cancelled', 'canceled'}
 
@@ -74,6 +77,8 @@ def budget_row(project, budget, currency):
     if limit is None or spent is None or not budget.get('budget_name'):
         return None
     pct = float(100 * forecast / limit) if forecast is not None and limit > 0 else None
+    # no forecast yet: what has been spent is the best signal there is
+    near = pct if pct is not None else float(100 * spent / limit) if limit > 0 else None
     return dict(
         project=project,
         budget_name=budget['budget_name'],
@@ -85,7 +90,7 @@ def budget_row(project, budget, currency):
         status='over'
         if spent >= limit or (pct is not None and pct >= 100)
         else 'watch'
-        if pct is not None and pct >= 85
+        if near is not None and near >= 85
         else 'ok',
     )
 
@@ -107,7 +112,7 @@ class InsightsService:
         self._cache = OrderedDict()
         self._lock = RLock()
 
-    def get_insights(self, request, authorize, username=None):
+    def get_insights(self, request, authorize, username=None, fresh=False):
         deadline = time.monotonic() + BUILD_SECONDS
         if not authorize():
             raise exceptions.unauthorized_access()
@@ -133,7 +138,18 @@ class InsightsService:
         with self._lock:
             check_deadline(deadline)
             cached = self._cache.get(key)
-            result = cached[1] if cached and time.monotonic() < cached[0] else None
+            result = (
+                cached[1]
+                if cached
+                and time.monotonic()
+                < (
+                    # a refresh rebuilds, but one every so often is all anyone can ask for
+                    cached[0] - (TTL_SECONDS - REFRESH_FLOOR_SECONDS)
+                    if fresh
+                    else cached[0]
+                )
+                else None
+            )
         if result is not None:
             result = result.model_copy(deep=True)
         else:
@@ -142,20 +158,22 @@ class InsightsService:
             budget_projects = (
                 projects if projects is not None else data.get('project_records', [])
             )
-            result.budgets = self.budgets(budget_projects, currency, deadline)
+            result.budgets = self.budgets(budget_projects, currency, deadline, result)
             check_deadline(deadline)
-            cached_result = result.model_copy(deep=True)
-            with self._lock:
-                check_deadline(deadline)
-                self._cache[key] = (time.monotonic() + TTL_SECONDS, cached_result)
-                self._cache.move_to_end(key)
-                while len(self._cache) > 128:
-                    self._cache.popitem(last=False)
+            # a report missing a source is not kept: the next try should read it again
+            if not result.unavailable:
+                cached_result = result.model_copy(deep=True)
+                with self._lock:
+                    check_deadline(deadline)
+                    self._cache[key] = (time.monotonic() + TTL_SECONDS, cached_result)
+                    self._cache.move_to_end(key)
+                    while len(self._cache) > 128:
+                        self._cache.popitem(last=False)
         if not authorize():
             raise exceptions.unauthorized_access()
         return result
 
-    def budgets(self, projects, currency, deadline):
+    def budgets(self, projects, currency, deadline, result=None):
         rows, fetched = [], {}
         for project in projects:
             check_deadline(deadline)
@@ -170,10 +188,17 @@ class InsightsService:
                         .budgets_get_budget(budget_name=name)
                         .model_dump(mode='json')
                     )
-                except exceptions.SocaException as error:
-                    if error.error_code != 'BUDGET_NOT_FOUND':
-                        raise
-                    fetched[name] = {'is_missing': True}
+                except Exception as error:
+                    if getattr(error, 'error_code', None) == 'BUDGET_NOT_FOUND':
+                        fetched[name] = {'is_missing': True}
+                    else:
+                        # one Budgets error must not take the whole report with it
+                        logging.getLogger(__name__).warning(
+                            'budget read failed', exc_info=True
+                        )
+                        if result is not None and 'budgets' not in result.unavailable:
+                            result.unavailable.append('budgets')
+                        continue
             row = budget_row(
                 project.get('title') or project.get('name') or project['project_id'],
                 fetched[name],
@@ -237,6 +262,8 @@ class InsightsService:
             jobs.count += 1
             efficiency = job_efficiency(job)
             cost = job_spend(job.get('estimated_bom_cost'), currency)
+            if cost is None:
+                jobs.unpriced += 1
             cpu = efficiency['cpu_efficiency_pct']
             if cpu is not None:
                 jobs.jobs_with_efficiency += 1
@@ -322,13 +349,17 @@ class InsightsService:
         )[:25]
         self.desktops(result, data, period, currency, zone, deadline, username)
         self.storage(result, data, period, currency, zone, deadline, username)
-        if any(value == 'unavailable' for value in data.get('coverage', {}).values()):
-            result.notes.append('Some costs could not be read; try again later.')
+        result.unavailable = sorted(
+            name
+            for name, value in data.get('coverage', {}).items()
+            if value == 'unavailable'
+        )
         # Validate assigned rows as well as constructor fields.
         return ReportingInsights.model_validate(result.model_dump(warnings=False))
 
     def desktops(self, result, data, period, currency, zone, deadline, username):
         users, projects, daily = {}, {}, []
+        stored_days, missing_days = set(), set()
         for owner, projection in data.get('projections', {}).items():
             check_deadline(deadline)
             if username is not None and owner != username:
@@ -344,6 +375,10 @@ class InsightsService:
                     points[point['date']] = point
             for day, point in points.items():
                 cost = number(point.get('amount'))
+                stored_days.add(day)
+                if cost is None and period.start_date <= day <= period.end_date:
+                    if point.get('status') != 'not_applicable':
+                        missing_days.add(day)
                 if (
                     period.start_date <= day <= period.end_date
                     and cost is not None
@@ -352,6 +387,8 @@ class InsightsService:
                     add_group(users, user_label(owner), cost, None)
                     daily.append(dict(date=day, user=user_label(owner), cost=cost))
         result.desktops.cost = known_sum(v[0] for v in users.values())
+        result.desktops.available_from = min(stored_days) if stored_days else None
+        result.desktops.missing_days = len(missing_days)
         top = {
             name
             for name, _ in sorted(
@@ -359,8 +396,15 @@ class InsightsService:
             )[:10]
         }
         result.desktops.by_user = ranked(users) if username is None else []
+        # everyone outside the top ten is one daily Other, so the chart adds up to the total
+        others = defaultdict(Decimal)
+        for point in daily:
+            if point['user'] not in top:
+                others[point['date']] += point['cost']
         result.desktops.daily_top_users = sorted(
-            (p for p in daily if p['user'] in top), key=lambda p: (p['date'], p['user'])
+            [p for p in daily if p['user'] in top]
+            + [dict(date=day, user='Other', cost=cost) for day, cost in others.items()],
+            key=lambda p: (p['date'], p['user']),
         )
         pricing = MyCostsService(self.context)
         pricing._ondemand_price = lru_cache(maxsize=128)(pricing._ondemand_price)
@@ -537,7 +581,7 @@ class InsightsService:
                 dict(name=name, bytes=value, cost=known_sum(grouped_costs[name]))
                 for name, value in sorted(
                     grouped_used.items(), key=lambda item: (-item[1], item[0])
-                )[:15]
+                )
             ]
             if username is None
             else []

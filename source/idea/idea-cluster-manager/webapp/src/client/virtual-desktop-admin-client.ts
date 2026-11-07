@@ -74,6 +74,10 @@ import {
     RefreshImagesResponse,
     RollbackImageRequest,
     RollbackImageResponse,
+    ExtendSoftwareStackRequest,
+    ExtendSoftwareStackResponse,
+    ListOrphanInstancesRequest,
+    ListOrphanInstancesResponse,
     SetImagePinnedRequest,
     SetImagePinnedResponse,
     GetImageScheduleRequest,
@@ -210,6 +214,20 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
     getSoftwareStackInfo(req: GetSoftwareStackInfoRequest): Promise<GetSoftwareStackInfoResponse> {
         return this.apiInvoker.invoke_alt<GetSoftwareStackInfoRequest, GetSoftwareStackInfoResponse>(
             'VirtualDesktopAdmin.GetSoftwareStackInfo',
+            req
+        )
+    }
+
+    extendSoftwareStack(req: ExtendSoftwareStackRequest): Promise<ExtendSoftwareStackResponse> {
+        return this.apiInvoker.invoke_alt<ExtendSoftwareStackRequest, ExtendSoftwareStackResponse>(
+            'VirtualDesktopAdmin.ExtendSoftwareStack',
+            req
+        )
+    }
+
+    listOrphanInstances(req: ListOrphanInstancesRequest = {}): Promise<ListOrphanInstancesResponse> {
+        return this.apiInvoker.invoke_alt<ListOrphanInstancesRequest, ListOrphanInstancesResponse>(
+            'VirtualDesktopAdmin.ListOrphanInstances',
             req
         )
     }

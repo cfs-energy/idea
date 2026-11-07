@@ -29,7 +29,9 @@ from ideasdk.utils import Utils
 from ideasdk.utils.error_redaction import AWS_IDENTIFIERS
 
 from typing import List, Optional, Dict
+import arrow
 import dataset
+import json
 import os
 import logging
 import re
@@ -86,14 +88,31 @@ class JobsDB:
     """
     The live cache is a SQLite file on local disk, where it is fast. A container's local
     disk goes with every task replacement, so there a copy is kept under PBS_HOME (the
-    scheduler-pbs volume, which outlives the task): refreshed by SQLite's online backup
-    every five minutes when something changed, and on an orderly stop, and restored on a
-    start that finds no local file. At most the last five minutes of cache are lost when a
-    task dies without an orderly stop, and no network filesystem locking sits in the hot
-    path. Each refresh copies the whole file, so the interval sets the EFS write volume.
+    scheduler-pbs volume, which outlives the task): refreshed hourly when something changed,
+    and on an orderly stop, and restored on a start that finds no local file. No network
+    filesystem locking sits in the hot path. Each refresh copies the whole file, so the
+    interval sets the EFS write volume; a job or hook event in most hours means nearly
+    every refresh runs, and only the interval lowers the volume.
+
+    At most the last hour is lost when a task dies without an orderly stop, and most of
+    that comes back: PBS re-supplies active jobs and their licenses, the document store
+    answers for jobs it already holds (see FinishedJobProcessor._recorded_job), and SQS
+    keeps undelivered hook events.
+
+    Finished jobs older than the retention are deleted in small batches. The live file
+    keeps the freed pages for new rows and is never vacuumed in place, because that would
+    hold the write lock for the whole rebuild. The copy is written compacted instead, so
+    it shrinks at its next refresh, and a replacement task starts from that smaller file.
     """
 
-    DEFAULT_BACKUP_INTERVAL_SECONDS = 300
+    # ponytail: whole-file copy, so bytes grow with retained rows: about 8 GB/day at 64k rows.
+    # Copy finished-job deltas instead if the EFS burst balance trends toward empty.
+    DEFAULT_BACKUP_INTERVAL_SECONDS = 3600
+    DEFAULT_FINISHED_JOB_RETENTION_DAYS = 400
+    PRUNE_INTERVAL_SECONDS = 3600
+    PRUNE_BATCH_SIZE = 500
+    PRUNE_MAX_BATCHES = 20
+    PRUNE_BATCH_PAUSE_SECONDS = 1
 
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
@@ -119,7 +138,9 @@ class JobsDB:
             'scheduler.job_cache.backup_interval_seconds',
             default=self.DEFAULT_BACKUP_INTERVAL_SECONDS,
         )
-        self._backup_stop = Event()
+        self._stop = Event()
+        self._prune_thread: Optional[Thread] = None
+        self._prune_cursor = 0
         self._backup_thread: Optional[Thread] = None
         self._backup_connection: Optional[sqlite3.Connection] = None
         self._backed_up_version = None
@@ -161,6 +182,10 @@ class JobsDB:
                 target=self._backup_loop, name='job-cache-backup', daemon=True
             )
             self._backup_thread.start()
+        self._prune_thread = Thread(
+            target=self._prune_loop, name='job-cache-prune', daemon=True
+        )
+        self._prune_thread.start()
 
     @staticmethod
     def _copy_database(source_file: str, destination_file: str):
@@ -178,8 +203,9 @@ class JobsDB:
         )
         os.close(fd)
         try:
+            # a read snapshot of the source, so writers carry on, written without free pages
+            source.execute('VACUUM INTO ?', (temporary_file,))
             with closing(sqlite3.connect(temporary_file)) as destination:
-                source.backup(destination)
                 # one plain file: the copy is opened without -wal/-shm sidecars, which matters
                 # on a network filesystem; the live file goes back to WAL when connected
                 destination.execute('PRAGMA journal_mode=DELETE')
@@ -216,12 +242,95 @@ class JobsDB:
             return False
 
     def _backup_loop(self):
-        while not self._backup_stop.wait(self._backup_interval):
+        while not self._stop.wait(self._backup_interval):
             self.backup()
+
+    @staticmethod
+    def _finished_job_time(job_data: Optional[str]) -> Optional[arrow.Arrow]:
+        """when the job ended, or the latest time it has if it never ran"""
+        try:
+            job = json.loads(job_data)
+            for field in ('end_time', 'start_time', 'queue_time'):
+                if job.get(field):
+                    return arrow.get(job[field])
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return None
+
+    def prune_finished_jobs(self) -> int:
+        """
+        Delete finished jobs older than the retention, within a fixed budget per pass. The age
+        lives in job_data, so rows are walked by id, and each pass goes on from where the last
+        stopped, wrapping at the end: a stretch with nothing to delete, such as rows with no
+        readable time, which are kept, cannot hide what lies behind it. The cursor is only this
+        process's: a restart walks from the start. The database lock is held only for each delete, and
+        a pass that deletes nothing writes nothing, so it does not trigger a backup.
+        :return: the number of rows deleted
+        """
+        retention_days = self._context.config().get_int(
+            'scheduler.job_cache.finished_job_retention_days',
+            default=self.DEFAULT_FINISHED_JOB_RETENTION_DAYS,
+        )
+        if retention_days <= 0:
+            return 0
+        cutoff = arrow.utcnow().shift(days=-retention_days)
+        deleted = 0
+        conn = self.db.engine.raw_connection()
+        try:
+            # the first finished job adds this column; until then there is nothing to read
+            columns = conn.execute(f'PRAGMA table_info({FINISHED_JOBS_TABLE})')
+            has_jobs = any(column[1] == 'job_data' for column in columns.fetchall())
+            for batch in range(self.PRUNE_MAX_BATCHES if has_jobs else 0):
+                if batch > 0 and self._stop.wait(self.PRUNE_BATCH_PAUSE_SECONDS):
+                    break
+                # table names are module-level constants; identifiers cannot be bound
+                rows = conn.execute(
+                    f'SELECT id, job_data FROM {FINISHED_JOBS_TABLE} '
+                    'WHERE id > ? ORDER BY id LIMIT ?',
+                    (self._prune_cursor, self.PRUNE_BATCH_SIZE),
+                ).fetchall()
+                if not rows:
+                    self._prune_cursor = 0
+                    break
+                self._prune_cursor = rows[-1][0]
+                expired = []
+                for row_id, job_data in rows:
+                    finished = self._finished_job_time(job_data)
+                    if finished is not None and finished < cutoff:
+                        expired.append((row_id,))
+                if not expired:
+                    continue
+                with self._db_lock:
+                    conn.executemany(
+                        f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
+                    )
+                    conn.commit()
+                deleted += len(expired)
+        finally:
+            conn.close()
+        if deleted > 0:
+            self._logger.info(
+                f'pruned {deleted} finished jobs older than {retention_days} days'
+            )
+        else:
+            # one line an hour, so a running prune is visible when there is nothing to delete
+            self._logger.info(
+                f'finished job prune: nothing older than {retention_days} days'
+            )
+        return deleted
+
+    def _prune_loop(self):
+        while not self._stop.wait(self.PRUNE_INTERVAL_SECONDS):
+            try:
+                self.prune_finished_jobs()
+            except Exception as e:
+                self._logger.error(f'finished job prune failed: {e}')
 
     def stop(self):
         """an orderly stop leaves a current copy behind"""
-        self._backup_stop.set()
+        self._stop.set()
+        if self._prune_thread is not None:
+            self._prune_thread.join(timeout=30)
         if self._backup_thread is not None:
             self._backup_thread.join(timeout=30)
         self.backup(force=True)

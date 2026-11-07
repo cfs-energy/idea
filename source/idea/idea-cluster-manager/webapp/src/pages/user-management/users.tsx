@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import {IdeaFormValidate} from "../../components/form-field/form-field";
 import React, {Component, RefObject} from "react";
 
 import {AppContext} from "../../common";
@@ -288,7 +289,7 @@ class Users extends Component<UsersProps, UsersState> {
                               }
                           })
 
-                          this.authAdmin().createUser({
+                          return this.authAdmin().createUser({
                               user: {
                                   username: values.username,
                                   email: values.email,
@@ -326,8 +327,9 @@ class Users extends Component<UsersProps, UsersState> {
                               param_type: 'text',
                               validate: {
                                   required: true,
-                                  regex: '^(?=.{3,32}$)(?![_.])(?!.*[_.]{2})[a-z0-9._]+(?<![_.])$'
-                              }
+                                  regex: '^(?=.{3,32}$)(?![_.])(?!.*[_.]{2})[a-z0-9._]+(?<![_.])$',
+                                  message: 'Use 3 to 32 lowercase letters, digits, dots or underscores. Start and end with a letter or digit.'
+                              } as IdeaFormValidate
                           },
                           {
                               name: 'email',
@@ -459,7 +461,7 @@ class Users extends Component<UsersProps, UsersState> {
                              }
                              const values = this.getAddUserToGroupForm().getValues()
                              const username = this.getSelectedUser()?.username!
-                             this.authAdmin().addUserToGroup({
+                             return this.authAdmin().addUserToGroup({
                                  usernames: [username],
                                  group_name: values.group_name
                              }).then(_ => {
@@ -481,7 +483,7 @@ class Users extends Component<UsersProps, UsersState> {
                              if (request.param === 'group_name') {
                                  let filters = []
                                  if (request.filters && request.filters.length > 0) {
-                                     const filterValue = Utils.asString(request.filters[0].value)
+                                     const filterValue = Utils.asString(request.filters[0].value).trim().toLowerCase()
                                      if (Utils.isNotEmpty(filterValue)) {
                                          filters.push({
                                              key: 'group_name',
@@ -538,7 +540,7 @@ class Users extends Component<UsersProps, UsersState> {
                              }
                              const values = this.getRemoveUserFromGroupForm().getValues()
                              const username = this.getSelectedUser()?.username!
-                             this.authAdmin().removeUserFromGroup({
+                             return this.authAdmin().removeUserFromGroup({
                                  usernames: [username],
                                  group_name: values.group_name
                              }).then(_ => {
@@ -687,13 +689,13 @@ class Users extends Component<UsersProps, UsersState> {
                                  username: username
                              }).then(_ => {
                                  this.getListing().fetchRecords()
-                                 this.setFlashMessage(`User: ${username} password was reset successfully.`, 'success')
+                                 this.setFlashMessage(`Reset email sent to ${username}. Their API tokens were revoked.`, 'success')
                              }).catch(error => {
                                  this.setFlashMessage(`Failed to reset password for user: ${error.message}`, 'error')
                              })
                          }}
             >
-                Are you sure you want to reset password for user: <Box variant="strong">{this.getSelectedUser()?.username}</Box> ?
+                This emails <Box variant="strong" display="inline">{this.getSelectedUser()?.username}</Box> a password reset and revokes their API tokens.
             </IdeaConfirm>
         )
     }
@@ -830,9 +832,11 @@ class Users extends Component<UsersProps, UsersState> {
             <IdeaListView
                 ref={this.listing}
                 preferencesKey={'users'}
+                filteringPlaceholder="Search by username"
                 showPreferences={false}
                 title="Users"
-                description="Cluster user management"
+                description="Cluster users. Search matches usernames."
+                empty={<Box textAlign="center" color="inherit">No users found. Search looks at usernames only.</Box>}
                 selectionType="single"
                 enableExportToCsv={true}
                 csvFilename={`idea_users_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
@@ -921,6 +925,10 @@ class Users extends Component<UsersProps, UsersState> {
                     this.setState({
                         userSelected: true
                     })
+                }}
+                onRecordsFetched={() => {
+                    // a fetch clears the row selection, so the actions must follow
+                    this.setState({userSelected: false})
                 }}
                 onFetchRecords={() => {
                     return this.authAdmin().listUsers({

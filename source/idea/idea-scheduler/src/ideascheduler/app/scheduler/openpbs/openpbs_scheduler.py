@@ -439,6 +439,8 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 return None
             return queues[0]
         except exceptions.SocaException as e:
+            if e.error_code == errorcodes.SCHEDULER_QUEUE_NOT_FOUND:
+                return None
             if e.error_code == errorcodes.SCHEDULER_ERROR:
                 if f'Unknown queue {queue}' in e.message:
                     return None

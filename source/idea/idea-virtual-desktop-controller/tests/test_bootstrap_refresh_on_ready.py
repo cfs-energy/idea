@@ -30,7 +30,7 @@ def ready(refresh):
     sessions = {}
     handler.session_db = Mock()
     handler.session_db.get_from_db.side_effect = (
-        lambda idea_session_owner, idea_session_id: (sessions[idea_session_id])
+        lambda idea_session_owner, idea_session_id: sessions[idea_session_id]
     )
     handler.session_db.update.side_effect = lambda session: session
     refresh.context.dcv_broker_client.describe_sessions.side_effect = lambda found: {

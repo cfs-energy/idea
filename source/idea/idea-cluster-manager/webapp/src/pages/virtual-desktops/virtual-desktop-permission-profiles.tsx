@@ -261,18 +261,8 @@ class VirtualDesktopPermissionProfiles extends Component<VirtualDesktopPermissio
                     }
                 ]}
                 showPaginator={true}
-                showFilters={true}
                 defaultSortingColumn="created_on"
                 defaultSortingDescending={true}
-                filterType="select"
-                selectFilters={[
-                    {
-                        name: '$all',
-                    }
-                ]}
-                onFilter={(filters) => {
-                    return filters
-                }}
                 onRefresh={() => {
                     this.setState({
                         permissionProfileSelected: false
@@ -287,18 +277,6 @@ class VirtualDesktopPermissionProfiles extends Component<VirtualDesktopPermissio
                 }}
                 onFetchRecords={() => {
                     return this.getVirtualDesktopUtilsClient().listPermissionProfiles({})
-                        .catch(error => {
-                            this.props.onFlashbarChange({
-                                items: [
-                                    {
-                                        content: error.message,
-                                        type: 'error',
-                                        dismissible: true
-                                    }
-                                ]
-                            })
-                            throw error
-                        })
                 }}
                 columnDefinitions={VIRTUAL_DESKTOP_PERMISSION_PROFILE_TABLE_COLUMN_DEFINITIONS}
             />

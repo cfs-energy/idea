@@ -27,6 +27,7 @@ from ideaclustermanager.app.projects.bedrock_usage_service import (
 from ideaclustermanager.app.projects.db.bedrock_usage_dao import (
     BedrockInstanceOwnerDAO,
     BedrockUsageDAO,
+    SCAN_STATE_ID,
     UNATTRIBUTED_USER,
     build_day_key,
     build_project_key,
@@ -96,6 +97,9 @@ CONFIG_VALUES = {
     f'{MODULE_ID}.bedrock.enabled': True,
     f'{MODULE_ID}.bedrock.usage.enabled': True,
     f'{MODULE_ID}.bedrock.usage.lookback_days': 2,
+    # an overlap longer than the window settles nothing, so every run recomputes the whole
+    # window from what the query returns. the incremental tests below set their own.
+    f'{MODULE_ID}.bedrock.usage.overlap_minutes': 10**6,
     f'{MODULE_ID}.bedrock.invocation_log_group_name': LOG_GROUP,
     f'{MODULE_ID}.bedrock.invocation_log_role_arn': LOG_ROLE_ARN,
 }
@@ -475,7 +479,20 @@ def build_service(
 
 
 def rows_by_usage_id(usage_dao):
-    return {usage_id: item for (_, usage_id), item in usage_dao.table.items.items()}
+    # the scan state is bookkeeping, not usage; the tests below read it on its own.
+    return {
+        usage_id: item
+        for (_, usage_id), item in usage_dao.table.items.items()
+        if usage_id != SCAN_STATE_ID
+    }
+
+
+def usage_items(usage_dao):
+    return {
+        key: item
+        for key, item in usage_dao.table.items.items()
+        if key[1] != SCAN_STATE_ID
+    }
 
 
 # ------------------------------------------------------------ invocation logging
@@ -715,7 +732,7 @@ def test_a_project_only_receives_its_own_usage():
     )
     service.aggregate()
     assert all(
-        project_id == PROJECT_ID for project_id, _ in usage_dao.table.items.keys()
+        project_id == PROJECT_ID for project_id, _ in usage_items(usage_dao).keys()
     )
 
 
@@ -728,12 +745,12 @@ def test_repeating_a_run_produces_identical_rows():
     service.aggregate()
     first = {
         key: {k: v for k, v in item.items() if k != 'updated_on'}
-        for key, item in usage_dao.table.items.items()
+        for key, item in usage_items(usage_dao).items()
     }
     service.aggregate()
     second = {
         key: {k: v for k, v in item.items() if k != 'updated_on'}
-        for key, item in usage_dao.table.items.items()
+        for key, item in usage_items(usage_dao).items()
     }
     assert first == second
 
@@ -784,7 +801,7 @@ def test_only_indexed_projects_reconcile_empty_usage(
         jobs={INSTANCE_ONE: '4242'},
     )
     service.aggregate()
-    stored_keys = set(usage_dao.table.items)
+    stored_keys = set(usage_items(usage_dao))
     assert len(stored_keys) == 5
 
     if not keep_role:
@@ -800,7 +817,7 @@ def test_only_indexed_projects_reconcile_empty_usage(
         logs.results.append(invocation)
     service.aggregate()
 
-    remaining_keys = {key for key in usage_dao.table.items if key[0] == PROJECT_ID}
+    remaining_keys = {key for key in usage_items(usage_dao) if key[0] == PROJECT_ID}
     mapping_present = keep_profile if profile_attributed else keep_role
     preserved = unchanged_invocation or not mapping_present
     assert remaining_keys == (stored_keys if preserved else set())
@@ -828,15 +845,15 @@ def test_partial_mapping_loss_preserves_mixed_attribution_counters(legacy):
         jobs={INSTANCE_ONE: '4242'},
     )
     service.aggregate()
-    stored_keys = set(usage_dao.table.items)
+    stored_keys = set(usage_items(usage_dao))
     if legacy:
-        for row in usage_dao.table.items.values():
+        for row in usage_items(usage_dao).values():
             row.pop('attribution_mappings', None)
     project.bedrock.role_arn = None
     service.aggregate()
-    assert set(usage_dao.table.items) == stored_keys
-    assert all(row['total_tokens'] == 40 for row in usage_dao.table.items.values())
-    assert all(row['invocations'] == 3 for row in usage_dao.table.items.values())
+    assert set(usage_items(usage_dao)) == stored_keys
+    assert all(row['total_tokens'] == 40 for row in usage_items(usage_dao).values())
+    assert all(row['invocations'] == 3 for row in usage_items(usage_dao).values())
 
 
 def test_legacy_rows_without_mapping_provenance_are_preserved():
@@ -846,12 +863,12 @@ def test_legacy_rows_without_mapping_provenance_are_preserved():
         jobs={INSTANCE_ONE: '4242'},
     )
     service.aggregate()
-    stored_keys = set(usage_dao.table.items)
-    for row in usage_dao.table.items.values():
+    stored_keys = set(usage_items(usage_dao))
+    for row in usage_items(usage_dao).values():
         row.pop('attribution_mappings', None)
     logs.results = [insights_row(caller_arn(), MODEL_B, TODAY, 20, 5, 2)]
     service.aggregate()
-    assert stored_keys <= set(usage_dao.table.items)
+    assert stored_keys <= set(usage_items(usage_dao))
     assert (
         usage_dao.table.items[(PROJECT_ID, build_project_key(PERIOD))]['total_tokens']
         == 40
@@ -1414,11 +1431,11 @@ def test_a_job_spanning_days_keeps_every_day_in_its_month_rollup():
             insights_row(caller_arn(), MODEL_A, TODAY, 20, 5, 2),
         ],
         jobs={INSTANCE_ONE: '4242'},
-        config_values={f'{MODULE_ID}.bedrock.usage.lookback_days': 1},
     )
     service.aggregate()
     assert rows_by_usage_id(usage_dao)[f'job#{PERIOD}#4242']['total_tokens'] == 40
 
+    service.context.config().values[f'{MODULE_ID}.bedrock.usage.lookback_days'] = 1
     logs.results = [insights_row(caller_arn(), MODEL_A, TODAY, 20, 5, 2)]
     service.aggregate()
     rows = rows_by_usage_id(usage_dao)
@@ -1513,3 +1530,299 @@ def test_job_rollups_are_read_for_one_project_only():
     condition = usage_dao.table.calls[-1][1].get_expression()
     assert condition['operator'] == 'AND'
     assert condition['values'][0].get_expression()['values'][0].name == 'project_id'
+
+
+# ------------------------------------------------------------ incremental scan
+
+HOUR = 3600
+SIM_START = arrow.get('2026-11-05 14:20:00', 'YYYY-MM-DD HH:mm:ss').int_timestamp
+
+
+class SimClock:
+    def __init__(self, now):
+        self.now = now
+
+
+class TimedLogs(FakeLogs):
+    """
+    a log group that answers like logs insights: only events inside the time range, and
+    only the ones that have reached cloudwatch (visible_at) by the time of the query.
+    """
+
+    def __init__(self, events, clock):
+        super().__init__()
+        self.events = events
+        self.clock = clock
+        self.spans = []
+        self.started = []
+
+    def start_query(self, logGroupName, startTime, endTime, queryString):
+        self.started.append((startTime, endTime))
+        self.spans.append(endTime - startTime)
+        hourly = 'bin(1h)' in queryString
+        groups = {}
+        for event in self.events:
+            if event['visible_at'] > self.clock.now:
+                continue
+            if not startTime <= event['ts'] <= endTime:
+                continue
+            stamp = arrow.get(event['ts'])
+            day = stamp.format('YYYY-MM-DD') + (
+                stamp.format(' HH') + ':00:00.000' if hourly else ' 00:00:00.000'
+            )
+            counters = groups.setdefault(
+                (event['caller'], event['model'], day), [0, 0, 0]
+            )
+            counters[0] += event['in']
+            counters[1] += event['out']
+            counters[2] += 1
+        self.results = [
+            [
+                {'field': 'caller_arn', 'value': caller},
+                {'field': 'model_id', 'value': model},
+                {'field': 'usage_day', 'value': day},
+                {'field': 'input_tokens', 'value': str(values[0])},
+                {'field': 'output_tokens', 'value': str(values[1])},
+                {'field': 'invocations', 'value': str(values[2])},
+            ]
+            for (caller, model, day), values in sorted(groups.items())
+        ]
+        return {'queryId': 'q-1'}
+
+
+def sim_events(late_by_seconds=None):
+    events = []
+    first = arrow.get('2026-11-04 06:00:00', 'YYYY-MM-DD HH:mm:ss').int_timestamp
+    for index in range(0, 62 * 60 // 7):
+        ts = first + index * 7 * 60 + (index % 5) * 13
+        late = 20 * 60 if index % 5 == 0 else 0
+        events.append(
+            {
+                'ts': ts,
+                'visible_at': ts + 30 + late,
+                'caller': caller_arn(session=[INSTANCE_ONE, INSTANCE_TWO][index % 2]),
+                'model': [MODEL_A, MODEL_B][index % 3 == 0],
+                'in': 10 + index,
+                'out': 3 + index % 7,
+            }
+        )
+    if late_by_seconds is not None:
+        # one event that reaches cloudwatch long after the time it was logged at
+        ts = SIM_START + 2 * HOUR
+        events.append(
+            {
+                'ts': ts,
+                'visible_at': ts + late_by_seconds,
+                'caller': caller_arn(),
+                'model': MODEL_B,
+                'in': 1000,
+                'out': 1000,
+            }
+        )
+    return events
+
+
+def sim_service(monkeypatch, clock, events, extra_config=None):
+    monkeypatch.setattr(arrow, 'utcnow', lambda: arrow.get(clock.now))
+    service, context, _, _, usage_dao = build_service(
+        owners={INSTANCE_ONE: 'alice', INSTANCE_TWO: 'bob'},
+        jobs={INSTANCE_TWO: '77'},
+        config_values=extra_config,
+    )
+    logs = TimedLogs(events, clock)
+    context.aws()._logs = logs
+    return service, logs, usage_dao
+
+
+def stored_usage(usage_dao):
+    return {
+        key: {k: v for k, v in item.items() if k not in ('updated_on', 'ttl')}
+        for key, item in usage_items(usage_dao).items()
+    }
+
+
+def simulate(monkeypatch, steps, events, extra_config=None, fail_state_at=None):
+    clock = SimClock(SIM_START)
+    reference, ref_logs, ref_dao = sim_service(
+        monkeypatch,
+        clock,
+        events,
+        # an overlap longer than the window settles nothing: a full scan every run
+        {f'{MODULE_ID}.bedrock.usage.overlap_minutes': 10**6},
+    )
+    incremental, inc_logs, inc_dao = sim_service(
+        monkeypatch,
+        clock,
+        events,
+        {f'{MODULE_ID}.bedrock.usage.overlap_minutes': 60, **(extra_config or {})},
+    )
+    history = []
+    for step in range(steps):
+        reference.aggregate()
+        if fail_state_at == step:
+            real_put_rows = inc_dao.put_rows
+
+            def failing(rows, real=real_put_rows):
+                if any(row['usage_id'] == SCAN_STATE_ID for row in rows):
+                    raise RuntimeError('died before the state was saved')
+                real(rows)
+
+            inc_dao.put_rows = failing
+            with pytest.raises(RuntimeError):
+                incremental.aggregate()
+            inc_dao.put_rows = real_put_rows
+        else:
+            incremental.aggregate()
+        history.append((stored_usage(ref_dao), stored_usage(inc_dao)))
+        clock.now += 15 * 60
+    return history, ref_logs, inc_logs, inc_dao
+
+
+def test_incremental_scan_stores_the_same_usage_as_scanning_the_whole_window(
+    monkeypatch,
+):
+    # 30 hours of runs every 15 minutes, across midnight and a window day change
+    history, _, _, _ = simulate(monkeypatch, 120, sim_events())
+    assert any(inc for _, inc in history)
+    for step, (reference, incremental) in enumerate(history):
+        assert incremental == reference, f'step {step}'
+
+
+def test_a_run_that_dies_before_saving_its_state_loses_and_doubles_nothing(
+    monkeypatch,
+):
+    history, _, _, _ = simulate(monkeypatch, 60, sim_events(), fail_state_at=23)
+    for step, (reference, incremental) in enumerate(history):
+        assert incremental == reference, f'step {step}'
+
+
+def test_a_steady_state_run_scans_only_the_new_hours(monkeypatch):
+    far = {f'{MODULE_ID}.bedrock.usage.full_rescan_hours': 10**4}
+    _, ref_logs, inc_logs, _ = simulate(monkeypatch, 60, sim_events(), far)
+    # the first run reads the whole window, as the full scan does
+    assert inc_logs.spans[0] == ref_logs.spans[0]
+    # then the overlap, the hours since, and up to an hour of alignment
+    assert max(inc_logs.spans[1:]) <= 3 * HOUR
+    assert sum(inc_logs.spans) < sum(ref_logs.spans) / 5
+
+
+def test_a_full_rescan_is_made_daily_and_picks_up_a_very_late_record(monkeypatch):
+    # three hours late, past the one hour overlap
+    events = sim_events(late_by_seconds=3 * HOUR + 10 * 60)
+    history, ref_logs, inc_logs, _ = simulate(monkeypatch, 130, events)
+    step_late = (2 * HOUR + 3 * HOUR + 10 * 60) // (15 * 60) + 1
+    assert history[step_late + 8][1] != history[step_late + 8][0]
+    assert history[-1][1] == history[-1][0]
+    # the first run, and the rescan a day later
+    full = [span for span in inc_logs.spans if span > 6 * HOUR]
+    assert len(full) == 2
+
+
+def test_a_long_catch_up_that_would_truncate_still_saves_its_state(monkeypatch):
+    # more groups across the window than one query can answer, few enough for each day of it
+    day = 24 * HOUR
+    events = [
+        {
+            'ts': SIM_START - offset * day + HOUR * minute,
+            'visible_at': SIM_START - offset * day + HOUR * minute,
+            'caller': caller_arn(),
+            'model': MODEL_A,
+            'in': 1,
+            'out': 1,
+        }
+        for offset in range(1, 9)
+        for minute in range(3)
+    ]
+    clock = SimClock(SIM_START)
+    service, logs, usage = sim_service(
+        monkeypatch,
+        clock,
+        events,
+        {
+            f'{MODULE_ID}.bedrock.usage.overlap_minutes': 60,
+            f'{MODULE_ID}.bedrock.usage.max_query_results': 10,
+            f'{MODULE_ID}.bedrock.usage.lookback_days': 30,
+            f'{MODULE_ID}.bedrock.usage.full_rescan_hours': 10**4,
+        },
+    )
+    service.aggregate()
+    # the whole window would not fit, so it was read again a day at a time
+    assert len(logs.spans) > 2 and all(span <= day for span in logs.spans[1:])
+    assert sum(
+        item.get('invocations', 0) for item in stored_usage(usage).values()
+    ) >= len(events)
+    # the state was kept, so the next run reads only what is new
+    clock.now += 15 * 60
+    logs.spans.clear()
+    service.aggregate()
+    assert max(logs.spans) <= 3 * HOUR
+
+
+def test_each_day_of_a_catch_up_counts_only_its_own_time():
+    from ideaclustermanager.app.projects import bedrock_usage_service
+
+    query = bedrock_usage_service.window_query(1000, 2000)
+    assert '@timestamp >= 1000000 and @timestamp < 2000000' in query
+    assert query.index('@timestamp') < query.index('| stats')
+    assert 'bin(1h)' in query
+
+
+def test_a_changed_project_mapping_scans_the_whole_window_again(monkeypatch):
+    clock = SimClock(SIM_START)
+    service, logs, _ = sim_service(
+        monkeypatch,
+        clock,
+        sim_events(),
+        {f'{MODULE_ID}.bedrock.usage.overlap_minutes': 60},
+    )
+    service.aggregate()
+    clock.now += 15 * 60
+    service.aggregate()
+    assert logs.started[1][0] > logs.started[0][0]
+
+    clock.now += 15 * 60
+    project = service.projects_service.projects_dao.projects[0]
+    project.bedrock.inference_profile_arns = {}
+    service.aggregate()
+    assert logs.started[2][0] == logs.started[0][0]
+
+
+def test_an_unchanged_rollup_is_not_written_again(monkeypatch):
+    clock = SimClock(SIM_START)
+    service, _, usage_dao = sim_service(monkeypatch, clock, sim_events())
+    service.aggregate()
+    usage_dao.table.calls.clear()
+    clock.now += 60
+    service.aggregate()
+    written = [
+        call[1]['usage_id']
+        for call in usage_dao.table.calls
+        if call[0] == 'put_item'
+        and call[1]['usage_id'].split('#')[0] in ('user', 'job', 'project')
+    ]
+    assert written == []
+
+
+def test_a_changed_rollup_is_written(monkeypatch):
+    clock = SimClock(SIM_START)
+    events = sim_events()
+    service, _, usage_dao = sim_service(monkeypatch, clock, events)
+    service.aggregate()
+    usage_dao.table.calls.clear()
+    clock.now += 15 * 60
+    events.append(
+        {
+            'ts': clock.now - 60,
+            'visible_at': clock.now - 60,
+            'caller': caller_arn(),
+            'model': MODEL_B,
+            'in': 5,
+            'out': 5,
+        }
+    )
+    service.aggregate()
+    written = {
+        call[1]['usage_id'] for call in usage_dao.table.calls if call[0] == 'put_item'
+    }
+    assert f'user#{PERIOD}#alice' in written
+    assert f'project#{PERIOD}' in written

@@ -334,7 +334,7 @@ describe('layer D: every template-produced key the runtime reads is generated', 
     // The inventory counts key patterns: `<app>.server.port` is one entry there and three keys here, as are
     // `<day>`, `<state>`, `<os>`, `<family>` and the `<module>.module_id` mappings.
     const distinct = new Set(RUNTIME_KEY_GROUPS.flatMap((group) => runtimeKeys[group] as string[]));
-    assert.equal(distinct.size, 702);
+    assert.equal(distinct.size, 734);
     // Spot-check expanded key identities.
     for (const key of [
       'global-settings.module_sets.default.virtual-desktop-controller.module_id',
@@ -754,7 +754,7 @@ describe('cost settings keep shipped defaults', () => {
       const flat = flattenConfigDir(outDir);
       const expected = {
         'cluster-manager.metrics.cost.enabled': false,
-        'cluster-manager.metrics.cost.lookback_days': 3,
+        'cluster-manager.metrics.cost.lookback_days': 7,
         'cluster-manager.metrics.cost.interval_hours': 24,
         'cluster-manager.metrics.cost.by_account': false,
         'cluster-manager.metrics.storage.enabled': false,

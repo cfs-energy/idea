@@ -5,6 +5,8 @@ from ideasdk.utils import Utils
 
 METRIC_PREFIX = 'idea'
 _TAG_UNSAFE = re.compile(r'[,|#\n\r\t ]+')
+# Infrastructure totals: only idea_cluster, and never the identity of the collecting task.
+COLLECTOR_PREFIXES = ('cost.', 'storage.', 'session.', 'health.')
 
 
 class DatadogFormat:
@@ -41,7 +43,7 @@ class DatadogFormat:
 
     def name_and_tags(self, entry):
         name = entry['MetricName']
-        collector = name.startswith(('cost.', 'storage.'))
+        collector = name.startswith(COLLECTOR_PREFIXES)
         # Preserve formatter tags; DogStatsD agent enrichment can add live-only tags.
         tags = [
             tag

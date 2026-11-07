@@ -395,7 +395,7 @@ class PresetComputeHelper:
             domain_query[result_key] = result_value
 
         # Sanity check our query results
-        # todo - should domain-controller-flags be evaluated for writeable or other health flags?
+        # todo - should domain-controller-flags be evaluated for writable or other health flags?
 
         # domain-name must be present and match our configuration
         domain_name = Utils.get_value_as_string(

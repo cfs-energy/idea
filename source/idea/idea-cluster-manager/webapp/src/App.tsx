@@ -16,6 +16,8 @@ import './App.scss';
 import {IdeaAuthChallenge, IdeaAuthConfirmForgotPassword, IdeaAuthenticatedRoute, IdeaAuthForgotPassword, IdeaAuthLogin} from "./pages/auth";
 import Reporting from "./pages/reporting/reporting";
 import {AppContext} from "./common";
+import PortalMessage from "./components/portal-message";
+import IdeaAppLayout from "./components/app-layout";
 import Users from "./pages/user-management/users";
 import Groups from "./pages/user-management/groups";
 import Queues from "./pages/hpc/queues";
@@ -42,10 +44,11 @@ import PortalSettings from "./pages/cluster-admin/portal-settings";
 import HpcNodes from "./pages/hpc/hpc-nodes";
 import {ServicesPage} from "./pages/cluster-admin/services-page";
 import ReconciliationRuns from "./pages/cluster-admin/reconciliation-runs";
+import ScratchCleanup from "./pages/hpc/scratch-cleanup";
 import ClusterStatus from "./pages/cluster-admin/cluster-status";
 import Projects from "./pages/cluster-admin/projects";
 import UserCostsPage from "./pages/cluster-admin/user-costs";
-import {Alert, Box, Header, HelpPanel, Link, SideNavigationProps, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {Alert, Box, Button, Header, HelpPanel, Link, SideNavigationProps, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
 import {NonCancelableCustomEvent} from "@cloudscape-design/components/interfaces";
 import {FlashbarProps} from "@cloudscape-design/components/flashbar";
 import HpcLicenses from "./pages/hpc/hpc-licenses";
@@ -60,6 +63,7 @@ import VirtualDesktopPermissionProfileDetail from "./pages/virtual-desktops/virt
 import MySharedVirtualDesktopSessions from "./pages/virtual-desktops/my-shared-virtual-desktop-sessions";
 import VirtualDesktopSoftwareStackDetail from "./pages/virtual-desktops/virtual-desktop-software-stack-detail";
 import {IdeaSideNavHeader, IdeaSideNavItems} from "./navigation/side-nav-items";
+import IdeaErrorBoundary from './components/error-boundary';
 import {IdeaAppNavigationProps, withRouter} from './navigation/navigation-utils';
 import {Routes, Route} from "react-router-dom";
 import IdeaLogTail from "./pages/home/log-tail";
@@ -77,6 +81,7 @@ export interface IdeaWebPortalAppProps extends IdeaAppNavigationProps {
 }
 
 export interface IdeaWebPortalAppState {
+    startupFailed: boolean
     sideNavHeader: SideNavigationProps.Header
     sideNavItems: SideNavigationProps.Item[]
     isLoggedIn: boolean
@@ -114,7 +119,8 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
             sideNavItems: [],
             toolsOpen: false,
             tools: null,
-            flashbarItems: []
+            flashbarItems: [],
+            startupFailed: false
         }
     }
 
@@ -168,7 +174,8 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
             }
 
             if (loginStatus) {
-                context.getClusterSettingsService().initialize().then(_ => {
+                context.getClusterSettingsService().initialize().then(loaded => {
+                    this.setState({startupFailed: this.modulesMissing(loaded)})
                     init()
                 })
             } else {
@@ -183,15 +190,21 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
         })
     }
 
+    // Without the module list every page would claim the person has no access.
+    private modulesMissing(loaded: boolean): boolean {
+        return loaded === false && !AppContext.get().getClusterSettingsService().clusterModules?.length
+    }
+
     onLogin = (): Promise<boolean> => {
         return new Promise((resolve, reject) => {
             const context = AppContext.get()
             // A new sign-in never restores an earlier session's terminals.
             shellStore.endSession()
             shellStore.setOwner(context.auth().getUsername())
-            context.getClusterSettingsService().initialize().then(_ => {
+            context.getClusterSettingsService().initialize().then(loaded => {
                 this.setState({
                     isLoggedIn: true,
+                    startupFailed: this.modulesMissing(loaded),
                     sideNavHeader: IdeaSideNavHeader(context),
                     sideNavItems: IdeaSideNavItems(context)
                 }, () => {
@@ -209,7 +222,8 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
         shellStore.endSession()
         return new Promise((resolve, _) => {
             this.setState({
-                isLoggedIn: false
+                isLoggedIn: false,
+                startupFailed: false
             }, () => {
                 applyDensity(Density.Comfortable)
                 applyMode(Mode.Light)
@@ -336,17 +350,23 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     render() {
         // The dock sits beside the routes so terminals stay open while navigating.
         return <>
-            {this.renderPage()}
+            <IdeaErrorBoundary resetKey={this.props.location.pathname}>{this.renderPage()}</IdeaErrorBoundary>
             {this.state.isInitialized && this.state.isLoggedIn && terminalEnabled() && <ShellDock client={AppContext.get().client().terminal()}/>}
         </>
     }
 
     renderPage() {
+        if (this.state.isInitialized && this.state.isLoggedIn && this.state.startupFailed) {
+            return <PortalMessage type="error" header="The portal could not load"
+                                  action={<Button variant="primary" onClick={() => window.location.reload()}>Reload page</Button>}>
+                The portal could not load its settings. Reload the page. If this keeps happening, contact your administrator.
+            </PortalMessage>
+        }
         const view = this.props.searchParams.get('view')
         const AdminJobs = view === 'nodes' ? HpcNodes : AdminActiveJobs
         const redirected = legacyRoute(this.props.location.pathname, this.props.location.search, AppContext.get());
         const costs = /\/settings\/(cost-collection|costs)\/?$/.test(this.props.location.pathname) || (this.props.location.pathname === '/cluster/status' && this.props.searchParams.get('operation') === 'backfill-history');
-        if (this.state.isInitialized && costs && !hasAccess(AppContext.get(), 'cluster-admin') && !hasAccess(AppContext.get(), 'jobs-admin')) return <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}><Alert type="warning" header="Destination unavailable">Costs settings requires cluster or jobs administrator access.</Alert></IdeaAuthenticatedRoute>;
+        if (this.state.isInitialized && costs && !hasAccess(AppContext.get(), 'cluster-admin') && !hasAccess(AppContext.get(), 'jobs-admin')) return <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}><PortalMessage type="warning" header="You do not have access to this page" action={<Button href="#/">Go to Home</Button>}>Costs settings need cluster or jobs administrator access.</PortalMessage></IdeaAuthenticatedRoute>;
         if (this.state.isInitialized && redirected) return <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}><Navigate to={redirected} replace/></IdeaAuthenticatedRoute>;
 
         return (this.state.isInitialized &&
@@ -354,6 +374,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                 <Route path="/reporting/*" element={
                     !this.state.isLoggedIn ? <Navigate to="/auth/login"/> :
                         !AppContext.get().auth().isReportingResolved() ? <StatusIndicator type="loading">Checking Reporting access</StatusIndicator> :
+                            AppContext.get().auth().isReportingCheckFailed() ? <div role="alert">We couldn't check your access to reports. Reload the page to try again.</div> :
                             !AppContext.get().auth().canReadReporting() ? <div role="alert">Access denied</div> :
                                 <Reporting
                                     ideaPageId="reporting"
@@ -1032,6 +1053,22 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         />
                     </IdeaAuthenticatedRoute>
                 }/>
+                <Route path="/soca/scratch-cleanup" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <ScratchCleanup
+                            ideaPageId="scratch-cleanup"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
                 <Route path="/cluster/reconciliation-runs" element={
                     <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
                         <ReconciliationRuns
@@ -1109,6 +1146,23 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                             onSideNavChange={this.onSideNavChange}
                             onFlashbarChange={this.onFlashbarChange}
                             flashbarItems={this.state.flashbarItems}
+                        />
+                    </IdeaAuthenticatedRoute>
+                }/>
+                <Route path="*" element={
+                    <IdeaAuthenticatedRoute isLoggedIn={this.state.isLoggedIn}>
+                        <IdeaAppLayout
+                            ideaPageId="not-found"
+                            toolsOpen={this.state.toolsOpen}
+                            tools={this.state.tools}
+                            onToolsChange={this.onToolsChange}
+                            onPageChange={this.onPageChange}
+                            sideNavItems={this.state.sideNavItems}
+                            sideNavHeader={this.state.sideNavHeader}
+                            onSideNavChange={this.onSideNavChange}
+                            onFlashbarChange={this.onFlashbarChange}
+                            flashbarItems={this.state.flashbarItems}
+                            content={<Alert type="info" header="This page does not exist" action={<Button href="#/">Go to Home</Button>}>The link may be out of date.</Alert>}
                         />
                     </IdeaAuthenticatedRoute>
                 }/>

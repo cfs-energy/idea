@@ -73,6 +73,18 @@ import {
     RefreshImagesResponse,
     RollbackImageRequest,
     RollbackImageResponse,
+    GetScratchCleanupStatusRequest,
+    GetScratchCleanupStatusResult,
+    PreviewScratchCleanupRequest,
+    PreviewScratchCleanupResult,
+    ListScratchCleanupPreviewRequest,
+    ListScratchCleanupPreviewResult,
+    BackfillScratchCleanupRequest,
+    BackfillScratchCleanupResult,
+    ListScratchCleanupUpcomingRequest,
+    ListScratchCleanupUpcomingResult,
+    ListScratchCleanupAuditRequest,
+    ListScratchCleanupAuditResult,
     SetImagePinnedRequest,
     SetImagePinnedResponse,
     GetImageScheduleRequest,
@@ -322,6 +334,48 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     getImageSchedule(req: GetImageScheduleRequest): Promise<GetImageScheduleResponse> {
         return this.apiInvoker.invoke_alt<GetImageScheduleRequest, GetImageScheduleResponse>(
             'SchedulerAdmin.GetImageSchedule',
+            req
+        )
+    }
+
+    getScratchCleanupStatus(req: GetScratchCleanupStatusRequest): Promise<GetScratchCleanupStatusResult> {
+        return this.apiInvoker.invoke_alt<GetScratchCleanupStatusRequest, GetScratchCleanupStatusResult>(
+            'SchedulerAdmin.GetScratchCleanupStatus',
+            req
+        )
+    }
+
+    previewScratchCleanup(req: PreviewScratchCleanupRequest): Promise<PreviewScratchCleanupResult> {
+        return this.apiInvoker.invoke_alt<PreviewScratchCleanupRequest, PreviewScratchCleanupResult>(
+            'SchedulerAdmin.PreviewScratchCleanup',
+            req
+        )
+    }
+
+    listScratchCleanupPreview(req: ListScratchCleanupPreviewRequest): Promise<ListScratchCleanupPreviewResult> {
+        return this.apiInvoker.invoke_alt<ListScratchCleanupPreviewRequest, ListScratchCleanupPreviewResult>(
+            'SchedulerAdmin.ListScratchCleanupPreview',
+            req
+        )
+    }
+
+    backfillScratchCleanup(req: BackfillScratchCleanupRequest): Promise<BackfillScratchCleanupResult> {
+        return this.apiInvoker.invoke_alt<BackfillScratchCleanupRequest, BackfillScratchCleanupResult>(
+            'SchedulerAdmin.BackfillScratchCleanup',
+            req
+        )
+    }
+
+    listScratchCleanupUpcoming(req: ListScratchCleanupUpcomingRequest): Promise<ListScratchCleanupUpcomingResult> {
+        return this.apiInvoker.invoke_alt<ListScratchCleanupUpcomingRequest, ListScratchCleanupUpcomingResult>(
+            'SchedulerAdmin.ListScratchCleanupUpcoming',
+            req
+        )
+    }
+
+    listScratchCleanupAudit(req: ListScratchCleanupAuditRequest): Promise<ListScratchCleanupAuditResult> {
+        return this.apiInvoker.invoke_alt<ListScratchCleanupAuditRequest, ListScratchCleanupAuditResult>(
+            'SchedulerAdmin.ListScratchCleanupAudit',
             req
         )
     }

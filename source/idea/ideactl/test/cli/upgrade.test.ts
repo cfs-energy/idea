@@ -18,6 +18,7 @@ import {
   createLiveUpgradeDeps,
   dcvUbuntuPinTargets,
   planCostIntervalDefault,
+  planCostLookbackDefault,
   planDcvUbuntuPins,
   planEcsImageFollowsRelease,
   prepareUpgradeDriftInput,
@@ -504,7 +505,28 @@ test("the pinned DCV release matches the global settings template", () => {
 });
 
 const COST_INTERVAL = "cluster-manager.metrics.cost.interval_hours";
+const COST_LOOKBACK = "cluster-manager.metrics.cost.lookback_days";
 const CLUSTER_MANAGER = [{ module_id: "cluster-manager", name: "cluster-manager", type: "app" }];
+
+test("the cost lookback moves from the old three-day default to seven and nothing else moves", () => {
+  const plan = (row?: { value: unknown; source?: string }) =>
+    planCostLookbackDefault(CLUSTER_MANAGER, row === undefined ? [] : [{ key: COST_LOOKBACK, ...row }]);
+  assert.deepEqual(plan({ value: 3, source: "template" }), [{ key: COST_LOOKBACK, value: 7 }]);
+  assert.deepEqual(plan({ value: 3 }), [{ key: COST_LOOKBACK, value: 7 }]);
+  assert.deepEqual(plan({ value: 5, source: "template" }), []);
+  assert.deepEqual(plan(), []);
+  assert.deepEqual(plan({ value: 3, source: "cli" }), []);
+  assert.deepEqual(plan({ value: 3, source: "api" }), []);
+  assert.deepEqual(plan({ value: 7, source: "template" }), []);
+  assert.deepEqual(planCostLookbackDefault([], [{ key: COST_LOOKBACK, value: 3 }]), []);
+
+  const report = compareUpgradeDrift({
+    current: [{ key: COST_LOOKBACK, value: 3, source: "template" }],
+    generated: [{ key: COST_LOOKBACK, value: 7 }],
+    phase3: plan({ value: 3, source: "template" }),
+  });
+  assert.equal(report.findings.find((row) => row.key === COST_LOOKBACK)?.routineUpdate, "template default");
+});
 
 test("the cost interval moves from the old six-hour default to 24 and nothing else moves", () => {
   const plan = (row?: { value: unknown; source?: string }) =>

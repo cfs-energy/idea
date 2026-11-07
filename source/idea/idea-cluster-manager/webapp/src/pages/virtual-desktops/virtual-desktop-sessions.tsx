@@ -103,6 +103,11 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
         sortingField: "state"
     },
     {
+        id: 'failure_reason',
+        header: 'Failure reason',
+        cell: e => e.state === 'ERROR' && e.failure_reason ? e.failure_reason : '-'
+    },
+    {
         id: 'project_title',
         header: 'Project',
         cell: e => e.project?.title,
@@ -410,9 +415,9 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                 {
                     sessions.map((session, index) => {
                         if (session.failure_reason) {
-                            return <p key={index}>IDEA Session Id: {session?.idea_session_id}, Owner: {session.owner} - {message_string}: {session.failure_reason}</p>
+                            return <p key={index}>{session.name ?? 'Desktop'} (Owner: {session.owner}) - {message_string}: {session.failure_reason}</p>
                         } else {
-                            return <p key={index}>IDEA Session Id: {session?.idea_session_id}, Owner: {session.owner} - {message_string}</p>
+                            return <p key={index}>{session.name ?? 'Desktop'} (Owner: {session.owner}) - {message_string}</p>
                         }
                     })
                 }
@@ -458,7 +463,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         return (
             <IdeaConfirm
                 ref={this.deleteSessionsConfirmModal}
-                title={(this.state.forceTerminate) ? "Force Delete Sessions" : "Delete Sessions"}
+                title={(this.state.forceTerminate) ? "Force Terminate Sessions" : "Terminate Sessions"}
                 onConfirm={() => {
                     const toDelete: VirtualDesktopSession[] = []
                     this.getSelectedSessions().forEach(session => toDelete.push({
@@ -482,7 +487,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                     })
                 }}
             >
-                <p>Are you sure you want to delete below sessions:</p>
+                <p>Are you sure you want to terminate below sessions:</p>
                 {this.getSelectedSessions().map((session, index) => {
                     return <li key={index}>{session.name} (Owner: {session.owner})</li>
                 })}
@@ -557,7 +562,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                     })
                 }}
             >
-                <p>The stopped desktop cleanup may delete the below sessions again once they are stopped past the cutoff:</p>
+                <p>The stopped desktop cleanup may terminate the below sessions again once they are stopped past the cutoff:</p>
                 {this.getSelectedSessions().map((session, index) => {
                     return <li key={index}>{session.name} (Owner: {session.owner})</li>
                 })}
@@ -581,8 +586,10 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                     })
                 }
             >
-                <ReactJson defaultValue="" enableClipboard={false} name={false} src={this.state.sessionHealth} displayDataTypes={false}
-                           iconStyle={"circle"} onEdit={false} theme="grayscale:inverted" collapseStringsAfterLength={45}/>
+                {Utils.isEmpty(this.state.sessionHealth)
+                    ? <p>The broker has no record of this session.</p>
+                    : <ReactJson defaultValue="" enableClipboard={false} name={false} src={this.state.sessionHealth} displayDataTypes={false}
+                                 iconStyle={"circle"} onEdit={false} theme="grayscale:inverted" collapseStringsAfterLength={45}/>}
             </IdeaView>
         )
     }
@@ -761,11 +768,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         text: 'Resume Session(s)',
                         disabled: !this.isSelected(),
                         onClick: () => {
-                            this.setState({
-                                forceStop: true
-                            }, () => {
-                                this.getResumeSessionsConfirmModal().show()
-                            })
+                            this.getResumeSessionsConfirmModal().show()
                         }
                     },
                     {
@@ -774,7 +777,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         disabled: !this.isSelected(),
                         onClick: () => {
                             this.setState({
-                                forceStop: true
+                                forceStop: false
                             }, () => {
                                 this.getStopSessionsConfirmModal().show()
                             })
@@ -832,16 +835,15 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                             this.getVirtualDCVClient().describeSessions({
                                 sessions: sessions
                             }).then(response => {
-                                    let health = response.response;
-                                    delete health?.request_id
-                                    delete health?.next_token
                                     this.setState({
-                                        sessionHealth: health?.sessions
+                                        sessionHealth: response.response?.sessions ?? {}
                                     }, () => {
                                         this.getSessionHealthModal().show()
                                     })
                                 }
-                            )
+                            ).catch(error => {
+                                this.setFlashMessage(`Session health could not be loaded: ${error?.message ?? 'try again'}`, 'error')
+                            })
                         }
                     },
                     {
@@ -885,12 +887,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         this.getListing().fetchRecords()
                     })
                 }}
+                // no default range: a desktop left running for months is still here to manage
                 showDateRange={true}
-                dateRange={{
-                    type: 'relative',
-                    amount: 1,
-                    unit: "month"
-                }}
                 onDateRange={(dateRange) => {
                     return {
                         key: 'updated_on',
@@ -916,7 +914,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 value: 'READY'
                             },
                             {
-                                title: 'Provisioning',
+                                title: 'Setting up: provisioning',
                                 value: 'PROVISIONING'
                             },
                             {
@@ -928,23 +926,23 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                                 value: 'STOPPING'
                             },
                             {
-                                title: 'Initializing',
+                                title: 'Setting up: initializing',
                                 value: 'INITIALIZING'
                             },
                             {
-                                title: 'Creating',
+                                title: 'Setting up: creating',
                                 value: 'CREATING'
                             },
                             {
-                                title: 'Resuming',
+                                title: 'Starting',
                                 value: 'RESUMING'
                             },
                             {
-                                title: 'Deleting',
+                                title: 'Terminating',
                                 value: 'DELETING'
                             },
                             {
-                                title: 'Error',
+                                title: 'Failed',
                                 value: 'ERROR'
                             }
                         ]
@@ -1015,8 +1013,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         ]
                     }
                 ]}
-                defaultSortingColumn="created_on"
-                defaultSortingDescending={true}
+                serverSort={{columns: {created_on: 'created_on'}, defaultColumn: 'created_on', defaultDescending: true}}
                 onFilter={(filters) => {
                     return filters
                 }}
@@ -1030,19 +1027,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         .listSessions({
                             filters: this.getListing().getFilters(),
                             paginator: this.getListing().getPaginator(),
+                            sort_by: this.getListing().getSortBy(),
                             date_range: this.getListing().getDateRange()
-                        })
-                        .catch(error => {
-                            this.props.onFlashbarChange({
-                                items: [
-                                    {
-                                        content: error.message,
-                                        type: 'error',
-                                        dismissible: true
-                                    }
-                                ]
-                            })
-                            throw error
                         })
                 }}
                 columnDefinitions={VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS}

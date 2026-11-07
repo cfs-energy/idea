@@ -5,12 +5,20 @@ CLEA = "CLEA"
 Pn = "Pn"
 Ded = "Ded"
 onfigure = "onfigure"
+# the bolded initial in "**I**ntegrated" leaves the stem
+ntegrated = "ntegrated"
+# the PyPI package name
+certifi = "certifi"
+# a prefix check on the word terminate/terminating
+terminat = "terminat"
 braket = "braket"
 Sur = "Sur"
 
 [default]
 extend-ignore-re = [
   "ami-[0-9a-f]+",
+  # the r7iz EC2 instance family
+  "\\br7iz\\b",
   "fs-[0-9a-f]+",
   # CDK logical ids end in an eight-character hex hash whose letters read as words.
   "[a-z]+[0-9A-F]{8}\\b",

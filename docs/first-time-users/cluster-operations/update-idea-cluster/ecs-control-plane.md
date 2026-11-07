@@ -19,9 +19,11 @@ Duration, cost and efficiency describe the latest execution attempt. See [Job co
 | Metric | Samples included |
 | --- | --- |
 | `idea.job.cpu_efficiency` | Existing rule: measured CPU seconds divided by allocated CPU seconds. Missing or invalid measurements are omitted; measured zero CPU is included as zero. |
-| `idea.job.cpu_efficiency.measured` | Explicit measured-only series for dashboards replacing IDEAL. Uses the same formula and validity checks, includes measured zero CPU, and omits jobs without a usable CPU measurement. |
+| `idea.job.cpu_efficiency.measured` | Measured-only series for dashboards replacing IDEAL. Uses the same formula and validity checks, and omits jobs without a usable CPU measurement and, from 26.11.2, jobs that recorded zero CPU. |
 
-Both are ratios from 0 to 1 with identical tags and job-end timestamps. They currently contain the same samples; the existing series never substituted zero for missing measurements. Multi-node partial measurements and impossible ratios are excluded from both. Select one series per dashboard, without combining them.
+`idea.session.count` is a gauge of desktops by `state`, `base_os` and `project`, read from the sessions table every five minutes by one controller task on DogStatsD clusters. Filter it by `idea_cluster`; it has no `env`. A tag set that empties reads zero once and then stops.
+
+Both efficiency series are ratios from 0 to 1 with identical tags and job-end timestamps. They differ only in zero-CPU jobs; the existing series never substituted zero for missing measurements. Multi-node partial measurements and impossible ratios are excluded from both. Select one series per dashboard, without combining them.
 
 ### Once per cluster
 
@@ -76,7 +78,7 @@ Spend comes from Cost Explorer, commercial partition only: every trailing full d
   'Key=cluster-manager.metrics.cost.enabled,Type=bool,Value=true'
 ```
 
-After upgrading to this release, the collector checks the setting every cycle, including while disabled. Enabling starts collection on the next cycle; disabling stops subsequent cycles. The default interval is 24 hours (`cluster-manager.metrics.cost.interval_hours`); upgrading to 26.11.1 moves a cluster still on the earlier six-hour default to 24 and leaves any value an operator set. No additional redeploy or service restart is needed: the task role already permits `ce:GetCostAndUsage`, `ce:GetTags` and `ce:GetDimensionValues`. The tag keys default to `idea:ModuleId`, `idea:Project` and `idea:JobOwner` and follow `cluster-manager.metrics.cost.*`.
+After upgrading to this release, the collector checks the setting every cycle, including while disabled. Enabling starts collection on the next cycle; disabling stops subsequent cycles. The default interval is 24 hours (`cluster-manager.metrics.cost.interval_hours`); upgrading to 26.11.1 moves a cluster still on the earlier six-hour default to 24 and leaves any value an operator set. Each run re-reads the trailing `cluster-manager.metrics.cost.lookback_days` days (default seven, because Cost Explorer can post a month's first-day tax several days late); upgrading to 26.11.2 moves a cluster still on the earlier three-day default to seven and leaves any value an operator set. Redeploy a cost-only stack to take the new default. No additional redeploy or service restart is needed: the task role already permits `ce:GetCostAndUsage`, `ce:GetTags` and `ce:GetDimensionValues`. The tag keys default to `idea:ModuleId`, `idea:Project` and `idea:JobOwner` and follow `cluster-manager.metrics.cost.*`.
 
 For GovCloud billing, or a commercial billing account with no cluster, use cost-only mode in the commercial account that can read the bill. It runs the same collector and a Datadog sidecar in one Fargate task, with no cluster settings table. Enable historical ingestion for `idea.cost` as above, activate the cost allocation tags in that billing account, and deploy:
 
@@ -89,9 +91,9 @@ ideactl cost-collector deploy --aws-profile <BILLING_PROFILE> --aws-region us-ea
   --datadog-api-key-secret-arn <SECRET_ARN> --subnet-ids <SUBNET_ID> <SUBNET_ID>
 ```
 
-The task runs on Linux arm64 (Graviton) like the control-plane image; the default agent image is multi-architecture, and any override must support Linux arm64. Use an API key secret in the deployment region. Subnets must be in one VPC and all public or all private. Public subnets receive a public IP; private subnets need outbound access through NAT. The default interval is 24 hours with a three-day lookback and the same tag keys as the cluster collector; `--by-account` adds linked account spend. `--cluster-name` labels the account's bill; it does not filter it to that cluster. Remove it with `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`.
+The task runs on Linux arm64 (Graviton) like the control-plane image; the default agent image is multi-architecture, and any override must support Linux arm64. Use an API key secret in the deployment region. Subnets must be in one VPC and all public or all private. Public subnets receive a public IP; private subnets need outbound access through NAT. The default interval is 24 hours with a seven-day lookback and the same tag keys as the cluster collector; `--by-account` adds linked account spend. `--cluster-name` labels the account's bill; it does not filter it to that cluster. Remove it with `ideactl cost-collector destroy --aws-region us-east-1 --stack-name gov-spend`.
 
-To verify cost-only delivery, wait for a collection cycle, then query `sum:idea.cost.amortized{idea_cluster:<CLUSTER_NAME>}` in Datadog over the trailing three full UTC days (or the configured lookback), including yesterday; require non-null daily points and compare them with Cost Explorer. `metrics-sink` checks API invocations, which this task does not emit. In ECS, open the task's Logs tab and inspect both `cost-metrics/cost-metrics/<TASK_ID>` and `datadog/datadog/<TASK_ID>` in the stack-created log group for collection failures, dropped historical points or ingestion errors.
+To verify cost-only delivery, wait for a collection cycle, then query `sum:idea.cost.amortized{idea_cluster:<CLUSTER_NAME>}` in Datadog over the trailing seven full UTC days (or the configured lookback), including yesterday; require non-null daily points and compare them with Cost Explorer. `metrics-sink` checks API invocations, which this task does not emit. In ECS, open the task's Logs tab and inspect both `cost-metrics/cost-metrics/<TASK_ID>` and `datadog/datadog/<TASK_ID>` in the stack-created log group for collection failures, dropped historical points or ingestion errors.
 
 Storage levels come from each FSx for NetApp ONTAP file system in `shared-storage` that carries metrics credentials: an ONTAP user that can read `/api/storage/quota/reports` and `/api/storage/volumes` on the SVM management endpoint, its password in a Secrets Manager secret tagged `idea:ClusterName=<CLUSTER_NAME>` and `idea:ModuleName=cluster-manager`, which the cluster-manager role can already read. `idea.storage.used_bytes` and `idea.storage.files_used` are per `user`, `volume` and `qtree`; `idea.storage.volume_size_bytes`, `idea.storage.volume_used_bytes` and `idea.storage.volume_tier_bytes` (`tier:ssd`, `tier:capacity_pool`) per volume; every point carries `svm` and `filesystem`.
 
@@ -103,6 +105,17 @@ security login rest-role create -vserver <SVM> -role idea-metrics -api /api/stor
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/storage/volumes -access readonly
 security login create -vserver <SVM> -user-or-group-name idea-metrics -application http -authentication-method password -role idea-metrics
 ```
+
+Folder sizes in the Storage usage pane come from ONTAP File System Analytics, read through this login. Open that path on the home volume only. The wildcard needs its quotes. A proven dev check: the home volume answers 200, another volume 403.
+
+```bash
+security login rest-role create -vserver <SVM> -role idea-metrics -api "/api/storage/volumes/*/files" -access none
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/storage/volumes/<HOME_VOLUME_UUID>/files -access readonly
+```
+
+ONTAP cannot separate listing a folder from reading a file on this path, so this role alone could read file contents on the home volume. IDEA never does: its ONTAP client refuses any read that could reach file contents. Security audit logging of those reads is not available on FSx for ONTAP.
+
+The directory checks in [cluster health metrics](../cluster-health-metrics.md) read through this same login and need four more paths on its role.
 
 ```bash
 aws --profile <PROFILE> --region <REGION> secretsmanager create-secret --name idea-<CLUSTER_NAME>-ontap-metrics-<NAME> --secret-string '<password>' \

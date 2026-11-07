@@ -40,6 +40,8 @@ from ideadatamodel.scheduler import (
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
+from ideascheduler.app.api.active_jobs import list_active_job_page
+from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideascheduler.app.scheduler.job_param_builder import (
     JobParamsBuilderContext,
@@ -333,10 +335,8 @@ class SchedulerAPI(BaseAPI):
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
-        page_size = payload.page_size
-        page_start = payload.page_start
-        entries = self.context.job_cache.list_jobs(
-            owner=context.get_username(), _limit=page_size, _offset=page_start
+        entries, total = list_active_job_page(
+            self.context, payload, owner=context.get_username()
         )
         # enriched here rather than in the job cache: the signals are per-request and
         # must not be written back into the cached job_data by an internal sync.
@@ -345,13 +345,13 @@ class SchedulerAPI(BaseAPI):
             jobs=entries,
             is_administrator=self._caller_is_administrator(context),
         )
-        total = self.context.job_cache.get_count(owner=context.get_username())
 
         context.success(
             ListJobsResult(
                 paginator=SocaPaginator(
                     total=total, page_size=payload.page_size, start=payload.page_start
                 ),
+                filters=payload.filters,
                 listing=entries,
             )
         )
@@ -612,14 +612,14 @@ class SchedulerAPI(BaseAPI):
                         self.logger.error(f'Failed to submit job: {result}')
                         raise exceptions.soca_exception(
                             errorcodes.JOB_SUBMISSION_FAILED,
-                            f'Failed to submit job: {result}',
+                            JOB_INTERNAL_ERROR_MESSAGE,
                         )
                     # rc == 0 but the tracker has no record for this job_uid (tracker TTL
                     # miss): avoid the opaque AttributeError and report clearly instead.
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        'Job was submitted but the submission result could not be retrieved. '
-                        'Check job status with qstat before resubmitting.',
+                        'Your job was submitted, but the result could not be read. '
+                        'Check Active Jobs before submitting it again.',
                     )
 
                 if job_id is not None:
@@ -636,7 +636,9 @@ class SchedulerAPI(BaseAPI):
                     )
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        f'Failed to submit job: {reason}',
+                        reason.removeprefix('qsub: ').strip()
+                        if Utils.is_not_empty(reason)
+                        else JOB_INTERNAL_ERROR_MESSAGE,
                     )
 
                 return submission_result
@@ -659,9 +661,10 @@ class SchedulerAPI(BaseAPI):
                 if result.returncode == 0:
                     return SubmitJobResult(accepted=True)
                 else:
+                    self.logger.error(f'Failed to submit job: {result}')
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        f'Failed to submit job: {result}',
+                        JOB_INTERNAL_ERROR_MESSAGE,
                     )
         finally:
             # qsub copies the script into the PBS spool, so the file has no reader after

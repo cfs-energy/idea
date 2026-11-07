@@ -1389,9 +1389,63 @@ def get_socket():
     return socket_client, soca_daemon_unix_socket
 
 
+# what a person submitting a job reads; the detail goes to the PBS server log
+INTERNAL_ERROR_MESSAGE = (
+    'The scheduler hit an internal error. Try again; if it repeats, tell an '
+    'administrator and quote the job name.'
+)
+
+
 def sanitize_error_message(message: str):
     # remove all double quotes - json parsing fails as pbs does not escape the quotes
     return message.replace('"', '')
+
+
+SCRATCH_HOLDS_DIR = '/run/idea-scratch-holds'
+SCRATCH_HOLD_TTL_SECS = 300
+
+
+def scratch_hold_reason(e, directory=SCRATCH_HOLDS_DIR):
+    """
+    why this job cannot start yet: scratch cleanup is removing a folder of its owner's. Read from
+    a file so it holds even if the scheduler is too busy to answer. A hold past its time, or a
+    task that was replaced, lets the job start, because the removal stops itself by then.
+    """
+    message = (
+        'Scratch cleanup is removing a folder from a finished job of this user. '
+        'This job will start when that ends, within 30 minutes.'
+    )
+    try:
+        owner = str(e.job.Job_Owner or e.job.euser or '').split('@')[0].lower()
+    except Exception:
+        # whose job this is cannot be said, so it waits while anyone's folder is being removed
+        try:
+            return message if os.listdir(directory) else None
+        except OSError:
+            return None
+    if not owner or '/' in owner or owner.startswith('.'):
+        return None
+    path = os.path.join(directory, owner)
+    try:
+        with open(path) as stream:
+            content = stream.read()
+    except OSError:
+        return None
+    except ValueError:
+        content = ''
+    try:
+        return message if time.time() < float(content) else None
+    except ValueError:
+        pass
+    # being written, or damaged: held, but not for longer than a hold can last
+    try:
+        return (
+            message
+            if time.time() - os.path.getmtime(path) < SCRATCH_HOLD_TTL_SECS
+            else None
+        )
+    except OSError:
+        return None
 
 
 def is_always_success_event(e):
@@ -1476,10 +1530,10 @@ def invoke_soca_scheduler(e) -> dict:
         ConnectionResetError,
         ConnectionAbortedError,
     ) as exc:
-        raise SocaException(
-            f'Could not connect to idea-scheduler at {address}. '
-            f'Please contact administrator to investigate the problem. Err: {exc}'
+        pbs.logmsg(
+            pbs.LOG_ERROR, f'Could not connect to idea-scheduler at {address}: {exc}'
         )
+        raise SocaException(INTERNAL_ERROR_MESSAGE)
     finally:
         if client:
             client.close()
@@ -1492,6 +1546,12 @@ try:
         raise SystemExit
 
     event_type = e.type
+
+    if event_type == HOOK_EVENT_RUNJOB:
+        hold_reason = scratch_hold_reason(e)
+        if hold_reason:
+            # PBS keeps the job queued and tries it again on its next cycle
+            e.reject(hold_reason)
 
     if event_type in PRE_EXECUTION_HOOKS:
         # if event is generated due to qsub, qalter etc, and scheduler is invoked via unix socket
@@ -1588,7 +1648,13 @@ except Exception as exc:
             error_message = sanitize_error_message(exc.message)
         else:
             exc_type, exc_obj, exc_tb = sys.exc_info()
-            error_message = f'{pbs.event().hook_name} failed with {sys.exc_info()[:2]}, lineno: {exc_tb.tb_lineno}'
+            pbs.logmsg(
+                pbs.LOG_ERROR,
+                sanitize_error_message(
+                    f'{pbs.event().hook_name} failed with {sys.exc_info()[:2]}, lineno: {exc_tb.tb_lineno}'
+                ),
+            )
+            error_message = INTERNAL_ERROR_MESSAGE
     finally:
         if error_message is None:
             error_message = 'Unknown Error'

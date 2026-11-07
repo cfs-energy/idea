@@ -101,6 +101,7 @@ class DownloadFilesRequest(SocaPayload):
 
 class DownloadFilesResult(SocaPayload):
     download_url: Optional[str] = Field(default=None)
+    skipped_files: Optional[int] = Field(default=None)
 
 
 # FileBrowser.DeleteFiles

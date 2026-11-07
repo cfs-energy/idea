@@ -74,6 +74,7 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
   # Only update kernel if not already on a supported version
   if [[ ! ($kernel == *"4.18.0-477"*$machine || $kernel == *"4.18.0-425"*$machine || $kernel == *"4.18.0-372"*$machine || $kernel == *"4.18.0-348"*$machine || $kernel == *"4.18.0-305"*$machine || $kernel == *"4.18.0-240"*$machine || $kernel == *"4.18.0-193"*$machine || $kernel == *"4.18.0-513"*$machine || $kernel == *"4.18.0-553"*$machine) ]]; then
     log_info "Current kernel is not a supported version for FSx Lustre. Updating kernel..."
+    drop_rescue_images
     package_transaction yum install -y kernel kernel-devel
   else
     log_info "Current kernel version $kernel is supported for FSx Lustre. Skipping kernel update."
@@ -181,6 +182,7 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
   # Only update kernel if not already on a supported version
   if [[ ! ($kernel == *"5.14.0-427"*$machine || $kernel == *"5.14.0-362"*$machine || $kernel == *"5.14.0-70"*$machine || $kernel == *"5.14.0-503"*$machine || $kernel == *"5.14.0-570"*$machine || $kernel == *"5.14.0-611"*$machine || $kernel == *"5.14.0-687"*$machine) ]]; then
     log_info "Current kernel is not a supported version for FSx Lustre. Updating kernel..."
+    drop_rescue_images
     package_transaction yum install -y kernel kernel-devel
   else
     log_info "Current kernel version $kernel is supported for FSx Lustre. Skipping kernel update."

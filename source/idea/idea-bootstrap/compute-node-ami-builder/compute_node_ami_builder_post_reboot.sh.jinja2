@@ -28,6 +28,8 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot_after_cloud_init
   exit 0
 else
+  # no reboot now, but every clone boots whatever is the default
+  ensure_boot_kernel_bootable
 
   # user data customizations
   if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
@@ -47,6 +49,11 @@ else
   remove_from_fstab "/scratch"
 
   # clean-up
+  # kdump builds its initrd under /var/tmp after boot. Deleting that underneath it failed the
+  # service and left every clone rebuilding the initrd on its own first boot; start waits for it.
+  if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
+    systemctl start kdump.service || log_warning "kdump did not start; a clone builds its own initrd"
+  fi
   rm -rf /var/tmp/* /tmp/* /var/crash/*
   rm -f /etc/udev/rules.d/70-persistent-net.rules
   grep -l "Created by cloud-init on instance boot automatically" /etc/sysconfig/network-scripts/ifcfg-* | xargs rm -f

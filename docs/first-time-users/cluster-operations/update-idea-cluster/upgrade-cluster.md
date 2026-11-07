@@ -342,6 +342,20 @@ Before launching the container, `idea-admin.sh` resets its public ECR credential
 with a warning and the command continues. Install `bind-utils` to restore the reset, or set
 `IDEA_ECR_CREDS_RESET=false` to skip it without the warning.
 
+### Going Back to 26.11.1
+
+26.11.2 stores a user's desktop disk inventory when it changes rather than every 15 minutes. 26.11.1 reads each stored row as one 15 minute sample, so after going back it undercounts disk costs on any day 26.11.2 wrote. A day is recomputed on every collector run until it is more than 3 days old and is stored after that, so return to 26.11.2 within 3 days and these days are computed correctly again. A day stored while on 26.11.1 stays low until the month-close pass on the 5th of the next month recomputes it on 26.11.2.
+
+Finish a rolling upgrade in one go for the same reason: a 26.11.1 collector that regains leadership during it reads the same rows as gaps. After going back and upgrading again, delete the `head-subjects-seeded` row (subject `!collector`) from the personal costs table, so heads written meanwhile are found.
+
+### Scheduler Log Archive Expiry
+
+The first `ideactl bootstrap` or full deploy after upgrading applies the 400 day expiry on `logs/<scheduler module id>/` in the cluster bucket and deletes older archives, with no prompt. `upgrade-cluster` does not apply it. To keep archives for ever, run this before that first bootstrap:
+
+```bash
+./idea-admin.sh config set "Key=scheduler.log_archive.s3_retention_days,Type=int,Value=0" --cluster-name <CLUSTER_NAME> --aws-region <REGION>
+```
+
 ### Troubleshooting
 
 If the upgrade fails during the pre-upgrade configuration stage:

@@ -161,6 +161,9 @@ const OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = "m5.large.search";
 // 26.11.1 collects Cost Explorer spend once a day; earlier releases installed six hours.
 const COST_INTERVAL_HOURS = 24;
 const COST_INTERVAL_HOURS_OLD = 6;
+// Cost Explorer posted the first of the month's tax after a three-day window had moved past it.
+const COST_LOOKBACK_DAYS = 7;
+const COST_LOOKBACK_DAYS_OLD = 3;
 const COMPUTE_IMAGE_PREFIX = ["idea", "compute", "node", ""].join("-");
 
 const AMI_UPDATE_KEYS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
@@ -871,11 +874,26 @@ async function planOpenSearchDataNodeInstanceType(
  * set, or no row at all is left alone; a second upgrade finds 24 and plans nothing.
  */
 export function planCostIntervalDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return planCostSettingDefault(modules, settings, "interval_hours", COST_INTERVAL_HOURS_OLD, COST_INTERVAL_HOURS);
+}
+
+/** The cost lookback moves under the same rule as the interval. */
+export function planCostLookbackDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return planCostSettingDefault(modules, settings, "lookback_days", COST_LOOKBACK_DAYS_OLD, COST_LOOKBACK_DAYS);
+}
+
+function planCostSettingDefault(
+  modules: ModuleInfo[],
+  settings: readonly CurrentConfigRow[],
+  name: string,
+  oldDefault: number,
+  newDefault: number,
+): ConfigEntry[] {
   return modules.filter((module) => module.name === "cluster-manager").flatMap((module) => {
-    const key = `${module.module_id}.metrics.cost.interval_hours`;
+    const key = `${module.module_id}.metrics.cost.${name}`;
     const row = settings.find((entry) => entry.key === key);
-    if (row === undefined || row.value !== COST_INTERVAL_HOURS_OLD || isOperatorSource(row.source)) return [];
-    return [{ key, value: COST_INTERVAL_HOURS }];
+    if (row === undefined || row.value !== oldDefault || isOperatorSource(row.source)) return [];
+    return [{ key, value: newDefault }];
   });
 }
 
@@ -951,6 +969,7 @@ export async function planUpgradePhase3Entries(
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
     ...planCostIntervalDefault(modules, settings),
+    ...planCostLookbackDefault(modules, settings),
     ...planDcvUbuntuPins(settings, deps.out),
     ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
   ];
@@ -1186,6 +1205,8 @@ async function applyPhase3Entries(
       out(`analytics data nodes move from ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} to ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a blue/green deployment.`);
     } else if (entry.key.endsWith(".metrics.cost.interval_hours")) {
       out(`${entry.key} moves from the old default ${COST_INTERVAL_HOURS_OLD} to ${COST_INTERVAL_HOURS}; cost collection runs once a day from the next cycle`);
+    } else if (entry.key.endsWith(".metrics.cost.lookback_days")) {
+      out(`${entry.key} moves from the old default ${COST_LOOKBACK_DAYS_OLD} to ${COST_LOOKBACK_DAYS}; each collection re-reads a week of Cost Explorer days from the next cycle`);
     } else if (entry.key.startsWith("global-settings.package_config.dcv.")) {
       out(`${entry.key} moves from the old default ${String(previous.get(entry.key))} to the pinned ${String(entry.value)}`);
     }

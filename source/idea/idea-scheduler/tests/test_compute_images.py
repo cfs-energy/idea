@@ -542,9 +542,11 @@ def test_an_arm64_request_with_no_instance_type_uses_the_arm64_builder(monkeypat
     monkeypatch.setattr(
         module,
         'find_latest_stock_ami',
-        lambda ec2, base_os, architecture, log: 'ami-rocky9armstock01'
-        if architecture == 'arm64'
-        else 'ami-rocky9stock00001',
+        lambda ec2, base_os, architecture, log: (
+            'ami-rocky9armstock01'
+            if architecture == 'arm64'
+            else 'ami-rocky9stock00001'
+        ),
     )
 
     builder = service.build(

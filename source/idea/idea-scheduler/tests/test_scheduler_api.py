@@ -7,7 +7,13 @@ read from the token - the comparison must be by value.
 """
 
 from ideadatamodel import constants, errorcodes, exceptions
-from ideadatamodel.scheduler import GetJobResult, SocaJob, SubmitJobRequest
+from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
+from ideadatamodel.scheduler import (
+    GetJobResult,
+    ListJobsResult,
+    SocaJob,
+    SubmitJobRequest,
+)
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
 from ideascheduler.app.api import scheduler_api as scheduler_api_module
@@ -401,8 +407,8 @@ def test_submit_job_dry_run_returns_the_refusal_instead_of_raising(
 
 def test_submit_job_raises_only_when_tracker_empty(context, monkeypatch):
     """
-    when qsub fails and the tracker has nothing, the raw failure is surfaced as a
-    last resort (no structured result exists to return).
+    when qsub fails and the tracker has nothing, there is no structured result to
+    return: the raw failure goes to the log and the submitter reads a fixed message.
     """
     api = _prepare_submit(context, monkeypatch, returncode=1)
     context.job_submission_tracker = _FakeTracker(None)
@@ -415,7 +421,7 @@ def test_submit_job_raises_only_when_tracker_empty(context, monkeypatch):
 
     with pytest.raises(exceptions.SocaException) as exc_info:
         api._submit_job(request=request, job_owner=CONTEXT_USER, dry_run=None)
-    assert 'Failed to submit job' in exc_info.value.message
+    assert exc_info.value.message == JOB_INTERNAL_ERROR_MESSAGE
 
 
 # --- job read scoping: Scheduler.GetActiveJob / Scheduler.GetCompletedJob ---
@@ -840,6 +846,43 @@ def test_list_active_jobs_always_filters_on_the_token_username(context, monkeypa
 
     assert job_cache.list_kwargs['owner'] == 'jane-doe'
     assert job_cache.count_kwargs['owner'] == 'jane-doe'
+
+
+def test_active_jobs_search_is_honoured_and_echoed(context, monkeypatch):
+    jobs = [
+        SocaJob(job_id='2345', name='Plasma scan', owner='jane-doe'),
+        SocaJob(job_id='2346', name='Protein study', owner='jane-doe'),
+    ]
+
+    class _JobCache:
+        def list_jobs(self, **kwargs):
+            return list(jobs)
+
+        def get_count(self, **kwargs):
+            return len(jobs)
+
+        def get_job_provisioning_retry_count(self, job_id):
+            return 0
+
+    monkeypatch.setattr(
+        ApiInvocationContext, 'get_username', lambda _: 'jane-doe', raising=False
+    )
+    context.job_cache = _JobCache()
+    monkeypatch.setattr(
+        'ideascheduler.app.api.scheduler_api.apply_waiting_signals',
+        lambda **_kwargs: None,
+    )
+    invocation = build_invocation_context(
+        context,
+        {'filters': [{'key': 'job_id', 'value': '2346'}]},
+        'Scheduler.ListActiveJobs',
+    )
+    SchedulerAPI(context=context).list_active_jobs(invocation)
+
+    result = invocation.get_response_payload_as(ListJobsResult)
+    assert [job.job_id for job in result.listing] == ['2346']
+    assert result.paginator.total == 1
+    assert result.filters[0].key == 'job_id'
 
 
 def test_owner_delete_records_owner_reason(scheduler_api, context, monkeypatch):

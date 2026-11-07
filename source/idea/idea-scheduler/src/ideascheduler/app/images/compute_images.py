@@ -29,6 +29,7 @@ from ideadatamodel import (
 from ideascheduler_meta import __version__
 from ideascheduler.app.images.compute_image_canary import (
     ComputeImageCanary,
+    PIPELINE_SETTINGS,
     VALIDATION_QUEUE_PREFIX,
 )
 
@@ -42,6 +43,9 @@ from ideadatamodel import (
 from ideasdk.aws.image_builds import (
     BUILD_STATUS_BUILDING,
     COMPUTE_IMAGE_PREFIX,
+    bake_overdue,
+    needs_attempt_clock,
+    bake_time_limit_reason,
     builder_log_link,
     check_builder_instance_type,
     custom_build_architecture,
@@ -50,12 +54,15 @@ from ideasdk.aws.image_builds import (
     STALE_AFTER,
     ImageBuildRecordsDB,
     ImageBuildRunner,
-    stop_builder,
     terminate_old_stopped_builders,
     promote_gate,
+    capture_builder_failure,
+    report_bake_failure,
     resume_record,
     terminate_builder,
+    with_cause,
     build_stamp,
+    dispose_builder,
     describe_images_by_id,
     image_state,
     new_record,
@@ -72,6 +79,7 @@ from ideasdk.aws.stock_amis import (
     trusted_owners,
 )
 from ideascheduler.app.images.compute_node_ami_builder import ComputeNodeAmiBuilder
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 
 # the base OS set ideactl ami-builder accepts
@@ -97,6 +105,10 @@ SCHEDULER_DEFAULT_REFERENCE = 'scheduler default'
 VALIDATED_IMAGE_TAG = 'idea:ComputeImageValidated'
 # a row can roll back from either idle state that keeps current + previous
 ROLLBACK_IDLE_STATUSES = ('current', 'failed')
+
+
+class RowMoved(Exception):
+    """the stored row is no longer this bake's: re-queued, or failed by the time limit"""
 
 
 class ComputeImageService:
@@ -525,6 +537,7 @@ class ComputeImageService:
         row.release = __version__
         row.host = socket.gethostname()
         row.started_on, row.finished_on = datetime.now(timezone.utc), None
+        row.attempt_started_on = None
         row.image_id = row.instance_id = row.validated_on = row.promoted_on = None
         row.error = row.retry_after = None
         row.checks = []
@@ -563,17 +576,29 @@ class ComputeImageService:
         names = {f'#k{i}': key for i, key in enumerate(updates)}
         values = {f':v{i}': value for i, value in enumerate(updates.values())}
         values[':started'] = item['started_on']
-        self.table.update_item(
-            Key={
-                'base_os': record.base_os,
-                'architecture': record.row_key().range_key(),
-            },
-            UpdateExpression='SET '
-            + ', '.join(f'#k{i} = :v{i}' for i in range(len(updates))),
-            ConditionExpression='started_on = :started',
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
-        )
+        # a row already failed stays failed: a worker that wakes from a hung mount after
+        # the time limit must not bring it back
+        names['#row_status'] = 'status'
+        in_flight = sorted(IMAGE_ROW_IN_FLIGHT)
+        for index, status in enumerate(in_flight):
+            values[f':f{index}'] = status
+        allowed = ', '.join(f':f{index}' for index in range(len(in_flight)))
+        try:
+            self.table.update_item(
+                Key={
+                    'base_os': record.base_os,
+                    'architecture': record.row_key().range_key(),
+                },
+                UpdateExpression='SET '
+                + ', '.join(f'#k{i} = :v{i}' for i in range(len(updates))),
+                ConditionExpression=f'started_on = :started AND #row_status IN ({allowed})',
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                raise RowMoved()
+            raise
 
     def _start_row(self, record, builder=None):
         key = (record.base_os, record.row_key().range_key())
@@ -605,9 +630,26 @@ class ComputeImageService:
             if record.status in ('building', 'checking'):
                 record = resume_record(self.context, self.records, record, self._logger)
                 if record.status == 'failed':
+                    report_bake_failure(
+                        self._logger,
+                        ImageKind.COMPUTE,
+                        record,
+                        record.error,
+                        context=self.context,
+                    )
+                    self._last_sweep = float('-inf')
                     return
+            if record.image_id and not record.attempt_started_on:
+                progress({'attempt_started_on': datetime.now(timezone.utc)})
             if not record.image_id:
-                progress({'status': 'resolving'})
+                # kept across a restart mid-attempt: a requeue clears it first
+                progress(
+                    {
+                        'status': 'resolving',
+                        'attempt_started_on': record.attempt_started_on
+                        or datetime.now(timezone.utc),
+                    }
+                )
                 source = self.default_base_ami(record.base_os, record.architecture)
                 if not source:
                     raise exceptions.general_exception(
@@ -670,16 +712,26 @@ class ComputeImageService:
                 {'validated_on': datetime.now(timezone.utc), 'status': 'promoting'}
             )
             self.promote(record)
+        except RowMoved:
+            self._logger.warning(
+                f'{record.base_os}/{record.architecture}: the row moved on; leaving it'
+            )
         except Exception as error:
             if not self.context.is_leader():
                 return  # The new leader resumes the persisted row.
             self._logger.exception('Compute image validation failed')
-            record.status = 'failed'
-            record.error = (
+            reason = (
                 getattr(error, 'message', None)
                 or str(error)
                 or 'Compute image validation failed.'
             )
+            record.error = with_cause(
+                reason,
+                capture_builder_failure(
+                    self.context, self._logger, ImageKind.COMPUTE, record, reason
+                ),
+            )
+            record.status = 'failed'
             record.finished_on = datetime.now(timezone.utc)
             if not any(c.ok is False for c in record.checks or []):
                 record.checks = list(record.checks or []) + [
@@ -687,7 +739,26 @@ class ComputeImageService:
                         name='pipeline', ok=False, detail=record.error, seconds=0
                     )
                 ]
-            self._save(record)
+            try:
+                self._save(record)
+            except RowMoved:
+                return
+            report_bake_failure(
+                self._logger,
+                ImageKind.COMPUTE,
+                record,
+                record.error,
+                context=self.context,
+            )
+            self._dispose(record)
+
+    def _dispose(self, record):
+        """
+        the builder goes now; the sweep this brings forward reaps the hidden queue with its
+        job, then deregisters the failed candidate and its snapshots unless still named
+        """
+        dispose_builder(self.context, record.instance_id, self._logger)
+        self._last_sweep = float('-inf')
 
     def promote(self, record):
         promote_gate(record, record.image_id)
@@ -940,10 +1011,38 @@ class ComputeImageService:
         config = self.context.config()
         config.db.set_config_entry(config.get_real_key(key), value)
 
+    def _remove_queueless_validation_capacity(self):
+        """
+        a validation queue reaped while its capacity launched leaves a stack with no job and
+        no node, the two things stack cleanup follows, so nothing else would ever remove it
+        """
+        try:
+            for instance in self.context.instance_cache.list_compute_instances(
+                cluster_name=self.context.cluster_name()
+            ):
+                queue = instance.soca_job_queue or ''
+                stack = instance.soca_compute_stack
+                if (
+                    instance.is_running
+                    and stack
+                    and queue.startswith(VALIDATION_QUEUE_PREFIX)
+                    and self.context.scheduler.get_queue(queue) is None
+                ):
+                    self._logger.warning(
+                        f'deleting stack {stack}: instance {instance.instance_id} '
+                        f'belongs to validation queue {queue}, which no longer exists'
+                    )
+                    self.context.aws_util().cloudformation_delete_stack(
+                        stack_name=stack
+                    )
+        except Exception:
+            self._logger.exception('Validation capacity sweep failed')
+
     def sweep_builders(self, now):
         """
         a builder no live record owns and older than any real bake (its process died
-        before it recorded the instance) is stopped; one stopped for a day is terminated
+        before it recorded the instance) is terminated, as is one an earlier release
+        stopped and left for a day
         """
         records = [r for r in self.records.list_all() if r.is_in_flight()]
         busy = {r.instance_id for r in records}
@@ -961,6 +1060,7 @@ class ComputeImageService:
                     self._logger.warning(
                         f'validation queue {profile.name} not reaped: {"; ".join(errors)}'
                     )
+        self._remove_queueless_validation_capacity()
         result = (
             self.context.aws()
             .ec2()
@@ -980,7 +1080,12 @@ class ComputeImageService:
                     and launched is not None
                     and launched < now - STALE_AFTER
                 ):
-                    stop_builder(self.context, instance['InstanceId'], self._logger)
+                    terminate_builder(
+                        self.context, instance['InstanceId'], self._logger
+                    )
+                    HealthMetrics(self.context).add(
+                        'orphan_sweep', kind='compute_image_builder'
+                    )
         terminate_old_stopped_builders(self.context, self._logger)
         try:
             self.deregister_unreferenced_images()
@@ -1029,10 +1134,59 @@ class ComputeImageService:
             self._logger,
         )
 
+    def _enforce_time_limit(self, now):
+        """
+        fail every row past the limit, alive or not: a worker blocked on a hung mount can
+        neither fail its own row nor be stopped, so it is left behind, its slot freed, and
+        its later writes refused by _save
+        """
+        limit = ImagePipelineSettings(
+            **dict(
+                self.context.config().get_config(PIPELINE_SETTINGS, default={}) or {}
+            )
+        ).bake_time_limit()
+        for row in self.records.list_all():
+            if is_custom_record(row):
+                continue
+            if needs_attempt_clock(row):
+                row.attempt_started_on = now
+                try:
+                    self._save(row)
+                except RowMoved:
+                    pass
+                continue
+            if not bake_overdue(row, now, limit):
+                continue
+            reason = bake_time_limit_reason(row, limit)
+            reason = with_cause(
+                reason,
+                capture_builder_failure(
+                    self.context, self._logger, ImageKind.COMPUTE, row, reason
+                ),
+            )
+            row.status, row.error, row.finished_on = 'failed', reason, now
+            row.checks = list(row.checks or []) + [
+                ImageCheck(name='time_limit', ok=False, detail=reason, seconds=0)
+            ]
+            try:
+                self._save(row)
+            except RowMoved:
+                continue
+            with self._lock:
+                self._live.pop((row.base_os, row.row_key().range_key()), None)
+            report_bake_failure(
+                self._logger, ImageKind.COMPUTE, row, reason, context=self.context
+            )
+            self._dispose(row)
+
     def tick(self, now=None):
         if not self.context.is_leader():
             return
         now = now or datetime.now(timezone.utc)
+        try:
+            self._enforce_time_limit(now)
+        except Exception:
+            self._logger.exception('Bake time limit check failed')
         if time.monotonic() - self._last_sweep > 1800:
             self._last_sweep = time.monotonic()
             try:
@@ -1060,7 +1214,13 @@ class ComputeImageService:
             - timedelta(seconds=1)
         )
         due = schedule.next_run_after(baseline)
-        monthly = due is not None and due <= local
+        # wait for bakes in flight, unclaimed so a later tick still runs it; each row's own
+        # time limit bounds the wait
+        monthly = (
+            due is not None
+            and due <= local
+            and not any(row.is_in_flight() for row in self.list_rows())
+        )
         if monthly:
             # claim the period before checking: the settings copy lags this write, and a
             # tick that still reads the old last run must not run the check again
@@ -1098,8 +1258,12 @@ class ComputeImageService:
                     continue
                 try:
                     source = self.default_base_ami(row.base_os, row.architecture)
+                    # monthly bakes every row, changed or not: repositories move between
+                    # vendor images, and an image only carries their fixes by being baked again
                     if source and (
-                        source != row.source_ami or row.release != __version__
+                        monthly
+                        or source != row.source_ami
+                        or row.release != __version__
                     ):
                         self._enqueue(row, None, 'release' if release else 'monthly')
                 except Exception:

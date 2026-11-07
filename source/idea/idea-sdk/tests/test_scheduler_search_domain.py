@@ -152,3 +152,38 @@ def test_network_manager_hosts_keep_the_zone_across_a_reboot(tmp_path, device_an
         in calls.read_text()
     )
     assert 'modify lo' not in calls.read_text()
+
+
+def test_networkmanager_applies_the_zone_to_the_running_device(tmp_path):
+    # a reload rewrites resolv.conf from the device's applied settings, not the saved profile
+    calls = tmp_path / 'calls'
+    stubs = {
+        'ip': 'echo "default via 10.0.0.1 dev eth0"',
+        'systemctl': 'case "$*" in *systemd-resolved*) exit 1 ;; esac',
+        'lsattr': 'echo "--------------e------- $1"',
+        'nmcli': f"""echo "nmcli $*" >> {calls}
+case "$*" in
+  *GENERAL.CONNECTION*) echo "System eth0" ;;
+  *ipv4.dns-search*show*|*"ipv4.dns-search connection show"*) echo ec2.internal ;;
+esac""",
+    }
+    _run_block(tmp_path, stubs, link=False)
+    lines = calls.read_text().splitlines()
+    modify = lines.index(f'nmcli connection modify System eth0 +ipv4.dns-search {ZONE}')
+    assert lines[modify + 1] == 'nmcli device reapply eth0'
+
+
+def test_a_profile_that_already_has_the_zone_is_not_reapplied(tmp_path):
+    calls = tmp_path / 'calls'
+    stubs = {
+        'ip': 'echo "default via 10.0.0.1 dev eth0"',
+        'systemctl': 'case "$*" in *systemd-resolved*) exit 1 ;; esac',
+        'lsattr': 'echo "--------------e------- $1"',
+        'nmcli': f"""echo "nmcli $*" >> {calls}
+case "$*" in
+  *GENERAL.CONNECTION*) echo "System eth0" ;;
+  *ipv4.dns-search*) echo {ZONE} ;;
+esac""",
+    }
+    _run_block(tmp_path, stubs, link=False)
+    assert 'reapply' not in calls.read_text()

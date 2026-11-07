@@ -18,3 +18,15 @@ it('uses the configured dashboard title as the page heading while navigation sta
     expect(screen.queryByRole('heading', {name: 'Reports', level: 1})).not.toBeInTheDocument();
     expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Reports');
 });
+
+it('does not show setting names to someone with no dashboard', async () => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'isCustomDashboardEnabled').mockReturnValue(false);
+    vi.spyOn(context.getClusterSettingsService(), 'getCustomDashboard').mockReturnValue({} as any);
+    render(<MemoryRouter initialEntries={['/home/custom-dashboard']}><CustomDashboard
+        ideaPageId="custom-dashboard" toolsOpen={false} tools={null} onToolsChange={() => {}} onPageChange={() => {}}
+        sideNavHeader={{text: 'IDEA', href: '#/'}} sideNavItems={[]} onSideNavChange={() => {}}
+        onFlashbarChange={() => {}} flashbarItems={[]}/></MemoryRouter>);
+    expect(await screen.findByText(/No reports dashboard has been set up/)).toBeInTheDocument();
+    expect(screen.queryByText(/cluster-manager/)).toBeNull();
+});

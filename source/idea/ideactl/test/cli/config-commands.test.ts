@@ -72,6 +72,16 @@ describe('parseSetEntries', () => {
     assert.throws(() => parseSetEntries(['Key=k,Type=list<int>,Value=1,x']), /is not a valid list<int>/);
   });
 
+  it('takes an empty Value only as an explicit empty string', () => {
+    assert.deepEqual(parseSetEntries(['Key=cluster-manager.maintenance.message,Type=string,Value=']), [
+      { key: 'cluster-manager.maintenance.message', value: '' },
+    ]);
+    assert.throws(() => parseSetEntries(['Key=k,Type=str']), /\[0\] Value is required/);
+    assert.throws(() => parseSetEntries(['Key=k,Type=int,Value=']), /\[0\] Value is required/);
+    assert.throws(() => parseSetEntries(['Key=k,Type=bool,Value=']), /\[0\] Value is required/);
+    assert.throws(() => parseSetEntries(['Key=k,Type=list<str>,Value=']), /\[0\] Value is required/);
+  });
+
   it('requires each of Key, Type and Value', () => {
     assert.throws(() => parseSetEntries(['Key= ,Type=str,Value=x']), /\[0\] Key is required/);
     assert.throws(() => parseSetEntries(['Key=k,Type= ,Value=x']), /\[0\] Type is required/);

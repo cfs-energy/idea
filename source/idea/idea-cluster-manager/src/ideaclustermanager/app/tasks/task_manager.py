@@ -19,7 +19,7 @@ from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 from ideadatamodel import constants
-from ideaclustermanager.app.tasks.base_task import BaseTask
+from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
 
 from typing import Dict, List
 import threading
@@ -323,6 +323,14 @@ class TaskManager(SocaService):
             if task is not None:
                 self._update_task_failure(task, task_payload, e)
             # Still remove the task from the queue in this case
+            self.context.aws().sqs().delete_message(
+                QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
+            )
+
+        except TaskCannotSucceed as e:
+            self.logger.error(f'task {task_name} cannot succeed: {e}')
+            if task is not None:
+                self._update_task_failure(task, task_payload, e)
             self.context.aws().sqs().delete_message(
                 QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
             )

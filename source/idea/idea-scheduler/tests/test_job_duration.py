@@ -571,6 +571,7 @@ def test_serialized_hooks_recover_duration_without_pbs_history(
     context.metrics = Mock()
     context.job_notifications = Mock()
     context.document_store = Mock()
+    context.document_store.get_job.return_value = None
     context.lifecycle_events = None
 
     def deliver(phase, count, when, host):

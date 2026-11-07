@@ -34,8 +34,16 @@ export interface VirtualDesktopSoftwareStackEditFormProps {
         allowed_instance_types?: string[],
         ami_id?: string,
         min_ram?: number,
-        min_storage?: number
+        min_storage?: number,
+        owner?: string,
+        expiry?: {expires_on?: string, clear_expires_on?: boolean}
     ) => Promise<boolean>
+}
+
+// A blank date removes the stack's own: left out of the update, the server would keep it.
+export function expiryChange(typed: string | undefined, current: string | undefined): {expires_on?: string, clear_expires_on?: boolean} {
+    if (typed) return {expires_on: `${typed}T00:00:00Z`};
+    return current ? {clear_expires_on: true} : {};
 }
 
 export interface VirtualDesktopSoftwareStackEditFormState {
@@ -242,7 +250,9 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         allowedInstanceTypes,
                         ami_id,
                         min_ram,
-                        min_storage
+                        min_storage,
+                        (values.owner ?? '').trim(),
+                        expiryChange(values.expires_on, this.props.softwareStack?.expires_on)
                     ).then(result => {
                         this.hideForm()
                         return Promise.resolve(result)
@@ -284,6 +294,30 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         default: this.props.softwareStack?.description,
                         validate: {
                             required: true
+                        }
+                    },
+                    {
+                        name: 'owner',
+                        title: 'Owner',
+                        description: 'The username who answers for this stack. They get a weekly email when it is near or past its expiry date. Optional.',
+                        data_type: 'str',
+                        param_type: 'text',
+                        default: this.props.softwareStack?.owner,
+                        validate: {
+                            required: false,
+                            regex: '^[A-Za-z0-9._@-]{0,128}$'
+                        }
+                    },
+                    {
+                        name: 'expires_on',
+                        title: 'Expiry date',
+                        description: 'YYYY-MM-DD. Leave empty for no date of its own. Stacks the monthly rebuild feeds do not expire.',
+                        data_type: 'str',
+                        param_type: 'text',
+                        default: this.props.softwareStack?.expires_on?.slice(0, 10),
+                        validate: {
+                            required: false,
+                            regex: '^(\\d{4}-\\d{2}-\\d{2})?$'
                         }
                     },
                     {

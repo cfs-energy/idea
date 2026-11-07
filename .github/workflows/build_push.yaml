@@ -72,7 +72,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.0
           install_args: node python
       - name: Check package version
         run: |
@@ -125,7 +125,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.0
           install_args: node python
       - name: Check package version
         run: |
@@ -201,7 +201,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.0
           install_args: node
       - name: Check package version
         run: |
@@ -346,6 +346,7 @@ jobs:
           docker buildx inspect --bootstrap
           docker buildx build --push --platform linux/arm64 \
             --build-arg IDEA_VERSION="${VERSION}" \
+            --build-arg IDEA_PACKAGE_REFRESH="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --build-context dcv-packages=/tmp/dcv-packages \
             --cache-from type=gha,version=2,scope=idea-control-plane \
             --cache-to type=gha,version=2,mode=max,scope=idea-control-plane \
@@ -362,6 +363,8 @@ jobs:
           # the binary answers alone. The runner's own user keeps the generated files removable.
           docker run --rm --network none --env IDEA_CLUSTER_NAME=smoke --env AWS_DEFAULT_REGION=us-east-1 --env AWS_EC2_METADATA_DISABLED=true --entrypoint python3.13 "$IMAGE" -c 'import asyncssh, ideaclustermanager.app.cluster_manager_app, ideascheduler.app.scheduler_app, ideascheduler.app.sync_users, ideavirtualdesktopcontroller.app.virtual_desktop_controller_app'
           docker run --rm --entrypoint /bin/bash "$IMAGE" -c '/opt/pbs/sbin/pbs_server.bin --version'
+          # check-update exits 100 when the latest AL2023 release has a newer package.
+          docker run --rm --entrypoint /bin/bash "$IMAGE" -c "rpm -q openssh-server openssh-clients; dnf -q check-update --releasever=latest 'openssh*'"
           docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp --workdir /tmp/work "$IMAGE" ideactl about
           docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
             --workdir /tmp/work \
@@ -500,8 +503,15 @@ jobs:
             --tag "${REPOSITORY}:v${VERSION}" \
             --tag "${REPOSITORY}:${VERSION}" \
             --tag "${REPOSITORY}:latest" "$IMAGE"
+          # public ECR can serve a stale manifest for a few seconds after the tags move
           for TAG in "v${VERSION}" "${VERSION}" latest; do
-            test "$(digest "${REPOSITORY}:${TAG}")" = "${IMAGE#*@}"
+            for TRY in 1 2 3 4 5 6; do
+              test "$(digest "${REPOSITORY}:${TAG}")" = "${IMAGE#*@}" && continue 2
+              echo "::warning::${TAG} does not read back as ${IMAGE#*@} yet (try ${TRY}/6)"
+              test "$TRY" -lt 6 && sleep 10
+            done
+            echo "::error::${REPOSITORY}:${TAG} never read back as ${IMAGE#*@}."
+            exit 1
           done
       - name: Publish the release
         env:

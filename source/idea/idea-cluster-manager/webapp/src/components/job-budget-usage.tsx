@@ -3,12 +3,17 @@ import {Box, ColumnLayout, Container, Grid, Header, PieChart, SpaceBetween} from
 import {SocaJobEstimatedBudgetUsage} from '../client/data-model';
 import Utils from '../common/utils';
 
-export function buildBudgetUsage(budget: SocaJobEstimatedBudgetUsage) {
+export function buildBudgetUsage(budget: SocaJobEstimatedBudgetUsage, asOf?: string) {
+    const limit = budget.budget_limit?.amount || 0
+    const actual = budget.actual_spend?.amount || 0
+    const noForecast = !budget.forecasted_spend?.amount && actual > 0
+    // the larger of spent and forecast: a budget with no forecast yet still has spending against it
+    const left = limit - Math.max(actual, budget.forecasted_spend?.amount || 0)
     return (
         <Container>
             <Grid gridDefinition={[{ colspan: { default: 12, xxs: 12 } }]}>
                 <Box>
-                    <Header variant="h2">Budget Overview</Header>
+                    <Header variant="h2" description={asOf ? `Project budget when this job finished (${new Date(asOf).toLocaleDateString()}).` : undefined}>Budget Overview</Header>
                     <Box padding={{ top: 'l' }}>
                         <Grid gridDefinition={[
                             { colspan: { default: 7, xxs: 12 } },
@@ -34,13 +39,13 @@ export function buildBudgetUsage(budget: SocaJobEstimatedBudgetUsage) {
                                             </Box>
                                             <Box>
                                                 <Box variant="awsui-key-label">Forecasted Spend</Box>
-                                                <Box>{Utils.getFormattedAmount(budget.forecasted_spend)}</Box>
+                                                <Box>{noForecast ? 'No forecast yet' : Utils.getFormattedAmount(budget.forecasted_spend)}</Box>
                                             </Box>
                                             <Box>
-                                                <Box variant="awsui-key-label">Remaining Budget</Box>
+                                                <Box variant="awsui-key-label">{left < 0 ? 'Over budget by' : 'Left after forecast'}</Box>
                                                 <Box>
                                                     {Utils.getFormattedAmount({
-                                                        amount: Math.max(0, (budget.budget_limit?.amount || 0) - (budget.forecasted_spend?.amount || 0)),
+                                                        amount: Math.abs(left),
                                                         unit: budget.budget_limit?.unit
                                                     })}
                                                 </Box>
@@ -75,8 +80,8 @@ export function buildBudgetUsage(budget: SocaJobEstimatedBudgetUsage) {
                                                 lastUpdate: new Date().toISOString()
                                             },
                                             {
-                                                title: "Remaining Budget",
-                                                value: Number(Math.max(0, (budget.budget_limit?.amount || 0) - (budget.forecasted_spend?.amount || 0)).toFixed(2)),
+                                                title: "Left after forecast",
+                                                value: Number(Math.max(0, left).toFixed(2)),
                                                 lastUpdate: new Date().toISOString()
                                             }
                                         ]}

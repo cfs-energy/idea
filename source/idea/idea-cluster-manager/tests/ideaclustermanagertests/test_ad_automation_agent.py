@@ -179,8 +179,8 @@ def test_contending_callers_refresh_under_lock(directory):
         assert lock.acquire(timeout=5)
 
     directory.context.distributed_lock().acquire.side_effect = acquire
-    directory.context.distributed_lock().release.side_effect = (
-        lambda key: lock.release()
+    directory.context.distributed_lock().release.side_effect = lambda key: (
+        lock.release()
     )
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
@@ -216,6 +216,23 @@ def test_healthy_password_does_not_reset(directory):
     directory.reset.assert_not_called()
     directory.put_secret.assert_not_called()
     directory.context.distributed_lock().acquire.assert_not_called()
+
+
+def test_a_candidate_bind_cannot_wait_for_ever_on_a_silent_directory(monkeypatch):
+    import ldap as ldap_module
+    from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+        AbstractLDAPClient,
+    )
+
+    connection = Mock()
+    monkeypatch.setattr(ldap_module, 'initialize', lambda uri: connection)
+    client = SimpleNamespace(ldap_uri='ldaps://x', ldap_root_bind='cn=root')
+    assert AbstractLDAPClient.root_password_binds(client, 'candidate') is True
+    options = dict(call.args for call in connection.set_option.call_args_list)
+    assert options[ldap_module.OPT_NETWORK_TIMEOUT] == 10
+    assert options[ldap_module.OPT_TIMEOUT] == 10
+    connection.set_option.assert_called()
+    assert connection.method_calls[0][0] == 'set_option'
 
 
 def test_stale_client_refreshes_after_another_task_reset(directory):

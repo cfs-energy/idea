@@ -2,7 +2,7 @@ import {render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router-dom';
 import CostSections, {ESTIMATED_NOTE} from '../../components/cost-sections';
-import StorageUsage from './storage-usage';
+import StorageUsage, { storageScanSentence } from './storage-usage';
 import {initTestAppContext} from '../../test-support';
 import {AppContext} from '../../common';
 
@@ -116,6 +116,48 @@ describe('shared cost details and storage usage', () => {
         vi.restoreAllMocks();
     });
 
+    it('counts a volume once when estimating how many files a scan has to see', () => {
+        const sentence = storageScanSentence({
+            state: 'ready', home: '/h', partial: true, scanned_files: 10, total: {bytes: 1, files: 10},
+            quotas: [{files: 1000, volume: 'v', qtree: ''}, {files: 1000, volume: 'v', qtree: 'q'}]
+        } as any);
+        expect(sentence).toContain('of about 1,000 files');
+    });
+
+    it('keeps the rows on screen while a refresh recomputes them', async () => {
+        const context = initTestAppContext();
+        stubMyCosts(context, EMPTY_SUMMARY);
+        const usage = vi.mocked(context.client().fileBrowser().getStorageUsage);
+        usage.mockResolvedValue({state: 'computing', home: '/home/user-a'} as any);
+        usage.mockResolvedValueOnce({
+            state: 'ready', home: '/home/user-a', measured_at: 1,
+            total: {bytes: 1, files: 1, unchanged_90_days_bytes: 0},
+            folders: [{path: '/home/user-a/runs', name: 'runs', bytes: 1, files: 1, unchanged_90_days_bytes: 0}]
+        } as any);
+        render(<StorageUsage/>);
+        await screen.findByRole('link', {name: 'runs'});
+        await userEvent.setup().click(screen.getByRole('button', {name: /Refresh/}));
+        await waitFor(() => expect(usage.mock.calls.length).toBeGreaterThan(1));
+        expect(screen.getByRole('link', {name: 'runs'})).toBeInTheDocument();
+    });
+
+    it('offers the way back after a folder could not be read', async () => {
+        const context = initTestAppContext();
+        stubMyCosts(context, EMPTY_SUMMARY);
+        const usage = vi.mocked(context.client().fileBrowser().getStorageUsage);
+        usage.mockResolvedValue({state: 'unavailable', home: '/home/user-a', message: 'Sizes need analytics.'} as any);
+        usage.mockResolvedValueOnce({
+            state: 'ready', home: '/home/user-a', source: 'analytics', measured_at: 1,
+            total: {bytes: 1, files: 1, unchanged_90_days_bytes: 0},
+            folders: [{path: '/home/user-a/runs', name: 'runs', bytes: 1, files: 1, unchanged_90_days_bytes: 0}]
+        } as any);
+        render(<StorageUsage/>);
+        await userEvent.setup().click(await screen.findByRole('link', {name: 'runs'}));
+        expect(await screen.findByText('Sizes need analytics.')).toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', {name: 'Back to your home folder'}));
+        expect(usage).toHaveBeenLastCalledWith({});
+    });
+
     it('polls computing storage, renders folder age and old bytes, then the quota report', async () => {
         const context = initTestAppContext();
         stubMyCosts(context, EMPTY_SUMMARY);
@@ -133,18 +175,18 @@ describe('shared cost details and storage usage', () => {
         });
         renderMyCosts();
         expect(await screen.findByText('Computing storage usage...')).toBeInTheDocument();
-        expect(screen.queryByText(/ONTAP quota/)).toBeNull();
+        expect(screen.queryByText(/storage quota/)).toBeNull();
         expect(await screen.findByText('reports & notes', {}, {timeout: 10000})).toBeInTheDocument();
-        expect(screen.getByText('512 B of 1 KiB has not changed in 90 days.')).toBeInTheDocument();
+        expect(screen.getByText(/512 B has not changed in 90 days\./)).toBeInTheDocument();
         expect(screen.getByText(/1 day ago/)).toBeInTheDocument();
-        expect(screen.getByText(/100 days ago/)).toBeInTheDocument();
         expect(screen.getByRole('link', {name: 'Open in Files'})).toHaveAttribute('href', '#/home/file-browser?cwd=%2Fhome%2Fuser-a%2Freports%20%26%20notes');
-        expect(screen.getByText(/ONTAP quota/)).toHaveTextContent('2 KiB used, 3 files, limit 4 KiB');
+        expect(screen.getByText('2 KiB in 3 files (limit 4 KiB)')).toBeInTheDocument();
+        expect(screen.getByText('Your storage quota counts everything you own on this volume, including outside your home folder.')).toBeInTheDocument();
         expect(screen.queryByRole('button', {name: /Delete/})).toBeNull();
         await waitFor(() => expect(usage).toHaveBeenCalledTimes(2));
     });
 
-    it('labels a partial storage scan and explains an unavailable ONTAP quota report', async () => {
+    it('labels a partial storage scan and explains an unavailable storage quota', async () => {
         const context = initTestAppContext();
         stubMyCosts(context, EMPTY_SUMMARY);
         vi.mocked(context.client().fileBrowser().getStorageUsage).mockResolvedValue({
@@ -152,9 +194,73 @@ describe('shared cost details and storage usage', () => {
             total: {path: '/home/user-a', name: 'user-a', bytes: 0, files: 0, newest_mtime: null, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: true}, folders: []
         });
         renderMyCosts();
-        expect(await screen.findByText(/Partial storage usage/)).toBeInTheDocument();
-        expect(screen.getByText('ONTAP quota: unavailable. No quota report is available for your account.')).toBeInTheDocument();
+        expect(await screen.findByText('Scanned 0 files, then stopped at the time limit. Sizes are lower bounds. Refresh repeats this same short scan; open a folder below to measure it on its own.')).toBeInTheDocument();
+        expect(screen.getByText('Your storage quota is not available right now.')).toBeInTheDocument();
+        expect(screen.queryByText('Partial')).toBeNull();
     });
+
+    it('says how far a scan got against the quota file count, not a bare badge', async () => {
+        const context = initTestAppContext();
+        stubMyCosts(context, EMPTY_SUMMARY);
+        const measured = Date.now() / 1000;
+        vi.mocked(context.client().fileBrowser().getStorageUsage).mockResolvedValue({
+            state: 'ready', source: 'scan', home: '/home/user-a', measured_at: measured, partial: true, scanned_files: 8361,
+            total: {path: '/home/user-a', name: 'user-a', bytes: 3 * 1024 ** 3, files: 8361, newest_mtime: null, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: true},
+            folders: [{path: '/home/user-a/.cache', name: '.cache', bytes: 3 * 1024 ** 3, files: 8361, newest_mtime: measured, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: true},
+                {path: '/home/user-a/projects', name: 'projects', bytes: 0, files: 0, newest_mtime: measured, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: true, measured: false}],
+            quotas: [{target: 'data', volume: 'profiles', qtree: '', used_bytes: 1.2 * 1024 ** 4, files: 3670000, limit_bytes: null, measured_at: measured}]
+        });
+        renderMyCosts();
+        expect(await screen.findByText('Scanned 8,361 of about 3.67M files, then stopped at the time limit. Sizes are lower bounds. Refresh repeats this same short scan; open a folder below to measure it on its own.', {}, {timeout: 10000})).toBeInTheDocument();
+        expect(screen.getByText('Your storage quota counts everything you own on this volume, including outside your home folder.')).toBeInTheDocument();
+        expect(screen.getByText('Not measured yet')).toBeInTheDocument();
+        expect(screen.getByText('At least 3 GiB')).toBeInTheDocument();
+        expect(screen.queryByText('Partial')).toBeNull();
+    }, 20000);
+
+    it('drills into a folder, shows the study progress, and says what is outside home', async () => {
+        const context = initTestAppContext();
+        stubMyCosts(context, EMPTY_SUMMARY);
+        const measured = Date.now() / 1000;
+        const row = (path: string, name: string, bytes: number) => ({path, name, bytes, files: 10, newest_mtime: measured, oldest_mtime: measured, unchanged_90_days_bytes: bytes / 2, partial: false});
+        const usage = vi.mocked(context.client().fileBrowser().getStorageUsage);
+        usage.mockImplementation(async (request: any = {}) => request.folder ? {
+            state: 'ready', source: 'analytics', home: '/home/user-a', measured_at: measured, partial: false,
+            total: row(request.folder, 'runs', 1024), folder: row(request.folder, 'runs', 1024), folders: [row(`${request.folder}/run-7`, 'run-7', 512)]
+        } : {
+            state: 'ready', source: 'analytics', home: '/home/user-a', measured_at: measured, partial: false, outside_home_bytes: 900 * 1024 ** 3,
+            total: row('/home/user-a', 'user-a', 2048), folders: [row('/home/user-a/runs', 'runs', 1024)],
+            shared: [row('/data/shared/models', 'models', 4096)],
+            quotas: [{target: 'data', volume: 'profiles', qtree: '', used_bytes: 900 * 1024 ** 3, files: 100, limit_bytes: null, measured_at: measured}],
+            progress: {running: false, step: 'Finished', done: 9, total: 9, started_at: measured, steps: []}
+        });
+        renderMyCosts();
+        expect(await screen.findByText(/900 GiB of that is outside your home folder/, {}, {timeout: 10000})).toBeInTheDocument();
+        expect(screen.getByText('models')).toBeInTheDocument();
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('link', {name: 'runs'}));
+        expect(await screen.findByRole('link', {name: 'run-7'}, {timeout: 5000})).toBeInTheDocument();
+        expect(usage).toHaveBeenCalledWith({folder: '/home/user-a/runs'});
+        expect(screen.queryByText(/outside your home folder\. The quota/)).toBeNull();
+    }, 20000);
+
+    it('shows live study steps and sends one refresh', async () => {
+        const context = initTestAppContext();
+        stubMyCosts(context, EMPTY_SUMMARY);
+        const measured = Date.now() / 1000;
+        const usage = vi.mocked(context.client().fileBrowser().getStorageUsage);
+        usage.mockResolvedValue({
+            state: 'ready', source: 'analytics', home: '/home/user-a', measured_at: measured, partial: false,
+            total: {path: '/home/user-a', name: 'user-a', bytes: 1, files: 1, newest_mtime: null, oldest_mtime: null, unchanged_90_days_bytes: 0, partial: false}, folders: [],
+            progress: {running: true, step: 'Checking runs/run-7', done: 57, total: 100, started_at: measured - 12,
+                steps: [{label: 'Read your quota total', state: 'done'}, {label: 'Find your biggest folders', state: 'running'}]}
+        });
+        renderMyCosts();
+        const status = await screen.findByRole('status', {name: 'Storage study progress'}, {timeout: 10000});
+        expect(status).toHaveTextContent('Checking runs/run-7');
+        expect(status).toHaveTextContent('57 of 100 folders checked');
+        expect(status).toHaveTextContent('Read your quota total (done)');
+    }, 20000);
 
     it('renders the three sections with the measured numbers', async () => {
         const context = initTestAppContext();

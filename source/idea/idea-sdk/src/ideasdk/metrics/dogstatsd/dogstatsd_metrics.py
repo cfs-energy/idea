@@ -1,6 +1,6 @@
 from ideasdk.protocols import MetricsProviderProtocol, SocaContextProtocol
 from ideasdk.utils import Utils
-from ideasdk.metrics.datadog_format import DatadogFormat
+from ideasdk.metrics.datadog_format import COLLECTOR_PREFIXES, DatadogFormat
 
 from typing import Dict, List, Optional, Tuple
 from threading import RLock
@@ -72,7 +72,7 @@ class DogStatsdMetrics(DatadogFormat, MetricsProviderProtocol):
         if value is None:
             return None
         metric_type = _METRIC_TYPES.get(entry.get('MetricType'), 'g')
-        collector = name.startswith(('cost.', 'storage.'))
+        collector = name.startswith(COLLECTOR_PREFIXES)
         metric_name, tags = self.name_and_tags(entry)
         line = f'{metric_name}:{self._value(value)}|{metric_type}'
         if len(tags) > 0:

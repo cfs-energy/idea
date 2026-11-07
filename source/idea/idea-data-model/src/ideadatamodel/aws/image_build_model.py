@@ -240,8 +240,16 @@ class ImagePipelineSettings(SocaBaseModel):
     keep_generations: Optional[int] = Field(default=2)
     ready_gate_seconds_linux: Optional[int] = Field(default=600)
     ready_gate_seconds_windows: Optional[int] = Field(default=900)
+    # past this a bake attempt fails, whatever state it is working in and whether or not a
+    # worker still runs it. the queue and a wait for EC2 capacity are not on the clock: a
+    # capacity wait is bounded by its five tries. a value below 1 means the default
+    bake_time_limit_minutes: Optional[int] = Field(default=120)
     validation_user: Optional[str] = Field(default='idea-validate')
     validation_project: Optional[str] = Field(default='idea-validate')
+
+    def bake_time_limit(self) -> timedelta:
+        minutes = self.bake_time_limit_minutes
+        return timedelta(minutes=minutes if minutes and minutes > 0 else 120)
 
 
 class ImageBuildRecord(SocaBaseModel):
@@ -272,6 +280,8 @@ class ImageBuildRecord(SocaBaseModel):
     error: Optional[str] = Field(default=None)
     started_on: Optional[datetime] = Field(default=None)
     finished_on: Optional[datetime] = Field(default=None)
+    # when this attempt left the queue; the bake time limit counts from here
+    attempt_started_on: Optional[datetime] = Field(default=None)
 
     # 26.10.1 image row fields
     kind: Optional[ImageKind] = Field(default=None)

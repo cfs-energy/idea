@@ -450,7 +450,22 @@ export class ClusterManagerStack extends IdeaBaseStack {
       vars: { role_arn: taskRole.roleArn },
     });
     // Preserve every statement; separate the large table and project grants to stay below 6 KiB.
-    const groups: Record<string, iam.PolicyStatement[]> = { application: [], tables: [], projects: [] };
+    const groups: Record<string, iam.PolicyStatement[]> = {
+      application: [],
+      tables: [],
+      projects: [],
+      // The health collectors: metadata only, none of it takes a resource. Kept out of the policy
+      // template, which is at its size limit.
+      health: [new iam.PolicyStatement({
+        actions: [
+          'elasticloadbalancing:DescribeListenerCertificates',
+          'acm:DescribeCertificate',
+          'secretsmanager:ListSecrets',
+          'ds:DescribeDirectories',
+        ],
+        resources: ['*'],
+      })],
+    };
     for (const statement of (document as { Statement: Record<string, any>[] }).Statement) {
       const actions = [statement.Action].flat() as string[];
       const group = actions.some((action) => action.startsWith('dynamodb:')) ? 'tables'

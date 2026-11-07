@@ -718,6 +718,10 @@ class SocaJob(SocaBaseModel):
     estimated_bom_cost: Optional[SocaJobEstimatedBOMCost] = Field(default=None)
     execution_hosts: Optional[List[SocaJobExecutionHost]] = Field(default=None)
     notifications: Optional[SocaJobNotifications] = Field(default=None)
+    # when scratch cleanup removed this job's scratch folder
+    scratch_removed_at: Optional[datetime] = Field(default=None)
+    # when a removal stopped part way, leaving the folder incomplete
+    scratch_partly_removed_at: Optional[datetime] = Field(default=None)
 
     def get_total_time_seconds(self) -> Optional[int]:
         if self.total_time_secs is not None:
@@ -1654,7 +1658,7 @@ class JobValidationResult(SocaBaseModel):
             if entry.error_code is None and entry.message is None:
                 s += f'{os.linesep}'
                 continue
-            s += f'[{entry.error_code}] {entry.message}{os.linesep}'
+            s += f'- {entry.message}{os.linesep}'
         return s
 
     def as_string(self, pad_left: int = 0):

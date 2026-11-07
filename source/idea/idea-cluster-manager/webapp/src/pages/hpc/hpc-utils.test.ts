@@ -1,5 +1,7 @@
 import {
     formatBlockingLimit,
+    jobFailureNextStep,
+    listAllProjects,
     formatDurationMinutes,
     formatProvisioningAttempt,
     getJobWaitingSignals,
@@ -185,8 +187,13 @@ describe('formatProvisioningAttempt', () => {
 });
 
 describe('formatBlockingLimit', () => {
-    it('names the limit type', () => {
-        expect(formatBlockingLimit('max_provisioned_instances')).toBe('queue limit: max_provisioned_instances');
+    it('says what the limit is in words, and that nothing is needed', () => {
+        expect(formatBlockingLimit('max_provisioned_instances')).toBe('The queue is at its limit for machines. Your job starts when others finish. Nothing to do.');
+        expect(formatBlockingLimit('max_running_jobs')).toBe('The queue is at its limit for running jobs. Your job starts when others finish. Nothing to do.');
+    });
+
+    it('never shows a limit name it does not know', () => {
+        expect(formatBlockingLimit('max_new_thing')).not.toContain('max_new_thing');
     });
 
     it('renders nothing without a limit', () => {
@@ -213,7 +220,7 @@ describe('getJobWaitingSignals', () => {
         expect(signals).toEqual([
             'waiting 45 min',
             'attempt 2 of 3',
-            'queue limit: max_provisioned_instances'
+            'The queue is at its limit for machines. Your job starts when others finish. Nothing to do.'
         ]);
     });
 
@@ -257,5 +264,35 @@ describe('getJobWaitingSignals', () => {
         }), NOW);
         const joined = signals.join(' ');
         expect(joined).not.toMatch(/position|ahead|rank|estimat|start(s|ing)? (at|in|by)/i);
+    });
+});
+
+describe('jobFailureNextStep', () => {
+    it('sends a script failure to the output files', () => {
+        expect(jobFailureNextStep({job_id: '2345', name: 'plasma', exit_status: 2})).toBe(
+            "Exit code 2 came from your script. Check the job's output files (plasma.o2345 and plasma.e2345 in the folder it was submitted from).");
+    });
+
+    it('names the signal case above 256', () => {
+        expect(jobFailureNextStep({job_id: '2345', name: 'plasma', exit_status: 271})).toBe('Stopped by a signal, often the walltime limit.');
+    });
+
+    it('has nothing to say without a script exit code', () => {
+        expect(jobFailureNextStep({job_id: '2345', name: 'plasma'})).toBeNull();
+        expect(jobFailureNextStep({job_id: '2345', name: 'plasma', exit_status: 0})).toBeNull();
+        expect(jobFailureNextStep({job_id: '2345', name: 'plasma', exit_status: -1})).toBeNull();
+    });
+});
+
+describe('listAllProjects', () => {
+    it('follows the cursor to the last project', async () => {
+        const project = (index: number) => ({project_id: `p-${index}`, name: `project-${index}`});
+        const listProjects = vi.fn()
+            .mockResolvedValueOnce({listing: Array.from({length: 100}, (_, index) => project(index)), paginator: {cursor: 'next'}})
+            .mockResolvedValueOnce({listing: Array.from({length: 30}, (_, index) => project(100 + index)), paginator: {}});
+        const projects = await listAllProjects({listProjects});
+        expect(projects).toHaveLength(130);
+        expect(listProjects).toHaveBeenCalledTimes(2);
+        expect(listProjects.mock.calls[1][0].paginator.cursor).toBe('next');
     });
 });

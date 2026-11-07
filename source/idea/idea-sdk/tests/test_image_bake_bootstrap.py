@@ -227,6 +227,13 @@ systemctl() {
   [[ "$FAIL" != dcv-launcher || "$*" != 'is-active --quiet dcvsessionlauncher.service' ]]
 }
 modprobe() { [[ "$FAIL" != lustre ]]; }
+dnf() {
+  printf 'dnf %s\n' "$*" >> "$CALLS"
+  case "$FAIL" in
+    openssh) echo 'openssh-server.x86_64 9.9p1-16 baseos'; return 100 ;;
+    openssh-repo) echo 'repository unreachable'; return 1 ;;
+  esac
+}
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
 # like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
 # through the pkglibdir the dcvserver wrapper puts on LD_LIBRARY_PATH
@@ -627,11 +634,11 @@ submenu 'Advanced options' --id advanced-id {
     command = tmp_path / 'grub-editenv'
     command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
     command.chmod(0o755)
-    function = function.replace('/boot/grub', str(tmp_path))
     result = subprocess.run(
         [
             'bash',
             '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
             'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
             + function
             + '\nkernel_ok',
@@ -642,6 +649,7 @@ submenu 'Advanced options' --id advanced-id {
             **os.environ,
             'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
             'GRUB_SELECTION': selection,
+            'GRUB_DIR': str(tmp_path),
             'RUNNING': running,
         },
     )
@@ -658,11 +666,11 @@ def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
     command = tmp_path / 'grub-editenv'
     command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
     command.chmod(0o755)
-    function = function.replace('/boot/grub', str(tmp_path))
     result = subprocess.run(
         [
             'bash',
             '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
             'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
             + function
             + '\nkernel_ok',
@@ -673,6 +681,7 @@ def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
             **os.environ,
             'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
             'GRUB_SELECTION': saved_entry,
+            'GRUB_DIR': str(tmp_path),
             'RUNNING': running,
         },
     )

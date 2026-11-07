@@ -557,7 +557,9 @@ class ConditionTable(FakeTable):
         python = expression
         python = re.sub(
             r'attribute_not_exists\(([#\w]+)\)',
-            lambda m: f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)',
+            lambda m: (
+                f'({m.group(1) if m.group(1).startswith("#") else repr(m.group(1)).join(("item.get(", ")"))} is None)'
+            ),
             python,
         )
         python = re.sub(r'NOT (#\w+) IN \(([^)]*)\)', r'(\1 not in [\2])', python)
@@ -802,6 +804,77 @@ def test_update_fields_sets_only_those_attributes_unless_a_job_holds_the_row():
         'building',
         'i-1',
     )
+
+
+def test_a_resumed_row_with_no_clock_starts_one_at_the_resume():
+    from ideasdk.aws.image_builds import bake_overdue, resume_record
+
+    started = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status='checking',
+        image_id='ami-1',
+        started_on=started,
+    )
+    context = Mock()
+    context.aws().ec2().describe_images.return_value = {
+        'Images': [{'ImageId': 'ami-1', 'State': 'available'}]
+    }
+    resumed = resume_record(context, Mock(), record, Mock())
+    assert resumed.status == 'test_launching'
+    assert resumed.attempt_started_on > started
+    assert not bake_overdue(
+        resumed, resumed.attempt_started_on + timedelta(hours=1), timedelta(hours=2)
+    )
+
+
+def test_a_row_requeued_after_a_restart_starts_its_clock_again():
+    from ideasdk.aws.image_builds import resume_record
+
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status='building',
+        ami_name='gone',
+        started_on=datetime(2026, 11, 6, 8, tzinfo=timezone.utc),
+        attempt_started_on=datetime(2026, 11, 6, 8, tzinfo=timezone.utc),
+    )
+    context = Mock()
+    context.aws().ec2().describe_images.return_value = {'Images': []}
+    resumed = resume_record(context, Mock(), record, Mock())
+    assert resumed.status == 'queued'
+    assert resumed.attempt_started_on is None
+
+
+@pytest.mark.parametrize('status', ['queued', 'waiting_capacity'])
+def test_time_that_costs_nothing_is_not_on_the_clock(status):
+    from ideasdk.aws.image_builds import bake_overdue
+
+    started = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    record = ImageBuildRecord(
+        base_os='rocky9',
+        architecture='x86_64',
+        status=status,
+        started_on=started,
+        attempt_started_on=started,
+    )
+    assert not bake_overdue(record, started + timedelta(days=3), timedelta(hours=2))
+
+
+def test_a_row_with_no_clock_is_not_overdue_and_says_it_needs_one():
+    from ideasdk.aws.image_builds import bake_overdue, needs_attempt_clock
+
+    started = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+    row = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', status='building', started_on=started
+    )
+    assert not bake_overdue(row, started + timedelta(days=3), timedelta(hours=2))
+    assert needs_attempt_clock(row)
+    row.status = 'queued'
+    assert not needs_attempt_clock(row)
+    row.status = 'waiting_capacity'
+    assert not needs_attempt_clock(row)
 
 
 def test_resume_goes_to_the_test_launch_when_the_image_exists():
@@ -1162,3 +1235,22 @@ def test_a_legacy_sweep_that_deletes_nothing_still_logs_its_summary():
         'legacy image sweep: 0 candidates, 0 kept (0 referenced, 0 too new, '
         '0 in flight), 0 deleted, capped=no'
     )
+
+
+def test_a_path_on_a_hung_mount_does_not_answer(monkeypatch):
+    import threading
+    from ideasdk.aws import validation_identity
+
+    release = threading.Event()
+    monkeypatch.setattr(validation_identity.os, 'lstat', lambda path: release.wait(5))
+    try:
+        assert validation_identity.path_answers('/data/home/x', 0.05) is False
+    finally:
+        release.set()
+
+
+def test_a_missing_path_is_still_an_answer(tmp_path):
+    from ideasdk.aws.validation_identity import path_answers
+
+    assert path_answers(str(tmp_path)) is True
+    assert path_answers(str(tmp_path / 'absent')) is True

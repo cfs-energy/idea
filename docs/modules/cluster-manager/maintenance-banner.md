@@ -48,7 +48,7 @@ You need to be a cluster administrator. Every signed-in user can read the three 
   --aws-region <REGION>
 ```
 
-To close the window, set `enabled` back to `false`.
+To close the window, set `enabled` back to `false`. To clear the message, write `"Key=cluster-manager.maintenance.message,Type=string,Value="`.
 
 ## What it does not cover
 

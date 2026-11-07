@@ -83,10 +83,19 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       }
     }
     assert.ok(inlineBytes < 10240, `inline total: ${inlineBytes}`);
-    assert.equal(managed.length, 3);
+    assert.equal(managed.length, 4);
     assert.ok(managed.some((doc) => JSON.stringify(doc).includes('bedrock:CreateInferenceProfile')));
+    // the health collectors read metadata and are the one grant outside the template
+    const health = managed.filter((doc) => JSON.stringify(doc).includes('acm:DescribeCertificate'));
+    assert.equal(health.length, 1);
+    assert.deepEqual(health[0]!.Statement[0].Action.sort(), [
+      'acm:DescribeCertificate',
+      'ds:DescribeDirectories',
+      'elasticloadbalancing:DescribeListenerCertificates',
+      'secretsmanager:ListSecrets',
+    ]);
     const normalize = (statements: Json[]) => statements.map((statement) => JSON.stringify(resolve(iam.PolicyStatement.fromJson(statement).toStatementJson()))).sort();
-    assert.deepEqual(normalize(managed.flatMap((doc) => doc.Statement)), normalize(expected));
+    assert.deepEqual(normalize(managed.filter((doc) => !health.includes(doc)).flatMap((doc) => doc.Statement)), normalize(expected));
     console.log(`GovCloud task inline: ${inlineBytes}; managed: ${managed.map(size).join(', ')} bytes`);
   } finally {
     IdeaCodeAsset.prototype.assetPath = originalAssetPath;

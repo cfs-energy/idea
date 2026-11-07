@@ -206,7 +206,11 @@ describe('account reconciliation settings', () => {
         expect(run).toHaveBeenLastCalledWith({dry_run: dryRun, override_max_disable_fraction: false});
         expect(await screen.findByText('Reconciliation refused')).toBeInTheDocument();
         expect(screen.getByText(/Proposed disables: 2 of 4/)).toBeInTheDocument();
+        expect(screen.getByText(/This would disable more accounts than the limit allows/)).toBeInTheDocument();
+        expect(screen.queryByText(/max_disable_fraction/)).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'Proceed anyway'}));
+        expect(run).toHaveBeenCalledTimes(1);
+        await userEvent.click(screen.getByRole('button', {name: dryRun ? 'Preview past the limit' : 'Disable accounts'}));
         expect(run).toHaveBeenLastCalledWith({dry_run: dryRun, override_max_disable_fraction: true});
         await waitFor(() => expect(screen.queryByRole('button', {name: 'Proceed anyway'})).not.toBeInTheDocument());
     });
@@ -218,6 +222,47 @@ describe('account reconciliation settings', () => {
         await userEvent.click(screen.getByRole('button', {name: 'Apply reconciliation'}));
         expect(await screen.findByText('Reconciliation refused')).toBeInTheDocument();
         expect(screen.queryByRole('button', {name: 'Proceed anyway'})).not.toBeInTheDocument();
+    });
+
+    it('cancelling the override runs nothing', async () => {
+        const {run} = await setup();
+        await userEvent.click(screen.getByRole('button', {name: 'Preview changes'}));
+        await userEvent.click(await screen.findByRole('button', {name: 'Proceed anyway'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Cancel'}));
+        expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows progress while a run is checking accounts', async () => {
+        const {run} = await setup();
+        let finish!: (value: any) => void;
+        run.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+        await userEvent.click(screen.getByRole('button', {name: 'Preview changes'}));
+        expect(await screen.findByText('Checking accounts…')).toBeInTheDocument();
+        await act(async () => finish(report));
+        await waitFor(() => expect(screen.queryByText('Checking accounts…')).not.toBeInTheDocument());
+    });
+
+    it('clears a failed poll once polling recovers', async () => {
+        const poll = vi.spyOn(window, 'setInterval');
+        const {read} = await setup();
+        const tick = () => poll.mock.calls.filter(call => call[1] === 10000).at(-1)![0] as () => void;
+        read.mockRejectedValueOnce({message: 'Status unavailable'});
+        await act(async () => tick()());
+        expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
+        await act(async () => tick()());
+        await waitFor(() => expect(screen.queryByText('Status unavailable')).not.toBeInTheDocument());
+    });
+
+    it('keeps a validation message through a successful poll', async () => {
+        const poll = vi.spyOn(window, 'setInterval');
+        await setup();
+        await advanced();
+        const interval = screen.getByRole('textbox', {name: 'Interval (minutes)'});
+        await userEvent.clear(interval);
+        await userEvent.click(screen.getByRole('button', {name: /save/i}));
+        expect(await screen.findByText('Interval must be an integer from 1 to 1440 minutes.')).toBeInTheDocument();
+        await act(async () => (poll.mock.calls.filter(call => call[1] === 10000).at(-1)![0] as () => void)());
+        expect(screen.getByText('Interval must be an integer from 1 to 1440 minutes.')).toBeInTheDocument();
     });
 
     it('polls the last report without overwriting advanced edits', async () => {

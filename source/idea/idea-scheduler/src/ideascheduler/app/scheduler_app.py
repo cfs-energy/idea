@@ -23,6 +23,10 @@ from ideasdk.shell import ShellInvoker
 from ideasdk.utils import GroupNameHelper
 
 import ideascheduler
+from ideadatamodel import ImageKind
+from ideasdk.aws.image_builds import ImageRowsCollector
+from ideasdk.metrics.health import CollectorRunner, StorageMountsCollector
+from ideascheduler.app.metrics.pbs_health import PbsHealthCollector
 from ideascheduler.app.api import SchedulerApiInvoker
 from ideascheduler.app.aws import InstanceCache, InstanceMonitor
 from ideascheduler.app.metrics import JobProvisioningMetrics
@@ -191,8 +195,26 @@ class SchedulerApp(ideasdk.app.SocaApp):
         # create default scheduler settings
         SchedulerDefaultSettings(self.context).initialize()
         self._initialize_image_builds()
+        self._start_scratch_cleanup()
+        self._health_collectors = CollectorRunner(
+            self.context,
+            [
+                ImageRowsCollector(
+                    ImageKind.COMPUTE,
+                    lambda: self.context.compute_image_service.list_rows(),
+                    release=ideascheduler.__version__,
+                ),
+                PbsHealthCollector(),
+                StorageMountsCollector(self.context),
+            ],
+        )
+        self._health_collectors.start()
 
     def app_stop(self):
+        if getattr(self, '_health_collectors', None) is not None:
+            self._health_collectors.stop()
+        if getattr(self.context, 'scratch_cleanup', None) is not None:
+            self.context.scratch_cleanup.stop()
         if getattr(self.context, 'compute_image_service', None) is not None:
             self.context.compute_image_service.stop()
         if self.instance_monitor is not None:
@@ -209,6 +231,19 @@ class SchedulerApp(ideasdk.app.SocaApp):
             self.context.accounts_client.destroy()
         if self.context.projects_client is not None:
             self.context.projects_client.destroy()
+
+    def _start_scratch_cleanup(self):
+        """reads the job state above, so it comes last; a failure leaves jobs running"""
+        from ideascheduler.app.scratch_cleanup import ScratchCleanupService
+
+        try:
+            service = ScratchCleanupService(self.context)
+            service.start()
+            self.context.scratch_cleanup = service
+        except Exception as e:
+            self.context.logger('scheduler-app').error(
+                f'scratch cleanup could not be started: {e}'
+            )
 
     def _initialize_image_builds(self):
         """Start the compute leader loop without making scheduler startup depend on it."""

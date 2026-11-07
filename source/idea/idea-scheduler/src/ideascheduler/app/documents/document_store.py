@@ -13,6 +13,7 @@ import os.path
 import ideascheduler
 
 from ideadatamodel import (
+    SocaSortOrder,
     exceptions,
     errorcodes,
     SocaPaginator,
@@ -433,9 +434,9 @@ class DocumentStore(DocumentStoreProtocol):
                 if listing_filter.key == '$all':
                     term_filters.append(
                         {
-                            'query_string': {
+                            'simple_query_string': {
                                 'query': Utils.get_as_string(listing_filter.value),
-                                'fields': [],
+                                'lenient': True,
                             }
                         }
                     )
@@ -473,12 +474,16 @@ class DocumentStore(DocumentStoreProtocol):
 
         body = None
         if query:
-            body = {'query': query}
+            # the true count, not the 10000 OpenSearch stops at by default
+            body = {'query': query, 'track_total_hits': True}
 
         self.logger.info(f'ES Request: {Utils.to_json(body)}')
 
         if options.sort_by:
-            sort_by = f'{options.sort_by.key}:{options.sort_by.order}'
+            # .value: formatting the enum gives "SortOrder.DESC", which OpenSearch ignores
+            # without an error. an analysed field sorts by its keyword sub-field.
+            sort_key = self._term_key(options.sort_by.key, keyword_subfields)
+            sort_by = f'{sort_key}:{SocaSortOrder(options.sort_by.order).value}'
         else:
             sort_by = default_sort_by
 
@@ -613,6 +618,23 @@ class DocumentStore(DocumentStoreProtocol):
                 {'terms': {self._term_key('owner', subfields): [owner]}}
             )
         return self._get_first_job({'bool': {'must': term_filters}})
+
+    def find_jobs_by_id(self, job_ids: List[str], limit: int = 200) -> List[SocaJob]:
+        """every indexed job under these numbers, whoever owned them. A failed search raises."""
+        subfields = self._jobs_keyword_subfields
+        results = self.opensearch_client.os_client.search(
+            index=self._jobs_alias,
+            sort='queue_time:desc',
+            size=limit,
+            from_=0,
+            body={'query': {'terms': {self._term_key('job_id', subfields): job_ids}}},
+        )
+        hits = Utils.get_value_as_dict('hits', results)
+        return [
+            SocaJob(**entry['_source'])
+            for entry in Utils.get_value_as_list('hits', hits, [])
+            if entry.get('_source')
+        ]
 
     def search_nodes(self, options: ListNodesRequest, **kwargs) -> ListNodesResult:
         if not self.is_enabled() or not self.is_initialized():

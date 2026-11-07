@@ -17,6 +17,7 @@ from ideaclustermanager.app.reporting.reporting_service import (
     job_values,
     walltime,
 )
+from ideaclustermanager.app.costs.personal_costs_store import PersonalCostsStore
 from ideaclustermanager.app.reporting.reporting_sources import ReportingSources
 from ideaclustermanager.app.reporting.snapshot_store import FACETS
 
@@ -548,7 +549,9 @@ def test_retained_heads_include_former_users_and_exclude_reserved_subjects():
             list_projects=lambda request: SimpleNamespace(listing=[], paginator=None)
         ),
         personal_costs_store=SimpleNamespace(
-            table=table, get=lambda *args: json.dumps(costs)
+            table=table,
+            get=lambda *args: json.dumps(costs),
+            head_subjects=lambda: None,
         ),
         config=lambda: SimpleNamespace(is_module_enabled=lambda module: False),
     )
@@ -556,6 +559,17 @@ def test_retained_heads_include_former_users_and_exclude_reserved_subjects():
     assert set(result['users']) == {'former'}
     assert result['projections']['former']['head']['generation'] == 'pinned'
     assert result['coverage']['jobs'] == 'not_applicable'
+
+
+def test_a_failed_read_of_empty_desktop_rows_keeps_the_desktops_that_were_read():
+    sources = ReportingSources(SimpleNamespace())
+    sources.desktop_shapes = Mock(side_effect=RuntimeError('unavailable'))
+    result = dict(coverage=dict(desktops='ready'), warnings=[], desktops=[{'kept': 1}])
+    sources.add_desktop_shapes(result, 'index', time.monotonic() + 30)
+    assert result['desktop_shapes'] == []
+    assert result['coverage']['desktops'] == 'ready'
+    assert result['desktops'] == [{'kept': 1}]
+    assert result['warnings']
 
 
 def test_reporting_sources_have_no_fresh_collection_dependencies():
@@ -763,7 +777,7 @@ def test_build_timeout_bounds_blocked_source_reads_without_publication(monkeypat
 @pytest.mark.parametrize('kind', ['users', 'projects'])
 @pytest.mark.parametrize('through_adapter', [False, True])
 def test_real_listing_models_continue_two_dao_pages(kind, through_adapter):
-    from ideadatamodel import ListUsersRequest, ListProjectsRequest, SocaPaginator
+    from ideadatamodel import ListUsersRequest, ListProjectsRequest
     from ideaclustermanager.app.accounts.db.user_dao import UserDAO
     from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 
@@ -804,11 +818,10 @@ def test_real_listing_models_continue_two_dao_pages(kind, through_adapter):
     if through_adapter:
         rows = list(ReportingSources.listing(read, request_type, time.monotonic() + 30))
     else:
-        first = read(request_type())
-        second = read(
-            request_type(paginator=SocaPaginator(cursor=first.paginator.cursor))
-        )
-        rows = [row.model_dump() for row in first.listing + second.listing]
+        # the DAO reads every scan page itself, so one call is the whole listing
+        result = read(request_type())
+        assert result.paginator.cursor is None
+        rows = [row.model_dump() for row in result.listing]
     assert [row[field] for row in rows] == ['first', 'second']
     assert len(calls) == 2
 
@@ -916,8 +929,8 @@ def test_custom_period_retains_stored_spend_and_explains_unstored_dates(start, m
         ['jobs'],
     )
     exported = list(csv.DictReader(io.StringIO(result.content.lstrip('\ufeff'))))[0]
-    assert Decimal(exported['jobs']) == row['spend_by_facet']['jobs']
-    assert json.loads(exported['coverage']) == row['coverage']
+    assert Decimal(exported['Job spend']) == row['spend_by_facet']['jobs']
+    assert exported['Complete'].startswith('Partial')
 
 
 def test_saturated_report_workers_fail_busy_and_recover():
@@ -1248,3 +1261,482 @@ def test_report_without_cached_hours_finishes_without_cloudwatch(attempt):
     assert row['desktop_hours'] == 24
     assert row['coverage']['desktop_hours']['status'] == 'estimated'
     pricing.return_value._prefetch_running_hours.assert_not_called()
+
+
+# Period-bounded reads: the same report from far fewer reads
+
+
+class PeriodIndex:
+    """a session index that applies the query it is given, or every document when it
+    plays the old unfiltered read"""
+
+    def __init__(self, docs, unfiltered=False):
+        self.docs, self.unfiltered = docs, unfiltered
+        self.searches = []
+        self.returned = 0
+
+    def matches(self, query, doc):
+        if 'match_all' in query:
+            return True
+        if 'bool' in query:
+            clause = query['bool']
+            return (
+                all(self.matches(q, doc) for q in clause.get('filter', []))
+                and not any(self.matches(q, doc) for q in clause.get('must_not', []))
+                and (
+                    not clause.get('should')
+                    or any(self.matches(q, doc) for q in clause['should'])
+                )
+            )
+        if 'exists' in query:
+            return self.value(doc, query['exists']['field']) is not None
+        if 'term' in query:
+            ((field, value),) = query['term'].items()
+            return self.value(doc, field) == value
+        if 'terms' in query:
+            ((field, values),) = query['terms'].items()
+            return self.value(doc, field) in values
+        ((field, bounds),) = query['range'].items()
+        value = self.value(doc, field)
+        return value is not None and all(
+            {'lt': value < limit, 'lte': value <= limit, 'gte': value >= limit}[name]
+            for name, limit in bounds.items()
+        )
+
+    @staticmethod
+    def value(doc, field):
+        value = doc
+        for part in field.removesuffix('.raw').split('.'):
+            value = value.get(part) if isinstance(value, dict) else None
+        return value
+
+    def search(self, index, body, **kwargs):
+        self.searches.append(body)
+        if 'aggs' in body:
+            composite = body['aggs']['shapes']['composite']
+            if composite.get('after'):
+                return dict(aggregations=dict(shapes=dict(buckets=[])))
+            keys = {
+                (
+                    doc.get('owner'),
+                    (doc.get('project') or {}).get('project_id'),
+                    (doc.get('project') or {}).get('name'),
+                )
+                for doc in self.docs
+            }
+            buckets = [
+                dict(key=dict(owner=owner, project_id=project, name=name))
+                for owner, project, name in keys
+            ]
+            return dict(
+                aggregations=dict(shapes=dict(buckets=buckets, after_key=dict(a=1)))
+            )
+        hits = [
+            dict(_index='sessions', _id=str(position), _source=doc)
+            for position, doc in enumerate(self.docs)
+            if self.unfiltered or self.matches(body['query'], doc)
+        ]
+        self.returned += len(hits)
+        return dict(hits=dict(hits=hits), _scroll_id='s')
+
+    def scroll(self, **kwargs):
+        return dict(hits=dict(hits=[]), _scroll_id='s')
+
+    def clear_scroll(self, **kwargs):
+        pass
+
+
+class CostsTableStub:
+    """personal-costs at report scale: mostly inventory and generation rows"""
+
+    name = 'costs'
+
+    def __init__(self, heads, other_rows):
+        self.heads, self.other = heads, other_rows
+        self.calls = {'Scan': 0, 'BatchGetItem': 0, 'RCU': 0}
+
+    def scan(self, Segment=0, TotalSegments=1, **kwargs):
+        # 1 MB pages of 1 KB rows, the whole table read whatever the filter keeps
+        pages = max(1, self.other // TotalSegments // 1000)
+        self.calls['Scan'] += 1
+        self.calls['RCU'] += 1000 // 4
+        page = kwargs.get('ExclusiveStartKey', {}).get('page', 0)
+        if page + 1 < pages:
+            return dict(Items=[], LastEvaluatedKey=dict(page=page + 1))
+        return dict(Items=list(self.heads) if Segment == 0 else [])
+
+    def batch_get_item(self, RequestItems):
+        self.calls['BatchGetItem'] += 1
+        keys = RequestItems[self.name]['Keys']
+        self.calls['RCU'] += len(keys)
+        names = {key['subject'] for key in keys}
+        return dict(
+            Responses={self.name: [h for h in self.heads if h['subject'] in names]}
+        )
+
+
+def report_sessions():
+    start = int(datetime(2024, 2, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    end = int(datetime(2024, 3, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    day = 86400000
+
+    def doc(identity, owner, state, created, updated, project='p1', **fields):
+        return dict(
+            idea_session_id=identity,
+            owner=owner,
+            state=state,
+            created_on=created,
+            updated_on=updated,
+            server=dict(instance_type='m5.large', instance_id=f'i-{identity}'),
+            project=dict(project_id=project, name=f'name-{project}')
+            if project
+            else None,
+            **fields,
+        )
+
+    return (
+        start,
+        end,
+        [
+            # ran inside the period
+            doc(
+                'in',
+                'user-a',
+                'STOPPED',
+                start + day,
+                start + 2 * day,
+                stopped_on=start + 2 * day,
+            ),
+            # running throughout, its last write long before the period: the whole period
+            doc('forever', 'user-a', 'READY', start - 90 * day, start - 80 * day),
+            # an old index generation still says READY; the newer one stopped before the period
+            doc('reindexed', 'user-b', 'READY', start - 60 * day, start - 50 * day),
+            doc(
+                'reindexed',
+                'user-b',
+                'STOPPED',
+                start - 60 * day,
+                start - 40 * day,
+                stopped_on=start - 40 * day,
+            ),
+            # stopped before the period, but a run the document never heard of overlaps it
+            doc(
+                'late-run',
+                'user-b',
+                'STOPPED',
+                start - 60 * day,
+                start - 30 * day,
+                stopped_on=start - 30 * day,
+            ),
+            # counted with unknown hours whatever the period
+            doc('undated', 'user-c', 'STOPPED', None, None),
+            doc('zero', 'user-c', 'STOPPED', start + day, 0),
+            # no part in this period's numbers, but the old report kept their rows
+            doc(
+                'old',
+                'former',
+                'STOPPED',
+                start - 300 * day,
+                start - 290 * day,
+                'deleted-project',
+                stopped_on=start - 290 * day,
+            ),
+            doc(
+                'old-unassigned',
+                'user-a',
+                'DELETED',
+                start - 300 * day,
+                start - 290 * day,
+                None,
+                stopped_on=start - 290 * day,
+            ),
+            doc('future', 'future-user', 'READY', end + day, end + day),
+        ]
+        + [
+            # what a time filter is for: years of desktops long gone
+            doc(
+                f'gone-{n}',
+                'user-a',
+                'DELETED',
+                start - 500 * day,
+                start - 400 * day,
+                stopped_on=start - 400 * day,
+            )
+            for n in range(100)
+        ],
+    )
+
+
+def read_report(docs, unfiltered, history, heads, activity=None, insights=False):
+    index = PeriodIndex(docs, unfiltered)
+    table = CostsTableStub(heads, 192000)
+    store = SimpleNamespace(
+        table=table,
+        get=lambda *args: json.dumps(projection([])['costs']),
+        head_subjects=lambda: None if unfiltered else [h['subject'] for h in heads],
+        records=lambda *args: [
+            dict(record=f'idle:{date}', payload=json.dumps(dict(sessions=sessions)))
+            for date, sessions in (activity or {}).items()
+        ],
+        resolve_source=lambda subject, value: value,
+    )
+    store.batch_heads = lambda subjects, check=lambda: None: (
+        PersonalCostsStore.batch_heads(
+            SimpleNamespace(
+                table=table,
+                context=SimpleNamespace(
+                    aws=lambda: SimpleNamespace(dynamodb_table=lambda: table)
+                ),
+            ),
+            subjects,
+            check,
+        )
+    )
+    history_table = SimpleNamespace(scan=lambda **kwargs: dict(Items=history))
+    context = SimpleNamespace(
+        cluster_name=lambda: 'test',
+        logger=lambda *args: Mock(),
+        accounts=SimpleNamespace(
+            list_users=lambda request: SimpleNamespace(
+                listing=[
+                    SimpleNamespace(model_dump=lambda mode: dict(username='user-a'))
+                ],
+                paginator=None,
+            )
+        ),
+        projects=SimpleNamespace(
+            list_projects=lambda request: SimpleNamespace(
+                listing=[
+                    SimpleNamespace(
+                        model_dump=lambda mode: dict(
+                            project_id='p1', name='name-p1', title='P1'
+                        )
+                    )
+                ],
+                paginator=None,
+            )
+        ),
+        personal_costs_store=store,
+        analytics_service=lambda: SimpleNamespace(
+            os_client=SimpleNamespace(os_client=index)
+        ),
+        config=lambda: SimpleNamespace(
+            is_module_enabled=lambda module: (
+                module == constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+            ),
+            get_string=lambda key, required=False: 'sessions',
+            get_module_id=lambda module: 'vdc',
+        ),
+        aws=lambda: SimpleNamespace(
+            dynamodb_table=lambda: SimpleNamespace(Table=lambda name: history_table)
+        ),
+    )
+    data = ReportingSources(context).read(
+        period(), time.monotonic() + 30, include_storage=not insights, insights=insights
+    )
+    return data, table, index, context
+
+
+def period_fixture():
+    start, end, docs = report_sessions()
+    day = 86400000
+    history = [
+        dict(
+            run_of='late-run',
+            owner='user-b',
+            started_on=start - 2 * day,
+            stopped_on=start + 3 * day,
+        ),
+        dict(
+            run_of='in',
+            owner='user-a',
+            started_on=start + day,
+            stopped_on=start + 2 * day,
+        ),
+    ]
+    heads = [
+        dict(
+            subject=name,
+            record='head',
+            payload=json.dumps({'generation': 'g', 'parts': {'costs': 1}}),
+        )
+        for name in ('user-a', 'user-b', 'departed')
+    ]
+    return docs, history, heads
+
+
+def built(data):
+    tables, tiles, covers, warnings = ReportingService.build(
+        data, period(), 'USD', 'UTC', time.monotonic() + 30
+    )
+    return (
+        {
+            name: sorted(rows, key=lambda row: row['key'])
+            for name, rows in tables.items()
+        },
+        tiles,
+        covers,
+        warnings,
+    )
+
+
+def test_period_bounded_read_builds_the_same_report_as_the_full_read(capsys):
+    docs, history, heads = period_fixture()
+    old, old_table, old_index, _ = read_report(docs, True, history, heads)
+    new, new_table, new_index, _ = read_report(docs, False, history, heads)
+    expected, actual = built(old), built(new)
+    assert actual == expected
+    rows = {row['key']: row for row in expected[0]['user']}
+    # not vacuous: every case above landed where it should
+    assert set(rows) >= {
+        'user-a',
+        'user-b',
+        'user-c',
+        'former',
+        'future-user',
+        'departed',
+    }
+    assert rows['user-a']['desktop_hours'] > 24 * 28  # the desktop running throughout
+    assert rows['user-b']['desktop_hours'] == Decimal(3 * 24)  # only the late run
+    assert rows['user-c']['coverage']['desktop_hours']['missing_records'] == 2
+    projects = {row['key'] for row in expected[0]['project']}
+    assert {'deleted-project', '!unassigned'} <= projects
+    assert new_index.returned < 15
+    assert new_table.calls['Scan'] == 0 and old_table.calls['Scan'] >= 8
+    assert new_table.calls['RCU'] * 100 < old_table.calls['RCU']
+    with capsys.disabled():
+        print(
+            f'\nreport heads, 192k rows: Scan {old_table.calls["Scan"]} -> {new_table.calls["Scan"]}, '
+            f'BatchGetItem {old_table.calls["BatchGetItem"]} -> {new_table.calls["BatchGetItem"]}, '
+            f'RCU {old_table.calls["RCU"]} -> {new_table.calls["RCU"]}; '
+            f'session documents {len(docs)} -> {new_index.returned}'
+        )
+
+
+def test_period_bounded_read_gives_the_same_insights_as_the_full_read(monkeypatch):
+    from ideaclustermanager.app.reporting.insights_service import InsightsService
+    from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+
+    monkeypatch.setattr(MyCostsService, '_ondemand_price', lambda self, kind: 0.1)
+    monkeypatch.setattr(
+        MyCostsService, '_prefetch_running_hours', lambda self, *args: None
+    )
+    docs, history, heads = period_fixture()
+    activity = {
+        '2024-02-05': {
+            'late-run': dict(
+                owner='user-b', checks=10, idle=5, instance_type='m5.large'
+            ),
+            'old': dict(owner='former', checks=2, idle=1),
+        }
+    }
+    results = []
+    for unfiltered in (True, False):
+        data, _, _, context = read_report(
+            docs, unfiltered, history, heads, activity, True
+        )
+        service = InsightsService(context, Mock())
+        results.append(
+            service.build(data, period(), 'USD', 'UTC', time.monotonic() + 30, None)
+        )
+    first, second = (result.model_dump(exclude={'updated_at'}) for result in results)
+    assert second == first
+    assert results[0].desktops.hours and results[0].desktops.idle_hours
+
+
+def test_heads_scan_until_the_index_is_seeded_then_never():
+    from ideaclustermanagertests.test_personal_costs_collector import Table
+
+    table = Table()
+    table.name = 'costs'
+
+    def batch_get_item(RequestItems):
+        keys = RequestItems['costs']['Keys']
+        return dict(
+            Responses=dict(
+                costs=[
+                    table.rows[(k['subject'], k['record'])]
+                    for k in keys
+                    if (k['subject'], k['record']) in table.rows
+                ]
+            )
+        )
+
+    table.scan = Mock(
+        side_effect=lambda **kwargs: dict(
+            Items=[
+                row
+                for row in table.rows.values()
+                if row['record'] == 'head' and kwargs['Segment'] == 0
+            ]
+        )
+    )
+    context = SimpleNamespace(
+        aws=lambda: SimpleNamespace(
+            dynamodb_table=lambda: SimpleNamespace(batch_get_item=batch_get_item)
+        )
+    )
+    store = PersonalCostsStore(context)
+    store.table = table
+    sources = ReportingSources(SimpleNamespace(personal_costs_store=store))
+    # an existing cluster: a head from before the index, for a deleted account
+    table.put_item(Item=dict(subject='former', record='head', payload='{}'))
+    assert {r['subject'] for r in sources.read_heads([], time.monotonic() + 5)} == {
+        'former'
+    }
+    assert table.scan.call_count == 8
+    assert store.seed_head_subjects() is True
+    assert store.head_subjects() == ['former']
+    assert store.seed_head_subjects() is False
+    table.scan.reset_mock()
+    table.put_item(Item=dict(subject='user-a', record='head', payload='{}'))
+    store.register_head_subject('user-a')
+    assert {
+        r['subject'] for r in sources.read_heads(['no-head'], time.monotonic() + 5)
+    } == {'former', 'user-a'}
+    table.scan.assert_not_called()
+
+
+def test_a_published_head_is_indexed_before_it_exists():
+    from ideadatamodel import GetMyCostsSummaryResult
+    from ideaclustermanagertests.test_personal_costs_collector import Table, costs
+
+    store = PersonalCostsStore(SimpleNamespace())
+    store.table = Table()
+    order = []
+    store.table.before_put = lambda item: order.append(item['record'])
+    store.publish(
+        'user-a', costs(), GetMyCostsSummaryResult(username='user-a', window='w')
+    )
+    assert order.index('head-subject:user-a') < order.index('head')
+    order.clear()
+    store.publish(
+        'user-a', costs(), GetMyCostsSummaryResult(username='user-a', window='w')
+    )
+    assert 'head-subject:user-a' not in order
+
+
+def test_unprocessed_heads_are_retried_and_never_read_as_missing(monkeypatch):
+    monkeypatch.setattr(
+        'ideaclustermanager.app.costs.personal_costs_store.time.sleep', lambda *a: None
+    )
+    answers = [
+        dict(
+            Responses=dict(costs=[dict(subject='a')]),
+            UnprocessedKeys=dict(costs=dict(Keys=[dict(subject='b', record='head')])),
+        ),
+        dict(Responses=dict(costs=[dict(subject='b')])),
+    ]
+    batch = Mock(side_effect=answers)
+    store = PersonalCostsStore(
+        SimpleNamespace(
+            aws=lambda: SimpleNamespace(
+                dynamodb_table=lambda: SimpleNamespace(batch_get_item=batch)
+            )
+        )
+    )
+    store.table = SimpleNamespace(name='costs')
+    assert [row['subject'] for row in store.batch_heads(['a', 'b'])] == ['a', 'b']
+    batch.side_effect = lambda RequestItems: dict(UnprocessedKeys=RequestItems)
+    with pytest.raises(RuntimeError):
+        store.batch_heads(['a'])

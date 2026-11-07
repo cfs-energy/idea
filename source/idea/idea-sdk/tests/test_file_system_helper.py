@@ -36,6 +36,7 @@ from ideadatamodel import (
     CreateFileRequest,
     RenameFileRequest,
     DownloadFilesRequest,
+    TailFileRequest,
 )
 
 
@@ -339,7 +340,12 @@ def test_delete_removes_read_only_and_server_written_files(numeric_tree):
     os.mkdir(locked, 0o755)  # root's folder: the user may not delete from it
     kept = os.path.join(locked, 'kept.dat')
     open(kept, 'w').close()
-    helper.delete_files(DeleteFilesRequest(files=[server_written, read_only, kept]))
+    with pytest.raises(exceptions.SocaException) as raised:
+        helper.delete_files(DeleteFilesRequest(files=[server_written, read_only, kept]))
+    assert raised.value.error_code == errorcodes.FILE_BROWSER_DELETE_FAILED
+    assert (
+        raised.value.message == 'Could not delete 1 of 3: kept.dat (permission denied)'
+    )
     assert not os.path.exists(server_written)
     assert not os.path.exists(read_only)
     assert os.path.exists(kept)
@@ -506,3 +512,260 @@ def test_upload_into_a_folder_reached_through_the_users_own_link(numeric_tree):
     assert file_path == os.path.join(path, 'link', 'data.dat') and not renamed
     assert os.path.isfile(os.path.join(real, 'data.dat'))
     assert os.stat(os.path.join(real, 'data.dat')).st_uid == helper._identity.uid
+
+
+def test_tail_keeps_the_indentation_of_a_line(numeric_tree, tmp_path):
+    log = tmp_path / 'run.log'
+    log.write_text('Traceback:\n  File "a.py", line 3\n')
+    helper = FileSystemHelper(account_context(), 'no-passwd-entry')
+    helper.check_access = lambda *args, **kwargs: None
+
+    result = helper._tail_file(TailFileRequest(file=str(log), line_count=10))
+
+    assert result.lines[-1] == '  File "a.py", line 3'
+
+
+def test_delete_says_what_it_could_not_delete(numeric_tree):
+    path, helper = numeric_tree
+    here = os.path.join(path, 'here.dat')
+    helper.run_as_user(lambda: open(here, 'w').close())
+    gone = os.path.join(path, 'gone.dat')
+
+    with pytest.raises(exceptions.SocaException) as raised:
+        helper.delete_files(DeleteFilesRequest(files=[here, gone]))
+
+    assert raised.value.error_code == errorcodes.FILE_BROWSER_DELETE_FAILED
+    assert raised.value.message == 'Could not delete 1 of 2: gone.dat (not found)'
+    assert not os.path.exists(here)
+
+
+def test_delete_lists_only_the_first_few_failures(numeric_tree):
+    path, helper = numeric_tree
+    files = [os.path.join(path, f'gone{index}.dat') for index in range(8)]
+
+    with pytest.raises(exceptions.SocaException) as raised:
+        helper.delete_files(DeleteFilesRequest(files=files))
+
+    assert raised.value.message.endswith('and 3 more')
+
+
+def run_download(server, request):
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(server.file_download_route(request))
+    finally:
+        loop.close()
+
+
+def download_server(username, helper_context):
+    from ideasdk.server.soca_server import SocaServer
+
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    server._context = helper_context
+    server._api_invocation_handler = Mock()
+    server._api_invocation_handler.get_username.return_value = username
+    return server
+
+
+def test_download_refusals_are_not_saved_as_the_file(numeric_tree):
+    path, helper = numeric_tree
+    signed_out = SimpleNamespace(args={}, headers={})
+    server = download_server('', helper.context)
+    server.get_query_param_as_string = lambda *_: None
+    assert run_download(server, signed_out).status == 401
+
+    server = download_server('no-passwd-entry', helper.context)
+    assert run_download(server, SimpleNamespace(args={})).status == 400
+    missing = SimpleNamespace(args={'file': [os.path.join(path, 'gone.dat')]})
+    assert run_download(server, missing).status in (403, 404)
+
+
+def test_slow_work_is_not_reported_as_forbidden(numeric_tree):
+    import time
+
+    _, helper = numeric_tree
+    helper.run_as_user(lambda: None)
+
+    with pytest.raises(exceptions.SocaException) as raised:
+        helper._identity.run(lambda: time.sleep(30), timeout=0.2)
+
+    assert raised.value.error_code == errorcodes.FILE_OPERATION_TIMED_OUT
+
+
+def archive_tree(numeric_tree, monkeypatch):
+    path, helper = numeric_tree
+    monkeypatch.setattr(helper, 'get_user_home', lambda: path)
+    folder = os.path.join(path, 'run')
+
+    def make():
+        os.mkdir(folder)
+        open(os.path.join(folder, 'ok.dat'), 'w').close()
+
+    helper.run_as_user(make)
+    return path, helper, folder
+
+
+def test_archive_counts_files_it_could_not_read(numeric_tree, monkeypatch):
+    _, helper, folder = archive_tree(numeric_tree, monkeypatch)
+    helper.run_as_user(
+        lambda: (
+            open(os.path.join(folder, 'secret.dat'), 'w').close(),
+            os.chmod(os.path.join(folder, 'secret.dat'), 0),
+        )
+    )
+
+    _, skipped = helper.create_download_archive(DownloadFilesRequest(files=[folder]))
+
+    assert skipped == 1
+
+
+def test_only_a_generated_archive_is_removed(numeric_tree, monkeypatch):
+    path, helper, folder = archive_tree(numeric_tree, monkeypatch)
+    archive = helper.download_files(DownloadFilesRequest(files=[folder]))
+    assert helper.is_generated_archive(archive)
+    mine = os.path.join(path, 'idea_downloads', 'results_2026-01-02_03-04-05.zip')
+    elsewhere = os.path.join(folder, os.path.basename(archive))
+    helper.run_as_user(lambda: (open(mine, 'w').close(), open(elsewhere, 'w').close()))
+
+    helper.remove_generated_archive(mine)
+    helper.remove_generated_archive(elsewhere)
+    assert os.path.exists(mine) and os.path.exists(elsewhere)
+
+    helper.remove_generated_archive(archive)
+    assert not os.path.exists(archive)
+
+
+def test_archive_leaves_out_earlier_archives(numeric_tree, monkeypatch):
+    import zipfile
+
+    path, helper, folder = archive_tree(numeric_tree, monkeypatch)
+    earlier = helper.download_files(DownloadFilesRequest(files=[folder]))
+    own_file = os.path.join(path, 'idea_downloads', 'my-notes.txt')
+    helper.run_as_user(lambda: open(own_file, 'w').close())
+
+    home_archive = helper.download_files(DownloadFilesRequest(files=[path]))
+
+    with zipfile.ZipFile(home_archive) as stream:
+        names = stream.namelist()
+    assert any(name.endswith('run/ok.dat') for name in names)
+    assert not any(name.endswith(os.path.basename(earlier)) for name in names)
+    assert any(name.endswith('idea_downloads/my-notes.txt') for name in names)
+
+
+def test_downloading_the_downloads_folder_skips_the_archive_being_written(
+    numeric_tree, monkeypatch
+):
+    import zipfile
+
+    path, helper, folder = archive_tree(numeric_tree, monkeypatch)
+    first = helper.download_files(DownloadFilesRequest(files=[folder]))
+
+    archive = helper.download_files(
+        DownloadFilesRequest(files=[os.path.dirname(first)])
+    )
+
+    with zipfile.ZipFile(archive) as stream:
+        names = stream.namelist()
+    assert any(name.endswith(os.path.basename(first)) for name in names)
+    assert not any(name.endswith(os.path.basename(archive)) for name in names)
+
+
+def test_archive_stopped_for_time_leaves_nothing_behind(numeric_tree, monkeypatch):
+    import time
+
+    path, helper, folder = archive_tree(numeric_tree, monkeypatch)
+    monkeypatch.setattr(helper, '_add_directory_to_zip', lambda *args: time.sleep(30))
+    helper.run_as_user(lambda: None)
+
+    with pytest.raises(exceptions.SocaException) as raised:
+        helper._identity.run(
+            lambda: helper.create_download_archive(
+                DownloadFilesRequest(files=[folder])
+            ),
+            timeout=0.5,
+        )
+
+    assert raised.value.error_code == errorcodes.FILE_OPERATION_TIMED_OUT
+    assert os.listdir(os.path.join(path, 'idea_downloads')) == []
+
+
+def test_generated_archive_goes_once_it_has_been_sent(numeric_tree, monkeypatch):
+    import asyncio
+
+    path, helper, folder = archive_tree(numeric_tree, monkeypatch)
+    archive = helper.download_files(DownloadFilesRequest(files=[folder]))
+    server = download_server('no-passwd-entry', helper.context)
+    server.options = SimpleNamespace()
+
+    sent = []
+
+    class Stream:
+        async def write(self, data):
+            sent.append(data)
+
+    loop = asyncio.new_event_loop()
+    try:
+        response = loop.run_until_complete(
+            server._stream_file_download(
+                archive,
+                os.path.basename(archive),
+                os.path.getsize(archive),
+                after_streamed=lambda: helper.remove_generated_archive(archive),
+            )
+        )
+        assert os.path.exists(archive)
+        loop.run_until_complete(response.streaming_fn(Stream()))
+    finally:
+        loop.close()
+    assert sent and not os.path.exists(archive)
+
+
+def test_refused_upload_is_not_a_success_to_the_browser(numeric_tree):
+    import asyncio
+
+    path, helper = numeric_tree
+    read_only = os.path.join(path, 'read-only')
+    helper.run_as_user(lambda: os.mkdir(read_only, 0o500))
+    server = download_server('no-passwd-entry', helper.context)
+
+    loop = asyncio.new_event_loop()
+    try:
+        response = loop.run_until_complete(
+            server.file_upload_stream_route(
+                SimpleNamespace(args={'cwd': [read_only]}, headers={})
+            )
+        )
+    finally:
+        loop.close()
+
+    assert response.status == 403
+
+
+def test_upload_reports_a_cleaned_up_name(numeric_tree):
+    from ideasdk.server.soca_server import SocaServer
+
+    path, helper = numeric_tree
+    body = (
+        b'--b\r\nContent-Disposition: form-data; name="file"; filename="my data.csv"\r\n'
+        b'Content-Type: text/csv\r\n\r\nhello\r\n--b--\r\n'
+    )
+    chunks = iter([body, None])
+
+    class Stream:
+        async def read(self):
+            return next(chunks)
+
+    request = SimpleNamespace(
+        headers={'content-type': 'multipart/form-data; boundary=b'}, stream=Stream()
+    )
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+
+    result = run_upload(server, request, helper, path)
+
+    assert result['payload']['files_renamed'] == [
+        {'original_name': 'my data.csv', 'final_name': 'my_data.csv'}
+    ]

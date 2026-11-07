@@ -22,9 +22,10 @@ import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
 import {Alert, Box, Button, ButtonDropdown, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, TextContent, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import {toast} from "react-toastify";
-import FileBrowserTable, {entryIcon, entryKey, FileBrowserEntry, FileBrowserMenuItem} from "./file-browser-table";
+import FileBrowserTable, {entryIcon, entryKey, formatFileSize, FileBrowserEntry, FileBrowserMenuItem} from "./file-browser-table";
 import DeleteFolderDialog from "./delete-folder-dialog";
 import FileBrowserPath, {describeListingFailure} from "./file-browser-path";
+import {bastionHost, describeKeyFailure} from "./bastion-host";
 
 import 'ace-builds/css/ace.css';
 import 'ace-builds/css/theme/dawn.css';
@@ -76,6 +77,9 @@ export interface IdeaFileBrowserState {
     renameValidationErrors: {[fileId: string]: string}
     filePermissions: Map<string, any>
     homeDir: string
+    listError: string | null
+    listingLoaded?: boolean
+    cannotOpen: {file: FileBrowserEntry, reason: 'large' | 'binary'} | null
 }
 
 /** One operation on the current selection, offered by the toolbar and the row menu. */
@@ -260,6 +264,65 @@ class IdeaFileEditorModal extends Component<IdeaFileEditorProps, IdeaFileEditorS
 }
 
 const FILE_BROWSER_API_PATH = '/cluster-manager/api/v1'
+const MAX_NAMES_TO_DELETE_SHOWN = 20
+
+/** Anything about a finished upload that differs from what the person chose. */
+export function describeUploadOutcome(payload?: {
+    files_renamed?: {original_name: string, final_name: string}[]
+    files_skipped?: string[]
+}): string | null {
+    const renamed = payload?.files_renamed ?? []
+    const skipped = payload?.files_skipped ?? []
+    const parts: string[] = []
+    if (renamed.length > 0) {
+        const shown = renamed.slice(0, 3).map((file) => `${file.original_name} as ${file.final_name}`).join(', ')
+        const more = renamed.length - 3
+        parts.push(`Saved ${shown}${more > 0 ? `, and ${more} more under new names` : ''}.`)
+    }
+    if (skipped.length > 0) {
+        parts.push(`Skipped ${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ''}: no usable characters in the name.`)
+    }
+    return parts.length > 0 ? parts.join(' ') : null
+}
+
+/** A path for a query string: names can hold & # + and the like, slashes read better as they are. */
+export function encodePath(path: string): string {
+    return path.split('/').map(encodeURIComponent).join('/')
+}
+
+/** Why an upload failed, from the server's answer, without error codes. */
+export function describeUploadFailure(responseText?: string): string {
+    let answer: {error_code?: string, message?: string} = {}
+    try {
+        answer = JSON.parse(responseText ?? '{}')
+    } catch {
+        // an answer from something in front of the server, not worth showing
+    }
+    if (answer.error_code === 'UNAUTHORIZED_ACCESS') {
+        return "You don't have permission to add files to this folder."
+    }
+    return answer.message ?? 'The upload failed. Try again.'
+}
+
+/** Why a download did not start, without error codes. */
+export function describeDownloadFailure(what: string, error: {errorCode?: string, message?: string}): string {
+    if (error?.errorCode === 'FILE_OPERATION_TIMED_OUT') {
+        return `${what} took too long to prepare and was stopped. For large folders, use the commands on the SSH access page.`
+    }
+    if (error?.errorCode === 'UNAUTHORIZED_ACCESS') {
+        return `You do not have access to ${what}. If you need it, ask its owner.`
+    }
+    return `Could not download ${what}: ${error?.message ?? 'unknown error'}`
+}
+
+// atob and btoa work on bytes as characters, so µ arrives as Âµ and → cannot be sent at all.
+export function decodeFileContent(base64: string): string {
+    return new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)))
+}
+
+export function encodeFileContent(content: string): string {
+    return btoa(Array.from(new TextEncoder().encode(content), (byte) => String.fromCharCode(byte)).join(''))
+}
 
 class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserState> {
 
@@ -306,7 +369,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             renameFormValues: {},
             renameValidationErrors: {},
             filePermissions: new Map<string, any>(),
-            homeDir: ''
+            homeDir: '',
+            listError: null,
+            cannotOpen: null
         }
         this._fileBrowserClient = AppContext.get().client().fileBrowser()
         this.createFolderForm = React.createRef()
@@ -322,7 +387,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     componentDidMount() {
         AppContext.get().getClusterSettingsService().getModuleSettings(Constants.MODULE_BASTION_HOST).then(moduleInfo => {
             this.setState({
-                sshHostIp: Utils.asString(moduleInfo.public_ip || moduleInfo.private_dns_name || moduleInfo.private_ip),
+                sshHostIp: bastionHost(moduleInfo),
                 sshAccess: true
             })
         }).catch(error => {
@@ -370,8 +435,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     checkFileSize(file: FileBrowserEntry): boolean {
         const maxFileSize = 5 * 1024 * 1024; // 5MB in bytes
         if (file.size && file.size > maxFileSize) {
-            const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
-            this.showToast('file-too-large', `File is too large (${fileSizeMB}MB). Only files 5MB or smaller can be opened in the editor.`);
+            this.setState({cannotOpen: {file: file, reason: 'large'}});
             return false;
         }
         return true;
@@ -380,7 +444,8 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     showToast(id: string, message: string, type: 'warning' | 'info' = 'warning') {
         if (type === 'warning') {
             toast.warn(message, {
-                autoClose: 2000,
+                // a failure stays until it is dismissed: nobody reads a reason in two seconds
+                autoClose: false,
                 toastId: id
             })
         } else if (type === 'info') {
@@ -391,8 +456,8 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         }
     }
 
-    /** List a directory. `onError` takes the failure instead of the toast, for callers that show it
-     * somewhere the user is already looking. */
+    /** List a directory. `onError` takes the failure instead of the alert above the table, for
+     * callers that show it somewhere the user is already looking. */
     listFiles(cwd?: string, onError?: (error: any) => void): Promise<boolean> {
         this.setState({listing: true})
         return this.fileBrowserClient().listFiles({
@@ -404,7 +469,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 files: this.convert(result),
                 cwd: Utils.asString(result.cwd, '/'),
                 selectedFiles: [],
-                listing: false
+                listing: false,
+                listError: null,
+                listingLoaded: true
             })
             return true
         }).catch(error => {
@@ -413,7 +480,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             if (onError != null) {
                 onError(error)
             } else {
-                this.showToast(error.errorCode, error.message)
+                this.setState({listError: describeListingFailure(cwd ?? 'your home folder', error)})
             }
             return false
         })
@@ -492,44 +559,58 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return path
     }
 
-    downloadFiles(files: FileBrowserEntry[]) {
-
-        const download = (file: string, skipFlashbar = false) => {
-            const tokens = file.split('/')
-            const fileName = tokens[tokens.length - 1]
-
-            // Get a temporary signed download URL from the server
-            AppContext.get().auth().getAccessToken().then(accessToken => {
-                return fetch(`${AppContext.get().client().fileBrowser().getEndpointUrl()}/generate-download-url`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ file: file })
-                })
-            }).then(response => {
-                if (!response.ok) {
-                    throw new Error(`Failed to generate download URL: ${response.status}`)
-                }
-                return response.json()
-            }).then(result => {
-                // Use the temporary signed URL for native browser download
-                const link = document.createElement('a')
-                link.href = result.download_url
-                link.setAttribute('download', fileName)
-                link.style.display = 'none'
-                document.body.appendChild(link)
-                link.click()
-                document.body.removeChild(link)
-            }).catch(error => {
-                console.error('Download failed:', error)
-                const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-                if (!skipFlashbar) {
-                    this.showToast('download-error', `Failed to download ${fileName}: ${errorMessage}`)
-                }
+    /** Ask for a signed link and hand it to the browser. Rejects when there is nothing to hand over,
+     * because the server answers a refused file with a 200 and no link. */
+    startBrowserDownload(file: string): Promise<void> {
+        const fileName = file.substring(file.lastIndexOf('/') + 1)
+        return AppContext.get().auth().getAccessToken().then(accessToken => {
+            return fetch(`${AppContext.get().client().fileBrowser().getEndpointUrl()}/generate-download-url`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ file: file })
             })
+        }).then(response => {
+            if (!response.ok) {
+                throw {message: `the server answered ${response.status}`}
+            }
+            return response.json()
+        }).then(result => {
+            if (result.success === false || !result.download_url) {
+                throw {errorCode: result.error_code, message: result.message}
+            }
+            const link = document.createElement('a')
+            link.href = result.download_url
+            link.setAttribute('download', fileName)
+            link.style.display = 'none'
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+        })
+    }
+
+    /** Swap one flashbar item for another, or add it when the first has gone. */
+    replaceFlash(id: string, item: any) {
+        const items = this.props.flashbarItems || []
+        const replaced = items.map(current => (current as any).customId === id ? item : current)
+        if (!replaced.some(current => (current as any).customId === id)) {
+            replaced.push(item)
         }
+        this.props.onFlashbarChange({items: replaced})
+    }
+
+    removeFlashAfter(id: string, ms: number) {
+        setTimeout(() => {
+            this.props.onFlashbarChange({
+                items: (this.props.flashbarItems || []).filter(item => (item as any).customId !== id)
+            })
+        }, ms)
+    }
+
+    downloadFiles(files: FileBrowserEntry[]) {
+        const what = files.length === 1 ? files[0].name : `these ${files.length} files`
 
         // Determine if we need to show flashbar (for directories, multiple files, or large single files)
         const needsFlashbar = files.length > 1 ||
@@ -537,133 +618,71 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                              files.some(file => file.size && file.size > 10 * 1024 * 1024) // 10MB threshold
 
         if (files.length === 1 && !needsFlashbar) {
-            // Simple single file download without flashbar
-            download(this.getFilePath(files[0]))
+            this.startBrowserDownload(this.getFilePath(files[0])).catch(error => {
+                this.showToast('download-error', describeDownloadFailure(what, error))
+            })
+            return
+        }
+
+        // Show loading feedback for downloads that might take time
+        const downloadId = `download-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
+        let contentMessage = ''
+        if (files.length === 1 && files[0].isDir) {
+            contentMessage = `Preparing download archive for directory "${files[0].name}"... This may take several minutes for directories with large files.`
+        } else if (files.length === 1) {
+            contentMessage = `Preparing download for large file "${files[0].name}"...`
         } else {
-            // Show loading feedback for downloads that might take time
-            const downloadId = `download-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+            contentMessage = `Preparing download archive for ${files.length} files... This may take several minutes for large files.`
+        }
 
-            let contentMessage = ''
-            if (files.length === 1 && files[0].isDir) {
-                contentMessage = `Preparing download archive for directory "${files[0].name}"... This may take several minutes for directories with large files.`
-            } else if (files.length === 1) {
-                contentMessage = `Preparing download for large file "${files[0].name}"... This may take several minutes.`
-            } else {
-                contentMessage = `Preparing download archive for ${files.length} files... This may take several minutes for large files.`
-            }
-
-            const preparingItem = {
+        this.props.onFlashbarChange({
+            items: [...(this.props.flashbarItems || []), {
                 type: 'info' as const,
                 loading: true,
                 header: 'Preparing download',
                 content: contentMessage,
                 dismissible: false,
                 customId: downloadId
-            }
+            } as any]
+        })
 
-            // Add the preparing item to current flashbar items
-            this.props.onFlashbarChange({
-                items: [...(this.props.flashbarItems || []), preparingItem]
-            })
+        const isSingleFile = files.length === 1 && !files[0].isDir
+        const prepared: Promise<number> = isSingleFile
+            ? this.startBrowserDownload(this.getFilePath(files[0])).then(() => 0)
+            : this.fileBrowserClient().downloadFiles({
+                files: files.map((file) => this.getFilePath(file))
+            }).then(result => this.startBrowserDownload(result.download_url!).then(() => result.skipped_files ?? 0))
 
-            if (files.length === 1 && !files[0].isDir) {
-                // Single file download with flashbar
-                download(this.getFilePath(files[0]), true)
-
-                // Replace with success message
-                const successItem = {
-                    type: 'success' as const,
+        prepared.then((skipped) => {
+            if (skipped > 0) {
+                // stays until dismissed: the zip is not everything that was asked for
+                this.replaceFlash(downloadId, {
+                    type: 'warning' as const,
                     header: 'Download ready',
-                    content: 'Your download should start automatically.',
+                    content: `Your zip is ready. ${skipped.toLocaleString()} ${skipped === 1 ? 'file' : 'files'} could not be read and ${skipped === 1 ? 'is' : 'are'} not in it.`,
                     dismissible: true,
                     customId: downloadId
-                }
-
-                // Replace the preparing item with success
-                setTimeout(() => {
-                    const currentItems = this.props.flashbarItems || []
-                    const updatedItems = currentItems.map(item => {
-                        return (item as any).customId === downloadId ? successItem : item
-                    })
-
-                    this.props.onFlashbarChange({
-                        items: updatedItems
-                    })
-
-                    // Auto-remove success message after 5 seconds
-                    setTimeout(() => {
-                        this.props.onFlashbarChange({
-                            items: (this.props.flashbarItems || []).filter(item => (item as any).customId !== downloadId)
-                        })
-                    }, 5000)
-                }, 500) // Small delay to show the preparing state
-            } else {
-                // Multiple files or directory download - use API
-                const file_paths: string[] = []
-                files.forEach((file) => file_paths.push(this.getFilePath(file)))
-                this.fileBrowserClient().downloadFiles({
-                    files: file_paths
-                }).then(result => {
-                    // Replace with success message
-                    const successItem = {
-                        type: 'success' as const,
-                        header: 'Download ready',
-                        content: 'Download archive is ready! Your download should start automatically.',
-                        dismissible: true,
-                        customId: downloadId
-                    }
-
-                    // Create new items array with the replacement
-                    const currentItems = this.props.flashbarItems || []
-                    const updatedItems = currentItems.map(item => {
-                        return (item as any).customId === downloadId ? successItem : item
-                    })
-
-                    // If no item was replaced, add it
-                    if (!updatedItems.some(item => (item as any).customId === downloadId)) {
-                        updatedItems.push(successItem)
-                    }
-
-                    this.props.onFlashbarChange({
-                        items: updatedItems
-                    })
-
-                    download(result.download_url!, true)
-
-                    // Auto-remove success message after 10 seconds
-                    setTimeout(() => {
-                        this.props.onFlashbarChange({
-                            items: (this.props.flashbarItems || []).filter(item => (item as any).customId !== downloadId)
-                        })
-                    }, 10000)
-                }).catch(error => {
-                    console.error('Download preparation failed:', error)
-                    // Replace with error message using the same pattern as other error handlers
-                    const errorItem = {
-                        type: 'error' as const,
-                        header: 'Download failed',
-                        content: `Failed to prepare download: ${error.message} (${error.errorCode})`,
-                        dismissible: true,
-                        customId: downloadId
-                    }
-
-                    // Create new items array with the replacement
-                    const currentItems = this.props.flashbarItems || []
-                    const updatedItems = currentItems.map(item =>
-                        (item as any).customId === downloadId ? errorItem : item
-                    )
-
-                    // If no item was replaced, add it
-                    if (!updatedItems.some(item => (item as any).customId === downloadId)) {
-                        updatedItems.push(errorItem)
-                    }
-
-                    this.props.onFlashbarChange({
-                        items: updatedItems
-                    })
                 })
+                return
             }
-        }
+            this.replaceFlash(downloadId, {
+                type: 'success' as const,
+                header: 'Download ready',
+                content: 'Your download should start automatically.',
+                dismissible: true,
+                customId: downloadId
+            })
+            this.removeFlashAfter(downloadId, isSingleFile ? 5000 : 10000)
+        }).catch(error => {
+            this.replaceFlash(downloadId, {
+                type: 'error' as const,
+                header: 'Download failed',
+                content: describeDownloadFailure(what, error),
+                dismissible: true,
+                customId: downloadId
+            })
+        })
     }
 
     onOpenSelection(payload?: FileBrowserEntry) {
@@ -702,7 +721,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 onSave={(file: string, content: string) => {
                     return this.fileBrowserClient().saveFile({
                         file: file,
-                        content: btoa(content)
+                        content: encodeFileContent(content)
                     }).then(() => {
                         return true
                     })
@@ -726,16 +745,18 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         this.fileBrowserClient().readFile({
             file: path
         }).then(result => {
-            this.fileEditor.current?.setContent(path, atob(result.content!))
+            this.fileEditor.current?.setContent(path, decodeFileContent(result.content!))
             this.fileEditor.current?.setLanguage('sh')
             this.setState({
                 editorOpen: true
             })
         }).catch(error => {
             if (error.errorCode === 'NOT_A_TEXT_FILE') {
-                this.downloadFiles([file])
+                this.setState({cannotOpen: {file: file, reason: 'binary'}})
+            } else if (error.errorCode === 'UNAUTHORIZED_ACCESS') {
+                this.showToast('open-denied', `You do not have access to ${file.name}. If you need it, ask its owner.`)
             } else {
-                toast(error.message)
+                this.showToast(error.errorCode, `Could not open ${file.name}: ${error.message}`)
             }
         })
     }
@@ -752,7 +773,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             file: path
         }).then(result => {
             // If successful, the file is a text file and safe to open in script workbench
-            this.props.navigate(`/home/script-workbench?file=${path}`)
+            this.props.navigate(`/home/script-workbench?file=${encodePath(path)}`)
         }).catch(error => {
             if (error.errorCode === 'NOT_A_TEXT_FILE') {
                 this.showToast('binary-file-error', 'Cannot open binary files in Script Workbench. Only text files are supported.')
@@ -775,7 +796,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     theme: (AppContext.get().isDarkMode() ? 'dark' : 'light')
                 })
                 .use(XHRUpload, {
-                    endpoint: `${httpEndpoint}${FILE_BROWSER_API_PATH}/upload?cwd=${this.getCwd()}`,
+                    endpoint: `${httpEndpoint}${FILE_BROWSER_API_PATH}/upload?cwd=${encodePath(this.getCwd())}`,
                     headers: {
                         'Authorization': `Bearer ${accessToken}`
                     },
@@ -786,7 +807,19 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 })
             const dashboard = uppy.getPlugin('Dashboard')!
             dashboard.openModal()
+            uppy.on('upload-error', (_file, _error, response) => {
+                uppy.info(describeUploadFailure((response as any)?.responseText), 'error', 15000)
+            })
+            let outcome: any = null
+            uppy.on('upload-success', (_file, response) => {
+                // a bundled upload answers once for all its files
+                outcome = (response?.body as any)?.payload ?? outcome
+            })
             uppy.on('complete', () => {
+                const changed = describeUploadOutcome(outcome)
+                if (changed != null) {
+                    uppy.info(changed, 'warning', 15000)
+                }
                 this.listFiles(this.getCwd()).finally()
             })
         })
@@ -804,6 +837,11 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                               return
                           }
                           const values = this.getCreateFolderForm().getValues()
+                          const invalidName = this.validateFileName(values.name)
+                          if (invalidName != null) {
+                              this.getCreateFolderForm().setError('INVALID_PARAMS', invalidName)
+                              return
+                          }
                           this.fileBrowserClient().createFile({
                               cwd: this.getCwd(),
                               filename: values.name,
@@ -812,14 +850,14 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                               this.listFiles(this.getCwd()).finally()
                               this.getCreateFolderForm().hideModal()
                           }).catch(error => {
-                              this.getCreateFolderForm().setError(error.errorCode, error.message)
+                              this.getCreateFolderForm().setError(error.errorCode, `${error.message}`.replace(/^Invalid params: /, ''))
                           })
                       }}
                       params={[
                           {
                               name: 'name',
                               title: 'Folder name',
-                              description: 'Enter the name of the folder',
+                              description: 'Letters, numbers, and _ . - ( ) only. No spaces.',
                               data_type: 'str',
                               param_type: 'text',
                               validate: {
@@ -1178,7 +1216,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
         return (
             <IdeaConfirm
                 ref={this.deleteFileConfirmModal}
-                title={"Delete files"}
+                title={`Delete ${this.state.filesToDelete.length.toLocaleString()} ${this.state.filesToDelete.length === 1 ? 'file' : 'files'}`}
                 onCancel={() => {
                     this.setState({
                         filesToDelete: [],
@@ -1197,15 +1235,22 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     }).catch(error => {
                         if (error.errorCode === 'UNAUTHORIZED_ACCESS') {
                             this.showToast(error.errorCode, 'Permission denied')
+                        } else if (error.errorCode === 'FILE_OPERATION_TIMED_OUT') {
+                            this.showToast(error.errorCode, 'Deleting took too long and was stopped. Some files may already be gone.')
                         } else {
                             this.showToast(error.errorCode, error.message)
                         }
+                        // whatever could be deleted is gone
+                        this.listFiles(this.getCwd()).finally()
                     })
                 }}>
                 <p>Delete these files? This cannot be undone.</p>
-                {this.state.filesToDelete.map((file, index) => {
+                {this.state.filesToDelete.slice(0, MAX_NAMES_TO_DELETE_SHOWN).map((file, index) => {
                     return <li key={index}>{file.name}</li>
                 })}
+                {this.state.filesToDelete.length > MAX_NAMES_TO_DELETE_SHOWN && (
+                    <li>and {(this.state.filesToDelete.length - MAX_NAMES_TO_DELETE_SHOWN).toLocaleString()} more</li>
+                )}
             </IdeaConfirm>
         )
     }
@@ -1228,7 +1273,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             state.downloadPpkLoading = true
         }
         this.setState(state, () => {
-            AppContext.get().auth().downloadPrivateKey(keyFormat).finally(() => {
+            AppContext.get().auth().downloadPrivateKey(keyFormat).catch(error => {
+                this.showToast('key-download-error', describeKeyFailure(error))
+            }).finally(() => {
                 const state: any = {}
                 if (keyFormat === 'pem') {
                     state.downloadPemLoading = false
@@ -1254,7 +1301,42 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     }
 
     tailFile(file: FileBrowserEntry) {
-        Utils.openNewTab(`/#/home/file-browser/tail?file=${this.getCwd()}/${file.name}&cwd=${this.getCwd()}`)
+        Utils.openNewTab(`/#/home/file-browser/tail?file=${encodePath(this.getFilePath(file))}&cwd=${encodePath(this.getCwd())}`)
+    }
+
+    buildCannotOpenModal() {
+        const cannotOpen = this.state.cannotOpen
+        if (cannotOpen == null) {
+            return null
+        }
+        const file = cannotOpen.file
+        const close = () => this.setState({cannotOpen: null})
+        return (
+            <Modal
+                visible={true}
+                onDismiss={close}
+                header="This file can't be opened here"
+                footer={
+                    <Box float="right">
+                        <SpaceBetween size="xs" direction="horizontal">
+                            <Button onClick={close}>Close</Button>
+                            {cannotOpen.reason === 'large' && <Button onClick={() => {
+                                close()
+                                this.tailFile(file)
+                            }}>Watch the end of the file</Button>}
+                            <Button variant="primary" onClick={() => {
+                                close()
+                                this.downloadFiles([file])
+                            }}>Download</Button>
+                        </SpaceBetween>
+                    </Box>
+                }
+            >
+                {cannotOpen.reason === 'large'
+                    ? `${file.name} is ${formatFileSize(file.size)}. Files up to 5 MB can be opened here.`
+                    : `${file.name} isn't a text file, so it can't be shown here.`}
+            </Modal>
+        )
     }
 
     /** Right-clicking outside the selection moves the selection to that entry. */
@@ -1273,10 +1355,13 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     filesActions(): FileBrowserAction[] {
         const selected = this.state.selectedFiles
         const any = selected.length > 0
+        // these act on one thing: offered for several, they would quietly use only the first
+        const one = selected.length === 1
+        const oneFile = one && !selected[0].isDir
         const actions: FileBrowserAction[] = [
-            {id: 'open', text: 'Open', enabled: selected.length === 1, run: () => this.onOpenSelection(selected[0])},
+            {id: 'open', text: 'Open', enabled: one, run: () => this.onOpenSelection(selected[0])},
             {id: 'download', text: 'Download files', enabled: any, run: () => this.downloadFiles(selected)},
-            {id: 'copy', text: 'Copy path', enabled: any, run: () => this.copyPath(selected[0])},
+            {id: 'copy', text: 'Copy path', enabled: one, run: () => this.copyPath(selected[0])},
             {id: 'rename', text: 'Rename', enabled: any, run: () => this.checkRenamePermissions(selected)},
             {id: 'favorite', text: 'Add to favorites', enabled: any, run: () => selected.forEach((file) => this.addFavorite(file))}
         ]
@@ -1284,13 +1369,13 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             actions.push({
                 id: 'submit-job',
                 text: 'Submit job',
-                enabled: any,
-                run: () => this.props.navigate(`/soca/jobs/submit-job?input_file=${this.getCwd()}/${selected[0].name}`)
+                enabled: oneFile,
+                run: () => this.props.navigate(`/soca/jobs/submit-job?input_file=${encodePath(this.getFilePath(selected[0]))}`)
             })
         }
         actions.push(
-            {id: 'tail', text: 'Tail file', enabled: any, run: () => this.tailFile(selected[0])},
-            {id: 'workbench', text: 'Open in script editor', enabled: any, run: () => this.openFileInScriptWorkbench(selected[0])},
+            {id: 'tail', text: 'Watch end of file', enabled: oneFile, run: () => this.tailFile(selected[0])},
+            {id: 'workbench', text: 'Open in script editor', enabled: oneFile, run: () => this.openFileInScriptWorkbench(selected[0])},
             {id: 'delete', text: 'Delete files', enabled: any && selected.every(file => !file.isDir), run: () => this.deleteFiles(selected)},
             {id: 'delete-folder', text: 'Delete folder', enabled: selected.length === 1 && !!selected[0].isDir,
                 run: () => this.setState({folderToDelete: {path: this.getFilePath(selected[0]), name: selected[0].name!}})}
@@ -1314,8 +1399,8 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             actions.push({
                 id: 'submit-job',
                 text: 'Submit job',
-                enabled: any,
-                run: () => this.props.navigate(`/soca/jobs/submit-job?input_location=${selected[0].path}`)
+                enabled: selected.length === 1 && !selected[0].isDir,
+                run: () => this.props.navigate(`/soca/jobs/submit-job?input_file=${encodePath(selected[0].path ?? '')}`)
             })
         }
         return actions
@@ -1409,7 +1494,12 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         {this.state.showDeleteConfirmModal && this.buildDeleteFileConfirmModal()}
                         {this.state.folderToDelete && <DeleteFolderDialog
                             {...this.state.folderToDelete}
-                            onClose={() => this.setState({folderToDelete: null})}
+                            home={this.state.homeDir}
+                            onClose={() => {
+                                this.setState({folderToDelete: null})
+                                // a failed attempt may have removed part of the folder
+                                this.listFiles(this.getCwd()).finally()
+                            }}
                             onDeleted={() => {
                                 this.setState({folderToDelete: null})
                                 this.listFiles(this.getCwd()).finally()
@@ -1417,7 +1507,13 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         {this.buildCreateFolderForm()}
                         {this.buildRenameFileModal()}
                         {this.buildFileEditor()}
+                        {this.buildCannotOpenModal()}
                         {/*<Container>*/}
+                        {this.state.listError && (
+                            <Alert type="error" dismissible={true} onDismiss={() => this.setState({listError: null})}>
+                                {this.state.listError}
+                            </Alert>
+                        )}
                         <Tabs
                             onChange={(event) => {
                                 this.setState({
@@ -1447,6 +1543,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                             actions={this.buildFilesToolbar(filesActions)}
                                             path={this.buildPathNav()}
                                             loading={this.state.listing}
+                                            emptyText={this.state.listError && !this.state.listingLoaded ? 'This folder could not be opened.' : undefined}
+                                            filterScope={this.getCwd()}
+                                            onShowHiddenFiles={() => this.setState({showHiddenFiles: true})}
                                             showHiddenFiles={this.state.showHiddenFiles}
                                         />
                                     )
@@ -1457,6 +1556,8 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                     content: (
                                         <FileBrowserTable
                                             title="Favorites"
+                                            emptyLabel="No favorites yet."
+                                            filterLabel="Filter favorites by name"
                                             entries={this.state.favorites}
                                             selectedEntries={this.state.selectedFavorites}
                                             onSelectionChange={(entries) => this.setState({selectedFavorites: entries})}
@@ -1475,7 +1576,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                         <SpaceBetween size={"s"}>
                                             <Container header={<Header variant="h3" description="Use one of these to move large files to your cluster.">File transfer method</Header>}>
                                                 <Tiles value={this.state.fileTransferMethod}
-                                                       columns={3}
+                                                       columns={AppContext.get().auth().isAdmin() ? 3 : 2}
                                                        items={[
                                                            {
                                                                label: 'FileZilla',
@@ -1487,11 +1588,12 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                                description: 'Available for Windows only',
                                                                value: 'winscp'
                                                            },
-                                                           {
+                                                           // setting this up takes the AWS console, so it is an administrator's job
+                                                           ...(AppContext.get().auth().isAdmin() ? [{
                                                                label: 'AWS Transfer',
                                                                description: 'Your IDEA cluster must be using Amazon EFS to use AWS Transfer',
                                                                value: 'aws-transfer'
-                                                           }
+                                                           }] : [])
                                                        ]}
                                                        onChange={(event) => {
                                                            this.setState({
@@ -1554,7 +1656,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                                                         <Alert onDismiss={() => false}
                                                                dismissAriaLabel="Close alert"
                                                                header="Info">
-                                                            WinSCP is only available on Windows. Please use alternate methods (FileZilla, AWS FTP) if you are running Linux/Mac clients.
+                                                            WinSCP is only available on Windows. Use FileZilla if you are on Linux or a Mac.
                                                         </Alert>
                                                         <h4>Step 1: Download WinSCP</h4>
                                                         <ul>

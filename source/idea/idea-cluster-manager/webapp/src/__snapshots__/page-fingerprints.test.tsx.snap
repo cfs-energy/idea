@@ -999,7 +999,7 @@ exports[`page dom fingerprints > file-browser 1`] = `
                                       div class="soca-file-browser-filter"
                                         div class="awsui_input-container awsui_root"
                                           div class="awsui_input-field"
-                                            input aria-label="Search this directory" autocomplete="on" class="awsui_input" placeholder="Search" type="text" value=""
+                                            input aria-label="Filter this folder by name" autocomplete="on" class="awsui_input" placeholder="Filter this folder by name" type="text" value=""
                                         span class="soca-file-browser-filter-count"
                             div class="awsui_content"
                               div class="awsui_content-inner awsui_content-inner awsui_with-header"
@@ -2481,18 +2481,8 @@ exports[`page dom fingerprints > virtual-desktop-session-detail 1`] = `
                                 span class="awsui_tab-label awsui_tabs-tab-label"
                                   span
                           li class="awsui_tabs-tab" role="presentation"
-                            div class="awsui_refresh awsui_tabs-tab-focusable awsui_tabs-tab-header-container"
-                              button aria-controls="awsui-tabs-_r25_-monitoring-panel" aria-selected="false" class="awsui_refresh awsui_tabs-tab-focusable awsui_tabs-tab-link" data-awsui-motion-trigger="hover" data-testid="monitoring" id="awsui-tabs-_r25_-monitoring" role="tab" tabindex="-1" type="button"
-                                span class="awsui_tab-label awsui_tabs-tab-label"
-                                  span
-                          li class="awsui_tabs-tab" role="presentation"
                             div class="awsui_refresh awsui_tabs-tab-active awsui_tabs-tab-focusable awsui_tabs-tab-header-container"
                               button aria-controls="awsui-tabs-_r25_-session-health-panel" aria-selected="true" class="awsui_active-tab-header awsui_refresh awsui_tabs-tab-active awsui_tabs-tab-focusable awsui_tabs-tab-focused awsui_tabs-tab-link" data-awsui-motion-trigger="hover" data-testid="session-health" id="awsui-tabs-_r25_-session-health" role="tab" tabindex="0" type="button"
-                                span class="awsui_tab-label awsui_tabs-tab-label"
-                                  span
-                          li class="awsui_tabs-tab" role="presentation"
-                            div class="awsui_refresh awsui_tabs-tab-focusable awsui_tabs-tab-header-container"
-                              button aria-controls="awsui-tabs-_r25_-cost-estimates-panel" aria-selected="false" class="awsui_refresh awsui_tabs-tab-focusable awsui_tabs-tab-link" data-awsui-motion-trigger="hover" data-testid="cost-estimates" id="awsui-tabs-_r25_-cost-estimates" role="tab" tabindex="-1" type="button"
                                 span class="awsui_tab-label awsui_tabs-tab-label"
                                   span
                     div class="awsui_tabs-content-wrapper awsui_with-paddings"
@@ -2502,7 +2492,6 @@ exports[`page dom fingerprints > virtual-desktop-session-detail 1`] = `
                       div aria-labelledby="awsui-tabs-_r25_-project" class="awsui_tabs-content" id="awsui-tabs-_r25_-project-panel" role="tabpanel" tabindex="0"
                       div aria-labelledby="awsui-tabs-_r25_-permissions" class="awsui_tabs-content" id="awsui-tabs-_r25_-permissions-panel" role="tabpanel" tabindex="0"
                       div aria-labelledby="awsui-tabs-_r25_-schedule" class="awsui_tabs-content" id="awsui-tabs-_r25_-schedule-panel" role="tabpanel" tabindex="0"
-                      div aria-labelledby="awsui-tabs-_r25_-monitoring" class="awsui_tabs-content" id="awsui-tabs-_r25_-monitoring-panel" role="tabpanel" tabindex="0"
                       div aria-labelledby="awsui-tabs-_r25_-session-health" class="awsui_tabs-content awsui_tabs-content-active" id="awsui-tabs-_r25_-session-health-panel" role="tabpanel" tabindex="0"
                         div class="awsui_refresh awsui_root awsui_variant-default"
                           div class="awsui_content-wrapper" id="_r26_"
@@ -2694,7 +2683,6 @@ exports[`page dom fingerprints > virtual-desktop-session-detail 1`] = `
                                                                 svg aria-hidden="true" data-awsui-icon-animated="true" focusable="false" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"
                                                                   path class="awsui-icon-front stroke-linejoin-round" d="#0a04a5a7"
                                                                   path class="awsui-icon-back stroke-linejoin-round" d="#be10f2d0"
-                      div aria-labelledby="awsui-tabs-_r25_-cost-estimates" class="awsui_tabs-content" id="awsui-tabs-_r25_-cost-estimates-panel" role="tabpanel" tabindex="0"
         div class="awsui_tools-container"
           aside aria-hidden="true" class="awsui_drawer-closed awsui_tools awsui_tools" id="tools-_r47_"
             div class="awsui_animated-content"

@@ -19,9 +19,15 @@ from ideadatamodel import (
     errorcodes,
     exceptions,
 )
-from ideasdk.aws.image_builds import default_builder_instance_type
+from ideasdk.aws.failure_capture import (
+    FailedHost,
+    capture_failure,
+    find_job_instance,
+)
+from ideasdk.aws.image_builds import default_builder_instance_type, with_cause
 from ideasdk.aws.validation_identity import (
     ensure_validation_identity,
+    path_answers,
     wait_for_local_user,
 )
 
@@ -209,6 +215,23 @@ class ComputeImageCanary:
             f'{size}, the validation instance type.'
         )
 
+    def _capture_failed_node(self, record, job_id, node, error):
+        return capture_failure(
+            self.context,
+            self.context.logger('compute-image-canary'),
+            FailedHost(
+                kind='compute_bake',
+                identifier=record.ami_name or f'{record.base_os}/{record.architecture}',
+                instance_id=getattr(node, 'instance_id', None)
+                or find_job_instance(self.context, job_id),
+                failure=getattr(error, 'message', None) or str(error),
+                os=record.base_os,
+                arch=record.architecture,
+                ami=record.image_id,
+                release=record.release,
+            ),
+        )
+
     def validate(self, record, progress):
         from ideascheduler.app.api.scheduler_api import SchedulerAPI
 
@@ -299,6 +322,13 @@ class ComputeImageCanary:
             'shared-storage.data.mount_dir', required=True
         )
         output = Path(data) / 'home' / user / 'jobs' / (name + '.json')
+        # the submit below stats this path with no timeout: on a hung mount it never returns
+        home = output.parents[1]
+        if not path_answers(str(home)):
+            raise exceptions.general_exception(
+                f'The shared home {home} did not answer within 60 seconds, so the '
+                'validation job cannot be written. Check the file system that serves it.'
+            )
         # PBS directive values cannot contain line breaks or whitespace.
         if any(ch.isspace() for ch in str(output)):
             raise exceptions.invalid_params(
@@ -309,6 +339,7 @@ class ComputeImageCanary:
         deadline = started + settings.ready_gate_seconds_linux
         job_id = None
         created = None
+        observed_node = None
 
         def check(check_name, ok, detail, fatal=True):
             checks.append(
@@ -457,6 +488,12 @@ class ComputeImageCanary:
                     )
                 )
                 progress({'checks': checks})
+            # before the release below takes the node. a node that panicked never registered
+            cause = self._capture_failed_node(record, job_id, observed_node, error)
+            if cause:
+                raise exceptions.general_exception(
+                    with_cause(getattr(error, 'message', None) or str(error), cause)
+                ) from error
             raise
         finally:
             cleanup_errors = self._release(job_id, created)

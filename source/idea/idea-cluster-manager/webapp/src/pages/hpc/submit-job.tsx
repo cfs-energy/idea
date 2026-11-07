@@ -113,6 +113,14 @@ const TAB_BUDGET_USAGE = 'budget-usage'
 const TAB_JOB_SCRIPT = 'job-script'
 const TAB_JOB_PARAMETERS = 'job-parameters'
 
+/** The application picker for someone with no applications: why, and the way to run a job anyway. */
+export function NoApplications({navigate}: {navigate: (path: string) => void}) {
+    return <SpaceBetween size="s">
+        <Box>No applications are available for your projects. Ask an administrator to add you to a project, or write your own job script.</Box>
+        <Button variant="primary" onClick={() => navigate('/home/script-workbench')}>Write script</Button>
+    </SpaceBetween>
+}
+
 class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
     jobSubmissionForm: RefObject<IdeaForm | null>
@@ -196,7 +204,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             return error.message
         }
         if (Utils.isNotEmpty(error?.errorCode)) {
-            return `Request failed with error code: ${error.errorCode}`
+            return 'The request failed. Try again; if it repeats, tell an administrator.'
         }
         return `${error}`
     }
@@ -355,6 +363,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                    }
             >
                 <div style={{height: '60vh', overflow: 'auto'}}>
+                    {this.state.applications.length === 0 ? <NoApplications navigate={this.props.navigate}/> :
                     <SpaceBetween size="m" direction="vertical">
                         <TextFilter
                             filteringText={this.state.applicationFilterText}
@@ -399,7 +408,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                 }
                             })}
                         />
-                    </SpaceBetween>
+                    </SpaceBetween>}
                 </div>
             </Modal>
         )
@@ -955,15 +964,16 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             const estimated_bom_cost = this.state.submitJobResult.estimated_bom_cost
             return (
                 <ColumnLayout columns={1}>
-                    <Table items={(estimated_bom_cost.line_items) ? estimated_bom_cost.line_items! : []}
-                           columnDefinitions={getColumnDefinitions()}/>
+                    {!estimated_bom_cost.price_unavailable &&
+                        <Table items={(estimated_bom_cost.line_items) ? estimated_bom_cost.line_items! : []}
+                               columnDefinitions={getColumnDefinitions()}/>}
 
                     <ColumnLayout columns={2}>
                         <Box textAlign="left">
-                            <h3>Estimated Total Cost Per Hour</h3>
+                            <h3>Estimated total for the requested walltime (1 hour if none set)</h3>
                         </Box>
                         <Box textAlign="right">
-                            <h3>{Utils.getFormattedAmount(estimated_bom_cost?.line_items_total)}</h3>
+                            <h3>{estimated_bom_cost.price_unavailable ? 'Price not available' : Utils.getFormattedAmount(estimated_bom_cost?.line_items_total)}</h3>
                         </Box>
                     </ColumnLayout>
 
@@ -1052,6 +1062,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     </Box>
                 }
 
+                if (this.state.submitJobResult?.estimated_bom_cost?.price_unavailable) {
+                    return <Box>Budget impact can't be calculated without a price.</Box>
+                }
+
                 return buildBudgetUsage(budget)
             } else {
                 return <Box color="text-body-secondary">
@@ -1132,36 +1146,10 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 }
                 return (
                     <ColumnLayout columns={1}>
-                        {this.isDryRun() && (
-                            <div>
-                                <Box variant="h3" color="text-status-error">Dry Run Failed</Box>
-                                <p>
-                                    <StatusIndicator type="error">Job cannot be submitted with this configuration due to below
-                                        errors.</StatusIndicator>
-                                </p>
-                            </div>
-                        )}
-                        {!this.isDryRun() && (
-                            <div>
-                                <Box variant="h3" color="text-status-error">Job Submission Failed</Box>
-                                <p>
-                                    <StatusIndicator type="error">Job submission failed with errors</StatusIndicator>
-                                </p>
-                            </div>
-                        )}
-                        <Table items={errors}
-                               columnDefinitions={[
-                                   {
-                                       id: 'error-code',
-                                       header: 'Error Code',
-                                       cell: e => e.error_code
-                                   },
-                                   {
-                                       id: 'error-code',
-                                       header: 'Description',
-                                       cell: e => <pre>{e.message}</pre>
-                                   }
-                               ]}/>
+                        <Box variant="h3" color="text-status-error">This job can't be queued:</Box>
+                        <ul>
+                            {errors.map((error, index) => <li key={index}>{error.message}</li>)}
+                        </ul>
                     </ColumnLayout>
                 )
             } else if (this.isAccepted()) {

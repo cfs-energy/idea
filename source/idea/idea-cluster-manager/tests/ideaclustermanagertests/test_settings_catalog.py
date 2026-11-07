@@ -228,14 +228,47 @@ def test_catalog_count_contract_and_explicit_dispositions():
         'identity-provider.cognito.operations_leads_group_name',
         'cluster.costs.compute_rate_multiplier',
         'cluster.network.ssh_client_ip',
+        'cluster.failure_capture.enabled',
+        'virtual-desktop-controller.software_stacks.expiry.default_days',
+        'virtual-desktop-controller.software_stacks.expiry.digest_enabled',
+        'virtual-desktop-controller.software_stacks.expiry.enforce_from',
+        'virtual-desktop-controller.software_stacks.expiry.exempt_amis',
+        'virtual-desktop-controller.software_stacks.expiry.warn_days',
+        'metrics.health.drift_checks.enabled',
+        'metrics.health.stack_expiry.enabled',
+        'scheduler.job_cache.backup_interval_seconds',
+        'scheduler.job_cache.finished_job_retention_days',
+        'scheduler.log_archive.s3_retention_days',
+        'metrics.health.enabled',
+        'metrics.health.ad_automation.enabled',
+        'metrics.health.bastion.enabled',
+        'metrics.health.certificates.enabled',
+        'metrics.health.directory.enabled',
+        'metrics.health.ecs.enabled',
+        'metrics.health.gateway_certificate.enabled',
+        'metrics.health.home_probe.enabled',
+        'metrics.health.image_bakes.enabled',
+        'metrics.health.pbs.enabled',
+        'metrics.health.secrets.enabled',
+        'metrics.health.storage_mounts.enabled',
+        'scheduler.scratch_cleanup.dry_run',
+        'scheduler.scratch_cleanup.enabled',
+        'scheduler.scratch_cleanup.file_systems',
+        'scheduler.scratch_cleanup.kill_switch',
+        'scheduler.scratch_cleanup.success_retention_days',
+        'scheduler.scratch_cleanup.failed_retention_days',
+        'scheduler.scratch_cleanup.digest_weekday',
+        'scheduler.scratch_cleanup.max_folders_per_run',
+        'scheduler.scratch_cleanup.max_run_bytes_percent',
+        'scheduler.scratch_cleanup.max_run_share_percent',
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
-    assert len(DESTINATION_SECTIONS) == 37
+    assert len(DESTINATION_SECTIONS) == 38
     assert len(baseline) == 676
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == '6e8dca909911d3fe74178b1ce5d26ed7b693b78c906a88a52689cbd0cfd5656d'
+        == '749daff6a0768a6a32697cc7d11679296c96234c044943013f64cca736903adf'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -1033,3 +1066,21 @@ def test_retired_host_package_settings_are_not_offered_or_writable():
             coerce_settings(
                 'global-settings', {'package_config': {package: {'version': '1'}}}
             )
+
+
+def test_scratch_cleanup_settings_are_editable_at_runtime_and_bounded():
+    keys = [key for key in BY_KEY if key.startswith('scheduler.scratch_cleanup.')]
+    assert len(keys) == 10
+    for key in keys:
+        item = BY_KEY[key]
+        assert item['section'] == 'Scratch cleanup'
+        assert item['effect'] == 'runtime'
+        assert not item['hidden'] and not item['read_only']
+    for leaf in ('max_run_bytes_percent', 'max_run_share_percent'):
+        rule = BY_KEY[f'scheduler.scratch_cleanup.{leaf}']['validation']
+        assert (rule['minimum'], rule['maximum']) == (1, 100)
+    for leaf in ('success_retention_days', 'failed_retention_days'):
+        rule = BY_KEY[f'scheduler.scratch_cleanup.{leaf}']['validation']
+        assert rule['minimum'] == 14
+    rule = BY_KEY['scheduler.scratch_cleanup.digest_weekday']['validation']
+    assert (rule['minimum'], rule['maximum']) == (0, 6)

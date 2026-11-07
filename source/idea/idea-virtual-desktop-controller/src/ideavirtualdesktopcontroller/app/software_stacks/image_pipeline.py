@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from ideadatamodel import (
     IMAGE_ROW_IN_FLIGHT,
     ImageBuildRecord,
+    ImageCheck,
     ImageBuildTrigger,
     ImageKind,
     ImagePipelineSettings,
@@ -44,6 +45,9 @@ from ideasdk.aws.image_builds import (
     IMAGE_BUILD_TAG,
     LEGACY_MIN_AGE_DAYS,
     PIPELINE_IMAGE_TAG,
+    bake_overdue,
+    needs_attempt_clock,
+    bake_time_limit_reason,
     deregister_legacy_images,
     deregister_unreferenced_images,
     describe_image_or_none,
@@ -54,16 +58,21 @@ from ideasdk.aws.image_builds import (
     ImageNotValidated,
     builder_root_gb,
     describe_images_by_id,
+    capture_builder_failure,
+    dispose_builder,
     promote_gate,
+    report_bake_failure,
     root_device_volume_gb,
     resume_record,
     terminate_builder,
+    with_cause,
 )
 from ideasdk.aws.stock_amis import (
     resolve_stock_image,
     stock_unsupported_reason,
     trusted_owners,
 )
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.sessions.image_validation import (
     CapacityWait,
@@ -126,6 +135,9 @@ CAPACITY_MAX_ATTEMPTS = 5
 REAP_AFTER = timedelta(hours=2)
 CLEANUP_EVERY_SECONDS = 30 * 60
 
+# the owner a timed-out row is written with: the host fence stops any thread still on it
+TIME_LIMIT_OWNER = 'bake-time-limit'
+
 # threads running a row in this process, by row key; shared by every pipeline instance
 _LIVE: Dict[str, threading.Thread] = {}
 _LIVE_LOCK = threading.Lock()
@@ -150,6 +162,11 @@ def variant_of(record) -> str:
 
 def now_utc() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def started_on_item(record: ImageBuildRecord) -> Optional[int]:
+    """started_on as the table stores it; it names one bake, so it fences that bake's writes"""
+    return ImageBuildRecordsDB.to_item(record).get('started_on')
 
 
 class DesktopImagePipeline:
@@ -381,6 +398,7 @@ class DesktopImagePipeline:
         record.release = self.version
         record.requested_by = requested_by or trigger.value
         record.attempts = 0
+        record.attempt_started_on = None
         record.retry_after = None
         record.error = None
         record.started_on = now
@@ -527,6 +545,8 @@ class DesktopImagePipeline:
 
     def tick(self, now: Optional[datetime] = None, blocking: bool = False):
         now = now or now_utc()
+        # first: everything below can raise, and a hung bake must fail regardless
+        self._enforce_time_limit(now)
         # Housekeeping is retried next tick; a transient failure must not stop bakes.
         try:
             self.raise_base_stack_min_storage()
@@ -558,6 +578,66 @@ class DesktopImagePipeline:
         if time.monotonic() - self._last_cleanup > CLEANUP_EVERY_SECONDS:
             self._last_cleanup = time.monotonic()
             self.cleanup()
+
+    def _enforce_time_limit(self, now: datetime):
+        """
+        fail every row past the limit, alive or not: a worker blocked on a hung mount can
+        neither fail its own row nor be stopped, so it is left behind and fenced out
+        """
+        try:
+            limit = self.settings().bake_time_limit()
+            rows = self.managed()
+        except Exception as e:
+            self._logger.error(f'bake time limit check failed: {e}')
+            return
+        for record in rows:
+            expected = {
+                'status': record.status,
+                'started_on': started_on_item(record),
+            }
+            if needs_attempt_clock(record):
+                record.attempt_started_on = now
+                try:
+                    self.records.put_if(record, expected)
+                except Exception as e:
+                    self._logger.error(f'{row_id(record)}: could not start clock: {e}')
+                continue
+            if not bake_overdue(record, now, limit):
+                continue
+            reason = bake_time_limit_reason(record, limit)
+            reason = with_cause(
+                reason,
+                capture_builder_failure(
+                    self.context, self._logger, ImageKind.DESKTOP, record, reason
+                ),
+            )
+            record.status = S.FAILED.value
+            record.error = reason
+            record.finished_on = now
+            record.host = TIME_LIMIT_OWNER
+            record.checks = list(record.checks or []) + [
+                ImageCheck(name='time_limit', ok=False, detail=reason, seconds=0)
+            ]
+            try:
+                if not self.records.put_if(record, expected):
+                    continue  # it moved on since the read; the next tick judges it again
+            except Exception as e:
+                self._logger.error(f'{row_id(record)}: could not time out: {e}')
+                continue
+            with _LIVE_LOCK:
+                _LIVE.pop(row_id(record), None)
+            report_bake_failure(
+                self._logger, ImageKind.DESKTOP, record, reason, context=self.context
+            )
+            self._dispose(record)
+            # the worker's own cleanup may never run
+            if self.tester is not None:
+                try:
+                    self.tester.discard(record, self.settings())
+                except Exception as e:
+                    self._logger.error(
+                        f'{row_id(record)}: could not remove its test launch: {e}'
+                    )
 
     def raise_base_stack_min_storage(self) -> List[str]:
         """
@@ -665,11 +745,14 @@ class DesktopImagePipeline:
         if record.status == S.WAITING_CAPACITY.value:
             if record.retry_after is not None and record.retry_after > now:
                 return
-            # an image already built resumes at the test launch, not a rebake
+            # an image already built resumes at the test launch, not a rebake. either way
+            # this try gets the whole limit: the wait was not work
             if record.image_id and not record.validated_on:
                 record.status = S.TEST_LAUNCHING.value
+                record.attempt_started_on = now
             else:
                 record.status = S.QUEUED.value
+                record.attempt_started_on = None
             record.retry_after = None
             self.records.put(record)
             if record.status == S.QUEUED.value:
@@ -681,13 +764,24 @@ class DesktopImagePipeline:
         )
         if record.status in (S.BUILDING.value, S.CHECKING.value):
             resume_record(self.context, self.records, record, self._logger)
+            if record.status == S.FAILED.value:
+                report_bake_failure(
+                    self._logger,
+                    ImageKind.DESKTOP,
+                    record,
+                    record.error,
+                    context=self.context,
+                )
+                self._last_cleanup = float('-inf')
         elif record.status == S.RESOLVING.value:
             record.status = S.QUEUED.value
+            record.attempt_started_on = None
             record.host = self.host
             self.records.put(record)
         else:
             # test_launching and promoting pick up where they were
             record.host = self.host
+            record.attempt_started_on = record.attempt_started_on or now
             self.records.put(record)
         if record.status in ACTIVE:
             self._start(record, blocking=blocking)
@@ -732,26 +826,25 @@ class DesktopImagePipeline:
         due = schedule.next_run_after(last)
         if due is None or due > now.astimezone(tz):
             return
+        # wait for bakes in flight, unclaimed so a later tick still runs it; each row's own
+        # time limit bounds the wait
+        if any(record.is_in_flight() for record in self.managed()):
+            return
         # claim the period first, so a controller reading a lagging copy of last-run
         # does not run the check twice
         if not self._claim_config(LAST_RUN_KEY, last_ms, int(now.timestamp() * 1000)):
             return
-        ec2 = self.context.aws().ec2()
         queued = []
         for record in self.seed_rows():
             if record.pinned or record.rollback_hold or record.is_in_flight():
                 continue
-            # one row's lookup failing must not skip the rest until next month
+            # every row, changed or not: repositories move between vendor images, and an image
+            # only carries their fixes by being baked again. one row failing must not skip the rest
             try:
                 if self.unsupported_reason(record):
                     continue
-                latest = resolve_stock_image(
-                    ec2, record.base_os, record.architecture, self._logger
-                )
-                changed = latest is not None and latest['ImageId'] != record.source_ami
-                if changed or record.release != self.version:
-                    if self.queue(record, ImageBuildTrigger.MONTHLY)[0] == 'queued':
-                        queued.append(row_id(record))
+                if self.queue(record, ImageBuildTrigger.MONTHLY)[0] == 'queued':
+                    queued.append(row_id(record))
             except Exception as e:
                 self._logger.error(f'{row_id(record)}: monthly image check failed: {e}')
         self._logger.info(f'monthly image check: queued {queued or "nothing"}')
@@ -826,18 +919,36 @@ class DesktopImagePipeline:
         stored = self.records.get(record.base_os, record.architecture, record.variant)
         if stored is not None:
             record.pinned = stored.pinned
-        if not self.records.put_if(record, {'host': self.host, **expected}):
+        fence = {'host': self.host, 'started_on': started_on_item(record)}
+        if not self.records.put_if(record, {**fence, **expected}):
             raise LostOwnership()
 
     def _fail(self, record: ImageBuildRecord, reason: str):
+        reason = with_cause(
+            reason,
+            capture_builder_failure(
+                self.context, self._logger, ImageKind.DESKTOP, record, reason
+            ),
+        )
         record.status = S.FAILED.value
         record.error = reason
         record.finished_on = now_utc()
         try:
             self._save(record)
         except LostOwnership:
-            pass
-        self._logger.error(f'{row_id(record)} failed: {reason}')
+            return
+        report_bake_failure(
+            self._logger, ImageKind.DESKTOP, record, reason, context=self.context
+        )
+        self._dispose(record)
+
+    def _dispose(self, record: ImageBuildRecord):
+        """
+        the builder goes now, not at the two hour reap; the failed candidate and its
+        snapshots go in the cleanup this brings forward, which keeps anything still named
+        """
+        dispose_builder(self.context, record.instance_id, self._logger)
+        self._last_cleanup = float('-inf')
 
     def _wait_for_capacity(self, record: ImageBuildRecord, reason: str):
         record.attempts = (record.attempts or 0) + 1
@@ -861,6 +972,8 @@ class DesktopImagePipeline:
         record.instance_id = None
         record.validated_on = None
         record.error = None
+        # kept across a restart mid-attempt; a capacity wait and a requeue clear it first
+        record.attempt_started_on = record.attempt_started_on or now_utc()
         self._save(record)
         reason = self.unsupported_reason(record)
         if reason:
@@ -1171,6 +1284,9 @@ class DesktopImagePipeline:
                     stale.append(instance['InstanceId'])
         if stale:
             ec2.terminate_instances(InstanceIds=stale)
+            HealthMetrics(self.context).add(
+                'orphan_sweep', len(stale), kind='desktop_image_builder'
+            )
             self._logger.warning(
                 f'terminated builder instances left over from dead bakes: {stale}'
             )

@@ -22,8 +22,10 @@ import {Project, VirtualDesktopBaseOS, VirtualDesktopSoftwareStack, VirtualDeskt
 import Tabs from "../../components/tabs/tabs";
 import Utils from "../../common/utils";
 import VirtualDesktopSoftwareStackEditForm from "./forms/virtual-desktop-software-stack-edit-form";
+import {describeExpiry} from "./virtual-desktop-software-stacks";
 import {VirtualDesktopAdminClient} from "../../client";
 import {withRouter} from "../../navigation/navigation-utils";
+import {DetailLoadState, DetailLoadStatus} from "./components/detail-load-state";
 
 export interface VirtualDesktopSoftwareStackDetailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -31,6 +33,7 @@ export interface VirtualDesktopSoftwareStackDetailProps extends IdeaAppLayoutPro
 interface VirtualDesktopSoftwareStackDetailState {
     softwareStack: VirtualDesktopSoftwareStack
     showEditSoftwareStackForm: boolean
+    loadStatus: DetailLoadStatus
 }
 
 class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftwareStackDetailProps, VirtualDesktopSoftwareStackDetailState> {
@@ -42,7 +45,8 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
         this.editStackForm = React.createRef()
         this.state = {
             softwareStack: {},
-            showEditSoftwareStackForm: false
+            showEditSoftwareStackForm: false,
+            loadStatus: 'loading'
         }
 
         // Bind methods
@@ -58,12 +62,20 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
     }
 
     componentDidMount() {
+        this.loadSoftwareStack()
+    }
+
+    loadSoftwareStack = () => {
+        this.setState({loadStatus: 'loading'})
         AppContext.get().client().virtualDesktopAdmin().getSoftwareStackInfo({
             stack_id: this.getSoftwareStackId()
         }).then(result => {
             this.setState({
-                softwareStack: result.software_stack!
+                softwareStack: result.software_stack!,
+                loadStatus: 'ready'
             })
+        }).catch(() => {
+            this.setState({loadStatus: 'error'})
         })
     }
 
@@ -116,6 +128,8 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                     <KeyValue title="Base OS" value={Utils.getOsTitle(this.state.softwareStack.base_os)}/>
 
                     <KeyValue title="Instance Tenancy" value={this.state.softwareStack.launch_tenancy}/>
+                    <KeyValue title="Owner" value={this.state.softwareStack.owner ?? '-'}/>
+                    <KeyValue title="Expires" value={describeExpiry(this.state.softwareStack)}/>
 {/*                    <KeyValue title="Warming Pool" value={<EnabledDisabledStatusIndicator enabled={Utils.asBoolean(this.state.softwareStack.pool_enabled, false)}/>} type={"react-node"}/>*/}
 
                 </ColumnLayout>
@@ -203,27 +217,29 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                         href: '#/virtual-desktop/software-stacks'
                     },
                     {
-                        text: this.getSoftwareStackId(),
+                        text: this.state.softwareStack.name ?? 'Desktop image',
                         href: ''
                     }
                 ]}
                 header={
                     <Header
                         variant={"h1"}
-                        actions={this.buildHeaderActions()}
+                        actions={this.state.loadStatus === 'ready' && this.buildHeaderActions()}
                     >
-                        Stack: {this.state.softwareStack.name}
+                        {this.state.softwareStack.name ? `Stack: ${this.state.softwareStack.name}` : 'Desktop image'}
                     </Header>
                 }
                 contentType={"default"}
                 content={
                     <div>
-                        {this.buildDetails()}
+                        {this.state.loadStatus === 'ready'
+                            ? this.buildDetails()
+                            : <DetailLoadState status={this.state.loadStatus} loadingText="Loading this desktop image" errorText="This desktop image could not be loaded." onRetry={this.loadSoftwareStack}/>}
                         {this.state.showEditSoftwareStackForm &&
                             <VirtualDesktopSoftwareStackEditForm
                                 ref={this.editStackForm}
                                 softwareStack={this.state.softwareStack}
-                                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[], pool_enabled: boolean, pool_asg_name: string, launch_tenancy: VirtualDesktopTenancy, allowed_instance_types?: string[], ami_id?: string, min_ram?: number, min_storage?: number) => {
+                                onSubmit={(stack_id: string, base_os: VirtualDesktopBaseOS, name: string, description: string, projects: Project[], pool_enabled: boolean, pool_asg_name: string, launch_tenancy: VirtualDesktopTenancy, allowed_instance_types?: string[], ami_id?: string, min_ram?: number, min_storage?: number, owner?: string, expiry?: {expires_on?: string, clear_expires_on?: boolean}) => {
                                     return this.getVirtualDesktopAdminClient().updateSoftwareStack({
                                             software_stack: {
                                                 stack_id: stack_id,
@@ -236,6 +252,8 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
                                                 launch_tenancy: launch_tenancy,
                                                 allowed_instance_types: allowed_instance_types,
                                                 ami_id: ami_id,
+                                                owner: owner,
+                                                ...expiry,
                                                 min_ram: min_ram ? {
                                                     value: min_ram,
                                                     unit: 'gb'

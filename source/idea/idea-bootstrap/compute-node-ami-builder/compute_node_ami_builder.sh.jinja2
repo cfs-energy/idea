@@ -29,6 +29,9 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include '_templates/linux/system_packages.jinja2' %}
 
+{% set openssh_required = true %}
+{% include '_templates/linux/openssh_update.jinja2' %}
+
 {% include '_templates/linux/cloudwatch_agent.jinja2' %}
 
 {% if context.is_metrics_provider_prometheus() %}

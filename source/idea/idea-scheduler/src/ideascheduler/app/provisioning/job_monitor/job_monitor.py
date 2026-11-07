@@ -18,6 +18,7 @@ import ideascheduler
 
 from ideadatamodel import exceptions, SocaJob, SocaJobState, JobUpdates, JobUpdate
 from ideasdk.service import SocaService
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 from ideascheduler.app.app_protocols import JobMonitorProtocol
 from ideascheduler.app.provisioning.job_monitor.finished_job_processor import (
@@ -259,6 +260,11 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     jobs = self._context.scheduler.list_jobs(queue=queue)
 
                     self._context.job_cache.sync(jobs=jobs)
+                    # a restored cache can predate a job's provisioning, and only that
+                    # records its licenses. without this the license check over-admits.
+                    self._context.job_cache.add_active_licenses(
+                        [job for job in jobs if job.is_provisioned()]
+                    )
 
                     for job in jobs:
                         if self._provisioning_retries_exhausted(job):
@@ -453,6 +459,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             queue=queue, log_tag='job-reconciler'
                         )
                         if adopted > 0:
+                            HealthMetrics(self._context).add(
+                                'orphan_sweep', adopted, kind='job'
+                            )
                             self._logger.info(
                                 f'job reconciler adopted {adopted} orphaned job(s) in queue: {queue}'
                             )

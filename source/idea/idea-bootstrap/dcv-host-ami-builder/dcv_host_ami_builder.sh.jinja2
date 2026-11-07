@@ -81,6 +81,8 @@ fi
 if [[ ! -f /var/lib/idea/bake-packages.ok ]]; then
   : # The upgrade include can be empty when first-boot updates are disabled.
   {% include '_templates/linux/system_upgrade.jinja2' %}
+  {% set openssh_required = true %}
+  {% include '_templates/linux/openssh_update.jinja2' %}
 else
   log_info "Packages stage already completed for this bake"
 fi

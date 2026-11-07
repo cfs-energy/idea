@@ -80,6 +80,33 @@ images:
   # this many days old and nothing references them; 0 keeps them
   legacy_cleanup_min_age_days: 30
 
+job_cache:
+  # how often the job cache is copied to the scheduler-pbs volume when it changed; a task that dies
+  # without an orderly stop restores a copy up to this old. each copy writes the whole file to EFS.
+  backup_interval_seconds: 3600
+  # finished jobs are deleted from the scheduler's job cache this many days after they end; 0 keeps them
+  finished_job_retention_days: 400
+
+scratch_cleanup:
+  # when a job finishes, its numbered scratch folder on the Lustre file systems named below gets a
+  # removal date. Off until an administrator turns it on, and a dry run until told otherwise
+  enabled: false
+  dry_run: true
+  # stops every removal within a couple of seconds, in the middle of a folder if need be
+  kill_switch: false
+  # shared-storage names to clean, for example [scratch]; nothing is cleaned while this is empty
+  file_systems: []
+  # days after a job ends: exit status 0, or anything else that ran, including killed and deleted
+  success_retention_days: 30
+  failed_retention_days: 60
+  # the weekly owner digest and administrator summary go on this day: 0 is Monday, 6 is Sunday
+  digest_weekday: 0
+  # how many removals one hourly check can make; the rest wait for the next
+  max_folders_per_run: 25
+  # a check or backfill that would remove more than this share stops instead, and alerts
+  max_run_bytes_percent: 25
+  max_run_share_percent: 50
+
 job_provisioning:
   # Determine if AWS Service Quotas should be used:
   # True (default) - query AWS service quotas API to make sure an incoming job can be deployed.
@@ -169,6 +196,13 @@ provisioning_lifecycle_events:
   enabled: true
   # number of daily rotated event log files to retain
   retention_days: 90
+
+log_archive:
+  # days the daily copy of the scheduler logs is kept in the cluster bucket (logs/<module id>/).
+  # 0 keeps it forever, otherwise at least 30: the scheduler keeps 10 days on disk and uploads
+  # what the bucket lacks, so a shorter expiry only has it uploaded again. the bucket rule is
+  # applied by the bootstrap stack update (`ideactl bootstrap`, or a full deploy), not by upgrade-cluster.
+  s3_retention_days: 400
 
 # Elastic Fabric Adapter (EFA) config
 # applies to jobs submitted with efa_support=true

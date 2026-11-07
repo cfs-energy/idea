@@ -23,7 +23,9 @@ from ideadatamodel import (
     SocaQueueMode,
     ProvisioningStatus,
 )
+from ideasdk.metrics.health import HealthMetrics, instance_family_of
 from ideasdk.utils import Utils
+from ideascheduler.app.provisioning.lifecycle_events import ProvisioningLifecycleEvents
 
 from ideascheduler.app.provisioning import (
     JobProvisioningQueue,
@@ -533,6 +535,13 @@ class ProvisionJobs:
                 self._context.metrics.job_provisioning_failed(
                     queue_type=self.job.queue_type, error_code=e.error_code
                 )
+                HealthMetrics(self._context).add(
+                    'scheduler.provisioning_failures',
+                    reason_class=ProvisioningLifecycleEvents.get_reason_class(
+                        e.error_code
+                    ),
+                    instance_family=instance_family_of(self.job),
+                )
                 if self._lifecycle_events is not None:
                     # designed wait states (licenses, quota headroom, stale shared
                     # stacks) are waits in the event stream, not stack failures.
@@ -563,6 +572,11 @@ class ProvisionJobs:
             )
             self._context.metrics.job_provisioning_failed(
                 queue_type=self.job.queue_type, error_code=errorcodes.GENERAL_ERROR
+            )
+            HealthMetrics(self._context).add(
+                'scheduler.provisioning_failures',
+                reason_class='internal',
+                instance_family=instance_family_of(self.job),
             )
             if self._lifecycle_events is not None:
                 self._lifecycle_events.stack_failed(

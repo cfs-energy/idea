@@ -1,7 +1,7 @@
 import {render, screen} from '@testing-library/react';
 import {MemoryRouter, Route, Routes, useLocation} from 'react-router-dom';
-import {afterEach, expect, it, vi} from 'vitest';
-import {LandingPage} from './landing-page';
+import {afterEach, describe, expect, it, vi} from 'vitest';
+import {LandingPage, resolveLandingPath} from './landing-page';
 import {initTestAppContext} from '../test-support';
 
 const Location = () => <output>{useLocation().pathname}</output>;
@@ -41,4 +41,11 @@ it('has no Home breadcrumb pointing to the portal root in any page', () => {
         if (path.includes('.test.')) continue;
         expect(source, path).not.toMatch(/\{\s*text:\s*['"]Home['"],\s*href:\s*['"]#\/?['"]/);
     }
+});
+
+describe('a reports landing choice with no dashboard', () => {
+    it('goes to My costs instead of an empty page', () => {
+        expect(resolveLandingPath('reports', undefined, false)).toBe('/home/my-costs');
+        expect(resolveLandingPath('reports', undefined, true)).toBe('/home/custom-dashboard');
+    });
 });

@@ -3,7 +3,13 @@ Test Cases for the storage metrics collector
 ONTAP answers are recorded shapes of the two REST collections; nothing reaches a file system.
 """
 
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
 from ideaclustermanager.app.metrics.storage_metrics_service import (
+    FileContentsRefused,
     OntapClient,
     StorageMetrics,
     StorageMetricsService,
@@ -244,7 +250,7 @@ def test_client_follows_pages_and_refuses_a_failure(monkeypatch):
         '/api/bad': Response(401, {'error': 'no'}),
     }
 
-    def fake_get(url, auth=None, verify=None, timeout=None):
+    def fake_get(url, auth=None, verify=None, timeout=None, headers=None):
         calls.append((url, auth, verify))
         return pages[url.split('https://' + ENDPOINT, 1)[1]]
 
@@ -348,6 +354,189 @@ def test_latest_reports_are_retained_per_target_and_joined_by_user(monkeypatch):
     rows = service.get_user_quotas('ALICE')
     assert [row['used_bytes'] for row in rows] == [200, 5]
     assert rows[0]['limit_bytes'] is None
+
+
+@pytest.mark.parametrize(
+    'path',
+    [
+        # the content read as ONTAP documents it, and the ways around a plain check
+        '/api/storage/volumes/u/files/a%2Fb?byte_offset=0&length=100',
+        '/api/storage/volumes/u/files/a?type=directory&byte_offset=0',
+        '/api/storage/volumes/u/files/a?type=directory&LENGTH=100',
+        '/api/storage/volumes/u/files/a?type=directory&stream_name=x',
+        '/api/storage/volumes/u/files/a?type=directory&byte%5Foffset=0',
+        '/api/storage/volumes/u/files/a?type=directory;length=1',
+        # a file's own read with none of those: not a listing, so no
+        '/api/storage/volumes/u/files/a%2Fb',
+        '/api/storage/volumes/u/files/a%2Fb?fields=size',
+        '/API/storage/volumes/u/FILES/a',
+        '/api/storage/volumes/u/%66iles/a',
+    ],
+)
+@pytest.mark.parametrize('method', ['get', 'first_page'])
+def test_no_call_can_read_file_contents(monkeypatch, path, method):
+    sent = []
+    monkeypatch.setattr(
+        'ideaclustermanager.app.metrics.storage_metrics_service.requests.get',
+        lambda url, **kwargs: sent.append(url),
+    )
+    with pytest.raises(FileContentsRefused):
+        getattr(OntapClient('host', 'user', 'password'), method)(path)
+    assert sent == []
+
+
+def test_a_next_link_cannot_lead_to_file_contents(monkeypatch):
+    sent = []
+
+    def fake_get(url, **kwargs):
+        sent.append(url)
+        next_path = '/api/storage/volumes/u/files/a?byte_offset=0&length=1'
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {'records': [], '_links': {'next': {'href': next_path}}},
+        )
+
+    monkeypatch.setattr(
+        'ideaclustermanager.app.metrics.storage_metrics_service.requests.get', fake_get
+    )
+    with pytest.raises(FileContentsRefused):
+        OntapClient('host', 'user', 'password').get('/api/storage/volumes')
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize(
+    'path',
+    [
+        '/api/storage/volumes?fields=name',
+        '/api/storage/quota/reports',
+        '/api/storage/volumes/u/files/%2F?return_metadata=true&fields=analytics',
+        '/api/storage/volumes/u/files/a%2Fb?type=directory&fields=analytics.bytes_used'
+        '&order_by=analytics.bytes_used%20desc&max_records=1000&return_timeout=10',
+        '/api/storage/volumes/u/files/a?start.iter_key=abc&max_records=1000',
+    ],
+)
+def test_what_the_collectors_ask_for_still_goes_and_only_as_json(monkeypatch, path):
+    sent = []
+
+    def fake_get(url, **kwargs):
+        sent.append(kwargs['headers'])
+        return SimpleNamespace(status_code=200, json=lambda: {'records': []})
+
+    monkeypatch.setattr(
+        'ideaclustermanager.app.metrics.storage_metrics_service.requests.get', fake_get
+    )
+    client = OntapClient('host', 'user', 'password')
+    client.get(path)
+    client.first_page(path)
+    assert [h['Accept'] for h in sent] == ['application/json'] * 2
+
+
+def test_nothing_reaches_ontap_except_through_the_guard():
+    from ideaclustermanager.app.metrics import storage_metrics_service as module
+
+    source = Path(module.__file__).read_text()
+    assert source.count('requests.get(') == 1
+    assert 'requests.post(' not in source and 'requests.request(' not in source
+
+
+def test_the_same_volume_name_on_two_file_systems_is_two_quotas():
+    service = StorageMetricsService(FakeContext({}))
+    service.targets = lambda: [
+        SimpleNamespace(name='data', endpoint='svm.fs-1.example'),
+        SimpleNamespace(name='apps', endpoint='svm.fs-2.example'),
+    ]
+    service._quota_reports = {
+        'data': (10, [quota('alice', 'vol1', 100, 1)]),
+        'apps': (20, [quota('alice', 'vol1', 7, 1)]),
+    }
+    found = sorted(service.get_user_quotas('alice'), key=lambda row: row['used_bytes'])
+    assert [row['used_bytes'] for row in found] == [7, 100]
+    assert [row['endpoint'] for row in found] == [
+        'svm.fs-2.example',
+        'svm.fs-1.example',
+    ]
+
+
+def test_user_quota_sums_nfs_and_smb_rows_and_ignores_duplicate_targets():
+    service = StorageMetricsService(FakeContext({}))
+    rows = [
+        quota('alice', 'profiles', 100, 3),
+        quota('DOMAIN\\Alice', 'profiles', 20, 2),
+        quota('bob', 'profiles', 999, 9),
+    ]
+    service._quota_reports = {'apps': (10, rows), 'data': (20, rows)}
+    found = service.get_user_quotas('alice')
+    assert len(found) == 1
+    assert found[0]['target'] == 'data'
+    assert found[0]['used_bytes'] == 120
+    assert found[0]['files'] == 5
+
+
+def test_unattributed_bytes_come_from_the_file_system_asked_about():
+    service = StorageMetricsService(FakeContext({}))
+    service.targets = lambda: [
+        SimpleNamespace(name='home', endpoint='svm.fs-1'),
+        SimpleNamespace(name='other', endpoint='svm.fs-2'),
+    ]
+    service._quota_reports = {
+        'home': (5, [quota('S-1-5-21-9', 'vol1', 10, 1)]),
+        'other': (9, [quota('S-1-5-21-9', 'vol1', 999, 9)]),
+    }
+    assert service.unattributed_quota('vol1', 'svm.fs-1') == dict(bytes=10, files=1)
+    assert service.unattributed_quota('vol1', 'svm.fs-2') == dict(bytes=999, files=9)
+
+
+def test_owners_known_only_as_a_sid_are_counted_as_unattributed():
+    service = StorageMetricsService(FakeContext({}))
+    service._quota_reports = {
+        'data': (
+            5,
+            [
+                quota('S-1-5-21-9', 'profiles', 70, 2),
+                quota('alice', 'profiles', 10, 1),
+                quota('S-1-5-21-9', 'apps', 500, 5),
+            ],
+        )
+    }
+    assert service.unattributed_quota('profiles') == dict(bytes=70, files=2)
+    assert service.get_user_quotas('s-1-5-21-9')[0]['used_bytes'] == 70
+
+
+def test_any_task_can_read_quotas_and_failure_is_soft(monkeypatch):
+    context = FakeContext(
+        {
+            'cluster-manager.metrics.storage.enabled': True,
+            'metrics.provider': 'cloudwatch',
+            'shared-storage': {
+                'data': {'provider': 'fsx_netapp_ontap'},
+            },
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.metrics.password_secret_arn': 'secret',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+        }
+    )
+    service = StorageMetricsService(context)
+    calls = []
+
+    def read(_):
+        calls.append(1)
+        return [quota('alice', 'profiles', 7, 1)]
+
+    monkeypatch.setattr(OntapClient, 'quota_reports', read)
+    monkeypatch.setattr(context.config(), 'get_secret', lambda _: 'pw', raising=False)
+    service.refresh_quota_reports()
+    service.refresh_quota_reports()
+    assert len(calls) == 1
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 7
+
+    def fail(_):
+        raise RuntimeError('unreachable')
+
+    monkeypatch.setattr(OntapClient, 'quota_reports', fail)
+    service._quota_reports = {}
+    service._quota_attempted = 0
+    service.refresh_quota_reports()
+    assert service.get_user_quotas('alice') == []
 
 
 def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
