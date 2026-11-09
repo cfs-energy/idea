@@ -188,18 +188,25 @@ class CollectorRunner:
         while not self._exit.is_set():
             wait = collector.interval_seconds
             try:
-                if (
+                due = (
                     not collector.leader_only or self.context.is_leader()
-                ) and self.is_enabled(collector):
-                    self.run_once(collector)
-                else:
-                    # a new task is elected a minute or two after it starts: waiting the
-                    # whole interval left a six-hourly collector silent for six hours
-                    wait = min(wait, SKIPPED_RECHECK_SECONDS)
+                ) and self.is_enabled(collector)
             except Exception as e:
+                due = False
                 self.logger.warning(
                     f'{collector.name} collector loop: {type(e).__name__}'
                 )
+            if not due:
+                # a new task is elected a minute or two after it starts: waiting the
+                # whole interval left a six-hourly collector silent for six hours
+                wait = min(wait, SKIPPED_RECHECK_SECONDS)
+            else:
+                try:
+                    self.run_once(collector)
+                except Exception as e:
+                    self.logger.warning(
+                        f'{collector.name} collector loop: {type(e).__name__}'
+                    )
             self._exit.wait(wait)
 
     def start(self):

@@ -158,6 +158,31 @@ def test_a_collector_that_was_not_yet_leader_runs_once_elected_not_an_interval_l
     assert len(ran) == 1
 
 
+def test_a_failed_leader_or_switch_read_looks_again_in_a_minute_not_an_interval():
+    ran = []
+    sample = collector(lambda m: ran.append(1))
+    sample.interval_seconds = 6 * 3600
+    found = context()
+    found.is_leader.side_effect = [RuntimeError('lock table'), True, True]
+    runner = CollectorRunner(found, [sample])
+    runner._exit = Waits(3)
+    runner._loop(sample)
+    assert runner._exit.seconds[1:] == [60, 6 * 3600]
+    assert len(ran) == 1
+    assert 'RuntimeError' in str(found.logger().warning.call_args_list)
+
+
+def test_a_collector_that_ran_and_then_failed_to_report_waits_its_interval():
+    sample = collector(lambda m: None)
+    sample.interval_seconds = 6 * 3600
+    found = context()
+    runner = CollectorRunner(found, [sample])
+    runner._exit = Waits(2)
+    runner._report = Mock(side_effect=RuntimeError('agent gone'))
+    runner._loop(sample)
+    assert runner._exit.seconds[1:] == [6 * 3600]
+
+
 def test_other_providers_get_nothing_they_would_be_billed_for():
     found = context(provider='cloudwatch')
     HealthMetrics(found).level('cert.days_to_expiry', 3)
