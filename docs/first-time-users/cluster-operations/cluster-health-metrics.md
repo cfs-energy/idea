@@ -116,11 +116,11 @@ A separate process in each task, once a minute, using only what the task can see
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback. |
+| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback: 0 when nothing answers or sshd refuses the connection, as it would a user's. |
 | `idea.health.bastion.sshd_check_seconds` | `host` | How long that took. |
 | `idea.health.bastion.sessions` | `host` | Logged-in connections. |
 | `idea.health.bastion.tcp_established` | `host` | Established on port 22, including those not logged in yet. |
-| `idea.health.bastion.connection_drops` | `reason`, `source` | `maxstartups`, `auth_timeout`, `client_timeout`. `source` is `loopback` (the task's own health check, which ends in a replacement) or `remote` (real users refused). |
+| `idea.health.bastion.connection_drops` | `reason`, `source` | `maxstartups`, `auth_timeout`, `client_timeout`. `source` is `loopback` (the task's own checks, which sshd refused; a refusal still counts as healthy, so the task is not replaced) or `remote` (every other connection refused). MaxStartups drops are counted from sshd's own totals, so every drop counts, not only those sshd names in its log. |
 
 ## Storage levels and scratch
 

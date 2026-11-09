@@ -30,10 +30,14 @@ ClientAliveCountMax 3
 Subsystem sftp internal-sftp
 # Per-source limits stand in for the EC2 host's fail2ban, set so only brute force reaches them:
 # many users can share one NAT address. No PerSourceMaxStartups: it refused the health check's
-# own loopback connections, and the failed checks killed the task. Each connection that fails authentication adds
-# 2 seconds of refusal, and the address is refused only once more than 30 seconds are pending, so
-# about 15 failed connections in quick succession, or a failure more than every 2 seconds
-# sustained; refusals stop at most 10 minutes after the attempts do.
+# own loopback connections, and the failed checks killed the task. Penalties add up per address
+# and drain in real time; the address is refused only once more than 30 seconds are pending, and
+# refusals stop at most 10 minutes after the attempts do. Each connection adds: 2 seconds if it
+# fails authentication (set here), and sshd's defaults of 1 second if it closes without trying
+# to authenticate, 10 seconds if it outlasts LoginGraceTime and 90 seconds if it crashes sshd. So
+# about 15 failed logins in quick succession, or about 30 connections that never authenticate
+# (a port scanner, ssh-keyscan), or 3 left open past the grace time; sustained, a failed login
+# more than every 2 seconds or such a connection more than every second.
 MaxStartups 50:30:200
 PerSourceNetBlockSize 32:128
 PerSourcePenalties authfail:2s min:30s max:10m
@@ -144,12 +148,15 @@ sssd_pid=$!
 #     Connection closed by 10.x.y.z port N
 # Logins, failed and invalid-user attempts, disconnects after authentication, any close from a
 # public address and every other sshd line still reach the task log.
-SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+ \[preauth\]|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)$'
+# sshd -e ends each line in CR LF, so the CR is allowed before the end.
+SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+ \[preauth\]|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)'$'\r''?$'
 # Connections sshd dropped go to a tally for the metrics process: only the phrase, and the
 # address only when it is loopback, so the file holds nothing about anyone. tee -p and a local file: a
-# dead tally costs a count, never sshd's stderr. sshd prints this at its default log level; 9.9 says
-# "past Maxstartups", 10.5 "Maxstartups".
-SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|Timeout before authentication|Timeout, client not responding'
+# dead tally costs a count, never sshd's stderr. At its default log level sshd names only some
+# drops ("past Maxstartups" on 9.9, "Maxstartups" on 10.5) and counts the rest in a summary: 9.9
+# "in|exited MaxStartups throttling ..., N connections dropped" (the episode so far), 10.5
+# "MaxStartups logging rate-limited: additional N connections dropped".
+SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
 sshd_log_filter() {
   tee -p >(grep --line-buffered -oE "${SSHD_DROP_LINES}" >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
     | grep --line-buffered -v -E "${SSHD_HEALTH_CHECK_LINES}" >&2 || true
