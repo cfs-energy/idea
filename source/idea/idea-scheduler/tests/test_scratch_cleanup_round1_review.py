@@ -224,6 +224,8 @@ def test_a_digest_day_hiccup_retries_on_the_next_check(world):
     assert run(world)['noticed_folders'] == 0
     world.state.records_error = None
     world.now += timedelta(hours=1)
+    # still the digest day, whatever hour this runs: an hour on can be tomorrow
+    world.config['scheduler.scratch_cleanup.digest_weekday'] = world.now.weekday()
     assert run(world)['noticed_folders'] == 1
     assert len(digests(world)) == 1
 
