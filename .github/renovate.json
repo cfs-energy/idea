@@ -219,6 +219,23 @@
       "automerge": false,
       "groupName": null,
       "groupSlug": null
+    },
+    {
+      "description": "The mise TypeScript tool is the parser hk's lint-cloudscape-usage step loads; TypeScript 7 has no JS compiler API at its package root",
+      "matchManagers": [
+        "mise"
+      ],
+      "matchDepNames": [
+        "npm:typescript"
+      ],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "Cloudscape components 3.0.1410 gave Toggle role switch, which 3.0.1411 reverted",
+      "matchPackageNames": [
+        "@cloudscape-design/components"
+      ],
+      "allowedVersions": "!/^3\\.0\\.1410$/"
     }
   ],
   "mise": {
