@@ -930,7 +930,9 @@ def test_custom_period_retains_stored_spend_and_explains_unstored_dates(start, m
     )
     exported = list(csv.DictReader(io.StringIO(result.content.lstrip('\ufeff'))))[0]
     assert Decimal(exported['Job spend']) == row['spend_by_facet']['jobs']
-    assert exported['Complete'].startswith('Partial')
+    # calendar days of the period, not one count per facet added up
+    assert exported['Complete'] == f'Partial: missing {missing} days'
+    assert row['coverage']['spend_total']['missing_days'] == missing
 
 
 def test_saturated_report_workers_fail_busy_and_recover():
