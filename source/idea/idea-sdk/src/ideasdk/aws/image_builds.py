@@ -406,6 +406,9 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
             release=record.release,
             log_group=f'/{context.cluster_name()}/{context.module_id()}/ami-builder',
             log_stream=f'bootstrap_{record.instance_id}',
+            fallback_reason=(
+                'time_limit' if classify_bake_failure(reason) == 'time_limit' else None
+            ),
         ),
     )
 
