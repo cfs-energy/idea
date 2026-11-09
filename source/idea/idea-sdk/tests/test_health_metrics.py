@@ -255,10 +255,13 @@ def test_health_lines_carry_cluster_and_module_and_a_count_keeps_its_bucket(tmp_
     provider_context = Mock()
     provider_context.config().get_string.return_value = 'udp://127.0.0.1:8125'
     provider = DogStatsdMetrics(provider_context, 'idea-com/cluster-manager/task')
-    # a bucket total carries no host, so the next leader's read rewrites the same point
+    # a bucket total carries nothing of its sender, so the next leader's read rewrites the same
+    # point: no host, and the tag every agent reads as no container tags. the card field alone
+    # left image_tag and task_version on the series, a second series after each upgrade.
     assert provider.format_entry(stamped) == (
         'idea.health.ecs.task_stops:3|c|#idea_cluster:idea-com,'
-        'idea_module:cluster-manager,ecs_service_name:vdc,host:|T600|card:none'
+        'idea_module:cluster-manager,ecs_service_name:vdc,host:,dd.internal.card:none'
+        '|T600|card:none'
     )
     # a level is per sender, and keeps the agent's host
     assert provider.format_entry(level) == (
