@@ -106,7 +106,7 @@ jobs:
       - name: Install the bastion image's OpenSSH
         # as the control-plane Dockerfile does: the newest OpenSSH past the base release
         run: |
-          dnf install -y openssh-server openssh-clients python3 procps-ng coreutils tar gzip git shadow-utils
+          dnf install -y openssh-server openssh-clients python3 procps-ng tar gzip git shadow-utils
           dnf upgrade -y --releasever=latest 'openssh*'
           /usr/sbin/sshd -V
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
