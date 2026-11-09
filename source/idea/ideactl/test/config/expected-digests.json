@@ -13,7 +13,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "d387c6c825b38a55af06b214ab2734898384892edc07f2709f1b5275f8456591",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "946caacc1dca4e2b7c0ecfc7afb39e73131738919219fb8b182c4a954fc29ff9",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -31,7 +31,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "44fa4a72fbcbc86ed576b0c05ba95d3e2ac81aa1a3610d1d9176634b8cbbc08f",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "7e6ff5ecf0ddf623bb19f63f9732889a8ccb305fd55fa43f60c268d49f63d8f5",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -49,7 +49,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "db09addd1df3dd33af13416694402a5cafff12fb63cdb8744b2f752de9993d59",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "d90ba39bcb3e781a5630527b71ab35ec1c1c0e7b7441db8cfd2169633018193b",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -67,7 +67,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "f43e3f79a54dd6f3a6d481f6c2b18a76c3275eb26a1eb33d56dc1bf2461f4a7e",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "d2cc8e2725a7a737aa6cca8a015a7935ecb93093cc27c8f470f7c5432b77d1a5",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -85,7 +85,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "fb698aae274f2ef6e2385a3190e8fd399c6a9a76696ecd8b7912a8513e39e94c",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "405ca8f6ace497481fdc1a2f613e01a54c383b47dd03b221e20588210b76a90d",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -103,7 +103,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "db09addd1df3dd33af13416694402a5cafff12fb63cdb8744b2f752de9993d59",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "f456cbd936db945520f7dd923a81e2c8a87724f4d417bc8f72560931d0b48c8b",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -121,7 +121,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "db09addd1df3dd33af13416694402a5cafff12fb63cdb8744b2f752de9993d59",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "53ba68031aabc78943f0a39e538ae74cd3a2b983ad8c083f1a6ea1063a924026",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -139,7 +139,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "d4a5b2462b24bce75acb8b611dee1e1f41b76a8af40789604f29ab38026a872d",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "99046ea3db2725eb5ff3dd73f5e96f65fc93fe57821c9696b26a422152cd5019",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -157,7 +157,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "f3806507bc66304c2e44007dc0a2d1688fc583351423a6702df201c5b149f823",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "e38287bddc4232a0f065f7f45a7bf8a8fbd5af4bd043bb060b5de6f018c05d1f",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -175,7 +175,7 @@
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "8941c2e880f4ba17defaea78dcccdf1c8a8741df280cc8d1312bcdea8af8e586",
     "virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2": "9430fd46d0d9511402951631f34e3427bc164c87c3f40f9b30b680c82cb01e6c",
     "virtual-desktop-host-linux/setup.sh.jinja2": "8ccd5aca6c3c834660ca9fedb22ecef3e76914a4173faf84ca0e592ce6924787",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84",
     "_templates/linux/gnome_online_accounts.jinja2": "e1f572f99b019a10eef674a880a4ab476a357949ad22ea450fe9cc7238c147f8"
   },
@@ -183,14 +183,14 @@
     "_templates/linux/join_directoryservice.jinja2": "cdd9ae9d2bdb8ed54ba7d698a0c6de4a11e78ad1f792699ce45af51480236c16",
     "virtual-desktop-host-linux/setup.sh.jinja2": "3d190bb73ace7bada6d6399d48aa634690ab64f206fa85889498ffdb5091e761",
     "compute-node/compute_node.sh.jinja2": "4afe12fd12bddc1121331592bd189a1a9bc70a955f5f5e9ceaca1bb60f11979b",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "093e35d3166f789e4f725dccaa933ed3e2b11e6f91664af025fa7a8d56195e59",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "2baa8642fd5a5554a1e0de84aa18e4c13644c24982424d153e84431fb5c1a628",
     "virtual-desktop-host-windows/ConfigureDCVHost.ps1.jinja2": "efb9b5fe83a66f42c319cd5cac1b9005bc887e2d7d2960d014c3b767fdd8fc84"
   },
   "fsx": {
     "_templates/linux/mount_shared_storage.jinja2": "890b40d99211bee53cbbc7a268c384e0467723c1bffa4c1faada1797799e20c3",
     "_templates/windows/mount_shared_storage.jinja2": "01faebac55bb4dad7a39d9d80a8af91caaeb04b611be2385fe46b0e8cdc4a3ca",
     "virtual-desktop-host-linux/setup.sh.jinja2": "18b090db3508b62552f84edfb62346f2bb4d185f7bec81d6d810a2693e19b4cc",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "cde0e43bae464243e85e3c16d11d744d2c106e1d8dce786325b5b676b6fe5e83",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "272bd448349df22f41ea6a82e1d0c224055e9bf2c367e1399a49506d5b12f58d",
     "compute-node/compute_node.sh.jinja2": "17745738a15ec23be17828af679b3ce5f245ac78651f58b4e968e14088695061",
     "dcv-host-ami-builder/setup.sh.jinja2": "66073db95278db8cbc212264b90e21633ce2a10af597a7492f8fb10ea1cd3874",
     "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "e46c3d383ea476ffb7c186aaa41e915699de2a3cd3ad07b4d1caaa796e633a3e",
@@ -212,7 +212,7 @@
     "_templates/linux/instance_storage.jinja2": "191fc5f73ec54083d78452344e35257ac960bbfc7ffc5c67394a9b6e04c50f22",
     "_templates/windows/configure_instance_storage.jinja2": "28291556491b77ad6d30fbf293795930bd61f63f89bb86ce64bc161196b6ba6a",
     "virtual-desktop-host-linux/setup.sh.jinja2": "0fa6f547d2811ef0e1cf23831b927d7a41cd7d70c4fc31a299ab048e6ab6276b",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "1656c2a8742d62c763bc2ee675135e6549408e10b75a082db3586eac682559e8"
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "fdb1f783c726ef4ca0597fcd98c698317ab58a890ed06fb38b1aa59b0b66ca84"
   },
   "metrics": {
     "virtual-desktop-host-linux/setup.sh.jinja2": "1b539bbd44912fa1c148e0283e1287f8c4babce62a7d4621046f1a8d312941bf",
@@ -229,7 +229,7 @@
   "nested-combination": {
     "virtual-desktop-host-linux/setup.sh.jinja2": "d2cc8e2725a7a737aa6cca8a015a7935ecb93093cc27c8f470f7c5432b77d1a5",
     "virtual-desktop-host-linux/configure_dcv_host.sh.jinja2": "f43e3f79a54dd6f3a6d481f6c2b18a76c3275eb26a1eb33d56dc1bf2461f4a7e",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "775fc762963e9096361f941240243e6f98e101ca5ba3ce65ad5face3d3767505",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "c9b49188c9401866f48be11c0fbd9a7bc25b74b00a545f4a5065419f8469fb19",
     "compute-node/compute_node.sh.jinja2": "d5f6d5aead361da75f859cb13662893364faa50f0bfa48656144a4ee539fa005",
     "compute-node/compute_node_post_reboot.sh.jinja2": "3af42f60998108f593afc778545c165fa4ce63fac8762608c68f7dd9b60d2049",
     "compute-node-ami-builder/compute_node_ami_builder.sh.jinja2": "22d176fe1c9a02bdb99e254c62d36fd563e6ff944e6b57d5537bfab1746632b4",
@@ -239,7 +239,7 @@
     "_templates/linux/mount_shared_storage.jinja2": "10d93f81d7f20a22e5a50453747148ace4645927071a40af8dad498eab4150f2",
     "_templates/windows/mount_shared_storage.jinja2": "01faebac55bb4dad7a39d9d80a8af91caaeb04b611be2385fe46b0e8cdc4a3ca",
     "virtual-desktop-host-linux/setup.sh.jinja2": "8c7aa3641bb07c3d7c15e5084935a05a6e3a77652fea466b375df1cb7256d66a",
-    "virtual-desktop-host-windows/Configure.ps1.jinja2": "cde0e43bae464243e85e3c16d11d744d2c106e1d8dce786325b5b676b6fe5e83",
+    "virtual-desktop-host-windows/Configure.ps1.jinja2": "272bd448349df22f41ea6a82e1d0c224055e9bf2c367e1399a49506d5b12f58d",
     "compute-node/compute_node.sh.jinja2": "17745738a15ec23be17828af679b3ce5f245ac78651f58b4e968e14088695061",
     "dcv-host-ami-builder/setup.sh.jinja2": "38073883194c95c326a2fe7299389b99e4e7d8d2dfa1b98f81c238f59ee2c668",
     "dcv-host-ami-builder/dcv_host_ami_builder_post_reboot.sh.jinja2": "e46c3d383ea476ffb7c186aaa41e915699de2a3cd3ad07b4d1caaa796e633a3e",
