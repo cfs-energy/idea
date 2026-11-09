@@ -62,6 +62,13 @@ sed -i '\|^[^#[:space:]][^[:space:]]*[[:space:]]\{1,\}{{ storage.mount_dir.rstri
 {% endif %}
 {% endfor %}
 grep -Eq '^[^#[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab
+# kdump rebuilds its initrd (30 s or more) on any boot that finds /etc/fstab newer than it, and
+# sed -i above rewrites fstab even when nothing matched. Restarted after the last fstab write,
+# kdump leaves an initrd that every clone boots on; kdump still rebuilds on a clone whose kernel,
+# kdump config or dump target differs. A clone's own mount edits land after kdump has started.
+if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
+  systemctl restart kdump.service || echo "kdump did not restart; each clone rebuilds its initrd"
+fi
 (crontab -l 2>/dev/null | grep -v '_ami_builder_post_reboot.sh' || true) | crontab -
 # Checks have captured the evidence; retain JSON, remove host-specific bootstrap logs.
 rm -rf /root/bootstrap/logs
@@ -69,4 +76,11 @@ rm -rf /root/bootstrap/logs
 # builder's offset, so the stream started minutes into the host's bootstrap.
 systemctl stop amazon-cloudwatch-agent 2>/dev/null || true
 rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
+# That agent ships the system log from its start on a clone, and rsyslog with no saved
+# position replays the journal: both held the builder's lines, so every node's log stream
+# opened with them. Stopped first, so nothing more lands in the image before it is captured.
+systemctl stop rsyslog 2>/dev/null || true
+rm -f /var/lib/rsyslog/imjournal.state
+rm -f /var/log/messages* /var/log/syslog*
+rm -rf /var/log/journal/*
 /bin/sync

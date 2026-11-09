@@ -896,6 +896,70 @@ def test_scrub_machine_id_works_with_and_without_var_lib_dbus(tmp_path, has_dbus
     assert link.is_symlink() == has_dbus_dir
 
 
+def _stub_systemctl(tmp_path, enabled, restart_rc=0):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    calls = tmp_path / 'systemctl.log'
+    stub = bin_dir / 'systemctl'
+    stub.write_text(
+        '#!/bin/bash\n'
+        f'echo "$*" >> {calls}\n'
+        f'[[ "$1" != is-enabled ]] || exit {0 if enabled else 1}\n'
+        f'[[ "$1" != restart ]] || exit {restart_rc}\n'
+    )
+    stub.chmod(0o755)
+    return {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}, calls
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('enabled,restart_rc', [(True, 0), (True, 1), (False, 0)])
+def test_scrub_restarts_kdump_after_its_last_fstab_write(
+    tmp_path, builder, enabled, restart_rc
+):
+    """
+    kdump rebuilds its initrd on any boot that finds /etc/fstab newer than it. The scrub's
+    sed -i rewrote fstab after kdump had built, so every clone rebuilt on its first boot.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    restart = scrub.index('systemctl restart kdump.service')
+    last_fstab_write = max(
+        i for i, line in enumerate(scrub.splitlines()) if '/etc/fstab' in line
+    )
+    assert scrub.count('\n', 0, restart) > last_fstab_write
+    start = scrub.rindex('\nif ', 0, restart)
+    block = scrub[start : scrub.index('\nfi\n', restart) + 4]
+    env, calls = _stub_systemctl(tmp_path, enabled, restart_rc)
+    # a kdump that will not start costs each clone a rebuild, not the bake
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert ('restart kdump.service' in calls.read_text()) == enabled
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+def test_scrub_leaves_no_builder_lines_for_a_clones_log_stream(tmp_path, builder):
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    block = scrub[scrub.index('systemctl stop rsyslog') : scrub.index('/bin/sync')]
+    root = tmp_path / 'root'
+    journal = root / 'var/log/journal'
+    (journal / 'builder-machine-id').mkdir(parents=True)
+    (journal / 'builder-machine-id/system.journal').write_text('builder')
+    (root / 'var/lib/rsyslog').mkdir(parents=True)
+    (root / 'var/lib/rsyslog/imjournal.state').write_text('cursor')
+    for name in ('messages', 'messages-20261109', 'syslog', 'syslog.1', 'secure'):
+        (root / 'var/log' / name).write_text('builder')
+    block = block.replace('/var/', f'{root}/var/')
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert 'stop rsyslog' in calls.read_text()
+    assert sorted(p.name for p in (root / 'var/log').iterdir()) == ['journal', 'secure']
+    # the directory stays: journald keeps the clone's journal persistent only if it exists
+    assert list(journal.iterdir()) == []
+    assert not (root / 'var/lib/rsyslog/imjournal.state').exists()
+    # the cloudwatch agent is stopped before rsyslog, so it ships nothing more from the builder
+    assert scrub.index('systemctl stop amazon-cloudwatch-agent') < scrub.index(
+        'systemctl stop rsyslog'
+    )
+
+
 def test_a_failed_scrub_names_the_command(tmp_path):
     scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
     trap = next(line for line in scrub.splitlines() if line.startswith('trap '))

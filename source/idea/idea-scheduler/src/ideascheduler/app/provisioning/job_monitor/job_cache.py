@@ -49,6 +49,58 @@ ACTIVE_JOB_LICENSES_TABLE = 'active_job_licenses'
 JOB_PROVISIONING_ERRORS = 'job_provisioning_errors'
 JOB_PROVISIONING_RETRIES = 'job_provisioning_retries'
 
+# every column the cache writes or queries. tables are created with all of them, and a
+# column missing from a cache written by an earlier release is added at start: a column
+# left for the first write to add breaks every raw query that runs before that write.
+TABLE_COLUMNS = {
+    JOBS_TABLE: {
+        'job_id': 'TEXT',
+        'job_group': 'TEXT',
+        'job_uid': 'TEXT',
+        'desired_capacity': 'INTEGER',
+        'state': 'TEXT',
+        'owner': 'TEXT',
+        'queue': 'TEXT',
+        'queue_profile': 'TEXT',
+        'project': 'TEXT',
+        'provisioned': 'BOOLEAN',
+        'job_data': 'TEXT',
+    },
+    FINISHED_JOBS_TABLE: {
+        'job_id': 'TEXT',
+        'job_group': 'TEXT',
+        'job_uid': 'TEXT',
+        'desired_capacity': 'INTEGER',
+        'state': 'TEXT',
+        'owner': 'TEXT',
+        'queue': 'TEXT',
+        'queue_profile': 'TEXT',
+        'project': 'TEXT',
+        'job_data': 'TEXT',
+        'indexed': 'BOOLEAN NOT NULL DEFAULT 0',
+    },
+    EXECUTION_HOSTS_TABLE: {
+        'job_id': 'TEXT',
+        'host': 'TEXT',
+        'execution_host_data': 'TEXT',
+    },
+    ACTIVE_JOB_LICENSES_TABLE: {
+        'job_id': 'TEXT',
+        'license_name': 'TEXT',
+        'count': 'INTEGER',
+    },
+    JOB_PROVISIONING_ERRORS: {
+        'job_id': 'TEXT',
+        'error_code': 'TEXT',
+        'message': 'TEXT',
+    },
+    JOB_PROVISIONING_RETRIES: {
+        'job_id': 'TEXT',
+        'retry_count': 'INTEGER',
+        'stack_id': 'TEXT',
+    },
+}
+
 ERROR_MESSAGE_MAX_LENGTH = 256
 ERROR_MESSAGE_REDACTED = 'redacted'
 # job owners read error_message using qstat -f. account and resource identifiers are redacted and
@@ -277,10 +329,7 @@ class JobsDB:
         deleted = 0
         conn = self.db.engine.raw_connection()
         try:
-            # the first finished job adds this column; until then there is nothing to read
-            columns = conn.execute(f'PRAGMA table_info({FINISHED_JOBS_TABLE})')
-            has_jobs = any(column[1] == 'job_data' for column in columns.fetchall())
-            for batch in range(self.PRUNE_MAX_BATCHES if has_jobs else 0):
+            for batch in range(self.PRUNE_MAX_BATCHES):
                 if batch > 0 and self._stop.wait(self.PRUNE_BATCH_PAUSE_SECONDS):
                     break
                 # table names are module-level constants; identifiers cannot be bound
@@ -387,14 +436,7 @@ class JobsDB:
 
     def create_all_tables(self):
         """Create all required tables in a single transaction"""
-        required_tables = [
-            JOBS_TABLE,
-            FINISHED_JOBS_TABLE,
-            EXECUTION_HOSTS_TABLE,
-            ACTIVE_JOB_LICENSES_TABLE,
-            JOB_PROVISIONING_ERRORS,
-            JOB_PROVISIONING_RETRIES,
-        ]
+        required_tables = list(TABLE_COLUMNS)
 
         with self._db_lock:
             # Use a more explicit transaction approach
@@ -402,23 +444,33 @@ class JobsDB:
             try:
                 cursor = conn.cursor()
 
-                for table in required_tables:
+                for table, columns in TABLE_COLUMNS.items():
+                    # table and column names are module-level constants; identifiers cannot be bound
                     if table not in self.db:
                         self._logger.info(f'Creating table: {table}')
-                        # table names are module-level constants; identifiers cannot be bound as parameters
-                        cursor.execute(
-                            f'CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT)'
+                        definition = ', '.join(
+                            f'"{name}" {kind}' for name, kind in columns.items()
                         )
-
-                cursor.execute(f'PRAGMA table_info({FINISHED_JOBS_TABLE})')
-                if 'indexed' not in {column[1] for column in cursor.fetchall()}:
-                    # records written before the marker existed were indexed as they were
-                    # recorded; only records written from now on wait for the index.
-                    cursor.execute(
-                        f'ALTER TABLE {FINISHED_JOBS_TABLE} '
-                        'ADD COLUMN indexed BOOLEAN NOT NULL DEFAULT 0'
-                    )
-                    cursor.execute(f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1')
+                        cursor.execute(
+                            f'CREATE TABLE IF NOT EXISTS {table} '
+                            f'(id INTEGER PRIMARY KEY AUTOINCREMENT, {definition})'
+                        )
+                        continue
+                    cursor.execute(f'PRAGMA table_info({table})')
+                    present = {column[1] for column in cursor.fetchall()}
+                    for name, kind in columns.items():
+                        if name in present:
+                            continue
+                        self._logger.info(f'adding column {name} to {table}')
+                        cursor.execute(
+                            f'ALTER TABLE {table} ADD COLUMN "{name}" {kind}'
+                        )
+                        if table == FINISHED_JOBS_TABLE and name == 'indexed':
+                            # records written before the marker existed were indexed as they were
+                            # recorded; only records written from now on wait for the index.
+                            cursor.execute(
+                                f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1'
+                            )
 
                 conn.commit()
                 self._logger.info('All tables created successfully')
@@ -488,17 +540,7 @@ class JobsDB:
         try:
             with self._db_lock:
                 # First verify all tables exist
-                if not all(
-                    table in self.db.tables
-                    for table in [
-                        JOBS_TABLE,
-                        FINISHED_JOBS_TABLE,
-                        EXECUTION_HOSTS_TABLE,
-                        ACTIVE_JOB_LICENSES_TABLE,
-                        JOB_PROVISIONING_ERRORS,
-                        JOB_PROVISIONING_RETRIES,
-                    ]
-                ):
+                if not all(table in self.db.tables for table in TABLE_COLUMNS):
                     raise Exception(
                         'Cannot create indices - one or more required tables are missing'
                     )
