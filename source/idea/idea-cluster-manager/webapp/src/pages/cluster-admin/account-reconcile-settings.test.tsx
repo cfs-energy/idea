@@ -24,6 +24,28 @@ describe('account reconciliation settings', () => {
         return {context, read, save, run, ...view};
     };
     const advanced = () => userEvent.click(screen.getByRole('button', {name: 'Advanced'}));
+    // The component polls every 10 s, as does the app context's login check. Hold both rather than
+    // run real ones, so a test fires each poll itself and no real tick, or a cleared interval, takes
+    // a mocked read. The context starts its interval before render and the component re-creates
+    // its own whenever its state moves, so the newest live interval is always the component's.
+    const holdPolls = () => {
+        const live = new Map<number, () => void>();
+        let id = 1e9;
+        const setReal = window.setInterval.bind(window), clearReal = window.clearInterval.bind(window);
+        vi.spyOn(window, 'setInterval').mockImplementation(((handler: TimerHandler, delay?: number, ...rest: any[]) => {
+            if (delay !== 10000) return setReal(handler, delay, ...rest);
+            live.set(++id, handler as () => void);
+            return id;
+        }) as typeof window.setInterval);
+        vi.spyOn(window, 'clearInterval').mockImplementation(timer => {
+            if (!live.delete(timer as number)) clearReal(timer);
+        });
+        return async () => {
+            // the component starts polling in an effect after the render that a find resolves on
+            await waitFor(() => expect(live.size).toBe(2));
+            await act(async () => Array.from(live.values()).at(-1)!());
+        };
+    };
 
     it('shows saved state, schedule and two run buttons with advanced collapsed', async () => {
         await setup({last_run: {at: 1700000000, report: {...report, refused: 0}}});
@@ -243,38 +265,35 @@ describe('account reconciliation settings', () => {
     });
 
     it('clears a failed poll once polling recovers', async () => {
-        const poll = vi.spyOn(window, 'setInterval');
+        const poll = holdPolls();
         const {read} = await setup();
-        const tick = () => poll.mock.calls.filter(call => call[1] === 10000).at(-1)![0] as () => void;
         read.mockRejectedValueOnce({message: 'Status unavailable'});
-        await act(async () => tick()());
+        await poll();
         expect(await screen.findByText('Status unavailable')).toBeInTheDocument();
-        await act(async () => tick()());
+        await poll();
         await waitFor(() => expect(screen.queryByText('Status unavailable')).not.toBeInTheDocument());
     });
 
     it('keeps a validation message through a successful poll', async () => {
-        const poll = vi.spyOn(window, 'setInterval');
+        const poll = holdPolls();
         await setup();
         await advanced();
         const interval = screen.getByRole('textbox', {name: 'Interval (minutes)'});
         await userEvent.clear(interval);
         await userEvent.click(screen.getByRole('button', {name: /save/i}));
         expect(await screen.findByText('Interval must be an integer from 1 to 1440 minutes.')).toBeInTheDocument();
-        await act(async () => (poll.mock.calls.filter(call => call[1] === 10000).at(-1)![0] as () => void)());
+        await poll();
         expect(screen.getByText('Interval must be an integer from 1 to 1440 minutes.')).toBeInTheDocument();
     });
 
     it('polls the last report without overwriting advanced edits', async () => {
-        const poll = vi.spyOn(window, 'setInterval');
+        const poll = holdPolls();
         const {read} = await setup();
         await advanced();
         await userEvent.clear(screen.getByRole('textbox', {name: 'Interval (minutes)'}));
         await userEvent.type(screen.getByRole('textbox', {name: 'Interval (minutes)'}), '40');
         read.mockResolvedValue({settings: {accounts: {reconcile: {...savedValues, last_run: {at: 1700000100, report: {...report, refused: 0}}}}}});
-        const callback = poll.mock.calls[poll.mock.calls.length - 1][0];
-        expect(typeof callback).toBe('function');
-        await act(async () => {if (typeof callback === 'function') callback();});
+        await poll();
         expect(read).toHaveBeenCalledTimes(2);
         expect(screen.getByText(/Last run at \/ result:.*Completed/)).toBeInTheDocument();
         expect(screen.getByRole('textbox', {name: 'Interval (minutes)'})).toHaveValue('40');
