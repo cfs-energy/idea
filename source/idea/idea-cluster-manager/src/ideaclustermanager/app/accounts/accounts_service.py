@@ -45,6 +45,7 @@ from ideaclustermanager.app.accounts.db.single_sign_on_state_dao import (
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
 from typing import Optional, List
+import botocore.exceptions
 import ldap
 import os
 import re
@@ -220,11 +221,14 @@ class AccountsService:
 
         return self.group_dao.convert_from_db(updated_group)
 
-    def delete_group(self, group_name: str, force: bool = False):
+    def delete_group(
+        self, group_name: str, force: bool = False, *, keep_directory: bool = False
+    ):
         """
         delete a group
         :param group_name:
         :param force: force delete a group even if group has existing members
+        :param keep_directory: leave the directory's group alone
         :return:
         """
 
@@ -255,6 +259,8 @@ class AccountsService:
 
         self.group_dao.delete_group(group_name=group_name)
 
+        if keep_directory:
+            return
         self.task_manager.send(
             task_name='accounts.sync-group',
             payload={'group_name': group_name},
@@ -992,6 +998,13 @@ class AccountsService:
         if is_enabled:
             return
 
+        if self.group_dao.get_group(existing_user['group_name']) is None:
+            # only a delete removes it, and one that stopped there has already
+            # removed the account from the directory and the user pool
+            raise AuthUtils.invalid_operation(
+                f'User: {username} is part way through being deleted. Delete it again.'
+            )
+
         if existing_user.get('disable_pending'):
             self.disable_user(
                 username, reconcile_sources=existing_user.get('reconcile_sources', [])
@@ -1091,7 +1104,7 @@ class AccountsService:
         self.disable_user(username=username)
 
         self.logger.info(f'{log_tag} removing memberships and directory account')
-        self._remove_deleted_user_now(username, groups)
+        keep_directory = self._remove_deleted_user_now(username, groups)
 
         # delete user in user pool
         self.logger.info(f'{log_tag} delete user from user pool')
@@ -1099,7 +1112,16 @@ class AccountsService:
 
         # delete user's group from db
         self.logger.info(f'{log_tag} deleting group: {group_name}')
-        self.delete_group(group_name=group_name, force=True)
+        try:
+            # the task this queues cannot ask a deleted user whether its directory
+            # account is kept, and with the account stays the group it belongs to
+            self.delete_group(
+                group_name=group_name, force=True, keep_directory=keep_directory
+            )
+        except exceptions.SocaException as e:
+            # a delete that stopped after this step finds the group gone when run again
+            if e.error_code != errorcodes.AUTH_GROUP_NOT_FOUND:
+                raise
 
         self.revoke_user_api_tokens(username)
 
@@ -1107,7 +1129,7 @@ class AccountsService:
         self.logger.info(f'{log_tag} delete user in ddb')
         self.user_dao.delete_user(username=username)
 
-    def _remove_deleted_user_now(self, username: str, group_names: List[str]):
+    def _remove_deleted_user_now(self, username: str, group_names: List[str]) -> bool:
         # The queue drops a user's tasks once the account record is gone, so the
         # work they would do runs here, before the record goes. A failure stops the
         # delete with the user disabled, and deleting again resumes it.
@@ -1119,12 +1141,12 @@ class AccountsService:
 
         user = self.user_dao.get_user(username)
         # the directory keeps its memberships wherever it keeps the account
-        keep_directory = self.ldap_client.is_readonly() or keeps_directory_account(
-            self.context, user
-        )
+        keep_account = keeps_directory_account(self.context, user)
+        keep_directory = keep_account or self.ldap_client.is_readonly()
         remaining = Utils.get_value_as_list('additional_groups', user, [])
+        # the record and the member list drop a group last, together, so a delete
+        # that stops inside a group leaves both still showing it
         for group_name in group_names:
-            self.group_members_dao.delete_membership(group_name, username)
             if not keep_directory:
                 try:
                     self.ldap_client.remove_user_from_group([username], group_name)
@@ -1136,9 +1158,18 @@ class AccountsService:
                     ldap.UNWILLING_TO_PERFORM,
                 ):
                     pass
+            group = self.group_dao.get_group(group_name)
+            if group is None or group['group_type'] not in (
+                constants.GROUP_TYPE_USER,
+                constants.GROUP_TYPE_PROJECT,
+            ):
+                # sign-in takes administrator and manager rights from the user
+                # pool's groups, not from the record
+                self._remove_from_user_pool_group(username, group_name)
             self.context.projects.user_projects_dao.group_member_removed(
                 group_name=group_name, username=username
             )
+            self.group_members_dao.delete_membership(group_name, username)
             # the record lists what is still to remove, and no more: a delete that
             # stops here resumes from it, and enabling the user instead shows the truth
             remaining = [name for name in remaining if name != group_name]
@@ -1146,6 +1177,20 @@ class AccountsService:
                 {'username': username, 'additional_groups': remaining}
             )
         SyncUserInDirectoryServiceTask(self.context).invoke({'username': username})
+        return keep_account
+
+    def _remove_from_user_pool_group(self, username: str, group_name: str):
+        try:
+            self.user_pool.admin_remove_user_from_group(
+                username=username, group_name=group_name
+            )
+        except botocore.exceptions.ClientError as e:
+            # no such user or no such group: there is no membership left to remove
+            if e.response['Error']['Code'] not in (
+                'UserNotFoundException',
+                'ResourceNotFoundException',
+            ):
+                raise
 
     def revoke_user_api_tokens(self, username):
         if self.token_service is not None:

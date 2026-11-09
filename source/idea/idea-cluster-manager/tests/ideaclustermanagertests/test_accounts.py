@@ -926,13 +926,145 @@ def test_deleting_a_user_whose_directory_account_is_kept_leaves_its_memberships(
     )
     # as the reconciler disables a user it found disabled in the directory
     context.accounts.disable_user(username, preserve_directory=True)
+    send = Mock(wraps=context.accounts.task_manager.send)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
     context.accounts.delete_user(username)
     assert directory.remove_user_from_group.called is not kept
     assert directory.delete_user.called is not kept
+    # the account's own directory group stays or goes with the account
+    queued_groups = [
+        call.kwargs['payload']['group_name']
+        for call in send.call_args_list
+        if call.kwargs['task_name'] == 'accounts.sync-group'
+    ]
+    assert (f'{username}-user-group' in queued_groups) is not kept
     # the cluster's own records go either way
     members = context.accounts.group_members_dao.get_usernames_in_group
     assert username not in members('default-project-group')
+    assert context.accounts.group_dao.get_group(f'{username}-user-group') is None
     assert context.accounts.user_dao.get_user(username) is None
+
+
+def in_cluster_group(context, monkeypatch, username, group_name):
+    # administrators and managers are user pool groups; sign-in reads them there
+    from ideadatamodel import constants
+
+    context.accounts.group_dao.create_group(
+        {
+            'group_name': group_name,
+            'title': group_name,
+            'gid': 5990,
+            'group_type': constants.GROUP_TYPE_CLUSTER,
+            'enabled': True,
+        }
+    )
+    context.accounts.add_users_to_group([username], group_name)
+    remove = Mock()
+    monkeypatch.setattr(
+        context.aws().cognito_idp(),
+        'admin_remove_user_from_group',
+        remove,
+        raising=False,
+    )
+    return remove
+
+
+def test_a_stopped_delete_does_not_leave_user_pool_rights_the_record_no_longer_lists(
+    context: AppContext, monkeypatch
+):
+    username, group_name = 'accounts_deleted6', 'accounts-deleted6-cluster-group'
+    directory = deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    directory.delete_user.side_effect = RuntimeError('directory down')
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user(username)
+    assert group_name not in context.accounts.user_dao.get_user(username)[
+        'additional_groups'
+    ]
+    removed_from_pool.assert_called_once()
+    assert removed_from_pool.call_args.kwargs['Username'] == username
+    assert removed_from_pool.call_args.kwargs['GroupName'] == group_name
+
+
+@pytest.mark.parametrize('gone', ['UserNotFoundException', 'ResourceNotFoundException'])
+def test_deleting_a_user_the_user_pool_no_longer_has_still_finishes(
+    context: AppContext, monkeypatch, gone
+):
+    username = f'accounts_deleted7{gone[0].lower()}'
+    group_name = f'{username}-cluster-group'
+    deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    removed_from_pool.side_effect = botocore.exceptions.ClientError(
+        {'Error': {'Code': gone}}, 'AdminRemoveUserFromGroup'
+    )
+    context.accounts.delete_user(username)
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def test_a_user_pool_that_refuses_the_group_removal_stops_the_delete_with_the_group_listed(
+    context: AppContext, monkeypatch
+):
+    username, group_name = 'accounts_deleted8', 'accounts-deleted8-cluster-group'
+    deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    removed_from_pool.side_effect = botocore.exceptions.ClientError(
+        {'Error': {'Code': 'TooManyRequestsException'}}, 'AdminRemoveUserFromGroup'
+    )
+    with pytest.raises(botocore.exceptions.ClientError):
+        context.accounts.delete_user(username)
+    # record and member list agree on what is left
+    left = context.accounts.user_dao.get_user(username)
+    assert group_name in left['additional_groups']
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert username in members(group_name)
+
+    removed_from_pool.side_effect = None
+    context.accounts.delete_user(username)
+    assert username not in members(group_name)
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def test_a_directory_that_refuses_a_group_removal_leaves_the_member_list_showing_it(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted9')
+    directory.remove_user_from_group.side_effect = ldap.SERVER_DOWN()
+    with pytest.raises(ldap.SERVER_DOWN):
+        context.accounts.delete_user('accounts_deleted9')
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert 'accounts_deleted9' in members('default-project-group')
+
+
+def stopped_after_the_user_group_went(context, monkeypatch, username):
+    deletable_user(context, monkeypatch, username)
+    delete_record = context.accounts.user_dao.delete_user
+    monkeypatch.setattr(
+        context.accounts.user_dao,
+        'delete_user',
+        Mock(side_effect=RuntimeError('table throttled')),
+    )
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user(username)
+    monkeypatch.setattr(context.accounts.user_dao, 'delete_user', delete_record)
+    assert context.accounts.group_dao.get_group(f'{username}-user-group') is None
+
+
+def test_a_delete_that_stopped_after_the_user_group_went_can_be_run_again(
+    context: AppContext, monkeypatch
+):
+    stopped_after_the_user_group_went(context, monkeypatch, 'accounts_deleted10')
+    context.accounts.delete_user('accounts_deleted10')
+    assert context.accounts.user_dao.get_user('accounts_deleted10') is None
+
+
+def test_a_user_whose_delete_stopped_after_its_accounts_went_cannot_be_enabled(
+    context: AppContext, monkeypatch
+):
+    stopped_after_the_user_group_went(context, monkeypatch, 'accounts_deleted11')
+    with pytest.raises(exceptions.SocaException) as refused:
+        context.accounts.enable_user('accounts_deleted11')
+    assert refused.value.error_code == errorcodes.AUTH_INVALID_OPERATION
+    assert context.accounts.user_dao.get_user('accounts_deleted11')['enabled'] is False
 
 
 @pytest.mark.parametrize('failing', ['directory', 'queue'])
