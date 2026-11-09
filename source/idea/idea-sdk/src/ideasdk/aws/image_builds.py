@@ -245,6 +245,10 @@ def needs_attempt_clock(record: ImageBuildRecord) -> bool:
     )
 
 
+# what bake_time_limit_reason says, so the count and the capture can name it
+BAKE_TIME_LIMIT_TEXT = re.compile(r'ran past its \d+ minute limit')
+
+
 def bake_time_limit_reason(record: ImageBuildRecord, limit: timedelta) -> str:
     minutes = int(limit.total_seconds() / 60)
     waiting = f' ({record.error})' if record.error else ''
@@ -288,7 +292,7 @@ def report_bake_failure(
 
 # what a bake failure's text says, as a tag. each row's error is a sentence built from these.
 _BAKE_REASONS = (
-    (re.compile(r'time limit', re.I), 'time_limit'),
+    (BAKE_TIME_LIMIT_TEXT, 'time_limit'),
     (re.compile(r'capacity', re.I), 'capacity'),
     (re.compile(r'in-bake check results unreadable'), 'checks_unreadable'),
     (re.compile(r'in-bake check (\w+)'), None),
@@ -402,6 +406,9 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
             release=record.release,
             log_group=f'/{context.cluster_name()}/{context.module_id()}/ami-builder',
             log_stream=f'bootstrap_{record.instance_id}',
+            fallback_reason=(
+                'time_limit' if classify_bake_failure(reason) == 'time_limit' else None
+            ),
         ),
     )
 

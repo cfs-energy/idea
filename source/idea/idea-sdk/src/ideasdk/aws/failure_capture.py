@@ -203,6 +203,8 @@ class FailedHost:
     log_group: Optional[str] = None
     log_stream: Optional[str] = None
     owner: Optional[str] = None  # never logged: removed from everything that is
+    # the reason tag when the host says nothing known, from the caller's own record of it
+    fallback_reason: Optional[str] = None
 
 
 def detect_signature(*texts: Optional[str]) -> str:
@@ -211,6 +213,12 @@ def detect_signature(*texts: Optional[str]) -> str:
         if pattern.search(joined):
             return name
     return UNKNOWN_SIGNATURE
+
+
+def _reason(host: FailedHost, signature: str) -> str:
+    if signature == UNKNOWN_SIGNATURE and host.fallback_reason:
+        return host.fallback_reason
+    return signature
 
 
 def plain_cause(signature: Optional[str]) -> Optional[str]:
@@ -326,7 +334,7 @@ def _capture(context, logger, host: FailedHost, abandoned: Event) -> Tuple[str, 
         _fill_identity(ec2, host)
     except Exception:  # noqa - identity is a convenience
         pass
-    signature = detect_signature(console, tail)
+    signature = _reason(host, detect_signature(console, tail))
     if abandoned.is_set():
         return signature, console_state
     lines = [
@@ -366,7 +374,10 @@ def capture_failure(context, logger, host: FailedHost) -> Optional[str]:
         try:
             outcome['result'] = _capture(context, logger, host, abandoned)
         except Exception as e:
-            outcome['result'] = (UNKNOWN_SIGNATURE, type(e).__name__.lower()[:32])
+            outcome['result'] = (
+                _reason(host, UNKNOWN_SIGNATURE),
+                type(e).__name__.lower()[:32],
+            )
 
     worker = Thread(target=work, name='failure-capture', daemon=True)
     try:
@@ -374,7 +385,9 @@ def capture_failure(context, logger, host: FailedHost) -> Optional[str]:
         worker.join(TIME_LIMIT_SECONDS)
         if worker.is_alive():
             abandoned.set()
-        signature, console_state = outcome.get('result', (UNKNOWN_SIGNATURE, 'timeout'))
+        signature, console_state = outcome.get(
+            'result', (_reason(host, UNKNOWN_SIGNATURE), 'timeout')
+        )
         HealthMetrics(context).add(
             'failure.captures',
             kind=host.kind,

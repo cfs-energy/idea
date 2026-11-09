@@ -127,14 +127,18 @@ export async function runBootstrap(
     '../../cdk/stacks/bootstrap.ts'
   );
   // An upgraded cluster has no row for the setting until the settings sync adds it; the default
-  // here is the same as the template's, so the two never disagree.
-  const schedulerModules = config.modules().filter((module) => module.name === 'scheduler');
-  const retentionDays =
-    schedulerModules.length === 0
-      ? 0
-      : schedulerLogRetentionDays(
-          config.getInt('scheduler.log_archive.s3_retention_days', 400, { moduleId: schedulerModules[0].module_id }),
-        );
+  // here is the same as the template's, so the two never disagree. Each scheduler module keeps
+  // its own archive for its own retention.
+  const schedulerLogArchives = config
+    .modules()
+    .filter((module) => module.name === 'scheduler')
+    .map((module) => ({
+      moduleId: module.module_id,
+      retentionDays: schedulerLogRetentionDays(
+        config.getInt('scheduler.log_archive.s3_retention_days', 400, { moduleId: module.module_id }),
+        module.module_id,
+      ),
+    }));
   writeFileSync(
     templatePath,
     renderBootstrapStack({
@@ -142,8 +146,7 @@ export async function runBootstrap(
       awsDnsSuffix: config.getString('cluster.aws.dns_suffix', 'amazonaws.com'),
       awsElbAccountId: elbAccountIdForRegion(options.awsRegion),
       inputPermissionsBoundary: options.customPermissionsBoundary,
-      schedulerLogModuleIds: schedulerModules.map((module) => module.module_id),
-      schedulerLogRetentionDays: retentionDays,
+      schedulerLogArchives,
     }),
   );
   deps.out(

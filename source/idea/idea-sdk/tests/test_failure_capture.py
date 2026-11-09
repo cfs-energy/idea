@@ -419,3 +419,51 @@ def test_the_real_client_decodes_the_console_and_sends_latest():
         )
         text, state = module._read_console(client, 'i-1')
     assert state == 'ok' and 'Kernel panic' in text
+
+
+def test_a_bake_stopped_by_its_time_limit_is_counted_as_one_when_the_host_says_nothing(
+    monkeypatch,
+):
+    from datetime import timedelta
+
+    from ideadatamodel import ImageBuildRecord, ImageKind
+    from ideasdk.aws.image_builds import bake_time_limit_reason, capture_builder_failure
+
+    def captured(console):
+        h = Harness(FakeEc2(console))
+        monkeypatch.setattr(
+            module.HealthMetrics,
+            'add',
+            lambda _, name, value=1, **tags: h.metrics.append((name, tags)),
+        )
+        record = ImageBuildRecord(
+            base_os='rocky8',
+            architecture='arm64',
+            status='building',
+            instance_id='i-1',
+            release='26.11.2',
+        )
+        reason = bake_time_limit_reason(record, timedelta(minutes=3))
+        cause = capture_builder_failure(
+            h.context, h.logger, ImageKind.DESKTOP, record, reason
+        )
+        return h, cause
+
+    h, cause = captured(HEALTHY_BOOT)
+    assert h.metrics[0][1]['reason'] == 'time_limit'
+    assert 'reason=time_limit' in h.shipped()
+    # the row's error already says so; the portal sentence is only for what the host said
+    assert cause is None
+    # what the host did say outranks it
+    h, cause = captured('Kernel panic - not syncing: Fatal exception')
+    assert h.metrics[0][1]['reason'] == 'kernel_panic'
+
+
+def test_a_hung_read_still_counts_the_callers_reason(monkeypatch):
+    block = threading.Event()
+    monkeypatch.setattr(module, 'TIME_LIMIT_SECONDS', 0.1)
+    h = Harness(FakeEc2(block=block))
+    h.run_with(monkeypatch, fallback_reason='time_limit')
+    block.set()
+    assert h.metrics[0][1]['reason'] == 'time_limit'
+    assert h.metrics[0][1]['console'] == 'timeout'

@@ -20,7 +20,7 @@ describe("scheduler log archive expiry", () => {
   it("adds no rule unless a retention is set, so an unconfigured bucket renders as before", () => {
     assert.deepEqual(rules(renderBootstrapStack(base)).map((rule) => rule.Id), ["CleanupOldVersions"]);
     assert.deepEqual(
-      rules(renderBootstrapStack({ ...base, schedulerLogModuleIds: ["scheduler"], schedulerLogRetentionDays: 0 })).map(
+      rules(renderBootstrapStack({ ...base, schedulerLogArchives: [{ moduleId: "scheduler", retentionDays: 0 }] })).map(
         (rule) => rule.Id,
       ),
       ["CleanupOldVersions"],
@@ -30,8 +30,7 @@ describe("scheduler log archive expiry", () => {
   it("expires only the scheduler module's prefix, in place on the existing bucket", () => {
     const rendered = renderBootstrapStack({
       ...base,
-      schedulerLogModuleIds: ["scheduler"],
-      schedulerLogRetentionDays: 400,
+      schedulerLogArchives: [{ moduleId: "scheduler", retentionDays: 400 }],
     });
     const found = rules(rendered);
     const expire = found.find((rule) => rule.Id === "ExpireSchedulerLogArchive1");
@@ -51,11 +50,20 @@ describe("scheduler log archive expiry", () => {
 
   it("gives each scheduler module its own rules", () => {
     const found = rules(
-      renderBootstrapStack({ ...base, schedulerLogModuleIds: ["scheduler", "scheduler-b"], schedulerLogRetentionDays: 45 }),
+      renderBootstrapStack({
+        ...base,
+        schedulerLogArchives: [
+          { moduleId: "scheduler", retentionDays: 45 },
+          { moduleId: "scheduler-b", retentionDays: 90 },
+        ],
+      }),
     );
     assert.deepEqual(
-      found.filter((rule) => rule.ExpirationInDays !== undefined).map((rule) => rule.Prefix),
-      ["logs/scheduler/", "logs/scheduler-b/"],
+      found.filter((rule) => rule.ExpirationInDays !== undefined).map((rule) => [rule.Prefix, rule.ExpirationInDays]),
+      [
+        ["logs/scheduler/", 45],
+        ["logs/scheduler-b/", 90],
+      ],
     );
   });
 
@@ -63,5 +71,12 @@ describe("scheduler log archive expiry", () => {
     assert.equal(schedulerLogRetentionDays(0), 0);
     assert.equal(schedulerLogRetentionDays(30), 30);
     for (const bad of [1, 29, -1, 1.5]) assert.throws(() => schedulerLogRetentionDays(bad), /s3_retention_days/);
+  });
+
+  it("names the scheduler module whose retention is refused", () => {
+    assert.throws(
+      () => schedulerLogRetentionDays(10, "scheduler-b"),
+      (error: Error) => error.message.startsWith("scheduler-b.log_archive.s3_retention_days must be 0"),
+    );
   });
 });
