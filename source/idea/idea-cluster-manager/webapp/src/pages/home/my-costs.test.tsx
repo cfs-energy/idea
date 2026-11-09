@@ -63,7 +63,7 @@ it('uses the shared personal job table, hints, and completed-job links', async (
     const table = await screen.findByRole('table', {name: 'Top jobs'});
     expect(within(table).getByRole('link', {name: 'Protein study'})).toHaveAttribute('href', '#/home/completed-jobs?job_id=job-1');
     expect(screen.queryByRole('columnheader', {name: 'User'})).toBeNull();
-    expect(screen.getByRole('heading', {name: 'Top jobs (1)'})).toBeInTheDocument();
+    expect(screen.getByRole('heading', {name: /^Top jobs/})).toHaveTextContent('Top jobs (1)');
     expect(screen.getByText('Requested 36 cores, used about 1. Try ncpus=2. Requested 64 GiB, peak 3 GiB.')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith({period: 'last_month'});
 });

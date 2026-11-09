@@ -400,7 +400,7 @@ describe('Terminal action', () => {
         expect(group.children[1]).toContainElement(connect);
         // the group keeps its buttons on one line; the name column takes any wrapping
         expect(group.style.whiteSpace).toBe('nowrap');
-        expect((group.previousElementSibling as HTMLElement).style.minWidth).toBe('0');
+        expect((group.previousElementSibling as HTMLElement).style.minWidth).toBe('0px');
         expect(group.previousElementSibling).toHaveTextContent('my-desktop');
     });
 

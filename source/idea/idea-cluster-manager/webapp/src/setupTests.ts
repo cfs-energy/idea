@@ -77,3 +77,31 @@ if (window.matchMedia == null) {
         dispatchEvent: () => false
     });
 }
+
+// jsdom has no layout, so every box measures zero. jsdom 26 left a computed width and height
+// empty; jsdom 29 on reports 'auto', where a browser reports the used size in px. Cloudscape's
+// top navigation reads the computed width and treats 0 as "no layout", but 'auto' parses to NaN
+// and collapses every utility into the overflow menu, so report the zero jsdom lays out.
+const computedStyle = window.getComputedStyle.bind(window);
+const zeroWhenAuto = (property: string, value: string) =>
+    (property === 'width' || property === 'height') && value === 'auto' ? '0px' : value;
+window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
+    const style = computedStyle(element, pseudo);
+    return new Proxy(style, {
+        get(target, property) {
+            if (property === 'getPropertyValue') {
+                return (name: string) => zeroWhenAuto(name, target.getPropertyValue(name));
+            }
+            const value = Reflect.get(target, property, target);
+            if (typeof value === 'function') return value.bind(target);
+            return typeof property === 'string' && typeof value === 'string' ? zeroWhenAuto(property, value) : value;
+        }
+    });
+}) as typeof window.getComputedStyle;
+
+// Tests load Cloudscape without its stylesheets (css: false). A fly-out menu positions itself
+// against its closest scrolling ancestor, the parent menu's options list, which only that
+// stylesheet makes scroll; jsdom 26 computed every box's overflow as '', which hid this.
+const scrollers = document.createElement('style');
+scrollers.textContent = '[class*="awsui_options-list_"] { overflow-y: auto; }';
+document.head.appendChild(scrollers);

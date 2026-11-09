@@ -170,7 +170,7 @@ describe('report views', () => {
         open(`/reporting?table=${tab}`);
         expect((await screen.findAllByText(heading)).length).toBeGreaterThan(0);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month'});
-        if (tab === 'jobs') expect(screen.getByRole('heading', {name: 'Top jobs (1)'})).toBeInTheDocument();
+        if (tab === 'jobs') expect(screen.getByRole('heading', {name: /^Top jobs/})).toHaveTextContent('Top jobs (1)');
         expect(screen.getByRole('tab', {name: ({overview: 'Overview', jobs: 'Jobs', desktops: 'Desktops', storage: 'Storage', user: 'Breakdown', project: 'Breakdown'} as Record<string, string>)[tab]})).toHaveAttribute('aria-selected', 'true');
         expect(document.body.textContent).not.toMatch(/\b(facet|projection|index|coverage|eligible|freshness|spread|snapshot|provisional|allocation|v1|recorded label|unavailable)\b/i);
         expect(document.body.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -518,7 +518,7 @@ describe('Reporting user filter', () => {
     it('includes the filter in insights table CSV filenames', async () => {
         open('/reporting/jobs?user=scientist-a');
         const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-        await screen.findByRole('heading', {name: 'Top jobs (1)'});
+        expect(await screen.findByRole('heading', {name: /^Top jobs/})).toHaveTextContent('Top jobs (1)');
         await userEvent.click(screen.getByRole('button', {name: /^Export/}));
         expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('top-jobs-scientist-a.csv');
     });

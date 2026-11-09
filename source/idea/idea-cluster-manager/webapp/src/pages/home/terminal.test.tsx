@@ -45,8 +45,10 @@ beforeEach(() => {
     const computed = window.getComputedStyle;
     vi.spyOn(window, 'getComputedStyle').mockImplementation(element => {
         const style = computed(element);
-        if (element.classList.contains('terminal-surface')) {style.backgroundColor = 'rgb(255, 255, 255)'; style.color = 'rgb(15, 20, 25)';}
-        return style;
+        if (!element.classList.contains('terminal-surface')) return style;
+        // a computed declaration is read-only, so answer the resolved theme colours over it
+        const colors: Record<string | symbol, string> = {backgroundColor: 'rgb(255, 255, 255)', color: 'rgb(15, 20, 25)'};
+        return new Proxy(style, {get: (target, property) => colors[property] ?? Reflect.get(target, property)});
     });
 });
 afterEach(() => {vi.unstubAllGlobals(); vi.restoreAllMocks();});
