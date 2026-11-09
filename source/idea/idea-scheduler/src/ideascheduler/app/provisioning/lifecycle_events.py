@@ -95,7 +95,10 @@ ERROR_CODE_REASON_CLASSES = {
 
 # the holds the platform places, each recorded with its error code. PBS shows the same held
 # state for an owner's qsub -h or a dependency not yet met, which the platform did not fail.
-PLATFORM_HOLD_REASON_CLASSES = (REASON_CLASS_RETRIES_EXHAUSTED, REASON_CLASS_STACK_TIMEOUT)
+PLATFORM_HOLD_REASON_CLASSES = (
+    REASON_CLASS_RETRIES_EXHAUSTED,
+    REASON_CLASS_STACK_TIMEOUT,
+)
 
 
 class ProvisioningLifecycleEvents:
