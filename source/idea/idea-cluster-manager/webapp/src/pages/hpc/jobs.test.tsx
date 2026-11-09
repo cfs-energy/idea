@@ -190,6 +190,11 @@ describe('job info panel words', () => {
         expect(screen.queryByText('State')).toBeNull();
     });
 
+    it('reads an array with a subjob begun as running, not as still provisioning', () => {
+        render(<JobStatus job={{job_id: '357[]', state: 'subjob_begun', start_time: '2026-08-19T11:00:00Z', params: {compute_stack: 'cluster-test-357-array'}}} now={NOW}/>);
+        expect(screen.getByText('Running')).toBeInTheDocument();
+    });
+
     it('keeps internal fields behind Technical details, closed until asked for', () => {
         const {container} = render(<JobInfo job={job} now={NOW}/>);
         const toggle = screen.getByRole('button', {name: 'Technical details'});

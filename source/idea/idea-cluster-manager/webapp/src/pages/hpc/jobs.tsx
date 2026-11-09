@@ -45,7 +45,7 @@ export function jobStatusLabel(job: SocaJob): string {
     const failed = job.exit_status ? `Failed (exit ${job.exit_status})` : 'Failed'
     return job.state === 'finished' ? (disposition === 'ran' ? 'Finished' : disposition === 'failed' ? failed : disposition[0].toUpperCase() + disposition.slice(1))
         : job.state === 'held' ? 'Held'
-        : job.state === 'running' ? 'Running'
+        : job.state === 'running' || job.state === 'subjob_begun' ? 'Running'
         : job.state === 'exit' ? (job.exit_status ? failed : 'Finishing')
         : job.params?.compute_stack === 'tbd' ? 'Queued' : 'Provisioning'
 }
