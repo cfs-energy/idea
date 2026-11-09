@@ -25,6 +25,7 @@ import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../..
 import {
   compareUpgradeDrift,
   isOperatorSource,
+  isTemplateDefaultKey,
   VALUES_OWNED_KEYS,
   renderUpgradeDrift,
   type CurrentConfigRow,
@@ -1197,7 +1198,9 @@ async function applyPhase3Entries(
 ): Promise<void> {
   const previous = new Map(current.map((entry) => [entry.key, entry.value]));
   for (const entry of entries) {
-    await writer.setConfigEntry(entry.key, entry.value);
+    // A move to the new template default is the template's value: stamped cli, the row would read
+    // as an operator's from then on, and the template refresh and later default moves would skip it.
+    await writer.setConfigEntry(entry.key, entry.value, isTemplateDefaultKey(entry.key) ? "template" : "cli");
     if (entry.key === "ecs.image") {
       out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; every task rolls to the release image`);
     } else if (entry.key === "metrics.provider") {
@@ -1659,7 +1662,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
           for (const entry of entries) if (overwrite || !expected.has(entry.key)) expected.set(entry.key, entry.value);
           await writer.syncClusterSettingsInDb(entries, overwrite, source);
         },
-        async setConfigEntry(key, value) { expected.set(key, value); await writer.setConfigEntry(key, value); },
+        async setConfigEntry(key, value, source) { expected.set(key, value); await writer.setConfigEntry(key, value, source); },
         async deleteConfigEntries(prefix) {
           for (const key of expected.keys()) if (key.startsWith(prefix)) expected.delete(key);
           await writer.deleteConfigEntries(prefix);

@@ -104,12 +104,14 @@ function replay(): Replay {
         .filter((name): name is string => name !== undefined);
       if (announced.length > 0) events.push(`module-sets:${overwrite === true}:${announced.sort().join(",")}`);
     },
-    async setConfigEntry(key, value) {
+    async setConfigEntry(key, value, source = "cli") {
       events.push(`set:${key}=${String(value)}`);
       const table = rows[`${clusterName}.cluster-settings`]!;
       const index = table.findIndex((row) => row["key"] === key);
-      if (index < 0) table.push(setting(key, value));
-      else table[index] = setting(key, value);
+      // as the table writer does: stamp the writer, count the write
+      const version = index < 0 ? 1 : Number(table[index]!["version"] ?? 0) + 1;
+      if (index < 0) table.push({ ...setting(key, value), source, version });
+      else table[index] = { ...setting(key, value), source, version };
     },
     async deleteConfigEntries(prefix) {
       events.push(`delete:${prefix}`);
@@ -584,6 +586,25 @@ for (const [stored, expected] of [[6, 24], [12, 12], [undefined, undefined]] as 
     });
   });
 }
+
+test("a cost default moved in Phase 3 stays the template's, so a later upgrade can move it again", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    const table = rows[`${clusterName}.cluster-settings`]!;
+    rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
+    // written by `config update` at install
+    table.push({ key: COST_LOOKBACK, value: 3, source: "cli", version: 1 });
+    const run = () => upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, skipGlobalSettingsUpdate: true });
+    await run();
+    assert.ok(events.includes(`set:${COST_LOOKBACK}=7`));
+    const moved = table.find((row) => row["key"] === COST_LOOKBACK)!;
+    assert.equal(moved["value"], 7);
+    // stamped cli at version 2 it would read as an operator's choice from then on
+    assert.equal(moved["source"], "template");
+    events.length = 0;
+    await run();
+    assert.ok(!events.some((event) => event.startsWith(`set:${COST_LOOKBACK}=`)));
+  });
+});
 
 for (const serviceSoftwareOptions of [
   { newVersion: "R20260901-P1", updateAvailable: true, updateStatus: "ELIGIBLE" },
@@ -1251,12 +1272,12 @@ for (const point of ["global-write", "full-sync", "phase3", "deployment"]) {
             }
             await writer.syncClusterSettingsInDb(entries, overwrite, source);
           },
-          async setConfigEntry(key, value) {
+          async setConfigEntry(key, value, source) {
             if (!failed && point === "phase3" && key === "analytics.opensearch.data_node_instance_type") {
               failed = true;
               throw new Error("injected interruption");
             }
-            await writer.setConfigEntry(key, value);
+            await writer.setConfigEntry(key, value, source);
           },
         };
       };
