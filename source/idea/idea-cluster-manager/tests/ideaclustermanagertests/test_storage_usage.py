@@ -969,11 +969,40 @@ def test_outside_home_without_analytics_says_so_and_does_not_walk(monkeypatch, t
         storage_usage, 'scan_as_user', Mock(side_effect=AssertionError('no walk'))
     )
     sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    os.mkdir(sibling)
     try:
         result = service.get_usage('alice', sibling)
         assert result['state'] == 'unavailable'
         assert 'storage analytics' in result['message']
     finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_names_in_a_folder_the_person_cannot_open_get_one_answer(monkeypatch, tree):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    other = os.path.join(os.path.dirname(tree), 'bob')
+    os.makedirs(other + '/parity')
+    folders = {
+        other + '/parity': dict(
+            self=row(other + '/parity', 50), children=[], measured_at=NOW
+        )
+    }
+    service, source = analytics_service(monkeypatch, tree, folders)
+    os.chmod(other, 0)
+    answers = []
+    try:
+        for name in ('parity', 'no-such-folder'):
+            with pytest.raises(exceptions.SocaException) as raised:
+                service.get_usage('alice', f'{other}/{name}', study=False)
+            answers.append((raised.value.error_code, raised.value.message))
+        assert answers[0] == answers[1]
+        assert 'no longer exists or cannot be opened' in answers[0][1]
+        # and ONTAP is not asked about either
+        source.folder.assert_not_called()
+    finally:
+        os.chmod(other, 0o700)
         service._study_workers.shutdown()
         service._workers.shutdown()
 

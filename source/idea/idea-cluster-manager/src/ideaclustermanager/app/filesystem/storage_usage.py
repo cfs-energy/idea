@@ -32,6 +32,7 @@ MAX_CONCURRENT_STUDIES = 2
 MAX_LARGEST = 25
 MIN_LARGEST_BYTES = 2**20
 MAX_CACHED_VIEWS = 1000
+CANNOT_OPEN = 'That folder no longer exists or cannot be opened.'
 
 
 def summary(path, mtime=None):
@@ -471,6 +472,14 @@ class StorageUsageService:
         self, username, identity, mount, home, folder, refresh, study
     ):
         target = folder or home
+        # Opened as this person before ONTAP is asked, and one answer whether it is missing or
+        # closed to them: ONTAP sees every name, so its answer would say which names exist.
+        if (
+            folder is not None
+            and self._analytics() is not None
+            and not readable_paths_as_user(identity, mount, [folder])
+        ):
+            raise exceptions.invalid_params(CANNOT_OPEN)
         view = self._view(username, identity, mount, target, refresh)
         if view is None:
             return None
@@ -547,9 +556,7 @@ class StorageUsageService:
             try:
                 result = scan_as_user(identity, home, folder)
             except OSError:
-                raise exceptions.invalid_params(
-                    'That folder no longer exists or cannot be opened.'
-                )
+                raise exceptions.invalid_params(CANNOT_OPEN)
             result['folder'] = result['total']
             result['home'] = home
             result['source'] = 'scan'
