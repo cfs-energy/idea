@@ -623,9 +623,10 @@ def test_a_job_cached_after_pbs_was_asked_is_not_taken_as_gone(world):
     assert cached_ids(world.cache) == ['50']
 
 
-def test_an_array_all_of_whose_subjobs_exited_0_succeeded(world):
+@pytest.mark.parametrize('done', [SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED])
+def test_an_array_all_of_whose_subjobs_exited_0_succeeded(world, done):
     world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
-    finish_array(world, subjobs=[subjob(1), subjob(2, start=30)])
+    finish_array(world, subjobs=[subjob(1), subjob(2, start=30, state=done)])
     poll(world)
     [record] = records(world)
     assert record.exit_status == 0

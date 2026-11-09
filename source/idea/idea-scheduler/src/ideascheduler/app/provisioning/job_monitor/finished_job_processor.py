@@ -485,7 +485,9 @@ class FinishedJobProcessor:
         if failed:
             job.exit_status = failed[0]
         elif submitted == len(subjobs) and all(
-            subjob.state == SocaJobState.FINISHED and subjob.exit_status == 0
+            # a done subjob reads X while its array is active and F in history
+            subjob.state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+            and subjob.exit_status == 0
             for subjob in subjobs
         ):
             job.exit_status = 0
