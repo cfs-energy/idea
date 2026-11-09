@@ -879,7 +879,9 @@ class CiInterpreter(unittest.TestCase):
         import re
 
         role = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
-        python = re.search(r'(\S+) -I -S /opt/idea/roles/bastion_metrics\.py', role).group(1)
+        python = re.search(
+            r'(\S+) -I -S /opt/idea/roles/bastion_metrics\.py', role
+        ).group(1)
         workflow = (ROOT / '.github/workflows/ideactl_checks.yaml').read_text()
         job = workflow[workflow.index('\n  bastion-sshd:') :]
         job = job[: job.index('\n  private-parity:')]
