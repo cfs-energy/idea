@@ -217,7 +217,7 @@ ideactl build-desktop-image --base-os rocky9 --base-ami <vendor ami> --force
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `virtual-desktop-controller.software_stacks.image_refresh_schedule.enabled` | `true` | Run the monthly vendor check. Applies to desktop and compute rows. |
+| `virtual-desktop-controller.software_stacks.image_refresh_schedule.enabled` | `true` | Run the monthly rebuild. Applies to desktop and compute rows. |
 | `virtual-desktop-controller.software_stacks.image_refresh_schedule.day` | `first sunday` | `first`, `second`, `third`, `fourth` or `last`, then a weekday. |
 | `virtual-desktop-controller.software_stacks.image_refresh_schedule.hour` | `2` | Hour in cluster time. |
 | `virtual-desktop-controller.software_stacks.image_pipeline.ready_gate_seconds_linux` | `600` | Linux test launch limit from request to Ready. Also limits the compute test job. |

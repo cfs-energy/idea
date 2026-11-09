@@ -183,7 +183,7 @@ class ImageRowFilter(SocaBaseModel):
 
 class ImageRefreshSchedule(SocaBaseModel):
     """
-    the monthly vendor check, stored at vdc.software_stacks.image_refresh_schedule.
+    the monthly rebuild, stored at vdc.software_stacks.image_refresh_schedule.
     the scheduler reads the same key for compute rows. hour is in cluster.timezone
     """
 

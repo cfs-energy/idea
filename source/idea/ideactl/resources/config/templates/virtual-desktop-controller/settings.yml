@@ -230,7 +230,7 @@ software_stacks:
     exempt_amis: []      # images that never expire
     enforce_from: ""     # YYYY-MM-DD. stacks with no date of their own start to warn once this is set; from this day expired stacks are not offered for new desktops. empty: only stacks given a date warn
     digest_enabled: true # one email per owner per week at most
-  # the monthly vendor check (rebakes only rows whose vendor base image changed).
+  # the monthly rebuild (every desktop and compute row, changed or not; pinned and held rows are skipped).
   # the scheduler reads this key for compute rows too. hour is in cluster.timezone
   image_refresh_schedule:
     enabled: true

@@ -98,7 +98,7 @@ from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     BASE_STACK_MIN_STORAGE_GB,
 )
 
-# the monthly vendor check; the scheduler reads the same key for compute rows
+# the monthly rebuild; the scheduler reads the same key for compute rows
 IMAGE_REFRESH_SCHEDULE_KEY = (
     'virtual-desktop-controller.software_stacks.image_refresh_schedule'
 )
