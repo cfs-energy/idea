@@ -18,6 +18,7 @@ from ideadatamodel import (
     VirtualDesktopSession,
     VirtualDesktopServer,
     VirtualDesktopSoftwareStack,
+    errorcodes,
     exceptions,
 )
 from ideavirtualdesktopcontroller.app.software_stacks import stack_expiry as module
@@ -695,6 +696,15 @@ def test_the_admin_list_takes_the_grace_in_minutes_and_refuses_a_negative():
         assert [o.instance_id for o in listing] == expected, minutes
     with pytest.raises(exceptions.SocaException):
         api.list_orphan_instances(invocation(min_age_minutes=-1))
+
+
+@pytest.mark.parametrize('minutes', [525601, 10**13])
+def test_the_admin_list_refuses_a_grace_longer_than_a_year(minutes):
+    # 10**13 minutes is past what a timedelta holds and came back as a server error
+    api = admin_api(stack())
+    with pytest.raises(exceptions.SocaException) as error:
+        api.list_orphan_instances(invocation(min_age_minutes=minutes))
+    assert error.value.error_code == errorcodes.INVALID_PARAMS
 
 
 def test_the_count_is_a_level_and_a_failed_read_publishes_no_zero():

@@ -780,12 +780,12 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
     def list_orphan_instances(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListOrphanInstancesRequest)
+        # the model has already made this an int; a grace past a year is no grace period, and
+        # one past what a timedelta holds would fail as a server error
         minutes = request.min_age_minutes
-        if minutes is not None and (
-            isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 0
-        ):
+        if minutes is not None and not 0 <= minutes <= 525600:
             raise exceptions.invalid_params(
-                'min_age_minutes must be a whole number of minutes, 0 or more'
+                'min_age_minutes must be a whole number of minutes from 0 to 525600 (a year)'
             )
         finder = OrphanInstances(self.context, self.session_db)
         context.success(
