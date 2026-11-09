@@ -31,7 +31,13 @@ STUDY_REFRESH_SECONDS = 60
 MAX_CONCURRENT_STUDIES = 2
 MAX_LARGEST = 25
 MIN_LARGEST_BYTES = 2**20
+OUTSIDE_HOME_MESSAGES = dict(
+    on='Storage analytics could not read this folder.',
+    failed='Storage analytics could not be reached. Try again in a minute.',
+    initializing='Storage analytics is still taking its first measurement of this volume. Try again later.',
+)
 MAX_CACHED_VIEWS = 1000
+CANNOT_OPEN = 'That folder no longer exists or cannot be opened.'
 
 
 def summary(path, mtime=None):
@@ -279,20 +285,6 @@ def readable_paths_as_user(identity, root, paths):
     return identity.run(check, timeout=MAX_SECONDS + 10)
 
 
-def hide_row(row):
-    return dict(
-        path=row['path'],
-        name=row['name'],
-        bytes=0,
-        files=0,
-        newest_mtime=None,
-        oldest_mtime=None,
-        unchanged_90_days_bytes=0,
-        partial=False,
-        unreadable=True,
-    )
-
-
 class StorageUsageService:
     def __init__(self, context):
         self.context = context
@@ -334,15 +326,19 @@ class StorageUsageService:
             except OSError:
                 raise exceptions.unauthorized_access()
             readable = set(readable)
-            children = [
-                row if row['name'] in readable else hide_row(row)
-                for row in found['children']
-            ]
+            # A folder this person cannot open gets no row: its name is theirs to see, a size from
+            # ONTAP's login is not. Its bytes stay in the total, ONTAP's rollup of everything
+            # below, and in every row above it, so the total less the rows here and the files in
+            # this folder, which the person can stat, is what the hidden folders hold together.
+            # Taking them out would need a walk as this person.
+            children = [row for row in found['children'] if row['name'] in readable]
             view = dict(
                 total=dict(found['self'], identity=identity_row),
                 folders=children,
                 measured_at=found['measured_at'],
             )
+            if len(children) < len(names):
+                view['hidden_folders'] = len(names) - len(children)
             truncated = bool(found.get('truncated'))
             view['truncated'] = truncated
             # the rest of the parent's total is direct files only if every child is here, with its
@@ -471,6 +467,14 @@ class StorageUsageService:
         self, username, identity, mount, home, folder, refresh, study
     ):
         target = folder or home
+        # Opened as this person before ONTAP is asked, and one answer whether it is missing or
+        # closed to them: ONTAP sees every name, so its answer would say which names exist.
+        if (
+            folder is not None
+            and self._analytics() is not None
+            and not readable_paths_as_user(identity, mount, [folder])
+        ):
+            raise exceptions.invalid_params(CANNOT_OPEN)
         view = self._view(username, identity, mount, target, refresh)
         if view is None:
             return None
@@ -479,7 +483,8 @@ class StorageUsageService:
             source='analytics',
             home=home,
             measured_at=view['measured_at'],
-            partial=bool(view['truncated'] or view['total'].get('partial')),
+            # the total is ONTAP's rollup for the folder itself, whole even when its list is cut
+            partial=bool(view['total'].get('partial')),
             total=view['total'],
             folders=view['folders'],
         )
@@ -487,6 +492,8 @@ class StorageUsageService:
             result['truncated'] = True
         if 'files_here' in view:
             result['files_here'] = view['files_here']
+        if 'hidden_folders' in view:
+            result['hidden_folders'] = view['hidden_folders']
         if folder is not None:
             result['folder'] = view['total']
             return result
@@ -538,18 +545,21 @@ class StorageUsageService:
         if from_analytics is not None:
             return from_analytics
         if folder is not None and os.path.commonpath([home, folder]) != home:
+            analytics = self._analytics()
+            state = analytics.status(folder)['state'] if analytics else 'off'
             return dict(
                 state='unavailable',
                 home=home,
-                message='Sizes for folders outside your home folder need storage analytics, which is not on for this volume.',
+                message=OUTSIDE_HOME_MESSAGES.get(
+                    state,
+                    'Sizes for folders outside your home folder need storage analytics, which is not on for this volume.',
+                ),
             )
         if folder is not None:
             try:
                 result = scan_as_user(identity, home, folder)
             except OSError:
-                raise exceptions.invalid_params(
-                    'That folder no longer exists or cannot be opened.'
-                )
+                raise exceptions.invalid_params(CANNOT_OPEN)
             result['folder'] = result['total']
             result['home'] = home
             result['source'] = 'scan'

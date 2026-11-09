@@ -147,7 +147,7 @@ export default function StorageUsage({compact = false, refreshSignal = 0}: {comp
             </SpaceBetween>}
             {usage?.state === 'ready' && !quotaHasBytes && usage.quota_status === 'unavailable' && <Box>{compact ? 'Storage quota: not available' : 'Your storage quota is not available right now.'}</Box>}
             {usage?.outside_home_bytes !== undefined && usage.outside_home_bytes > 0 && !folder && <Box>
-                {storageSize(usage.outside_home_bytes)} of that is outside your home folder. The quota totals what you own but can't say which folders hold it.
+                At least {storageSize(usage.outside_home_bytes)} of that is outside your home folder. Your home folder's size counts files anyone owns in it and the quota counts only yours, so the real figure can be higher.
             </Box>}
             {!!usage?.unattributed_quota_bytes && !folder && <Box color="text-body-secondary" fontSize="body-s">
                 Another {storageSize(usage.unattributed_quota_bytes)} on this volume has no named owner, so it isn't in anyone's total. Files you wrote from Windows could be part of it.
@@ -164,7 +164,8 @@ export default function StorageUsage({compact = false, refreshSignal = 0}: {comp
                 {outsideHome && <Button variant="link" onClick={() => setFolder(undefined)}>Back to your home folder</Button>}
                 <Box>{folder ? folder : `Home folder ${usage.home}`}: {usage.partial ? 'at least ' : ''}{storageSize(usage.total.bytes)} in {usage.total.files.toLocaleString()} files. {storageSize(usage.total.unchanged_90_days_bytes)} has not changed in {fromAnalytics ? '3 months or more' : '90 days'}.</Box>
                 <FolderTable items={usage.folders || []} empty="No folders here." canOpen fromAnalytics={fromAnalytics} onOpen={setFolder}/>
-                {usage.truncated && <Box>This folder has more subfolders than can be listed, so only the largest are shown.</Box>}
+                {usage.truncated && <Box>This folder has more subfolders than can be listed. The largest are shown, and some smaller ones are left out.</Box>}
+                {!!usage.hidden_folders && <Box>{usage.hidden_folders === 1 ? '1 folder here is not listed because you can\'t open it. Its size is still in the total above.' : `${usage.hidden_folders.toLocaleString()} folders here are not listed because you can't open them. Their sizes are still in the total above.`}</Box>}
                 {usage.files_here && usage.files_here.files > 0 && <Box>Files directly in this folder: {storageSize(usage.files_here.bytes)} in {usage.files_here.files.toLocaleString()} files.</Box>}
                 {!folder && !!usage.largest?.length && <SpaceBetween size="xs">
                     <Header variant="h3">Biggest folders anywhere in your home</Header>

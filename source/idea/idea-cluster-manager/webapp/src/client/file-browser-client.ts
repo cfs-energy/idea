@@ -66,6 +66,7 @@ export interface StorageUsageResult {
     unattributed_quota_bytes?: number
     files_here?: {bytes: number, files: number}
     truncated?: boolean
+    hidden_folders?: number
     largest?: StorageFolderUsage[]
     shared?: StorageFolderUsage[]
     progress?: StorageStudyProgress

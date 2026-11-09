@@ -15,7 +15,10 @@ from collections import OrderedDict
 from datetime import date, datetime, timezone
 from urllib.parse import quote
 
-from ideaclustermanager.app.metrics.storage_metrics_service import OntapClient
+from ideaclustermanager.app.metrics.storage_metrics_service import (
+    FileContentsRefused,
+    OntapClient,
+)
 
 VOLUMES = (
     '/api/storage/volumes?return_records=true&max_records=1000'
@@ -44,6 +47,20 @@ RETRY_SECONDS = 60
 READ_TIMEOUT_SECONDS = 10
 MAX_CONCURRENT_READS = 4
 MAX_CACHED_FOLDERS = 5000
+# what ONTAP answers about the filer itself: a bad login, a timeout, too many requests
+FILER_ERRORS = {401, 408, 429}
+
+
+def refused_this_path(error):
+    """ONTAP refused this one path (a file, not a folder, or a volume the role cannot read), or
+    the guard did before sending it. Anyone can ask for any path, so that says nothing about the
+    filer, and must not turn analytics off for everyone else."""
+    if isinstance(error, (FileNotFoundError, FileContentsRefused)):
+        return True
+    status = getattr(error, 'status_code', None)
+    return (
+        isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
+    )
 
 
 def bucket_end(label):
@@ -165,9 +182,10 @@ class FolderAnalytics:
         return volumes
 
     def status(self, path):
-        """on, off, initializing or unavailable, with the volume and its relative path when on."""
+        """on, off, initializing, failed (the filer did not answer; backing off) or unavailable
+        (no analytics volume holds this path), with the volume and its relative path when on."""
         if time.monotonic() - self._failed_at < RETRY_SECONDS:
-            return dict(state='unavailable')
+            return dict(state='failed')
         target, namespace = self._attachment(path)
         if target is None:
             return dict(state='unavailable')
@@ -214,7 +232,7 @@ class FolderAnalytics:
         # Names and paths stay out of the log: only the kind of failure is recorded.
         self.logger.warning(f'storage analytics read failed: {type(error).__name__}')
         self._failed_at = time.monotonic()
-        return dict(state='unavailable')
+        return dict(state='failed')
 
     def folder(self, path, fresh=False):
         """{'self': row, 'children': [rows, largest first], 'measured_at': time} or None. One ONTAP
@@ -260,46 +278,67 @@ class FolderAnalytics:
         self._labels[uuid] = (time.monotonic(), labels)
         return labels
 
-    def _listing(self, client, request):
-        """(every record, whether any are left out). A later page that fails leaves the folder
-        partial rather than unavailable: its largest rows are already in hand."""
-        deadline = time.monotonic() + MAX_READ_SECONDS
-        page = client.first_page(request)
-        records = list(page.get('records', []))
-        for _ in range(MAX_PAGES - 1):
-            following = ((page.get('_links') or {}).get('next') or {}).get('href')
-            if not following:
-                return records, False
+    def _listing(self, client, request, deadline):
+        """every record in directory order, or None when any are left out. A page that fails
+        leaves the folder partial rather than unavailable."""
+        records = []
+        following = request
+        for _ in range(MAX_PAGES):
             if time.monotonic() >= deadline:
-                return records, True
+                return None
             try:
                 page = client.first_page(following)
             except Exception as e:
                 self.logger.warning(
                     f'storage analytics page read failed: {type(e).__name__}'
                 )
-                return records, True
+                return None
             records.extend(page.get('records', []))
-        return records, bool((page.get('_links') or {}).get('next'))
+            following = ((page.get('_links') or {}).get('next') or {}).get('href')
+            if not following:
+                return records
+        return None
+
+    def _records(self, client, request):
+        """(records, whether any are left out). One page in size order is a single answer, so a
+        folder that fits on it is complete and one too big to list still shows its largest, with
+        nothing larger left out. Past one page it is read again in directory order: ONTAP resumes a
+        next page from the last row's place in that order, so under a size order a folder that
+        grows between pages can be skipped. Both reads share one deadline."""
+        deadline = time.monotonic() + MAX_READ_SECONDS
+        largest = client.first_page(f'{request}&order_by=analytics.bytes_used%20desc')
+        if not ((largest.get('_links') or {}).get('next') or {}).get('href'):
+            return largest.get('records', []), False
+        records = self._listing(client, request, deadline)
+        if records is None:
+            return largest.get('records', []), True
+        return records, False
 
     def _read(self, status, path):
         now = time.time()
         relative = quote(status['relative'] or '/', safe='')
         request = (
             f'/api/storage/volumes/{status["uuid"]}/files/{relative}?type=directory'
-            f'&fields={ANALYTICS_FIELDS}&order_by=analytics.bytes_used%20desc'
-            f'&max_records={MAX_ROWS}&return_timeout=10'
+            f'&fields={ANALYTICS_FIELDS}&max_records={MAX_ROWS}&return_timeout=10'
         )
-        try:
-            with self._reads:
+        with self._reads:
+            try:
                 client = self._client(status['target'])
+                # about the volume root, not this path: a refusal here is the role's, for everyone
                 labels = self._bucket_labels(client, status['uuid'])
-                records, truncated = self._listing(client, request)
-        except FileNotFoundError:
-            return None
-        except Exception as e:
-            self._failed(e)
-            return None
+            except Exception as e:
+                self._failed(e)
+                return None
+            try:
+                records, truncated = self._records(client, request)
+            except Exception as e:
+                if refused_this_path(e):
+                    # Names and paths stay out of the log here too.
+                    code = getattr(e, 'status_code', type(e).__name__)
+                    self.logger.info(f'storage analytics refused one folder: {code}')
+                else:
+                    self._failed(e)
+                return None
         own = None
         children = []
         for record in records:
@@ -310,6 +349,7 @@ class FolderAnalytics:
                 children.append(to_row(f'{path}/{name}', name, record, labels, now))
         if own is None:
             return None
+        children.sort(key=lambda row: (-row['bytes'], row['name']))
         return dict(
             self=own,
             children=children,

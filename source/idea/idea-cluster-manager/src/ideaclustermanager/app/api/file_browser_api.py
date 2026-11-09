@@ -88,7 +88,9 @@ class ClusterFileBrowserAPI(FileBrowserAPI):
         asked_volume, asked_endpoint = asked.get('volume'), asked.get('endpoint')
         for quota in quotas:
             quota.pop('endpoint', None)
-        if volume and used:
+        # The home's size counts everyone's files in it and the quota only this person's, so this
+        # is a floor. A partial home total would make it a guess in the other direction too.
+        if volume and used and not result.get('partial'):
             result['outside_home_bytes'] = max(0, sum(used) - result['total']['bytes'])
         if quotas:
             unattributed = collector.unattributed_quota(asked_volume, asked_endpoint)

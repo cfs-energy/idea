@@ -90,6 +90,26 @@ def test_entry_cap_returns_partial_counts(tree):
     assert result['total']['files'] < 4
 
 
+def test_files_directly_in_home_past_the_entry_cap_are_all_counted(tree, tmp_path):
+    # The only way the cost fallback differs from 26.11.1: that walk checked the cap before
+    # seeing the listing had ended, and called this partial although it had every byte. A
+    # partial home drops every user's storage share, so this is a fix, not a new basis.
+    import shutil
+
+    shutil.rmtree(tree + '/reports')
+    shutil.rmtree(tree + '/empty')
+    for link in ('linked-file', 'linked-dir'):
+        os.unlink(f'{tree}/{link}')
+    for index in range(5):
+        with open(f'{tree}/f{index}', 'wb') as stream:
+            stream.write(b'x' * (index + 1))
+    for cap in (6, 3):
+        result = storage_usage.walk_home(tree, max_entries=cap, now=NOW)
+        assert not result['partial']
+        assert result['total']['bytes'] == 4 + 15
+        assert result['total']['files'] == 6
+
+
 def test_time_cap_returns_partial_instead_of_waiting(tree):
     result = storage_usage.walk_home(tree, max_seconds=0, now=NOW)
     assert result['partial']
@@ -560,7 +580,9 @@ def test_every_page_of_a_large_folder_is_read(monkeypatch, tree):
     found = analytics.folder(tree)
     assert [r['name'] for r in found['children']] == ['first', 'second', 'third']
     assert found['truncated'] is False
-    assert calls[1:] == ['/api/next?page=2', '/api/next?page=3']
+    # one page in size order, then the whole folder in directory order
+    assert 'order_by' in calls[0] and 'order_by' not in calls[1]
+    assert calls[2:] == ['/api/next?page=2', '/api/next?page=3']
 
 
 def test_a_folder_past_the_page_limit_says_it_is_truncated(monkeypatch, tree):
@@ -580,7 +602,130 @@ def test_a_folder_past_the_page_limit_says_it_is_truncated(monkeypatch, tree):
     pages['page'] = dict(records=[analytics_row('.', 1000, 40)], _links=next_link(2))
     found = analytics.folder(tree)
     assert found['truncated'] is True
-    assert len(calls) == limit
+    # one page in size order first, so the largest are there, then the limit in directory order
+    assert len(calls) == limit + 1
+    assert 'order_by=analytics.bytes_used%20desc' in calls[0]
+    assert found['children'] == []
+
+
+class Filer:
+    """ONTAP's paging: each page is read afresh and resumes after the last row's place in that
+    page's order. Sizes change between pages, as when someone writes into a folder."""
+
+    def __init__(self, count, rows):
+        self.sizes = {f'd{n:03}': 1000 - n for n in range(count)}
+        self.rows = rows
+        self.pages = 0
+
+    def first_page(self, client, path):
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(path).query)
+        by_size = 'order_by' in path
+        names = sorted(self.sizes)
+        if by_size:
+            names.sort(key=lambda name: -self.sizes[name])
+        after = query.get('after', [None])[0]
+        start = names.index(after) + 1 if after else 0
+        chunk = names[start : start + self.rows]
+        records = [analytics_row(name, self.sizes[name], 1) for name in chunk]
+        if not after:
+            records.insert(0, analytics_row('.', sum(self.sizes.values()), 40))
+        page = dict(records=records)
+        if start + self.rows < len(names):
+            order = '&order_by=x' if by_size else ''
+            page['_links'] = dict(next=dict(href=f'/api/next?after={chunk[-1]}{order}'))
+        self.pages += 1
+        # someone writes into a folder further down while the next page is asked for
+        self.sizes['d025'] += 5000 if self.pages == 1 else 0
+        return page
+
+
+def test_a_folder_that_grows_between_pages_is_not_skipped(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    analytics = fake_analytics(monkeypatch, tree)
+    filer = Filer(count=30, rows=10)
+    monkeypatch.setattr(ontap_analytics, 'MAX_ROWS', 10)
+    original = ontap_analytics.OntapClient.first_page
+    monkeypatch.setattr(
+        ontap_analytics.OntapClient,
+        'first_page',
+        lambda self, path: (
+            original(self, path)
+            if 'return_metadata' in path
+            else filer.first_page(self, path)
+        ),
+    )
+    found = analytics.folder(tree)
+    names = [row['name'] for row in found['children']]
+    assert sorted(names) == sorted(filer.sizes)
+    assert names[0] == 'd025'
+    assert [row['bytes'] for row in found['children']] == sorted(
+        (row['bytes'] for row in found['children']), reverse=True
+    )
+    assert found['truncated'] is False
+
+
+def filer_listing(monkeypatch, tree, filer):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    analytics = fake_analytics(monkeypatch, tree)
+    original = ontap_analytics.OntapClient.first_page
+    monkeypatch.setattr(
+        ontap_analytics.OntapClient,
+        'first_page',
+        lambda self, path: (
+            original(self, path)
+            if 'return_metadata' in path
+            else filer.first_page(self, path)
+        ),
+    )
+    return analytics
+
+
+def test_a_folder_too_big_to_list_shows_its_largest_and_nothing_smaller(
+    monkeypatch, tree
+):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    monkeypatch.setattr(ontap_analytics, 'MAX_ROWS', 10)
+    # 80 folders, the largest last in directory order: five pages of ten cannot list them
+    filer = Filer(count=80, rows=10)
+    filer.sizes = {f'd{n:03}': n + 1 for n in range(80)}
+    largest = sorted(filer.sizes, key=lambda name: -filer.sizes[name])[:10]
+    found = filer_listing(monkeypatch, tree, filer).folder(tree)
+    assert found['truncated'] is True
+    # every folder listed is larger than every folder left out
+    assert [row['name'] for row in found['children']] == largest
+
+
+def test_a_folder_read_stops_at_its_deadline(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    monkeypatch.setattr(ontap_analytics, 'MAX_ROWS', 10)
+    clock = [1000.0]
+    monkeypatch.setattr(
+        ontap_analytics,
+        'time',
+        SimpleNamespace(monotonic=lambda: clock[0], time=lambda: NOW),
+    )
+    started = []
+
+    class Slow(Filer):
+        def first_page(self, client, path):
+            started.append(clock[0])
+            clock[0] += ontap_analytics.MAX_READ_SECONDS / 2 + 1
+            return super().first_page(client, path)
+
+    filer = Slow(count=80, rows=10)
+    analytics = filer_listing(monkeypatch, tree, filer)
+    start = clock[0]
+    found = analytics.folder(tree)
+    assert found['truncated'] is True
+    assert started and all(
+        moment < start + ontap_analytics.MAX_READ_SECONDS for moment in started
+    )
 
 
 def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tree):
@@ -595,6 +740,94 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
     assert found['truncated'] is True
     assert [r['name'] for r in found['children']] == ['first']
     assert analytics._failed_at == 0
+
+
+def filer(monkeypatch, tree, answers, labels=(200, dict(records=[{}]))):
+    """FolderAnalytics over the real ONTAP client, with the HTTP layer answering by path."""
+    from ideaclustermanager.app.filesystem import ontap_analytics
+    from ideaclustermanager.app.metrics import storage_metrics_service
+
+    analytics = fake_analytics(monkeypatch, tree)
+    monkeypatch.setattr(
+        ontap_analytics, 'OntapClient', storage_metrics_service.OntapClient
+    )
+    sent = []
+
+    def get(url, **kwargs):
+        path = url.split('.invalid', 1)[1]
+        sent.append(path)
+        if path.startswith('/api/storage/volumes?'):
+            records = [
+                dict(
+                    name='profiles',
+                    uuid='u-1',
+                    nas=dict(path='/profiles'),
+                    files=dict(used=100),
+                    analytics=dict(state='on', file_count=100),
+                )
+            ]
+            return Mock(status_code=200, json=lambda: dict(records=records))
+        if 'return_metadata' in path:
+            return Mock(status_code=labels[0], json=lambda: labels[1], text='')
+        for name, (status, page) in answers.items():
+            if path.split('?')[0].endswith(name):
+                return Mock(status_code=status, json=lambda page=page: page, text='')
+        raise AssertionError(path)
+
+    monkeypatch.setattr(storage_metrics_service.requests, 'get', get)
+    return analytics, sent
+
+
+@pytest.mark.parametrize('status', (400, 403, 404))
+def test_one_persons_refused_path_leaves_analytics_on_for_everyone(
+    monkeypatch, tree, status
+):
+    # GetStorageUsage on a file: ONTAP says 400 not a directory, about that path only
+    listing = dict(records=[analytics_row('.', 1000, 40), analytics_row('a', 10, 1)])
+    analytics, sent = filer(
+        monkeypatch,
+        tree,
+        {'%2Falice%2F.bashrc': (status, {}), '%2Falice': (200, listing)},
+    )
+    assert analytics.folder(tree + '/.bashrc') is None
+    assert analytics.status(tree)['state'] == 'on'
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+    assert analytics._failed_at == 0
+
+
+@pytest.mark.parametrize('status', (401, 429, 500, 503))
+def test_a_filer_failure_still_backs_off_for_everyone(monkeypatch, tree, status):
+    analytics, sent = filer(monkeypatch, tree, {'%2Falice': (status, {})})
+    assert analytics.folder(tree) is None
+    reads = len(sent)
+    assert analytics.status(tree) == dict(state='failed')
+    assert analytics.folder(tree + '/reports') is None
+    assert len(sent) == reads
+
+
+@pytest.mark.parametrize('status', (400, 403, 404))
+def test_a_refused_volume_root_backs_off_for_everyone(monkeypatch, tree, status):
+    # the labels read asks about the volume root, not the person's path: a refusal there is the
+    # role's for the whole volume, so every request would otherwise ask again and get nothing
+    listing = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = filer(
+        monkeypatch, tree, {'%2Falice': (200, listing)}, labels=(status, {})
+    )
+    assert analytics.folder(tree) is None
+    reads = len(sent)
+    assert analytics.status(tree) == dict(state='failed')
+    assert analytics.folder(tree) is None
+    assert len(sent) == reads
+
+
+def test_a_refused_content_read_is_about_that_path(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+    from ideaclustermanager.app.metrics.storage_metrics_service import (
+        FileContentsRefused,
+    )
+
+    assert ontap_analytics.refused_this_path(FileContentsRefused())
+    assert not ontap_analytics.refused_this_path(RuntimeError('timed out'))
 
 
 def test_analytics_on_but_first_scan_unfinished_is_initializing(monkeypatch, tree):
@@ -627,9 +860,9 @@ def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):
     assert analytics.folder(tree) is None
     analytics = fake_analytics(monkeypatch, tree)
     analytics._volume_list = Mock(side_effect=RuntimeError('unreachable'))
-    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.status(tree) == dict(state='failed')
     analytics._volume_list = Mock(side_effect=AssertionError('backs off'))
-    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.status(tree) == dict(state='failed')
 
 
 def test_bucket_labels_end_where_they_should():
@@ -683,12 +916,41 @@ def test_analytics_view_hides_folders_the_person_cannot_open(monkeypatch, tree):
         result = service.get_usage('alice')
         rows = {item['name']: item for item in result['folders']}
         assert result['source'] == 'analytics' and not result['partial']
-        assert rows['secret']['unreadable'] and rows['secret']['bytes'] == 0
+        # left out, not shown at the place its size gives it
+        assert 'secret' not in rows and result['hidden_folders'] == 1
         assert rows['reports']['bytes'] == 13
         assert 'files_here' not in result
         assert result['total']['identity']['inode'] == str(os.stat(tree).st_ino)
     finally:
         os.chmod(tree + '/secret', 0o700)
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_a_hidden_folder_leaves_no_gap_that_ranks_its_size(monkeypatch, tree):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    for name in ('big', 'locked', 'small'):
+        os.mkdir(f'{tree}/{name}')
+    os.chmod(tree + '/locked', 0)
+    folders = {
+        tree: dict(
+            self=row(tree, 300, 9),
+            children=[
+                row(tree + '/big', 127),
+                row(tree + '/locked', 50),
+                row(tree + '/small', 31),
+            ],
+            measured_at=NOW,
+        )
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    try:
+        result = service.get_usage('alice', study=False)
+        assert [item['name'] for item in result['folders']] == ['big', 'small']
+        assert result['hidden_folders'] == 1
+    finally:
+        os.chmod(tree + '/locked', 0o700)
         service._study_workers.shutdown()
         service._workers.shutdown()
 
@@ -705,7 +967,8 @@ def test_a_truncated_folder_is_partial_with_no_direct_file_figure(monkeypatch, t
     service, _ = analytics_service(monkeypatch, tree, folders)
     try:
         result = service.get_usage('alice', study=False)
-        assert result['partial'] is True
+        # the total is ONTAP's rollup for the folder itself, whole however short the list
+        assert result['partial'] is False
         assert 'files_here' not in result
         assert result['truncated'] is True
     finally:
@@ -831,15 +1094,86 @@ def test_drill_down_through_a_symlink_is_refused(monkeypatch, tree, tmp_path):
 
 def test_outside_home_without_analytics_says_so_and_does_not_walk(monkeypatch, tree):
     service, source = analytics_service(monkeypatch, tree, {})
+    source.status.return_value = dict(state='off')
     monkeypatch.setattr(
         storage_usage, 'scan_as_user', Mock(side_effect=AssertionError('no walk'))
     )
     sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    os.mkdir(sibling)
     try:
         result = service.get_usage('alice', sibling)
         assert result['state'] == 'unavailable'
         assert 'storage analytics' in result['message']
     finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_outside_home_with_analytics_on_does_not_say_it_is_off(monkeypatch, tree):
+    # analytics is on but could not read this folder (ONTAP refused it)
+    service, source = analytics_service(monkeypatch, tree, {})
+    sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    os.mkdir(sibling)
+    try:
+        result = service.get_usage('alice', sibling)
+        assert result['state'] == 'unavailable'
+        assert 'not on' not in result['message']
+        assert result['message'] == 'Storage analytics could not read this folder.'
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+@pytest.mark.parametrize(
+    'status, message',
+    (
+        (503, 'Storage analytics could not be reached. Try again in a minute.'),
+        (403, 'Storage analytics could not read this folder.'),
+    ),
+)
+def test_outside_home_after_a_filer_answer_says_what_happened(
+    monkeypatch, tree, status, message
+):
+    sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    os.mkdir(sibling)
+    analytics, sent = filer(monkeypatch, tree, {'%2Fshared-folder': (status, {})})
+    service, _, _ = make_service(monkeypatch, tree)
+    service._analytics_source = analytics
+    try:
+        # the second request lands inside the backoff after a filer failure
+        for _ in range(2):
+            result = service.get_usage('alice', sibling)
+            assert result['state'] == 'unavailable'
+            assert result['message'] == message
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_names_in_a_folder_the_person_cannot_open_get_one_answer(monkeypatch, tree):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    other = os.path.join(os.path.dirname(tree), 'bob')
+    os.makedirs(other + '/parity')
+    folders = {
+        other + '/parity': dict(
+            self=row(other + '/parity', 50), children=[], measured_at=NOW
+        )
+    }
+    service, source = analytics_service(monkeypatch, tree, folders)
+    os.chmod(other, 0)
+    answers = []
+    try:
+        for name in ('parity', 'no-such-folder'):
+            with pytest.raises(exceptions.SocaException) as raised:
+                service.get_usage('alice', f'{other}/{name}', study=False)
+            answers.append((raised.value.error_code, raised.value.message))
+        assert answers[0] == answers[1]
+        assert 'no longer exists or cannot be opened' in answers[0][1]
+        # and ONTAP is not asked about either
+        source.folder.assert_not_called()
+    finally:
+        os.chmod(other, 0o700)
         service._study_workers.shutdown()
         service._workers.shutdown()
 
@@ -991,6 +1325,26 @@ def quota_api(collector, **usage):
     invocation.is_authorized_user.return_value = True
     api.invoke(invocation)
     return invocation.success.call_args.args[0]
+
+
+def test_no_outside_home_figure_from_a_partial_home_total():
+    # a home total still catching up is a floor, so quota minus it could be too high
+    collector = Mock()
+    collector.has_ontap_storage.return_value = True
+    collector.get_user_quotas.side_effect = lambda user: [
+        dict(used_bytes=1000, volume='vol1', files=5, endpoint='svm.fs-1')
+    ]
+    collector.unattributed_quota.return_value = dict(bytes=0, files=0)
+    result = quota_api(
+        collector, volume='vol1', volume_endpoint='svm.fs-1', partial=True
+    )
+    assert 'outside_home_bytes' not in result
+    assert (
+        quota_api(collector, volume='vol1', volume_endpoint='svm.fs-1')[
+            'outside_home_bytes'
+        ]
+        == 600
+    )
 
 
 def test_bytes_outside_home_count_this_file_systems_volume_only():
