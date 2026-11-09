@@ -1243,6 +1243,7 @@ export interface SocaJob {
   state?: SocaJobState;
   exit_status?: number;
   terminated?: boolean;
+  dependent_job_ids?: string[];
   provisioned?: boolean;
   error_message?: string;
   status_reason?: string;

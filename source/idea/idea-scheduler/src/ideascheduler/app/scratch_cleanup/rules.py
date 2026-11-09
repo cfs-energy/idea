@@ -146,6 +146,8 @@ class JobRecord:
     first_run_start: Optional[datetime] = None
     # shown to have completed normally; anything else waits the longer failed time
     succeeded: bool = True
+    # numbers of the jobs that waited on this one, which PBS no longer lists on them
+    dependents: FrozenSet[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -253,6 +255,8 @@ def decide_job(
     matching = [r for r in matching if r.owner == owner_folder]
     if not matching:
         return JobDecision(Reason.NO_FINISHED_RECORD)
+    if any(r.dependents & active.base_ids for r in matching):
+        return JobDecision(Reason.REFERENCED_BY_ACTIVE_JOB, matching)
     # a subjob's own record decides. Without one its array's does: PBS finishes an array only
     # when every subjob has, and a status of 0 means every subjob's was 0
     matching = [r for r in matching if r.job_id == folder_name] or matching

@@ -33,10 +33,14 @@ from ideascheduler.app.scheduler.pbs_select import select_chunks, chunk_resource
 
 from typing import Optional, Union, Dict, List
 import arrow
+import re
 from datetime import datetime
 
 DATE_FORMAT = 'ddd MMM D HH:mm:ss YYYY'
 DEFAULT_QUEUE_NAME = 'normal'
+
+
+_DEPEND_JOB_ID = re.compile(r':([0-9]{1,18}(?:\[[0-9]*\])?)', re.ASCII)
 
 
 class OpenPBSJob(SocaBaseModel):
@@ -155,6 +159,19 @@ class OpenPBSJob(SocaBaseModel):
             return SocaJobState.SUSPENDED
 
         return None
+
+    def get_dependent_job_ids(self) -> Optional[List[str]]:
+        """
+        the jobs a before* dependency names: beforeok:348.server@server:349.server. A server
+        port can read as a number too, which only over-matches.
+        """
+        found = [
+            job_id
+            for part in (self.depend or '').split(',')
+            if part.strip().startswith('before')
+            for job_id in _DEPEND_JOB_ID.findall(part)
+        ]
+        return found or None
 
     @property
     def soca_job_state(self) -> Optional[SocaJobState]:
@@ -515,6 +532,8 @@ class OpenPBSJob(SocaBaseModel):
 
         # exit status
         exit_status = self.Exit_status
+        dependent_job_ids = self.get_dependent_job_ids()
+
         # a job qdel ended can still exit 0; only a finished job's substate says so
         terminated = None
         if state == SocaJobState.FINISHED and self.substate is not None:
@@ -612,6 +631,7 @@ class OpenPBSJob(SocaBaseModel):
             state=state,
             exit_status=exit_status,
             terminated=terminated,
+            dependent_job_ids=dependent_job_ids,
             provisioned=provisioned,
             queue_time=queue_time,
             start_time=start_time,

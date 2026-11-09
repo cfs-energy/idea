@@ -278,4 +278,9 @@ def _as_record(job: SocaJob) -> JobRecord:
         start_time=job.start_time,
         end_time=job.end_time,
         first_run_start=_first_run_start(job),
+        dependents=frozenset(
+            base
+            for base in (base_job_id(str(i)) for i in job.dependent_job_ids or [])
+            if base
+        ),
     )

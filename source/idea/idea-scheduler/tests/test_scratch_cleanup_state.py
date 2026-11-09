@@ -167,6 +167,14 @@ def test_records_come_from_the_cache_and_the_index():
     assert all(record.finished for record in records)
 
 
+def test_a_record_keeps_the_jobs_that_waited_on_it_by_number():
+    source, context = state()
+    finished = job()
+    finished.dependent_job_ids = ['348', '350[]']
+    context.job_cache.list_completed_jobs.return_value = [finished]
+    assert source.finished_records({'123'})[0].dependents == {'348', '350'}
+
+
 def test_a_record_in_any_other_state_is_not_finished():
     source, context = state()
     context.job_cache.list_completed_jobs.return_value = [

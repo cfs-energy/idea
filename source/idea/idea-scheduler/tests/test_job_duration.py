@@ -704,4 +704,29 @@ def test_pbs_history_says_whether_qdel_ended_the_job(
 def test_a_job_pbs_has_not_finished_says_nothing_about_qdel(context):
     pbs_job = build_pbs_job(job_state='R', substate=42)
 
-    assert pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE).terminated is None
+    assert (
+        pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE).terminated
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    'depend, dependents',
+    [
+        # read from PBS history on a dev cluster, after 348 had dropped 342 from its depend
+        ('beforeany:348.scheduler@scheduler', ['348']),
+        (
+            'beforeok:348.scheduler@scheduler:349.scheduler,afterok:12.scheduler,'
+            'beforenotok:350[].scheduler',
+            ['348', '349', '350[]'],
+        ),
+        ('afterany:347.scheduler@scheduler', None),
+        (None, None),
+    ],
+)
+def test_pbs_depend_says_which_jobs_wait_on_this_one(context, depend, dependents):
+    pbs_job = build_pbs_job(depend=depend)
+
+    job = pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+
+    assert job.dependent_job_ids == dependents
