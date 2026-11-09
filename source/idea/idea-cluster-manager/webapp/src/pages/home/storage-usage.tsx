@@ -164,7 +164,7 @@ export default function StorageUsage({compact = false, refreshSignal = 0}: {comp
                 {outsideHome && <Button variant="link" onClick={() => setFolder(undefined)}>Back to your home folder</Button>}
                 <Box>{folder ? folder : `Home folder ${usage.home}`}: {usage.partial ? 'at least ' : ''}{storageSize(usage.total.bytes)} in {usage.total.files.toLocaleString()} files. {storageSize(usage.total.unchanged_90_days_bytes)} has not changed in {fromAnalytics ? '3 months or more' : '90 days'}.</Box>
                 <FolderTable items={usage.folders || []} empty="No folders here." canOpen fromAnalytics={fromAnalytics} onOpen={setFolder}/>
-                {usage.truncated && <Box>This folder has more subfolders than can be listed, so only the largest are shown.</Box>}
+                {usage.truncated && <Box>This folder has more subfolders than can be listed. The largest are shown, and some smaller ones are left out.</Box>}
                 {usage.files_here && usage.files_here.files > 0 && <Box>Files directly in this folder: {storageSize(usage.files_here.bytes)} in {usage.files_here.files.toLocaleString()} files.</Box>}
                 {!folder && !!usage.largest?.length && <SpaceBetween size="xs">
                     <Header variant="h3">Biggest folders anywhere in your home</Header>

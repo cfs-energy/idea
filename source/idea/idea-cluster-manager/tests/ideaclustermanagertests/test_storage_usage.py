@@ -512,7 +512,7 @@ def test_analytics_rolls_up_without_touching_files_and_is_cached(monkeypatch, tr
     assert found['children'][1]['measured'] is False and found['children'][1]['partial']
     assert analytics.folder(tree) is found
     assert len(calls) == 1
-    assert 'order_by=analytics.bytes_used%20desc' in calls[0]
+    assert 'order_by' not in calls[0]
     assert 'owner' not in calls[0]
 
 
@@ -580,7 +580,68 @@ def test_a_folder_past_the_page_limit_says_it_is_truncated(monkeypatch, tree):
     pages['page'] = dict(records=[analytics_row('.', 1000, 40)], _links=next_link(2))
     found = analytics.folder(tree)
     assert found['truncated'] is True
-    assert len(calls) == limit
+    # and one page in size order, so the largest are there
+    assert len(calls) == limit + 1
+    assert 'order_by=analytics.bytes_used%20desc' in calls[-1]
+
+
+class Filer:
+    """ONTAP's paging: each page is read afresh and resumes after the last row's place in that
+    page's order. Sizes change between pages, as when someone writes into a folder."""
+
+    def __init__(self, count, rows):
+        self.sizes = {f'd{n:03}': 1000 - n for n in range(count)}
+        self.rows = rows
+        self.pages = 0
+
+    def first_page(self, client, path):
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(path).query)
+        by_size = 'order_by' in path
+        names = sorted(self.sizes)
+        if by_size:
+            names.sort(key=lambda name: -self.sizes[name])
+        after = query.get('after', [None])[0]
+        start = names.index(after) + 1 if after else 0
+        chunk = names[start : start + self.rows]
+        records = [analytics_row(name, self.sizes[name], 1) for name in chunk]
+        if not after:
+            records.insert(0, analytics_row('.', sum(self.sizes.values()), 40))
+        page = dict(records=records)
+        if start + self.rows < len(names):
+            order = '&order_by=x' if by_size else ''
+            page['_links'] = dict(next=dict(href=f'/api/next?after={chunk[-1]}{order}'))
+        self.pages += 1
+        # someone writes into a folder further down while the next page is asked for
+        self.sizes['d025'] += 5000 if self.pages == 1 else 0
+        return page
+
+
+def test_a_folder_that_grows_between_pages_is_not_skipped(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    analytics = fake_analytics(monkeypatch, tree)
+    filer = Filer(count=30, rows=10)
+    monkeypatch.setattr(ontap_analytics, 'MAX_ROWS', 10)
+    original = ontap_analytics.OntapClient.first_page
+    monkeypatch.setattr(
+        ontap_analytics.OntapClient,
+        'first_page',
+        lambda self, path: (
+            original(self, path)
+            if 'return_metadata' in path
+            else filer.first_page(self, path)
+        ),
+    )
+    found = analytics.folder(tree)
+    names = [row['name'] for row in found['children']]
+    assert sorted(names) == sorted(filer.sizes)
+    assert names[0] == 'd025'
+    assert [row['bytes'] for row in found['children']] == sorted(
+        (row['bytes'] for row in found['children']), reverse=True
+    )
+    assert found['truncated'] is False
 
 
 def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tree):

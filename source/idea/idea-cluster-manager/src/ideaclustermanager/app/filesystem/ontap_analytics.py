@@ -297,19 +297,33 @@ class FolderAnalytics:
             records.extend(page.get('records', []))
         return records, bool((page.get('_links') or {}).get('next'))
 
+    def _largest(self, client, request, records):
+        """a folder too big to list still shows its largest: one page in size order is a single
+        answer, so nothing on it is skipped. The rows not already read."""
+        try:
+            page = client.first_page(f'{request}&order_by=analytics.bytes_used%20desc')
+        except Exception as e:
+            self.logger.warning(f'storage analytics page read failed: {type(e).__name__}')
+            return []
+        seen = {record.get('name') for record in records}
+        return [r for r in page.get('records', []) if r.get('name') not in seen]
+
     def _read(self, status, path):
         now = time.time()
         relative = quote(status['relative'] or '/', safe='')
+        # Directory order, not size order: ONTAP resumes a next page from the last row's place in
+        # the directory, so under a size order a folder that grows between pages can be skipped.
         request = (
             f'/api/storage/volumes/{status["uuid"]}/files/{relative}?type=directory'
-            f'&fields={ANALYTICS_FIELDS}&order_by=analytics.bytes_used%20desc'
-            f'&max_records={MAX_ROWS}&return_timeout=10'
+            f'&fields={ANALYTICS_FIELDS}&max_records={MAX_ROWS}&return_timeout=10'
         )
         try:
             with self._reads:
                 client = self._client(status['target'])
                 labels = self._bucket_labels(client, status['uuid'])
                 records, truncated = self._listing(client, request)
+                if truncated:
+                    records += self._largest(client, request, records)
         except Exception as e:
             if refused_this_path(e):
                 # Names and paths stay out of the log here too.
@@ -328,6 +342,7 @@ class FolderAnalytics:
                 children.append(to_row(f'{path}/{name}', name, record, labels, now))
         if own is None:
             return None
+        children.sort(key=lambda row: (-row['bytes'], row['name']))
         return dict(
             self=own,
             children=children,
