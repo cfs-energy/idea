@@ -64,7 +64,7 @@ security login rest-role create -vserver <SVM> -role idea-metrics -api /api/prot
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/svm/svms -access readonly
 ```
 
-secd event counts need a cluster-level login. ONTAP keeps the event log at cluster level and will not add it to an SVM role (`A Vserver admin cannot use command directory /api/support/ems/events with access level readonly`). With an SVM login, `check:secd_events` reads `reason:unavailable` and `secd_events` sends nothing. secd failures are still covered by `ldap_up` and `home_stat_ok`.
+secd event counts need a cluster-level login. ONTAP keeps the event log at cluster level and will not add it to an SVM role at any access level: `readonly`, `all` and every level between are refused with `A SVM admin cannot use command directory "/api/support/ems/events" with access level ...`. With an SVM login, `check:secd_events` reads `reason:unavailable` and `secd_events` sends nothing. secd failures are still covered by `ldap_up` and `home_stat_ok`.
 
 ## Directory automation
 

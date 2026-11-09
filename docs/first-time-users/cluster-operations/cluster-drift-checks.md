@@ -49,7 +49,7 @@ max:idea.health.drift.value{check:fsx_parity,setting:backup_retention_days} by {
 
 ## Alert
 
-Two definitions, to create in Datadog after the release is on a cluster. The checks run every 23 hours, so a one day window always holds a reading, and a fix clears at the next run.
+Two definitions, to create in Datadog after the release is on a cluster. Add any tags your organisation requires on a monitor, such as `team`, or Datadog refuses them. The checks run every 23 hours, so a one day window always holds a reading, and a fix clears at the next run.
 
 ```json
 {
