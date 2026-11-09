@@ -331,8 +331,8 @@ class FolderAnalytics:
         except Exception as e:
             if refused_this_path(e):
                 # Names and paths stay out of the log here too.
-                status = getattr(e, 'status_code', type(e).__name__)
-                self.logger.info(f'storage analytics refused one folder: {status}')
+                code = getattr(e, 'status_code', type(e).__name__)
+                self.logger.info(f'storage analytics refused one folder: {code}')
             else:
                 self._failed(e)
             return None
