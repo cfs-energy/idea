@@ -32,6 +32,8 @@ import time
 BUCKET_SECONDS = 300
 SECONDS_PER_DAY = 86400
 ENABLED_KEY = 'metrics.health.enabled'
+# how soon a collector skipped for not being leader, or switched off, looks again
+SKIPPED_RECHECK_SECONDS = 60
 
 ACCESS_DENIED_CODES = {
     'AccessDenied',
@@ -184,16 +186,21 @@ class CollectorRunner:
         # replicas and restarts do not all read at the same second
         self._exit.wait(random.uniform(0, min(30, collector.interval_seconds)))
         while not self._exit.is_set():
+            wait = collector.interval_seconds
             try:
                 if (
                     not collector.leader_only or self.context.is_leader()
                 ) and self.is_enabled(collector):
                     self.run_once(collector)
+                else:
+                    # a new task is elected a minute or two after it starts: waiting the
+                    # whole interval left a six-hourly collector silent for six hours
+                    wait = min(wait, SKIPPED_RECHECK_SECONDS)
             except Exception as e:
                 self.logger.warning(
                     f'{collector.name} collector loop: {type(e).__name__}'
                 )
-            self._exit.wait(collector.interval_seconds)
+            self._exit.wait(wait)
 
     def start(self):
         provider = self.context.config().get_string('metrics.provider')

@@ -128,6 +128,36 @@ def test_each_collector_has_an_off_switch_and_all_share_one():
     ).is_enabled(sample)
 
 
+class Waits:
+    """stands in for the runner's exit event: records each wait, stops after `limit`."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.seconds = []
+
+    def is_set(self):
+        return len(self.seconds) >= self.limit
+
+    def wait(self, seconds):
+        self.seconds.append(seconds)
+
+
+def test_a_collector_that_was_not_yet_leader_runs_once_elected_not_an_interval_later():
+    ran = []
+    sample = collector(lambda m: ran.append(1))
+    sample.interval_seconds = 6 * 3600
+    found = context()
+    # elected a minute or two after start, as a new task is
+    found.is_leader.side_effect = [False, False, True, True]
+    runner = CollectorRunner(found, [sample])
+    runner._exit = Waits(4)
+    runner._loop(sample)
+    startup, *waits = runner._exit.seconds
+    assert startup <= 30
+    assert waits == [60, 60, 6 * 3600]
+    assert len(ran) == 1
+
+
 def test_other_providers_get_nothing_they_would_be_billed_for():
     found = context(provider='cloudwatch')
     HealthMetrics(found).level('cert.days_to_expiry', 3)
