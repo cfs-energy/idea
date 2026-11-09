@@ -313,7 +313,11 @@ def test_no_cifs_record_is_unknown_not_drift(monkeypatch):
     checks = harness(monkeypatch)
     FakeOntap.answers['/api/protocols/cifs/services'] = []
     found = states(checks.run_once())
-    for check in ('ontap_cifs_session_security', 'ontap_cifs_aes', 'ontap_machine_account'):
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
         assert found[check] == UNKNOWN
     assert found['ontap_ldap_session_security'] == OK
     assert not any(value == 2 for value, _ in checks.published['state'])
@@ -322,7 +326,9 @@ def test_no_cifs_record_is_unknown_not_drift(monkeypatch):
 def test_backup_retention_left_out_of_the_answer_reads_as_off(monkeypatch):
     checks = harness(monkeypatch)
     described = checks.context.aws().fsx().describe_file_systems.return_value
-    del described['FileSystems'][0]['OntapConfiguration']['AutomaticBackupRetentionDays']
+    del described['FileSystems'][0]['OntapConfiguration'][
+        'AutomaticBackupRetentionDays'
+    ]
     checks.run_once()
     found = {
         (t['check'], t['setting']): t['current'] for _, t in checks.published['value']

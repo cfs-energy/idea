@@ -173,13 +173,19 @@ class EcsTasksCollector(HealthCollector):
             ).get('services', []):
                 name = service['serviceName'].removeprefix(f'{cluster_name}-')
                 metrics.level(
-                    'ecs.tasks_running', service.get('runningCount', 0), ecs_service_name=name
+                    'ecs.tasks_running',
+                    service.get('runningCount', 0),
+                    ecs_service_name=name,
                 )
                 metrics.level(
-                    'ecs.tasks_desired', service.get('desiredCount', 0), ecs_service_name=name
+                    'ecs.tasks_desired',
+                    service.get('desiredCount', 0),
+                    ecs_service_name=name,
                 )
                 metrics.level(
-                    'ecs.tasks_pending', service.get('pendingCount', 0), ecs_service_name=name
+                    'ecs.tasks_pending',
+                    service.get('pendingCount', 0),
+                    ecs_service_name=name,
                 )
                 deployments = service.get('deployments') or []
                 states = [d.get('rolloutState') for d in deployments]
@@ -189,7 +195,9 @@ class EcsTasksCollector(HealthCollector):
                     ecs_service_name=name,
                 )
                 metrics.level(
-                    'ecs.rollout_failed', 1 if 'FAILED' in states else 0, ecs_service_name=name
+                    'ecs.rollout_failed',
+                    1 if 'FAILED' in states else 0,
+                    ecs_service_name=name,
                 )
                 for deployment in deployments:
                     created = deployment.get('createdAt')
@@ -200,7 +208,9 @@ class EcsTasksCollector(HealthCollector):
         for key in [key for key in rollouts if key[0] < oldest]:
             del rollouts[key]
         for (bucket, name), seen in rollouts.items():
-            metrics.add('ecs.rollouts', len(seen), timestamp=bucket, ecs_service_name=name)
+            metrics.add(
+                'ecs.rollouts', len(seen), timestamp=bucket, ecs_service_name=name
+            )
 
 
 # the file is on the shared mount: read in a child, so a hung read cannot take this thread with it.
