@@ -460,6 +460,18 @@ def test_the_clear_request_is_never_stored():
     assert 'clear_expires_on' not in db_dict
 
 
+def test_a_cleared_date_reaches_the_index_as_null():
+    # the index applies an update as a merge, so a key left out keeps the old date
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    index_dict = db.convert_software_stack_object_to_index_dict(stack())
+    assert 'expires_on' in index_dict and index_dict['expires_on'] is None
+    read = db.convert_index_dict_to_software_stack_object(index_dict)
+    assert read.expires_on is None
+    on = NOW + timedelta(days=5)
+    dated = db.convert_software_stack_object_to_index_dict(stack(expires_on=on))
+    assert dated['expires_on'] == int(on.timestamp() * 1000)
+
+
 def test_owner_and_date_round_trip():
     on = NOW + timedelta(days=5)
     db_dict = VirtualDesktopSoftwareStackDB.convert_software_stack_object_to_db_dict(

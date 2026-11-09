@@ -557,6 +557,11 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         self, software_stack: VirtualDesktopSoftwareStack
     ) -> Dict:
         index_dict = self.convert_software_stack_object_to_db_dict(software_stack)
+        # an index update merges into the stored document: a cleared date must be sent as
+        # null, or the old one stays and every listing keeps warning about it
+        index_dict.setdefault(
+            software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None
+        )
 
         project_ids = Utils.get_value_as_list(
             software_stacks_constants.SOFTWARE_STACK_DB_PROJECTS_KEY, index_dict, []
