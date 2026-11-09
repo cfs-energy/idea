@@ -807,9 +807,9 @@
   integrity sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==
 
 "@babel/runtime@^7.20.13", "@babel/runtime@^7.21.0", "@babel/runtime@^7.5.5", "@babel/runtime@^7.8.0", "@babel/runtime@^7.8.7":
-  version "7.29.10"
-  resolved "https://registry.yarnpkg.com/@babel/runtime/-/runtime-7.29.10.tgz#fe9920782f7ee34029165ac6f272984917a1641b"
-  integrity sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==
+  version "7.29.13"
+  resolved "https://registry.yarnpkg.com/@babel/runtime/-/runtime-7.29.13.tgz#6b33e456181ff15b5585d932f3aebfc0669b32dd"
+  integrity sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==
 
 "@babel/template@^7.29.7":
   version "7.29.7"
@@ -857,9 +857,9 @@
     weekstart "^2.0.0"
 
 "@cloudscape-design/components@^3.0.1348":
-  version "3.0.1409"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1409.tgz#00cb88a667f323da61c78dd24d408798d9ebcbc1"
-  integrity sha512-oI7kky/pypovqDDrx+JEnnCzswuSaYpdD60zw9zAfknP6l3fxk9ouG6VZyyO6PZM9W9C37u62JJNnZUrelQPdQ==
+  version "3.0.1410"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1410.tgz#d15ea4ae8f80b1f1b1c4e624dcfafba218f68e28"
+  integrity sha512-vnkS/iK8hbebjKwrp1epCLQ2nbgTNH+sSdyLYHSgWeRgCzgwMaTH4e9Z+rE20OD9tyoVf/GeAYbIe5miIsghAw==
   dependencies:
     "@cloudscape-design/collection-hooks" "^1.0.0"
     "@cloudscape-design/component-toolkit" "^1.0.0-beta"
@@ -1105,9 +1105,9 @@
   integrity sha512-ztmtTd6xwnuh2/xu+Vb01btgV8SQWYCaK56CkRK8gEkWe5TuDyBcYJ0wgkMRn+2VcE9KUmhvkz+N9GHrqw/C0g==
 
 "@microlink/react-json-view@^1.31.28":
-  version "1.31.46"
-  resolved "https://registry.yarnpkg.com/@microlink/react-json-view/-/react-json-view-1.31.46.tgz#ae52130f76a2a2ee59a34e537d9d956a900935b3"
-  integrity sha512-RKkHZYOpccM2J1+q09nZ3lq6NeGkdflBLGE+ZDAUubla7M4o6W79fHQH1MfHEYb6pSZ4oTigZ+jfUP4t7EU2pw==
+  version "1.31.48"
+  resolved "https://registry.yarnpkg.com/@microlink/react-json-view/-/react-json-view-1.31.48.tgz#d6e2c79315be8a4c9c98504fbe869aa82a8a2d27"
+  integrity sha512-DqWxyfeksOCeHaUZq0x6AK2x260jIrvrQFIpi+CI36AEWAJCHCjxMc37DvIuj/WXeesf2Sa/sZMwD7OW6n7ohg==
   dependencies:
     react-base16-styling "~0.10.0"
     react-lifecycles-compat "~3.0.4"
@@ -4201,7 +4201,7 @@ possible-typed-array-names@^1.0.0, possible-typed-array-names@^1.1.0:
   resolved "https://registry.yarnpkg.com/possible-typed-array-names/-/possible-typed-array-names-1.1.0.tgz#93e3582bc0e5426586d9d07b79ee40fc841de4ae"
   integrity sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==
 
-postcss@^8.5.30:
+postcss@^8.5.32:
   version "8.5.32"
   resolved "https://registry.yarnpkg.com/postcss/-/postcss-8.5.32.tgz#fbccef8388a0c77508c713bfd37728d646595803"
   integrity sha512-LJlKCCAUFKOuZxipUdYw1NzIITEsPcgyOG9LkvRJvuKj/bRzbuRY0ARXvL0pWGpsZvn8jku+LMep2eU0seHp8g==
@@ -4534,7 +4534,7 @@ rimraf@~2.6.2:
   dependencies:
     glob "^7.1.3"
 
-rolldown@~1.2.14:
+rolldown@~1.2.16:
   version "1.2.16"
   resolved "https://registry.yarnpkg.com/rolldown/-/rolldown-1.2.16.tgz#6c99aafa32361d578fbd945aeb43e533bb8f4c28"
   integrity sha512-bWvlMpFKiTfDKfnK7FC2MPgPeWCf/Kpwsq49ApdW+FQaBZb6O6dZ4MAPbPUjp7hYQrw/RobqCzn64BRrQecGHw==
@@ -4631,10 +4631,10 @@ safe-regex-test@^1.1.0:
   resolved "https://registry.yarnpkg.com/safer-buffer/-/safer-buffer-2.1.2.tgz#44fa161b0187b9549dd84bb91802f9bd8385cd6a"
   integrity sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==
 
-sass@1.107.1:
-  version "1.107.1"
-  resolved "https://registry.yarnpkg.com/sass/-/sass-1.107.1.tgz#a8a461744666e31f8973041a6b9ae7fcb265befd"
-  integrity sha512-aJ1/LvxOOb04YhmiBjzZn3jVwdHKol+OVhoMV6fFl02fF9T3i+5Mg9l/CnzqtM+NX5Jn5o3lAbs/ZJivTCLHfQ==
+sass@1.108.0:
+  version "1.108.0"
+  resolved "https://registry.yarnpkg.com/sass/-/sass-1.108.0.tgz#f459d748b3dc8885e15b9cb9304979efd68e70ab"
+  integrity sha512-9HwnefouIfwY+XuA1rS5xOhALH5vsoe3SzYICG3MEwpkMbE7tpuh5ytZFRXUKPYkxY7lKdIbqxl+DxQGo8jwQQ==
   dependencies:
     chokidar "^5.0.0"
     immutable "^5.1.5"
@@ -5311,15 +5311,15 @@ vite-plugin-pwa@2.0.0:
     workbox-build "^7.4.1"
     workbox-window "^7.4.1"
 
-vite@8.3.5:
-  version "8.3.5"
-  resolved "https://registry.yarnpkg.com/vite/-/vite-8.3.5.tgz#9614f66026cb92fe486cb9d3c90780b2a69fc85d"
-  integrity sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==
+vite@8.3.6:
+  version "8.3.6"
+  resolved "https://registry.yarnpkg.com/vite/-/vite-8.3.6.tgz#ff2eb6b0b18e910c08a79c59a80faebecd422808"
+  integrity sha512-UI7dK29NnS54Fk+mmo7o+jI6U8Fp7hDl+X5Q1k45WH+d4dSlbLVUETGQ+hfkNgvLQGyoElPj837nZyv4MBc0VA==
   dependencies:
     lightningcss "^1.33.0"
     picomatch "^4.0.7"
-    postcss "^8.5.30"
-    rolldown "~1.2.14"
+    postcss "^8.5.32"
+    rolldown "~1.2.16"
     tinyglobby "^0.2.17"
   optionalDependencies:
     fsevents "~2.3.3"
