@@ -38,3 +38,29 @@ test("sync stamps every write as template and CLI edits replace the marker atomi
     client.destroy();
   }
 });
+
+test("the upgrade log shows a map or list value as written, not [object Object]", async (context) => {
+  context.mock.method(DynamoDBClient.prototype, "send", async () => ({ Table: { TableStatus: "ACTIVE" } }));
+  const owners = { scheduler: "upgrade-1", "cluster-manager": "upgrade-1" };
+  context.mock.method(DynamoDBDocumentClient.prototype, "send", async (command: { constructor: { name: string } }) =>
+    command.constructor.name === "ScanCommand"
+      ? { Items: [{ key: "cluster.upgrade_module_set_owners", value: owners }, { key: "cluster.upgrade_hosts", value: ["a", "b"] }] }
+      : {},
+  );
+  const lines: string[] = [];
+  const db = await ClusterConfigDb.open({
+    clusterName: "sample",
+    client: new DynamoDBClient({ region: "us-east-1" }),
+    awsRegion: "us-east-1",
+    logger: (line) => lines.push(line),
+  });
+  await db.setConfigEntry("cluster.upgrade_module_set_owners", owners);
+  await db.setConfigEntry("cluster.locale", "en_US.UTF-8");
+  await db.deleteConfigEntries("cluster.upgrade_");
+  const shown = JSON.stringify(owners);
+  assert.ok(lines.includes(`updating config: cluster.upgrade_module_set_owners = ${shown}`), lines.join("\n"));
+  assert.ok(lines.includes("updating config: cluster.locale = en_US.UTF-8"));
+  assert.ok(lines.includes(`deleting config entry - cluster.upgrade_module_set_owners = ${shown}`));
+  assert.ok(lines.includes('deleting config entry - cluster.upgrade_hosts = ["a","b"]'));
+  assert.ok(lines.every((line) => !line.includes("[object Object]")));
+});

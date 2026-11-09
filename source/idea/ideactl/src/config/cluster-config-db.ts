@@ -107,6 +107,12 @@ async function dynamoRegion(client: DynamoDBClient): Promise<string | undefined>
   return undefined;
 }
 
+/** A value as a log line shows it: a map or list as JSON, never `[object Object]`. */
+function shown(value: unknown): string {
+  if (value === null || typeof value !== 'object') return String(value);
+  return JSON.stringify(value, (_key, item: unknown) => (item instanceof Set ? [...item] : item));
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class ClusterConfigDb {
@@ -244,7 +250,7 @@ export class ClusterConfigDb {
 
   /** Write value and last writer atomically; version counts writes. */
   async setConfigEntry(key: string, value: unknown, source: 'cli' | 'template' = 'cli'): Promise<void> {
-    this.logger(`updating config: ${key} = ${String(value)}`);
+    this.logger(`updating config: ${key} = ${shown(value)}`);
     await this.doc.send(
       new UpdateCommand({
         TableName: this.clusterSettingsTableName,
@@ -359,7 +365,7 @@ export class ClusterConfigDb {
     }
     this.logger(`found ${toDelete.length} config entries matching: ${configKeyPrefix}`);
     for (const item of toDelete) {
-      this.logger(`deleting config entry - ${String(item['key'])} = ${String(item['value'])}`);
+      this.logger(`deleting config entry - ${String(item['key'])} = ${shown(item['value'])}`);
       await this.doc.send(
         new DeleteCommand({
           TableName: this.clusterSettingsTableName,
