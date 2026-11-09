@@ -316,9 +316,7 @@ def test_reboot_event_leaves_a_ready_session_the_broker_still_has(recovery):
 
 
 @pytest.mark.parametrize('state', [None, 'DELETED', 'UNKNOWN', 'CREATING'])
-def test_reboot_event_recovers_a_ready_session_the_broker_lost_at_once(
-    recovery, state
-):
+def test_reboot_event_recovers_a_ready_session_the_broker_lost_at_once(recovery, state):
     """the reboot itself is the evidence, so one unready answer starts recovery"""
     recovery.broker.describe_sessions.return_value = {
         'sessions': {'old-dcv': {'state': state}}
