@@ -408,12 +408,12 @@ def test_unique_job_id_index_from_an_earlier_schema_is_dropped(tmp_path):
     finished_jobs.job_id, which rejects the second job to be given a reused id.
     """
     cache = JobCache(context=FakeSchedulerContext(deploy_dir=str(tmp_path)))
-    # the row creates the columns the index needs
     cache.add_finished_job(build_job(job_id='41', job_uid='uid-first'))
 
     db_file = glob.glob(f'{tmp_path}/db/*.db')[0]
     connection = sqlite3.connect(db_file)
     try:
+        connection.execute('DROP INDEX ix_finished_jobs_job_id')
         connection.execute(
             'CREATE UNIQUE INDEX ix_finished_jobs_job_id ON finished_jobs (job_id)'
         )
@@ -450,6 +450,48 @@ def test_get_active_license_count_binds_license_name(job_cache):
 
     assert job_cache.get_active_license_count(license_name=license_name) == 7
     assert job_cache.get_active_license_count(license_name="x' or '1'='1") == 0
+
+
+def test_a_new_cache_answers_every_raw_query_before_its_first_write(job_cache):
+    """
+    a cluster that never ran a licensed job had an active_job_licenses table with no
+    count column, so the license check failed every licensed submission.
+    """
+    assert job_cache.get_active_license_count(license_name='app_license') == 0
+    assert job_cache.get_desired_capacity(job_group='group-1') == 0
+    assert job_cache.get_active_jobs(queue_profile='compute') == 0
+
+
+def test_columns_missing_from_an_earlier_cache_are_added_at_start(tmp_path):
+    db_dir = tmp_path / 'db'
+    db_dir.mkdir()
+    with closing(sqlite3.connect(db_dir / 'job-cache-v3.db')) as connection:
+        for table in job_cache_module.TABLE_COLUMNS:
+            connection.execute(
+                f'CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT)'
+            )
+        connection.commit()
+
+    cache = JobCache(context=FakeSchedulerContext(deploy_dir=str(tmp_path)))
+    assert cache.get_active_license_count(license_name='app_license') == 0
+    cache.add_active_licenses(
+        [
+            build_job(
+                job_id='10.host',
+                licenses=[SocaJobLicenseAsk(name='app_license', count=2)],
+            )
+        ]
+    )
+    assert cache.get_active_license_count(license_name='app_license') == 2
+    with closing(sqlite3.connect(db_dir / 'job-cache-v3.db')) as connection:
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+    # indexes on the added columns are built at the same start, not one restart later
+    assert 'ix_active_job_licenses_job_id_license_name' in indexes
 
 
 def test_admin_deletion_reason_survives_cached_scheduler_refresh(job_cache):
@@ -624,7 +666,7 @@ def test_each_prune_pass_says_what_it_did(job_cache, monkeypatch):
 
 
 def test_prune_before_the_first_finished_job_is_not_an_error(job_cache):
-    # the table has no job_data column yet, which failed every hour on a new cluster
+    # an empty table, which once lacked the job_data column and failed every hour
     assert job_cache._jobs_db.prune_finished_jobs() == 0
 
 
