@@ -3,7 +3,6 @@
 from ideaclustermanager.app.accounts.ad_automation_agent import ADAutomationAgent
 from ideaclustermanager.app.metrics import health_collectors
 from ideaclustermanager.app.metrics.health_collectors import (
-    EMS_PATH,
     AdAutomationCollector,
     CertificatesCollector,
     DirectoryCollector,
@@ -11,7 +10,6 @@ from ideaclustermanager.app.metrics.health_collectors import (
     HomeDirectoryCollector,
     SecretsCollector,
     classify_stopped_task,
-    ems_bucket_counts,
     service_of,
 )
 from ideaclustermanager.app.metrics.storage_metrics_service import OntapRequestFailed
@@ -554,7 +552,7 @@ def run_directory(
     health_collectors.OntapClient = lambda *a, **k: fake
     try:
         metrics = Recorder()
-        DirectoryCollector(context, storage).collect(metrics, NOW.timestamp())
+        DirectoryCollector(context, storage).collect(metrics)
     finally:
         health_collectors.OntapClient = original
     return metrics, fake
@@ -563,7 +561,6 @@ def run_directory(
 LDAP = '/api/name-services/ldap'
 CIFS = '/api/protocols/cifs/services'
 DNS = '/api/name-services/dns'
-EMS = '/api/support/ems/events'
 SVMS = '/api/svm/svms'
 SVM = {'svm': {'name': 'TESTSVM1'}}
 
@@ -574,7 +571,6 @@ def test_the_conditions_for_a_good_join_read_as_gauges_before_anything_fails():
             LDAP: [{**SVM, 'status': {'state': 'up'}}],
             CIFS: [{**SVM, 'security': {'session_security': 'none'}}],
             DNS: [{**SVM, 'servers': ['10.10.0.2']}],
-            EMS: [],
         }
     )
     assert metrics.value('directory.ldap_up', svm='testsvm1', filesystem='fs-abc') == [
@@ -591,7 +587,6 @@ def test_good_settings_read_as_good():
             LDAP: [{**SVM, 'status': {'state': 'down'}}],
             CIFS: [{**SVM, 'security': {'session_security': 'sign'}}],
             DNS: [{**SVM, 'servers': ['10.0.0.1', '10.0.0.2']}],
-            EMS: [],
         }
     )
     assert metrics.value('directory.ldap_up') == [0]
@@ -605,21 +600,20 @@ def test_a_path_the_login_cannot_read_reports_forbidden_and_the_others_go_on():
     assert metrics.value(
         'directory.check_ok', check='cifs_security', reason='forbidden'
     ) == [0]
-    # an SVM login cannot be granted the event log: not a failure, but still shown
-    assert metrics.value(
-        'directory.check_ok', check='secd_events', reason='unavailable'
-    ) == [1]
-    assert (
-        metrics.value('directory.check_ok', check='secd_events', reason='forbidden')
-        == []
-    )
+    # a refusal never reads as good, whatever the check
+    assert not [
+        tags
+        for name, value, tags in metrics.levels
+        if name == 'directory.check_ok'
+        and value == 1
+        and tags['reason'] not in ('ok', 'no_cifs_server')
+    ]
 
 
 GOOD = {
     LDAP: [{**SVM, 'status': {'state': 'up'}}],
     CIFS: [{**SVM, 'security': {'session_security': 'sign'}}],
     DNS: [{**SVM, 'servers': ['10.0.0.1']}],
-    EMS: [],
 }
 
 
@@ -631,13 +625,11 @@ def test_a_reason_is_the_status_ontap_gave_never_a_number_in_the_text():
     unreachable = ConnectionError(
         "HTTPSConnectionPool(host='svm-0403a.fs-0401b.fsx', port=443): 0x7f403"
     )
-    metrics, _ = run_directory({**GOOD, LDAP: unreachable, EMS: unreachable})
+    metrics, _ = run_directory({**GOOD, LDAP: unreachable})
     assert metrics.value('directory.check_ok', check='ldap') == [0]
     assert metrics.value('directory.check_ok', check='ldap', reason='unreachable') == [
         0
     ]
-    # refused is the one answer that reads as fine for the event log: unreachable is not it
-    assert metrics.value('directory.check_ok', check='secd_events') == [0]
     for status, reason in ((401, 'unauthorized'), (403, 'forbidden'), (500, 'error')):
         metrics, _ = run_directory({**GOOD, LDAP: OntapRequestFailed(status)})
         assert metrics.value('directory.check_ok', check='ldap', reason=reason) == [0]
@@ -726,25 +718,20 @@ def test_an_svm_the_role_can_see_with_no_cifs_server_is_nfs_only_not_a_failed_re
     assert any(path.startswith(SVMS) for path in fake.paths)
 
 
-def test_event_reads_ask_for_names_and_times_and_nothing_else():
-    assert 'fields=message.name,time' in EMS_PATH
-    for never in ('log_message', 'parameters', 'byte_offset', '/files'):
-        assert never not in EMS_PATH
-    event = {
-        'message': {'name': 'secd.ldap.noServers'},
-        'time': '2026-11-06T11:58:00+00:00',
-    }
-    leaky = {**event, 'log_message': 'alice denied', 'parameters': [{'value': 'alice'}]}
-    metrics, _ = run_directory({LDAP: [], CIFS: [], DNS: [], EMS: [event, leaky]})
-    assert [c[1] for c in metrics.counts] == [2]
-    assert 'alice' not in str(metrics.counts) + str(metrics.levels)
-
-
-def test_events_older_than_the_window_are_left_alone():
-    event = {'message': {'name': 'secd.x'}, 'time': '2026-11-06T09:00:00+00:00'}
-    metrics, _ = run_directory({LDAP: [], CIFS: [], DNS: [], EMS: [event]})
+def test_the_event_log_no_svm_login_can_be_granted_is_never_asked_for():
+    # ONTAP refuses /api/support/ems/events to an SVM role at every access level, so a secd
+    # check could only ever read refused, and a check that cannot fail is not a check
+    metrics, fake = run_directory(GOOD)
+    assert not [path for path in fake.paths if '/ems' in path]
+    assert metrics.value('directory.check_ok', check='secd_events') == []
     assert metrics.counts == []
-    assert len(ems_bucket_counts([event])) == 1
+    assert {t['check'] for n, _, t in metrics.levels if n == 'directory.check_ok'} == {
+        'dc_addresses',
+        'login',
+        'ldap',
+        'cifs_security',
+        'dns',
+    }
 
 
 def test_home_probe_reports_success_latency_and_each_way_of_failing(monkeypatch):

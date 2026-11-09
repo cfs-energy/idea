@@ -27,7 +27,6 @@ from ideasdk.metrics.health import (
 from ideasdk.utils import Utils
 
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 import re
 import time
@@ -47,12 +46,6 @@ STOPPED_WINDOW_SECONDS = 50 * 60
 DESCRIBE_TASKS_BATCH = 100
 DESCRIBE_SERVICES_BATCH = 10
 
-# fields, not text: an event's log_message and parameters can carry a username or a path.
-# ponytail: newest 1000 events in one read; past that in 50 minutes a burst is undercounted.
-EMS_PATH = (
-    '/api/support/ems/events?message.name=secd.*&return_records=true&max_records=1000'
-    '&order_by=time%20desc&fields=message.name,time'
-)
 LDAP_PATH = '/api/name-services/ldap?fields=svm.name,status&return_records=true'
 CIFS_PATH = (
     '/api/protocols/cifs/services?fields=svm.name,security.session_security'
@@ -432,26 +425,14 @@ class AdAutomationCollector(HealthCollector):
             metrics.level('ad.admin_password_days_to_expiry', agent.password_days_left)
 
 
-def ems_bucket_counts(records: List[Dict]) -> Dict[Tuple[int, str], int]:
-    """(bucket, event name) totals. Only the name and the time are ever looked at."""
-    totals: Counter = Counter()
-    for record in records:
-        name = Utils.get_value_as_string(
-            'name', Utils.get_value_as_dict('message', record, {})
-        )
-        when = Utils.get_value_as_string('time', record)
-        if Utils.is_empty(name) or Utils.is_empty(when):
-            continue
-        epoch = datetime.fromisoformat(when).astimezone(timezone.utc).timestamp()
-        totals[(bucket_of(epoch), name)] += 1
-    return totals
-
-
 class DirectoryCollector(HealthCollector):
     """
     What makes a file server lose the directory, read over the existing metrics login, every
     check on its own so one the login's role lacks reports as forbidden and the others go on.
-    Reads settings and event names and times; never a file, a user or an event's text.
+    Reads settings; never a file or a user. ONTAP's event log is not read: it is kept at
+    cluster level and no SVM login can be granted it, so a count of its secd events could
+    never be sent from the login this uses. ldap_up and the home directory probe show the same
+    failures.
     """
 
     name = 'directory'
@@ -477,8 +458,7 @@ class DirectoryCollector(HealthCollector):
             raise NoControllers()
         return set(described[0].get('DnsIpAddrs', []))
 
-    def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
-        now = now or time.time()
+    def collect(self, metrics: HealthMetrics) -> None:
         # None with no directory to ask. One that would not answer is not that: its read is
         # reported, on no file system, and the DNS check that needs it says so, never ok.
         controllers = None
@@ -547,20 +527,9 @@ class DirectoryCollector(HealthCollector):
                     m, f, records, controllers, controllers_unread
                 ),
             )
-            self._check(
-                metrics,
-                client,
-                filesystem,
-                'secd_events',
-                EMS_PATH,
-                lambda m, f, records: self._secd(m, f, records, now),
-                # ONTAP keeps the event log at cluster level and will not grant it to
-                # an SVM role, so an SVM login is refused it by design.
-                refused_reason='unavailable',
-            )
 
     @staticmethod
-    def _check(metrics, client, filesystem, check, path, read, refused_reason=None):
+    def _check(metrics, client, filesystem, check, path, read):
         try:
             records = Utils.get_value_as_list('records', client.first_page(path), [])
             reason = read(metrics, filesystem, records) or 'ok'
@@ -572,21 +541,11 @@ class DirectoryCollector(HealthCollector):
                 filesystem=filesystem,
             )
         except Exception as e:
-            reason = DirectoryCollector._reason(e)
-            if reason == 'forbidden' and refused_reason:
-                metrics.level(
-                    'directory.check_ok',
-                    1,
-                    check=check,
-                    reason=refused_reason,
-                    filesystem=filesystem,
-                )
-                return
             metrics.level(
                 'directory.check_ok',
                 0,
                 check=check,
-                reason=reason,
+                reason=DirectoryCollector._reason(e),
                 filesystem=filesystem,
             )
 
@@ -669,18 +628,6 @@ class DirectoryCollector(HealthCollector):
                 svm=self._svm(record),
                 filesystem=filesystem,
             )
-
-    def _secd(self, metrics, filesystem, records, now):
-        oldest = now - STOPPED_WINDOW_SECONDS
-        for (bucket, name), total in ems_bucket_counts(records).items():
-            if bucket >= oldest:
-                metrics.add(
-                    'directory.secd_events',
-                    total,
-                    timestamp=bucket,
-                    event=name,
-                    filesystem=filesystem,
-                )
 
 
 class HomeDirectoryCollector(HealthCollector):
