@@ -1327,6 +1327,42 @@ class VirtualDesktopSessionUtils:
 
         return success_response_list, fail_response_list
 
+    def drop_index_entries_without_a_row(self) -> int:
+        """
+        A search document whose table row is gone is a desktop every admin listing still
+        shows and nothing can act on. One arrives when a session's last update reaches the
+        index after its delete (an update creates the document it does not find), or when
+        a row is removed out of band. Each document is checked against the table with a
+        consistent read, so a desktop created a moment ago is never dropped.
+        """
+        page_size = 100
+        indexed: List[VirtualDesktopSession] = []
+        while True:
+            listing = (
+                self._session_db.list_from_index(
+                    ListSessionsRequest(
+                        paginator=SocaPaginator(start=len(indexed), page_size=page_size)
+                    )
+                ).listing
+                or []
+            )
+            indexed.extend(listing)
+            if len(listing) < page_size:
+                break
+        dropped = 0
+        for session in indexed:
+            if Utils.is_empty(session.idea_session_id) or Utils.is_empty(session.owner):
+                continue
+            if self._session_db.get_from_db(session.owner, session.idea_session_id):
+                continue
+            self.delete_session_entry_from_opensearch(session.idea_session_id)
+            dropped += 1
+        if dropped:
+            self._logger.info(
+                f'dropped {dropped} desktop(s) from the search index: no table row'
+            )
+        return dropped
+
     def delete_session_entry_from_opensearch(self, idea_session_id: str):
         index_name = f'{self.context.config().get_string("virtual-desktop-controller.opensearch.dcv_session.alias", required=True)}-{self.context.sessions_template_version}'
         self.context.analytics_service().post_entry(
