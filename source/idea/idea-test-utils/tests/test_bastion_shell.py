@@ -878,14 +878,22 @@ class RealSshd(unittest.TestCase):
             ],
             check=True,
         )
-        probe = socket.socket()
-        probe.bind(('127.0.0.1', 0))
-        self.port = probe.getsockname()[1]
-        probe.close()
+        def free_port():
+            probe = socket.socket()
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+            probe.close()
+            return port
+
+        self.port = free_port()
         config = self.folder / 'sshd_config'
         lines = [
             f'Port {self.port}',
             'ListenAddress 127.0.0.1',
+            # a second, unused listener: with one, Ubuntu's 9.6 sshd (the CI runner's) puts each
+            # child's startup pipe on the descriptor its socket-activation patch then closes, so
+            # the listener counts no startups and MaxStartups never refuses anything
+            f'ListenAddress 127.0.0.1:{free_port()}',
             f'HostKey {self.folder / "key"}',
             'UsePAM no',
             'PidFile none',
@@ -975,6 +983,14 @@ class RealSshd(unittest.TestCase):
             for connection in held:
                 connection.settimeout(5)
                 self.assertTrue(connection.recv(64).startswith(b'SSH-'))
+            # sshd's own count, where its title shows one: none counted means nothing is refused
+            title = subprocess.run(
+                ['ps', '-o', 'args=', '-p', str(self.sshd.pid)],
+                capture_output=True,
+                text=True,
+            ).stdout
+            if '[listener] 0 of ' in title:
+                self.skipTest(f'this sshd counts no startups for held connections: {title}')
             # positive control: sshd really refuses the old check now; noted as the checks
             # note theirs, as sshd counts it
             self.assertNotEqual(self.keyscan(), 0)
