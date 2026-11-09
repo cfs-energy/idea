@@ -87,6 +87,14 @@ test("a refused settings write says the credentials only read settings and where
     error.message.includes("--aws-profile") &&
     !error.message.includes("arn:aws");
   await assert.rejects(() => db.setConfigEntry("cluster.locale", "en_US.UTF-8"), plain);
+  // the AWS error is kept for IDEA_DEBUG=1, for an administrator refused by an SCP or boundary
+  await assert.rejects(
+    () => db.setConfigEntry("cluster.locale", "en_US.UTF-8"),
+    (error: Error) =>
+      error.message.includes("IDEA_DEBUG=1") &&
+      (error.cause as Error | undefined)?.name === "AccessDeniedException" &&
+      String((error.cause as Error).message).includes("dynamodb:UpdateItem"),
+  );
   await assert.rejects(() => db.deleteConfigEntries("cluster.upgrade_"), plain);
   // any other failure is left as it was
   context.mock.method(DynamoDBDocumentClient.prototype, "send", async () => {

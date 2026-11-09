@@ -60,11 +60,14 @@ export class ClusterConfigDbError extends Error {
  * rows they own, so ideactl in their task shells can show settings but not change them.
  */
 export class ClusterSettingsWriteDenied extends Error {
-  constructor(table: string) {
+  constructor(table: string, cause: unknown) {
     super(
       `These AWS credentials cannot change ${table}. In a control-plane task, only the cluster-manager ` +
         "task's role can; the others write only their own rows. Run the command in a cluster-manager " +
-        'task, or from a workstation with an administrator profile (--aws-profile).',
+        'task, or from a workstation with an administrator profile (--aws-profile). If an administrator ' +
+        'is refused, an SCP, permissions boundary or endpoint policy denies the write: IDEA_DEBUG=1 ' +
+        'prints the AWS error.',
+      { cause },
     );
     this.name = 'ClusterSettingsWriteDenied';
   }
@@ -398,7 +401,7 @@ export class ClusterConfigDb {
       else await this.doc.send(command);
     } catch (error) {
       if ((error as { name?: string })?.name === 'AccessDeniedException') {
-        throw new ClusterSettingsWriteDenied(String(command.input.TableName));
+        throw new ClusterSettingsWriteDenied(String(command.input.TableName), error);
       }
       throw error;
     }
