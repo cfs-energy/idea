@@ -235,14 +235,14 @@ describe('shared cost details and storage usage', () => {
             progress: {running: false, step: 'Finished', done: 9, total: 9, started_at: measured, steps: []}
         });
         renderMyCosts();
-        expect(await screen.findByText(/900 GiB of that is outside your home folder/, {}, {timeout: 10000})).toBeInTheDocument();
+        expect(await screen.findByText("At least 900 GiB of that is outside your home folder. Your home folder's size counts files anyone owns in it and the quota counts only yours, so the real figure can be higher.", {}, {timeout: 10000})).toBeInTheDocument();
         expect(screen.getByText('models')).toBeInTheDocument();
         const user = userEvent.setup();
         await user.click(screen.getByRole('link', {name: 'runs'}));
         expect(await screen.findByRole('link', {name: 'run-7'}, {timeout: 5000})).toBeInTheDocument();
         expect(screen.getByText("2 folders here are not listed because you can't open them. Their sizes are still in the total above.")).toBeInTheDocument();
         expect(usage).toHaveBeenCalledWith({folder: '/home/user-a/runs'});
-        expect(screen.queryByText(/outside your home folder\. The quota/)).toBeNull();
+        expect(screen.queryByText(/outside your home folder\. Your home/)).toBeNull();
     }, 20000);
 
     it('shows live study steps and sends one refresh', async () => {

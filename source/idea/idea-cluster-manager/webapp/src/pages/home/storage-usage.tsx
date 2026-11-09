@@ -147,7 +147,7 @@ export default function StorageUsage({compact = false, refreshSignal = 0}: {comp
             </SpaceBetween>}
             {usage?.state === 'ready' && !quotaHasBytes && usage.quota_status === 'unavailable' && <Box>{compact ? 'Storage quota: not available' : 'Your storage quota is not available right now.'}</Box>}
             {usage?.outside_home_bytes !== undefined && usage.outside_home_bytes > 0 && !folder && <Box>
-                {storageSize(usage.outside_home_bytes)} of that is outside your home folder. The quota totals what you own but can't say which folders hold it.
+                At least {storageSize(usage.outside_home_bytes)} of that is outside your home folder. Your home folder's size counts files anyone owns in it and the quota counts only yours, so the real figure can be higher.
             </Box>}
             {!!usage?.unattributed_quota_bytes && !folder && <Box color="text-body-secondary" fontSize="body-s">
                 Another {storageSize(usage.unattributed_quota_bytes)} on this volume has no named owner, so it isn't in anyone's total. Files you wrote from Windows could be part of it.

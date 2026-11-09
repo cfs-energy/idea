@@ -1185,6 +1185,23 @@ def quota_api(collector, **usage):
     return invocation.success.call_args.args[0]
 
 
+def test_no_outside_home_figure_from_a_partial_home_total():
+    # a home total still catching up is a floor, so quota minus it could be too high
+    collector = Mock()
+    collector.has_ontap_storage.return_value = True
+    collector.get_user_quotas.side_effect = lambda user: [
+        dict(used_bytes=1000, volume='vol1', files=5, endpoint='svm.fs-1')
+    ]
+    collector.unattributed_quota.return_value = dict(bytes=0, files=0)
+    result = quota_api(
+        collector, volume='vol1', volume_endpoint='svm.fs-1', partial=True
+    )
+    assert 'outside_home_bytes' not in result
+    assert quota_api(collector, volume='vol1', volume_endpoint='svm.fs-1')[
+        'outside_home_bytes'
+    ] == 600
+
+
 def test_bytes_outside_home_count_this_file_systems_volume_only():
     collector = Mock()
     collector.has_ontap_storage.return_value = True
