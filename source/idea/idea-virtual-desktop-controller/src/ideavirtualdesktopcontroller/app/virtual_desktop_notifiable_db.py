@@ -32,10 +32,16 @@ class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
         self._table_name = table_name
         self.sqs_client = self.context.aws().sqs()
 
+    @staticmethod
+    def event_group_id(hash_key: str, range_key: str) -> str:
+        """one ordered group per row. A hash key passed as an enum formats as its class
+        and member name, which put the same row's events in two groups with no order."""
+        return f'{getattr(hash_key, "value", hash_key)}-{range_key}'
+
     def trigger_delete_event(self, hash_key: str, range_key: str, deleted_entry: dict):
         self.context.events_client.publish_event(
             event=VirtualDesktopEvent(
-                event_group_id=f'{hash_key}-{range_key}',
+                event_group_id=self.event_group_id(hash_key, range_key),
                 event_type=VirtualDesktopEventType.DB_ENTRY_DELETED_EVENT,
                 detail={
                     'hash_key': hash_key,
@@ -49,7 +55,7 @@ class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
     def trigger_create_event(self, hash_key: str, range_key: str, new_entry: dict):
         self.context.events_client.publish_event(
             event=VirtualDesktopEvent(
-                event_group_id=f'{hash_key}-{range_key}',
+                event_group_id=self.event_group_id(hash_key, range_key),
                 event_type=VirtualDesktopEventType.DB_ENTRY_CREATED_EVENT,
                 detail={
                     'hash_key': hash_key,
@@ -65,7 +71,7 @@ class VirtualDesktopNotifiableDB(VirtualDesktopNotifiableDBProtocol):
     ):
         self.context.events_client.publish_event(
             event=VirtualDesktopEvent(
-                event_group_id=f'{hash_key}-{range_key}',
+                event_group_id=self.event_group_id(hash_key, range_key),
                 event_type=VirtualDesktopEventType.DB_ENTRY_UPDATED_EVENT,
                 detail={
                     'hash_key': hash_key,

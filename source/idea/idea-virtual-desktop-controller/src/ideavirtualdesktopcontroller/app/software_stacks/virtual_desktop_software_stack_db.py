@@ -557,11 +557,13 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         self, software_stack: VirtualDesktopSoftwareStack
     ) -> Dict:
         index_dict = self.convert_software_stack_object_to_db_dict(software_stack)
-        # an index update merges into the stored document: a cleared date must be sent as
-        # null, or the old one stays and every listing keeps warning about it
+        # an index update merges into the stored document: a cleared date or owner must be
+        # sent as null, or the old one stays in every listing. the table stores a cleared
+        # owner as an empty string, which reads back as no owner
         index_dict.setdefault(
             software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None
         )
+        index_dict.setdefault(software_stacks_constants.SOFTWARE_STACK_DB_OWNER_KEY, None)
 
         project_ids = Utils.get_value_as_list(
             software_stacks_constants.SOFTWARE_STACK_DB_PROJECTS_KEY, index_dict, []
@@ -832,9 +834,15 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         return self.convert_db_dict_to_software_stack_object(new_entry)
 
     def update(
-        self, software_stack: VirtualDesktopSoftwareStack
+        self,
+        software_stack: VirtualDesktopSoftwareStack,
+        clear_expires_on: bool = False,
     ) -> VirtualDesktopSoftwareStack:
+        """clear_expires_on removes the date in this same write. A second write would send
+        a second index update, and the two can land in either order."""
         db_entry = self.convert_software_stack_object_to_db_dict(software_stack)
+        if clear_expires_on:
+            db_entry.pop(software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None)
         db_entry[software_stacks_constants.SOFTWARE_STACK_DB_UPDATED_ON_KEY] = (
             Utils.current_time_ms()
         )
@@ -853,6 +861,13 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
             expression_attr_names[f'#{key}'] = key
             expression_attr_values[f':{key}'] = value
 
+        update_expression = 'SET ' + ', '.join(update_expression_tokens)
+        if clear_expires_on:
+            update_expression += ' REMOVE #expires_on'
+            expression_attr_names['#expires_on'] = (
+                software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY
+            )
+
         result = self._table.update_item(
             Key={
                 software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY: db_entry[
@@ -862,7 +877,7 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
                     software_stacks_constants.SOFTWARE_STACK_DB_RANGE_KEY
                 ],
             },
-            UpdateExpression='SET ' + ', '.join(update_expression_tokens),
+            UpdateExpression=update_expression,
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
             ReturnValues='ALL_OLD',
@@ -872,6 +887,10 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         # SET leaves attributes the caller did not send, such as a date set since it read
         # the stack: report the row as it now is, or the index is told that date is gone
         new_db_entry = {**old_db_entry, **db_entry}
+        if clear_expires_on:
+            new_db_entry.pop(
+                software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None
+            )
         self.trigger_update_event(
             db_entry[software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY],
             db_entry[software_stacks_constants.SOFTWARE_STACK_DB_RANGE_KEY],
