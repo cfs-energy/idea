@@ -362,7 +362,8 @@ class SshdHealthCheckLines(unittest.TestCase):
     """health-check connections never leave the container; every other sshd line does"""
 
     DROPPED = [
-        # the task's ssh-keyscan check
+        # the task's own checks, which read the banner and close (9.9), and a key scan
+        'Connection closed by 127.0.0.1 port 41022',
         'Connection closed by 127.0.0.1 port 41022 [preauth]',
         # the load balancer's TCP check, from its private addresses
         'Connection closed by 10.7.0.48 port 3151',
@@ -383,7 +384,7 @@ class SshdHealthCheckLines(unittest.TestCase):
         # a close from a public address is not the load balancer
         'Connection closed by 23.23.20.238 port 54871',
         'Connection closed by 172.32.0.1 port 22',
-        'Connection closed by 127.0.0.1 port 41022',
+        'Connection reset by 127.0.0.1 port 41022 [preauth]',
         'error: kex_exchange_identification: Connection closed by remote host',
         'Server listening on 0.0.0.0 port 22.',
     ]
@@ -423,6 +424,77 @@ class SshdHealthCheckLines(unittest.TestCase):
     def test_sshd_logs_through_the_filter(self):
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
         self.assertIn('/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &\nsshd_pid=$!', text)
+
+
+class HealthCheck(unittest.TestCase):
+    """bastion_health.sh: one connection, the banner read and nothing sent, every refusal noted"""
+
+    def check(self, answer):
+        import socket
+        import threading
+
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(8)
+        listener.settimeout(0.1)
+        accepted = []
+        done = threading.Event()
+
+        def serve():
+            while not done.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except socket.timeout:
+                    continue
+                with connection:
+                    connection.settimeout(5)
+                    connection.sendall(answer)
+                    # what the check sent before it closed
+                    received = b''
+                    try:
+                        while chunk := connection.recv(4096):
+                            received += chunk
+                    except OSError:
+                        pass
+                    accepted.append(received)
+
+        worker = threading.Thread(target=serve)
+        worker.start()
+        with tempfile.TemporaryDirectory() as folder:
+            drops = Path(folder) / 'drops'
+            drops.write_bytes(b'')
+            code = subprocess.run(
+                [
+                    'bash',
+                    str(
+                        ROOT
+                        / 'deployment/ecr/idea-control-plane/roles/bastion_health.sh'
+                    ),
+                    str(listener.getsockname()[1]),
+                ],
+                env={**__import__('os').environ, 'SSHD_DROPS_FILE': str(drops)},
+                capture_output=True,
+                timeout=20,
+            ).returncode
+            done.set()
+            worker.join()
+            listener.close()
+            return code, accepted, drops.read_bytes()
+
+    def test_a_refused_check_is_one_connection_noted_once(self):
+        # a second, unnoted connection would be one more drop in sshd's totals, counted as remote
+        self.assertEqual(
+            self.check(b'Not allowed at this time\r\n'),
+            (0, [b''], b'loopback check refused\n'),
+        )
+
+    def test_a_serving_sshd_is_one_connection_left_with_nothing_unread(self):
+        # nothing sent: sshd's answer to an identification would be unread at the close, which
+        # makes it a reset sshd logs on 10.5
+        self.assertEqual(self.check(b'SSH-2.0-OpenSSH_9.9\r\n'), (0, [b''], b''))
+
+    def test_anything_else_is_unhealthy(self):
+        self.assertEqual(self.check(b'\r\n')[::2], (1, b''))
 
 
 class BastionMetrics(unittest.TestCase):
@@ -534,12 +606,18 @@ class BastionMetrics(unittest.TestCase):
             for line in script.splitlines()
             if line.startswith('SSHD_DROP_LINES=')
         )
-        kept = subprocess.run(
-            ['grep', '-oE', patterns],
-            input=''.join(line + '\r\n' for line in lines),
-            capture_output=True,
-            text=True,
-        ).stdout
+        # what the checks note goes to the tally directly, in order with sshd's lines
+        kept = ''.join(
+            line + '\n'
+            if line == 'loopback check refused'
+            else subprocess.run(
+                ['grep', '-oE', patterns],
+                input=line + '\r\n',
+                capture_output=True,
+                text=True,
+            ).stdout
+            for line in lines
+        )
         for address in ('131.0.2.9', '10.0.0.1'):
             self.assertNotIn(address, kept)
         with tempfile.NamedTemporaryFile('ab') as drops:
@@ -599,13 +677,77 @@ class BastionMetrics(unittest.TestCase):
             )
 
     def test_10_5_drops_it_does_not_name_are_counted(self):
+        # sshd 10.5's own summary line: its first word is not one more named drop
         self.assertEqual(
             self.tally_of(
                 'drop connection #50 from [131.0.2.9]:5 on [10.0.0.1]:22 Maxstartups',
-                'MaxStartups logging rate-limited: additional 9 connections dropped',
+                'Maxstartups logging rate-limited: additional 9 connections dropped',
             ),
             {('maxstartups', 'remote'): 10},
         )
+
+    def test_10_5_checks_refusals_it_does_not_name_are_not_remote(self):
+        # a local 10.5 run, slots held, five checks, a minute, two checks: sshd named six of the
+        # seven refusals and counted the seventh in the summary that the next drop set off
+        named = (
+            'drop connection #2 from [127.0.0.1]:{} on [127.0.0.1]:52737 Maxstartups'
+        )
+        refused = 'loopback check refused'
+        lines = []
+        for port in (52767, 52768, 52769, 52770):
+            lines += [named.format(port), refused]
+        lines += [refused, named.format(52861)]
+        lines += [
+            'Maxstartups logging rate-limited: additional 1 connections dropped',
+            refused,
+            named.format(52862),
+            refused,
+        ]
+        self.assertEqual(self.tally_of(*lines), {('maxstartups', 'loopback'): 7})
+
+    def test_10_5_remote_drops_in_a_summary_are_counted_without_the_checks(self):
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+
+            def read(*lines):
+                drops.write(b''.join(line + b'\n' for line in lines))
+                drops.flush()
+                return tally.read()
+
+            # a check refused unnamed, then the summary: one of its three was the check's
+            self.assertEqual(
+                read(
+                    b'Maxstartups',
+                    b'loopback check refused',
+                    b'Maxstartups logging rate-limited: additional 3 connections dropped',
+                ),
+                {('maxstartups', 'remote'): 3, ('maxstartups', 'loopback'): 1},
+            )
+            # a check refused unnamed, its summary not yet logged: nothing remote yet
+            self.assertEqual(
+                read(b'loopback check refused'), {('maxstartups', 'loopback'): 1}
+            )
+            self.assertEqual(
+                read(
+                    b'Maxstartups logging rate-limited: additional 4 connections dropped'
+                ),
+                {('maxstartups', 'remote'): 3},
+            )
+
+    def test_a_check_named_before_it_notes_its_refusal_is_not_remote(self):
+        # sshd names the drop before the check reads the refusal and notes it, so a read can
+        # fall in between
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+            for line in (
+                b'from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups',
+                b'loopback check refused',
+            ):
+                drops.write(line + b'\n')
+                drops.flush()
+                self.assertNotIn(('maxstartups', 'remote'), tally.read())
 
     def test_sshd_naming_a_loopback_drop_does_not_count_the_check_twice(self):
         # real lines: from idea-com's bastion on the image's 9.9, and a local run of 10.5; the
@@ -655,6 +797,31 @@ class BastionMetrics(unittest.TestCase):
             self.assertEqual(
                 metrics.DropTally(drops.name).read(), {('maxstartups', 'loopback'): 1}
             )
+
+    def test_sshd_check_sends_nothing_before_it_closes(self):
+        # sshd's answer to an identification would be unread at the close, a reset sshd logs
+        import socket
+        import threading
+
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        received = []
+
+        def serve():
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                connection.sendall(b'SSH-2.0-OpenSSH_9.9\r\n')
+                received.append(connection.recv(4096))
+
+        worker = threading.Thread(target=serve)
+        worker.start()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            up, _ = self.module().sshd_check(listener.getsockname(), drops.name)
+        worker.join()
+        listener.close()
+        self.assertEqual((up, received), (True, [b'']))
 
     def test_no_line_carries_a_hostname_derived_tag(self):
         metrics = self.module()
@@ -790,36 +957,44 @@ class RealSshd(unittest.TestCase):
         import socket
         import time
 
+        metrics = load(
+            'bastion_metrics',
+            'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
+        )
         self.assertEqual(self.health(), 0)
+        up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
+        self.assertTrue(up)
+        time.sleep(0.5)
         held = [socket.create_connection(('127.0.0.1', self.port), 5) for _ in range(2)]
         try:
             for connection in held:
                 connection.settimeout(5)
                 self.assertTrue(connection.recv(64).startswith(b'SSH-'))
-            # positive control: sshd really refuses the old check now
+            # positive control: sshd really refuses the old check now; noted as the checks
+            # note theirs, as sshd counts it
             self.assertNotEqual(self.keyscan(), 0)
+            with open(self.drops, 'ab') as drops:
+                drops.write(b'loopback check refused\n')
             for _ in range(3):
                 self.assertEqual(self.health(), 0)
-            metrics = load(
-                'bastion_metrics',
-                'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
-            )
             up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
             self.assertFalse(up)
         finally:
             for connection in held:
                 connection.close()
         time.sleep(0.5)
-        tally = metrics.DropTally(str(self.drops)).read()
-        self.assertEqual(tally[('maxstartups', 'loopback')], 4)
+        tally = metrics.DropTally(str(self.drops))
+        self.assertEqual(tally.read(), {('maxstartups', 'loopback'): 5})
         self.assertEqual(self.health(), 0)
         self.stop()
         self.assertNotEqual(self.health(), 0)
         up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
         self.assertFalse(up)
+        # whatever sshd counted on the way out (9.9's episode summary) is the checks' own
+        self.assertNotIn(('maxstartups', 'remote'), tally.read())
         # every check's close was CR LF terminated and none reached the log
         log = self.stderr.read_bytes()
-        self.assertNotIn(b'Connection closed by 127.0.0.1', log)
+        self.assertNotIn(b'by 127.0.0.1 port', log)
         self.assertIn(b'Maxstartups\r\n', log)
 
 

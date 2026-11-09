@@ -535,7 +535,7 @@ export function applicationContainerSettings(role: ContainerRole, brokerPorts = 
       // The gateway exposes a dedicated TCP readiness listener, not an HTTP endpoint.
       ? "timeout 4 bash -c '</dev/tcp/127.0.0.1/8989'"
       : role === "bastion-host"
-        // ssh-keyscan, and a sshd that refuses a connection under MaxStartups still counts as up
+        // sshd's banner on one connection; a sshd that refuses it under MaxStartups still counts as up
         ? "/opt/idea/roles/bastion_health.sh"
         : http("https://localhost:8443/healthcheck");
   return {

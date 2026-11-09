@@ -42,7 +42,7 @@ MaxStartups 50:30:200
 PerSourceNetBlockSize 32:128
 PerSourcePenalties authfail:2s min:30s max:10m
 EOF
-# Never penalize the task's own ssh-keyscan check, the load balancer's TCP checks (from its
+# Never penalize the task's own health checks, the load balancer's TCP checks (from its
 # private addresses) or the browser terminals (from the cluster manager): loopback and the VPC.
 # Nor the SSH allowlist (ssh_client_ip): an office reaches the bastion through one NAT address,
 # and a penalty there would refuse every user in it. An entry wider than /8 stays penalized: no
@@ -141,7 +141,9 @@ sssd_pid=$!
 # Health checks connect to sshd without logging in and sshd reports each one on stderr, which
 # the log shipper files as an error: about 1.2M lines a week, every error IDEA logged. Two shapes
 # are dropped before they leave the container, and nothing else:
-#   the task's ssh-keyscan on 127.0.0.1, which closes after the key exchange:
+#   the task's own checks on 127.0.0.1 (bastion_health.sh and the metrics process), which read
+#     the banner and close, and any other loopback client that leaves before authenticating:
+#     Connection closed by 127.0.0.1 port N
 #     Connection closed by 127.0.0.1 port N [preauth]
 #   the load balancer's TCP check from its private addresses, which closes before sending an SSH
 #     identification string (no [preauth]: no session existed):
@@ -149,14 +151,15 @@ sssd_pid=$!
 # Logins, failed and invalid-user attempts, disconnects after authentication, any close from a
 # public address and every other sshd line still reach the task log.
 # sshd -e ends each line in CR LF, so the CR is allowed before the end.
-SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+ \[preauth\]|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)'$'\r''?$'
+SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[preauth\])?|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)'$'\r''?$'
 # Connections sshd dropped go to a tally for the metrics process: only the phrase, and the
 # address only when it is loopback, so the file holds nothing about anyone. tee -p and a local file: a
 # dead tally costs a count, never sshd's stderr. At its default log level sshd names only some
 # drops ("past Maxstartups" on 9.9, "Maxstartups" on 10.5) and counts the rest in a summary: 9.9
 # "in|exited MaxStartups throttling ..., N connections dropped" (the episode so far), 10.5
-# "MaxStartups logging rate-limited: additional N connections dropped".
-SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
+# "Maxstartups logging rate-limited: additional N connections dropped", matched whole so that
+# its first word is not taken for a named drop.
+SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
 sshd_log_filter() {
   tee -p >(grep --line-buffered -oE "${SSHD_DROP_LINES}" >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
     | grep --line-buffered -v -E "${SSHD_HEALTH_CHECK_LINES}" >&2 || true
