@@ -1165,6 +1165,88 @@ def test_a_folder_under_a_parent_that_can_only_be_passed_through_opens(
         service._workers.shutdown()
 
 
+def member_of(*projects):
+    """alice's account with these project groups beside her own, by gid."""
+    own = account_context().accounts.get_user('alice')
+    groups = {str(gid): Group(name=str(gid), gid=gid) for gid in (own.gid, *projects)}
+
+    def get_group(name):
+        if name == 'left-long-ago':
+            raise exceptions.soca_exception(errorcodes.AUTH_GROUP_NOT_FOUND, name)
+        return groups[name]
+
+    user = User(
+        username='alice',
+        uid=own.uid,
+        gid=own.gid,
+        additional_groups=['left-long-ago', *groups],
+    )
+    return SimpleNamespace(get_user=lambda _: user, get_group=get_group)
+
+
+def test_the_pane_opens_folders_with_every_group_the_account_is_in(
+    monkeypatch, tree, tmp_path
+):
+    # what the worker asks the kernel for; the kernel's own answer is the root-only test below
+    folders = {tree: dict(self=row(tree, 900, 9), children=[], measured_at=NOW)}
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    service.context.accounts = member_of(54321, 54322)
+    own = service.context.accounts.get_user('alice')
+    asked = tmp_path / 'asked'
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(os, 'setgroups', lambda gids: asked.write_text(repr(gids)))
+    monkeypatch.setattr(os, 'setresgid', lambda *ids: None, raising=False)
+    monkeypatch.setattr(os, 'setresuid', lambda *ids: None, raising=False)
+    try:
+        assert service.get_usage('alice', study=False)['state'] == 'ready'
+        assert asked.read_text() == repr(sorted({own.gid, 54321, 54322}))
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_a_group_only_folder_is_listed_for_its_members_and_nobody_else(
+    monkeypatch, tree
+):
+    if os.geteuid() != 0:
+        pytest.skip('needs root to give a folder to a group the caller is not in')
+    project = os.path.dirname(tree) + '/projects'
+    os.makedirs(f'{project}/team/results')
+    for path in (f'{project}/team/results', f'{project}/team'):
+        os.chown(path, 0, 54321)
+        os.chmod(path, 0o770)
+    folders = {
+        project: dict(
+            self=row(project, 100, 9),
+            children=[row(f'{project}/team', 70, 7)],
+            measured_at=NOW,
+        ),
+        f'{project}/team': dict(
+            self=row(f'{project}/team', 70, 7),
+            children=[row(f'{project}/team/results', 60, 6)],
+            measured_at=NOW,
+        ),
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    try:
+        # the view is kept per person, so the member and the stranger are two people
+        service.context.accounts = member_of(54321)
+        result = service.get_usage('member', folder=project)
+        assert [item['name'] for item in result['folders']] == ['team']
+        assert 'hidden_folders' not in result
+        inside = service.get_usage('member', folder=f'{project}/team')
+        assert [item['name'] for item in inside['folders']] == ['results']
+        service.context.accounts = member_of(54322)
+        result = service.get_usage('stranger', folder=project)
+        assert result['folders'] == [] and result['hidden_folders'] == 1
+        with pytest.raises(exceptions.SocaException) as error:
+            service.get_usage('stranger', folder=f'{project}/team')
+        assert storage_usage.CANNOT_OPEN in error.value.message
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
 def test_a_truncated_folder_is_partial_with_no_direct_file_figure(monkeypatch, tree):
     folders = {
         tree: dict(
