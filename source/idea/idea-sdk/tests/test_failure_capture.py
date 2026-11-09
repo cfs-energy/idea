@@ -459,6 +459,31 @@ def test_a_bake_stopped_by_its_time_limit_is_counted_as_one_when_the_host_says_n
     assert h.metrics[0][1]['reason'] == 'kernel_panic'
 
 
+def test_a_builder_that_never_reported_is_counted_as_a_step_timeout(monkeypatch):
+    """with the default limit the builder's own 60 minute wait fails first, not the limit"""
+    from ideadatamodel import ImageBuildRecord, ImageKind
+    from ideasdk.aws.image_builds import capture_builder_failure
+
+    def captured(console):
+        h = Harness(FakeEc2(console))
+        monkeypatch.setattr(
+            module.HealthMetrics,
+            'add',
+            lambda _, name, value=1, **tags: h.metrics.append((name, tags)),
+        )
+        record = ImageBuildRecord(
+            base_os='rocky8', architecture='arm64', status='building', instance_id='i-1'
+        )
+        reason = 'builder i-1 did not report ready within 60 minutes'
+        capture_builder_failure(h.context, h.logger, ImageKind.DESKTOP, record, reason)
+        return h
+
+    assert captured(HEALTHY_BOOT).metrics[0][1]['reason'] == 'step_timeout'
+    # what the host did say outranks it
+    panic = captured('Kernel panic - not syncing: Fatal exception')
+    assert panic.metrics[0][1]['reason'] == 'kernel_panic'
+
+
 def test_a_hung_read_still_counts_the_callers_reason(monkeypatch):
     block = threading.Event()
     monkeypatch.setattr(module, 'TIME_LIMIT_SECONDS', 0.1)

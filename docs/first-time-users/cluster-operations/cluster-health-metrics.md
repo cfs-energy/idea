@@ -84,7 +84,7 @@ secd event counts need a cluster-level login. ONTAP keeps the event log at clust
 | `idea.health.bake.row_state` | `kind`, `os`, `arch`, `variant`, `status` | 1 for the state each row is in, every five minutes and at once on a failure. A state it left reads 0 once. |
 | `idea.health.bake.row_on_release` | `kind`, `os`, `arch`, `variant` | 1 when the row is `current` on the running release. Pinned and unsupported rows are left out. |
 | `idea.health.bake.rows_behind_release` | `kind` | How many rows are not. Rows in flight count, so it stays above 0 for the length of the bakes after an upgrade. |
-| `idea.health.bake.failures` | `kind`, `os`, `arch`, `variant`, `reason` | Each failure that logs `IDEA_IMAGE_BAKE_FAILED`, sent as it happens: in Datadog within a minute or two. `reason`: `time_limit`, `capacity`, `check_<name>`, `checks_unreadable`, `ready_gate`, `canary`, `release_mismatch`, `no_source_image`, `no_base_stack`, `image_unavailable`, `other`. |
+| `idea.health.bake.failures` | `kind`, `os`, `arch`, `variant`, `reason` | Each failure that logs `IDEA_IMAGE_BAKE_FAILED`, sent as it happens: in Datadog within a minute or two. `reason`: `time_limit`, `step_timeout` (one step's own wait ran out first, such as a builder that never reported ready within 60 minutes), `capacity`, `check_<name>`, `checks_unreadable`, `ready_gate`, `canary`, `release_mismatch`, `no_source_image`, `no_base_stack`, `image_unavailable`, `other`. |
 | `idea.health.bake.last_duration_seconds` | `kind`, `os`, `arch`, `variant` | The row's last attempt. |
 | `idea.health.bake.image_age_days` | `kind`, `os`, `arch`, `variant` | Age of the image the row launches. |
 

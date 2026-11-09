@@ -293,6 +293,14 @@ def report_bake_failure(
 # what a bake failure's text says, as a tag. each row's error is a sentence built from these.
 _BAKE_REASONS = (
     (BAKE_TIME_LIMIT_TEXT, 'time_limit'),
+    # one step's own wait ran out before the bake's limit: a hung builder, with the defaults
+    (
+        re.compile(
+            r'did not report ready within|was not available within'
+            r'|did not stop (?:after sysprep )?within|in-bake checks timed out'
+        ),
+        'step_timeout',
+    ),
     (re.compile(r'capacity', re.I), 'capacity'),
     (re.compile(r'in-bake check results unreadable'), 'checks_unreadable'),
     (re.compile(r'in-bake check (\w+)'), None),
@@ -303,6 +311,10 @@ _BAKE_REASONS = (
     (re.compile(r'no ss-base stack'), 'no_base_stack'),
     (re.compile(r'candidate image'), 'image_unavailable'),
 )
+
+
+# the host's console may say nothing of these: the capture then carries the bake's own reason
+TIMEOUT_REASONS = ('time_limit', 'step_timeout')
 
 
 def classify_bake_failure(reason: Optional[str]) -> str:
@@ -392,6 +404,7 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
         ImageRowStatus.CHECKING.value,
     ):
         return None
+    bake_reason = classify_bake_failure(reason)
     return capture_failure(
         context,
         logger,
@@ -406,9 +419,7 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
             release=record.release,
             log_group=f'/{context.cluster_name()}/{context.module_id()}/ami-builder',
             log_stream=f'bootstrap_{record.instance_id}',
-            fallback_reason=(
-                'time_limit' if classify_bake_failure(reason) == 'time_limit' else None
-            ),
+            fallback_reason=bake_reason if bake_reason in TIMEOUT_REASONS else None,
         ),
     )
 

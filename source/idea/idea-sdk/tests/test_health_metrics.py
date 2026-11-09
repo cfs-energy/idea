@@ -355,6 +355,11 @@ def test_bake_failure_reasons_are_a_small_vocabulary():
         ('ready_gate: not READY in 600s', 'ready_gate'),
         ('the canary failed', 'canary'),
         ('the builder ran the 1 bootstrap, not 2', 'release_mismatch'),
+        ('builder i-0 did not report ready within 60 minutes', 'step_timeout'),
+        ('image ami-0 was not available within 60 minutes', 'step_timeout'),
+        ('builder i-0 did not stop within 10 minutes', 'step_timeout'),
+        ('builder i-0 did not stop after sysprep within 30 minutes', 'step_timeout'),
+        ('Reading compute in-bake checks timed out.', 'step_timeout'),
         ('something new with i-0abc in it', 'other'),
         (None, 'other'),
     ):
