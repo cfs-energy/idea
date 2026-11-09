@@ -675,3 +675,33 @@ def test_serialized_hooks_recover_duration_without_pbs_history(
             assert PricingSpy.calls == []
     finally:
         cache.stop()
+
+
+@pytest.mark.parametrize(
+    'substate, exit_status, terminated',
+    [
+        # read from PBS history on a dev cluster: a running job qdel'd with no trap exits 0
+        (91, 0, True),
+        (91, 265, True),
+        (92, 0, False),
+        (93, 3, False),
+    ],
+)
+def test_pbs_history_says_whether_qdel_ended_the_job(
+    context, substate, exit_status, terminated
+):
+    pbs_job = build_pbs_job(
+        substate=substate,
+        Exit_status=exit_status,
+        comment='an error message can stand in for the PBS comment',
+    )
+
+    job = pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+
+    assert job.terminated is terminated
+
+
+def test_a_job_pbs_has_not_finished_says_nothing_about_qdel(context):
+    pbs_job = build_pbs_job(job_state='R', substate=42)
+
+    assert pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE).terminated is None

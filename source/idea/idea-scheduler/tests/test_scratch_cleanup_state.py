@@ -437,11 +437,18 @@ def test_a_job_that_ran_and_exited_0_succeeded():
         {'reason_class': 'cancelled'},
         {'comment': 'Job run at Thu Jan 22 on (host) and terminated'},
         {'comment': 'Job deleted by alice'},
+        # PBS's own record of a qdel, with the comment replaced by an error message
+        {'terminated': True, 'comment': 'capacity wait'},
     ],
     ids=str,
 )
 def test_anything_not_shown_to_have_completed_normally_is_failed(fields):
     assert not _succeeded(**fields)
+
+
+def test_pbs_history_outranks_the_comment_text():
+    """the comment can be an error message from an earlier wait, which says nothing of the end"""
+    assert _succeeded(terminated=False, comment='spot instance terminated, retrying')
 
 
 def test_an_old_record_with_no_disposition_is_on_the_failed_path():

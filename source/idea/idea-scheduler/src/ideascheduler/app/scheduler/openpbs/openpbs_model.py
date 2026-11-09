@@ -28,6 +28,7 @@ from ideasdk.utils import Utils
 
 from ideascheduler.app.scheduler import SocaJobBuilder
 
+from ideascheduler.app.scheduler.openpbs import openpbs_constants
 from ideascheduler.app.scheduler.pbs_select import select_chunks, chunk_resources
 
 from typing import Optional, Union, Dict, List
@@ -514,6 +515,10 @@ class OpenPBSJob(SocaBaseModel):
 
         # exit status
         exit_status = self.Exit_status
+        # a job qdel ended can still exit 0; only a finished job's substate says so
+        terminated = None
+        if state == SocaJobState.FINISHED and self.substate is not None:
+            terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
 
         params = self.get_soca_job_params()
         execution_hosts = self.get_soca_execution_hosts(event=event)
@@ -606,6 +611,7 @@ class OpenPBSJob(SocaBaseModel):
             owner=owner,
             state=state,
             exit_status=exit_status,
+            terminated=terminated,
             provisioned=provisioned,
             queue_time=queue_time,
             start_time=start_time,

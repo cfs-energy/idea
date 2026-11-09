@@ -694,6 +694,8 @@ class SocaJob(SocaBaseModel):
     owner_email: Optional[str] = Field(default=None)
     state: Optional[SocaJobState] = Field(default=None)
     exit_status: Optional[int] = Field(default=None, strict=False)
+    # PBS ended it with qdel (history substate 91); None when PBS has not said
+    terminated: Optional[bool] = Field(default=None)
     provisioned: Optional[bool] = Field(default=None)
     error_message: Optional[str] = Field(default=None)
     status_reason: Optional[str] = Field(default=None)

@@ -243,8 +243,18 @@ def job_succeeded(job: SocaJob) -> bool:
         and job.exit_status == 0
         and job.disposition == 'ran'
         and job.reason_class != 'cancelled'
-        and not _STOPPED_COMMENT.search(job.comment or '')
+        and not _stopped(job)
     )
+
+
+def _stopped(job: SocaJob) -> bool:
+    """
+    PBS's history substate says whether qdel ended the job. Records from before it was kept fall
+    back to the comment, which an error message can replace.
+    """
+    if job.terminated is not None:
+        return job.terminated
+    return bool(_STOPPED_COMMENT.search(job.comment or ''))
 
 
 def _first_run_start(job: SocaJob) -> Optional[datetime]:
