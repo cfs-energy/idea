@@ -860,7 +860,7 @@ class RealSshd(unittest.TestCase):
         import socket
         import time
 
-        sshd = '/usr/sbin/sshd'
+        sshd = self.sshd_path = '/usr/sbin/sshd'
         if not Path(sshd).exists() or not shutil.which('ssh-keyscan'):
             self.skipTest('no sshd and ssh-keyscan here')
         self.folder = Path(tempfile.mkdtemp())
@@ -966,6 +966,7 @@ class RealSshd(unittest.TestCase):
         ).returncode
 
     def test_a_full_sshd_stays_healthy_and_a_stopped_one_does_not(self):
+        import re
         import socket
         import time
 
@@ -997,6 +998,16 @@ class RealSshd(unittest.TestCase):
             # positive control: sshd really refuses the old check now; noted as the checks
             # note theirs, as sshd counts it
             self.assertNotEqual(self.keyscan(), 0)
+            # what follows reads the refusal the bastion's 9.9 sends; before 9.8 sshd answers
+            # "Exceeded MaxStartups" instead, which the check does not read as a refusal
+            version = subprocess.run(
+                [self.sshd_path, '-V'], capture_output=True, text=True
+            ).stderr
+            found = re.search(r'OpenSSH_(\d+)\.(\d+)', version)
+            if not found or tuple(map(int, found.groups())) < (9, 8):
+                self.skipTest(
+                    f'sshd refused, but not with the 9.8 and later answer: {version.strip()}'
+                )
             with open(self.drops, 'ab') as drops:
                 drops.write(b'loopback check refused\n')
             for _ in range(3):
