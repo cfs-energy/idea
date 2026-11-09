@@ -25,6 +25,7 @@ import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../..
 import {
   compareUpgradeDrift,
   isOperatorSource,
+  isTemplateDefaultKey,
   VALUES_OWNED_KEYS,
   renderUpgradeDrift,
   type CurrentConfigRow,
@@ -872,6 +873,10 @@ async function planOpenSearchDataNodeInstanceType(
  * The cost collector's interval moves from the old default to the new one only when the row still
  * holds the old default and the operator did not write it. Any other value, a row the operator
  * set, or no row at all is left alone; a second upgrade finds 24 and plans nothing.
+ *
+ * `config update` at install stamps every row it writes `cli` at version 1, so such a row holding
+ * the old default is the template's, not a choice. Every later write raises the version, so a row
+ * an operator set with `config set` or the portal, even back to the old default, stays.
  */
 export function planCostIntervalDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
   return planCostSettingDefault(modules, settings, "interval_hours", COST_INTERVAL_HOURS_OLD, COST_INTERVAL_HOURS);
@@ -892,7 +897,9 @@ function planCostSettingDefault(
   return modules.filter((module) => module.name === "cluster-manager").flatMap((module) => {
     const key = `${module.module_id}.metrics.cost.${name}`;
     const row = settings.find((entry) => entry.key === key);
-    if (row === undefined || row.value !== oldDefault || isOperatorSource(row.source)) return [];
+    if (row === undefined || row.value !== oldDefault) return [];
+    const installed = row.source === "cli" && row.version === 1;
+    if (isOperatorSource(row.source) && !installed) return [];
     return [{ key, value: newDefault }];
   });
 }
@@ -1191,7 +1198,9 @@ async function applyPhase3Entries(
 ): Promise<void> {
   const previous = new Map(current.map((entry) => [entry.key, entry.value]));
   for (const entry of entries) {
-    await writer.setConfigEntry(entry.key, entry.value);
+    // A move to the new template default is the template's value: stamped cli, the row would read
+    // as an operator's from then on, and the template refresh and later default moves would skip it.
+    await writer.setConfigEntry(entry.key, entry.value, isTemplateDefaultKey(entry.key) ? "template" : "cli");
     if (entry.key === "ecs.image") {
       out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; every task rolls to the release image`);
     } else if (entry.key === "metrics.provider") {
@@ -1653,7 +1662,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
           for (const entry of entries) if (overwrite || !expected.has(entry.key)) expected.set(entry.key, entry.value);
           await writer.syncClusterSettingsInDb(entries, overwrite, source);
         },
-        async setConfigEntry(key, value) { expected.set(key, value); await writer.setConfigEntry(key, value); },
+        async setConfigEntry(key, value, source) { expected.set(key, value); await writer.setConfigEntry(key, value, source); },
         async deleteConfigEntries(prefix) {
           for (const key of expected.keys()) if (key.startsWith(prefix)) expected.delete(key);
           await writer.deleteConfigEntries(prefix);

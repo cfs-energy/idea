@@ -930,7 +930,9 @@ def test_custom_period_retains_stored_spend_and_explains_unstored_dates(start, m
     )
     exported = list(csv.DictReader(io.StringIO(result.content.lstrip('\ufeff'))))[0]
     assert Decimal(exported['Job spend']) == row['spend_by_facet']['jobs']
-    assert exported['Complete'].startswith('Partial')
+    # calendar days of the period, not one count per facet added up
+    assert exported['Complete'] == f'Partial: missing at least {missing} days'
+    assert row['coverage']['spend_total']['missing_days'] == missing
 
 
 def test_saturated_report_workers_fail_busy_and_recover():
@@ -1642,6 +1644,46 @@ def test_period_bounded_read_gives_the_same_insights_as_the_full_read(monkeypatc
     first, second = (result.model_dump(exclude={'updated_at'}) for result in results)
     assert second == first
     assert results[0].desktops.hours and results[0].desktops.idle_hours
+
+
+WRONG_PERIOD_FILTERS = {
+    'no documents': lambda selected, scope: {'bool': {'must_not': [{'match_all': {}}]}},
+    'the month before': lambda selected, scope: ReportingSources.desktop_period_query(
+        period('2024-01-01', '2024-01-31'), scope
+    ),
+}
+
+
+@pytest.mark.parametrize('wrong', sorted(WRONG_PERIOD_FILTERS))
+def test_a_wrong_period_filter_changes_the_report_and_insights(monkeypatch, wrong):
+    """the control for the two tests above: their equality can fail"""
+    from ideaclustermanager.app.reporting.insights_service import InsightsService
+    from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+
+    monkeypatch.setattr(MyCostsService, '_ondemand_price', lambda self, kind: 0.1)
+    monkeypatch.setattr(
+        MyCostsService, '_prefetch_running_hours', lambda self, *args: None
+    )
+    docs, history, heads = period_fixture()
+
+    def both(unfiltered):
+        report = built(read_report(docs, unfiltered, history, heads)[0])
+        data, _, _, context = read_report(docs, unfiltered, history, heads, {}, True)
+        insights = InsightsService(context, Mock()).build(
+            data, period(), 'USD', 'UTC', time.monotonic() + 30, None
+        )
+        return report, insights.model_dump(exclude={'updated_at'})
+
+    full = both(True)
+    assert both(False) == full
+    monkeypatch.setattr(
+        ReportingSources,
+        'desktop_period_query',
+        staticmethod(WRONG_PERIOD_FILTERS[wrong]),
+    )
+    report, insights = both(False)
+    assert report != full[0]
+    assert insights != full[1]
 
 
 def test_heads_scan_until_the_index_is_seeded_then_never():

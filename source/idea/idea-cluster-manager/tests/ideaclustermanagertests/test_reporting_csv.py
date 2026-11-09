@@ -215,5 +215,19 @@ def test_csv_says_in_words_whether_a_row_is_complete():
     assert completeness({'jobs': {'status': 'partial'}}) == 'Partial'
     assert (
         completeness({'jobs': {'status': 'partial', 'missing_days': 12}})
-        == 'Partial: missing 12 days'
+        == 'Partial: missing at least 12 days'
+    )
+    # AI misses days 1-5 and jobs days 20-25: 11 days, but only the counts are kept
+    assert (
+        completeness(
+            {
+                'ai': {'status': 'partial', 'missing_days': 5},
+                'jobs': {'status': 'partial', 'missing_days': 6},
+            }
+        )
+        == 'Partial: missing at least 6 days'
+    )
+    assert (
+        completeness({'jobs': {'status': 'partial', 'missing_days': 1}})
+        == 'Partial: missing at least 1 day'
     )

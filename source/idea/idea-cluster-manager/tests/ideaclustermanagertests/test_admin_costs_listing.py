@@ -700,7 +700,9 @@ def test_a_long_seed_does_not_read_as_a_stalled_collector(monkeypatch):
     docs, history = world()
     context, store, _, _ = build(monkeypatch, docs, history)
     store.table.delete_item(Key=dict(subject=SYSTEM, record=HEAD_SUBJECTS_SEEDED))
-    moments = [NOW.shift(seconds=140 * step) for step in range(1, 9)]
+    # dev's real runs take 22-34 s; the seed spends up to its budget on top of that
+    store.put(SYSTEM, 'state', {'last_duration': 30})
+    moments = [NOW.shift(seconds=14 * step) for step in range(1, 9)]
     seen = []
     real_scan_pages = {segment: [[f's{segment}']] for segment in range(8)}
     calls = seeding_table(store, real_scan_pages)
@@ -726,6 +728,67 @@ def test_a_long_seed_does_not_read_as_a_stalled_collector(monkeypatch):
     worker.calculator.month.return_value = month(NOW.floor('month'), NOW, 0.25)
     worker.check()
     assert len(seen) == 8 and not any(seen)
+    assert 'seeding_since' not in store.get(SYSTEM, 'state')
+
+
+def test_a_seed_stuck_past_its_budget_reads_as_overdue(monkeypatch):
+    docs, history = world()
+    _, store, _, _ = build(monkeypatch, docs, history)
+    started = NOW.shift(minutes=-10).isoformat()
+    store.put(SYSTEM, 'heartbeat', {'as_of': NOW.isoformat()})
+    state = {'run_started': started, 'seeding_since': started, 'last_duration': 30}
+    store.put(SYSTEM, 'state', state)
+    assert store.collecting().collecting_delayed
+    recent = NOW.shift(seconds=-60).isoformat()
+    store.put(SYSTEM, 'state', dict(state, run_started=recent, seeding_since=recent))
+    assert not store.collecting().collecting_delayed, 'a seed inside its budget is work'
+
+
+def test_a_finished_seed_counts_in_full_past_its_budget(monkeypatch):
+    # the seed checks its budget before each page, so the last page can end past it
+    docs, history = world()
+    _, store, _, _ = build(monkeypatch, docs, history)
+    store.put(SYSTEM, 'heartbeat', {'as_of': NOW.isoformat()})
+    started = NOW.shift(seconds=-(30 + 123)).isoformat()
+    state = {'run_started': started, 'seed_seconds': 125, 'last_duration': 30}
+    store.put(SYSTEM, 'state', state)
+    assert not store.collecting().collecting_delayed
+    store.put(SYSTEM, 'state', dict(state, seed_seconds=20))
+    assert store.collecting().collecting_delayed, (
+        'control: a short seed leaves it overdue'
+    )
+
+
+def test_a_seed_mark_left_by_a_dead_leader_is_cleared_by_the_next_run(monkeypatch):
+    # the leader died after the seed was marked done but before it cleared seeding_since;
+    # the seed never runs again, so only a run start can drop the mark
+    docs, history = world()
+    context, store, _, _ = build(monkeypatch, docs, history)
+    assert store.get(SYSTEM, HEAD_SUBJECTS_SEEDED)
+    stale = NOW.shift(days=-3).isoformat()
+    store.put(SYSTEM, 'state', {'seeding_since': stale, 'last_duration': 30})
+    context.accounts = SimpleNamespace(
+        list_users=lambda request: SimpleNamespace(
+            listing=[SimpleNamespace(username='settled-user')], paginator=None
+        )
+    )
+    context.is_leader = lambda: True
+    context.distributed_lock = lambda: Mock(spec=['acquire', 'release', 'assert_held'])
+    worker = PersonalCostsCollector(context, store, Mock())
+    worker.activity.capture = lambda *args: None
+    worker._startup = True
+    marks = []
+    collect = worker._collect
+
+    def watch(*args):
+        marks.append(store.get(SYSTEM, 'state').get('seeding_since'))
+        return collect(*args)
+
+    worker._collect = watch
+    worker.calculator.month.return_value = month(NOW.floor('month'), NOW, 0.25)
+    worker.check()
+    assert marks == [None], 'the run carried the dead seed into its estimate'
+    assert 'seeding_since' not in store.get(SYSTEM, 'state')
 
 
 def test_a_failed_history_read_never_stores_a_complete_zero(monkeypatch):

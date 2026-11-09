@@ -38,7 +38,9 @@ def completeness(coverage) -> str:
             missing = max(missing, value.get('missing_days') or 0)
             partial = partial or value.get('status') in ('partial', 'unavailable')
     if missing:
-        return f'Partial: missing {missing} days'
+        # facets and users can miss different days, and only their counts are kept: the
+        # largest is a floor, the true number is their union
+        return f'Partial: missing at least {missing} day{"" if missing == 1 else "s"}'
     return 'Partial' if partial else 'Complete'
 
 

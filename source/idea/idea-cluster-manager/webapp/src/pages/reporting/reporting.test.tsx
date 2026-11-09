@@ -138,6 +138,8 @@ describe('report views', () => {
         const result = summary();
         result.tiles.total = {...row('total'), spend_total: total, spend_by_facet: {jobs: '101', desktops: '202', desktop_disks: '3', shared_storage: '4', ai: '5'}};
         result.coverage.ai = {...coverage('partial'), missing_days: 2};
+        // a combined total keeps only the largest of its parts' counts, a floor
+        result.tiles.total.coverage.spend_total = {...coverage('partial'), missing_days: 3};
         open('/reporting', result);
         await screen.findByText(`$${total}`);
         for (const [title, value] of [['Job spend', '$101.00'], ['Desktop spend', '$202.00'], ['Desktop disk spend', '$3.00'], ['Storage spend', '$4.00'], ['AI spend', '$5.00']]) {
@@ -151,7 +153,8 @@ describe('report views', () => {
         await userEvent.click(screen.getByRole('button', {name: 'About Total spend'}));
         expect(screen.getByText(/All recorded costs for this period: jobs, desktops, desktop disks, storage and AI\./)).toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'About AI spend'}));
-        expect(screen.getByText(/Missing 2 days and 0 records\./)).toBeInTheDocument();
+        expect(screen.getByText(/Missing at least 2 days and 0 records\./)).toBeInTheDocument();
+        expect(screen.getByText('At least 3 days are missing, so this may be higher.')).toBeInTheDocument();
     });
     it('hides zero and missing spend facets, retains negative costs and keeps a zero total', async () => {
         const result = summary();

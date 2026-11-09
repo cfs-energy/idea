@@ -89,10 +89,12 @@ def combine(values, reason=''):
         else None,
         available_start=min(starts) if starts else None,
         available_end=max(ends) if ends else None,
+        # every value covers the same period, so its missing days are the same calendar
+        # days, not a count to add up across facets or users
+        missing_days=max(v.get('missing_days', 0) for v in values),
         **{
             key: sum(v.get(key, 0) for v in values)
             for key in (
-                'missing_days',
                 'missing_records',
                 'eligible_count',
                 'total_count',

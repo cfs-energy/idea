@@ -37,7 +37,11 @@ from ideaclustermanager.app.costs.my_costs_service import (
     LIVE_SESSION_STATES,
     MyCostsService,
 )
-from ideaclustermanager.app.costs.personal_costs_store import SYSTEM, window_storage
+from ideaclustermanager.app.costs.personal_costs_store import (
+    HEAD_SUBJECTS_SEEDED,
+    SYSTEM,
+    window_storage,
+)
 from ideaclustermanager.app.costs.desktop_activity import DesktopActivity
 from ideaclustermanager.app.costs.storage_rates import daily_storage_rate
 from ideaclustermanager.app.metrics.storage_metrics_service import normalize_user
@@ -1328,6 +1332,18 @@ class PersonalCostsCollector:
         )
         return retained
 
+    def _seed(self, state):
+        state['seeding_since'] = arrow.utcnow().isoformat()
+        self.store.put(SYSTEM, 'state', state)
+        started = time.monotonic()
+        try:
+            if self.store.seed_head_subjects(on_progress=self._beat):
+                self.logger.info('Personal cost head index seeded')
+        finally:
+            state.pop('seeding_since')
+            state['seed_seconds'] = max(1, int(time.monotonic() - started))
+            self.store.put(SYSTEM, 'state', state)
+
     def _beat(self):
         # a long seed is work, not a stalled collector, and users are shown the difference
         self.store.put(SYSTEM, 'heartbeat', {'as_of': arrow.utcnow().isoformat()})
@@ -1346,6 +1362,9 @@ class PersonalCostsCollector:
         self._startup = False
         started = time.monotonic()
         state['run_started'] = now.isoformat()
+        # a leader that died mid-seed left its mark; no seed runs until this run starts one
+        state.pop('seeding_since', None)
+        state.pop('seed_seconds', None)
         state['next_run'] = now.shift(minutes=15).isoformat()
         self.store.put(SYSTEM, 'state', state)
         timezone = self.context.config().get_string('cluster.timezone', 'UTC') or 'UTC'
@@ -1360,8 +1379,8 @@ class PersonalCostsCollector:
                 for owner in MyCostsService(self.context).history_owners():
                     self.store.register_head_subject(owner)
                 state['history_owners_on'] = today
-            if self.store.seed_head_subjects(on_progress=self._beat):
-                self.logger.info('Personal cost head index seeded')
+            if not self.store.get(SYSTEM, HEAD_SUBJECTS_SEEDED):
+                self._seed(state)
         except Exception:
             # readers keep scanning until this succeeds on a later run
             self.logger.exception('Personal cost head index not seeded')
@@ -1386,6 +1405,7 @@ class PersonalCostsCollector:
             return
         state['last_duration'] = max(1, int(time.monotonic() - started))
         state.pop('run_started', None)
+        state.pop('seed_seconds', None)
         # At most half the time busy: a run longer than the period waits as long again.
         state['next_run'] = max(
             arrow.utcnow().shift(seconds=state['last_duration']), now.shift(minutes=15)
