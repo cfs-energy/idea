@@ -127,6 +127,7 @@ def test_account_deletion_removes_only_owner_tokens(env):
     account.user_dao = Mock()
     account.user_dao.get_user.return_value = {'username': 'user-a'}
     account.disable_user = Mock()
+    account._remove_deleted_user_now = Mock()
     account.user_pool = Mock()
     account.delete_group = Mock()
     account.token_service = env.service
