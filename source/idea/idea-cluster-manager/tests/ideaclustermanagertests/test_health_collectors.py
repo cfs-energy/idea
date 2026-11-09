@@ -534,6 +534,7 @@ LDAP = '/api/name-services/ldap'
 CIFS = '/api/protocols/cifs/services'
 DNS = '/api/name-services/dns'
 EMS = '/api/support/ems/events'
+SVMS = '/api/svm/svms'
 SVM = {'svm': {'name': 'TESTSVM1'}}
 
 
@@ -592,6 +593,25 @@ def test_no_cifs_record_is_not_read_as_ok():
     ) == [0]
     assert metrics.value('directory.check_ok', check='cifs_security', reason='ok') == []
     assert metrics.value('directory.check_ok', check='ldap', reason='ok') == [1]
+
+
+def test_an_svm_the_role_can_see_with_no_cifs_server_is_nfs_only_not_a_failed_read():
+    metrics, fake = run_directory(
+        {
+            LDAP: [{**SVM, 'status': {'state': 'up'}}],
+            CIFS: [],
+            SVMS: [{'name': 'TESTSVM1'}],
+        }
+    )
+    assert metrics.value(
+        'directory.check_ok', check='cifs_security', reason='no_cifs_server'
+    ) == [1]
+    assert (
+        metrics.value('directory.check_ok', check='cifs_security', reason='no_records')
+        == []
+    )
+    assert metrics.value('directory.ldap_session_signed') == []
+    assert any(path.startswith(SVMS) for path in fake.paths)
 
 
 def test_event_reads_ask_for_names_and_times_and_nothing_else():

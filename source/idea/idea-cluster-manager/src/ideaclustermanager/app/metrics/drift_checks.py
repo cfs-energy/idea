@@ -14,6 +14,7 @@ its own thread and limit, and one still running is left behind, reported and not
 
 from ideaclustermanager.app.metrics.storage_metrics_service import (
     PROVIDER,
+    SVMS_PATH,
     OntapClient,
     fs_id_from_host,
     tag_value,
@@ -23,7 +24,7 @@ from ideasdk.metrics.health import HealthCollector, HealthMetrics, failure_reaso
 from ideasdk.utils import Utils
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 import hashlib
 import threading
 import time
@@ -128,17 +129,31 @@ def first_named(records: List[Dict]) -> Optional[Dict]:
 
 # a role without /api/svm/svms gets 200 and no records for a CIFS server that is there
 NO_CIFS_RECORDS = (
-    'no CIFS server in the answer: none joined, or the role lacks /api/svm/svms'
+    'no CIFS server in the answer and the SVM is not visible: the role lacks /api/svm/svms'
 )
+CIFS_UNSEEN = (UNKNOWN, NO_CIFS_RECORDS)
 
 
-def check_cifs(records: List[Dict], scope: str) -> List[DriftResult]:
-    """the checks read from the CIFS server. no record cannot tell a missing server from a
-    role that cannot see the SVM, so it says nothing either way."""
+def no_cifs_server(svm_visible: bool, smb_expected: bool) -> Tuple[str, str]:
+    """
+    an empty CIFS answer. from a role that cannot see the SVM it says nothing. from one that can,
+    the SVM has no CIFS server: drift where the cluster mounts it over SMB, fine where it is NFS.
+    """
+    if not svm_visible:
+        return CIFS_UNSEEN
+    if smb_expected:
+        return DRIFT, 'no CIFS server on the SVM, and the cluster mounts it over SMB'
+    return OK, 'no CIFS server on the SVM, and the cluster mounts it over NFS only'
+
+
+def check_cifs(
+    records: List[Dict], scope: str, missing: Tuple[str, str] = CIFS_UNSEEN
+) -> List[DriftResult]:
+    """the checks read from the CIFS server. missing is what no record means: no_cifs_server."""
     record = first_named(records)
     if record is None:
         return [
-            DriftResult(check, UNKNOWN, scope, NO_CIFS_RECORDS)
+            DriftResult(check, missing[0], scope, missing[1])
             for check in (
                 'ontap_cifs_session_security',
                 'ontap_cifs_aes',
@@ -210,7 +225,10 @@ def check_ldap(records: List[Dict], scope: str) -> List[DriftResult]:
 
 
 def check_machine_account(
-    cifs: List[Dict], ldap: List[Dict], scope: str
+    cifs: List[Dict],
+    ldap: List[Dict],
+    scope: str,
+    missing: Tuple[str, str] = CIFS_UNSEEN,
 ) -> List[DriftResult]:
     """
     the machine account as ONTAP sees it: the server is on and its LDAP client answers. the
@@ -218,7 +236,7 @@ def check_machine_account(
     """
     cifs_record, ldap_record = first_named(cifs), first_named(ldap)
     if cifs_record is None:
-        return [DriftResult('ontap_machine_account', UNKNOWN, scope, NO_CIFS_RECORDS)]
+        return [DriftResult('ontap_machine_account', missing[0], scope, missing[1])]
     if ldap_record is None:
         return [
             DriftResult(
@@ -336,6 +354,13 @@ class DriftChecks:
             == PROVIDER
         ]
 
+    @staticmethod
+    def svm_visible(client) -> bool:
+        try:
+            return len(client.get(SVMS_PATH)) > 0
+        except Exception:
+            return False
+
     def check_ontap_target(self, target, controllers) -> Dict:
         scope = tag_value(target.name)
         results: List[DriftResult] = []
@@ -373,8 +398,18 @@ class DriftChecks:
         ldap = read(LDAP_PATH, ['ontap_ldap_session_security'])
         dns = read(DNS_PATH, ['ontap_dns_domain_controllers', 'ontap_secure_ddns'])
         volumes = read(VOLUMES_PATH, ['ontap_analytics'])
+        missing = CIFS_UNSEEN
+        if cifs == []:
+            missing = no_cifs_server(
+                self.svm_visible(client),
+                Utils.is_not_empty(
+                    self.context.config().get_string(
+                        f'shared-storage.{target.name}.{PROVIDER}.svm.smb_dns'
+                    )
+                ),
+            )
         if cifs is not None:
-            results.extend(check_cifs(cifs, scope))
+            results.extend(check_cifs(cifs, scope, missing))
         if ldap is not None:
             results.extend(check_ldap(ldap, scope))
         if cifs is None or ldap is None:
@@ -382,7 +417,7 @@ class DriftChecks:
                 DriftResult('ontap_machine_account', UNKNOWN, scope, 'see other reads')
             )
         else:
-            results.extend(check_machine_account(cifs, ldap, scope))
+            results.extend(check_machine_account(cifs, ldap, scope, missing))
         if dns is not None:
             results.extend(check_dns(dns, controllers, scope))
         if volumes is not None:

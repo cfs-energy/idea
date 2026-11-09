@@ -21,7 +21,7 @@ About once a day the cluster manager leader reads the settings that must hold on
 
 A cluster with no file server on ONTAP has no `ontap_*` checks. A file server with no metrics login reports `no_login`.
 
-ONTAP reads use the storage metrics login, and read configuration and volume names only: never a file or a user. The login's role needs these paths added once per SVM, from `fsxadmin`. Until then those checks read `unknown` with `forbidden` in the log, and nothing else is affected. Without `/api/svm/svms` the CIFS read answers with no server, which cannot be told from an SVM with none joined, so the CIFS checks and `ontap_machine_account` read `unknown`, never drift:
+ONTAP reads use the storage metrics login, and read configuration and volume names only: never a file or a user. The login's role needs these paths added once per SVM, from `fsxadmin`. Until then those checks read `unknown` with `forbidden` in the log, and nothing else is affected. Without `/api/svm/svms` the CIFS read answers with no server even when one is joined, so the CIFS checks and `ontap_machine_account` read `unknown`, never drift. With it, an SVM that has no CIFS server reads `drift` when its shared-storage entry has `svm.smb_dns` (the cluster mounts it over SMB) and `ok` when it does not (NFS only):
 
 ```bash
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/ldap -access readonly

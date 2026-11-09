@@ -6,6 +6,7 @@ holds the directory agent and the ONTAP metrics login already. See docs for what
 
 from ideaclustermanager.app.accounts.auth_constants import USER_HOME_DIR_BASE
 from ideaclustermanager.app.metrics.storage_metrics_service import (
+    SVMS_PATH,
     OntapClient,
     fs_id_from_host,
     tag_value,
@@ -60,7 +61,7 @@ DNS_PATH = '/api/name-services/dns?fields=svm.name,servers&return_records=true'
 
 
 class NoRecords(Exception):
-    """a read that answered with nothing: the role may lack /api/svm/svms, so not an ok."""
+    """a CIFS read that answered with nothing from a role that cannot see its SVM: not an ok."""
 
 
 def service_of(group: Optional[str], cluster: str) -> Optional[str]:
@@ -506,7 +507,12 @@ class DirectoryCollector(HealthCollector):
             )
             self._check(metrics, client, filesystem, 'ldap', LDAP_PATH, self._ldap)
             self._check(
-                metrics, client, filesystem, 'cifs_security', CIFS_PATH, self._cifs
+                metrics,
+                client,
+                filesystem,
+                'cifs_security',
+                CIFS_PATH,
+                lambda m, f, records: self._cifs(m, f, records, client),
             )
             self._check(
                 metrics,
@@ -532,9 +538,9 @@ class DirectoryCollector(HealthCollector):
     def _check(metrics, client, filesystem, check, path, read, refused_reason=None):
         try:
             records = Utils.get_value_as_list('records', client.first_page(path), [])
-            read(metrics, filesystem, records)
+            reason = read(metrics, filesystem, records) or 'ok'
             metrics.level(
-                'directory.check_ok', 1, check=check, reason='ok', filesystem=filesystem
+                'directory.check_ok', 1, check=check, reason=reason, filesystem=filesystem
             )
         except Exception as e:
             reason = DirectoryCollector._reason(e)
@@ -591,9 +597,20 @@ class DirectoryCollector(HealthCollector):
                 filesystem=filesystem,
             )
 
-    def _cifs(self, metrics, filesystem, records):
+    @staticmethod
+    def _svm_visible(client) -> bool:
+        try:
+            return bool(
+                Utils.get_value_as_list('records', client.first_page(SVMS_PATH), [])
+            )
+        except Exception:
+            return False
+
+    def _cifs(self, metrics, filesystem, records, client):
         if not records:
-            raise NoRecords()
+            if not self._svm_visible(client):
+                raise NoRecords()
+            return 'no_cifs_server'  # an NFS-only SVM: nothing to sign
         for record in records:
             value = Utils.get_value_as_string(
                 'session_security', Utils.get_value_as_dict('security', record, {})
