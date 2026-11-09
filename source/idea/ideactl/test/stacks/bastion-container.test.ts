@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -177,6 +177,19 @@ test('ideactl in a task shell is the documented CLI, and the scheduler commands 
     assert.equal(run(), 'node main.js');
     assert.equal(run('jobs', 'list'), 'idea-scheduler-cli jobs list');
     assert.equal(run('ami-builder'), 'idea-scheduler-cli ami-builder');
+    // they reach the scheduler running in its own task; anywhere else they say where to go
+    const inTask = (role: string, ...args: string[]) => spawnSync('bash', [new URL('deployment/ecr/idea-control-plane/ideactl.sh', root).pathname, ...args], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, IDEACTL_MAIN: 'main.js', IDEA_CONTAINER_ROLE: role },
+      encoding: 'utf8',
+    });
+    assert.equal(inTask('scheduler', 'jobs', 'list').stdout.trim(), 'idea-scheduler-cli jobs list');
+    for (const role of ['cluster-manager', 'bastion-host']) {
+      const refused = inTask(role, 'jobs', 'list');
+      assert.equal(refused.status, 2);
+      assert.equal(refused.stdout, '');
+      assert.equal(refused.stderr.trim(), `ideactl jobs runs in the scheduler task's shell (container scheduler-container); this is the ${role} task`);
+      assert.equal(inTask(role, 'about').stdout.trim(), 'node main.js about');
+    }
   } finally {
     rmSync(bin, { recursive: true, force: true });
   }
