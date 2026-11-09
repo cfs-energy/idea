@@ -38,6 +38,17 @@ MAX_WAIT_TIME = 20  # The absolute maximum
 DEFAULT_VISIBILITY = constants.SQS_VISIBILITY_TASKS
 MAX_VISIBILITY = 12 * 60 * 60  # The absolute maximum (12 hours, SQS limit)
 
+# A failed task keeps its FIFO group waiting, so retries back off and then stop.
+# Kept below the queue's redrive count so this process, not the dead-letter move,
+# ends the task: only here can it record the failure and clean up after it.
+TASK_MAX_ATTEMPTS = 10
+RETRY_BASE_SECONDS = 10
+RETRY_MAX_SECONDS = 15 * 60
+
+
+def retry_delay(attempt: int) -> int:
+    return min(RETRY_BASE_SECONDS * 2 ** (max(attempt, 1) - 1), RETRY_MAX_SECONDS)
+
 
 class TaskManager(SocaService):
     def __init__(self, context: SocaContext, tasks: List[BaseTask]):
@@ -141,10 +152,7 @@ class TaskManager(SocaService):
                 2, b'Task deadline exceeded; terminating worker process for restart\n'
             )
             faulthandler.dump_traceback(all_threads=True)
-            if (
-                task is not None
-                and receive_count >= constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
-            ):
+            if task is not None and receive_count >= TASK_MAX_ATTEMPTS:
                 # Bound the write even if credentials or the database client hang.
                 writer = threading.Thread(
                     target=self._update_task_failure,
@@ -192,6 +200,39 @@ class TaskManager(SocaService):
             self._full_warned = True
         return False
 
+    def _delete(self, receipt_handle):
+        self.context.aws().sqs().delete_message(
+            QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
+        )
+
+    def _cleanup(self, task, payload):
+        try:
+            task.on_terminal_failure(payload)
+        except Exception:
+            self.logger.exception(f'cleanup failed for task: {task.get_name()}')
+
+    def _give_up(self, task, payload, receipt_handle, error):
+        if task is not None:
+            self._update_task_failure(task, payload, error)
+            self._cleanup(task, payload)
+        self._delete(receipt_handle)
+
+    def _retry_later(self, receipt_handle, receive_count):
+        delay = retry_delay(receive_count)
+        try:
+            self.context.aws().sqs().change_message_visibility(
+                QueueUrl=self.get_task_queue_url(),
+                ReceiptHandle=receipt_handle,
+                VisibilityTimeout=delay,
+            )
+        except Exception:
+            # The receive visibility still bounds the wait.
+            self.logger.exception('failed to schedule task retry')
+            return
+        self.logger.info(
+            f'task retry {receive_count + 1} of {TASK_MAX_ATTEMPTS} in {delay}s'
+        )
+
     def _discard_deleted_user(self, task_name, payload, receipt_handle):
         if task_name not in {
             'accounts.sync-user',
@@ -211,9 +252,10 @@ class TaskManager(SocaService):
         # LDAP absence alone can mean replication lag; only the authoritative
         # account record establishes that retrying this work is obsolete.
         self.logger.warning(f'failed task for deleted user; discarding: {task_name}')
-        self.context.aws().sqs().delete_message(
-            QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
-        )
+        task = self.tasks.get(task_name)
+        if task is not None:
+            self._cleanup(task, payload)
+        self._delete(receipt_handle)
         return True
 
     def get_task_queue_url(self) -> str:
@@ -275,6 +317,9 @@ class TaskManager(SocaService):
         receipt_handle = None
         task = None
         task_succeeded = False
+        receive_count = int(
+            sqs_message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
+        )
         try:
             _task_start = Utils.current_time_ms()
             message_body = Utils.get_value_as_string('Body', sqs_message)
@@ -302,6 +347,19 @@ class TaskManager(SocaService):
 
             if self._discard_deleted_user(task_name, task_payload, receipt_handle):
                 return
+            if receive_count > TASK_MAX_ATTEMPTS:
+                # The last attempt stopped without a result (deadline exit), or the
+                # message predates the attempt limit.
+                self.logger.error(
+                    f'task {task_name} gave up after {TASK_MAX_ATTEMPTS} attempts'
+                )
+                self._give_up(
+                    task,
+                    task_payload,
+                    receipt_handle,
+                    RuntimeError(f'gave up after {TASK_MAX_ATTEMPTS} attempts'),
+                )
+                return
             task.invoke(task_payload)
             task_succeeded = True
             self._update_task_failure(task, task_payload)
@@ -320,34 +378,26 @@ class TaskManager(SocaService):
             self.logger.warning(
                 f'failed to execute task due to LDAP exists error: {task_name} - {task_payload} - {e}'
             )
-            if task is not None:
-                self._update_task_failure(task, task_payload, e)
-            # Still remove the task from the queue in this case
-            self.context.aws().sqs().delete_message(
-                QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
-            )
+            self._give_up(task, task_payload, receipt_handle, e)
 
         except TaskCannotSucceed as e:
             self.logger.error(f'task {task_name} cannot succeed: {e}')
-            if task is not None:
-                self._update_task_failure(task, task_payload, e)
-            self.context.aws().sqs().delete_message(
-                QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
-            )
+            self._give_up(task, task_payload, receipt_handle, e)
 
         except Exception as e:
             if self._discard_deleted_user(task_name, task_payload, receipt_handle):
                 return
             self.logger.exception(f'failed to execute task: {task_name} - {e}')
-            receive_count = int(
-                sqs_message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
-            )
-            if (
-                task is not None
-                and not task_succeeded
-                and receive_count >= constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
-            ):
-                self._update_task_failure(task, task_payload, e)
+            if task is None or task_succeeded:
+                # Redelivery repeats an idempotent task; nothing failed to record.
+                return
+            if receive_count >= TASK_MAX_ATTEMPTS:
+                self.logger.error(
+                    f'task {task_name} gave up after {TASK_MAX_ATTEMPTS} attempts'
+                )
+                self._give_up(task, task_payload, receipt_handle, e)
+            else:
+                self._retry_later(receipt_handle, receive_count)
 
     def task_queue_listener(self):
         while not self.exit.is_set():
@@ -393,6 +443,10 @@ class TaskManager(SocaService):
 
         if Utils.is_empty(message_group_id):
             message_group_id = task_name
+        # Tasks in different lanes of one entity do not wait on each other's retries.
+        lane = getattr(self.tasks.get(task_name), 'lane', None)
+        if lane:
+            message_group_id = f'{message_group_id}.{lane}'
         if Utils.is_empty(message_dedupe_id):
             message_dedupe_id = Utils.sha256(Utils.to_json(task_message))
 

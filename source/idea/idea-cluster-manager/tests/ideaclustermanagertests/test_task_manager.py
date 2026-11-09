@@ -20,7 +20,7 @@ from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
 from ideaclustermanager.app.projects import project_tasks
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
-from ideaclustermanager.app.tasks.task_manager import TaskManager
+from ideaclustermanager.app.tasks.task_manager import TASK_MAX_ATTEMPTS, TaskManager
 from ideaclustermanagertests.metrics_fakes import FakeConfig
 
 
@@ -46,9 +46,7 @@ def run_worker(hang, final=False, write_hangs=False):
     manager._task_timeout = 0.05
     task.entity_ref.return_value = ('user', 'user')
     message['Attributes'] = {
-        'ApproximateReceiveCount': str(
-            constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS if final else 1
-        )
+        'ApproximateReceiveCount': str(TASK_MAX_ATTEMPTS if final else 1)
     }
 
     def write_marker(**kwargs):
@@ -320,21 +318,23 @@ def test_terminal_failure_is_visible_until_same_task_succeeds(
     entity_key = {key: payload[key]}
     table.put_item(Item={**entity_key, 'created_on': 1, 'updated_on': 1})
 
-    for count in range(1, constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS):
+    for count in range(1, TASK_MAX_ATTEMPTS):
         message['Attributes'] = {'ApproximateReceiveCount': str(count)}
         manager.execute_task(message)
         assert 'last_task_failure' not in table.get_item(Key=entity_key)['Item']
-
-    message['Attributes']['ApproximateReceiveCount'] = str(
-        constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
+    context.aws().sqs().delete_message.assert_not_called()
+    assert context.aws().sqs().change_message_visibility.call_count == (
+        TASK_MAX_ATTEMPTS - 1
     )
+
+    message['Attributes']['ApproximateReceiveCount'] = str(TASK_MAX_ATTEMPTS)
     manager.execute_task(message)
     record = table.get_item(Key=entity_key)['Item']
     marker = record['last_task_failure']
     assert marker['task'] == task.get_name()
     assert marker['message'] == ('failure ' * 40)[:200]
     assert datetime.fromisoformat(marker['at']).utcoffset().total_seconds() == 0
-    context.aws().sqs().delete_message.assert_not_called()
+    context.aws().sqs().delete_message.assert_called_once()
     if kind == 'user':
         entity = UserDAO(context, Mock()).convert_from_db(record)
     elif kind == 'group':
@@ -355,7 +355,7 @@ def test_terminal_failure_is_visible_until_same_task_succeeds(
     task.invoke.side_effect = None
     manager.execute_task(message)
     assert 'last_task_failure' not in table.get_item(Key=entity_key)['Item']
-    assert context.aws().sqs().delete_message.call_count == 2
+    assert context.aws().sqs().delete_message.call_count == 3
 
 
 def test_failure_does_not_recreate_deleted_entity(entity_tables):
@@ -364,9 +364,7 @@ def test_failure_does_not_recreate_deleted_entity(entity_tables):
     context.accounts.group_dao.table = table
     task.entity_ref.return_value = ('group', 'deleted')
     task.invoke.side_effect = RuntimeError('sync failed')
-    message['Attributes'] = {
-        'ApproximateReceiveCount': str(constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS)
-    }
+    message['Attributes'] = {'ApproximateReceiveCount': str(TASK_MAX_ATTEMPTS)}
     manager.execute_task(message)
     assert 'Item' not in table.get_item(Key={'group_name': 'deleted'})
 
@@ -375,9 +373,7 @@ def test_entityless_failure_keeps_logging_only():
     manager, context, task, message = build()
     task.entity_ref.side_effect = BaseTask().entity_ref
     task.invoke.side_effect = RuntimeError('failed')
-    message['Attributes'] = {
-        'ApproximateReceiveCount': str(constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS)
-    }
+    message['Attributes'] = {'ApproximateReceiveCount': str(TASK_MAX_ATTEMPTS)}
     manager.execute_task(message)
     context.logger().exception.assert_called_once()
     context.accounts.user_dao.table.update_item.assert_not_called()
@@ -406,8 +402,265 @@ def test_acknowledgement_failure_does_not_mark_successful_task(entity_tables):
     task.entity_ref.return_value = ('user', 'user')
     table.put_item(Item={'username': 'user'})
     context.aws().sqs().delete_message.side_effect = RuntimeError('queue unavailable')
-    message['Attributes'] = {
-        'ApproximateReceiveCount': str(constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS)
-    }
+    message['Attributes'] = {'ApproximateReceiveCount': str(TASK_MAX_ATTEMPTS)}
     manager.execute_task(message)
     assert 'last_task_failure' not in table.get_item(Key={'username': 'user'})['Item']
+
+
+class FifoQueue:
+    """the FIFO rules the consumer relies on: a group with a message in flight, or
+    whose oldest message is not yet visible again, holds back its later messages."""
+
+    def __init__(self):
+        self.now = 0
+        self.messages = []
+        self.sequence = 0
+
+    def send_message(self, MessageBody, MessageGroupId, **_):
+        self.sequence += 1
+        self.messages.append(
+            {
+                'id': str(self.sequence),
+                'group': MessageGroupId,
+                'body': MessageBody,
+                'visible_at': 0,
+                'receives': 0,
+            }
+        )
+
+    def receive_message(self, VisibilityTimeout, **_):
+        seen = set()
+        for message in self.messages:
+            if message['group'] in seen:
+                continue
+            seen.add(message['group'])
+            if message['visible_at'] > self.now:
+                continue
+            message['receives'] += 1
+            message['visible_at'] = self.now + VisibilityTimeout
+            return {
+                'Messages': [
+                    {
+                        'Body': message['body'],
+                        'ReceiptHandle': message['id'],
+                        'Attributes': {
+                            'ApproximateReceiveCount': str(message['receives'])
+                        },
+                    }
+                ]
+            }
+        return {}
+
+    def find(self, receipt_handle):
+        return next(m for m in self.messages if m['id'] == receipt_handle)
+
+    def delete_message(self, ReceiptHandle, **_):
+        self.messages.remove(self.find(ReceiptHandle))
+
+    def change_message_visibility(self, ReceiptHandle, VisibilityTimeout, **_):
+        self.find(ReceiptHandle)['visible_at'] = self.now + VisibilityTimeout
+
+
+def account_queue(tmp_path):
+    from ideaclustermanager.app.tasks import task_manager as module
+
+    context = Mock()
+    automation = tmp_path / 'automation'
+    context.config.return_value = FakeConfig(
+        {'directoryservice.automation_dir': str(automation)}
+    )
+    context.accounts.user_dao.get_user.return_value = {'username': 'user'}
+    queue = FifoQueue()
+    context.aws.return_value.sqs.return_value = queue
+    tasks = [
+        account_tasks.SyncUserInDirectoryServiceTask(context),
+        account_tasks.SyncPasswordInDirectoryServiceTask(context),
+        account_tasks.GroupMembershipUpdatedTask(context),
+        account_tasks.CreateUserHomeDirectoryTask(context),
+    ]
+    ran = []
+    for task in tasks:
+        task.invoke = Mock(
+            side_effect=lambda payload, name=task.get_name(): ran.append(
+                (name, payload.get('n'))
+            )
+        )
+    manager = TaskManager(context, tasks)
+    by_name = {task.get_name(): task for task in tasks}
+
+    def password(n):
+        folder = automation / f'p{n}'
+        folder.mkdir(parents=True)
+        path = folder / 'password.txt'
+        path.write_text('secret')
+        return path
+
+    def drain():
+        # every message receivable now, as the listener would take them
+        while True:
+            messages = queue.receive_message(
+                VisibilityTimeout=manager._polling_visibility_timeout
+            ).get('Messages')
+            if not messages:
+                return
+            manager.execute_task(messages[0])
+
+    return module, manager, queue, by_name, ran, password, drain
+
+
+def fail_first(task, times):
+    record = task.invoke.side_effect
+    failures = [times]
+
+    def invoke(payload):
+        if failures[0] > 0:
+            failures[0] -= 1
+            raise RuntimeError('busy')
+        record(payload)
+
+    task.invoke.side_effect = invoke
+
+
+def create_user_messages(manager, password_file):
+    # the order create_user sends them, all under the account's group id
+    manager.send('accounts.sync-user', {'username': 'user'}, 'user', 'u1')
+    manager.send(
+        'accounts.sync-password',
+        {'username': 'user', 'password_file': str(password_file)},
+        'user',
+    )
+    manager.send(
+        'accounts.group-membership-updated',
+        {'username': 'user', 'group_name': 'g', 'operation': 'add'},
+        'user',
+    )
+    manager.send('accounts.create-home-directory', {'username': 'user'}, 'user')
+
+
+def test_a_failing_password_sync_does_not_delay_home_creation(tmp_path):
+    _, manager, _, tasks, ran, password, drain = account_queue(tmp_path)
+    tasks['accounts.sync-password'].invoke.side_effect = RuntimeError('directory down')
+    create_user_messages(manager, password(1))
+    drain()
+    assert [name for name, _ in ran] == [
+        'accounts.sync-user',
+        'accounts.group-membership-updated',
+        'accounts.create-home-directory',
+    ]
+
+
+def test_a_retryable_failure_retries_with_backoff(tmp_path):
+    module, manager, queue, tasks, ran, password, drain = account_queue(tmp_path)
+    sync = tasks['accounts.sync-password']
+    sync.invoke.side_effect = [RuntimeError('busy'), RuntimeError('busy'), None]
+    file = password(1)
+    manager.send(
+        'accounts.sync-password',
+        {'username': 'user', 'password_file': str(file)},
+        'user',
+    )
+    drain()
+    assert sync.invoke.call_count == 1
+    for attempt in (1, 2):
+        queue.now += module.retry_delay(attempt) - 1
+        drain()
+        assert sync.invoke.call_count == attempt
+        queue.now += 1
+        drain()
+        assert sync.invoke.call_count == attempt + 1
+    assert queue.messages == []
+    assert module.retry_delay(1) < module.retry_delay(2) <= module.RETRY_MAX_SECONDS
+
+
+def test_a_task_that_keeps_failing_stops_and_releases_its_lane(tmp_path):
+    module, manager, queue, tasks, _, password, drain = account_queue(tmp_path)
+    sync = tasks['accounts.sync-password']
+    first, second = password(1), password(2)
+    sync.invoke.side_effect = lambda payload: (
+        (_ for _ in ()).throw(RuntimeError('directory down'))
+        if payload['password_file'] == str(first)
+        else None
+    )
+    for file in (first, second):
+        manager.send(
+            'accounts.sync-password',
+            {'username': 'user', 'password_file': str(file)},
+            'user',
+        )
+    for attempt in range(1, module.TASK_MAX_ATTEMPTS + 1):
+        drain()
+        queue.now += module.retry_delay(attempt)
+    drain()
+    assert sync.invoke.call_count == module.TASK_MAX_ATTEMPTS + 1
+    assert sync.invoke.call_args.args[0]['password_file'] == str(second)
+    assert queue.messages == []
+    assert not first.exists()
+    failure = manager.context.accounts.user_dao.table.update_item.call_args_list[0]
+    marker = failure.kwargs['ExpressionAttributeValues'][':failure']
+    assert marker['task'] == 'accounts.sync-password'
+
+
+def test_ordering_dependent_tasks_stay_ordered(tmp_path):
+    module, manager, queue, tasks, ran, password, drain = account_queue(tmp_path)
+    fail_first(tasks['accounts.sync-user'], 1)
+    fail_first(tasks['accounts.sync-password'], 1)
+    manager.send('accounts.sync-user', {'username': 'user'}, 'user', 'u1')
+    manager.send(
+        'accounts.group-membership-updated',
+        {'username': 'user', 'group_name': 'g', 'operation': 'add', 'n': 1},
+        'user',
+    )
+    for n in (1, 2):
+        manager.send(
+            'accounts.sync-password',
+            {'username': 'user', 'password_file': str(password(n)), 'n': n},
+            'user',
+        )
+    drain()
+    assert ran == []
+    queue.now += module.retry_delay(1)
+    drain()
+    assert [entry for entry in ran if entry[0] != 'accounts.sync-password'] == [
+        ('accounts.sync-user', None),
+        ('accounts.group-membership-updated', 1),
+    ]
+    assert [n for name, n in ran if name == 'accounts.sync-password'] == [1, 2]
+
+
+def test_the_attempt_limit_ends_tasks_before_the_dead_letter_move():
+    # the dead-letter move would skip the failure record and the password cleanup
+    assert TASK_MAX_ATTEMPTS < constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
+
+
+def test_a_message_past_its_attempts_is_ended_without_running(tmp_path):
+    # left in the queue by an earlier release, which retried until the dead-letter move
+    module, manager, queue, tasks, _, password, drain = account_queue(tmp_path)
+    file = password(1)
+    queue.send_message(
+        MessageBody=json.dumps(
+            {
+                'name': 'accounts.sync-password',
+                'payload': {'username': 'user', 'password_file': str(file)},
+            }
+        ),
+        MessageGroupId='user',
+    )
+    queue.messages[0]['receives'] = module.TASK_MAX_ATTEMPTS
+    drain()
+    tasks['accounts.sync-password'].invoke.assert_not_called()
+    assert queue.messages == []
+    assert not file.exists()
+
+
+def test_a_discarded_password_for_a_deleted_user_leaves_no_file(tmp_path):
+    _, manager, queue, _, _, password, drain = account_queue(tmp_path)
+    manager.context.accounts.user_dao.get_user.return_value = None
+    file = password(1)
+    manager.send(
+        'accounts.sync-password',
+        {'username': 'user', 'password_file': str(file)},
+        'user',
+    )
+    drain()
+    assert queue.messages == []
+    assert not file.exists()

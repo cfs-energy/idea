@@ -197,6 +197,10 @@ class SyncUserInDirectoryServiceTask(BaseTask):
 
 
 class SyncPasswordInDirectoryServiceTask(BaseTask):
+    # Passwords stay ordered among themselves; until the account reaches the
+    # directory the change fails and retries without holding up the account's tasks.
+    lane = 'password'
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -219,8 +223,8 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         try:
             self.context.ldap_client.change_password(username, password)
         except PasswordRefused:
-            # the same password is refused every time, and each retry would hold up this
-            # user's home folder and any later password behind it
+            # the same password is refused every time, and each retry would hold up any
+            # later password behind it
             self._remove_password_file(password_file)
             raise TaskCannotSucceed(
                 'The directory refused this password, so it was not synced. '
@@ -228,6 +232,12 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
             ) from None
 
         self._remove_password_file(password_file)
+
+    def on_terminal_failure(self, payload: Dict):
+        try:
+            self._remove_password_file(payload['password_file'])
+        except FileNotFoundError:
+            pass
 
     def _remove_password_file(self, password_file: str):
         password_file_path = pathlib.Path(password_file)
@@ -241,6 +251,9 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
 
 class CreateUserHomeDirectoryTask(BaseTask):
+    # Homes use the stored uid and gid, never the directory.
+    lane = 'home'
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -258,6 +271,8 @@ class CreateUserHomeDirectoryTask(BaseTask):
 
 
 class RepairHomeOwnershipTask(BaseTask):
+    lane = 'home'
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
 
