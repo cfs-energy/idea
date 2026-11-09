@@ -16,11 +16,13 @@ import pytest
 from ideadatamodel import (
     ProvisioningStatus,
     SocaJob,
+    SocaJobLicenseAsk,
     SocaJobParams,
     SocaJobState,
     errorcodes,
 )
 from ideadatamodel.aws.cloudformation_stack import CloudFormationStack
+from ideascheduler.app.app_protocols import LicenseAvailability
 from ideadatamodel.scheduler.scheduler_model import SocaJobProvisioningOptions
 from ideasdk.aws import AWSUtil
 from ideasdk.utils import Utils
@@ -197,6 +199,46 @@ def test_check_status_maps_every_failed_create_state(context, stack_status, expe
     )
 
     assert provisioning_util.check_status() == expected
+
+
+class MockLicenseService:
+    def __init__(self, available_count: int):
+        self.available_count = available_count
+
+    def get_license_availability(self, license_resource_name: str):
+        return LicenseAvailability(available_count=self.available_count, check_ok=True)
+
+
+def test_housekeeper_releases_the_licenses_of_a_job_it_resets(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    """
+    a job's license count is recorded when it is provisioned. a job reset after its stack
+    failed holds none, and the retry's license check adds the job's ask to what is
+    recorded: with its own count still there, a job asking for 2 of 3 was refused as
+    "needs 2, 1 are free" for as long as it stayed queued, and so was any other job.
+    """
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.FAILED
+    )
+    license_name = f'license_{Utils.short_uuid()}'
+    job = mock_job(provisioned=True)
+    job.params.licenses = [SocaJobLicenseAsk(name=license_name, count=2)]
+    other = mock_job(provisioned=True)
+    other.params.licenses = [SocaJobLicenseAsk(name=license_name, count=1)]
+    job_cache.sync(jobs=[job])
+    job_cache.add_active_licenses([job, other])
+    assert job_cache.get_active_license_count(license_name=license_name) == 3
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert mock_scheduler.reset_jobs == [job.job_id]
+    # the other job, still provisioned, keeps its count
+    assert job_cache.get_active_license_count(license_name=license_name) == 1
+    monkeypatch.setattr(
+        context, 'license_service', MockLicenseService(3), raising=False
+    )
+    JobProvisioningUtil(context=context, jobs=[job]).check_licenses()
 
 
 def test_housekeeper_deletes_failed_stack_and_retries(

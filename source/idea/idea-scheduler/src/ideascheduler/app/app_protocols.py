@@ -139,6 +139,9 @@ class JobCacheProtocol(SocaBaseProtocol):
     def add_active_licenses(self, jobs: List[SocaJob]): ...
 
     @abstractmethod
+    def release_active_licenses(self, job_id: str): ...
+
+    @abstractmethod
     def convert_db_entry_to_job(
         self, entry: Dict, fetch_errors: bool = False
     ) -> Optional[SocaJob]: ...
