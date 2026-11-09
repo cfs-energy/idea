@@ -27,6 +27,7 @@ from ideasdk.metrics.health import CollectorRunner
 SOURCE = Path(__file__).parents[3]
 DC = ['10.0.0.10', '10.0.0.11']
 ENDPOINT = 'svm-1.fs-0abc.fsx.us-east-2.amazonaws.com'
+SMB_DNS = 'shared-storage.data.fsx_netapp_ontap.svm.smb_dns'
 
 
 def test_an_aws_refusal_reads_as_what_it_is():
@@ -306,6 +307,55 @@ def test_a_field_missing_from_the_answer_is_unknown_not_ok(monkeypatch):
         'ontap_secure_ddns',
     ):
         assert found[check] == UNKNOWN
+
+
+def test_no_cifs_record_is_unknown_not_drift(monkeypatch):
+    # a role without /api/svm/svms reads 200 and no records for a server that is joined
+    checks = harness(monkeypatch, config=Config(**{SMB_DNS: 'SVM1.CORP.EXAMPLE'}))
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    FakeOntap.answers['/api/svm/svms'] = RuntimeError('GET /api/svm/svms: 403: no')
+    found = states(checks.run_once())
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
+        assert found[check] == UNKNOWN
+    assert found['ontap_ldap_session_security'] == OK
+    assert not any(value == 2 for value, _ in checks.published['state'])
+
+
+@pytest.mark.parametrize(
+    'smb_dns, expected', [('SVM1.CORP.EXAMPLE', DRIFT), (None, OK), ('', OK)]
+)
+def test_no_cifs_server_on_a_visible_svm_is_drift_only_where_smb_is_mounted(
+    monkeypatch, smb_dns, expected
+):
+    # an NFS-only SVM has nothing to sign; one the cluster mounts over SMB has lost its server
+    checks = harness(monkeypatch, config=Config(**{SMB_DNS: smb_dns}))
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    FakeOntap.answers['/api/svm/svms'] = [{'name': 'svm1'}]
+    found = states(checks.run_once())
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
+        assert found[check] == expected
+    assert found['ontap_ldap_session_security'] == OK
+
+
+def test_backup_retention_left_out_of_the_answer_reads_as_off(monkeypatch):
+    checks = harness(monkeypatch)
+    described = checks.context.aws().fsx().describe_file_systems.return_value
+    del described['FileSystems'][0]['OntapConfiguration'][
+        'AutomaticBackupRetentionDays'
+    ]
+    checks.run_once()
+    found = {
+        (t['check'], t['setting']): t['current'] for _, t in checks.published['value']
+    }
+    assert found['fsx_parity', 'backup_retention_days'] == '0'
 
 
 def test_domain_controllers_that_cannot_be_read_make_dns_unknown(monkeypatch):

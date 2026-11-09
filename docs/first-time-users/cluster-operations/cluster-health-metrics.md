@@ -1,8 +1,8 @@
 # Cluster health metrics
 
-The cluster reports its own health as `idea.health.*` metrics over DogStatsD, so what happened stays on record for Datadog's 15 months when logs have long gone. Every point carries `idea_cluster` and no agent container tags. They flow only when `metrics.provider` is `dogstatsd`.
+The cluster reports its own health as `idea.health.*` metrics over DogStatsD, so what happened stays on record for Datadog's 15 months when logs have long gone. Every point carries `idea_cluster` and `idea_module`, the module that read it. The agent also adds tags for the task that sent it, such as `service`, `ecs_service`, `task_version` and `host`, so group by IDEA's own tags rather than those. They flow only when `metrics.provider` is `dogstatsd`.
 
-Each concern is a collector with its own thread, its own time limit and its own off switch. One raising an error reports it as a gauge; one that hangs is left behind and reported, and no second copy starts behind it. Collectors other than the bastion run on the leader of their module.
+Each concern is a collector with its own thread, its own time limit and its own off switch. One raising an error reports it as a gauge; one that hangs is left behind and reported, and no second copy starts behind it. Collectors other than the bastion run on the leader of their module. A task that becomes leader, at start or when leadership moves, reads within 30 seconds, then once an interval.
 
 ## Off switches
 
@@ -34,12 +34,12 @@ Every five minutes, from the module's existing ECS read.
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.ecs.task_stops` | `service`, `reason` | Stopped tasks in a five minute bucket. `reason`: `health_check`, `deployment`, `oom`, `container_exit`, `failed_to_start`, `maintenance`, `user_stop`, `scheduler`, `spot`, `other`. Use `.as_count()`. |
-| `idea.health.ecs.tasks_running`, `tasks_desired`, `tasks_pending` | `service` | The service's own counts. |
-| `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `service` | 1 while a deployment rolls out, or has failed. |
-| `idea.health.ecs.rollouts` | `service` | Deployments started in a five minute bucket. |
+| `idea.health.ecs.task_stops` | `ecs_service_name`, `reason` | Stopped tasks in a five minute bucket. `reason`: `health_check`, `deployment`, `oom`, `container_exit`, `failed_to_start`, `maintenance`, `user_stop`, `scheduler`, `spot`, `other`. Use `.as_count()`. |
+| `idea.health.ecs.tasks_running`, `tasks_desired`, `tasks_pending` | `ecs_service_name` | The service's own counts. |
+| `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `ecs_service_name` | 1 while a deployment rolls out, or has failed. |
+| `idea.health.ecs.rollouts` | `ecs_service_name` | Deployments started in a five minute bucket. |
 
-ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader rewrites a point rather than adding to it. Stops are lost only if every cluster manager task is gone for over 50 minutes.
+ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, with no `host`, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader's read rewrites a point rather than adding to it. The agent's tags for the sending task still differ across a cluster manager deployment, when the old and new tasks can both send a bucket, so read these counts and `secd_events` with `max` across series and then sum over time, for example `sum(last_1h):max:idea.health.ecs.task_stops{reason:health_check} by {idea_cluster,ecs_service_name}.as_count()`. Stops are lost only if every cluster manager task is gone for over 50 minutes.
 
 ## File server and directory
 
@@ -51,19 +51,20 @@ Every five minutes, one read per file system in `shared-storage` that has metric
 | `idea.health.directory.ldap_session_signed` | `svm`, `filesystem` | 1 when `session-security-for-ad-ldap` is `sign` or `seal`. 0 will fail binds on a domain controller requiring signing. |
 | `idea.health.directory.dns_on_domain_controllers` | `svm`, `filesystem` | 1 when the SVM's DNS servers are all the directory's domain controllers. On the VPC resolver the reverse lookup gives no SPN that Kerberos can use. Managed AD only. |
 | `idea.health.directory.secd_events` | `event`, `filesystem` | `secd.*` events by name in a five minute bucket. Needs a cluster-level login, see below. |
-| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked. `reason:forbidden` is a path the login's role lacks. `reason:unavailable` (value 1) is a read this kind of login can never make, so not a failure. |
+| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked. `reason:forbidden` is a path the login's role lacks. `reason:no_records` is a CIFS read that answered with no server from a role that cannot see its SVM, as one without `/api/svm/svms` does. `reason:no_cifs_server` (value 1) is an SVM the role can see with no CIFS server: NFS only, nothing to sign. `reason:unavailable` (value 1) is a read this kind of login can never make, so not a failure. |
 | `idea.health.directory.home_stat_ok` | `reason` | A `stat` of `/data/home` and a lookup of a name that does not exist, from a separate process killed at 15 seconds. Exercises name mapping; reads no one's folder. `reason`: `ok`, `timeout`, `stuck` (still in the kernel, no new one started), `denied`, `error`. |
 | `idea.health.directory.home_stat_seconds` | | How long that took, including about 30 ms of process start. |
 
-The ONTAP login used by storage metrics needs these paths added once per SVM, from `fsxadmin` on the cluster shell. Until then those checks read `forbidden` and everything else carries on:
+The ONTAP login used by storage metrics needs these paths added once per SVM, from `fsxadmin` on the cluster shell. Until then those checks read `forbidden` and everything else carries on. Without `/api/svm/svms` the CIFS read answers with no server at all, so `cifs_security` reads `no_records` and `ldap_session_signed` is never sent. With it, an NFS-only SVM reads `no_cifs_server`:
 
 ```bash
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/ldap -access readonly
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/dns -access readonly
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/protocols/cifs/services -access readonly
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/svm/svms -access readonly
 ```
 
-secd event counts need a cluster-level login. ONTAP keeps the event log at cluster level and will not add it to an SVM role (`A Vserver admin cannot use command directory /api/support/ems/events with access level readonly`). With an SVM login, `check:secd_events` reads `reason:unavailable` and `secd_events` sends nothing. secd failures are still covered by `ldap_up` and `home_stat_ok`.
+secd event counts need a cluster-level login. ONTAP keeps the event log at cluster level and will not add it to an SVM role at any access level: `readonly`, `all` and every level between are refused with `A SVM admin cannot use command directory "/api/support/ems/events" with access level ...`. With an SVM login, `check:secd_events` reads `reason:unavailable` and `secd_events` sends nothing. secd failures are still covered by `ldap_up` and `home_stat_ok`.
 
 ## Directory automation
 
@@ -74,7 +75,7 @@ secd event counts need a cluster-level login. ONTAP keeps the event log at clust
 | `idea.health.ad.errors` | `kind` | `loop`, `message`, `delete_message`. |
 | `idea.health.ad.queue_depth`, `queue_in_flight` | | The queue, every minute. |
 | `idea.health.ad.seconds_since_queue_read` | | Rises when the agent stopped consuming: a rejected bind raises before it reaches the queue. Stays under about 30 when healthy. |
-| `idea.health.ad.admin_password_days_to_expiry` | | From the directory's own record. |
+| `idea.health.ad.admin_password_days_to_expiry` | | The admin account's `pwdLastSet` from the directory plus `directoryservice.password_max_age` (42, the AWS Managed Microsoft AD default). With `directoryservice.ad_automation.enable_root_password_reset` on, the agent resets the password once 2 days are left, so the value sits under 2 for the few minutes the reset takes. Under 2 for 15 minutes means the reset failed. |
 
 ## Image bakes
 

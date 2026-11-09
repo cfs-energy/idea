@@ -21,12 +21,13 @@ About once a day the cluster manager leader reads the settings that must hold on
 
 A cluster with no file server on ONTAP has no `ontap_*` checks. A file server with no metrics login reports `no_login`.
 
-ONTAP reads use the storage metrics login, and read configuration and volume names only: never a file or a user. The login's role needs these paths added once per SVM, from `fsxadmin`. Until then those checks read `unknown` with `forbidden` in the log, and nothing else is affected:
+ONTAP reads use the storage metrics login, and read configuration and volume names only: never a file or a user. The login's role needs these paths added once per SVM, from `fsxadmin`. Until then those checks read `unknown` with `forbidden` in the log, and nothing else is affected. Without `/api/svm/svms` the CIFS read answers with no server even when one is joined, so the CIFS checks and `ontap_machine_account` read `unknown`, never drift. With it, an SVM that has no CIFS server reads `drift` when its shared-storage entry has `svm.smb_dns` (the cluster mounts it over SMB) and `ok` when it does not (NFS only):
 
 ```bash
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/ldap -access readonly
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/dns -access readonly
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/protocols/cifs/services -access readonly
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/svm/svms -access readonly
 ```
 
 ## What only Datadog can compare
@@ -48,7 +49,7 @@ max:idea.health.drift.value{check:fsx_parity,setting:backup_retention_days} by {
 
 ## Alert
 
-Two definitions, to create in Datadog after the release is on a cluster. The checks run every 23 hours, so a one day window always holds a reading, and a fix clears at the next run.
+Two definitions, to create in Datadog after the release is on a cluster. Add any tags your organisation requires on a monitor, such as `team`, or Datadog refuses them. The checks run every 23 hours, so a one day window always holds a reading, and a fix clears at the next run.
 
 ```json
 {

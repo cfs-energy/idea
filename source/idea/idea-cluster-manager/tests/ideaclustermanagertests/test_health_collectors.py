@@ -121,7 +121,7 @@ def test_every_stopped_task_is_counted_by_service_and_reason_in_its_bucket():
         'ecs.task_stops',
         2,
         bucket,
-        {'service': 'bastion-host', 'reason': 'health_check'},
+        {'ecs_service_name': 'bastion-host', 'reason': 'health_check'},
     ) in metrics.counts
     assert sum(c[1] for c in metrics.counts) == 4
 
@@ -214,11 +214,16 @@ def test_services_report_running_desired_and_rollouts():
             }
         ],
     )
-    assert metrics.value('ecs.tasks_running', service='vdc') == [1]
-    assert metrics.value('ecs.tasks_desired', service='vdc') == [2]
-    assert metrics.value('ecs.rollout_in_progress', service='vdc') == [1]
-    assert metrics.value('ecs.rollout_failed', service='vdc') == [0]
+    assert metrics.value('ecs.tasks_running', ecs_service_name='vdc') == [1]
+    assert metrics.value('ecs.tasks_desired', ecs_service_name='vdc') == [2]
+    assert metrics.value('ecs.rollout_in_progress', ecs_service_name='vdc') == [1]
+    assert metrics.value('ecs.rollout_failed', ecs_service_name='vdc') == [0]
     assert [c[1] for c in metrics.counts if c[0] == 'ecs.rollouts'] == [1]
+    # the agent adds its own service and ecs_service for the sending task: never reuse them
+    for _, _, tags in metrics.levels:
+        assert not {'service', 'ecs_service'} & set(tags)
+    for *_, tags in metrics.counts:
+        assert not {'service', 'ecs_service'} & set(tags)
 
 
 def test_no_ecs_cluster_means_no_call():
@@ -529,6 +534,7 @@ LDAP = '/api/name-services/ldap'
 CIFS = '/api/protocols/cifs/services'
 DNS = '/api/name-services/dns'
 EMS = '/api/support/ems/events'
+SVMS = '/api/svm/svms'
 SVM = {'svm': {'name': 'TESTSVM1'}}
 
 
@@ -577,6 +583,35 @@ def test_a_path_the_login_cannot_read_reports_forbidden_and_the_others_go_on():
         metrics.value('directory.check_ok', check='secd_events', reason='forbidden')
         == []
     )
+
+
+def test_no_cifs_record_is_not_read_as_ok():
+    # a role without /api/svm/svms gets 200 and no records, which says nothing about signing
+    metrics, _ = run_directory({LDAP: [{**SVM, 'status': {'state': 'up'}}], CIFS: []})
+    assert metrics.value(
+        'directory.check_ok', check='cifs_security', reason='no_records'
+    ) == [0]
+    assert metrics.value('directory.check_ok', check='cifs_security', reason='ok') == []
+    assert metrics.value('directory.check_ok', check='ldap', reason='ok') == [1]
+
+
+def test_an_svm_the_role_can_see_with_no_cifs_server_is_nfs_only_not_a_failed_read():
+    metrics, fake = run_directory(
+        {
+            LDAP: [{**SVM, 'status': {'state': 'up'}}],
+            CIFS: [],
+            SVMS: [{'name': 'TESTSVM1'}],
+        }
+    )
+    assert metrics.value(
+        'directory.check_ok', check='cifs_security', reason='no_cifs_server'
+    ) == [1]
+    assert (
+        metrics.value('directory.check_ok', check='cifs_security', reason='no_records')
+        == []
+    )
+    assert metrics.value('directory.ldap_session_signed') == []
+    assert any(path.startswith(SVMS) for path in fake.paths)
 
 
 def test_event_reads_ask_for_names_and_times_and_nothing_else():

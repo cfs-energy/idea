@@ -146,15 +146,23 @@ def test_a_metric_failure_never_reaches_the_caller():
     HealthMetrics(found).timing('desktop.ready_seconds', 1)
 
 
-def test_health_lines_carry_the_cluster_alone_and_a_count_keeps_its_bucket(tmp_path):
+def test_health_lines_carry_cluster_and_module_and_a_count_keeps_its_bucket(tmp_path):
     found = context()
-    HealthMetrics(found).add('ecs.task_stops', 3, timestamp=600, service='vdc')
-    entry = found.published[-1]
+    HealthMetrics(found).add('ecs.task_stops', 3, timestamp=600, ecs_service_name='vdc')
+    HealthMetrics(found).level('collector.ok', 1, collector='ecs')
+    stamped, level = found.published[-2], found.published[-1]
     provider_context = Mock()
     provider_context.config().get_string.return_value = 'udp://127.0.0.1:8125'
     provider = DogStatsdMetrics(provider_context, 'idea-com/cluster-manager/task')
-    assert provider.format_entry(entry) == (
-        'idea.health.ecs.task_stops:3|c|#idea_cluster:idea-com,service:vdc|T600|card:none'
+    # a bucket total carries no host, so the next leader's read rewrites the same point
+    assert provider.format_entry(stamped) == (
+        'idea.health.ecs.task_stops:3|c|#idea_cluster:idea-com,'
+        'idea_module:cluster-manager,ecs_service_name:vdc,host:|T600|card:none'
+    )
+    # a level is per sender, and keeps the agent's host
+    assert provider.format_entry(level) == (
+        'idea.health.collector.ok:1|g|#idea_cluster:idea-com,'
+        'idea_module:cluster-manager,collector:ecs|card:none'
     )
 
 
@@ -359,3 +367,44 @@ def test_rows_behind_this_release_are_counted_and_pins_are_left_out():
         'rhel8': 0,
         'rhel9': 0,
     }
+
+
+def test_an_hourly_collector_reads_soon_after_its_task_becomes_leader(monkeypatch):
+    # leader election finishes minutes after start: the first read must not wait an interval
+    from ideasdk.metrics import health
+
+    monkeypatch.setattr(health, 'LOOK_EVERY_SECONDS', 0.05, raising=False)
+    monkeypatch.setattr(health.random, 'uniform', lambda low, high: 0)
+    found = context()
+    leader = []
+    found.is_leader.side_effect = lambda: bool(leader)
+    ran = Event()
+    hourly = collector(lambda metrics: ran.set())
+    hourly.interval_seconds = 3600
+    runner = CollectorRunner(found, [hourly])
+    runner.start()
+    try:
+        assert not ran.wait(0.2)
+        leader.append(True)
+        assert ran.wait(2)
+    finally:
+        runner.stop()
+
+
+def test_a_due_collector_still_waits_its_interval_between_reads(monkeypatch):
+    from ideasdk.metrics import health
+
+    monkeypatch.setattr(health, 'LOOK_EVERY_SECONDS', 0.02, raising=False)
+    monkeypatch.setattr(health.random, 'uniform', lambda low, high: 0)
+    found = context()
+    found.is_leader.return_value = True
+    runs = []
+    hourly = collector(lambda metrics: runs.append(1))
+    hourly.interval_seconds = 3600
+    runner = CollectorRunner(found, [hourly])
+    runner.start()
+    try:
+        time.sleep(0.3)
+        assert runs == [1]
+    finally:
+        runner.stop()

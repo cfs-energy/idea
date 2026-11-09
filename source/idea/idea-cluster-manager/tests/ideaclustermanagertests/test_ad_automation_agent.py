@@ -52,7 +52,7 @@ def directory(monkeypatch):
     )
     context._aws = Mock()
     context._lock = Mock()
-    state = SimpleNamespace(context=context, secrets=secrets, code='532')
+    state = SimpleNamespace(context=context, secrets=secrets, code='532', age_days=0)
     state.password = secrets['password-secret']
     state.reset = context.aws().ds().reset_user_password
     state.put_secret = context.aws().secretsmanager().put_secret_value
@@ -91,7 +91,8 @@ def directory(monkeypatch):
         if state.code:
             raise invalid_credentials(state.code)
         conn = Mock()
-        timestamp = (arrow.utcnow().int_timestamp + 11644473600) * 10_000_000
+        last_set = arrow.utcnow().shift(days=-state.age_days).int_timestamp
+        timestamp = (last_set + 11644473600) * 10_000_000
         conn.search_s.return_value = [
             ('cn=admin', {'pwdLastSet': [str(timestamp).encode()]})
         ]
@@ -216,6 +217,20 @@ def test_healthy_password_does_not_reset(directory):
     directory.reset.assert_not_called()
     directory.put_secret.assert_not_called()
     directory.context.distributed_lock().acquire.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'age_days, expired', [(39, False), (40.5, True), (41, True), (43, True)]
+)
+def test_the_password_counts_as_expired_two_days_before_its_max_age(
+    directory, age_days, expired
+):
+    # max age 42: reset with 2 days left, while the directory still accepts the bind
+    directory.code = None
+    directory.age_days = age_days
+    agent = directory.build()
+    assert agent.is_password_expired() is expired
+    assert agent.password_days_left == pytest.approx(42 - age_days, abs=0.01)
 
 
 def test_a_candidate_bind_cannot_wait_for_ever_on_a_silent_directory(monkeypatch):

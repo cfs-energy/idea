@@ -36,6 +36,9 @@ QUOTA_REPORTS = (
     '/api/storage/quota/reports?return_records=true&max_records=1000'
     '&fields=svm.name,volume.name,qtree.name,type,users.name,users.id,space.used.total,space.hard_limit,files.used.total'
 )
+# a role without this path reads 200 and no records from the CIFS services, joined or not: an
+# empty CIFS answer means no server only when the SVM itself is in this one
+SVMS_PATH = '/api/svm/svms?fields=name&return_records=true'
 VOLUMES = (
     '/api/storage/volumes?return_records=true&max_records=1000'
     '&fields=name,svm.name,space.size,space.used,space.performance_tier_footprint,space.capacity_tier_footprint'

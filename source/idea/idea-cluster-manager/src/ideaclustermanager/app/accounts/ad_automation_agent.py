@@ -147,13 +147,9 @@ class ADAutomationAgent(SocaService):
                 password_expiry_date - arrow.utcnow()
             ).total_seconds() / 86400
 
+        # reset once 2 days are left, before the directory starts rejecting binds
         if password_expiry_date is not None:
-            now = arrow.utcnow()
-
-            # check for expiration 2 days before expiration
-            now_minus_2days = now.shift(days=-2)
-
-            if now_minus_2days < password_expiry_date:
+            if arrow.utcnow().shift(days=2) < password_expiry_date:
                 return False
 
         return True
