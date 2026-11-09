@@ -23,10 +23,11 @@ export interface BootstrapStackVars {
   awsElbAccountId?: string;
   /** `CdkInvoker.custom_permissions_boundary`; Python default `None`, which Jinja/nunjucks print as `''`. */
   inputPermissionsBoundary?: string;
-  /** Module ids of the scheduler modules, whose `logs/<id>/` archive prefix expires. */
-  schedulerLogModuleIds?: string[];
-  /** Days the scheduler log archive is kept. Unset or 0 keeps it forever, as before. */
-  schedulerLogRetentionDays?: number;
+  /**
+   * Each scheduler module's `logs/<id>/` archive prefix and the days it is kept. Unset, or 0
+   * for a module, keeps that archive forever, as before.
+   */
+  schedulerLogArchives?: { moduleId: string; retentionDays: number }[];
 }
 
 /** `resources/cdk/cdk_toolkit_stack.yml`'s directory, for the `FileSystemLoader` root. */
@@ -105,8 +106,9 @@ export function renderBootstrapStack(vars: BootstrapStackVars, templateDir: stri
     aws_dns_suffix: vars.awsDnsSuffix,
     aws_elb_account_id: vars.awsElbAccountId,
     input_permissions_boundary: vars.inputPermissionsBoundary,
-    scheduler_log_module_ids: vars.schedulerLogModuleIds ?? [],
-    scheduler_log_retention_days: vars.schedulerLogRetentionDays ?? 0,
+    scheduler_log_archives: (vars.schedulerLogArchives ?? [])
+      .filter((archive) => archive.retentionDays > 0)
+      .map((archive) => ({ module_id: archive.moduleId, retention_days: archive.retentionDays })),
   });
 }
 

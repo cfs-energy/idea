@@ -4,10 +4,12 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
+
+import { load } from 'js-yaml';
 
 import { quickSetup } from '../../src/cli/main.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
@@ -140,5 +142,38 @@ describe('bootstrap', () => {
     assert.deepEqual(tags, ['CostCenter=42', `idea:ClusterName=${CLUSTER}`]);
     assert.ok(argv.includes('--public-access-block-configuration'));
     assert.ok(deps.stdout.some((line) => line.startsWith('rendered cdk toolkit stack template for cluster:')));
+  });
+
+  it('expires each scheduler module\'s log archive after that module\'s own retention', async () => {
+    const { runBootstrap } = await import('../../src/cli/commands/deploy.ts');
+    const deps = fakeDeps({
+      tables: {
+        [`${CLUSTER}.modules`]: [
+          ...TABLES[`${CLUSTER}.modules`],
+          moduleRow('scheduler', 'scheduler', 'app'),
+          moduleRow('scheduler-b', 'scheduler', 'app'),
+          moduleRow('scheduler-c', 'scheduler', 'app'),
+        ],
+        [`${CLUSTER}.cluster-settings`]: [
+          ...TABLES[`${CLUSTER}.cluster-settings`],
+          { key: 'scheduler.log_archive.s3_retention_days', value: 45 },
+          { key: 'scheduler-b.log_archive.s3_retention_days', value: 0 },
+        ],
+      },
+    });
+    await runBootstrap(deps, { clusterName: CLUSTER, awsRegion: REGION, moduleSet: 'default' });
+
+    const rendered = deps.stdout.find((line) => line.startsWith('rendered cdk toolkit stack template for cluster:')) ?? '';
+    const template = load(readFileSync(rendered.split('template: ')[1], 'utf8')) as {
+      Resources: { StagingBucket: { Properties: { LifecycleConfiguration: { Rules: Record<string, unknown>[] } } } };
+    };
+    const expiring = template.Resources.StagingBucket.Properties.LifecycleConfiguration.Rules.filter(
+      (rule) => rule.ExpirationInDays !== undefined,
+    ).map((rule) => [rule.Prefix, rule.ExpirationInDays]);
+    // 0 keeps scheduler-b's forever; scheduler-c has no row yet and takes the template default
+    assert.deepEqual(expiring, [
+      ['logs/scheduler/', 45],
+      ['logs/scheduler-c/', 400],
+    ]);
   });
 });
