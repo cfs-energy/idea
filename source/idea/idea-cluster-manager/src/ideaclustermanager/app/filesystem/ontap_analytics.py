@@ -58,7 +58,9 @@ def refused_this_path(error):
     if isinstance(error, (FileNotFoundError, FileContentsRefused)):
         return True
     status = getattr(error, 'status_code', None)
-    return isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
+    return (
+        isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
+    )
 
 
 def bucket_end(label):
@@ -303,7 +305,9 @@ class FolderAnalytics:
         try:
             page = client.first_page(f'{request}&order_by=analytics.bytes_used%20desc')
         except Exception as e:
-            self.logger.warning(f'storage analytics page read failed: {type(e).__name__}')
+            self.logger.warning(
+                f'storage analytics page read failed: {type(e).__name__}'
+            )
             return []
         seen = {record.get('name') for record in records}
         return [r for r in page.get('records', []) if r.get('name') not in seen]

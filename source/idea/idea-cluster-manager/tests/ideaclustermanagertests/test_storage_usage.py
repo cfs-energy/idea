@@ -1217,9 +1217,12 @@ def test_no_outside_home_figure_from_a_partial_home_total():
         collector, volume='vol1', volume_endpoint='svm.fs-1', partial=True
     )
     assert 'outside_home_bytes' not in result
-    assert quota_api(collector, volume='vol1', volume_endpoint='svm.fs-1')[
-        'outside_home_bytes'
-    ] == 600
+    assert (
+        quota_api(collector, volume='vol1', volume_endpoint='svm.fs-1')[
+            'outside_home_bytes'
+        ]
+        == 600
+    )
 
 
 def test_bytes_outside_home_count_this_file_systems_volume_only():
