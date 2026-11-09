@@ -18,8 +18,11 @@ from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
 
 import botocore.exceptions
+import ldap
+import os
 import pytest
 from typing import Optional
+from unittest.mock import Mock
 
 
 class AccountsTestContext:
@@ -771,3 +774,124 @@ def test_repair_home_ownership_request_defaults_and_validation():
         RepairHomeOwnershipRequest(username='user', dry_run='false')
     with pytest.raises(ValueError):
         RepairHomeOwnershipRequest(username='')
+
+
+def test_a_repeated_membership_change_is_not_dropped_as_a_duplicate(
+    context: AppContext, monkeypatch
+):
+    # the queue drops a repeated dedupe id for five minutes: remove, add, remove
+    sent = []
+    monkeypatch.setattr(
+        context.accounts.task_manager,
+        'send',
+        lambda **kwargs: sent.append(kwargs),
+    )
+    for operation in ('remove', 'add', 'remove'):
+        context.accounts.send_group_membership_updated('group', 'user', operation)
+    dedupe_ids = [message['message_dedupe_id'] for message in sent]
+    assert all(dedupe_ids)
+    assert len(set(dedupe_ids)) == 3
+
+
+def deletable_user(context, monkeypatch, username):
+    context.accounts.create_user(
+        user=User(
+            username=username,
+            email=f'{username}@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
+    directory = Mock(wraps=context.ldap_client)
+    directory.is_readonly.return_value = False
+    directory.is_existing_user.return_value = True
+    directory.is_existing_group.return_value = True
+    directory.is_sudo_user.return_value = False
+    monkeypatch.setattr(context, 'ldap_client', directory)
+    monkeypatch.setattr(context.accounts, 'ldap_client', directory)
+    return directory
+
+
+def test_deleting_a_user_removes_the_directory_account_without_the_queue(
+    context: AppContext, monkeypatch
+):
+    # the queue drops a deleted user's tasks, so nothing queued can be relied on
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted1')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    context.accounts.delete_user('accounts_deleted1')
+    directory.delete_user.assert_called_once_with('accounts_deleted1')
+    directory.remove_user_from_group.assert_called_once_with(
+        ['accounts_deleted1'], 'default-project-group'
+    )
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted1'
+    )
+    assert context.accounts.user_dao.get_user('accounts_deleted1') is None
+
+
+def test_deleting_a_user_stops_while_the_directory_refuses(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted2')
+    directory.delete_user.side_effect = RuntimeError('directory down')
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user('accounts_deleted2')
+    assert context.accounts.user_dao.get_user('accounts_deleted2')['enabled'] is False
+    # a member the directory does not have is no reason to stop
+    directory.delete_user.side_effect = None
+    directory.remove_user_from_group.side_effect = ldap.NO_SUCH_ATTRIBUTE()
+    context.accounts.delete_user('accounts_deleted2')
+    assert context.accounts.user_dao.get_user('accounts_deleted2') is None
+
+
+def test_deleting_a_disabled_user_leaves_no_group_membership(
+    context: AppContext, monkeypatch
+):
+    # removal from groups is refused for a disabled user, so delete does it itself
+    deletable_user(context, monkeypatch, 'accounts_deleted3')
+    context.accounts.disable_user('accounts_deleted3')
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert 'accounts_deleted3' in members('default-project-group')
+    context.accounts.delete_user('accounts_deleted3')
+    assert 'accounts_deleted3' not in members('default-project-group')
+
+
+@pytest.mark.parametrize('failing', ['directory', 'queue'])
+def test_a_password_that_could_not_be_queued_leaves_no_file(
+    context: AppContext, monkeypatch, tmp_path, failing
+):
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    if failing == 'directory':
+        monkeypatch.setattr(
+            context.accounts.ldap_client,
+            'is_existing_user',
+            Mock(side_effect=RuntimeError('directory down')),
+        )
+    else:
+        monkeypatch.setattr(
+            context.accounts.task_manager,
+            'send',
+            Mock(side_effect=RuntimeError('queue unavailable')),
+        )
+    with pytest.raises(RuntimeError):
+        context.accounts.change_ldap_password('user', 'secret-value')
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_queued_password_file_is_readable_by_its_owner_only(
+    context: AppContext, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    umask = os.umask(0)
+    try:
+        context.accounts.change_ldap_password('user', 'secret-value')
+    finally:
+        os.umask(umask)
+    (file,) = tmp_path.glob('*/password.txt')
+    assert file.read_text() == 'secret-value'
+    assert file.stat().st_mode & 0o777 == 0o600

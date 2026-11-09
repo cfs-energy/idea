@@ -45,8 +45,10 @@ from ideaclustermanager.app.accounts.db.single_sign_on_state_dao import (
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
 from typing import Optional, List
+import ldap
 import os
 import re
+import shutil
 import tempfile
 import time
 
@@ -384,6 +386,8 @@ class AccountsService:
                 'operation': operation,
             },
             message_group_id=username,
+            # the queue drops a repeat of the same content for five minutes
+            message_dedupe_id=f'{username}.{group_name}.{operation}.{nonce()}',
         )
 
     def remove_user_from_groups(self, username: str, group_names: List[str]):
@@ -448,15 +452,7 @@ class AccountsService:
                     username=username, group_name=group_name
                 )
 
-            self.task_manager.send(
-                task_name='accounts.group-membership-updated',
-                payload={
-                    'group_name': group_name,
-                    'username': username,
-                    'operation': 'remove',
-                },
-                message_group_id=username,
-            )
+            self.send_group_membership_updated(group_name, username, 'remove')
 
         self.user_dao.update_user(
             {'username': username, 'additional_groups': additional_groups}
@@ -527,15 +523,7 @@ class AccountsService:
                     username=username, group_name=group_name
                 )
 
-            self.task_manager.send(
-                task_name='accounts.group-membership-updated',
-                payload={
-                    'group_name': group_name,
-                    'username': username,
-                    'operation': 'remove',
-                },
-                message_group_id=username,
-            )
+            self.send_group_membership_updated(group_name, username, 'remove')
 
     # sudo user management methods
 
@@ -852,6 +840,7 @@ class AccountsService:
                 task_name='accounts.create-home-directory',
                 payload={'username': username},
                 message_group_id=username,
+                message_dedupe_id=f'{username}.create-home.{nonce()}',
             )
 
             return self.user_dao.convert_from_db(created_user)
@@ -1109,6 +1098,9 @@ class AccountsService:
         self.logger.info(f'{log_tag} disabling user')
         self.disable_user(username=username)
 
+        self.logger.info(f'{log_tag} removing user from directory service')
+        self._remove_deleted_user_now(username, groups)
+
         # delete user in user pool
         self.logger.info(f'{log_tag} delete user from user pool')
         self.user_pool.admin_delete_user(username=username)
@@ -1122,6 +1114,35 @@ class AccountsService:
         # delete user from db
         self.logger.info(f'{log_tag} delete user in ddb')
         self.user_dao.delete_user(username=username)
+
+    def _remove_deleted_user_now(self, username: str, group_names: List[str]):
+        # The queue drops a user's tasks once the account record is gone, so the
+        # work they would do runs here, before the record goes. A failure stops the
+        # delete with the user disabled, and deleting again resumes it.
+        # imported here: the tasks module needs this package fully loaded
+        from ideaclustermanager.app.accounts.account_tasks import (
+            SyncUserInDirectoryServiceTask,
+        )
+
+        readonly = self.ldap_client.is_readonly()
+        for group_name in group_names:
+            # a disabled user keeps these rows, as the removal above refuses them
+            self.group_members_dao.delete_membership(group_name, username)
+            if not readonly:
+                try:
+                    self.ldap_client.remove_user_from_group([username], group_name)
+                except (
+                    ldap.NO_SUCH_ATTRIBUTE,
+                    ldap.NO_SUCH_OBJECT,
+                    # Active Directory's answer for a member it does not have; there
+                    # the memberships go with the user in any case
+                    ldap.UNWILLING_TO_PERFORM,
+                ):
+                    pass
+            self.context.projects.user_projects_dao.group_member_removed(
+                group_name=group_name, username=username
+            )
+        SyncUserInDirectoryServiceTask(self.context).invoke({'username': username})
 
     def revoke_user_api_tokens(self, username):
         if self.token_service is not None:
@@ -1153,24 +1174,32 @@ class AccountsService:
             os.chmod(self.ds_automation_dir, 0o700)
 
         temp_dir = tempfile.mkdtemp(dir=self.ds_automation_dir)
-        password_file = os.path.join(temp_dir, 'password.txt')
-        with open(password_file, 'w') as f:
-            f.write(password)
+        try:
+            password_file = os.path.join(temp_dir, 'password.txt')
+            with open(
+                os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                'w',
+            ) as f:
+                f.write(password)
 
-        is_user_synced = self.ldap_client.is_existing_user(username)
-        if not is_user_synced:
+            is_user_synced = self.ldap_client.is_existing_user(username)
+            if not is_user_synced:
+                self.task_manager.send(
+                    task_name='accounts.sync-user',
+                    payload={'username': username},
+                    message_group_id=username,
+                    message_dedupe_id=f'{username}.change-password.{nonce()}',
+                )
+
             self.task_manager.send(
-                task_name='accounts.sync-user',
-                payload={'username': username},
+                task_name='accounts.sync-password',
+                payload={'username': username, 'password_file': password_file},
                 message_group_id=username,
-                message_dedupe_id=f'{username}.change-password.{nonce()}',
             )
-
-        self.task_manager.send(
-            task_name='accounts.sync-password',
-            payload={'username': username, 'password_file': password_file},
-            message_group_id=username,
-        )
+        except Exception:
+            # only the queued task removes the file, and none was queued
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
     def change_password(
         self, access_token: str, username: str, old_password: str, new_password: str
