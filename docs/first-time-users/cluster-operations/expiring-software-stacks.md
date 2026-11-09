@@ -29,6 +29,6 @@ To start the policy, add the images that must stay to `exempt_amis`, then set `e
 
 ## Instances with no desktop
 
-**Diagnostics → Instances with no desktop** lists instances tagged as this cluster's desktops that no desktop row names, older than an hour, so nobody can stop them from the portal. `idea.health.desktop.orphan_instances` carries the count. Nothing acts on them: they may hold data.
+**Diagnostics → Instances with no desktop** lists instances tagged as this cluster's desktops that no desktop row names, older than an hour, so nobody can stop them from the portal. `idea.health.desktop.orphan_instances` carries the count. Nothing acts on them: they may hold data. To check the matching while desktops are new, call `VirtualDesktopAdmin.ListOrphanInstances` with `min_age_minutes: 0`: it then lists every tagged instance no row names, however new, so a running desktop that appears there points at a broken match.
 
 `idea.health.stacks.expiry`, tagged `state` (`expiring`, `expired`), counts enabled stacks, and `idea.health.stacks.expiry_enforced` is 1 once hiding has begun. `metrics.health.stack_expiry.enabled` stops these counts; the digest has its own switch.

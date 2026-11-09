@@ -93,7 +93,7 @@ from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import (
     StackExpiry,
 )
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
-from datetime import datetime
+from datetime import datetime, timedelta
 from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     BASE_STACK_MIN_STORAGE_GB,
 )
@@ -779,10 +779,20 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
         context.success(ExtendSoftwareStackResponse(software_stack=updated))
 
     def list_orphan_instances(self, context: ApiInvocationContext):
-        context.get_request_payload_as(ListOrphanInstancesRequest)
+        request = context.get_request_payload_as(ListOrphanInstancesRequest)
+        minutes = request.min_age_minutes
+        if minutes is not None and (
+            isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 0
+        ):
+            raise exceptions.invalid_params(
+                'min_age_minutes must be a whole number of minutes, 0 or more'
+            )
+        finder = OrphanInstances(self.context, self.session_db)
         context.success(
             ListOrphanInstancesResponse(
-                listing=OrphanInstances(self.context, self.session_db).list()
+                listing=finder.list()
+                if minutes is None
+                else finder.list(min_age=timedelta(minutes=minutes))
             )
         )
 

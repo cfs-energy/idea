@@ -665,6 +665,38 @@ def test_an_instance_with_no_session_row_is_listed_and_nothing_is_done_to_it():
     ec2.stop_instances.assert_not_called()
 
 
+def test_with_no_grace_a_new_instance_is_listed_unless_a_row_names_it():
+    # the default hour hides every new desktop, so a check of the row matching made while
+    # desktops are new passes even if the matching is broken; with no grace it can fail
+    finder, _ = orphans(
+        [instance('i-new', age_hours=0), instance('i-new-known', age_hours=0)],
+        ['i-new-known'],
+    )
+    assert finder.list(NOW) == []
+    listed = finder.list(NOW, min_age=timedelta(0))
+    assert [o.instance_id for o in listed] == ['i-new']
+
+
+def test_the_admin_list_takes_the_grace_in_minutes_and_refuses_a_negative():
+    api = admin_api(stack())
+    # the API reads the clock: launched just now
+    launched = instance('i-new')
+    launched['LaunchTime'] = datetime.now(timezone.utc)
+    api.context.aws().ec2().get_paginator().paginate.return_value = [
+        {'Reservations': [{'Instances': [launched]}]}
+    ]
+    api.session_db.list_all_from_db.return_value = SimpleNamespace(
+        listing=[], cursor=None
+    )
+    for minutes, expected in ((None, []), (60, []), (0, ['i-new'])):
+        call = invocation(min_age_minutes=minutes)
+        api.list_orphan_instances(call)
+        listing = call.success.call_args.args[0].listing
+        assert [o.instance_id for o in listing] == expected, minutes
+    with pytest.raises(exceptions.SocaException):
+        api.list_orphan_instances(invocation(min_age_minutes=-1))
+
+
 def test_the_count_is_a_level_and_a_failed_read_publishes_no_zero():
     svc = service([])
     svc.orphans = Mock()

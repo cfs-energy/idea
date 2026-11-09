@@ -261,7 +261,7 @@ class OrphanInstances:
         return found
 
     def list(
-        self, now: Optional[datetime] = None
+        self, now: Optional[datetime] = None, min_age: timedelta = ORPHAN_MIN_AGE
     ) -> List[VirtualDesktopOrphanInstance]:
         now = now or datetime.now(timezone.utc)
         # the instances first: a desktop created in between has a row by the time rows are read
@@ -272,7 +272,7 @@ class OrphanInstances:
             launched = instance.get('LaunchTime')
             if instance.get('InstanceId') in known:
                 continue
-            if launched is not None and now - _as_utc(launched) < ORPHAN_MIN_AGE:
+            if launched is not None and now - _as_utc(launched) < min_age:
                 continue
             tags = {t.get('Key'): t.get('Value') for t in instance.get('Tags', [])}
             orphans.append(

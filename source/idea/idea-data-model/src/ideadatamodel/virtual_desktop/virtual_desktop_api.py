@@ -444,7 +444,9 @@ class ExtendSoftwareStackResponse(SocaPayload):
 
 # VirtualDesktopAdmin.ListOrphanInstances - Request
 class ListOrphanInstancesRequest(SocaPayload):
-    pass
+    # minutes an instance with no row is given to write one; default 60. 0 lists every
+    # unmatched instance, so a check of the matching can fail while desktops are new
+    min_age_minutes: Optional[int] = Field(default=None)
 
 
 # VirtualDesktopAdmin.ListOrphanInstances - Response
