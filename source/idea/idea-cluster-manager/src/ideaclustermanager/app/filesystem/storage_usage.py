@@ -37,6 +37,11 @@ OUTSIDE_HOME_MESSAGES = dict(
     initializing='Storage analytics is still taking its first measurement of this volume. Try again later.',
 )
 MAX_CACHED_VIEWS = 1000
+# what a person may open is asked again this often, so a permission change shows within a minute
+# and the pane's one-second polls during a study do not each fork to ask
+VIEW_SECONDS = 60
+# to pass through a folder on the way to another takes search permission on it, not read
+THROUGH = getattr(os, 'O_PATH', getattr(os, 'O_SEARCH', os.O_RDONLY))
 CANNOT_OPEN = 'That folder no longer exists or cannot be opened.'
 
 
@@ -229,13 +234,17 @@ def open_directory(home, folder, trusted_root=False):
     folder = os.path.abspath(folder)
     if os.path.commonpath([home, folder]) != home:
         raise exceptions.unauthorized_access()
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    relative = os.path.relpath(folder, home)
+    components = [] if relative == '.' else relative.split(os.sep)
+    # Only the folder asked for is opened to read. One above it is passed through, as a shell
+    # would: a parent that can be entered but not listed does not close what is inside it.
+    flags = [THROUGH | os.O_DIRECTORY | os.O_NOFOLLOW] * len(components)
+    flags.append(os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     # The mount point comes from cluster settings, a person's home folder does not.
-    fd = os.open(home, flags & ~os.O_NOFOLLOW if trusted_root else flags)
+    fd = os.open(home, flags[0] & ~os.O_NOFOLLOW if trusted_root else flags[0])
     try:
-        relative = os.path.relpath(folder, home)
-        for component in [] if relative == '.' else relative.split(os.sep):
-            child = os.open(component, flags, dir_fd=fd)
+        for component, mode in zip(components, flags[1:]):
+            child = os.open(component, mode, dir_fd=fd)
             os.close(fd)
             fd = child
         yield fd
@@ -318,8 +327,8 @@ class StorageUsageService:
             return None
         key = (username, path, found['measured_at'])
         with self._lock:
-            view = self._views.get(key)
-        if view is None:
+            checked_at, view = self._views.get(key, (0, None))
+        if view is None or time.monotonic() - checked_at >= VIEW_SECONDS:
             names = [row['name'] for row in found['children']]
             try:
                 identity_row, readable = inspect_as_user(identity, mount, path, names)
@@ -362,7 +371,8 @@ class StorageUsageService:
                     ),
                 )
             with self._lock:
-                self._views[key] = view
+                self._views[key] = (time.monotonic(), view)
+                self._views.move_to_end(key)
                 while len(self._views) > MAX_CACHED_VIEWS:
                     self._views.popitem(last=False)
         return view

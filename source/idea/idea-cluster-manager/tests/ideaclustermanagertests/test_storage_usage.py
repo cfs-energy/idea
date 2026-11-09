@@ -1056,6 +1056,85 @@ def test_a_hidden_folder_leaves_no_gap_that_ranks_its_size(monkeypatch, tree):
         service._workers.shutdown()
 
 
+def test_a_permission_change_reaches_a_view_already_served_within_a_minute(
+    monkeypatch, tree
+):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    for name in ('opened', 'closed'):
+        os.mkdir(f'{tree}/{name}')
+    os.chmod(tree + '/closed', 0)
+    folders = {
+        tree: dict(
+            self=row(tree, 300, 9),
+            children=[row(tree + '/opened', 127), row(tree + '/closed', 50)],
+            measured_at=NOW,
+        )
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    clock = [time.monotonic()]
+    monkeypatch.setattr(storage_usage.time, 'monotonic', lambda: clock[0])
+
+    def listed():
+        result = service.get_usage('alice', study=False)
+        return [item['name'] for item in result['folders']], result.get(
+            'hidden_folders', 0
+        )
+
+    try:
+        assert listed() == (['opened'], 1)
+        # the same ONTAP measurement is served for 15 minutes; who may open what is not
+        os.chmod(tree + '/closed', 0o700)
+        os.chmod(tree + '/opened', 0)
+        clock[0] += storage_usage.VIEW_SECONDS - 1
+        assert listed() == (['opened'], 1), 'control: inside the minute it is the same view'
+        clock[0] += 1
+        assert listed() == (['closed'], 1)
+    finally:
+        for name in ('opened', 'closed'):
+            os.chmod(f'{tree}/{name}', 0o700)
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_a_folder_under_a_parent_that_can_only_be_passed_through_opens(
+    monkeypatch, tree
+):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    project = os.path.dirname(tree) + '/projects'
+    for name in ('team', 'closed'):
+        os.makedirs(f'{project}/{name}')
+    os.chmod(f'{project}/closed', 0)
+    # 711 to everyone else: the team folders below are reached by name, the list is not
+    os.chmod(project, 0o300)
+    folders = {
+        f'{project}/team': dict(
+            self=row(f'{project}/team', 70, 7), children=[], measured_at=NOW
+        )
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    identity = UserIdentity(account_context().accounts, 'alice')
+    mount = os.path.dirname(os.path.dirname(tree))
+    try:
+        result = service.get_usage('alice', folder=f'{project}/team')
+        assert result['state'] == 'ready' and result['total']['bytes'] == 70
+        # a shell refuses these three too, and they get the one answer
+        for refused in ('closed', 'closed/inside', 'missing'):
+            with pytest.raises(exceptions.SocaException) as error:
+                service.get_usage('alice', folder=f'{project}/{refused}')
+            assert storage_usage.CANNOT_OPEN in error.value.message
+        # passing through is not opening: the parent itself still cannot be listed
+        assert storage_usage.readable_paths_as_user(
+            identity, mount, [project, f'{project}/team']
+        ) == [f'{project}/team']
+    finally:
+        os.chmod(project, 0o700)
+        os.chmod(f'{project}/closed', 0o700)
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
 def test_a_truncated_folder_is_partial_with_no_direct_file_figure(monkeypatch, tree):
     folders = {
         tree: dict(
