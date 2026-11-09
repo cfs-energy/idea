@@ -869,13 +869,16 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         )
 
         old_db_entry = result['Attributes']
+        # SET leaves attributes the caller did not send, such as a date set since it read
+        # the stack: report the row as it now is, or the index is told that date is gone
+        new_db_entry = {**old_db_entry, **db_entry}
         self.trigger_update_event(
             db_entry[software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY],
             db_entry[software_stacks_constants.SOFTWARE_STACK_DB_RANGE_KEY],
             old_entry=old_db_entry,
-            new_entry=db_entry,
+            new_entry=new_db_entry,
         )
-        return self.convert_db_dict_to_software_stack_object(db_entry)
+        return self.convert_db_dict_to_software_stack_object(new_db_entry)
 
     def set_expiry(
         self,

@@ -454,6 +454,28 @@ def test_clearing_removes_the_attribute_and_only_the_date(monkeypatch):
     assert ':exp' not in request['ExpressionAttributeValues']
 
 
+def test_an_update_reports_a_date_set_since_the_caller_read_the_stack(monkeypatch):
+    # an image repoint that read the stack just before an admin dated it wrote the stack
+    # back without the date: the table kept it, but the index was sent null and hid it
+    on = NOW + timedelta(days=5)
+    stored = VirtualDesktopSoftwareStackDB.convert_software_stack_object_to_db_dict(
+        stack('dated', expires_on=on)
+    )
+    table = Mock()
+    table.update_item.return_value = {'Attributes': stored}
+    monkeypatch.setattr(VirtualDesktopSoftwareStackDB, '_table', table)
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db.trigger_update_event = Mock()
+    read_before = stack('dated')
+    read_before.ami_id = 'ami-new'
+    updated = db.update(read_before)
+    assert 'expires_on' not in table.update_item.call_args.kwargs['UpdateExpression']
+    assert updated.expires_on.timestamp() == on.timestamp()
+    assert updated.ami_id == 'ami-new'
+    sent = db.trigger_update_event.call_args.kwargs['new_entry']
+    assert sent['expires_on'] == stored['expires_on']
+
+
 def test_the_clear_request_is_never_stored():
     db_dict = VirtualDesktopSoftwareStackDB.convert_software_stack_object_to_db_dict(
         stack(clear_expires_on=True)
