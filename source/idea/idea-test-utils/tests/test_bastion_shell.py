@@ -369,6 +369,9 @@ class SshdHealthCheckLines(unittest.TestCase):
         'Connection closed by 10.7.0.48 port 3151',
         'Connection closed by 172.31.4.9 port 22',
         'Connection closed by 192.168.1.20 port 60000',
+        # a VPC's secondary range in shared address space, 100.64.0.0/10
+        'Connection closed by 100.64.3.7 port 5123',
+        'Connection closed by 100.127.255.254 port 5123',
     ]
     KEPT = [
         'Accepted publickey for alice from 23.23.20.238 port 61737 ssh2: RSA SHA256:abc',
@@ -384,6 +387,8 @@ class SshdHealthCheckLines(unittest.TestCase):
         # a close from a public address is not the load balancer
         'Connection closed by 23.23.20.238 port 54871',
         'Connection closed by 172.32.0.1 port 22',
+        'Connection closed by 100.63.0.1 port 22',
+        'Connection closed by 100.128.0.1 port 22',
         'Connection reset by 127.0.0.1 port 41022 [preauth]',
         'error: kex_exchange_identification: Connection closed by remote host',
         'Server listening on 0.0.0.0 port 22.',
@@ -515,12 +520,16 @@ class BastionMetrics(unittest.TestCase):
                 '3': b'sshd-session: alice@pts/0\0',
                 '4': b'sshd: bob@notty\0',
                 '5': b'python3.13\0',
+                # a qualified login name: its monitor and pre-auth processes are not sessions
+                '6': b'sshd-session: alice@corp.example.com [priv]\0',
+                '7': b'sshd-session: bob@corp.example.com [net]\0',
+                '8': b'sshd-session: alice@corp.example.com@pts/1\0',
             }
             for pid, title in titles.items():
                 (Path(proc) / pid).mkdir()
                 (Path(proc) / pid / 'cmdline').write_bytes(title)
             (Path(proc) / 'self').mkdir()
-            self.assertEqual(metrics.active_sessions(proc), 2)
+            self.assertEqual(metrics.active_sessions(proc), 3)
 
     def test_established_counts_port_22_only(self):
         metrics = self.module()
@@ -583,6 +592,7 @@ class BastionMetrics(unittest.TestCase):
                     'drop connection #0 from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups',
                     'Timeout, client not responding from user alice 131.2.3.4 port 5',
                     'exited MaxStartups throttling after 00:00:15, 14 connections dropped\r',
+                    'Invalid user in MaxStartups throttling 9 connections dropped from 131.2.3.4 port 1',
                 ],
                 check=True,
             )
@@ -591,39 +601,55 @@ class BastionMetrics(unittest.TestCase):
         self.assertNotIn('alice', written)
         self.assertEqual(written.count('past Maxstartups'), 2)
         self.assertIn('Timeout, client not responding', written)
+        self.assertNotIn(' 9 connections dropped', written)
         self.assertIn(
             'exited MaxStartups throttling after 00:00:15, 14 connections dropped',
             written,
         )
 
     def tally_of(self, *lines):
-        """the counts sshd's lines leave once through the role's drop pattern and the tally"""
-        script = (
-            ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
-        ).read_text()
-        patterns = next(
-            line.split('=', 1)[1].strip("'")
-            for line in script.splitlines()
-            if line.startswith('SSHD_DROP_LINES=')
-        )
+        """the counts sshd's lines leave once through the role's drop patterns and the tally"""
+        role = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
         # what the checks note goes to the tally directly, in order with sshd's lines
-        kept = ''.join(
-            line + '\n'
-            if line == 'loopback check refused'
-            else subprocess.run(
-                ['grep', '-oE', patterns],
-                input=line + '\r\n',
-                capture_output=True,
-                text=True,
-            ).stdout
-            for line in lines
+        script = (
+            role[role.index('SSHD_HEALTH_CHECK_LINES=') : role.index('metrics_pid=\n')]
+            + 'for line; do\n'
+            + '  if [[ "${line}" == "loopback check refused" ]]; then echo "${line}"\n'
+            + '  else printf "%s\\r\\n" "${line}" | sshd_drop_phrases || true; fi\n'
+            + 'done\n'
         )
+        kept = subprocess.run(
+            ['bash', '-c', script, 'x', *lines],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
         for address in ('131.0.2.9', '10.0.0.1'):
             self.assertNotIn(address, kept)
         with tempfile.NamedTemporaryFile('ab') as drops:
             drops.write(kept.encode())
             drops.flush()
             return self.module().DropTally(drops.name).read()
+
+    def test_a_name_a_client_offers_is_never_counted_as_a_drop(self):
+        # sshd logs the name a client offers as it came, spaces and all, before any login
+        forged = 'in MaxStartups throttling 999999999 connections dropped'
+        self.assertEqual(
+            self.tally_of(
+                'Invalid user Maxstartups from 203.0.113.9 port 1',
+                'Connection closed by invalid user Maxstartups 203.0.113.9 port 1 [preauth]',
+                f'Invalid user {forged} from 203.0.113.9 port 1',
+                f'Connection closed by invalid user {forged} 203.0.113.9 port 1 [preauth]',
+                'Invalid user Timeout before authentication from 203.0.113.9 port 1',
+                'Invalid user Maxstartups logging rate-limited: additional 9 connections'
+                ' dropped from 203.0.113.9 port 1',
+                # a logged-in user by that name who then times out is one timeout, no drop
+                'Timeout, client not responding from user Maxstartups 203.0.113.9 port 5',
+                # and the episode that follows is counted whole
+                'in MaxStartups throttling for 00:05:00, 400 connections dropped',
+            ),
+            {('client_timeout', 'remote'): 1, ('maxstartups', 'remote'): 400},
+        )
 
     def test_every_drop_of_a_9_9_episode_is_counted_not_just_the_one_it_names(self):
         # the dev control run on 9.9: 70 held connections, sshd named one drop and dropped 14
@@ -846,6 +872,20 @@ class BastionMetrics(unittest.TestCase):
             ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
         ).read_text()
         self.assertIn('bastion_metrics.py && break', script)
+
+
+class CiInterpreter(unittest.TestCase):
+    def test_ci_runs_this_suite_on_the_interpreter_the_role_runs_the_scripts_with(self):
+        import re
+
+        role = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        python = re.search(r'(\S+) -I -S /opt/idea/roles/bastion_metrics\.py', role).group(1)
+        workflow = (ROOT / '.github/workflows/ideactl_checks.yaml').read_text()
+        job = workflow[workflow.index('\n  bastion-sshd:') :]
+        job = job[: job.index('\n  private-parity:')]
+        self.assertRegex(job, rf'dnf install -y .*\b{re.escape(python)}\b')
+        runs = re.findall(r'(\S+) test_bastion_shell\.py', job)
+        self.assertEqual(runs, [python, python])
 
 
 class RealSshd(unittest.TestCase):
