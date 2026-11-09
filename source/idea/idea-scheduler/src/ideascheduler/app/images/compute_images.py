@@ -600,6 +600,16 @@ class ComputeImageService:
                 raise RowMoved()
             raise
 
+    def _moved(self, record) -> bool:
+        """what _save would refuse, asked before the builder is read for a failure"""
+        stored = self.records.get(record.base_os, record.row_key().range_key())
+        return (
+            stored is None
+            or stored.status not in IMAGE_ROW_IN_FLIGHT
+            or self.records.to_item(stored).get('started_on')
+            != self.records.to_item(record).get('started_on')
+        )
+
     def _start_row(self, record, builder=None):
         key = (record.base_os, record.row_key().range_key())
         with self._lock:
@@ -719,6 +729,8 @@ class ComputeImageService:
         except Exception as error:
             if not self.context.is_leader():
                 return  # The new leader resumes the persisted row.
+            if self._moved(record):
+                return  # the time limit already read the builder and counted the failure
             self._logger.exception('Compute image validation failed')
             reason = (
                 getattr(error, 'message', None)

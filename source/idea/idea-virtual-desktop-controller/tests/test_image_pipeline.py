@@ -2315,6 +2315,27 @@ def test_a_row_past_its_limit_while_building_is_read_too(monkeypatch):
     assert h.row().error.endswith(PANIC)
 
 
+def test_a_fenced_out_worker_does_not_read_the_builder_again(monkeypatch):
+    """the time limit already captured this bake; a second read counted it twice"""
+    h = Harness()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    record = failing_row(h)
+    newer = h.row()
+    newer.status = 'failed'
+    newer.host = module.TIME_LIMIT_OWNER
+    h.records.put(newer)
+    h.pipeline._fail(record, 'builder i-builder did not report ready within 60 minutes')
+    capture.assert_not_called()
+    # nor one that a retry of the row has replaced
+    retry = h.row()
+    retry.status, retry.host, retry.started_on = 'building', 'leader', T0 + timedelta(1)
+    h.records.put(retry)
+    h.pipeline._fail(record, 'builder i-builder did not report ready within 60 minutes')
+    capture.assert_not_called()
+    assert h.row().status == 'building'
+
+
 def test_a_failed_test_launch_does_not_read_the_builder_again(monkeypatch):
     h = Harness()
     capture = Mock()

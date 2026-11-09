@@ -1222,6 +1222,40 @@ def test_a_failing_builder_is_read_before_it_goes_and_the_row_says_why(monkeypat
     assert stored.error == f'the builder never finished {PANIC}'
 
 
+@pytest.mark.parametrize(
+    'stored',
+    [
+        {'status': 'failed', 'started_on': LIMIT_NOW},
+        {'status': 'building', 'started_on': LIMIT_NOW + timedelta(hours=3)},
+    ],
+)
+def test_a_worker_left_behind_by_the_limit_does_not_read_the_builder_again(
+    monkeypatch, stored
+):
+    """the time limit already captured this bake; a second read counted it twice"""
+    svc = service()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    monkeypatch.setattr(svc, 'default_base_ami', lambda *a: 'ami-stock')
+    builder = Mock()
+    builder.get_ami_full_name.return_value = 'idea-rocky9-1'
+    record = row(status='queued', started_on=LIMIT_NOW)
+    svc.records.put(record)
+
+    def build(progress):
+        progress({'instance_id': 'i-builder'})
+        # the limit fails the row, or a retry takes it, while this worker still waits
+        svc.records.put(row(instance_id='i-builder', **stored))
+        raise exceptions.general_exception(
+            'builder i-builder did not report ready within 60 minutes'
+        )
+
+    builder.build.side_effect = build
+    svc._run_pipeline(record, builder)
+    capture.assert_not_called()
+    assert svc.records.get('rocky9', 'x86_64').status == stored['status']
+
+
 def test_a_canary_failure_does_not_read_the_builder_again(monkeypatch):
     svc = service()
     capture = Mock()
