@@ -68,6 +68,14 @@ def tag_value(value) -> str:
     return text.replace(' ', '_') if text else 'unknown'
 
 
+class OntapRequestFailed(RuntimeError):
+    """ONTAP answered with an error. The status says whether it refused this request or failed."""
+
+    def __init__(self, status_code: int):
+        super().__init__(f'ONTAP returned {status_code}')
+        self.status_code = status_code
+
+
 class FileContentsRefused(Exception):
     """a request that could read a file on the SVM. The role cannot stop this on every volume."""
 
@@ -149,7 +157,7 @@ class OntapClient:
         if response.status_code == 404:
             raise FileNotFoundError()
         if response.status_code != 200:
-            raise RuntimeError(f'ONTAP returned {response.status_code}')
+            raise OntapRequestFailed(response.status_code)
         return response.json()
 
     def quota_reports(self) -> List[Dict]:

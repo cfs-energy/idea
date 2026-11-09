@@ -597,6 +597,79 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
     assert analytics._failed_at == 0
 
 
+def filer(monkeypatch, tree, answers):
+    """FolderAnalytics over the real ONTAP client, with the HTTP layer answering by path."""
+    from ideaclustermanager.app.filesystem import ontap_analytics
+    from ideaclustermanager.app.metrics import storage_metrics_service
+
+    analytics = fake_analytics(monkeypatch, tree)
+    monkeypatch.setattr(
+        ontap_analytics, 'OntapClient', storage_metrics_service.OntapClient
+    )
+    sent = []
+
+    def get(url, **kwargs):
+        path = url.split('.invalid', 1)[1]
+        sent.append(path)
+        if path.startswith('/api/storage/volumes?'):
+            records = [
+                dict(
+                    name='profiles',
+                    uuid='u-1',
+                    nas=dict(path='/profiles'),
+                    files=dict(used=100),
+                    analytics=dict(state='on', file_count=100),
+                )
+            ]
+            return Mock(status_code=200, json=lambda: dict(records=records))
+        if 'return_metadata' in path:
+            return Mock(status_code=200, json=lambda: dict(records=[{}]))
+        for name, (status, page) in answers.items():
+            if path.split('?')[0].endswith(name):
+                return Mock(status_code=status, json=lambda page=page: page, text='')
+        raise AssertionError(path)
+
+    monkeypatch.setattr(storage_metrics_service.requests, 'get', get)
+    return analytics, sent
+
+
+@pytest.mark.parametrize('status', (400, 403, 404))
+def test_one_persons_refused_path_leaves_analytics_on_for_everyone(
+    monkeypatch, tree, status
+):
+    # GetStorageUsage on a file: ONTAP says 400 not a directory, about that path only
+    listing = dict(records=[analytics_row('.', 1000, 40), analytics_row('a', 10, 1)])
+    analytics, sent = filer(
+        monkeypatch,
+        tree,
+        {'%2Falice%2F.bashrc': (status, {}), '%2Falice': (200, listing)},
+    )
+    assert analytics.folder(tree + '/.bashrc') is None
+    assert analytics.status(tree)['state'] == 'on'
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+    assert analytics._failed_at == 0
+
+
+@pytest.mark.parametrize('status', (401, 429, 500, 503))
+def test_a_filer_failure_still_backs_off_for_everyone(monkeypatch, tree, status):
+    analytics, sent = filer(monkeypatch, tree, {'%2Falice': (status, {})})
+    assert analytics.folder(tree) is None
+    reads = len(sent)
+    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.folder(tree + '/reports') is None
+    assert len(sent) == reads
+
+
+def test_a_refused_content_read_is_about_that_path(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+    from ideaclustermanager.app.metrics.storage_metrics_service import (
+        FileContentsRefused,
+    )
+
+    assert ontap_analytics.refused_this_path(FileContentsRefused())
+    assert not ontap_analytics.refused_this_path(RuntimeError('timed out'))
+
+
 def test_analytics_on_but_first_scan_unfinished_is_initializing(monkeypatch, tree):
     volumes = [
         dict(

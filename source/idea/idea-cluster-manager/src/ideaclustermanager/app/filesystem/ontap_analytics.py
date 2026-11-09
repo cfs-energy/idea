@@ -15,7 +15,10 @@ from collections import OrderedDict
 from datetime import date, datetime, timezone
 from urllib.parse import quote
 
-from ideaclustermanager.app.metrics.storage_metrics_service import OntapClient
+from ideaclustermanager.app.metrics.storage_metrics_service import (
+    FileContentsRefused,
+    OntapClient,
+)
 
 VOLUMES = (
     '/api/storage/volumes?return_records=true&max_records=1000'
@@ -44,6 +47,18 @@ RETRY_SECONDS = 60
 READ_TIMEOUT_SECONDS = 10
 MAX_CONCURRENT_READS = 4
 MAX_CACHED_FOLDERS = 5000
+# what ONTAP answers about the filer itself: a bad login, a timeout, too many requests
+FILER_ERRORS = {401, 408, 429}
+
+
+def refused_this_path(error):
+    """ONTAP refused this one path (a file, not a folder, or a volume the role cannot read), or
+    the guard did before sending it. Anyone can ask for any path, so that says nothing about the
+    filer, and must not turn analytics off for everyone else."""
+    if isinstance(error, (FileNotFoundError, FileContentsRefused)):
+        return True
+    status = getattr(error, 'status_code', None)
+    return isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
 
 
 def bucket_end(label):
@@ -295,10 +310,13 @@ class FolderAnalytics:
                 client = self._client(status['target'])
                 labels = self._bucket_labels(client, status['uuid'])
                 records, truncated = self._listing(client, request)
-        except FileNotFoundError:
-            return None
         except Exception as e:
-            self._failed(e)
+            if refused_this_path(e):
+                # Names and paths stay out of the log here too.
+                status = getattr(e, 'status_code', type(e).__name__)
+                self.logger.info(f'storage analytics refused one folder: {status}')
+            else:
+                self._failed(e)
             return None
         own = None
         children = []
