@@ -76,4 +76,11 @@ rm -rf /root/bootstrap/logs
 # builder's offset, so the stream started minutes into the host's bootstrap.
 systemctl stop amazon-cloudwatch-agent 2>/dev/null || true
 rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
+# That agent ships the system log from its start on a clone, and rsyslog with no saved
+# position replays the journal: both held the builder's lines, so every node's log stream
+# opened with them. Stopped first, so nothing more lands in the image before it is captured.
+systemctl stop rsyslog 2>/dev/null || true
+rm -f /var/lib/rsyslog/imjournal.state
+rm -f /var/log/messages* /var/log/syslog*
+rm -rf /var/log/journal/*
 /bin/sync

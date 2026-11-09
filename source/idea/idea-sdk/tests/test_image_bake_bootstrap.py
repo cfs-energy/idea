@@ -934,6 +934,32 @@ def test_scrub_restarts_kdump_after_its_last_fstab_write(
     assert ('restart kdump.service' in calls.read_text()) == enabled
 
 
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+def test_scrub_leaves_no_builder_lines_for_a_clones_log_stream(tmp_path, builder):
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    block = scrub[scrub.index('systemctl stop rsyslog') : scrub.index('/bin/sync')]
+    root = tmp_path / 'root'
+    journal = root / 'var/log/journal'
+    (journal / 'builder-machine-id').mkdir(parents=True)
+    (journal / 'builder-machine-id/system.journal').write_text('builder')
+    (root / 'var/lib/rsyslog').mkdir(parents=True)
+    (root / 'var/lib/rsyslog/imjournal.state').write_text('cursor')
+    for name in ('messages', 'messages-20261109', 'syslog', 'syslog.1', 'secure'):
+        (root / 'var/log' / name).write_text('builder')
+    block = block.replace('/var/', f'{root}/var/')
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert 'stop rsyslog' in calls.read_text()
+    assert sorted(p.name for p in (root / 'var/log').iterdir()) == ['journal', 'secure']
+    # the directory stays: journald keeps the clone's journal persistent only if it exists
+    assert list(journal.iterdir()) == []
+    assert not (root / 'var/lib/rsyslog/imjournal.state').exists()
+    # the cloudwatch agent is stopped before rsyslog, so it ships nothing more from the builder
+    assert scrub.index('systemctl stop amazon-cloudwatch-agent') < scrub.index(
+        'systemctl stop rsyslog'
+    )
+
+
 def test_a_failed_scrub_names_the_command(tmp_path):
     scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
     trap = next(line for line in scrub.splitlines() if line.startswith('trap '))
