@@ -32,6 +32,8 @@ import time
 BUCKET_SECONDS = 300
 SECONDS_PER_DAY = 86400
 ENABLED_KEY = 'metrics.health.enabled'
+# how often a collector that is not due, not on the leader or switched off looks again
+LOOK_EVERY_SECONDS = 30
 
 ACCESS_DENIED_CODES = {
     'AccessDenied',
@@ -183,17 +185,26 @@ class CollectorRunner:
     def _loop(self, collector: HealthCollector):
         # replicas and restarts do not all read at the same second
         self._exit.wait(random.uniform(0, min(30, collector.interval_seconds)))
+        # a task is appointed leader minutes after it starts, and leadership moves: an hourly
+        # collector that only looked once an interval would first read an interval after that
+        due = 0.0
         while not self._exit.is_set():
             try:
                 if (
-                    not collector.leader_only or self.context.is_leader()
-                ) and self.is_enabled(collector):
+                    (not collector.leader_only or self.context.is_leader())
+                    and self.is_enabled(collector)
+                    and time.monotonic() >= due
+                ):
                     self.run_once(collector)
+                    due = time.monotonic() + collector.interval_seconds
             except Exception as e:
                 self.logger.warning(
                     f'{collector.name} collector loop: {type(e).__name__}'
                 )
-            self._exit.wait(collector.interval_seconds)
+            remaining = due - time.monotonic()
+            self._exit.wait(
+                remaining if 0 < remaining < LOOK_EVERY_SECONDS else LOOK_EVERY_SECONDS
+            )
 
     def start(self):
         provider = self.context.config().get_string('metrics.provider')

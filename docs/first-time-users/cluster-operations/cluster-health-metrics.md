@@ -2,7 +2,7 @@
 
 The cluster reports its own health as `idea.health.*` metrics over DogStatsD, so what happened stays on record for Datadog's 15 months when logs have long gone. Every point carries `idea_cluster` and no agent container tags. They flow only when `metrics.provider` is `dogstatsd`.
 
-Each concern is a collector with its own thread, its own time limit and its own off switch. One raising an error reports it as a gauge; one that hangs is left behind and reported, and no second copy starts behind it. Collectors other than the bastion run on the leader of their module.
+Each concern is a collector with its own thread, its own time limit and its own off switch. One raising an error reports it as a gauge; one that hangs is left behind and reported, and no second copy starts behind it. Collectors other than the bastion run on the leader of their module. A task that becomes leader, at start or when leadership moves, reads within 30 seconds, then once an interval.
 
 ## Off switches
 
