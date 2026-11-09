@@ -773,7 +773,8 @@ class BastionMetrics(unittest.TestCase):
         metrics.sshd_check = lambda real=metrics.sshd_check: real(('127.0.0.1', port))
         found = metrics.lines('idea-com', tally)
         self.assertIn(
-            'idea.health.bastion.sshd_up:0|g|#idea_cluster:idea-com|card:none', found
+            'idea.health.bastion.sshd_up:0|g|#idea_cluster:idea-com,idea_module:bastion-host|card:none',
+            found,
         )
         self.assertFalse([line for line in found if 'sshd_check_seconds' in line])
 
