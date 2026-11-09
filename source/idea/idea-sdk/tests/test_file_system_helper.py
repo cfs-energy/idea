@@ -769,3 +769,39 @@ def test_upload_reports_a_cleaned_up_name(numeric_tree):
     assert result['payload']['files_renamed'] == [
         {'original_name': 'my data.csv', 'final_name': 'my_data.csv'}
     ]
+
+
+def run_generate_download_url(server, request):
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(server.generate_download_url_route(request))
+    finally:
+        loop.close()
+
+
+def test_asking_for_a_download_link_with_no_session_is_refused_not_a_server_error():
+    # dev: a POST with no token answered 500 and logged two tracebacks, since the error
+    # handler named the file before the request body had been read
+    from ideasdk.server.soca_server import SocaServer
+
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    server._api_invocation_handler = Mock()
+    server._api_invocation_handler.get_username.return_value = None
+    response = run_generate_download_url(server, Mock(json={'file': '/data/x'}))
+    assert response.status == 401
+    assert Utils.from_json(response.body)['error_code'] == errorcodes.UNAUTHORIZED_ACCESS
+    server._logger.error.assert_not_called()
+
+
+def test_a_download_link_request_that_fails_before_its_body_is_read_still_answers():
+    from ideasdk.server.soca_server import SocaServer
+
+    server = object.__new__(SocaServer)
+    server._logger = Mock()
+    server._api_invocation_handler = Mock()
+    server._api_invocation_handler.get_username.side_effect = RuntimeError('boom')
+    response = run_generate_download_url(server, Mock(json={'file': '/data/x'}))
+    assert Utils.from_json(response.body)['error_code'] == errorcodes.GENERAL_ERROR
