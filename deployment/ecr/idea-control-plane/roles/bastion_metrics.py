@@ -7,6 +7,7 @@ writes (each line holds just the phrase that matched).
 """
 
 import os
+import re
 import socket
 import sys
 import time
@@ -19,6 +20,8 @@ DROPS_MAX_BYTES = 1024 * 1024
 TCP_ESTABLISHED = '01'
 SSH_PORT_HEX = f'{22:04X}'
 # what sshd sends a connection it drops, under MaxStartups or a penalty (loopback has none)
+# a login name may hold an @ itself, and sshd shows it in its monitor's and pre-auth titles
+SESSION_TITLE = re.compile(rb'(sshd|sshd-session): .*@(pts/\d+|notty)$')
 REFUSED = b'Not allowed at this time'
 # the line the task's own checks add to the tally when sshd refuses them (bastion_health.sh)
 LOOPBACK_REFUSED = b'loopback check refused'
@@ -35,7 +38,7 @@ def active_sessions(proc_root: str = '/proc') -> int:
                 title = handle.read(256).split(b'\0', 1)[0]
         except OSError:
             continue
-        if title.startswith((b'sshd: ', b'sshd-session: ')) and b'@' in title:
+        if SESSION_TITLE.match(title):
             count += 1
     return count
 
