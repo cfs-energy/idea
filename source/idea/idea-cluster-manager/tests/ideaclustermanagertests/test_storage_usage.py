@@ -743,7 +743,12 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
 
 
 def filer(
-    monkeypatch, tree, answers, labels=(200, dict(records=[{}])), volumes=None, closed=()
+    monkeypatch,
+    tree,
+    answers,
+    labels=(200, dict(records=[{}])),
+    volumes=None,
+    closed=(),
 ):
     """FolderAnalytics over the real ONTAP client, with the HTTP layer answering by path. The role
     cannot read /files on the volumes in closed."""
