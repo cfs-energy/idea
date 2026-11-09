@@ -37,6 +37,7 @@ import logging
 import re
 import sqlite3
 import tempfile
+import time
 from contextlib import closing
 from pathlib import Path
 from threading import Event, RLock, Thread
@@ -165,6 +166,9 @@ class JobsDB:
     PRUNE_BATCH_SIZE = 500
     PRUNE_MAX_BATCHES = 20
     PRUNE_BATCH_PAUSE_SECONDS = 1
+    # a copy in flight keeps writing its temporary file, so one untouched this long was
+    # left by a killed task. the age also spares a stopping task's last copy.
+    STALE_COPY_SECONDS = 3600
 
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
@@ -230,6 +234,7 @@ class JobsDB:
         self._db_lock = RLock()  # Keep the RLock for database operations
         self.init_db()
         if self._backup_file:
+            self._remove_stale_copies()
             self._backup_thread = Thread(
                 target=self._backup_loop, name='job-cache-backup', daemon=True
             )
@@ -266,6 +271,21 @@ class JobsDB:
             if os.path.exists(temporary_file):
                 os.remove(temporary_file)
 
+    def _remove_stale_copies(self):
+        """
+        A task killed during a copy leaves its temporary file, as large as the cache, on
+        storage that outlives the task. Nothing else ever removes it.
+        """
+        try:
+            backup_dir = Path(self._backup_file).parent
+            cutoff = time.time() - self.STALE_COPY_SECONDS
+            for leftover in backup_dir.glob('.job-cache-*'):
+                if leftover.stat().st_mtime < cutoff:
+                    leftover.unlink()
+                    self._logger.info(f'removed unfinished job cache copy {leftover}')
+        except OSError as e:
+            self._logger.warning(f'could not remove unfinished job cache copies: {e}')
+
     def backup(self, force: bool = False) -> bool:
         """
         Copy the cache to persistent storage when it changed since the last copy, or when
@@ -295,6 +315,7 @@ class JobsDB:
 
     def _backup_loop(self):
         while not self._stop.wait(self._backup_interval):
+            self._remove_stale_copies()
             self.backup()
 
     @staticmethod
@@ -376,13 +397,18 @@ class JobsDB:
                 self._logger.error(f'finished job prune failed: {e}')
 
     def stop(self):
-        """an orderly stop leaves a current copy behind"""
+        """
+        An orderly stop leaves a current copy behind, when the copy fits in what is left of
+        the task's stop allowance. A copy in flight is waited for and, if nothing was
+        committed since it began, is the final one: a second whole-file copy could run past
+        the allowance and be killed half written.
+        """
         self._stop.set()
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=30)
         if self._backup_thread is not None:
             self._backup_thread.join(timeout=30)
-        self.backup(force=True)
+        self.backup()
         if self._backup_connection is not None:
             self._backup_connection.close()
             self._backup_connection = None
@@ -787,6 +813,10 @@ class JobsDB:
                 tx[JOB_PROVISIONING_ERRORS].delete(job_id=job_id)
                 tx[JOB_PROVISIONING_RETRIES].delete(job_id=job_id)
 
+    def delete_license_ask(self, job_id: str):
+        with self._db_lock:
+            self.db[ACTIVE_JOB_LICENSES_TABLE].delete(job_id=job_id)
+
     def delete_many(self, job_ids: List[str]):
         with self._db_lock:
             with self.db:
@@ -1133,6 +1163,9 @@ class JobCache(JobCacheProtocol):
 
     def add_active_licenses(self, jobs: List[SocaJob]):
         self._jobs_db.add_license_ask(jobs)
+
+    def release_active_licenses(self, job_id: str):
+        self._jobs_db.delete_license_ask(job_id)
 
     def convert_db_entry_to_job(
         self, entry: Dict, fetch_errors: bool = False

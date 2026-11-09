@@ -8,6 +8,7 @@ to prove all raw SQL statements use parameter binding.
 
 import glob
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -154,6 +155,67 @@ def test_stop_flushes_a_final_copy_without_waiting_out_the_default_interval(
             ).fetchone()[0]
             == 1
         )
+
+
+def test_stop_does_not_repeat_a_copy_that_is_already_current(tmp_path, monkeypatch):
+    """
+    stop() waits for a copy in flight. a second whole-file copy of the same data only
+    spends the task's stop allowance, and a copy killed part way leaves its temporary
+    file behind.
+    """
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    db = cache._jobs_db
+    add_finished_job_aged(cache, 'before', 1)
+    assert db.backup() is True
+    copies = []
+    publish_copy = db._publish_copy
+    monkeypatch.setattr(
+        db,
+        '_publish_copy',
+        lambda source, destination: (
+            copies.append(destination),
+            publish_copy(source, destination),
+        ),
+    )
+    cache.stop()
+    assert copies == []
+
+
+def test_copies_left_by_a_killed_task_are_removed(tmp_path, monkeypatch):
+    """
+    a task killed during a copy leaves a temporary file as large as the cache on the
+    shared volume, and its journal. a fresh one may be another task's copy in flight.
+    """
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    backup_dir = tmp_path / 'pbs/idea/db'
+    backup_dir.mkdir(parents=True)
+    two_hours_ago = time.time() - 7200
+    for name in ('.job-cache-killed1', '.job-cache-killed1-journal'):
+        (backup_dir / name).write_bytes(b'partial')
+        os.utime(backup_dir / name, (two_hours_ago, two_hours_ago))
+    (backup_dir / '.job-cache-inflight').write_bytes(b'partial')
+    (backup_dir / 'unrelated').write_bytes(b'kept')
+
+    cache = JobCache(
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=0.05
+        )
+    )
+    assert sorted(p.name for p in backup_dir.iterdir()) == [
+        '.job-cache-inflight',
+        'unrelated',
+    ]
+    # the copy loop sweeps too: a task that outlives the leftover's age removes it
+    os.utime(backup_dir / '.job-cache-inflight', (two_hours_ago, two_hours_ago))
+    deadline = time.monotonic() + 5
+    while (backup_dir / '.job-cache-inflight').exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    cache.stop()
+    assert sorted(p.name for p in backup_dir.iterdir()) == [
+        'job-cache-v3.db',
+        'unrelated',
+    ]
 
 
 def test_host_job_cache_has_no_backup(tmp_path):
