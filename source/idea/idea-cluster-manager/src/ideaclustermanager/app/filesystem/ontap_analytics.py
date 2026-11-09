@@ -89,6 +89,25 @@ def bucket_end(label):
         return None
 
 
+def bucket_start(label):
+    """the first day a histogram bucket covers, or None for one with no start: --2015."""
+    try:
+        if label.startswith('--'):
+            return None
+        if '-W' in label:
+            year, week = label.split('-W')
+            return datetime.strptime(f'{year}-{week}-1', '%G-%V-%u').date()
+        if '-Q' in label:
+            year, quarter = label.split('-Q')
+            return date(int(year), int(quarter) * 3 - 2, 1)
+        if '-' in label:
+            year, month = (int(part) for part in label.split('-'))
+            return date(year, month, 1)
+        return date(int(label), 1, 1)
+    except (ValueError, AttributeError):
+        return None
+
+
 def ages(analytics, labels, now):
     """(bytes unchanged since before the last three calendar months, newest, oldest). The histogram
     repeats the same bytes as weeks, months, quarters and years, and its only recent buckets are
@@ -100,17 +119,21 @@ def ages(analytics, labels, now):
         0, analytics.get('bytes_used', 0) - recent - buckets.get('unknown', 0)
     )
 
-    def stamp(label):
-        end = bucket_end(label)
-        if end is None:
+    def stamp(day):
+        if day is None:
             return None
-        moment = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
+        moment = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
         return min(now, moment.timestamp())
 
+    # A bucket only says the week, month, quarter or year, and the newest and oldest are named
+    # at different widths. The newest is no later than its bucket's end and the oldest no
+    # earlier than its bucket's start: by the end of both, a month could put the oldest after
+    # a week inside it.
+    newest, oldest = histogram.get('newest_label'), histogram.get('oldest_label')
     return (
         unchanged,
-        stamp(histogram.get('newest_label')),
-        stamp(histogram.get('oldest_label')),
+        stamp(bucket_end(newest)),
+        stamp(bucket_start(oldest) or bucket_end(oldest)),
     )
 
 

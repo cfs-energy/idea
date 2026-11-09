@@ -977,6 +977,36 @@ def test_bucket_labels_end_where_they_should():
     assert bucket_end('unknown') is None
 
 
+def test_the_oldest_change_is_never_after_the_newest():
+    from ideaclustermanager.app.filesystem.ontap_analytics import ages, bucket_start
+    from datetime import date, datetime, timezone
+
+    def day(stamp):
+        return datetime.fromtimestamp(stamp, timezone.utc).date()
+
+    def histogram(newest, oldest):
+        labels = dict(newest_label=newest, oldest_label=oldest)
+        return dict(bytes_used=1, by_modified_time=dict(bytes_used=labels))
+
+    now = datetime(2026, 11, 9, tzinfo=timezone.utc).timestamp()
+    # an administrator's home on idea-dev: newest in a week of October, oldest earlier that month
+    _, newest, oldest = ages(histogram('2026-W42', '2026-10'), MONTHS, now)
+    assert (day(newest), day(oldest)) == (date(2026, 10, 18), date(2026, 10, 1))
+    for label, first in (
+        ('2026-W45', date(2026, 11, 2)),
+        ('2026-Q4', date(2026, 10, 1)),
+        ('2025', date(2025, 1, 1)),
+        ('--2022', None),
+        ('unknown', None),
+    ):
+        assert bucket_start(label) == first
+    for label in MONTHS[:-1]:
+        _, newest, oldest = ages(histogram(label, label), MONTHS, now)
+        assert oldest <= newest <= now
+    # everything from 2022 or before: no start to give, so the last day it could be
+    assert day(ages(histogram('2024', '--2022'), MONTHS, now)[2]) == date(2022, 12, 31)
+
+
 def analytics_service(monkeypatch, tree, folders):
     service, _, _ = make_service(monkeypatch, tree)
     source = Mock()
