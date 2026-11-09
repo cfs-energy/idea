@@ -288,7 +288,11 @@ def shared_filesystems(config, windows: bool) -> List[Tuple[str, str]]:
                 'cifs_share_name'
             ):
                 dns = storage['fsx_netapp_ontap']['svm']['smb_dns']
-                found.append((name, f'\\\\{dns}\\{volume["cifs_share_name"]}'))
+                # the path the desktop maps: one separator between parts, as the bootstrap writes it
+                share = '\\'.join(
+                    part for part in volume['cifs_share_name'].split('\\') if part
+                )
+                found.append((name, f'\\\\{dns}\\{share}'))
             elif storage['provider'] == 'fsx_windows_file_server':
                 dns = storage['fsx_windows_file_server']['dns']
                 found.append((name, f'\\\\{dns}\\share'))

@@ -310,6 +310,22 @@ def test_windows_filesystems_are_the_smb_shares():
     ]
 
 
+def test_a_share_name_stored_with_doubled_separators_is_probed_as_mapped():
+    config = MagicMock()
+    config.get_config.return_value = {
+        'data': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {
+                'svm': {'smb_dns': 'svm.example'},
+                'volume': {'cifs_share_name': 'Users$\\\\home\\\\%UserName%'},
+            },
+        },
+    }
+    assert shared_filesystems(config, windows=True) == [
+        ('data', '\\\\svm.example\\Users$\\home\\%UserName%')
+    ]
+
+
 def test_filesystems_read_from_the_live_config_tree():
     """the cluster config is a pyhocon tree: a key a filesystem leaves out is not an error"""
     from ideasdk.config.soca_config import SocaConfig

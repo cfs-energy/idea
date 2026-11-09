@@ -1274,6 +1274,41 @@ def test_windows_user_data_that_runs_again_after_the_final_restart_is_a_no_op(ba
     assert written < body.rindex('Restart-Computer -Force')
 
 
+def test_windows_drive_paths_have_one_separator_between_parts():
+    """a share name stored with doubled backslashes went into net use as it was"""
+    from types import SimpleNamespace
+
+    shares = {
+        'data': {
+            'provider': 'fsx_netapp_ontap',
+            'mount_drive': 'H',
+            'fsx_netapp_ontap': {
+                'svm': {'smb_dns': 'SVM.EXAMPLE'},
+                'volume': {'cifs_share_name': 'Users$\\\\home\\\\%UserName%'},
+            },
+        },
+        'apps': {
+            'provider': 'fsx_netapp_ontap',
+            'mount_drive': 'A',
+            'fsx_netapp_ontap': {
+                'svm': {'smb_dns': 'SVM.EXAMPLE'},
+                'volume': {'cifs_share_name': 'Apps'},
+            },
+        },
+    }
+    context = SimpleNamespace(
+        config=SimpleNamespace(get_config=lambda key: shares),
+        eval_shared_storage_scope=lambda shared_storage: True,
+    )
+    text = (
+        Environment(loader=FileSystemLoader(IDEA_BOOTSTRAP_DIR))
+        .get_template('_templates/windows/mount_shared_storage.jinja2')
+        .render(context=context)
+    )
+    assert "Path='\\\\SVM.EXAMPLE\\Users$\\home\\%UserName%'" in text
+    assert "Path='\\\\SVM.EXAMPLE\\Apps'" in text
+
+
 @pytest.mark.parametrize('base_os', WINDOWS)
 def test_windows_final_configure_restart_sends_no_reboot_event(base_os):
     """
