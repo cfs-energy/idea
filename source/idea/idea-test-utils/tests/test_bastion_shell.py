@@ -878,6 +878,7 @@ class RealSshd(unittest.TestCase):
             ],
             check=True,
         )
+
         def free_port():
             probe = socket.socket()
             probe.bind(('127.0.0.1', 0))
@@ -990,7 +991,9 @@ class RealSshd(unittest.TestCase):
                 text=True,
             ).stdout
             if '[listener] 0 of ' in title:
-                self.skipTest(f'this sshd counts no startups for held connections: {title}')
+                self.skipTest(
+                    f'this sshd counts no startups for held connections: {title}'
+                )
             # positive control: sshd really refuses the old check now; noted as the checks
             # note theirs, as sshd counts it
             self.assertNotEqual(self.keyscan(), 0)
