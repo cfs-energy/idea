@@ -557,6 +557,11 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         self, software_stack: VirtualDesktopSoftwareStack
     ) -> Dict:
         index_dict = self.convert_software_stack_object_to_db_dict(software_stack)
+        # an index update merges into the stored document: a cleared date must be sent as
+        # null, or the old one stays and every listing keeps warning about it
+        index_dict.setdefault(
+            software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None
+        )
 
         project_ids = Utils.get_value_as_list(
             software_stacks_constants.SOFTWARE_STACK_DB_PROJECTS_KEY, index_dict, []
@@ -864,13 +869,16 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         )
 
         old_db_entry = result['Attributes']
+        # SET leaves attributes the caller did not send, such as a date set since it read
+        # the stack: report the row as it now is, or the index is told that date is gone
+        new_db_entry = {**old_db_entry, **db_entry}
         self.trigger_update_event(
             db_entry[software_stacks_constants.SOFTWARE_STACK_DB_HASH_KEY],
             db_entry[software_stacks_constants.SOFTWARE_STACK_DB_RANGE_KEY],
             old_entry=old_db_entry,
-            new_entry=db_entry,
+            new_entry=new_db_entry,
         )
-        return self.convert_db_dict_to_software_stack_object(db_entry)
+        return self.convert_db_dict_to_software_stack_object(new_db_entry)
 
     def set_expiry(
         self,

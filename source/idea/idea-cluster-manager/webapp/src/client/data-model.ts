@@ -2154,7 +2154,9 @@ export interface SocaComputeNodeResources {
   gpus?: number;
   memory?: SocaMemory;
 }
-export interface ListOrphanInstancesRequest {}
+export interface ListOrphanInstancesRequest {
+  min_age_minutes?: number;
+}
 export interface ListOrphanInstancesResponse {
   listing?: VirtualDesktopOrphanInstance[];
 }

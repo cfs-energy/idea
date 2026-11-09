@@ -186,21 +186,33 @@ class CollectorRunner:
         # replicas and restarts do not all read at the same second
         self._exit.wait(random.uniform(0, min(30, collector.interval_seconds)))
         # a task is appointed leader minutes after it starts, and leadership moves: an hourly
-        # collector that only looked once an interval would first read an interval after that
-        due = 0.0
+        # collector that only looked once an interval would first read an interval after that.
+        # due starts at the clock, not 0: a new task's monotonic clock can be under an interval
+        due = time.monotonic()
         while not self._exit.is_set():
             try:
-                if (
-                    (not collector.leader_only or self.context.is_leader())
-                    and self.is_enabled(collector)
-                    and time.monotonic() >= due
-                ):
-                    self.run_once(collector)
-                    due = time.monotonic() + collector.interval_seconds
+                ready = (
+                    not collector.leader_only or self.context.is_leader()
+                ) and self.is_enabled(collector)
             except Exception as e:
+                ready = False
                 self.logger.warning(
                     f'{collector.name} collector loop: {type(e).__name__}'
                 )
+            now = time.monotonic()
+            if ready and now >= due:
+                # the next read is an interval after this one was due, so a read's own time does
+                # not push the cadence back; a read an interval or more late (the first, a new
+                # leader, switched back on) starts the cadence again. set before the read, so a
+                # read that fails to report still waits its interval
+                interval = collector.interval_seconds
+                due = due + interval if due + interval > now else now + interval
+                try:
+                    self.run_once(collector)
+                except Exception as e:
+                    self.logger.warning(
+                        f'{collector.name} collector loop: {type(e).__name__}'
+                    )
             remaining = due - time.monotonic()
             self._exit.wait(
                 remaining if 0 < remaining < LOOK_EVERY_SECONDS else LOOK_EVERY_SECONDS

@@ -58,9 +58,8 @@ class DcvSessionRecovery:
                 if resume:
                     return session.state != VirtualDesktopSessionState.RESUMING
                 return session.state != VirtualDesktopSessionState.INITIALIZING
-            if resume:
+            if resume and session.state != VirtualDesktopSessionState.READY:
                 if session.state not in {
-                    VirtualDesktopSessionState.READY,
                     VirtualDesktopSessionState.RESUMING,
                     VirtualDesktopSessionState.STOPPED,
                     VirtualDesktopSessionState.ERROR,
@@ -73,13 +72,15 @@ class DcvSessionRecovery:
             ):
                 self.reconcile(session)
             elif session.state == VirtualDesktopSessionState.READY:
+                # a reboot event for a READY desktop still asks the broker first: the restart
+                # that ends windows configuration reports one after READY with the session intact
                 response = self.broker.describe_sessions([session])
                 current = response.get('sessions', {}).get(session.dcv_session_id, {})
                 if current.get('state') == 'READY':
                     if session.recovery_unready_observed:
                         session.recovery_unready_observed = False
                         self.save(session)
-                elif session.recovery_unready_observed:
+                elif resume or session.recovery_unready_observed:
                     self.start(session)
                 else:
                     session.recovery_unready_observed = True

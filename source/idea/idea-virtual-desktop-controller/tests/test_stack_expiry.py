@@ -18,6 +18,7 @@ from ideadatamodel import (
     VirtualDesktopSession,
     VirtualDesktopServer,
     VirtualDesktopSoftwareStack,
+    errorcodes,
     exceptions,
 )
 from ideavirtualdesktopcontroller.app.software_stacks import stack_expiry as module
@@ -453,11 +454,45 @@ def test_clearing_removes_the_attribute_and_only_the_date(monkeypatch):
     assert ':exp' not in request['ExpressionAttributeValues']
 
 
+def test_an_update_reports_a_date_set_since_the_caller_read_the_stack(monkeypatch):
+    # an image repoint that read the stack just before an admin dated it wrote the stack
+    # back without the date: the table kept it, but the index was sent null and hid it
+    on = NOW + timedelta(days=5)
+    stored = VirtualDesktopSoftwareStackDB.convert_software_stack_object_to_db_dict(
+        stack('dated', expires_on=on)
+    )
+    table = Mock()
+    table.update_item.return_value = {'Attributes': stored}
+    monkeypatch.setattr(VirtualDesktopSoftwareStackDB, '_table', table)
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db.trigger_update_event = Mock()
+    read_before = stack('dated')
+    read_before.ami_id = 'ami-new'
+    updated = db.update(read_before)
+    assert 'expires_on' not in table.update_item.call_args.kwargs['UpdateExpression']
+    assert updated.expires_on.timestamp() == on.timestamp()
+    assert updated.ami_id == 'ami-new'
+    sent = db.trigger_update_event.call_args.kwargs['new_entry']
+    assert sent['expires_on'] == stored['expires_on']
+
+
 def test_the_clear_request_is_never_stored():
     db_dict = VirtualDesktopSoftwareStackDB.convert_software_stack_object_to_db_dict(
         stack(clear_expires_on=True)
     )
     assert 'clear_expires_on' not in db_dict
+
+
+def test_a_cleared_date_reaches_the_index_as_null():
+    # the index applies an update as a merge, so a key left out keeps the old date
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    index_dict = db.convert_software_stack_object_to_index_dict(stack())
+    assert 'expires_on' in index_dict and index_dict['expires_on'] is None
+    read = db.convert_index_dict_to_software_stack_object(index_dict)
+    assert read.expires_on is None
+    on = NOW + timedelta(days=5)
+    dated = db.convert_software_stack_object_to_index_dict(stack(expires_on=on))
+    assert dated['expires_on'] == int(on.timestamp() * 1000)
 
 
 def test_owner_and_date_round_trip():
@@ -651,6 +686,47 @@ def test_an_instance_with_no_session_row_is_listed_and_nothing_is_done_to_it():
     ec2 = finder.context.aws().ec2()
     ec2.terminate_instances.assert_not_called()
     ec2.stop_instances.assert_not_called()
+
+
+def test_with_no_grace_a_new_instance_is_listed_unless_a_row_names_it():
+    # the default hour hides every new desktop, so a check of the row matching made while
+    # desktops are new passes even if the matching is broken; with no grace it can fail
+    finder, _ = orphans(
+        [instance('i-new', age_hours=0), instance('i-new-known', age_hours=0)],
+        ['i-new-known'],
+    )
+    assert finder.list(NOW) == []
+    listed = finder.list(NOW, min_age=timedelta(0))
+    assert [o.instance_id for o in listed] == ['i-new']
+
+
+def test_the_admin_list_takes_the_grace_in_minutes_and_refuses_a_negative():
+    api = admin_api(stack())
+    # the API reads the clock: launched just now
+    launched = instance('i-new')
+    launched['LaunchTime'] = datetime.now(timezone.utc)
+    api.context.aws().ec2().get_paginator().paginate.return_value = [
+        {'Reservations': [{'Instances': [launched]}]}
+    ]
+    api.session_db.list_all_from_db.return_value = SimpleNamespace(
+        listing=[], cursor=None
+    )
+    for minutes, expected in ((None, []), (60, []), (0, ['i-new'])):
+        call = invocation(min_age_minutes=minutes)
+        api.list_orphan_instances(call)
+        listing = call.success.call_args.args[0].listing
+        assert [o.instance_id for o in listing] == expected, minutes
+    with pytest.raises(exceptions.SocaException):
+        api.list_orphan_instances(invocation(min_age_minutes=-1))
+
+
+@pytest.mark.parametrize('minutes', [525601, 10**13])
+def test_the_admin_list_refuses_a_grace_longer_than_a_year(minutes):
+    # 10**13 minutes is past what a timedelta holds and came back as a server error
+    api = admin_api(stack())
+    with pytest.raises(exceptions.SocaException) as error:
+        api.list_orphan_instances(invocation(min_age_minutes=minutes))
+    assert error.value.error_code == errorcodes.INVALID_PARAMS
 
 
 def test_the_count_is_a_level_and_a_failed_read_publishes_no_zero():

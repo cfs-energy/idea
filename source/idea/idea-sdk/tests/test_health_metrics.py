@@ -128,6 +128,106 @@ def test_each_collector_has_an_off_switch_and_all_share_one():
     ).is_enabled(sample)
 
 
+class Clock:
+    """stands in for the runner's exit event and time.monotonic: a wait moves the clock on, and
+    the loop stops once the clock reaches `until` seconds after its start."""
+
+    def __init__(self, until):
+        self.now = 1000.0
+        self.until = self.now + until
+        self.seconds = []
+
+    def monotonic(self):
+        return self.now
+
+    def is_set(self):
+        return self.now >= self.until
+
+    def wait(self, seconds):
+        self.seconds.append(seconds)
+        self.now += seconds
+
+
+def run_loop(monkeypatch, sample, found, clock, runner=None):
+    from ideasdk.metrics import health
+
+    monkeypatch.setattr(health.time, 'monotonic', clock.monotonic)
+    monkeypatch.setattr(health.random, 'uniform', lambda low, high: 0)
+    runner = runner or CollectorRunner(found, [sample])
+    runner._exit = clock
+    runner._loop(sample)
+
+
+def test_a_collector_that_was_not_yet_leader_runs_once_elected_not_an_interval_later(
+    monkeypatch,
+):
+    clock = Clock(3600)
+    starts = []
+    sample = collector(lambda m: starts.append(clock.now))
+    sample.interval_seconds = 6 * 3600
+    found = context()
+    # elected a minute or two after start, as a new task is
+    found.is_leader.side_effect = lambda: clock.now >= 1090
+    run_loop(monkeypatch, sample, found, clock)
+    assert starts == [1090.0]
+
+
+def test_a_failed_leader_or_switch_read_looks_again_soon_not_an_interval_later(
+    monkeypatch,
+):
+    clock = Clock(3600)
+    starts = []
+    sample = collector(lambda m: starts.append(clock.now))
+    sample.interval_seconds = 6 * 3600
+    found = context()
+    found.is_leader.side_effect = [RuntimeError('lock table')] + [True] * 200
+    run_loop(monkeypatch, sample, found, clock)
+    assert starts == [1030.0]
+    assert 'RuntimeError' in str(found.logger().warning.call_args_list)
+
+
+def test_a_collector_that_ran_and_then_failed_to_report_waits_its_interval(monkeypatch):
+    clock = Clock(6 * 3600 - 60)
+    starts = []
+    sample = collector(lambda m: starts.append(clock.now))
+    sample.interval_seconds = 6 * 3600
+    found = context()
+    runner = CollectorRunner(found, [sample])
+    runner._report = Mock(side_effect=RuntimeError('agent gone'))
+    run_loop(monkeypatch, sample, found, clock, runner)
+    assert starts == [1000.0]
+
+
+def test_a_read_that_takes_time_does_not_push_the_next_one_back(monkeypatch):
+    # each read takes 0.2 s: timed from the end of the last read, a 60 s collector drifts and
+    # skips a one-minute bucket every few hours
+    clock = Clock(600)
+    starts = []
+
+    def work(metrics):
+        starts.append(clock.now)
+        clock.now += 0.2
+
+    sample = collector(work, limit=5)
+    sample.interval_seconds = 60
+    found = context()
+    run_loop(monkeypatch, sample, found, clock)
+    assert [round(s - 1000, 6) for s in starts] == [60.0 * i for i in range(10)]
+
+
+def test_a_late_read_starts_a_new_cadence_instead_of_reading_twice(monkeypatch):
+    clock = Clock(4 * 3600)
+    starts = []
+    sample = collector(lambda m: starts.append(clock.now))
+    sample.interval_seconds = 3600
+    found = context()
+    # leader for the first read, then not for nearly three hours, then leader again
+    found.is_leader.side_effect = lambda: not (1100 < clock.now < 1000 + 3 * 3600)
+    run_loop(monkeypatch, sample, found, clock)
+    # the first read, then the read once leader again; the next is an interval after that
+    assert starts == [1000.0, 1000.0 + 3 * 3600]
+
+
 def test_other_providers_get_nothing_they_would_be_billed_for():
     found = context(provider='cloudwatch')
     HealthMetrics(found).level('cert.days_to_expiry', 3)
