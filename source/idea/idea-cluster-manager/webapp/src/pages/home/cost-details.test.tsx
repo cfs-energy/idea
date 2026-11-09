@@ -235,7 +235,7 @@ describe('shared cost details and storage usage', () => {
             progress: {running: false, step: 'Finished', done: 9, total: 9, started_at: measured, steps: []}
         });
         renderMyCosts();
-        expect(await screen.findByText("At least 900 GiB of that is outside your home folder. Your home folder's size counts files anyone owns in it and the quota counts only yours, so the real figure can be higher.", {}, {timeout: 10000})).toBeInTheDocument();
+        expect(await screen.findByText("At least 900 GiB of that is outside your home folder. Your quota and your home folder's size are measured differently, and the folder's size also counts files other people own in it, so the real figure can be higher.", {}, {timeout: 10000})).toBeInTheDocument();
         expect(screen.getByText('models')).toBeInTheDocument();
         const user = userEvent.setup();
         await user.click(screen.getByRole('link', {name: 'runs'}));
