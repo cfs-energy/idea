@@ -1,6 +1,6 @@
 # Cluster health metrics
 
-The cluster reports its own health as `idea.health.*` metrics over DogStatsD, so what happened stays on record for Datadog's 15 months when logs have long gone. Every point carries `idea_cluster` and no agent container tags. They flow only when `metrics.provider` is `dogstatsd`.
+The cluster reports its own health as `idea.health.*` metrics over DogStatsD, so what happened stays on record for Datadog's 15 months when logs have long gone. Every point carries `idea_cluster` and `idea_module`, the module that read it. The agent also adds tags for the task that sent it, such as `service`, `ecs_service`, `task_version` and `host`, so group by IDEA's own tags rather than those. They flow only when `metrics.provider` is `dogstatsd`.
 
 Each concern is a collector with its own thread, its own time limit and its own off switch. One raising an error reports it as a gauge; one that hangs is left behind and reported, and no second copy starts behind it. Collectors other than the bastion run on the leader of their module. A task that becomes leader, at start or when leadership moves, reads within 30 seconds, then once an interval.
 
@@ -39,7 +39,7 @@ Every five minutes, from the module's existing ECS read.
 | `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `ecs_service_name` | 1 while a deployment rolls out, or has failed. |
 | `idea.health.ecs.rollouts` | `ecs_service_name` | Deployments started in a five minute bucket. |
 
-ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader rewrites a point rather than adding to it. Stops are lost only if every cluster manager task is gone for over 50 minutes.
+ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, with no `host`, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader's read rewrites a point rather than adding to it. The agent's tags for the sending task still differ across a cluster manager deployment, when the old and new tasks can both send a bucket, so read these counts and `secd_events` with `max` across series and then sum over time, for example `sum(last_1h):max:idea.health.ecs.task_stops{reason:health_check} by {idea_cluster,ecs_service_name}.as_count()`. Stops are lost only if every cluster manager task is gone for over 50 minutes.
 
 ## File server and directory
 

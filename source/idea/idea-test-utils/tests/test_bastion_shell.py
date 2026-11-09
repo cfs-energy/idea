@@ -573,7 +573,7 @@ class BastionMetrics(unittest.TestCase):
         metrics.established_connections = lambda: 4
         tally = SimpleNamespace(read=lambda: {('maxstartups', 'remote'): 2})
         found = metrics.lines('idea-com', tally)
-        base = '#idea_cluster:idea-com'
+        base = '#idea_cluster:idea-com,idea_module:bastion-host'
         self.assertIn(f'idea.health.bastion.sshd_up:1|g|{base}|card:none', found)
         self.assertIn(f'idea.health.bastion.sessions:3|g|{base}|card:none', found)
         self.assertIn(

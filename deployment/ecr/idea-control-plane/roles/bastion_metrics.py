@@ -103,7 +103,7 @@ class DropTally:
 
 def lines(cluster: str, tally: DropTally, proc_root: str = '/proc'):
     # by cluster: each task has its own host, and the hostname of a task is its private address
-    base = f'idea_cluster:{cluster}'
+    base = f'idea_cluster:{cluster},idea_module:bastion-host'
 
     def gauge(name, value):
         return f'idea.health.bastion.{name}:{value}|g|#{base}|card:none'

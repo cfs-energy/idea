@@ -1,6 +1,10 @@
 from ideasdk.protocols import MetricsProviderProtocol, SocaContextProtocol
 from ideasdk.utils import Utils
-from ideasdk.metrics.datadog_format import COLLECTOR_PREFIXES, DatadogFormat
+from ideasdk.metrics.datadog_format import (
+    COLLECTOR_PREFIXES,
+    HEALTH_PREFIX,
+    DatadogFormat,
+)
 
 from typing import Dict, List, Optional, Tuple
 from threading import RLock
@@ -74,18 +78,23 @@ class DogStatsdMetrics(DatadogFormat, MetricsProviderProtocol):
         metric_type = _METRIC_TYPES.get(entry.get('MetricType'), 'g')
         collector = name.startswith(COLLECTOR_PREFIXES)
         metric_name, tags = self.name_and_tags(entry)
-        line = f'{metric_name}:{self._value(value)}|{metric_type}'
-        if len(tags) > 0:
-            line = f'{line}|#{",".join(tags)}'
         # An epoch Timestamp stamps the point at that time: Cost Explorer's day, not the
         # scrape. The agent forwards gauges and counts with a timestamp as they are, so the
         # value must already be the total for that time.
         timestamp = entry.get('Timestamp')
-        if (
+        stamped = (
             isinstance(timestamp, (int, float))
             and not isinstance(timestamp, bool)
             and metric_type in ('g', 'c')
-        ):
+        )
+        if stamped and name.startswith(HEALTH_PREFIX):
+            # a health bucket's whole total is sent again by each read and by the next leader:
+            # an empty host tag drops the agent's host, so another sender rewrites the point
+            tags = [*tags, 'host:']
+        line = f'{metric_name}:{self._value(value)}|{metric_type}'
+        if len(tags) > 0:
+            line = f'{line}|#{",".join(tags)}'
+        if stamped:
             line = f'{line}|T{int(timestamp)}'
         # Socket peer credentials can enrich points even without a container ID.
         # Infrastructure totals must not inherit the identity of the collecting task.
