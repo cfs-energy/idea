@@ -893,6 +893,60 @@ def test_analytics_on_but_first_scan_unfinished_is_initializing(monkeypatch, tre
     assert analytics.folder(tree) is None
 
 
+def scanned_volume(used, files, folders=0, state='on'):
+    return dict(
+        name='profiles',
+        uuid='u-1',
+        nas=dict(path='/profiles'),
+        files=dict(used=used),
+        analytics=dict(state=state, file_count=files, subdir_count=folders),
+    )
+
+
+def test_folders_count_towards_a_finished_first_scan(monkeypatch, tree):
+    # idea-dev's homes without its test fixtures: files.used counts the folders, file_count
+    # leaves them out, and nothing ever brings a 78% volume to 90%
+    volumes = [scanned_volume(used=6500, files=5060, folders=1360)]
+    analytics = fake_analytics(monkeypatch, tree, volumes=volumes)
+    assert analytics.status(tree)['state'] == 'on'
+    # control: with the folders not yet rolled up either, the scan is still running
+    volumes[0] = scanned_volume(used=6500, files=5060, folders=0)
+    analytics = fake_analytics(monkeypatch, tree, volumes=volumes)
+    assert analytics.status(tree) == dict(state='initializing', progress=77)
+
+
+def test_a_nearly_empty_volume_is_not_held_back_by_its_own_inodes(monkeypatch, tree):
+    # a new cluster: ONTAP's own files on the volume outnumber the handful people have written
+    volumes = [scanned_volume(used=150, files=40, folders=12)]
+    analytics = fake_analytics(monkeypatch, tree, volumes=volumes)
+    assert [analytics.status(tree)['state'] for _ in range(3)] == ['on'] * 3
+
+
+def test_new_files_the_rollup_has_not_reached_are_not_a_first_scan(monkeypatch, tree):
+    volumes = [scanned_volume(used=10000, files=9000, folders=950)]
+    analytics = fake_analytics(monkeypatch, tree, volumes=volumes)
+
+    def state(volume):
+        volumes[0] = volume
+        analytics._volumes.clear()
+        return analytics.status(tree)['state']
+
+    assert analytics.status(tree)['state'] == 'on'
+    # someone unpacks an archive: a quarter more inodes than the rollup has counted yet
+    assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'on'
+    # analytics switched off and on again starts the count from nothing: a first scan
+    assert state(scanned_volume(used=13000, files=1200, folders=100)) == 'initializing'
+    assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'initializing'
+    assert state(scanned_volume(used=13000, files=11500, folders=950)) == 'on'
+    assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'on'
+    # and so does seeing it off
+    assert state(scanned_volume(used=13000, files=0, state='off')) == 'off'
+    assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'initializing'
+    # control: a process that never saw this volume finished holds it to the first-scan line
+    fresh = fake_analytics(monkeypatch, tree, volumes=volumes)
+    assert fresh.status(tree)['state'] == 'initializing'
+
+
 def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):
     off = [
         dict(

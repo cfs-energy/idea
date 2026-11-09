@@ -34,7 +34,14 @@ ANALYTICS_FIELDS = (
 LABELS_FIELD = 'analytics.by_modified_time.bytes_used.labels'
 LABELS_SECONDS = 3600
 MONTH = re.compile(r'^\d{4}-\d{2}$')
+# the first scan is finished once the rollup holds this much of the volume's inodes, and has
+# started again if it later holds less than the second: what was added since is only new files
+# the rollup has not reached, and that is not a first measurement
 SCAN_COMPLETE_FRACTION = 0.9
+SCAN_RESTARTED_FRACTION = 0.5
+# files.used also counts what ONTAP keeps on the volume for itself, about a hundred inodes on
+# the volumes measured. On a nearly empty volume those outnumber what people wrote.
+VOLUME_OWN_INODES = 500
 MAX_ROWS = 1000
 # a folder's listing is read to its end: what is left out would count as files directly in it.
 # these bound one read, and a folder past them says so.
@@ -149,6 +156,7 @@ class FolderAnalytics:
         self._labels = {}
         self._failed_at = 0
         self._refused_at = {}
+        self._scanned = set()
 
     def _client(self, target):
         config = self.context.config()
@@ -209,26 +217,35 @@ class FolderAnalytics:
         root, volume = best
         analytics = volume.get('analytics') or {}
         state = analytics.get('state')
+        uuid = volume['uuid']
         if state not in ('on', 'initializing'):
+            self._scanned.discard(uuid)
             return dict(state='off')
         # ONTAP says on within seconds of enabling and reports no scan progress, so the first
-        # scan shows only as the volume's rollup catching up with its file count.
+        # scan shows only as the volume's rollup catching up with its inodes. files.used counts
+        # every inode and the rollup counts files and folders apart, so both are needed: by
+        # files alone a volume with one folder to nine files never finishes.
         used = (volume.get('files') or {}).get('used') or 0
-        counted = analytics.get('file_count', 0)
-        if state == 'initializing' or (
-            used and counted < used * SCAN_COMPLETE_FRACTION
+        counted = analytics.get('file_count', 0) + analytics.get('subdir_count', 0)
+        wanted = (
+            SCAN_RESTARTED_FRACTION if uuid in self._scanned else SCAN_COMPLETE_FRACTION
+        )
+        if state == 'initializing' or used - counted > max(
+            VOLUME_OWN_INODES, used * (1 - wanted)
         ):
+            self._scanned.discard(uuid)
             return dict(
                 state='initializing',
                 progress=min(99, counted * 100 // used) if used else 0,
             )
-        if time.monotonic() - self._refused_at.get(volume['uuid'], 0) < RETRY_SECONDS:
+        self._scanned.add(uuid)
+        if time.monotonic() - self._refused_at.get(uuid, 0) < RETRY_SECONDS:
             return dict(state='failed')
         return dict(
             state='on',
             target=target,
             volume=volume.get('name'),
-            uuid=volume['uuid'],
+            uuid=uuid,
             relative=namespace[len(root) :].lstrip('/'),
         )
 
