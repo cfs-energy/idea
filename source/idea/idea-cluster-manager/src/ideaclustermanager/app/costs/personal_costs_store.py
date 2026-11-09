@@ -351,11 +351,13 @@ class PersonalCostsStore:
         )
         duration = state.get('last_duration', 1200)
         # the seed runs inside a run and last_duration comes from runs without it, so its
-        # time moves the estimate, up to its budget: a seed stuck past that is overdue
+        # time moves the estimate. A finished seed counts in full, even the page it ended
+        # past its budget on; a running one counts up to its budget: one stuck is overdue
         seed = state.get('seed_seconds', 0)
         if state.get('seeding_since'):
-            seed = (now - arrow.get(state['seeding_since'])).total_seconds()
-        expected = next_run.shift(seconds=duration + min(seed, SEED_BUDGET_SECONDS))
+            elapsed = (now - arrow.get(state['seeding_since'])).total_seconds()
+            seed = min(elapsed, SEED_BUDGET_SECONDS)
+        expected = next_run.shift(seconds=duration + seed)
         heartbeat = (self.get(SYSTEM, 'heartbeat') or {}).get('as_of') or state.get(
             'heartbeat'
         )

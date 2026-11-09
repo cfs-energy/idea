@@ -1362,6 +1362,8 @@ class PersonalCostsCollector:
         self._startup = False
         started = time.monotonic()
         state['run_started'] = now.isoformat()
+        # a leader that died mid-seed left its mark; no seed runs until this run starts one
+        state.pop('seeding_since', None)
         state.pop('seed_seconds', None)
         state['next_run'] = now.shift(minutes=15).isoformat()
         self.store.put(SYSTEM, 'state', state)
