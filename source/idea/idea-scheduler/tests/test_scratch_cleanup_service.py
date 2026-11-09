@@ -2646,3 +2646,31 @@ def test_a_folder_changed_since_the_scan_is_left_alone(world, monkeypatch):
     monkeypatch.setattr(world.service, '_remove_opened', remove)
     assert run(world)['removed_folders'] == 0
     assert folder.exists()
+
+
+def test_each_email_renders_every_value_from_what_the_service_sends(world):
+    import jinja2
+    import yaml
+
+    templates_file = (
+        _source_root() / 'idea-cluster-manager/resources/defaults/email_templates.yml'
+    )
+    by_name = {
+        template['name']: template
+        for template in yaml.safe_load(templates_file.read_text())['templates']
+    }
+    digests_on(world)
+    due_in(world, days=1)
+    world.store.put_failure('1', {'message': 'stopped once'})
+    run(world)
+    sent = {n.template_name: n.params for n in world.sent}
+    assert {TEMPLATE_DIGEST, TEMPLATE_ADMIN_SUMMARY} <= set(sent)
+    strict = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    for name in (TEMPLATE_DIGEST, TEMPLATE_ADMIN_SUMMARY):
+        for part in ('subject', 'body'):
+            # a value the template names and the service never sends fails here
+            strict.from_string(by_name[name][part]).render(**sent[name])
+    summary = strict.from_string(by_name[TEMPLATE_ADMIN_SUMMARY]['body']).render(
+        **sent[TEMPLATE_ADMIN_SUMMARY]
+    )
+    assert 'and  are' not in summary
