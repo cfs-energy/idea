@@ -857,9 +857,9 @@
     weekstart "^2.0.0"
 
 "@cloudscape-design/components@^3.0.1348":
-  version "3.0.1410"
-  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1410.tgz#d15ea4ae8f80b1f1b1c4e624dcfafba218f68e28"
-  integrity sha512-vnkS/iK8hbebjKwrp1epCLQ2nbgTNH+sSdyLYHSgWeRgCzgwMaTH4e9Z+rE20OD9tyoVf/GeAYbIe5miIsghAw==
+  version "3.0.1409"
+  resolved "https://registry.yarnpkg.com/@cloudscape-design/components/-/components-3.0.1409.tgz#00cb88a667f323da61c78dd24d408798d9ebcbc1"
+  integrity sha512-oI7kky/pypovqDDrx+JEnnCzswuSaYpdD60zw9zAfknP6l3fxk9ouG6VZyyO6PZM9W9C37u62JJNnZUrelQPdQ==
   dependencies:
     "@cloudscape-design/collection-hooks" "^1.0.0"
     "@cloudscape-design/component-toolkit" "^1.0.0-beta"
