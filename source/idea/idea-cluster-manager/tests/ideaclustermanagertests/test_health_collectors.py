@@ -14,6 +14,7 @@ from ideaclustermanager.app.metrics.health_collectors import (
     ems_bucket_counts,
     service_of,
 )
+from ideaclustermanager.app.metrics.storage_metrics_service import OntapRequestFailed
 from ideasdk.metrics.health import IsolatedProbe, ProbeResult
 
 from datetime import datetime, timedelta, timezone
@@ -172,27 +173,33 @@ def test_stop_reasons_are_a_small_vocabulary():
     assert service_of('family:cost-metrics', 'idea-com') is None
 
 
-def test_a_rollout_that_has_left_the_service_still_counts_in_its_bucket():
-    # two rollouts in one bucket: ECS drops the first from the service when the second completes
+def test_a_rollout_that_has_left_the_service_still_counts_under_a_new_leader():
+    # two rollouts in one bucket: ECS drops the first from the service when the second
+    # completes, and the next leader is a new process that never saw it. Datadog keeps the last
+    # value per series and time, so no series may ever be sent a smaller one.
     created = NOW - timedelta(seconds=30)
     first = {'id': 'ecs-svc/1', 'rolloutState': 'COMPLETED', 'createdAt': created}
     second = {'id': 'ecs-svc/2', 'rolloutState': 'COMPLETED', 'createdAt': created}
     service = {'serviceName': 'idea-com-vdc', 'runningCount': 1, 'desiredCount': 1}
-    context = context_with(
-        {'ecs.cluster_name': 'idea-com-ecs'},
-        ecs=ecs_client([], [{**service, 'deployments': [first, second]}]),
-    )
-    collector = EcsTasksCollector(context)
-    metrics = Recorder()
-    collector.collect(metrics, NOW.timestamp())
-    assert [c[1] for c in metrics.counts if c[0] == 'ecs.rollouts'] == [2]
-    context.aws.return_value.get_client.side_effect = None
-    client = ecs_client([], [{**service, 'deployments': [second]}])
-    context.aws.return_value.get_client.side_effect = lambda name: client
-    context.aws.return_value.ecs.return_value = client
-    metrics = Recorder()
-    collector.collect(metrics, NOW.timestamp())
-    assert [c[1] for c in metrics.counts if c[0] == 'ecs.rollouts'] == [2]
+    stored = {}
+    for deployments in ([first, second], [second]):
+        metrics = run_ecs([], [{**service, 'deployments': deployments}])
+        for name, value, timestamp, tags in metrics.counts:
+            if name == 'ecs.rollouts':
+                series = (timestamp, tuple(sorted(tags.items())))
+                assert value >= stored.get(series, 0), 'a point was rewritten smaller'
+                stored[series] = value
+    assert sum(stored.values()) == 2
+    assert {dict(tags)['deployment'] for _, tags in stored} == {
+        'ecs-svc/1',
+        'ecs-svc/2',
+    }
+
+
+def test_a_rollout_too_old_to_send_is_left_alone():
+    old = {'id': 'ecs-svc/1', 'createdAt': NOW - timedelta(minutes=55)}
+    metrics = run_ecs([], [{'serviceName': 'idea-com-vdc', 'deployments': [old]}])
+    assert [c for c in metrics.counts if c[0] == 'ecs.rollouts'] == []
 
 
 def test_services_report_running_desired_and_rollouts():
@@ -472,6 +479,21 @@ def test_a_rejected_admin_bind_is_counted_with_its_code():
     assert rejected[0]['Dimensions'] == [{'Name': 'code', 'Value': '52e'}]
 
 
+def test_a_rejected_bind_is_counted_on_a_directory_idea_does_not_manage():
+    agent, published = agent_with(
+        error=ldap.INVALID_CREDENTIALS(
+            {'info': 'AcceptSecurityContext error, data 775, v'}
+        )
+    )
+    agent.ldap_client.ds_provider = 'activedirectory'
+    with pytest.raises(ldap.INVALID_CREDENTIALS):
+        agent.is_password_expired()
+    rejected = [e for e in published if e['MetricName'] == 'health.ad.bind_rejected']
+    assert [e['Dimensions'] for e in rejected] == [[{'Name': 'code', 'Value': '775'}]]
+    # counted, and nothing else: there is no password of ours to recover
+    agent._recover_root_password.assert_not_called()
+
+
 def test_the_admin_password_expiry_is_kept_for_the_collector():
     last_set = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp())
     agent, _ = agent_with(user={'password_last_set': last_set, 'password_max_age': 42})
@@ -490,19 +512,27 @@ class FakeOntap:
         self.paths.append(path)
         answer = next(
             (v for k, v in self.answers.items() if path.startswith(k)),
-            RuntimeError('ONTAP returned 403'),
+            OntapRequestFailed(403),
         )
         if isinstance(answer, Exception):
             raise answer
         return {'records': answer}
 
 
-def run_directory(answers, values=None, ds_ips=('10.0.0.1', '10.0.0.2')):
+def run_directory(
+    answers,
+    values=None,
+    ds_ips=('10.0.0.1', '10.0.0.2'),
+    described=None,
+    endpoint='svm-1.fs-abc.fsx.us-east-2.amazonaws.com',
+):
     fake = FakeOntap(answers)
     ds = Mock()
     ds.describe_directories.return_value = {
         'DirectoryDescriptions': [{'DnsIpAddrs': list(ds_ips)}]
     }
+    if described is not None:
+        ds.describe_directories.side_effect = described
     context = context_with(
         {
             'directoryservice.directory_id': 'd-1',
@@ -515,7 +545,7 @@ def run_directory(answers, values=None, ds_ips=('10.0.0.1', '10.0.0.2')):
     storage.targets.return_value = [
         SimpleNamespace(
             name='home',
-            endpoint='svm-1.fs-abc.fsx.us-east-2.amazonaws.com',
+            endpoint=endpoint,
             username='idea-metrics',
             password_key='secret',
         )
@@ -583,6 +613,88 @@ def test_a_path_the_login_cannot_read_reports_forbidden_and_the_others_go_on():
         metrics.value('directory.check_ok', check='secd_events', reason='forbidden')
         == []
     )
+
+
+GOOD = {
+    LDAP: [{**SVM, 'status': {'state': 'up'}}],
+    CIFS: [{**SVM, 'security': {'session_security': 'sign'}}],
+    DNS: [{**SVM, 'servers': ['10.0.0.1']}],
+    EMS: [],
+}
+
+
+def test_a_reason_is_the_status_ontap_gave_never_a_number_in_the_text():
+    # a connection error names the host, and an FSx id or an address can spell a status
+    class ConnectionError(Exception):
+        pass
+
+    unreachable = ConnectionError(
+        "HTTPSConnectionPool(host='svm-0403a.fs-0401b.fsx', port=443): 0x7f403"
+    )
+    metrics, _ = run_directory({**GOOD, LDAP: unreachable, EMS: unreachable})
+    assert metrics.value('directory.check_ok', check='ldap') == [0]
+    assert metrics.value('directory.check_ok', check='ldap', reason='unreachable') == [
+        0
+    ]
+    # refused is the one answer that reads as fine for the event log: unreachable is not it
+    assert metrics.value('directory.check_ok', check='secd_events') == [0]
+    for status, reason in ((401, 'unauthorized'), (403, 'forbidden'), (500, 'error')):
+        metrics, _ = run_directory({**GOOD, LDAP: OntapRequestFailed(status)})
+        assert metrics.value('directory.check_ok', check='ldap', reason=reason) == [0]
+
+
+def test_domain_controllers_that_cannot_be_read_are_seen_and_dns_is_not_called_ok():
+    for described, reason in (
+        (RuntimeError('throttled'), 'error'),
+        (lambda **kwargs: {'DirectoryDescriptions': []}, 'not_found'),
+    ):
+        metrics, _ = run_directory(GOOD, described=described)
+        # on a group the monitor evaluates: it groups by filesystem
+        assert metrics.value(
+            'directory.check_ok', check='dc_addresses', reason=reason, filesystem='none'
+        ) == [0]
+        assert metrics.value('directory.check_ok', check='dns') == [0]
+        assert metrics.value(
+            'directory.check_ok', check='dns', reason='no_controllers'
+        ) == [0]
+        assert metrics.value('directory.dns_on_domain_controllers') == []
+        assert metrics.value('directory.check_ok', check='ldap', reason='ok') == [1]
+
+
+def test_domain_controllers_that_read_say_so_and_no_directory_says_nothing():
+    metrics, _ = run_directory(GOOD)
+    assert metrics.value(
+        'directory.check_ok', check='dc_addresses', reason='ok', filesystem='none'
+    ) == [1]
+    assert metrics.value('directory.check_ok', check='dns', reason='ok') == [1]
+    metrics, _ = run_directory(GOOD, {'directoryservice.directory_id': None})
+    assert metrics.value('directory.check_ok', check='dc_addresses') == []
+    assert metrics.value('directory.check_ok', check='dns', reason='ok') == [1]
+    assert metrics.value('directory.dns_on_domain_controllers') == []
+
+
+def test_every_check_of_a_file_server_carries_one_filesystem_tag():
+    # an endpoint that is not an FSx name has no id in it: the target's name, never unknown
+    metrics, _ = run_directory(GOOD, endpoint='10.1.2.3')
+    tags = {
+        t['filesystem']
+        for n, _, t in metrics.levels
+        if t.get('check') != 'dc_addresses'
+    }
+    assert tags == {'home'}
+    assert metrics.value('directory.check_ok', check='login', reason='ok') == [1]
+    for endpoint, filesystem in (
+        ('10.1.2.3', 'home'),
+        ('svm-1.fs-abc.fsx.us-east-2.amazonaws.com', 'fs-abc'),
+    ):
+        metrics, _ = run_directory(GOOD, {'secret': None}, endpoint=endpoint)
+        assert metrics.value(
+            'directory.check_ok',
+            check='login',
+            reason='no_password',
+            filesystem=filesystem,
+        ) == [0]
+        assert metrics.value('directory.check_ok', check='ldap') == []
 
 
 def test_no_cifs_record_is_not_read_as_ok():

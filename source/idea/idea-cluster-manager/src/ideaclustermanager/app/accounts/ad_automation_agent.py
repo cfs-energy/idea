@@ -113,10 +113,11 @@ class ADAutomationAgent(SocaService):
                 user = self.ldap_client.get_user(root_username, trace=False)
                 break
             except ldap.INVALID_CREDENTIALS as e:
-                if not managed_ad:
-                    raise
+                # counted on every provider; only AWS Managed AD has a password to recover
                 code = self._bind_error_code(e)
                 self._health.add('ad.bind_rejected', code=code or 'unknown')
+                if not managed_ad:
+                    raise
                 if code in {'532', '773'}:
                     self.logger.warning(
                         f'AD admin password expired or requires reset (data {code}).'

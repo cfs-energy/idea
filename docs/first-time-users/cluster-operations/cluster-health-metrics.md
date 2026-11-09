@@ -37,9 +37,11 @@ Every five minutes, from the module's existing ECS read.
 | `idea.health.ecs.task_stops` | `ecs_service_name`, `reason` | Stopped tasks in a five minute bucket. `reason`: `health_check`, `deployment`, `oom`, `container_exit`, `failed_to_start`, `maintenance`, `user_stop`, `scheduler`, `spot`, `other`. Use `.as_count()`. |
 | `idea.health.ecs.tasks_running`, `tasks_desired`, `tasks_pending` | `ecs_service_name` | The service's own counts. |
 | `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `ecs_service_name` | 1 while a deployment rolls out, or has failed. |
-| `idea.health.ecs.rollouts` | `ecs_service_name` | Deployments started in a five minute bucket. |
+| `idea.health.ecs.rollouts` | `ecs_service_name`, `deployment` | One point of 1 for each deployment, at the five minute bucket it started in, tagged with its ECS deployment id. Sum across series: `sum:idea.health.ecs.rollouts{*} by {ecs_service_name}.as_count()`. |
 
 ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, with no `host`, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader's read rewrites a point rather than adding to it. The agent's tags for the sending task still differ across a cluster manager deployment, when the old and new tasks can both send a bucket, so read these counts and `secd_events` with `max` across series and then sum over time, for example `sum(last_1h):max:idea.health.ecs.task_stops{reason:health_check} by {idea_cluster,ecs_service_name}.as_count()`. Stops are lost only if every cluster manager task is gone for over 50 minutes.
+
+ECS drops a finished deployment from a service once the next one finishes, so a count of the deployments a read still lists could be rewritten smaller, by a later read or by a new leader. Each deployment is its own series instead: every read that still sees it sends the same 1, and a deployment ECS has dropped keeps the point it already has. Read `rollouts` with `sum` across series, not `max`.
 
 ## File server and directory
 
@@ -49,9 +51,9 @@ Every five minutes, one read per file system in `shared-storage` that has metric
 | --- | --- | --- |
 | `idea.health.directory.ldap_up` | `svm`, `filesystem` | ONTAP's LDAP client status. |
 | `idea.health.directory.ldap_session_signed` | `svm`, `filesystem` | 1 when `session-security-for-ad-ldap` is `sign` or `seal`. 0 will fail binds on a domain controller requiring signing. |
-| `idea.health.directory.dns_on_domain_controllers` | `svm`, `filesystem` | 1 when the SVM's DNS servers are all the directory's domain controllers. On the VPC resolver the reverse lookup gives no SPN that Kerberos can use. Managed AD only. |
+| `idea.health.directory.dns_on_domain_controllers` | `svm`, `filesystem` | 1 when the SVM's DNS servers are all the directory's domain controllers. On the VPC resolver the reverse lookup gives no SPN that Kerberos can use. Managed AD only. Not sent while the domain controllers cannot be read: `check:dns` then reads 0 with `reason:no_controllers`. |
 | `idea.health.directory.secd_events` | `event`, `filesystem` | `secd.*` events by name in a five minute bucket. Needs a cluster-level login, see below. |
-| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked. `reason:forbidden` is a path the login's role lacks. `reason:no_records` is a CIFS read that answered with no server from a role that cannot see its SVM, as one without `/api/svm/svms` does. `reason:no_cifs_server` (value 1) is an SVM the role can see with no CIFS server: NFS only, nothing to sign. `reason:unavailable` (value 1) is a read this kind of login can never make, so not a failure. |
+| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked: `ldap`, `cifs_security`, `dns` and `secd_events` per file system, `login` (1 when the file system's metrics login has a password, 0 with `reason:no_password`) and `dc_addresses` (the `ds:DescribeDirectories` read, on `filesystem:none`, sent only when `directoryservice.directory_id` is set; `reason:not_found` when the directory is not in the answer). `filesystem` is the FSx file system id from the management endpoint, or the shared-storage name when the endpoint is not an FSx name. `reason:unauthorized` and `reason:forbidden` are ONTAP's own 401 and 403, `reason:unreachable` a connection that failed or timed out, `reason:error` anything else. `reason:forbidden` is a path the login's role lacks. `reason:no_records` is a CIFS read that answered with no server from a role that cannot see its SVM, as one without `/api/svm/svms` does. `reason:no_cifs_server` (value 1) is an SVM the role can see with no CIFS server: NFS only, nothing to sign. `reason:unavailable` (value 1) is a read this kind of login can never make, so not a failure. |
 | `idea.health.directory.home_stat_ok` | `reason` | A `stat` of `/data/home` and a lookup of a name that does not exist, from a separate process killed at 15 seconds. Exercises name mapping; reads no one's folder. `reason`: `ok`, `timeout`, `stuck` (still in the kernel, no new one started), `denied`, `error`. |
 | `idea.health.directory.home_stat_seconds` | | How long that took, including about 30 ms of process start. |
 
@@ -70,7 +72,7 @@ secd event counts need a cluster-level login. ONTAP keeps the event log at clust
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.ad.bind_rejected` | `code` | Each rejected bind by the admin account, with the AD sub-code (`52e` wrong password, `532` expired, `775` locked out). As it happens, per task. |
+| `idea.health.ad.bind_rejected` | `code` | Each rejected bind by the admin account when the agent checks its password, with the AD sub-code (`52e` wrong password, `532` expired, `775` locked out). As it happens, per task. The agent only binds for that check with `directoryservice.ad_automation.enable_root_password_reset` on: the default on AWS Managed AD, off on a self-managed directory, where nothing is counted until it is turned on. |
 | `idea.health.ad.requests` | `namespace`, `outcome` | Requests handled: `success`, `dropped`, `retry`. |
 | `idea.health.ad.errors` | `kind` | `loop`, `message`, `delete_message`. |
 | `idea.health.ad.queue_depth`, `queue_in_flight` | | The queue, every minute. |

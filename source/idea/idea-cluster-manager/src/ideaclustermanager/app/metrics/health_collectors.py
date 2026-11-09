@@ -8,6 +8,7 @@ from ideaclustermanager.app.accounts.auth_constants import USER_HOME_DIR_BASE
 from ideaclustermanager.app.metrics.storage_metrics_service import (
     SVMS_PATH,
     OntapClient,
+    OntapRequestFailed,
     fs_id_from_host,
     tag_value,
 )
@@ -64,6 +65,10 @@ class NoRecords(Exception):
     """a CIFS read that answered with nothing from a role that cannot see its SVM: not an ok."""
 
 
+class NoControllers(Exception):
+    """the directory's domain controllers could not be read, so DNS has nothing to be held to."""
+
+
 def service_of(group: Optional[str], cluster: str) -> Optional[str]:
     """service:idea-com-bastion-host is bastion-host; a standalone task has no service."""
     if not group or not group.startswith('service:'):
@@ -109,7 +114,6 @@ class EcsTasksCollector(HealthCollector):
 
     def __init__(self, context):
         self.context = context
-        self._rollouts: Dict[Tuple[int, str], Set] = {}
 
     def _client(self):
         return self.context.aws().get_client('ecs')
@@ -165,9 +169,9 @@ class EcsTasksCollector(HealthCollector):
         arns: List[str] = []
         for page in client.get_paginator('list_services').paginate(cluster=cluster):
             arns.extend(page.get('serviceArns', []))
-        # a bucket's count is sent whole each time, and ECS forgets a finished deployment once the
-        # next finishes, so what was seen stays until the bucket is too old to send
-        rollouts = self._rollouts
+        # one point per deployment, tagged with its id: ECS forgets a finished deployment once
+        # the next finishes, and a count of what this read still lists would rewrite a bucket
+        # smaller, from this task or from the next leader. a point of its own is only ever 1.
         for start in range(0, len(arns), DESCRIBE_SERVICES_BATCH):
             for service in client.describe_services(
                 cluster=cluster, services=arns[start : start + DESCRIBE_SERVICES_BATCH]
@@ -202,16 +206,15 @@ class EcsTasksCollector(HealthCollector):
                 )
                 for deployment in deployments:
                     created = deployment.get('createdAt')
-                    if created is not None:
-                        rollouts.setdefault(
-                            (bucket_of(created.timestamp()), name), set()
-                        ).add(deployment.get('id') or created)
-        for key in [key for key in rollouts if key[0] < oldest]:
-            del rollouts[key]
-        for (bucket, name), seen in rollouts.items():
-            metrics.add(
-                'ecs.rollouts', len(seen), timestamp=bucket, ecs_service_name=name
-            )
+                    if created is None or bucket_of(created.timestamp()) < oldest:
+                        continue
+                    metrics.add(
+                        'ecs.rollouts',
+                        1,
+                        timestamp=bucket_of(created.timestamp()),
+                        ecs_service_name=name,
+                        deployment=tag_value(deployment.get('id')),
+                    )
 
 
 # the file is on the shared mount: read in a child, so a hung read cannot take this thread with it.
@@ -470,30 +473,53 @@ class DirectoryCollector(HealthCollector):
             .describe_directories(DirectoryIds=[directory_id])
             .get('DirectoryDescriptions', [])
         )
-        return set(described[0].get('DnsIpAddrs', [])) if described else None
+        if not described:
+            raise NoControllers()
+        return set(described[0].get('DnsIpAddrs', []))
 
     def collect(self, metrics: HealthMetrics, now: Optional[float] = None) -> None:
         now = now or time.time()
+        # None with no directory to ask. One that would not answer is not that: its read is
+        # reported, on no file system, and the DNS check that needs it says so, never ok.
+        controllers = None
+        controllers_unread = False
         try:
             controllers = self.domain_controller_addresses()
+            if controllers is not None:
+                metrics.level(
+                    'directory.check_ok',
+                    1,
+                    check='dc_addresses',
+                    reason='ok',
+                    filesystem='none',
+                )
         except Exception as e:
-            controllers = None
+            controllers_unread = True
             metrics.level(
-                'directory.check_ok', 0, check='dc_addresses', reason=failure_reason(e)
+                'directory.check_ok',
+                0,
+                check='dc_addresses',
+                reason='not_found'
+                if isinstance(e, NoControllers)
+                else failure_reason(e),
+                filesystem='none',
             )
         verify_tls = self.context.config().get_bool(
             f'{self.context.module_id()}.metrics.storage.verify_tls', False
         )
         for target in self.storage_metrics.targets():
+            # the same tag on every check of a target: an endpoint that is not an FSx name
+            # (an address, a name of the operator's own) has no id, so it goes by its name
+            filesystem = tag_value(fs_id_from_host(target.endpoint) or target.name)
             password = self.context.config().get_secret(target.password_key)
+            metrics.level(
+                'directory.check_ok',
+                0 if Utils.is_empty(password) else 1,
+                check='login',
+                reason='no_password' if Utils.is_empty(password) else 'ok',
+                filesystem=filesystem,
+            )
             if Utils.is_empty(password):
-                metrics.level(
-                    'directory.check_ok',
-                    0,
-                    check='login',
-                    reason='no_password',
-                    filesystem=target.name,
-                )
                 continue
             client = OntapClient(
                 target.endpoint,
@@ -501,9 +527,6 @@ class DirectoryCollector(HealthCollector):
                 password,
                 verify_tls=verify_tls,
                 timeout=self.READ_TIMEOUT_SECONDS,
-            )
-            filesystem = tag_value(fs_id_from_host(target.endpoint)) or tag_value(
-                target.name
             )
             self._check(metrics, client, filesystem, 'ldap', LDAP_PATH, self._ldap)
             self._check(
@@ -520,7 +543,9 @@ class DirectoryCollector(HealthCollector):
                 filesystem,
                 'dns',
                 DNS_PATH,
-                lambda m, f, records: self._dns(m, f, records, controllers),
+                lambda m, f, records: self._dns(
+                    m, f, records, controllers, controllers_unread
+                ),
             )
             self._check(
                 metrics,
@@ -571,11 +596,14 @@ class DirectoryCollector(HealthCollector):
             return 'unsupported'
         if isinstance(error, NoRecords):
             return 'no_records'
-        text = str(error)
-        if '401' in text:
-            return 'unauthorized'
-        if '403' in text:
-            return 'forbidden'
+        if isinstance(error, NoControllers):
+            return 'no_controllers'
+        if isinstance(error, OntapRequestFailed):
+            # the status ONTAP gave, never the text: a host name or an address in a connection
+            # error can spell 401 or 403
+            return {401: 'unauthorized', 403: 'forbidden'}.get(
+                error.status_code, 'error'
+            )
         name = type(error).__name__
         return 'unreachable' if 'imeout' in name or 'Connection' in name else 'error'
 
@@ -628,9 +656,11 @@ class DirectoryCollector(HealthCollector):
                 filesystem=filesystem,
             )
 
-    def _dns(self, metrics, filesystem, records, controllers):
+    def _dns(self, metrics, filesystem, records, controllers, controllers_unread):
+        if controllers_unread:
+            raise NoControllers()
         if controllers is None:
-            return  # not a managed directory, or its addresses could not be read
+            return  # not a managed directory: nothing to hold the servers to
         for record in records:
             servers = set(Utils.get_value_as_list('servers', record, []))
             metrics.level(
