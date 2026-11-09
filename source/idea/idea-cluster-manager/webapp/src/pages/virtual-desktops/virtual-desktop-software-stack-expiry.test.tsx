@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describeExpiry } from './virtual-desktop-software-stacks';
+import { describeExpiry, expiryDay } from './virtual-desktop-software-stacks';
 import { expiryChange } from './forms/virtual-desktop-software-stack-edit-form';
 
 describe('the expiry column', () => {
@@ -17,11 +17,28 @@ describe('the expiry column', () => {
         expect(cell).toBe(new Date('2027-01-15T12:00:00Z').toLocaleDateString(undefined, { timeZone: 'UTC' }));
     });
 
-    it('shows the day that was typed, wherever the viewer is', () => {
+    describe('shows the day that was typed, wherever the viewer is', () => {
+        const zone = process.env.TZ;
+        afterEach(() => {
+            if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone;
+        });
+
         // stored as midnight UTC, which is the day before anywhere west of it
-        const midnight = new Date('2027-01-15T00:00:00Z');
-        expect(describeExpiry({ effective_expires_on: '2027-01-15T00:00:00Z' }))
-            .toBe(new Intl.DateTimeFormat(undefined, { timeZone: 'UTC' }).format(midnight));
+        const stored = '2027-03-15T00:00:00Z';
+        it.each([
+            ['America/Los_Angeles', 14],
+            ['UTC', 15],
+            ['Asia/Tokyo', 15],
+            ['Pacific/Kiritimati', 15],
+        ])('in %s', (viewer, dayOnTheirClock) => {
+            process.env.TZ = viewer;
+            // the zone took: this is the day a plain local format would show
+            expect(new Date(stored).getDate()).toBe(dayOnTheirClock);
+            // 15 March as this viewer's locale writes a date
+            const typed = new Date(2027, 2, 15, 12).toLocaleDateString();
+            expect(expiryDay(stored)).toBe(typed);
+            expect(describeExpiry({ effective_expires_on: stored })).toBe(typed);
+        });
     });
 });
 
