@@ -118,6 +118,10 @@ class FakeScheduler:
             self.jobs_by_id[job_id] for job_id in job_ids if job_id in self.jobs_by_id
         ]
 
+    @staticmethod
+    def get_array_subjobs(job_id):
+        return None, []
+
 
 class FakeMetrics:
     def __getattr__(self, name):
@@ -1118,7 +1122,7 @@ def test_cached_completion_never_prices_to_now(
 
 
 @pytest.mark.parametrize('source', ['cache', 'hook', 'history'])
-@pytest.mark.parametrize('job_id', ['42', '42[1]'])
+@pytest.mark.parametrize('job_id', ['42', '42[]'])
 def test_completion_recovers_duration_before_persisting_and_publishing(
     fake_context, pricing_spy, monkeypatch, source, job_id
 ):

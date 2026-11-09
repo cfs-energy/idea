@@ -10,6 +10,7 @@ not - and that neither of them resets a job on a stack status they cannot interp
 import logging
 from threading import Event
 from typing import Dict, List, Optional
+from unittest.mock import Mock
 
 import pytest
 
@@ -211,6 +212,7 @@ def test_housekeeper_deletes_failed_stack_and_retries(
     )
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
 
     housekeeping_session(context).retry_provisioning_cleanup()
 
@@ -363,6 +365,7 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     )
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
 
     housekeeping_session(context).retry_provisioning_cleanup()
 
@@ -373,3 +376,88 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     assert comment.startswith('IDEA: held. Nodes launched but the job did not start in')
     assert comment.endswith(f'qrls {job.job_id} to retry')
     assert len(comment) <= 128
+
+
+@pytest.mark.parametrize(
+    'status', [ProvisioningStatus.COMPLETED, ProvisioningStatus.TIMEOUT]
+)
+@pytest.mark.parametrize(
+    'job_id, live_state',
+    [
+        # an array whose first subjob began: PBS reports the run under 357[1], so the
+        # array's own row can still read queued
+        ('357[]', SocaJobState.SUBJOB_BEGUN),
+        # any job whose run event was lost
+        ('358', SocaJobState.RUNNING),
+        ('359', SocaJobState.EXIT),
+    ],
+)
+def test_the_timeout_sweep_leaves_the_stack_of_a_job_that_runs(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    status,
+    job_id,
+    live_state,
+):
+    """
+    the sweep reads queued rows from the job cache. A row can read queued for a job that
+    runs, so PBS is asked before a stack is deleted: seen on a cluster as the stack of a
+    running array deleted 31 minutes after it was created.
+    """
+    import arrow
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(JobProvisioningUtil, 'check_status', lambda _self: status)
+    monkeypatch.setattr(
+        JobProvisioningUtil,
+        'stack',
+        property(
+            lambda _self: SimpleNamespace(
+                creation_time=arrow.utcnow().shift(minutes=-31)
+            )
+        ),
+    )
+    job = mock_job(provisioned=True)
+    job.job_id = job_id
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job_id] = job.model_copy(update={'state': live_state})
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.reset_jobs == []
+    assert mock_scheduler.held_jobs == []
+    # what PBS said is kept, so the next sweep does not look at this job at all
+    assert job_cache.get_job(job_id).state == live_state
+    housekeeping_session(context).retry_provisioning_cleanup()
+    assert deleted_stacks == []
+
+
+@pytest.mark.parametrize('answer', ['gone', 'error'])
+def test_the_timeout_sweep_leaves_a_stack_when_pbs_gives_no_answer(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    answer,
+):
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.TIMEOUT
+    )
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    if answer == 'error':
+        monkeypatch.setattr(
+            mock_scheduler, 'get_job', Mock(side_effect=RuntimeError('qstat failed'))
+        )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.reset_jobs == []

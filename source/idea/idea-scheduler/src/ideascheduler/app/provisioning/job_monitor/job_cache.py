@@ -25,6 +25,7 @@ from ideascheduler.app.provisioning.lifecycle_events import (
     OWNER_CANCELLATION,
     ADMINISTRATOR_DELETION,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.utils import Utils
 from ideasdk.utils.error_redaction import AWS_IDENTIFIERS
 
@@ -427,6 +428,8 @@ class JobsDB:
             # finished jobs table, which cannot hold two jobs given the same id.
             self.drop_unique_index(FINISHED_JOBS_TABLE, 'ix_finished_jobs_job_id')
 
+            self.drop_subjob_execution_hosts()
+
             # Create indices after tables are confirmed to exist
             self.init_indices()
 
@@ -534,6 +537,27 @@ class JobsDB:
         if dropped:
             # Refresh database object after raw connection usage
             self.db = self._connect()
+
+    def drop_subjob_execution_hosts(self):
+        """
+        an array's execution hosts are kept under its own id (123[]). a 26.11.2 release
+        candidate kept them under each subjob's (123[4]), where nothing reads or removes
+        them. best effort: a row left behind costs a few hundred bytes.
+        """
+        with self._db_lock:
+            conn = self.db.engine.raw_connection()
+            try:
+                # the table name is a module-level constant; identifiers cannot be bound
+                conn.execute(
+                    f'DELETE FROM {EXECUTION_HOSTS_TABLE} '
+                    "WHERE job_id LIKE '%[%]' AND job_id NOT LIKE '%[]'"
+                )
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                self._logger.error(f'failed to drop subjob execution hosts: {e}')
+            finally:
+                conn.close()
 
     def init_indices(self):
         """Initialize all indices outside of any transaction"""
@@ -673,6 +697,11 @@ class JobsDB:
             return self.convert_db_entry_to_job(entry, fetch_errors=True)
 
     def add(self, job: SocaJob):
+        if ModelUtils.array_parent_id(job.job_id) is not None:
+            # an array is tracked under its parent id alone. a subjob shares its array's
+            # job_uid and stack, and plain qselect never lists it, so a row for one would
+            # be finished in the array's place while it runs.
+            return
         with self._db_lock:
             with self.db as tx:
                 tx[JOBS_TABLE].upsert(
@@ -1104,7 +1133,8 @@ class JobCache(JobCacheProtocol):
         result = self._jobs_db.db.query(
             'select count(*) as active_jobs from jobs where '
             'queue_profile = :queue_profile '
-            "and state in ('queued', 'running') "
+            # an array with a subjob begun is running, and PBS calls it neither
+            "and state in ('queued', 'running', 'subjob_begun') "
             'and provisioned = 1',
             queue_profile=queue_profile,
         )

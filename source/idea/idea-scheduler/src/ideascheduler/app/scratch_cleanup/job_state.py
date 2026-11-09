@@ -197,21 +197,33 @@ class ScratchJobState:
         """every record under these numbers, from the cache and the index"""
         jobs: Dict[Tuple, SocaJob] = {}
         context = self._context
+        job_id_forms = set(job_id_forms)
         try:
             for form in job_id_forms:
                 for job in context.job_cache.list_completed_jobs(job_id=form):
-                    jobs[(job.job_uid or job.job_id, job.owner)] = job
+                    jobs[(job.job_uid or job.job_id, job.job_id, job.owner)] = job
             store = context.document_store
             if store.is_enabled():
                 if not store.is_initialized():
                     raise StateUnavailable('The job index is not ready.')
                 for job in store.find_jobs_by_id(sorted(job_id_forms)):
-                    jobs.setdefault((job.job_uid or job.job_id, job.owner), job)
+                    jobs.setdefault(
+                        (job.job_uid or job.job_id, job.job_id, job.owner), job
+                    )
         except StateUnavailable:
             raise
         except Exception as e:
             raise StateUnavailable(f'Job records could not be read: {e}') from e
-        return [_as_record(job) for job in jobs.values()]
+        records = [_as_record(job) for job in jobs.values()]
+        # an array has one record, which carries how each of its subjobs ended. A subjob's
+        # folder is judged by its own entry there.
+        records.extend(
+            _as_subjob_record(job, subjob)
+            for job in jobs.values()
+            for subjob in job.subjobs or []
+            if subjob.job_id in job_id_forms
+        )
+        return records
 
     def find_job(self, record: JobRecord) -> Optional[SocaJob]:
         """the full job behind a record, to mark its folder as removed"""
@@ -235,9 +247,12 @@ def job_succeeded(job: SocaJob) -> bool:
     """
     success has to be shown: PBS Exit_status 0, on a finished job the scheduler recorded as having
     run, with nothing saying it was stopped. Older records carry no disposition, and a job deleted
-    while running can still exit 0, so those are failures, which only wait longer. An array
-    parent's status is 0 only when every subjob's was.
+    while running can still exit 0, so those are failures, which only wait longer. PBS keeps
+    the last subjob's status on an array, so an array's own 0 counts only with the subjob
+    outcomes it was worked out from; a record without them is from an earlier build.
     """
+    if str(job.job_id).endswith('[]') and not job.subjobs:
+        return False
     return (
         is_finished(job)
         and job.exit_status == 0
@@ -266,6 +281,24 @@ def _first_run_start(job: SocaJob) -> Optional[datetime]:
         if run.start is not None
     ]
     return min(starts) if starts else None
+
+
+def _as_subjob_record(job: SocaJob, subjob) -> JobRecord:
+    """
+    one subjob of an array, from the array's record. Success has to be shown for the subjob
+    itself: finished, exit status 0, and PBS saying qdel did not end it.
+    """
+    finished = subjob.state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+    return JobRecord(
+        job_id=str(subjob.job_id),
+        job_uid=job.job_uid or None,
+        owner=job.owner or None,
+        finished=finished,
+        succeeded=finished and subjob.exit_status == 0 and subjob.terminated is False,
+        start_time=subjob.start_time,
+        end_time=subjob.end_time,
+        dependents=_as_record(job).dependents,
+    )
 
 
 def _as_record(job: SocaJob) -> JobRecord:

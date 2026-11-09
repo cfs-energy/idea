@@ -15,6 +15,7 @@ from ideadatamodel.scheduler import (
     SocaJobState,
     SocaJobExecutionHost,
     SocaJob,
+    SocaJobSubjob,
     LimitCheckResult,
     SocaComputeNodeState,
     SocaComputeNode,
@@ -52,7 +53,17 @@ from ideadatamodel.scheduler import (
 )
 
 from abc import abstractmethod, ABC
-from typing import List, Optional, Dict, Any, NamedTuple, TypeVar, Union, Generator
+from typing import (
+    List,
+    Optional,
+    Dict,
+    Any,
+    NamedTuple,
+    Tuple,
+    TypeVar,
+    Union,
+    Generator,
+)
 import arrow
 import dataset
 
@@ -315,6 +326,11 @@ class SocaSchedulerProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def get_job(self, job_id: str) -> Optional[SocaJob]: ...
+
+    @abstractmethod
+    def get_array_subjobs(
+        self, job_id: str
+    ) -> Tuple[Optional[int], List[SocaJobSubjob]]: ...
 
     @abstractmethod
     def delete_job(self, job_id: str): ...

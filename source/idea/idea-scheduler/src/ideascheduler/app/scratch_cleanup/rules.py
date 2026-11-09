@@ -257,9 +257,13 @@ def decide_job(
         return JobDecision(Reason.NO_FINISHED_RECORD)
     if any(r.dependents & active.base_ids for r in matching):
         return JobDecision(Reason.REFERENCED_BY_ACTIVE_JOB, matching)
-    # a subjob's own record decides. Without one its array's does: PBS finishes an array only
-    # when every subjob has, and a status of 0 means every subjob's was 0
-    matching = [r for r in matching if r.job_id == folder_name] or matching
+    # a subjob's own record decides. Without one its array's shows only that every subjob is
+    # over, since PBS finishes an array when the last one has. It cannot show this subjob
+    # succeeded: PBS keeps the last subjob's status on the array, and a later success hides an
+    # earlier failure. So the folder waits the longer of the two times.
+    own = [r for r in matching if r.job_id == folder_name]
+    outcome_shown = bool(own) or len(shape.job_id_forms) == 1
+    matching = own or matching
 
     if owner_uid is None:
         return JobDecision(Reason.OWNER_UNKNOWN, matching)
@@ -273,6 +277,8 @@ def decide_job(
 
     decision = JobDecision(Reason.ELIGIBLE, matching)
     required = min_age if all(r.succeeded for r in matching) else failed_min_age
+    if not outcome_shown:
+        required = max(min_age, failed_min_age)
     if _aware(now) - _aware(decision.latest_end) < required:
         decision.reason = Reason.TOO_RECENT
     return decision

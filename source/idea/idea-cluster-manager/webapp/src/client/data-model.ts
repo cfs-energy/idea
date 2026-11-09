@@ -1243,6 +1243,7 @@ export interface SocaJob {
   state?: SocaJobState;
   exit_status?: number;
   terminated?: boolean;
+  subjobs?: SocaJobSubjob[];
   dependent_job_ids?: string[];
   provisioned?: boolean;
   error_message?: string;
@@ -1268,6 +1269,18 @@ export interface SocaJob {
   notifications?: SocaJobNotifications;
   scratch_removed_at?: string;
   scratch_partly_removed_at?: string;
+}
+/**
+ * how one subjob of an array ended, read from PBS history when the array finished. An array
+ * is one job with one record; this is the only place a subjob's own outcome is kept.
+ */
+export interface SocaJobSubjob {
+  job_id?: string;
+  state?: SocaJobState;
+  exit_status?: number;
+  terminated?: boolean;
+  start_time?: string;
+  end_time?: string;
 }
 /**
  * These are job provisioning parameters, that satisfy any of these cases:

@@ -404,6 +404,10 @@ class ScratchCleanupService:
         ended = _iso(_as_utc(job.end_time))
         if not ended:
             return
+        # ponytail: an array's folders share one date, the failed one unless every subjob
+        # succeeded. Each folder is still judged by its own subjob's outcome when that date
+        # comes. A date per subjob needs a record per subjob here, thousands of writes on
+        # this thread for a wide array.
         outcome = 'succeeded' if job_succeeded(job) else 'failed'
         existing = self.store.get_removal(key)
         if (

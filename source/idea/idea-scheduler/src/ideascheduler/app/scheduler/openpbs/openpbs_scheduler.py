@@ -15,6 +15,7 @@ from ideascheduler.app.scheduler.pbs_select import select_compute_node
 from ideadatamodel import exceptions, errorcodes
 from ideadatamodel.scheduler import (
     SocaJob,
+    SocaJobSubjob,
     SocaQueue,
     SocaComputeNodeState,
     SocaComputeNode,
@@ -27,7 +28,7 @@ from ideascheduler.app.scheduler.openpbs import openpbs_constants
 
 from ideascheduler.app.app_protocols import SocaSchedulerProtocol
 
-from typing import Dict, Any, List, Optional, Generator
+from typing import Dict, Any, List, Optional, Generator, Tuple
 import re
 import os
 import arrow
@@ -508,6 +509,16 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             converter=self._converter,
             job_ids=[job_id],
         ).get_job()
+
+    def get_array_subjobs(
+        self, job_id: str
+    ) -> Tuple[Optional[int], List[SocaJobSubjob]]:
+        return OpenPBSQStat(
+            context=self._context,
+            logger=self._logger,
+            shell=self._shell,
+            converter=self._converter,
+        ).get_array_subjobs(job_id)
 
     def delete_job(self, job_id: str):
         result = self._shell.invoke(

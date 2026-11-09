@@ -254,10 +254,23 @@ def test_a_subjob_whose_own_record_is_not_finished_stays():
     assert subjob_decide([own, parent]) == Reason.RECORD_NOT_FINISHED
 
 
-def test_a_subjob_with_no_own_record_takes_a_finished_parents_status():
-    assert subjob_decide([record(job_id='123[]')]) == Reason.ELIGIBLE
-    failed = record(job_id='123[]', succeeded=False)
-    assert subjob_decide([failed]) == Reason.TOO_RECENT
+@pytest.mark.parametrize('parent_succeeded', [True, False])
+def test_a_subjob_with_only_its_arrays_record_waits_the_longer_time(parent_succeeded):
+    """
+    PBS keeps the last subjob's exit status on the array, so an array's record cannot show
+    that this subjob succeeded, whatever it says: 123[4] fails, 123[5] exits 0 last, and
+    the array reads 0.
+    """
+    parent = record(job_id='123[]', succeeded=parent_succeeded)
+    assert subjob_decide([parent]) == Reason.TOO_RECENT
+    assert subjob_decide([parent], failed_min_age=timedelta(days=29)) == Reason.ELIGIBLE
+    # the longer of the two, whichever way round they are set
+    assert (
+        subjob_decide(
+            [parent], min_age=timedelta(days=60), failed_min_age=timedelta(days=29)
+        )
+        == Reason.TOO_RECENT
+    )
 
 
 def test_a_subjob_whose_parent_is_not_finished_stays():

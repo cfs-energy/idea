@@ -366,6 +366,7 @@ def test_one_failed_stack_counts_once_across_housekeeper_and_provisioner(
 
     held_job = stack_job(job_id=job_id, stack_id=stack_arn(compute_stack, 'first'))
     job_cache.sync(jobs=[held_job])
+    mock_scheduler.live_jobs[job_id] = held_job
 
     housekeeper_pass(context)
     assert mock_scheduler.reset_jobs == [job_id]

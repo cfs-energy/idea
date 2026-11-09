@@ -13,6 +13,7 @@ from ideadatamodel import constants, exceptions, errorcodes
 from typing import Optional, Union, Any, List, Tuple, Set, Dict, TypeVar, Mapping
 import orjson
 import hashlib
+import re
 from decimal import Decimal
 from pydantic import BaseModel
 
@@ -33,6 +34,7 @@ def json_serializer(obj):
 
 
 _ARRAY_JOB_SUFFIX = '-array'
+_SUBJOB_ID = re.compile(r'([0-9]+)\[[0-9]+\]', re.ASCII)
 
 
 class ModelUtils:
@@ -478,12 +480,29 @@ class ModelUtils:
         return hashlib.shake_256(data.encode('utf-8')).hexdigest(num_bytes)
 
     @staticmethod
+    def array_parent_id(job_id: Optional[str]) -> Optional[str]:
+        """
+        the array a subjob belongs to: 123[] for 123[4]. None for anything else, an array's
+        own 123[] included. An array is one job under its parent id, with one job_uid, one
+        stack and one record; its subjobs are runs of that job and never jobs of their own.
+        """
+        match = _SUBJOB_ID.fullmatch(job_id or '')
+        return f'{match.group(1)}[]' if match else None
+
+    @staticmethod
+    def is_array_job_id(job_id: Optional[str]) -> bool:
+        """an array's own id, 123[]"""
+        return bool(job_id) and job_id.endswith('[]')
+
+    @staticmethod
     def aws_job_id(job_id: Optional[str]) -> Optional[str]:
         """
         the PBS job id as AWS names and tags take it. An array parent's 123[] becomes 123-array:
         stack names, log groups and metric namespaces refuse brackets. The idea:JobId tag
-        carries the same value so lookups by tag and by name agree.
+        carries the same value so lookups by tag and by name agree. A subjob's 123[4] names
+        its array's resources, since a subjob has none of its own.
         """
+        job_id = ModelUtils.array_parent_id(job_id) or job_id
         if job_id is not None and job_id.endswith('[]'):
             return f'{job_id[:-2]}{_ARRAY_JOB_SUFFIX}'
         return job_id
