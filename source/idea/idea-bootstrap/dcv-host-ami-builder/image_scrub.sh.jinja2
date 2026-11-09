@@ -79,6 +79,9 @@ rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
 # That agent ships the system log from its start on a clone, and rsyslog with no saved
 # position replays the journal: both held the builder's lines, so every node's log stream
 # opened with them. Stopped first, so nothing more lands in the image before it is captured.
+# Ubuntu's rsyslog is socket activated: with syslog.socket left listening, the next line logged
+# starts it again and it writes a new /var/log/syslog.
+systemctl stop syslog.socket 2>/dev/null || true
 systemctl stop rsyslog 2>/dev/null || true
 rm -f /var/lib/rsyslog/imjournal.state
 rm -f /var/log/messages* /var/log/syslog*
