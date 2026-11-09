@@ -508,10 +508,13 @@ class DirectoryCollector(HealthCollector):
                 'secd_events',
                 EMS_PATH,
                 lambda m, f, records: self._secd(m, f, records, now),
+                # ONTAP keeps the event log at cluster level and will not grant it to
+                # an SVM role, so an SVM login is refused it by design.
+                refused_reason='unavailable',
             )
 
     @staticmethod
-    def _check(metrics, client, filesystem, check, path, read):
+    def _check(metrics, client, filesystem, check, path, read, refused_reason=None):
         try:
             records = Utils.get_value_as_list('records', client.first_page(path), [])
             read(metrics, filesystem, records)
@@ -519,11 +522,21 @@ class DirectoryCollector(HealthCollector):
                 'directory.check_ok', 1, check=check, reason='ok', filesystem=filesystem
             )
         except Exception as e:
+            reason = DirectoryCollector._reason(e)
+            if reason == 'forbidden' and refused_reason:
+                metrics.level(
+                    'directory.check_ok',
+                    1,
+                    check=check,
+                    reason=refused_reason,
+                    filesystem=filesystem,
+                )
+                return
             metrics.level(
                 'directory.check_ok',
                 0,
                 check=check,
-                reason=DirectoryCollector._reason(e),
+                reason=reason,
                 filesystem=filesystem,
             )
 

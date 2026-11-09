@@ -50,8 +50,8 @@ Every five minutes, one read per file system in `shared-storage` that has metric
 | `idea.health.directory.ldap_up` | `svm`, `filesystem` | ONTAP's LDAP client status. |
 | `idea.health.directory.ldap_session_signed` | `svm`, `filesystem` | 1 when `session-security-for-ad-ldap` is `sign` or `seal`. 0 will fail binds on a domain controller requiring signing. |
 | `idea.health.directory.dns_on_domain_controllers` | `svm`, `filesystem` | 1 when the SVM's DNS servers are all the directory's domain controllers. On the VPC resolver the reverse lookup gives no SPN that Kerberos can use. Managed AD only. |
-| `idea.health.directory.secd_events` | `event`, `filesystem` | `secd.*` events by name in a five minute bucket. |
-| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked. `reason:forbidden` is a path the login's role lacks. |
+| `idea.health.directory.secd_events` | `event`, `filesystem` | `secd.*` events by name in a five minute bucket. Needs a cluster-level login, see below. |
+| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked. `reason:forbidden` is a path the login's role lacks. `reason:unavailable` (value 1) is a read this kind of login can never make, so not a failure. |
 | `idea.health.directory.home_stat_ok` | `reason` | A `stat` of `/data/home` and a lookup of a name that does not exist, from a separate process killed at 15 seconds. Exercises name mapping; reads no one's folder. `reason`: `ok`, `timeout`, `stuck` (still in the kernel, no new one started), `denied`, `error`. |
 | `idea.health.directory.home_stat_seconds` | | How long that took, including about 30 ms of process start. |
 
@@ -61,10 +61,9 @@ The ONTAP login used by storage metrics needs these paths added once per SVM, fr
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/ldap -access readonly
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/dns -access readonly
 security login rest-role create -vserver <SVM> -role idea-metrics -api /api/protocols/cifs/services -access readonly
-security login rest-role create -vserver <SVM> -role idea-metrics -api /api/support/ems/events -access readonly
 ```
 
-The event log is a cluster-level path in ONTAP and may refuse a role scoped to an SVM. If `check:secd_events` stays `forbidden` after that, secd failures show through `ldap_up` and `home_stat_ok` instead.
+secd event counts need a cluster-level login. ONTAP keeps the event log at cluster level and will not add it to an SVM role (`A Vserver admin cannot use command directory /api/support/ems/events with access level readonly`). With an SVM login, `check:secd_events` reads `reason:unavailable` and `secd_events` sends nothing. secd failures are still covered by `ldap_up` and `home_stat_ok`.
 
 ## Directory automation
 

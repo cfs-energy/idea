@@ -569,9 +569,14 @@ def test_a_path_the_login_cannot_read_reports_forbidden_and_the_others_go_on():
     assert metrics.value(
         'directory.check_ok', check='cifs_security', reason='forbidden'
     ) == [0]
+    # an SVM login cannot be granted the event log: not a failure, but still shown
     assert metrics.value(
-        'directory.check_ok', check='secd_events', reason='forbidden'
-    ) == [0]
+        'directory.check_ok', check='secd_events', reason='unavailable'
+    ) == [1]
+    assert (
+        metrics.value('directory.check_ok', check='secd_events', reason='forbidden')
+        == []
+    )
 
 
 def test_event_reads_ask_for_names_and_times_and_nothing_else():
