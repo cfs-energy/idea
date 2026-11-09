@@ -86,13 +86,13 @@ export function elbAccountIdForRegion(region: string, path: string = regionElbAc
 export const SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS = 30;
 
 /**
- * `scheduler.log_archive.s3_retention_days`: 0 keeps the archive forever; otherwise at least
- * `SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS`.
+ * `<module id>.log_archive.s3_retention_days`: 0 keeps the archive forever; otherwise at least
+ * `SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS`. The error names the module whose value is wrong.
  */
-export function schedulerLogRetentionDays(value: number): number {
+export function schedulerLogRetentionDays(value: number, moduleId: string = 'scheduler'): number {
   if (!Number.isInteger(value) || value < 0 || (value > 0 && value < SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS)) {
     throw new GeneralException(
-      `scheduler.log_archive.s3_retention_days must be 0 (keep forever) or at least ${SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS}, got ${value}`,
+      `${moduleId}.log_archive.s3_retention_days must be 0 (keep forever) or at least ${SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS}, got ${value}`,
     );
   }
   return value;

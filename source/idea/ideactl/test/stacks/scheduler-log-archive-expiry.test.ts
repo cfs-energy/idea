@@ -72,4 +72,11 @@ describe("scheduler log archive expiry", () => {
     assert.equal(schedulerLogRetentionDays(30), 30);
     for (const bad of [1, 29, -1, 1.5]) assert.throws(() => schedulerLogRetentionDays(bad), /s3_retention_days/);
   });
+
+  it("names the scheduler module whose retention is refused", () => {
+    assert.throws(
+      () => schedulerLogRetentionDays(10, "scheduler-b"),
+      (error: Error) => error.message.startsWith("scheduler-b.log_archive.s3_retention_days must be 0"),
+    );
+  });
 });

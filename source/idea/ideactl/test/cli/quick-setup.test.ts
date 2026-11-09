@@ -176,4 +176,26 @@ describe('bootstrap', () => {
       ['logs/scheduler-c/', 400],
     ]);
   });
+
+  it('names the scheduler module whose retention bootstrap refuses', async () => {
+    const { runBootstrap } = await import('../../src/cli/commands/deploy.ts');
+    const deps = fakeDeps({
+      tables: {
+        [`${CLUSTER}.modules`]: [
+          ...TABLES[`${CLUSTER}.modules`],
+          moduleRow('scheduler', 'scheduler', 'app'),
+          moduleRow('scheduler-b', 'scheduler', 'app'),
+        ],
+        [`${CLUSTER}.cluster-settings`]: [
+          ...TABLES[`${CLUSTER}.cluster-settings`],
+          { key: 'scheduler.log_archive.s3_retention_days', value: 45 },
+          { key: 'scheduler-b.log_archive.s3_retention_days', value: 10 },
+        ],
+      },
+    });
+    await assert.rejects(
+      () => runBootstrap(deps, { clusterName: CLUSTER, awsRegion: REGION, moduleSet: 'default' }),
+      (error: Error) => error.message.startsWith('scheduler-b.log_archive.s3_retention_days must be 0') && error.message.endsWith('got 10'),
+    );
+  });
 });
