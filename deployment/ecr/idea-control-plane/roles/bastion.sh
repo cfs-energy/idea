@@ -148,10 +148,12 @@ sssd_pid=$!
 #   the load balancer's TCP check from its private addresses, which closes before sending an SSH
 #     identification string (no [preauth]: no session existed):
 #     Connection closed by 10.x.y.z port N
+#     private is 10/8, 172.16/12, 192.168/16 and 100.64/10, the shared range a VPC's secondary
+#     CIDR is usually taken from; a VPC on any other range keeps these lines
 # Logins, failed and invalid-user attempts, disconnects after authentication, any close from a
 # public address and every other sshd line still reach the task log.
 # sshd -e ends each line in CR LF, so the CR is allowed before the end.
-SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[preauth\])?|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)'$'\r''?$'
+SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[preauth\])?|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))(\.[0-9]{1,3}){2}) port [0-9]+)'$'\r''?$'
 # Connections sshd dropped go to a tally for the metrics process: only the phrase, and the
 # address only when it is loopback, so the file holds nothing about anyone. tee -p and a local file: a
 # dead tally costs a count, never sshd's stderr. At its default log level sshd names only some
@@ -159,9 +161,16 @@ SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[prea
 # "in|exited MaxStartups throttling ..., N connections dropped" (the episode so far), 10.5
 # "Maxstartups logging rate-limited: additional N connections dropped", matched whole so that
 # its first word is not taken for a named drop.
+# sshd also logs the name a client offers, as it came and before any login ("Invalid user NAME
+# from ..."), so the phrases are taken only from lines sshd itself begins with them, cut where
+# its own words end: a name never reaches the second pattern.
+SSHD_DROP_SOURCES='^(drop connection #[0-9]+ from \[[^] ]+\]:[0-9]+ on \[[^] ]+\]:[0-9]+ (past )?Maxstartups|(in|exited) MaxStartups throttling (for|after) [^ ]+, [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication for |Timeout, client not responding from )'
 SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
+sshd_drop_phrases() {
+  grep --line-buffered -oE "${SSHD_DROP_SOURCES}" | grep --line-buffered -oE "${SSHD_DROP_LINES}"
+}
 sshd_log_filter() {
-  tee -p >(grep --line-buffered -oE "${SSHD_DROP_LINES}" >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
+  tee -p >(sshd_drop_phrases >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
     | grep --line-buffered -v -E "${SSHD_HEALTH_CHECK_LINES}" >&2 || true
 }
 metrics_pid=
