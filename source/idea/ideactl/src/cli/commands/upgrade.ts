@@ -1559,12 +1559,14 @@ async function verifyUpgradeCompletion(
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
   const checkpoints = new Set([
     ...modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
-      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)),
+      // accounts.reconcile.last_run is rewritten by every reconcile, periodic or manual; metrics.backfill.* is the heartbeat of a running backfill.
+      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "accounts.reconcile.last_run", "metrics.backfill.cost"].map((key) => `${module.module_id}.${key}`)),
     ...modules.filter((module) => module.name === "scheduler").flatMap((module) =>
-      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on"].map((key) => `${module.module_id}.${key}`)),
+      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on", "metrics.backfill.jobs"].map((key) => `${module.module_id}.${key}`)),
     // The image pipelines advance their release and monthly checkpoints as soon as the new modules run.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").flatMap((module) =>
-      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release"].map((key) => `${module.module_id}.${key}`)),
+      // The stack expiry digest claims its weekly row on the first tick after the controller starts.
+      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release", "software_stacks.expiry_last_digest_on"].map((key) => `${module.module_id}.${key}`)),
     // The desktop controller records the release it seeded base stacks for when it starts on a new version.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").map((module) => `${module.module_id}.software_stacks.base_stacks_seeded_release`),
   ]);
