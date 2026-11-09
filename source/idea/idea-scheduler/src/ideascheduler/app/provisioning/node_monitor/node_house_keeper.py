@@ -1084,6 +1084,16 @@ class NodeHouseKeepingSession:
         scheduler = self._context.scheduler
         try:
             scheduler.hold_job(job_id=job.job_id)
+            # on record, so a later qdel reads as the platform's hold and not the owner's
+            self._context.job_cache.set_job_provisioning_error(
+                job_id=job.job_id,
+                error_code=errorcodes.JOB_HELD_STACK_TIMEOUT,
+                message=(
+                    f'Job held: nodes launched but the job did not start in '
+                    f'{max(1, timeout_secs // 60)} min. Check instance_ami. '
+                    f'qrls {job.job_id} to retry.'
+                ),
+            )
             scheduler.set_job_comment(
                 job_id=job.job_id,
                 comment=(

@@ -90,7 +90,12 @@ ERROR_CODE_REASON_CLASSES = {
     errorcodes.UNAUTHORIZED_ACCESS: REASON_CLASS_ACCESS,
     errorcodes.CLOUDFORMATION_STACK_BUILDER_FAILED: REASON_CLASS_CLOUDFORMATION,
     errorcodes.JOB_PROVISIONING_RETRIES_EXHAUSTED: REASON_CLASS_RETRIES_EXHAUSTED,
+    errorcodes.JOB_HELD_STACK_TIMEOUT: REASON_CLASS_STACK_TIMEOUT,
 }
+
+# the holds the platform places, each recorded with its error code. PBS shows the same held
+# state for an owner's qsub -h or a dependency not yet met, which the platform did not fail.
+PLATFORM_HOLD_REASON_CLASSES = (REASON_CLASS_RETRIES_EXHAUSTED, REASON_CLASS_STACK_TIMEOUT)
 
 
 class ProvisioningLifecycleEvents:
@@ -231,11 +236,15 @@ class ProvisioningLifecycleEvents:
 
         HELD is mapped first: the retry cap also emits 'held' when it parks a job, but
         this function is called directly to label the record of a job that never ran, and
-        that record must say 'held' rather than 'deleted'.
+        that record must say 'held' rather than 'deleted'. Only a hold the platform
+        recorded counts: a job its owner held and then deleted was cancelled.
         """
         if job.disposition is not None:
             return job.disposition
-        if job.state == SocaJobState.HELD:
+        if (
+            job.state == SocaJobState.HELD
+            and job.reason_class in PLATFORM_HOLD_REASON_CLASSES
+        ):
             return DISPOSITION_HELD
         if not job.is_provisioned() or job.start_time is None:
             # error_message is not a discriminator here: it is written on transient

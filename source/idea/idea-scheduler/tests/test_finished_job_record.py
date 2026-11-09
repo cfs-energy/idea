@@ -250,13 +250,46 @@ def test_disposition_unprovisioned_with_a_wait_error_is_still_deleted(error):
 def test_disposition_held_at_retry_cap():
     """
     the retry cap is where provisioning stops trying, so it is the one unprovisioned
-    outcome the platform owns and the one that becomes a record.
+    outcome the platform owns and the one that becomes a record. The cache reads the
+    cap's error code onto the job as its reason class.
     """
     job = make_job(
-        provisioned=False, state=SocaJobState.HELD, error_message=PROVISIONING_ERROR
+        provisioned=False,
+        state=SocaJobState.HELD,
+        error_message=PROVISIONING_ERROR,
+        reason_class='retries_exhausted',
     )
 
     assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_HELD
+
+
+def test_disposition_held_after_a_stack_timeout():
+    job = make_job(
+        provisioned=False, state=SocaJobState.HELD, reason_class='stack_timeout'
+    )
+
+    assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_HELD
+
+
+@pytest.mark.parametrize(
+    'why',
+    [
+        {},  # qsub -h, or a dependency not yet met
+        {'error_message': QUEUE_LIMIT_ERROR, 'reason_class': 'capacity'},
+    ],
+)
+def test_a_job_its_owner_held_and_deleted_is_cancelled_not_failed(fake_context, why):
+    """
+    PBS shows a held state for an owner's hold and a dependency too. Only a hold the
+    platform placed, and recorded, is the platform giving up on the job.
+    """
+    job = make_job(provisioned=False, state=SocaJobState.HELD, **why)
+
+    assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_DELETED
+    build_processor(fake_context, job).invoke_unprovisioned()
+    assert job.disposition == DISPOSITION_DELETED
+    assert job.reason_class in ('cancelled', 'capacity')
+    assert job.reason_class != 'retries_exhausted'
 
 
 # --------------------------------------------------------- path 1: never provisioned
@@ -328,7 +361,10 @@ def test_unprovisioned_job_disposition_is_read_before_state_is_rewritten(fake_co
     the job was actually in, so a job parked at the retry cap reports 'held'.
     """
     job = make_job(
-        provisioned=False, state=SocaJobState.HELD, error_message=PROVISIONING_ERROR
+        provisioned=False,
+        state=SocaJobState.HELD,
+        error_message=PROVISIONING_ERROR,
+        reason_class='retries_exhausted',
     )
 
     build_processor(fake_context, job).invoke_unprovisioned()
