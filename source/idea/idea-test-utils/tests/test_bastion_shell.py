@@ -957,11 +957,13 @@ class SshdMessages(unittest.TestCase):
         import socket
 
         try:
-            socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)[0].close()
+            ends = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         except OSError as error:
             self.skipTest(
                 f'no message sockets here, the role falls back to the pipe: {error}'
             )
+        for end in ends:
+            end.close()
         role = (ROLES / 'bastion.sh').read_text()
         with tempfile.TemporaryDirectory() as folder:
             drops = Path(folder) / 'drops'
