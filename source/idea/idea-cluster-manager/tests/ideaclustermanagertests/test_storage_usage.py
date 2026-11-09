@@ -90,6 +90,26 @@ def test_entry_cap_returns_partial_counts(tree):
     assert result['total']['files'] < 4
 
 
+def test_files_directly_in_home_past_the_entry_cap_are_all_counted(tree, tmp_path):
+    # The only way the cost fallback differs from 26.11.1: that walk checked the cap before
+    # seeing the listing had ended, and called this partial although it had every byte. A
+    # partial home drops every user's storage share, so this is a fix, not a new basis.
+    import shutil
+
+    shutil.rmtree(tree + '/reports')
+    shutil.rmtree(tree + '/empty')
+    for link in ('linked-file', 'linked-dir'):
+        os.unlink(f'{tree}/{link}')
+    for index in range(5):
+        with open(f'{tree}/f{index}', 'wb') as stream:
+            stream.write(b'x' * (index + 1))
+    for cap in (6, 3):
+        result = storage_usage.walk_home(tree, max_entries=cap, now=NOW)
+        assert not result['partial']
+        assert result['total']['bytes'] == 4 + 15
+        assert result['total']['files'] == 6
+
+
 def test_time_cap_returns_partial_instead_of_waiting(tree):
     result = storage_usage.walk_home(tree, max_seconds=0, now=NOW)
     assert result['partial']
