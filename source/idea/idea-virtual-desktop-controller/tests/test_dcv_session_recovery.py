@@ -299,6 +299,38 @@ def test_resume_waits_for_live_broker_session(recovery, state):
     assert recovery.store[0].state != 'READY'
 
 
+def test_reboot_event_leaves_a_ready_session_the_broker_still_has(recovery):
+    """
+    a windows desktop's configuration restart reported a reboot after READY, and recovery took
+    the desktop back to INITIALIZING without asking the broker whether its session was gone
+    """
+    recovery.store[0].recovery_unready_observed = True
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': 'READY'}}
+    }
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'READY'
+    assert not recovery.store[0].recovering
+    assert not recovery.store[0].recovery_unready_observed
+    recovery.broker.create_session.assert_not_called()
+
+
+@pytest.mark.parametrize('state', [None, 'DELETED', 'UNKNOWN', 'CREATING'])
+def test_reboot_event_recovers_a_ready_session_the_broker_lost_at_once(
+    recovery, state
+):
+    """the reboot itself is the evidence, so one unready answer starts recovery"""
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': state}}
+    }
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'INITIALIZING'
+    assert recovery.store[0].recovering
+    recovery.now[0] += 60000
+    recovery.check()
+    recovery.broker.create_session.assert_called_once()
+
+
 @pytest.mark.parametrize('validation', [False, True])
 def test_planned_reboot_does_not_start_recovery(recovery, validation):
     from ideavirtualdesktopcontroller.app.sessions.image_validation import (
