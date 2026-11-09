@@ -509,13 +509,19 @@ const COST_LOOKBACK = "cluster-manager.metrics.cost.lookback_days";
 const CLUSTER_MANAGER = [{ module_id: "cluster-manager", name: "cluster-manager", type: "app" }];
 
 test("the cost lookback moves from the old three-day default to seven and nothing else moves", () => {
-  const plan = (row?: { value: unknown; source?: string }) =>
+  const plan = (row?: { value: unknown; source?: string; version?: number }) =>
     planCostLookbackDefault(CLUSTER_MANAGER, row === undefined ? [] : [{ key: COST_LOOKBACK, ...row }]);
   assert.deepEqual(plan({ value: 3, source: "template" }), [{ key: COST_LOOKBACK, value: 7 }]);
   assert.deepEqual(plan({ value: 3 }), [{ key: COST_LOOKBACK, value: 7 }]);
+  // `config update` at install stamps every row it writes cli at version 1: the template's value
+  assert.deepEqual(plan({ value: 3, source: "cli", version: 1 }), [{ key: COST_LOOKBACK, value: 7 }]);
+  assert.deepEqual(plan({ value: 5, source: "cli", version: 1 }), []);
   assert.deepEqual(plan({ value: 5, source: "template" }), []);
   assert.deepEqual(plan(), []);
+  // written again since, or from the portal: the operator chose three
+  assert.deepEqual(plan({ value: 3, source: "cli", version: 2 }), []);
   assert.deepEqual(plan({ value: 3, source: "cli" }), []);
+  assert.deepEqual(plan({ value: 3, source: "api", version: 1 }), []);
   assert.deepEqual(plan({ value: 3, source: "api" }), []);
   assert.deepEqual(plan({ value: 7, source: "template" }), []);
   assert.deepEqual(planCostLookbackDefault([], [{ key: COST_LOOKBACK, value: 3 }]), []);
@@ -529,14 +535,16 @@ test("the cost lookback moves from the old three-day default to seven and nothin
 });
 
 test("the cost interval moves from the old six-hour default to 24 and nothing else moves", () => {
-  const plan = (row?: { value: unknown; source?: string }) =>
+  const plan = (row?: { value: unknown; source?: string; version?: number }) =>
     planCostIntervalDefault(CLUSTER_MANAGER, row === undefined ? [] : [{ key: COST_INTERVAL, ...row }]);
   assert.deepEqual(plan({ value: 6, source: "template" }), [{ key: COST_INTERVAL, value: 24 }]);
   // a release that stamped no source wrote the template default too
   assert.deepEqual(plan({ value: 6 }), [{ key: COST_INTERVAL, value: 24 }]);
   assert.deepEqual(plan({ value: 12, source: "template" }), []);
   assert.deepEqual(plan(), []);
+  assert.deepEqual(plan({ value: 6, source: "cli", version: 1 }), [{ key: COST_INTERVAL, value: 24 }]);
   // the operator chose six
+  assert.deepEqual(plan({ value: 6, source: "cli", version: 2 }), []);
   assert.deepEqual(plan({ value: 6, source: "cli" }), []);
   assert.deepEqual(plan({ value: 6, source: "api" }), []);
   // a second upgrade finds 24 and plans nothing
