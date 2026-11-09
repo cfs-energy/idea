@@ -861,6 +861,75 @@ def test_deleting_a_disabled_user_leaves_no_group_membership(
     assert 'accounts_deleted3' not in members('default-project-group')
 
 
+def test_deleting_a_user_survives_its_queued_copy_removing_the_account_first(
+    context: AppContext, monkeypatch
+):
+    # disabling queues the same removal; the consumer can win between check and delete
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted4')
+    directory.is_sudo_user.return_value = True
+    for removal in ('delete_group', 'delete_user', 'remove_sudo_user'):
+        getattr(directory, removal).side_effect = ldap.NO_SUCH_OBJECT()
+    context.accounts.delete_user('accounts_deleted4')
+    directory.delete_user.assert_called_once_with('accounts_deleted4')
+    assert context.accounts.user_dao.get_user('accounts_deleted4') is None
+
+
+def test_deleting_a_user_again_resumes_the_group_removal(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted5')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    directory.remove_user_from_group.side_effect = ldap.SERVER_DOWN()
+    with pytest.raises(ldap.SERVER_DOWN):
+        context.accounts.delete_user('accounts_deleted5')
+    removed_from_projects.assert_not_called()
+
+    directory.remove_user_from_group.reset_mock(side_effect=True)
+    context.accounts.delete_user('accounts_deleted5')
+    directory.remove_user_from_group.assert_called_once_with(
+        ['accounts_deleted5'], 'default-project-group'
+    )
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted5'
+    )
+    assert context.accounts.user_dao.get_user('accounts_deleted5') is None
+
+
+@pytest.mark.parametrize(
+    'provider, kept', [('aws_managed_activedirectory', True), ('openldap', False)]
+)
+def test_deleting_a_user_whose_directory_account_is_kept_leaves_its_memberships(
+    context: AppContext, monkeypatch, provider, kept
+):
+    username = 'accounts_kept_ad' if kept else 'accounts_kept_ldap'
+    directory = deletable_user(context, monkeypatch, username)
+    config = context.config()
+    get_string = config.get_string
+    monkeypatch.setattr(
+        config,
+        'get_string',
+        lambda key, *args, **kwargs: (
+            provider
+            if key == 'directoryservice.provider'
+            else get_string(key, *args, **kwargs)
+        ),
+    )
+    # as the reconciler disables a user it found disabled in the directory
+    context.accounts.disable_user(username, preserve_directory=True)
+    context.accounts.delete_user(username)
+    assert directory.remove_user_from_group.called is not kept
+    assert directory.delete_user.called is not kept
+    # the cluster's own records go either way
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert username not in members('default-project-group')
+    assert context.accounts.user_dao.get_user(username) is None
+
+
 @pytest.mark.parametrize('failing', ['directory', 'queue'])
 def test_a_password_that_could_not_be_queued_leaves_no_file(
     context: AppContext, monkeypatch, tmp_path, failing

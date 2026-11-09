@@ -17,6 +17,11 @@ class TaskCannotSucceed(Exception):
     """retrying cannot help, and a retry holds up every later task of its FIFO group."""
 
 
+# returned by invoke when it found its work already settled and did nothing: that
+# says nothing about a failure recorded for the task, so the record is left alone
+NOTHING_DONE = object()
+
+
 class BaseTask:
     # FIFO lane: tasks for one entity share a message group, and so run in order,
     # unless their lane differs. A lane holds work that does not depend on, and is

@@ -19,7 +19,11 @@ from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 from ideadatamodel import constants
-from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
+from ideaclustermanager.app.tasks.base_task import (
+    NOTHING_DONE,
+    BaseTask,
+    TaskCannotSucceed,
+)
 
 from typing import Dict, List
 import threading
@@ -264,7 +268,9 @@ class TaskManager(SocaService):
         # of the lane, so it joins the lane and runs in turn; sent_at keeps its age.
         lane = getattr(task, 'lane', None)
         group = sqs_message.get('Attributes', {}).get('MessageGroupId')
-        if not isinstance(lane, str) or not group or group.endswith(f'.{lane}'):
+        entity = task.entity_ref(payload) if isinstance(lane, str) else None
+        # that release's group was the entity's bare id; a name's ending proves nothing
+        if not entity or group != entity[1]:
             return False
         self.logger.info(f'moving task {task.get_name()} into its lane: {lane}')
         self.send(
@@ -386,9 +392,10 @@ class TaskManager(SocaService):
                 return
             if self._move_into_lane(task, task_payload, sqs_message):
                 return
-            task.invoke(task_payload)
+            result = task.invoke(task_payload)
             task_succeeded = True
-            self._update_task_failure(task, task_payload)
+            if result is not NOTHING_DONE:
+                self._update_task_failure(task, task_payload)
             _task_end = Utils.current_time_ms()
             _task_duration = int(_task_end - _task_start)
             self.logger.info(

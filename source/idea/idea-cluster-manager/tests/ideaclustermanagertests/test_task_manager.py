@@ -787,6 +787,90 @@ def test_a_moved_message_is_not_queued_twice_when_its_delete_fails(
     assert queue.messages == []
 
 
+def test_a_password_given_up_on_is_not_replaced_by_an_older_one_behind_it(
+    tmp_path, entity_tables
+):
+    module, queue, directory, queue_password, drain, table = password_sync(
+        tmp_path, entity_tables
+    )
+    old = queue_password('old', group='user')
+    # at the upgrade it waits out a failed attempt in the group it was sent to
+    queue.messages[0]['receives'] = 3
+    queue.messages[0]['visible_at'] = 10000
+    queue.now += 1
+    directory['down'] = True
+    queue_password('new')
+    for attempt in range(1, module.TASK_MAX_ATTEMPTS + 1):
+        drain()
+        queue.now += module.retry_delay(attempt)
+    assert [message['group'] for message in queue.messages] == ['user']
+    failure = table.get_item(Key={'username': 'user'})['Item']['last_task_failure']
+    assert failure['task'] == 'accounts.sync-password'
+
+    directory['down'] = False
+    queue.now = 10000
+    drain()
+    assert directory['applied'] == []
+    assert queue.messages == []
+    assert not old.exists()
+    # the user is still told the newest password did not sync
+    record = table.get_item(Key={'username': 'user'})['Item']
+    assert record['last_task_failure'] == failure
+
+
+def test_a_redelivered_password_does_not_clear_a_recorded_failure(
+    tmp_path, entity_tables
+):
+    # refused, recorded, then acknowledged late: the same message comes back
+    _, queue, directory, queue_password, drain, table = password_sync(
+        tmp_path, entity_tables
+    )
+    table.put_item(
+        Item={
+            'username': 'user',
+            'last_task_failure': {'task': 'accounts.sync-password', 'message': 'no'},
+        }
+    )
+    file = queue_password('refused')
+    file.unlink()
+    drain()
+    assert directory['applied'] == []
+    assert queue.messages == []
+    assert 'last_task_failure' in table.get_item(Key={'username': 'user'})['Item']
+
+
+@pytest.mark.parametrize(
+    'username, group, moved',
+    [
+        # sent by the release before lanes, whatever the name ends in
+        ('user', 'user', True),
+        ('user.password', 'user.password', True),
+        ('user', 'user.password', False),
+        ('user.password', 'user.password.password', False),
+    ],
+)
+def test_only_a_message_in_the_bare_group_of_its_user_is_moved_into_the_lane(
+    tmp_path, username, group, moved
+):
+    _, manager, queue, tasks, ran, password, drain = account_queue(tmp_path)
+    queue.send_message(
+        MessageBody=json.dumps(
+            {
+                'name': 'accounts.sync-password',
+                'payload': {'username': username, 'password_file': str(password(1))},
+            }
+        ),
+        MessageGroupId=group,
+    )
+    message = queue.receive_message(VisibilityTimeout=30)['Messages'][0]
+    task = tasks['accounts.sync-password']
+    payload = json.loads(message['Body'])['payload']
+    assert manager._move_into_lane(task, payload, message) is moved
+    assert [m['group'] for m in queue.messages] == [
+        f'{username}.password' if moved else group
+    ]
+
+
 def test_a_redelivered_password_that_already_synced_is_done(tmp_path):
     task, password = refused_password_task(tmp_path, None)
     payload = {'username': 'user', 'password_file': str(password)}

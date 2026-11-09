@@ -1078,27 +1078,19 @@ class AccountsService:
             self.logger.info(f'{log_tag} user not found. skip.')
             return
 
-        # remove user from all group memberships
         group_name = Utils.get_value_as_string('group_name', user)
 
+        # The record keeps this list until the record itself goes, so a delete that
+        # stopped part way finds the same memberships to remove when it is run again.
         groups = Utils.get_value_as_list('additional_groups', user, [])
         if group_name in groups:
             groups.remove(group_name)
-        if Utils.is_not_empty(groups):
-            self.logger.info(f'{log_tag} clean-up group memberships')
-            try:
-                self.remove_user_from_groups(username=username, group_names=groups)
-            except exceptions.SocaException as e:
-                if e.error_code == errorcodes.AUTH_USER_IS_DISABLED:
-                    pass
-                else:
-                    raise e
 
         # disable user from db, user pool and delete from directory service
         self.logger.info(f'{log_tag} disabling user')
         self.disable_user(username=username)
 
-        self.logger.info(f'{log_tag} removing user from directory service')
+        self.logger.info(f'{log_tag} removing memberships and directory account')
         self._remove_deleted_user_now(username, groups)
 
         # delete user in user pool
@@ -1122,13 +1114,16 @@ class AccountsService:
         # imported here: the tasks module needs this package fully loaded
         from ideaclustermanager.app.accounts.account_tasks import (
             SyncUserInDirectoryServiceTask,
+            keeps_directory_account,
         )
 
-        readonly = self.ldap_client.is_readonly()
+        # the directory keeps its memberships wherever it keeps the account
+        keep_directory = self.ldap_client.is_readonly() or keeps_directory_account(
+            self.context, self.user_dao.get_user(username)
+        )
         for group_name in group_names:
-            # a disabled user keeps these rows, as the removal above refuses them
             self.group_members_dao.delete_membership(group_name, username)
-            if not readonly:
+            if not keep_directory:
                 try:
                     self.ldap_client.remove_user_from_group([username], group_name)
                 except (

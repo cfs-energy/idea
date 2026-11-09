@@ -27,10 +27,15 @@ import ideaclustermanager
 from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
     PasswordRefused,
 )
-from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
+from ideaclustermanager.app.tasks.base_task import (
+    NOTHING_DONE,
+    BaseTask,
+    TaskCannotSucceed,
+)
 from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirectory
 
 from typing import Dict
+import ldap
 import os
 import pathlib
 import shutil
@@ -142,6 +147,22 @@ class GroupMembershipUpdatedTask(BaseTask):
                 )
 
 
+def keeps_directory_account(context, user: Dict) -> bool:
+    # Reconciliation observes authoritative AD; mirror work must not mutate it.
+    return bool(user.get('preserve_directory')) and context.config().get_string(
+        'directoryservice.provider'
+    ) in ('activedirectory', 'aws_managed_activedirectory')
+
+
+def _remove_if_present(remove, name: str):
+    # Deleting a user runs this removal itself while the copy it queued can run too;
+    # whichever comes second finds the entry gone, which is the result it wanted.
+    try:
+        remove(name)
+    except ldap.NO_SUCH_OBJECT:
+        pass
+
+
 class SyncUserInDirectoryServiceTask(BaseTask):
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
@@ -160,10 +181,7 @@ class SyncUserInDirectoryServiceTask(BaseTask):
         enabled = user['enabled']
         sudo = Utils.get_value_as_bool('sudo', user, False)
         readonly = self.context.ldap_client.is_readonly()
-        # Reconciliation observes authoritative AD; queued mirror tasks must not mutate it.
-        if user.get('preserve_directory') and self.context.config().get_string(
-            'directoryservice.provider'
-        ) in ('activedirectory', 'aws_managed_activedirectory'):
+        if keeps_directory_account(self.context, user):
             return
 
         if readonly:
@@ -195,19 +213,20 @@ class SyncUserInDirectoryServiceTask(BaseTask):
 
         else:
             self.logger.info(f'deleting user: {username} from directory service ...')
-            if self.context.ldap_client.is_existing_group(group_name):
-                self.context.ldap_client.delete_group(group_name)
-            if self.context.ldap_client.is_existing_user(username):
-                self.context.ldap_client.delete_user(username)
-            if self.context.ldap_client.is_sudo_user(username):
-                self.context.ldap_client.remove_sudo_user(username)
+            directory = self.context.ldap_client
+            if directory.is_existing_group(group_name):
+                _remove_if_present(directory.delete_group, group_name)
+            if directory.is_existing_user(username):
+                _remove_if_present(directory.delete_user, username)
+            if directory.is_sudo_user(username):
+                _remove_if_present(directory.remove_sudo_user, username)
 
 
 class SyncPasswordInDirectoryServiceTask(BaseTask):
     # Passwords stay ordered among themselves; until the account reaches the
     # directory the change fails and retries without holding up the account's tasks.
     lane = 'password'
-    # user attribute: sent_at of the newest password applied
+    # user attribute: sent_at of the newest password finished with, applied or given up
     APPLIED = 'password_sync_sent_at'
 
     def __init__(self, context: ideaclustermanager.AppContext):
@@ -232,9 +251,10 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         sent_at = payload.get('sent_at')
         user = self.context.accounts.user_dao.get_user(username) or {}
         if sent_at is not None and sent_at < user.get(self.APPLIED, 0):
-            self.logger.info(f'a newer password is already synced for user: {username}')
+            self.logger.info(f'a newer password superseded this for user: {username}')
             self.on_terminal_failure(payload)
-            return
+            # the newer one's outcome stands, a recorded failure included
+            return NOTHING_DONE
 
         try:
             with open(password_file, 'r') as f:
@@ -246,7 +266,8 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
             # The file goes only once its message is finished with, so this is a
             # redelivery of one that was: nothing is left to do, and no retry finds it.
             self.logger.warning(f'password file is gone for user: {username}; done')
-            return
+            # it may have ended in a recorded failure, which this must not clear
+            return NOTHING_DONE
 
         try:
             self.context.ldap_client.change_password(username, password)
@@ -282,6 +303,10 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
             self._remove_password_file(payload['password_file'])
         except FileNotFoundError:
             pass
+        # An older password still queued behind this one must not become the
+        # directory's password once this one is given up on.
+        if payload.get('sent_at') is not None:
+            self._record_applied(payload['username'], payload['sent_at'])
 
     def _remove_password_file(self, password_file: str):
         password_file_path = pathlib.Path(password_file)
