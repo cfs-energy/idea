@@ -138,6 +138,19 @@ def test_a_job_another_active_job_depends_on_stays():
     assert decide(active=active) == Reason.REFERENCED_BY_ACTIVE_JOB
 
 
+def test_a_job_whose_record_names_an_active_dependent_stays():
+    """
+    PBS drops a satisfied dependency from the waiting job's depend, here 348's, while the
+    finished job's own record keeps beforeany:348. That is what holds the folder, even for a
+    dependency added with qalter or a dependent another user owns.
+    """
+    active = ActiveJobs(base_ids=frozenset({'348'}), owners=frozenset({'bob'}))
+    waiting = record(dependents=frozenset({'348'}))
+    assert decide(active=active, records=[waiting]) == Reason.REFERENCED_BY_ACTIVE_JOB
+    finished = ActiveJobs(owners=frozenset({'bob'}))
+    assert decide(active=finished, records=[waiting]) == Reason.ELIGIBLE
+
+
 def test_a_job_number_an_active_job_mentions_stays():
     active = ActiveJobs(mentioned_ids=frozenset({'123'}))
     assert decide(active=active) == Reason.REFERENCED_BY_ACTIVE_JOB

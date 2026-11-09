@@ -18,8 +18,8 @@ A folder stays unless all of these hold, and each runs again on the open folder 
 
 * PBS lists no job under that number in any state, no node is running one, and the job cache tracks none.
 * The owner has no active job at all. There is no setting for this.
-* No active job depends on it, names the folder in its working directory, output paths, environment, arguments or script, or mentions the job's number in its script, arguments or environment.
-* The job cache or job index holds a finished record for that number and owner, with start and end times, and the job ended long enough ago for how it finished.
+* No active job depends on it (a dependency PBS has already dropped is read from the finished job's record; jobs finished before 26.11.2 have none), names the folder in its working directory, output paths, environment, arguments or script, or mentions the job's number in its script, arguments or environment.
+* The job cache or job index holds a finished record for that number and owner, with start and end times, and the job ended long enough ago for how it finished. A job ended with `qdel` counts as failed even when it exited 0; jobs finished before 26.11.2 are read from their PBS comment for this.
 * The folder and the owner folder above it match the job owner's account, and it holds no one else's files.
 * Everything in the folder appeared and last changed while the job ran, from its first attempt's start to its end. A later change means something still uses it. Anything older means the data came from somewhere else, such as a reused job number.
 * No file in it was read after the job ended. On a mount using `noatime`, as IDEA's default Lustre options do, reads leave no trace and this check sees nothing.

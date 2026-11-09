@@ -234,8 +234,9 @@ describe('scratch cleanup page', () => {
             .mockResolvedValueOnce({listing: [{...row, action: 'removed', run_id: 'a'}], next_token: 'next'})
             .mockResolvedValueOnce({listing: [{...row, path: '/lustre/bob/9', action: 'removed', run_id: 'b'}]});
         render(<ScratchCleanupContent/>);
-        expect(await screen.findByText('Removed')).toBeVisible();
-        await userEvent.click(screen.getByRole('button', {name: 'Show more'}));
+        // the runs table has a Removed column, so wait for the log's own row
+        expect(await screen.findByText('/lustre/alice/123')).toBeVisible();
+        await userEvent.click(await screen.findByRole('button', {name: 'Show more'}));
         expect(await screen.findByText('/lustre/bob/9')).toBeVisible();
         expect(audit).toHaveBeenLastCalledWith({paginator: {page_size: 50, cursor: 'next'}});
     });

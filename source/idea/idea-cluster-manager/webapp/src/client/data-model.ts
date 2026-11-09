@@ -1242,6 +1242,8 @@ export interface SocaJob {
   owner_email?: string;
   state?: SocaJobState;
   exit_status?: number;
+  terminated?: boolean;
+  dependent_job_ids?: string[];
   provisioned?: boolean;
   error_message?: string;
   status_reason?: string;

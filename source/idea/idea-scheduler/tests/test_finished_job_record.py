@@ -250,13 +250,95 @@ def test_disposition_unprovisioned_with_a_wait_error_is_still_deleted(error):
 def test_disposition_held_at_retry_cap():
     """
     the retry cap is where provisioning stops trying, so it is the one unprovisioned
-    outcome the platform owns and the one that becomes a record.
+    outcome the platform owns and the one that becomes a record. The cache reads the
+    cap's error code onto the job as its reason class.
     """
     job = make_job(
-        provisioned=False, state=SocaJobState.HELD, error_message=PROVISIONING_ERROR
+        provisioned=False,
+        state=SocaJobState.HELD,
+        error_message=PROVISIONING_ERROR,
+        reason_class='retries_exhausted',
     )
 
     assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_HELD
+
+
+def test_disposition_held_after_a_stack_timeout():
+    job = make_job(
+        provisioned=False, state=SocaJobState.HELD, reason_class='stack_timeout'
+    )
+
+    assert ProvisioningLifecycleEvents.get_disposition(job) == DISPOSITION_HELD
+
+
+@pytest.mark.parametrize(
+    'recorded_error',
+    [
+        None,  # qsub -h, or a dependency not yet met
+        ('CAPACITY_UNAVAILABLE', QUEUE_LIMIT_ERROR),  # a wait, not the platform's hold
+        ('JOB_PROVISIONING_RETRIES_EXHAUSTED', PROVISIONING_ERROR),
+        (
+            'JOB_HELD_STACK_TIMEOUT',
+            'Job held: nodes launched but the job did not start',
+        ),
+    ],
+)
+def test_a_held_job_that_leaves_pbs_is_recorded_by_who_held_it(
+    fake_context, monkeypatch, tmp_path, recorded_error
+):
+    """
+    PBS shows a held state for an owner's hold and a dependency too. Only a hold the
+    platform placed, and recorded, is the platform giving up on the job; any other held
+    job that leaves PBS was deleted: cancelled, or the wait it was in when one was
+    recorded. Driven through the poll cycle, which writes the waiting signals ('Job
+    held') onto a held job before the record is made.
+    """
+    from threading import Event
+    from unittest.mock import Mock
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+
+    class CycleExit(Event):
+        def wait(self, timeout=None):
+            self.set()
+
+    cache = JobCache(FakeSchedulerContext(str(tmp_path)))
+    fake_context.job_cache = cache
+    job = make_job(job_uid='held-1', state=SocaJobState.HELD, provisioned=False)
+    cache.sync([job])
+    if recorded_error is not None:
+        cache.set_job_provisioning_error(job.job_id, *recorded_error)
+    fake_context.config = lambda: Mock(get_int=lambda key, default=None: default)
+    monkeypatch.setattr(
+        finished_job_processor,
+        'OpenPBSQSelect',
+        lambda context: Mock(list_jobs_ids=Mock(return_value=[])),
+    )
+    fake_context.document_store.is_enabled = Mock(return_value=True)
+    poller = build_poller(fake_context)
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+
+    [record] = cache.list_completed_jobs()
+    if recorded_error is None:
+        assert (record.disposition, record.reason_class, record.status_reason) == (
+            DISPOSITION_DELETED,
+            'cancelled',
+            'Cancelled by the owner.',
+        )
+    elif recorded_error[0] == 'CAPACITY_UNAVAILABLE':
+        # deleted while it waited: the wait it was in stays on the record
+        assert (record.disposition, record.reason_class, record.status_reason) == (
+            DISPOSITION_DELETED,
+            'capacity',
+            QUEUE_LIMIT_ERROR,
+        )
+    else:
+        expected = {
+            'JOB_PROVISIONING_RETRIES_EXHAUSTED': 'retries_exhausted',
+            'JOB_HELD_STACK_TIMEOUT': 'stack_timeout',
+        }[recorded_error[0]]
+        assert (record.disposition, record.reason_class) == (DISPOSITION_HELD, expected)
 
 
 # --------------------------------------------------------- path 1: never provisioned
@@ -328,7 +410,10 @@ def test_unprovisioned_job_disposition_is_read_before_state_is_rewritten(fake_co
     the job was actually in, so a job parked at the retry cap reports 'held'.
     """
     job = make_job(
-        provisioned=False, state=SocaJobState.HELD, error_message=PROVISIONING_ERROR
+        provisioned=False,
+        state=SocaJobState.HELD,
+        error_message=PROVISIONING_ERROR,
+        reason_class='retries_exhausted',
     )
 
     build_processor(fake_context, job).invoke_unprovisioned()

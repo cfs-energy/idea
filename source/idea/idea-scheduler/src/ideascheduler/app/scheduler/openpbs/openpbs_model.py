@@ -28,14 +28,19 @@ from ideasdk.utils import Utils
 
 from ideascheduler.app.scheduler import SocaJobBuilder
 
+from ideascheduler.app.scheduler.openpbs import openpbs_constants
 from ideascheduler.app.scheduler.pbs_select import select_chunks, chunk_resources
 
 from typing import Optional, Union, Dict, List
 import arrow
+import re
 from datetime import datetime
 
 DATE_FORMAT = 'ddd MMM D HH:mm:ss YYYY'
 DEFAULT_QUEUE_NAME = 'normal'
+
+
+_DEPEND_JOB_ID = re.compile(r':([0-9]{1,18}(?:\[[0-9]*\])?)', re.ASCII)
 
 
 class OpenPBSJob(SocaBaseModel):
@@ -154,6 +159,19 @@ class OpenPBSJob(SocaBaseModel):
             return SocaJobState.SUSPENDED
 
         return None
+
+    def get_dependent_job_ids(self) -> Optional[List[str]]:
+        """
+        the jobs a before* dependency names: beforeok:348.server@server:349.server. A server
+        port can read as a number too, which only over-matches.
+        """
+        found = [
+            job_id
+            for part in (self.depend or '').split(',')
+            if part.strip().startswith('before')
+            for job_id in _DEPEND_JOB_ID.findall(part)
+        ]
+        return found or None
 
     @property
     def soca_job_state(self) -> Optional[SocaJobState]:
@@ -514,6 +532,12 @@ class OpenPBSJob(SocaBaseModel):
 
         # exit status
         exit_status = self.Exit_status
+        dependent_job_ids = self.get_dependent_job_ids()
+
+        # a job qdel ended can still exit 0; only a finished job's substate says so
+        terminated = None
+        if state == SocaJobState.FINISHED and self.substate is not None:
+            terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
 
         params = self.get_soca_job_params()
         execution_hosts = self.get_soca_execution_hosts(event=event)
@@ -606,6 +630,8 @@ class OpenPBSJob(SocaBaseModel):
             owner=owner,
             state=state,
             exit_status=exit_status,
+            terminated=terminated,
+            dependent_job_ids=dependent_job_ids,
             provisioned=provisioned,
             queue_time=queue_time,
             start_time=start_time,

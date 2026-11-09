@@ -289,7 +289,11 @@ def test_lifecycle_events_disposition_held_is_inferred_from_state(
     recorded identically, a job the platform gave up on cannot be told from one somebody
     deleted. 'held' is what makes a retry-capped job legible in Completed Jobs.
     """
-    job = make_job(state=SocaJobState.HELD, provisioned=True)
+    job = make_job(
+        state=SocaJobState.HELD,
+        provisioned=True,
+        reason_class=REASON_CLASS_RETRIES_EXHAUSTED,
+    )
     lifecycle_events.job_disposition(job=job)
     assert recorder.events[0]['disposition'] == DISPOSITION_HELD
 

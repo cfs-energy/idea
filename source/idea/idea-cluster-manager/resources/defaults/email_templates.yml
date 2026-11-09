@@ -68,7 +68,7 @@ templates:
     template_type: jinja2
     subject: "[{{cluster_name}}] Scratch cleanup this week on {{file_system}}"
     body: |
-      <b>{{scheduled_folders}}</b> folders are scheduled for removal, and {{not_armed_folders}} are waiting for a backfill. {{removed_count}} folders ({{removed_gb}} GB) went this week.<br>
+      <b>{{scheduled_folders}}</b> folders are scheduled for removal. {{removed_count}} folders ({{removed_gb}} GB) went this week.<br>
       {% if waiting_message %}<br>{{waiting_message}}<br>{% endif %}
       {% if failures %}
       <h3>What stopped</h3>

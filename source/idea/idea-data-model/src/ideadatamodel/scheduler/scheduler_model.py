@@ -694,6 +694,11 @@ class SocaJob(SocaBaseModel):
     owner_email: Optional[str] = Field(default=None)
     state: Optional[SocaJobState] = Field(default=None)
     exit_status: Optional[int] = Field(default=None, strict=False)
+    # PBS ended it with qdel (history substate 91); None when PBS has not said
+    terminated: Optional[bool] = Field(default=None)
+    # jobs that wait on this one (PBS before* dependencies). PBS drops a satisfied dependency
+    # from the waiting job, and keeps it here on the finished record
+    dependent_job_ids: Optional[List[str]] = Field(default=None)
     provisioned: Optional[bool] = Field(default=None)
     error_message: Optional[str] = Field(default=None)
     status_reason: Optional[str] = Field(default=None)
@@ -853,7 +858,7 @@ class SocaJob(SocaBaseModel):
         elif self.is_shared_capacity():
             identifier = self.get_job_group()
         else:
-            identifier = self.job_id
+            identifier = ModelUtils.aws_job_id(self.job_id)
 
         if self.is_persistent_capacity():
             return f'{cluster_name}-{identifier}'

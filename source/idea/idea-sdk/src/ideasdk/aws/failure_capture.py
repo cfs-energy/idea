@@ -18,6 +18,7 @@ a hard limit, and any failure just means no cause was found.
 """
 
 from ideadatamodel import constants
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.metrics.health import HealthMetrics
 
 from botocore.exceptions import ClientError
@@ -389,7 +390,10 @@ def capture_failure(context, logger, host: FailedHost) -> Optional[str]:
 
 def _node_tag_filters(context, job_id: str) -> List[Dict]:
     return [
-        {'Name': f'tag:{constants.IDEA_TAG_JOB_ID}', 'Values': [job_id]},
+        {
+            'Name': f'tag:{constants.IDEA_TAG_JOB_ID}',
+            'Values': [ModelUtils.aws_job_id(job_id)],
+        },
         {
             'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
             'Values': [context.cluster_name()],
