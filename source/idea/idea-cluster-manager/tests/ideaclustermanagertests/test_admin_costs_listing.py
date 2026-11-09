@@ -754,7 +754,9 @@ def test_a_finished_seed_counts_in_full_past_its_budget(monkeypatch):
     store.put(SYSTEM, 'state', state)
     assert not store.collecting().collecting_delayed
     store.put(SYSTEM, 'state', dict(state, seed_seconds=20))
-    assert store.collecting().collecting_delayed, 'control: a short seed leaves it overdue'
+    assert store.collecting().collecting_delayed, (
+        'control: a short seed leaves it overdue'
+    )
 
 
 def test_a_seed_mark_left_by_a_dead_leader_is_cleared_by_the_next_run(monkeypatch):
