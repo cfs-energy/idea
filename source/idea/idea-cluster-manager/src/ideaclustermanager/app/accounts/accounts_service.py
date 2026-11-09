@@ -1080,8 +1080,8 @@ class AccountsService:
 
         group_name = Utils.get_value_as_string('group_name', user)
 
-        # The record keeps this list until the record itself goes, so a delete that
-        # stopped part way finds the same memberships to remove when it is run again.
+        # The record keeps each of these until that membership is removed, so a delete
+        # that stopped part way finds the rest when it is run again.
         groups = Utils.get_value_as_list('additional_groups', user, [])
         if group_name in groups:
             groups.remove(group_name)
@@ -1117,10 +1117,12 @@ class AccountsService:
             keeps_directory_account,
         )
 
+        user = self.user_dao.get_user(username)
         # the directory keeps its memberships wherever it keeps the account
         keep_directory = self.ldap_client.is_readonly() or keeps_directory_account(
-            self.context, self.user_dao.get_user(username)
+            self.context, user
         )
+        remaining = Utils.get_value_as_list('additional_groups', user, [])
         for group_name in group_names:
             self.group_members_dao.delete_membership(group_name, username)
             if not keep_directory:
@@ -1136,6 +1138,12 @@ class AccountsService:
                     pass
             self.context.projects.user_projects_dao.group_member_removed(
                 group_name=group_name, username=username
+            )
+            # the record lists what is still to remove, and no more: a delete that
+            # stops here resumes from it, and enabling the user instead shows the truth
+            remaining = [name for name in remaining if name != group_name]
+            self.user_dao.update_user(
+                {'username': username, 'additional_groups': remaining}
             )
         SyncUserInDirectoryServiceTask(self.context).invoke({'username': username})
 

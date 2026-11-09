@@ -841,7 +841,10 @@ def test_deleting_a_user_stops_while_the_directory_refuses(
     directory.delete_user.side_effect = RuntimeError('directory down')
     with pytest.raises(RuntimeError):
         context.accounts.delete_user('accounts_deleted2')
-    assert context.accounts.user_dao.get_user('accounts_deleted2')['enabled'] is False
+    left = context.accounts.user_dao.get_user('accounts_deleted2')
+    assert left['enabled'] is False
+    # the memberships did go, and the record says so should the user be enabled again
+    assert 'default-project-group' not in left['additional_groups']
     # a member the directory does not have is no reason to stop
     directory.delete_user.side_effect = None
     directory.remove_user_from_group.side_effect = ldap.NO_SUCH_ATTRIBUTE()
@@ -888,6 +891,8 @@ def test_deleting_a_user_again_resumes_the_group_removal(
     with pytest.raises(ldap.SERVER_DOWN):
         context.accounts.delete_user('accounts_deleted5')
     removed_from_projects.assert_not_called()
+    left = context.accounts.user_dao.get_user('accounts_deleted5')
+    assert 'default-project-group' in left['additional_groups']
 
     directory.remove_user_from_group.reset_mock(side_effect=True)
     context.accounts.delete_user('accounts_deleted5')
