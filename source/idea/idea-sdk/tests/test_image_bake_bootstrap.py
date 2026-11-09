@@ -1275,6 +1275,29 @@ def test_windows_user_data_that_runs_again_after_the_final_restart_is_a_no_op(ba
 
 
 @pytest.mark.parametrize('base_os', WINDOWS)
+def test_windows_final_configure_restart_sends_no_reboot_event(base_os):
+    """
+    the restart that ends configuration came back as a reboot event read after READY, and
+    recovery took the new desktop back to INITIALIZING for two minutes
+    """
+    configure = render('virtual-desktop-host-windows/Configure.ps1.jinja2', base_os)
+    body = configure[configure.index('function Configure-WindowsEC2Instance') :]
+    path = 'C:\\IDEA\\LocalScripts\\skip-next-reboot-notification'
+    assert f'$SkipRebootNotification = "{path}"' in body
+    script = body[body.index('$RebootNotificationContent = "') :]
+    script = script[: script.index('Send-SQSMessage')]
+    # the boot it was left for skips the send and removes it, so the next reboot reports
+    skip = script.index("if (Test-Path '$SkipRebootNotification')")
+    assert "Remove-Item '$SkipRebootNotification' -Force; exit 0" in script
+    assert skip < script.index('$RebootMessage')
+    left = body.index('New-Item -Path $SkipRebootNotification')
+    assert body.index('/tn IdeaRebootNotification') < left
+    final = body.rindex('Restart-Computer -Force')
+    assert left < final
+    assert 'Restart-Computer' not in body[left:final]
+
+
+@pytest.mark.parametrize('base_os', WINDOWS)
 def test_windows_repeat_run_marker_waits_for_a_successful_domain_join(
     tmp_path, monkeypatch, base_os
 ):

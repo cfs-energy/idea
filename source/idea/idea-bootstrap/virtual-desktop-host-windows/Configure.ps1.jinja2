@@ -239,7 +239,11 @@ function Configure-WindowsEC2Instance {
 
   Configure-DCVPermissions
 
+  # the restart that ends this configuration is not a reboot to recover from: its event can be
+  # read after the desktop is READY, and recovery then takes it back to INITIALIZING
+  $SkipRebootNotification = "C:\IDEA\LocalScripts\skip-next-reboot-notification"
   $RebootNotificationContent = "
+if (Test-Path '$SkipRebootNotification') { Remove-Item '$SkipRebootNotification' -Force; exit 0 }
 `$CurrentTimeStamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 `$RebootMessage = `"{```"event_group_id```":```"$IDEASessionID```",```"event_type```":```"DCV_HOST_REBOOT_COMPLETE_EVENT```",```"detail```":{```"idea_session_id```":```"$IDEASessionID```",```"idea_session_owner```":```"$LocalUser```",```"timestamp```":```"`$CurrentTimeStamp```"}}`"
 # todo - support vpc endpoint
@@ -269,6 +273,7 @@ Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody `$RebootMessage -Mess
     Write-ToLog -Message "Instance $InstanceId did not join the domain; the next boot runs the user data again"
   }
 
+  New-Item -Path $SkipRebootNotification -ItemType File -Force | Out-Null
   Stop-Transcript
   Restart-Computer -Force
   exit
