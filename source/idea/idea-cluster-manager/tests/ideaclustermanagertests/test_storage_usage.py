@@ -532,7 +532,7 @@ def test_analytics_rolls_up_without_touching_files_and_is_cached(monkeypatch, tr
     assert found['children'][1]['measured'] is False and found['children'][1]['partial']
     assert analytics.folder(tree) is found
     assert len(calls) == 1
-    assert 'order_by' not in calls[0]
+    assert 'order_by=analytics.bytes_used%20desc' in calls[0]
     assert 'owner' not in calls[0]
 
 
@@ -580,7 +580,9 @@ def test_every_page_of_a_large_folder_is_read(monkeypatch, tree):
     found = analytics.folder(tree)
     assert [r['name'] for r in found['children']] == ['first', 'second', 'third']
     assert found['truncated'] is False
-    assert calls[1:] == ['/api/next?page=2', '/api/next?page=3']
+    # one page in size order, then the whole folder in directory order
+    assert 'order_by' in calls[0] and 'order_by' not in calls[1]
+    assert calls[2:] == ['/api/next?page=2', '/api/next?page=3']
 
 
 def test_a_folder_past_the_page_limit_says_it_is_truncated(monkeypatch, tree):
@@ -600,9 +602,10 @@ def test_a_folder_past_the_page_limit_says_it_is_truncated(monkeypatch, tree):
     pages['page'] = dict(records=[analytics_row('.', 1000, 40)], _links=next_link(2))
     found = analytics.folder(tree)
     assert found['truncated'] is True
-    # and one page in size order, so the largest are there
+    # one page in size order first, so the largest are there, then the limit in directory order
     assert len(calls) == limit + 1
-    assert 'order_by=analytics.bytes_used%20desc' in calls[-1]
+    assert 'order_by=analytics.bytes_used%20desc' in calls[0]
+    assert found['children'] == []
 
 
 class Filer:
@@ -664,6 +667,67 @@ def test_a_folder_that_grows_between_pages_is_not_skipped(monkeypatch, tree):
     assert found['truncated'] is False
 
 
+def filer_listing(monkeypatch, tree, filer):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    analytics = fake_analytics(monkeypatch, tree)
+    original = ontap_analytics.OntapClient.first_page
+    monkeypatch.setattr(
+        ontap_analytics.OntapClient,
+        'first_page',
+        lambda self, path: (
+            original(self, path)
+            if 'return_metadata' in path
+            else filer.first_page(self, path)
+        ),
+    )
+    return analytics
+
+
+def test_a_folder_too_big_to_list_shows_its_largest_and_nothing_smaller(
+    monkeypatch, tree
+):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    monkeypatch.setattr(ontap_analytics, 'MAX_ROWS', 10)
+    # 80 folders, the largest last in directory order: five pages of ten cannot list them
+    filer = Filer(count=80, rows=10)
+    filer.sizes = {f'd{n:03}': n + 1 for n in range(80)}
+    largest = sorted(filer.sizes, key=lambda name: -filer.sizes[name])[:10]
+    found = filer_listing(monkeypatch, tree, filer).folder(tree)
+    assert found['truncated'] is True
+    # every folder listed is larger than every folder left out
+    assert [row['name'] for row in found['children']] == largest
+
+
+def test_a_folder_read_stops_at_its_deadline(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    monkeypatch.setattr(ontap_analytics, 'MAX_ROWS', 10)
+    clock = [1000.0]
+    monkeypatch.setattr(
+        ontap_analytics,
+        'time',
+        SimpleNamespace(monotonic=lambda: clock[0], time=lambda: NOW),
+    )
+    started = []
+
+    class Slow(Filer):
+        def first_page(self, client, path):
+            started.append(clock[0])
+            clock[0] += ontap_analytics.MAX_READ_SECONDS / 2 + 1
+            return super().first_page(client, path)
+
+    filer = Slow(count=80, rows=10)
+    analytics = filer_listing(monkeypatch, tree, filer)
+    start = clock[0]
+    found = analytics.folder(tree)
+    assert found['truncated'] is True
+    assert started and all(
+        moment < start + ontap_analytics.MAX_READ_SECONDS for moment in started
+    )
+
+
 def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tree):
     analytics, pages, _ = paged_analytics(
         monkeypatch, tree, {'/api/next?page=2': RuntimeError('ONTAP returned 503')}
@@ -678,7 +742,7 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
     assert analytics._failed_at == 0
 
 
-def filer(monkeypatch, tree, answers):
+def filer(monkeypatch, tree, answers, labels=(200, dict(records=[{}]))):
     """FolderAnalytics over the real ONTAP client, with the HTTP layer answering by path."""
     from ideaclustermanager.app.filesystem import ontap_analytics
     from ideaclustermanager.app.metrics import storage_metrics_service
@@ -704,7 +768,7 @@ def filer(monkeypatch, tree, answers):
             ]
             return Mock(status_code=200, json=lambda: dict(records=records))
         if 'return_metadata' in path:
-            return Mock(status_code=200, json=lambda: dict(records=[{}]))
+            return Mock(status_code=labels[0], json=lambda: labels[1], text='')
         for name, (status, page) in answers.items():
             if path.split('?')[0].endswith(name):
                 return Mock(status_code=status, json=lambda page=page: page, text='')
@@ -738,6 +802,21 @@ def test_a_filer_failure_still_backs_off_for_everyone(monkeypatch, tree, status)
     reads = len(sent)
     assert analytics.status(tree) == dict(state='unavailable')
     assert analytics.folder(tree + '/reports') is None
+    assert len(sent) == reads
+
+
+@pytest.mark.parametrize('status', (400, 403, 404))
+def test_a_refused_volume_root_backs_off_for_everyone(monkeypatch, tree, status):
+    # the labels read asks about the volume root, not the person's path: a refusal there is the
+    # role's for the whole volume, so every request would otherwise ask again and get nothing
+    listing = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = filer(
+        monkeypatch, tree, {'%2Falice': (200, listing)}, labels=(status, {})
+    )
+    assert analytics.folder(tree) is None
+    reads = len(sent)
+    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.folder(tree) is None
     assert len(sent) == reads
 
 

@@ -277,65 +277,67 @@ class FolderAnalytics:
         self._labels[uuid] = (time.monotonic(), labels)
         return labels
 
-    def _listing(self, client, request):
-        """(every record, whether any are left out). A later page that fails leaves the folder
-        partial rather than unavailable: its largest rows are already in hand."""
-        deadline = time.monotonic() + MAX_READ_SECONDS
-        page = client.first_page(request)
-        records = list(page.get('records', []))
-        for _ in range(MAX_PAGES - 1):
-            following = ((page.get('_links') or {}).get('next') or {}).get('href')
-            if not following:
-                return records, False
+    def _listing(self, client, request, deadline):
+        """every record in directory order, or None when any are left out. A page that fails
+        leaves the folder partial rather than unavailable."""
+        records = []
+        following = request
+        for _ in range(MAX_PAGES):
             if time.monotonic() >= deadline:
-                return records, True
+                return None
             try:
                 page = client.first_page(following)
             except Exception as e:
                 self.logger.warning(
                     f'storage analytics page read failed: {type(e).__name__}'
                 )
-                return records, True
+                return None
             records.extend(page.get('records', []))
-        return records, bool((page.get('_links') or {}).get('next'))
+            following = ((page.get('_links') or {}).get('next') or {}).get('href')
+            if not following:
+                return records
+        return None
 
-    def _largest(self, client, request, records):
-        """a folder too big to list still shows its largest: one page in size order is a single
-        answer, so nothing on it is skipped. The rows not already read."""
-        try:
-            page = client.first_page(f'{request}&order_by=analytics.bytes_used%20desc')
-        except Exception as e:
-            self.logger.warning(
-                f'storage analytics page read failed: {type(e).__name__}'
-            )
-            return []
-        seen = {record.get('name') for record in records}
-        return [r for r in page.get('records', []) if r.get('name') not in seen]
+    def _records(self, client, request):
+        """(records, whether any are left out). One page in size order is a single answer, so a
+        folder that fits on it is complete and one too big to list still shows its largest, with
+        nothing larger left out. Past one page it is read again in directory order: ONTAP resumes a
+        next page from the last row's place in that order, so under a size order a folder that
+        grows between pages can be skipped. Both reads share one deadline."""
+        deadline = time.monotonic() + MAX_READ_SECONDS
+        largest = client.first_page(f'{request}&order_by=analytics.bytes_used%20desc')
+        if not ((largest.get('_links') or {}).get('next') or {}).get('href'):
+            return largest.get('records', []), False
+        records = self._listing(client, request, deadline)
+        if records is None:
+            return largest.get('records', []), True
+        return records, False
 
     def _read(self, status, path):
         now = time.time()
         relative = quote(status['relative'] or '/', safe='')
-        # Directory order, not size order: ONTAP resumes a next page from the last row's place in
-        # the directory, so under a size order a folder that grows between pages can be skipped.
         request = (
             f'/api/storage/volumes/{status["uuid"]}/files/{relative}?type=directory'
             f'&fields={ANALYTICS_FIELDS}&max_records={MAX_ROWS}&return_timeout=10'
         )
-        try:
-            with self._reads:
+        with self._reads:
+            try:
                 client = self._client(status['target'])
+                # about the volume root, not this path: a refusal here is the role's, for everyone
                 labels = self._bucket_labels(client, status['uuid'])
-                records, truncated = self._listing(client, request)
-                if truncated:
-                    records += self._largest(client, request, records)
-        except Exception as e:
-            if refused_this_path(e):
-                # Names and paths stay out of the log here too.
-                code = getattr(e, 'status_code', type(e).__name__)
-                self.logger.info(f'storage analytics refused one folder: {code}')
-            else:
+            except Exception as e:
                 self._failed(e)
-            return None
+                return None
+            try:
+                records, truncated = self._records(client, request)
+            except Exception as e:
+                if refused_this_path(e):
+                    # Names and paths stay out of the log here too.
+                    code = getattr(e, 'status_code', type(e).__name__)
+                    self.logger.info(f'storage analytics refused one folder: {code}')
+                else:
+                    self._failed(e)
+                return None
         own = None
         children = []
         for record in records:
