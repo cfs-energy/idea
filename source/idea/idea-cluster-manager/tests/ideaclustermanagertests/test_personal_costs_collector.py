@@ -246,6 +246,43 @@ def test_overdue_eta_is_explicit(setup, monkeypatch):
     )
 
 
+def test_a_run_that_outlasts_the_one_before_is_not_overdue(setup, monkeypatch):
+    # idea-dev: a run took 27 s, the next, with seven more people, 37 s. Seconds 27 to 37 read
+    # as overdue to everyone with no costs yet, which is who the seven were.
+    _, store, _ = setup
+    now = arrow.get('2026-11-09T22:33:33Z')
+    monkeypatch.setattr(arrow, 'utcnow', lambda: now)
+    store.put(SYSTEM, 'heartbeat', {'as_of': now.isoformat()})
+
+    def collecting(**state):
+        store.put(SYSTEM, 'state', dict(state, last_duration=27))
+        return store.collecting()
+
+    result = collecting(run_started=now.shift(seconds=-33).isoformat())
+    assert not result.collecting_delayed and result.collecting_reason is None
+    assert arrow.get(result.expected_ready_at) > now
+    # due, and the collector looks once a minute: not started yet is not overdue either
+    assert not collecting(
+        next_run=now.shift(seconds=-50).isoformat()
+    ).collecting_delayed
+    # control: a minute past the estimate, and past twice the last run, it is
+    assert collecting(
+        run_started=now.shift(seconds=-(27 + 61)).isoformat()
+    ).collecting_delayed
+    store.put(
+        SYSTEM,
+        'state',
+        {'run_started': now.shift(minutes=-39).isoformat(), 'last_duration': 1200},
+    )
+    assert not store.collecting().collecting_delayed, 'a long run gets as long again'
+    store.put(
+        SYSTEM,
+        'state',
+        {'run_started': now.shift(minutes=-41).isoformat(), 'last_duration': 1200},
+    )
+    assert store.collecting().collecting_delayed
+
+
 def test_refresh_deduplicates_and_retains_values(setup):
     context, store, _ = setup
     publish(store)
