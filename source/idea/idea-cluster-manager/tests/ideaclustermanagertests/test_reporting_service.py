@@ -1646,6 +1646,46 @@ def test_period_bounded_read_gives_the_same_insights_as_the_full_read(monkeypatc
     assert results[0].desktops.hours and results[0].desktops.idle_hours
 
 
+WRONG_PERIOD_FILTERS = {
+    'no documents': lambda selected, scope: {'bool': {'must_not': [{'match_all': {}}]}},
+    'the month before': lambda selected, scope: ReportingSources.desktop_period_query(
+        period('2024-01-01', '2024-01-31'), scope
+    ),
+}
+
+
+@pytest.mark.parametrize('wrong', sorted(WRONG_PERIOD_FILTERS))
+def test_a_wrong_period_filter_changes_the_report_and_insights(monkeypatch, wrong):
+    """the control for the two tests above: their equality can fail"""
+    from ideaclustermanager.app.reporting.insights_service import InsightsService
+    from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+
+    monkeypatch.setattr(MyCostsService, '_ondemand_price', lambda self, kind: 0.1)
+    monkeypatch.setattr(
+        MyCostsService, '_prefetch_running_hours', lambda self, *args: None
+    )
+    docs, history, heads = period_fixture()
+
+    def both(unfiltered):
+        report = built(read_report(docs, unfiltered, history, heads)[0])
+        data, _, _, context = read_report(docs, unfiltered, history, heads, {}, True)
+        insights = InsightsService(context, Mock()).build(
+            data, period(), 'USD', 'UTC', time.monotonic() + 30, None
+        )
+        return report, insights.model_dump(exclude={'updated_at'})
+
+    full = both(True)
+    assert both(False) == full
+    monkeypatch.setattr(
+        ReportingSources,
+        'desktop_period_query',
+        staticmethod(WRONG_PERIOD_FILTERS[wrong]),
+    )
+    report, insights = both(False)
+    assert report != full[0]
+    assert insights != full[1]
+
+
 def test_heads_scan_until_the_index_is_seeded_then_never():
     from ideaclustermanagertests.test_personal_costs_collector import Table
 
