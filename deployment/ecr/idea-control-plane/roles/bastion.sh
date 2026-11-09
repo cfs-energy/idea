@@ -163,7 +163,9 @@ SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[prea
 # its first word is not taken for a named drop.
 # sshd also logs the name a client offers, as it came and before any login ("Invalid user NAME
 # from ..."), so the phrases are taken only from lines sshd itself begins with them, cut where
-# its own words end: a name never reaches the second pattern.
+# its own words end: a name never reaches the second pattern. A name may hold a line break too,
+# which sshd -e does not escape; sshd_stderr.py below keeps each message on one line, so a line
+# begins only where sshd began a message.
 SSHD_DROP_SOURCES='^(drop connection #[0-9]+ from \[[^] ]+\]:[0-9]+ on \[[^] ]+\]:[0-9]+ (past )?Maxstartups|(in|exited) MaxStartups throttling (for|after) [^ ]+, [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication for |Timeout, client not responding from )'
 SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
 sshd_drop_phrases() {
@@ -186,7 +188,9 @@ if [[ "${IDEA_BASTION_METRICS:-false}" == true ]]; then
   ) &
   metrics_pid=$!
 fi
-/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &
+# started by sshd_stderr.py, which execs it (the pid is sshd's) and writes each message it logs
+# as one line: a CR or LF inside a message reaches the filter and the task log as \r or \n
+python3.13 -I -S /opt/idea/roles/sshd_stderr.py /usr/sbin/sshd -D -e 2> >(sshd_log_filter) &
 sshd_pid=$!
 # Initialize and retry terminal trust without blocking ordinary SSH.
 (
