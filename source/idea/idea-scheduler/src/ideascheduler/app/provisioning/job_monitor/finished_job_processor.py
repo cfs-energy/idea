@@ -298,7 +298,10 @@ class ProcessFinishedJob:
     def apply_disposition(self):
         self.job.disposition = ProvisioningLifecycleEvents.get_disposition(self.job)
         if self.job.disposition == 'deleted':
-            if not self.job.reason_class and not self.job.status_reason:
+            if not self.job.reason_class:
+                # nothing recorded why, so qdel did it. a status_reason here is only the
+                # waiting signals' 'Job held' for an owner's hold or a dependency, not a
+                # reason. a recorded wait (capacity, a queue limit) stays the reason class.
                 self.job.reason_class = 'cancelled'
                 self.job.status_reason = 'Cancelled by the owner.'
         elif self.job.disposition == 'held':
