@@ -10,6 +10,7 @@ from ideadatamodel import SocaFilter
 from ideadatamodel.scheduler import ListJobsRequest
 from ideasdk.utils import Utils
 from ideascheduler.app.documents.document_store import (
+    JOB_SEARCH_FIELDS,
     DocumentStore,
     find_keyword_subfield_paths,
 )
@@ -117,9 +118,72 @@ def test_search_all_filter_is_not_a_term_filter(context):
         filters=[SocaFilter(key='$all', value='jane-doe')],
         keyword_subfields={'owner'},
     )
+    # every word: with the default, 'jane-doe' listed everything holding jane or doe
     assert term_filters == [
-        {'simple_query_string': {'query': 'jane-doe', 'lenient': True}}
+        {
+            'simple_query_string': {
+                'query': 'jane-doe',
+                'lenient': True,
+                'default_operator': 'and',
+            }
+        }
     ]
+
+
+def _job_search(context, monkeypatch, text):
+    store = _store_for_get_job(context, monkeypatch)
+    store._jobs_keyword_subfields = {'name', 'owner', 'queue', 'project'}
+    store.search_jobs(
+        ListJobsRequest(filters=[SocaFilter(key='$all', value=text)], page_size=10)
+    )
+    (search,) = store.opensearch_client.os_client.body['query']['bool']['must']
+    return search['bool']
+
+
+def test_a_completed_job_search_is_the_text_itself_not_any_word_of_it(
+    context, monkeypatch
+):
+    """
+    dev: 'comsol-run-ec41db' returned 5,100 of 5,255 completed jobs, since the name is
+    indexed as words and any one word in any field matched. the active list finds the
+    text inside six fields; the completed list now asks the index for the same thing.
+    """
+    from ideascheduler.app.api import active_jobs
+
+    search = _job_search(context, monkeypatch, 'comsol-run-ec41db')
+    assert search['minimum_should_match'] == 1
+    wanted = {'value': '*comsol-run-ec41db*', 'case_insensitive': True}
+    assert search['should'] == [
+        {'wildcard': {field: wanted}}
+        for field in (
+            'job_id',
+            'name.raw',
+            'owner.raw',
+            'queue.raw',
+            'project.raw',
+            'state',
+        )
+    ]
+    # one list of fields for both job lists
+    assert active_jobs.JOB_SEARCH_FIELDS is JOB_SEARCH_FIELDS
+    assert [field.removesuffix('.raw') for field in _fields(search)] == list(
+        JOB_SEARCH_FIELDS
+    )
+
+
+def _fields(search):
+    return [next(iter(item['wildcard'])) for item in search['should']]
+
+
+@pytest.mark.parametrize(
+    'text, pattern',
+    [('a*b', r'*a\*b*'), ('what?', r'*what\?*'), ('back\\slash', r'*back\\slash*')],
+)
+def test_a_search_for_a_wildcard_character_finds_that_character(
+    context, monkeypatch, text, pattern
+):
+    search = _job_search(context, monkeypatch, text)
+    assert search['should'][0]['wildcard']['job_id']['value'] == pattern
 
 
 def test_search_without_keyword_subfields_is_unchanged(context):
@@ -352,7 +416,13 @@ def test_free_text_search_cannot_fail_on_special_characters(context):
         keyword_subfields=set(),
     )
     assert must == [
-        {'simple_query_string': {'query': 'run:1 (test/2', 'lenient': True}}
+        {
+            'simple_query_string': {
+                'query': 'run:1 (test/2',
+                'lenient': True,
+                'default_operator': 'and',
+            }
+        }
     ]
 
 

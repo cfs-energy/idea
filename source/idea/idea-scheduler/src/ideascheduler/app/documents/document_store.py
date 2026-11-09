@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 import os.path
+import re
 
 import ideascheduler
 
@@ -29,11 +30,13 @@ from ideasdk.utils import Utils
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
 from ideascheduler.app.app_protocols import DocumentStoreProtocol
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 import arrow
 
 DYNAMIC_CONFIGURATION_KEY = 'DYNAMIC_CONFIGURATION'
 KEYWORD_SUBFIELD = 'raw'
+# what a job list's search box looks in, for active and completed jobs alike
+JOB_SEARCH_FIELDS = ('job_id', 'name', 'owner', 'queue', 'project', 'state')
 
 
 def find_keyword_subfield_paths(properties: Dict, prefix: str = '') -> Set[str]:
@@ -417,12 +420,27 @@ class DocumentStore(DocumentStoreProtocol):
             return f'{key}.{KEYWORD_SUBFIELD}'
         return key
 
+    @staticmethod
+    def _contains(fields: Tuple[str, ...], text: str) -> Dict:
+        """text anywhere in one of the fields, any case: what the active jobs list does"""
+        pattern = '*' + re.sub(r'([\\*?])', r'\\\1', text) + '*'
+        return {
+            'bool': {
+                'should': [
+                    {'wildcard': {field: {'value': pattern, 'case_insensitive': True}}}
+                    for field in fields
+                ],
+                'minimum_should_match': 1,
+            }
+        }
+
     def _search(
         self,
         index: str,
         options: SocaListingPayload,
         default_sort_by: str,
         keyword_subfields: Set[str],
+        search_fields: Tuple[str, ...] = (),
     ) -> Dict:
         term_filters = []
         if Utils.is_not_empty(options.filters):
@@ -432,11 +450,25 @@ class DocumentStore(DocumentStoreProtocol):
                 if Utils.is_empty(listing_filter.value):
                     continue
                 if listing_filter.key == '$all':
+                    text = Utils.get_as_string(listing_filter.value)
+                    if search_fields:
+                        term_filters.append(
+                            self._contains(
+                                tuple(
+                                    self._term_key(field, keyword_subfields)
+                                    for field in search_fields
+                                ),
+                                text,
+                            )
+                        )
+                        continue
                     term_filters.append(
                         {
                             'simple_query_string': {
-                                'query': Utils.get_as_string(listing_filter.value),
+                                'query': text,
                                 'lenient': True,
+                                # every word, or 'a-b' lists all that hold a or b
+                                'default_operator': 'and',
                             }
                         }
                     )
@@ -551,6 +583,7 @@ class DocumentStore(DocumentStoreProtocol):
             options=options,
             default_sort_by='queue_time:desc',
             keyword_subfields=self._jobs_keyword_subfields,
+            search_fields=JOB_SEARCH_FIELDS,
         )
 
         hits = Utils.get_value_as_dict('hits', results)
