@@ -77,8 +77,10 @@ class DcvSessionRecovery:
                 response = self.broker.describe_sessions([session])
                 current = response.get('sessions', {}).get(session.dcv_session_id, {})
                 if current.get('state') == 'READY':
-                    if session.recovery_unready_observed:
-                        session.recovery_unready_observed = False
+                    # a reboot the broker has not noticed yet still answers READY: the event
+                    # stands as the first unready read, and the next scan's READY clears it
+                    if session.recovery_unready_observed != resume:
+                        session.recovery_unready_observed = resume
                         self.save(session)
                 elif resume or session.recovery_unready_observed:
                     self.start(session)

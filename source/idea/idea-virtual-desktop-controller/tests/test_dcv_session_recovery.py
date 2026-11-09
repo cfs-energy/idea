@@ -304,15 +304,34 @@ def test_reboot_event_leaves_a_ready_session_the_broker_still_has(recovery):
     a windows desktop's configuration restart reported a reboot after READY, and recovery took
     the desktop back to INITIALIZING without asking the broker whether its session was gone
     """
-    recovery.store[0].recovery_unready_observed = True
     recovery.broker.describe_sessions.return_value = {
         'sessions': {'old-dcv': {'state': 'READY'}}
     }
     recovery.check(resume=True)
     assert recovery.store[0].state == 'READY'
     assert not recovery.store[0].recovering
-    assert not recovery.store[0].recovery_unready_observed
     recovery.broker.create_session.assert_not_called()
+    # the session is intact: the next scan's READY read ends the matter
+    recovery.check()
+    assert recovery.store[0].state == 'READY'
+    assert not recovery.store[0].recovery_unready_observed
+
+
+def test_reboot_event_answered_by_a_stale_ready_counts_as_one_unready_read(recovery):
+    """
+    a linux desktop rebooted from inside reports its reboot before the broker has noticed the
+    session is gone. the event is kept as the first of the two reads, so the next scan that
+    finds the session gone starts recovery instead of waiting for one more
+    """
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': 'READY'}}
+    }
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'READY'
+    recovery.broker.describe_sessions.return_value = {'sessions': {}}
+    recovery.check()
+    assert recovery.store[0].state == 'INITIALIZING'
+    assert recovery.store[0].recovering
 
 
 @pytest.mark.parametrize('state', [None, 'DELETED', 'UNKNOWN', 'CREATING'])
