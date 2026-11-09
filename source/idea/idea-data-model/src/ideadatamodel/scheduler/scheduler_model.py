@@ -853,7 +853,7 @@ class SocaJob(SocaBaseModel):
         elif self.is_shared_capacity():
             identifier = self.get_job_group()
         else:
-            identifier = self.job_id
+            identifier = ModelUtils.aws_job_id(self.job_id)
 
         if self.is_persistent_capacity():
             return f'{cluster_name}-{identifier}'

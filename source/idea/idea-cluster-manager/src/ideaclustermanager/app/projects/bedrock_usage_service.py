@@ -14,6 +14,7 @@ __all__ = (
     'apportion_spend',
 )
 
+from ideadatamodel.model_utils import ModelUtils
 from ideadatamodel import (
     constants,
     exceptions,
@@ -999,7 +1000,8 @@ class BedrockUsageService(SocaService):
                             tags.get(constants.IDEA_TAG_JOB_OWNER), ''
                         )
                         job_id = Utils.get_as_string(
-                            tags.get(constants.IDEA_TAG_JOB_ID), ''
+                            ModelUtils.pbs_job_id(tags.get(constants.IDEA_TAG_JOB_ID)),
+                            '',
                         )
                         if Utils.is_not_empty(username) or Utils.is_not_empty(job_id):
                             owners[instance_id] = (username, job_id)

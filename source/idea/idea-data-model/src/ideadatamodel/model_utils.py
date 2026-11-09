@@ -32,6 +32,9 @@ def json_serializer(obj):
         return str(obj)
 
 
+_ARRAY_JOB_SUFFIX = '-array'
+
+
 class ModelUtils:
     @staticmethod
     def is_empty(value: Optional[Any]) -> bool:
@@ -473,6 +476,23 @@ class ModelUtils:
     @staticmethod
     def shake_256(data: str, num_bytes: int = 5) -> str:
         return hashlib.shake_256(data.encode('utf-8')).hexdigest(num_bytes)
+
+    @staticmethod
+    def aws_job_id(job_id: Optional[str]) -> Optional[str]:
+        """
+        the PBS job id as AWS names and tags take it. An array parent's 123[] becomes 123-array:
+        stack names, tag values, log groups and metric namespaces all refuse brackets.
+        """
+        if job_id is not None and job_id.endswith('[]'):
+            return f'{job_id[:-2]}{_ARRAY_JOB_SUFFIX}'
+        return job_id
+
+    @staticmethod
+    def pbs_job_id(aws_job_id: Optional[str]) -> Optional[str]:
+        """the job id PBS knows, from a value aws_job_id made"""
+        if aws_job_id is not None and aws_job_id.endswith(_ARRAY_JOB_SUFFIX):
+            return f'{aws_job_id[: -len(_ARRAY_JOB_SUFFIX)]}[]'
+        return aws_job_id
 
     @staticmethod
     def walltime_to_seconds(walltime: str) -> int:
