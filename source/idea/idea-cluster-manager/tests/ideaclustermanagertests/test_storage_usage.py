@@ -817,12 +817,41 @@ def test_analytics_view_hides_folders_the_person_cannot_open(monkeypatch, tree):
         result = service.get_usage('alice')
         rows = {item['name']: item for item in result['folders']}
         assert result['source'] == 'analytics' and not result['partial']
-        assert rows['secret']['unreadable'] and rows['secret']['bytes'] == 0
+        # left out, not shown at the place its size gives it
+        assert 'secret' not in rows and result['hidden_folders'] == 1
         assert rows['reports']['bytes'] == 13
         assert 'files_here' not in result
         assert result['total']['identity']['inode'] == str(os.stat(tree).st_ino)
     finally:
         os.chmod(tree + '/secret', 0o700)
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_a_hidden_folder_leaves_no_gap_that_ranks_its_size(monkeypatch, tree):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    for name in ('big', 'locked', 'small'):
+        os.mkdir(f'{tree}/{name}')
+    os.chmod(tree + '/locked', 0)
+    folders = {
+        tree: dict(
+            self=row(tree, 300, 9),
+            children=[
+                row(tree + '/big', 127),
+                row(tree + '/locked', 50),
+                row(tree + '/small', 31),
+            ],
+            measured_at=NOW,
+        )
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    try:
+        result = service.get_usage('alice', study=False)
+        assert [item['name'] for item in result['folders']] == ['big', 'small']
+        assert result['hidden_folders'] == 1
+    finally:
+        os.chmod(tree + '/locked', 0o700)
         service._study_workers.shutdown()
         service._workers.shutdown()
 

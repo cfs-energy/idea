@@ -280,20 +280,6 @@ def readable_paths_as_user(identity, root, paths):
     return identity.run(check, timeout=MAX_SECONDS + 10)
 
 
-def hide_row(row):
-    return dict(
-        path=row['path'],
-        name=row['name'],
-        bytes=0,
-        files=0,
-        newest_mtime=None,
-        oldest_mtime=None,
-        unchanged_90_days_bytes=0,
-        partial=False,
-        unreadable=True,
-    )
-
-
 class StorageUsageService:
     def __init__(self, context):
         self.context = context
@@ -335,15 +321,16 @@ class StorageUsageService:
             except OSError:
                 raise exceptions.unauthorized_access()
             readable = set(readable)
-            children = [
-                row if row['name'] in readable else hide_row(row)
-                for row in found['children']
-            ]
+            # A folder this person cannot open is left out, not kept at its place: where it sits
+            # in a largest-first list would say how big it is.
+            children = [row for row in found['children'] if row['name'] in readable]
             view = dict(
                 total=dict(found['self'], identity=identity_row),
                 folders=children,
                 measured_at=found['measured_at'],
             )
+            if len(children) < len(names):
+                view['hidden_folders'] = len(names) - len(children)
             truncated = bool(found.get('truncated'))
             view['truncated'] = truncated
             # the rest of the parent's total is direct files only if every child is here, with its
@@ -496,6 +483,8 @@ class StorageUsageService:
             result['truncated'] = True
         if 'files_here' in view:
             result['files_here'] = view['files_here']
+        if 'hidden_folders' in view:
+            result['hidden_folders'] = view['hidden_folders']
         if folder is not None:
             result['folder'] = view['total']
             return result
