@@ -203,18 +203,18 @@ def test_the_end_of_a_long_read_starts_at_a_line():
 
 def test_a_last_line_longer_than_the_read_is_kept_from_its_start():
     # one log event with no newline: a cut anywhere in it lands inside whatever is there
-    secret = 'hunter2SECRETabcdefgh'
-    for inside in range(1, len(secret), 3):
-        # the last READ_CHARS of it start inside the secret
+    word = 'hunter2sss' + 'Zq9xK' * 3
+    for inside in range(1, len(word), 3):
+        # the last READ_CHARS of it start inside the word
         after = ' zz' * (module.READ_CHARS // 3)
-        after = after[: module.READ_CHARS - len(secret) + inside]
-        line = 'first words ' + 'q ' * 900 + 'password=' + secret + after
+        after = after[: module.READ_CHARS - len(word) + inside]
+        line = 'first words ' + 'q ' * 900 + 'password=' + word + after
         for text in (line, 'earlier\n' + line, line + '\n'):
             kept = module.bounded(text)
             assert kept.startswith('first words ') and len(kept) <= module.READ_CHARS
             shown = '\n'.join(clean_for_log(text, 100000))
             assert shown.startswith('| first words ')
-            for part in (secret[:6], secret[7:13], secret[-8:]):
+            for part in (word[:6], word[7:13], word[-8:]):
                 assert part not in shown, (inside, shown[:80])
     logs = Mock()
     logs.get_log_events.return_value = {'events': [{'message': line}]}
