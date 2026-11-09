@@ -20,8 +20,9 @@ DROPS_MAX_BYTES = 1024 * 1024
 TCP_ESTABLISHED = '01'
 SSH_PORT_HEX = f'{22:04X}'
 # what sshd sends a connection it drops, under MaxStartups or a penalty (loopback has none)
-# a login name may hold an @ itself, and sshd shows it in its monitor's and pre-auth titles
-SESSION_TITLE = re.compile(rb'(sshd|sshd-session): .*@(pts/\d+|notty)$')
+# a login name may hold an @ itself, and sshd shows it in its monitor's and pre-auth titles;
+# a connection with several terminals (a shared ControlMaster) lists them: user@pts/0,pts/1
+SESSION_TITLE = re.compile(rb'(sshd|sshd-session): .*@(pts/\d+(,pts/\d+)*|notty)$')
 REFUSED = b'Not allowed at this time'
 # the line the task's own checks add to the tally when sshd refuses them (bastion_health.sh)
 LOOPBACK_REFUSED = b'loopback check refused'
