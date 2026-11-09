@@ -75,7 +75,7 @@ secd event counts need a cluster-level login. ONTAP keeps the event log at clust
 | `idea.health.ad.errors` | `kind` | `loop`, `message`, `delete_message`. |
 | `idea.health.ad.queue_depth`, `queue_in_flight` | | The queue, every minute. |
 | `idea.health.ad.seconds_since_queue_read` | | Rises when the agent stopped consuming: a rejected bind raises before it reaches the queue. Stays under about 30 when healthy. |
-| `idea.health.ad.admin_password_days_to_expiry` | | The admin account's `pwdLastSet` from the directory plus `directoryservice.password_max_age` (42, the AWS Managed Microsoft AD default). With `directoryservice.ad_automation.enable_root_password_reset` on, the agent resets the password once 2 days are left. |
+| `idea.health.ad.admin_password_days_to_expiry` | | The admin account's `pwdLastSet` from the directory plus `directoryservice.password_max_age` (42, the AWS Managed Microsoft AD default). With `directoryservice.ad_automation.enable_root_password_reset` on, the agent resets the password once 2 days are left, so the value sits under 2 for the few minutes the reset takes. Under 2 for 15 minutes means the reset failed. |
 
 ## Image bakes
 
