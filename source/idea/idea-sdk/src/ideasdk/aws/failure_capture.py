@@ -35,6 +35,11 @@ CONSOLE_TAIL_CHARS = 12000
 LOG_TAIL_CHARS = 4000
 LOG_TAIL_EVENTS = 200
 LINE_CHARS = 400
+# a host wrote this text, and a pattern costs the square of an unbroken run. the regex engine
+# holds the interpreter while it works, so no thread's time limit stops it: the text is cut to
+# these before any pattern sees it. READ_CHARS is what EC2 keeps of a console.
+READ_CHARS = 64 * 1024
+CUT_CHARS = LINE_CHARS * 2
 ACCESS_DENIED_CODES = ('UnauthorizedOperation', 'AccessDenied', 'AccessDeniedException')
 
 # most specific first: a missing initramfs also panics, and a panic outranks a failed lookup
@@ -111,9 +116,12 @@ REDACTIONS: Tuple[Tuple['re.Pattern', str], ...] = (
     (re.compile(r'(?i)\bbearer\s+\S+'), 'bearer [redacted]'),
     (
         re.compile(
-            r'(?i)([\w.-]*(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key'
+            # no leading [\w.-]*: what comes before the word is kept either way, and looking
+            # for it from every character of a long run is what made this slow. a quote left
+            # open runs to the end of its line, where an over-long line was cut
+            r'(?im)((?:password|passwd|pwd|passphrase|secret|token|api[_-]?key'
             r'|access[_-]?key|private[_-]?key|credential)[\w.-]*["\']?\s*[:= ]\s*)'
-            r'("[^"\n]*"|\'[^\'\n]*\'|[^\s,;]+)'
+            r'("[^"\n]*(?:"|$)|\'[^\'\n]*(?:\'|$)|[^\s,;]+)'
         ),
         r'\1[redacted]',
     ),
@@ -166,7 +174,7 @@ USER_DATA: Tuple[Tuple['re.Pattern', str], ...] = (
     ),
     (
         re.compile(
-            r'(?i)([\w.-]*(?:user(?:name)?|owner|logname)[\w.-]*["\']?\s*[:= ]\s*)'
+            r'(?i)((?:user(?:name)?|owner|logname)[\w.-]*["\']?\s*[:= ]\s*)'
             r'("[^"\n]*"|\'[^\'\n]*\'|[^\s,;:]+)'
         ),
         r'\1[user]',
@@ -207,8 +215,36 @@ class FailedHost:
     fallback_reason: Optional[str] = None
 
 
+def bounded(text: Optional[str]) -> str:
+    """the end of it, from the start of a line: a cut inside a token would leave half a secret."""
+    text = text or ''
+    if len(text) <= READ_CHARS:
+        return text
+    text = text[-READ_CHARS:]
+    return text[text.find('\n') + 1 :]
+
+
+def _whole_words(line: str) -> str:
+    """a line no pattern can be slow on. cut at a space, so what is left of a secret is all of it
+    or none; a line with no space that far in is one token, and says nothing worth keeping."""
+    if len(line) <= CUT_CHARS:
+        return line
+    head = line[:CUT_CHARS]
+    return head[: max(head.rfind(' '), head.rfind('\t')) + 1] or '[redacted]'
+
+
+def _wrapped(text: str) -> str:
+    """long lines folded for the signature search, overlapping so no phrase is lost at a fold."""
+    step = CUT_CHARS - 100
+    return '\n'.join(
+        line[start : start + CUT_CHARS]
+        for line in text.split('\n')
+        for start in range(0, max(len(line) - 100, 1), step)
+    )
+
+
 def detect_signature(*texts: Optional[str]) -> str:
-    joined = '\n'.join(text for text in texts if text)
+    joined = _wrapped('\n'.join(bounded(text) for text in texts if text))
     for name, _, pattern in SIGNATURES:
         if pattern.search(joined):
             return name
@@ -255,9 +291,15 @@ def clean_for_log(
     """
     if not text:
         return []
-    cleaned = ANSI_OR_CONTROL.sub('', text.replace('\r\n', '\n'))
+    cleaned = '\n'.join(
+        _whole_words(line.rstrip())
+        for line in ANSI_OR_CONTROL.sub('', bounded(text).replace('\r\n', '\n')).split(
+            '\n'
+        )
+        if line.strip()
+    )
     lines = [
-        scrub(line[: LINE_CHARS * 2], owner)[:LINE_CHARS]
+        scrub(line, owner)[:LINE_CHARS]
         for line in redact(cleaned).split('\n')
         if line.strip()
         and not PACKAGE_LINE.match(line)
@@ -308,7 +350,7 @@ def _read_log_tail(logs, group: Optional[str], stream: Optional[str]) -> str:
         startFromHead=False,
         limit=LOG_TAIL_EVENTS,
     ).get('events', [])
-    return '\n'.join(str(event.get('message', '')) for event in events)
+    return bounded('\n'.join(str(event.get('message', '')) for event in events))
 
 
 def _fill_identity(ec2, host: FailedHost) -> None:

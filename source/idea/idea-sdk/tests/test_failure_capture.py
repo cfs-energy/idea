@@ -153,6 +153,59 @@ def test_a_long_path_like_line_is_scrubbed_at_once():
     assert time.monotonic() - started < 1
 
 
+@pytest.mark.parametrize(
+    'text',
+    [
+        'a' * 64000,
+        '.-' * 32000,
+        'password' * 8000,
+        'username' * 8000,
+        'x' * 30000 + '\n' + 'token' * 6000,
+        ('secret' + ' ' * 790 + '\n' + ' ' * 790 + ';\n') * 40,
+    ],
+)
+def test_one_long_token_cannot_hold_the_interpreter(text, monkeypatch):
+    # the patterns hold the GIL, so a slow one stops every thread and no join times it out
+    started = time.monotonic()
+    clean_for_log(text, 12000, 'alice')
+    detect_signature(text, text)
+    assert time.monotonic() - started < 2
+
+    h = Harness(FakeEc2(text), tail=text)
+    started = time.monotonic()
+    h.run(monkeypatch)
+    assert time.monotonic() - started < module.TIME_LIMIT_SECONDS
+    assert h.metrics[0][1]['console'] == 'ok'
+
+
+def test_a_line_cut_short_leaves_no_part_of_a_secret():
+    token = 'Zq9' * 30
+    for line in (
+        'x ' * 380 + token,
+        'x ' * 380 + 'scheme://admin:' + token + '@host',
+        'x ' * 370 + 'password="first ' + token + ' last"',
+        'join.' * 200 + token,
+    ):
+        shown = '\n'.join(clean_for_log('[redacted] ' * 30 + line, 100000))
+        assert 'Zq9' not in shown and 'last' not in shown, line[-200:]
+    assert redact('password="first second\nnext') == 'password=[redacted]\nnext'
+
+
+def test_the_end_of_a_long_read_starts_at_a_line():
+    text = 'k' * 39 + '\n' + 'line\n' * (module.READ_CHARS // 5)
+    assert module.bounded(text + 'last').startswith('line\n')
+    assert module.bounded('short') == 'short' and module.bounded(None) == ''
+    events = [{'message': 'e' * 1000} for _ in range(200)]
+    logs = Mock()
+    logs.get_log_events.return_value = {'events': events}
+    assert len(module._read_log_tail(logs, 'g', 's')) <= module.READ_CHARS
+
+
+def test_a_signature_far_along_a_long_line_is_still_found():
+    for at in (0, 750, 795, 1500, 5000):
+        assert detect_signature('x' * at + ' No space left on device') == 'no_space', at
+
+
 def test_a_shell_trace_line_does_not_travel():
     lines = clean_for_log(
         '+ configure --project quench7\n++ start quench7\nreal output\n', 1000
