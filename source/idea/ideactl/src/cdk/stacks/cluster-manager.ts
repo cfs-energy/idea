@@ -451,12 +451,10 @@ export class ClusterManagerStack extends IdeaBaseStack {
     });
     // Preserve every statement; separate the large table and project grants to stay below 6 KiB.
     const groups: Record<string, iam.PolicyStatement[]> = {
-      application: [],
-      tables: [],
-      projects: [],
       // The health collectors: metadata only, none of it takes a resource. Kept out of the policy
-      // template, which is at its size limit.
-      health: [new iam.PolicyStatement({
+      // template, which is at its size limit, and inside a group that always exists: a role takes
+      // 10 managed policies, and one more of ours is one fewer cluster.iam.ec2_managed_policy_arns.
+      application: [new iam.PolicyStatement({
         actions: [
           'elasticloadbalancing:DescribeListenerCertificates',
           'acm:DescribeCertificate',
@@ -465,6 +463,8 @@ export class ClusterManagerStack extends IdeaBaseStack {
         ],
         resources: ['*'],
       })],
+      tables: [],
+      projects: [],
     };
     for (const statement of (document as { Statement: Record<string, any>[] }).Statement) {
       const actions = [statement.Action].flat() as string[];
