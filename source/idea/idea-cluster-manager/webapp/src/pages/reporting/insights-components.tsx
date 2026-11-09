@@ -188,7 +188,7 @@ function InsightView({tab, insights: data, summary, userRow, timezone, personal 
     const spend = username ? userRow : summary?.tiles.total;
     const costs = [data.jobs.cost, data.desktops.cost, data.storage.cost].filter(value => value != null);
     const total = costs.length ? costs.reduce<number>((sum, value) => sum + Number(value), 0) : null;
-    const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={wholeMoney(value, currency)} info={metricInfo(details, timezone, definition)}>{details && details.missing_days > 0 ? <Box color="text-body-secondary">{details.missing_days === 1 ? 'A day is' : `${details.missing_days} days are`} missing, so this may be higher.</Box> : null}{children}</MetricTile>;
+    const tile = (title: string, value: ReportingNumber | null | undefined, details?: ReportingCoverage, definition?: string, children?: ReactNode) => value == null ? null : <MetricTile title={title} value={wholeMoney(value, currency)} info={metricInfo(details, timezone, definition)}>{details && details.missing_days > 0 ? <Box color="text-body-secondary">{details.missing_days === 1 ? 'At least a day is' : `At least ${details.missing_days} days are`} missing, so this may be higher.</Box> : null}{children}</MetricTile>;
     const gaps = <ReportGaps sources={missing}/>;
     if (tab === 'overview') return <SpaceBetween size="l">
         {gaps}

@@ -62,7 +62,7 @@ On **Breakdown**, choose **Export CSV** to download the selected table from the 
 
 Tables such as **Top jobs** also have **Export CSV**. These exports include all rows matching the table's search in the current sort and visible-column order.
 
-Each row starts with `Period`, `Start date`, `End date`, `Currency`, `Costs as of` and `Complete`, then the table's columns under the titles shown on the page. `Complete` is `Complete`, `Partial`, or `Partial: missing N days`. Before 26.11.2 these were `period`, `start_date`, `end_date`, `currency`, `source_as_of` and `coverage`, with the column names of the API: a script that reads an export by column name has to change with the upgrade.
+Each row starts with `Period`, `Start date`, `End date`, `Currency`, `Costs as of` and `Complete`, then the table's columns under the titles shown on the page. `Complete` is `Complete`, `Partial`, or `Partial: missing at least N days`. N is the most days any one facet or user of the row is missing; they can miss different days, so the row can be missing more. Before 26.11.2 these were `period`, `start_date`, `end_date`, `currency`, `source_as_of` and `coverage`, with the column names of the API: a script that reads an export by column name has to change with the upgrade.
 
 An expired report reloads once automatically. Use **Reload** to request the report again. Use **Try again** after a loading error. A reload can change values when newer records are available. If an export fails, wait for the report to load and choose **Export CSV** again.
 
