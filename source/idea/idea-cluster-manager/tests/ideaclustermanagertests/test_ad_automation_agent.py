@@ -233,6 +233,24 @@ def test_the_password_counts_as_expired_two_days_before_its_max_age(
     assert agent.password_days_left == pytest.approx(42 - age_days, abs=0.01)
 
 
+@pytest.mark.parametrize('max_age', [0, 1, 2, 3])
+def test_a_password_just_reset_is_not_expired_whatever_the_max_age(directory, max_age):
+    # at 2 or less a fixed two-day lead reset the password on every loop
+    directory.code = None
+    directory.context.config().values['directoryservice.password_max_age'] = max_age
+    agent = directory.build()
+    assert agent.is_password_expired() is False
+    if max_age == 0:
+        assert agent.password_days_left is None
+
+
+def test_a_short_max_age_resets_at_half_of_it(directory):
+    directory.code = None
+    directory.context.config().values['directoryservice.password_max_age'] = 2
+    directory.age_days = 1.1
+    assert directory.build().is_password_expired() is True
+
+
 def test_a_candidate_bind_cannot_wait_for_ever_on_a_silent_directory(monkeypatch):
     import ldap as ldap_module
     from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (

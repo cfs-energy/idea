@@ -141,15 +141,21 @@ class ADAutomationAgent(SocaService):
 
         password_expiry_date = None
         if password_last_set != 0:
+            if password_max_age <= 0:
+                # the directory's convention for a password that never expires
+                self.password_days_left = None
+                return False
             password_last_set_date = arrow.get(password_last_set)
             password_expiry_date = password_last_set_date.shift(days=password_max_age)
             self.password_days_left = (
                 password_expiry_date - arrow.utcnow()
             ).total_seconds() / 86400
 
-        # reset once 2 days are left, before the directory starts rejecting binds
+        # reset once 2 days are left, before the directory starts rejecting binds; a
+        # shorter max age takes half of itself, or a new password is expired at once
         if password_expiry_date is not None:
-            if arrow.utcnow().shift(days=2) < password_expiry_date:
+            lead_days = min(2, password_max_age / 2)
+            if arrow.utcnow().shift(days=lead_days) < password_expiry_date:
                 return False
 
         return True
