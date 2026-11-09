@@ -182,9 +182,10 @@ class FolderAnalytics:
         return volumes
 
     def status(self, path):
-        """on, off, initializing or unavailable, with the volume and its relative path when on."""
+        """on, off, initializing, failed (the filer did not answer; backing off) or unavailable
+        (no analytics volume holds this path), with the volume and its relative path when on."""
         if time.monotonic() - self._failed_at < RETRY_SECONDS:
-            return dict(state='unavailable')
+            return dict(state='failed')
         target, namespace = self._attachment(path)
         if target is None:
             return dict(state='unavailable')
@@ -231,7 +232,7 @@ class FolderAnalytics:
         # Names and paths stay out of the log: only the kind of failure is recorded.
         self.logger.warning(f'storage analytics read failed: {type(error).__name__}')
         self._failed_at = time.monotonic()
-        return dict(state='unavailable')
+        return dict(state='failed')
 
     def folder(self, path, fresh=False):
         """{'self': row, 'children': [rows, largest first], 'measured_at': time} or None. One ONTAP

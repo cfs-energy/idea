@@ -33,6 +33,7 @@ MAX_LARGEST = 25
 MIN_LARGEST_BYTES = 2**20
 OUTSIDE_HOME_MESSAGES = dict(
     on='Storage analytics could not read this folder.',
+    failed='Storage analytics could not be reached. Try again in a minute.',
     initializing='Storage analytics is still taking its first measurement of this volume. Try again later.',
 )
 MAX_CACHED_VIEWS = 1000
@@ -327,8 +328,9 @@ class StorageUsageService:
             readable = set(readable)
             # A folder this person cannot open gets no row: its name is theirs to see, a size from
             # ONTAP's login is not. Its bytes stay in the total, ONTAP's rollup of everything
-            # below, and in every row above it, so the total less the rows here still bounds what
-            # the hidden folders hold together. Taking them out would need a walk as this person.
+            # below, and in every row above it, so the total less the rows here and the files in
+            # this folder, which the person can stat, is what the hidden folders hold together.
+            # Taking them out would need a walk as this person.
             children = [row for row in found['children'] if row['name'] in readable]
             view = dict(
                 total=dict(found['self'], identity=identity_row),

@@ -800,7 +800,7 @@ def test_a_filer_failure_still_backs_off_for_everyone(monkeypatch, tree, status)
     analytics, sent = filer(monkeypatch, tree, {'%2Falice': (status, {})})
     assert analytics.folder(tree) is None
     reads = len(sent)
-    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.status(tree) == dict(state='failed')
     assert analytics.folder(tree + '/reports') is None
     assert len(sent) == reads
 
@@ -815,7 +815,7 @@ def test_a_refused_volume_root_backs_off_for_everyone(monkeypatch, tree, status)
     )
     assert analytics.folder(tree) is None
     reads = len(sent)
-    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.status(tree) == dict(state='failed')
     assert analytics.folder(tree) is None
     assert len(sent) == reads
 
@@ -860,9 +860,9 @@ def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):
     assert analytics.folder(tree) is None
     analytics = fake_analytics(monkeypatch, tree)
     analytics._volume_list = Mock(side_effect=RuntimeError('unreachable'))
-    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.status(tree) == dict(state='failed')
     analytics._volume_list = Mock(side_effect=AssertionError('backs off'))
-    assert analytics.status(tree) == dict(state='unavailable')
+    assert analytics.status(tree) == dict(state='failed')
 
 
 def test_bucket_labels_end_where_they_should():
@@ -1119,6 +1119,32 @@ def test_outside_home_with_analytics_on_does_not_say_it_is_off(monkeypatch, tree
         assert result['state'] == 'unavailable'
         assert 'not on' not in result['message']
         assert result['message'] == 'Storage analytics could not read this folder.'
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+@pytest.mark.parametrize(
+    'status, message',
+    (
+        (503, 'Storage analytics could not be reached. Try again in a minute.'),
+        (403, 'Storage analytics could not read this folder.'),
+    ),
+)
+def test_outside_home_after_a_filer_answer_says_what_happened(
+    monkeypatch, tree, status, message
+):
+    sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    os.mkdir(sibling)
+    analytics, sent = filer(monkeypatch, tree, {'%2Fshared-folder': (status, {})})
+    service, _, _ = make_service(monkeypatch, tree)
+    service._analytics_source = analytics
+    try:
+        # the second request lands inside the backoff after a filer failure
+        for _ in range(2):
+            result = service.get_usage('alice', sibling)
+            assert result['state'] == 'unavailable'
+            assert result['message'] == message
     finally:
         service._study_workers.shutdown()
         service._workers.shutdown()
