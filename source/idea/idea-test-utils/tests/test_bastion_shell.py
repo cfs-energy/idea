@@ -425,7 +425,6 @@ class SshdHealthCheckLines(unittest.TestCase):
         self.assertIn('/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &\nsshd_pid=$!', text)
 
 
-
 class BastionMetrics(unittest.TestCase):
     """the separate process that counts sessions and drops, and cannot reach sshd's log path"""
 
@@ -520,7 +519,10 @@ class BastionMetrics(unittest.TestCase):
         self.assertNotIn('alice', written)
         self.assertEqual(written.count('past Maxstartups'), 2)
         self.assertIn('Timeout, client not responding', written)
-        self.assertIn('exited MaxStartups throttling after 00:00:15, 14 connections dropped', written)
+        self.assertIn(
+            'exited MaxStartups throttling after 00:00:15, 14 connections dropped',
+            written,
+        )
 
     def tally_of(self, *lines):
         """the counts sshd's lines leave once through the role's drop pattern and the tally"""
@@ -582,7 +584,9 @@ class BastionMetrics(unittest.TestCase):
                 read(b'loopback check refused'), {('maxstartups', 'loopback'): 1}
             )
             self.assertEqual(
-                read(b'exited MaxStartups throttling after 00:06:00, 45 connections dropped'),
+                read(
+                    b'exited MaxStartups throttling after 00:06:00, 45 connections dropped'
+                ),
                 {('maxstartups', 'remote'): 4},
             )
             # the next episode starts from nothing
@@ -626,7 +630,9 @@ class BastionMetrics(unittest.TestCase):
         metrics.established_connections = lambda: 0
         metrics.sshd_check = lambda real=metrics.sshd_check: real(('127.0.0.1', port))
         found = metrics.lines('idea-com', tally)
-        self.assertIn('idea.health.bastion.sshd_up:0|g|#idea_cluster:idea-com|card:none', found)
+        self.assertIn(
+            'idea.health.bastion.sshd_up:0|g|#idea_cluster:idea-com|card:none', found
+        )
         self.assertFalse([line for line in found if 'sshd_check_seconds' in line])
 
         listener = socket.socket()
@@ -692,7 +698,16 @@ class RealSshd(unittest.TestCase):
         self.folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.folder, True)
         subprocess.run(
-            ['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(self.folder / 'key')],
+            [
+                'ssh-keygen',
+                '-q',
+                '-t',
+                'ed25519',
+                '-N',
+                '',
+                '-f',
+                str(self.folder / 'key'),
+            ],
             check=True,
         )
         probe = socket.socket()
@@ -713,8 +728,13 @@ class RealSshd(unittest.TestCase):
         config.write_text('\n'.join(lines) + '\n')
         # the role's loopback exemption, where this sshd has penalties at all
         exempt = 'PerSourcePenaltyExemptList 127.0.0.0/8'
-        if subprocess.run([sshd, '-t', '-f', str(config), '-o', exempt.replace(' ', '=')],
-                          capture_output=True).returncode == 0:
+        if (
+            subprocess.run(
+                [sshd, '-t', '-f', str(config), '-o', exempt.replace(' ', '=')],
+                capture_output=True,
+            ).returncode
+            == 0
+        ):
             config.write_text(config.read_text() + exempt + '\n')
         self.drops = self.folder / 'drops'
         self.drops.write_bytes(b'')
@@ -722,7 +742,9 @@ class RealSshd(unittest.TestCase):
         role = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
         script = (
             'set -euo pipefail\n'
-            + role[role.index('SSHD_HEALTH_CHECK_LINES='):role.index('metrics_pid=\n')]
+            + role[
+                role.index('SSHD_HEALTH_CHECK_LINES=') : role.index('metrics_pid=\n')
+            ]
             + f'export SSHD_DROPS_FILE={shlex.quote(str(self.drops))}\n'
             + f'exec {sshd} -D -e -f {shlex.quote(str(config))} '
             + f'2> >(sshd_log_filter 2>>{shlex.quote(str(self.stderr))})\n'
@@ -747,8 +769,11 @@ class RealSshd(unittest.TestCase):
 
     def health(self):
         return subprocess.run(
-            ['bash', str(ROOT / 'deployment/ecr/idea-control-plane/roles/bastion_health.sh'),
-             str(self.port)],
+            [
+                'bash',
+                str(ROOT / 'deployment/ecr/idea-control-plane/roles/bastion_health.sh'),
+                str(self.port),
+            ],
             env={**__import__('os').environ, 'SSHD_DROPS_FILE': str(self.drops)},
             capture_output=True,
             timeout=10,
@@ -775,7 +800,10 @@ class RealSshd(unittest.TestCase):
             self.assertNotEqual(self.keyscan(), 0)
             for _ in range(3):
                 self.assertEqual(self.health(), 0)
-            metrics = load('bastion_metrics', 'deployment/ecr/idea-control-plane/roles/bastion_metrics.py')
+            metrics = load(
+                'bastion_metrics',
+                'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
+            )
             up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
             self.assertFalse(up)
         finally:
