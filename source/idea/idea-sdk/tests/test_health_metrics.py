@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from ideadatamodel import ImageBuildRecord, ImageKind
 from ideasdk.aws.image_builds import (
     ImageRowsCollector,
+    bake_time_limit_reason,
     classify_bake_failure,
     report_bake_failure,
 )
@@ -240,7 +241,6 @@ def test_mounts_report_levels_and_a_dead_one_reports_only_that(monkeypatch):
 
 def test_bake_failure_reasons_are_a_small_vocabulary():
     for text, expected in (
-        ('bake passed its 120 minute time limit', 'time_limit'),
         ('no EC2 capacity after 4 tries: x', 'capacity'),
         ('in-bake check ssm failed on builder i-0: snap', 'check_ssm'),
         ('in-bake check results unreadable: e', 'checks_unreadable'),
@@ -251,6 +251,16 @@ def test_bake_failure_reasons_are_a_small_vocabulary():
         (None, 'other'),
     ):
         assert classify_bake_failure(text) == expected
+
+
+def test_a_bake_stopped_by_its_time_limit_is_counted_as_one():
+    # the text the limit writes, not a made up one; a waiting reason must not outrank it
+    for error in (None, 'no EC2 capacity after 4 tries: x', 'the canary failed'):
+        record = ImageBuildRecord(
+            base_os='rocky8', architecture='arm64', status='building', error=error
+        )
+        reason = bake_time_limit_reason(record, timedelta(minutes=3))
+        assert classify_bake_failure(reason) == 'time_limit'
 
 
 def test_a_reported_bake_failure_is_also_counted_with_its_row():
