@@ -40,6 +40,7 @@ LINE_CHARS = 400
 # these before any pattern sees it. READ_CHARS is what EC2 keeps of a console.
 READ_CHARS = 64 * 1024
 CUT_CHARS = LINE_CHARS * 2
+PEM_BEGIN, PEM_END = '-----BEGIN ', '-----END '
 ACCESS_DENIED_CODES = ('UnauthorizedOperation', 'AccessDenied', 'AccessDeniedException')
 
 # most specific first: a missing initramfs also panics, and a panic outranks a failed lookup
@@ -217,11 +218,19 @@ class FailedHost:
 
 def bounded(text: Optional[str]) -> str:
     """the end of it, from the start of a line: a cut inside a token would leave half a secret."""
-    text = text or ''
-    if len(text) <= READ_CHARS:
-        return text
-    text = text[-READ_CHARS:]
-    return text[text.find('\n') + 1 :]
+    text = (text or '').rstrip()
+    if len(text) > READ_CHARS:
+        cut = len(text) - READ_CHARS
+        start = text.find('\n', cut) + 1
+        if not start:
+            # the last line is longer than what is read: its start, never its middle
+            start = text.rfind('\n', 0, cut) + 1
+        text = text[start : start + READ_CHARS]
+    # a key block whose first line was cut away, here or by EC2, has no header left to find
+    end = text.find(PEM_END)
+    if end != -1 and not 0 <= text.find(PEM_BEGIN) < end:
+        text = text[text.find('\n', end) + 1 :] if '\n' in text[end:] else ''
+    return text
 
 
 def _whole_words(line: str) -> str:

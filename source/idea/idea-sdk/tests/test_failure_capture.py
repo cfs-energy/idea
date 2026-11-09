@@ -201,6 +201,45 @@ def test_the_end_of_a_long_read_starts_at_a_line():
     assert len(module._read_log_tail(logs, 'g', 's')) <= module.READ_CHARS
 
 
+def test_a_last_line_longer_than_the_read_is_kept_from_its_start():
+    # one log event with no newline: a cut anywhere in it lands inside whatever is there
+    secret = 'hunter2SECRETabcdefgh'
+    for inside in range(1, len(secret), 3):
+        # the last READ_CHARS of it start inside the secret
+        after = ' zz' * (module.READ_CHARS // 3)
+        after = after[: module.READ_CHARS - len(secret) + inside]
+        line = 'first words ' + 'q ' * 900 + 'password=' + secret + after
+        for text in (line, 'earlier\n' + line, line + '\n'):
+            kept = module.bounded(text)
+            assert kept.startswith('first words ') and len(kept) <= module.READ_CHARS
+            shown = '\n'.join(clean_for_log(text, 100000))
+            assert shown.startswith('| first words ')
+            for part in (secret[:6], secret[7:13], secret[-8:]):
+                assert part not in shown, (inside, shown[:80])
+    logs = Mock()
+    logs.get_log_events.return_value = {'events': [{'message': line}]}
+    assert module._read_log_tail(logs, 'g', 's').startswith('first words ')
+    assert detect_signature('No space left on device ' + 'z ' * 40000) == 'no_space'
+
+
+def test_a_key_block_with_its_first_line_cut_away_does_not_travel():
+    body = ['Mk9' * 21 + 'M'] * 30 + ['shortlastlineQ9x=']
+    block = ['-----BEGIN RSA PRIVATE KEY-----', *body, '-----END RSA PRIVATE KEY-----']
+    whole = '\n'.join(['boot ok', *block, 'after the key'])
+    assert redact(module.bounded(whole)) == 'boot ok\n[redacted]\nafter the key'
+    # cut by this read, and cut by EC2 before it was ever read
+    for text in (
+        'x\n' * module.READ_CHARS + '\n'.join([*block, 'after the key']),
+        '\n'.join([*block[5:], 'after the key']),
+        '\n'.join(block[5:]),
+    ):
+        shown = '\n'.join(clean_for_log(text[-module.READ_CHARS - 300 :], 100000))
+        assert 'shortlastline' not in shown and 'Mk9' not in shown, shown[-200:]
+    assert '| after the key' in shown or shown == ''
+    two = '\n'.join([*block[5:], 'between', *block, 'after'])
+    assert redact(module.bounded(two)) == 'between\n[redacted]\nafter'
+
+
 def test_a_signature_far_along_a_long_line_is_still_found():
     for at in (0, 750, 795, 1500, 5000):
         assert detect_signature('x' * at + ' No space left on device') == 'no_space', at
