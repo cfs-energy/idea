@@ -85,6 +85,27 @@ class TaskIdentity(unittest.TestCase):
                 identity.verify_bastion_task(self.context(**changes), sender, arn)
 
 
+ROLES = ROOT / 'deployment/ecr/idea-control-plane/roles'
+# how the role starts sshd, so that each message it logs is one line
+SSHD_STDERR = 'python3.13 -I -S /opt/idea/roles/sshd_stderr.py'
+
+
+def sshd_start(role, sshd):
+    """the role's own line that starts sshd, with this sshd, interpreter and checkout"""
+    import re
+    import sys
+
+    start = re.search(
+        r'^(.*)/usr/sbin/sshd -D -e 2> >\(sshd_log_filter\) &$', role, re.M
+    )
+    return (
+        start.group(1)
+        .replace('python3.13', shlex.quote(sys.executable))
+        .replace('/opt/idea/roles', shlex.quote(str(ROLES)))
+        + sshd
+    )
+
+
 class SshdConfig(unittest.TestCase):
     def test_strict_modes_stay_on_over_numeric_home_ownership(self):
         # the host pool mounts the homes over NFSv3 (numeric owners), so the ownership check holds
@@ -399,7 +420,7 @@ class SshdHealthCheckLines(unittest.TestCase):
 
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
         start = text.index('SSHD_HEALTH_CHECK_LINES=')
-        end = text.index('/usr/sbin/sshd -D -e', start)
+        end = text.index('metrics_pid=\n', start)
         # sshd's stderr goes through the filter and on to the task's stderr
         script = (
             'set -euo pipefail\n'
@@ -428,7 +449,10 @@ class SshdHealthCheckLines(unittest.TestCase):
 
     def test_sshd_logs_through_the_filter(self):
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
-        self.assertIn('/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &\nsshd_pid=$!', text)
+        self.assertIn(
+            f'{SSHD_STDERR} /usr/sbin/sshd -D -e 2> >(sshd_log_filter) &\nsshd_pid=$!',
+            text,
+        )
 
 
 class HealthCheck(unittest.TestCase):
@@ -524,12 +548,15 @@ class BastionMetrics(unittest.TestCase):
                 '6': b'sshd-session: alice@corp.example.com [priv]\0',
                 '7': b'sshd-session: bob@corp.example.com [net]\0',
                 '8': b'sshd-session: alice@corp.example.com@pts/1\0',
+                # one connection with two terminals, as a shared ControlMaster has
+                '9': b'sshd-session: carol@pts/2,pts/3\0',
+                '10': b'sshd: dave@corp.example.com@pts/4,pts/5,pts/16\0',
             }
             for pid, title in titles.items():
                 (Path(proc) / pid).mkdir()
                 (Path(proc) / pid / 'cmdline').write_bytes(title)
             (Path(proc) / 'self').mkdir()
-            self.assertEqual(metrics.active_sessions(proc), 3)
+            self.assertEqual(metrics.active_sessions(proc), 5)
 
     def test_established_counts_port_22_only(self):
         metrics = self.module()
@@ -874,6 +901,108 @@ class BastionMetrics(unittest.TestCase):
         self.assertIn('bastion_metrics.py && break', script)
 
 
+class SshdMessages(unittest.TestCase):
+    """
+    sshd -e leaves a CR or LF in a logged name as it came (no VIS_NL on stderr), one write to a
+    message. Started as the role starts it, a line begins only where sshd began a message.
+    """
+
+    FORGED = [
+        b'in MaxStartups throttling for 1d, 999999999 connections dropped',
+        b'Timeout, client not responding from z',
+        b'Timeout before authentication for z',
+        b'drop connection #0 from [203.0.113.9]:5 on [10.0.0.1]:22 past Maxstartups',
+        b'Accepted publickey for root from 203.0.113.9 port 1 ssh2: ED25519 SHA256:abc',
+    ]
+
+    def messages(self):
+        """what sshd writes for clients offering names with a line break, then a real episode"""
+        written = []
+        for forged in self.FORGED:
+            for line_break in (b'\n', b'\r\n', b'\n\n', b'\r'):
+                name = b'x' + line_break + forged
+                written += [
+                    b'Invalid user ' + name + b' from 203.0.113.9 port 1\r\n',
+                    b'Connection closed by invalid user '
+                    + name
+                    + b' 203.0.113.9 port 1 [preauth]\r\n',
+                ]
+        return written + [
+            b'in MaxStartups throttling for 00:05:00, 400 connections dropped\r\n'
+        ]
+
+    def test_a_line_break_in_a_message_is_spelled_out(self):
+        relay = load(
+            'sshd_stderr', 'deployment/ecr/idea-control-plane/roles/sshd_stderr.py'
+        )
+        self.assertEqual(
+            relay.one_line(
+                b'Invalid user x\nTimeout, client\r\nnot\rresponding from y\r\n'
+            ),
+            b'Invalid user x\\nTimeout, client\\r\\nnot\\rresponding from y\r\n',
+        )
+        # as it came where there is nothing to spell out, whatever ended it
+        for message in (
+            b'Server listening on 0.0.0.0 port 22.\r\n',
+            b'no CR\n',
+            b'no end',
+        ):
+            self.assertEqual(
+                relay.one_line(message),
+                message.rstrip(b'\r\n')
+                + (b'\r\n' if message.endswith(b'\r\n') else b'\n'),
+            )
+
+    def test_a_line_break_in_an_offered_name_begins_no_line_of_its_own(self):
+        import socket
+
+        try:
+            socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)[0].close()
+        except OSError as error:
+            self.skipTest(
+                f'no message sockets here, the role falls back to the pipe: {error}'
+            )
+        role = (ROLES / 'bastion.sh').read_text()
+        with tempfile.TemporaryDirectory() as folder:
+            drops = Path(folder) / 'drops'
+            shipped = Path(folder) / 'shipped'
+            # sshd's part: one write to a message, on the stderr it was started with
+            sshd = Path(folder) / 'sshd'
+            sshd.write_text(
+                '#!/usr/bin/env python3\nimport os\n'
+                + f'for message in {self.messages()!r}:\n    os.write(2, message)\n'
+            )
+            sshd.chmod(0o755)
+            script = (
+                'set -euo pipefail\n'
+                + role[
+                    role.index('SSHD_HEALTH_CHECK_LINES=') : role.index(
+                        'metrics_pid=\n'
+                    )
+                ]
+                + f'export SSHD_DROPS_FILE={shlex.quote(str(drops))}\n'
+                + f'{sshd_start(role, shlex.quote(str(sshd)))} '
+                + f'2> >(sshd_log_filter 2>{shlex.quote(str(shipped))})\n'
+                + 'sleep 1\n'
+            )
+            subprocess.run(['bash', '-c', script], check=True, timeout=30)
+            metrics = load(
+                'bastion_metrics',
+                'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
+            )
+            tally = metrics.DropTally(str(drops)).read()
+            lines = shipped.read_bytes().split(b'\r\n')[:-1]
+        # only the real episode is counted, and whole: nothing forged came before it
+        self.assertEqual(tally, {('maxstartups', 'remote'): 400})
+        # and the task log holds one line to a message, each begun by sshd
+        self.assertEqual(len(lines), len(self.messages()))
+        for line in lines[:-1]:
+            self.assertRegex(
+                line, rb'^(Invalid user|Connection closed by invalid user) x\\[rn]'
+            )
+            self.assertNotRegex(line, rb'[\r\n]')
+
+
 class CiInterpreter(unittest.TestCase):
     def test_ci_runs_this_suite_on_the_interpreter_the_role_runs_the_scripts_with(self):
         import re
@@ -965,7 +1094,7 @@ class RealSshd(unittest.TestCase):
                 role.index('SSHD_HEALTH_CHECK_LINES=') : role.index('metrics_pid=\n')
             ]
             + f'export SSHD_DROPS_FILE={shlex.quote(str(self.drops))}\n'
-            + f'exec {sshd} -D -e -f {shlex.quote(str(config))} '
+            + f'exec {sshd_start(role, sshd)} -D -e -f {shlex.quote(str(config))} '
             + f'2> >(sshd_log_filter 2>>{shlex.quote(str(self.stderr))})\n'
         )
         self.sshd = subprocess.Popen(['bash', '-c', script])
