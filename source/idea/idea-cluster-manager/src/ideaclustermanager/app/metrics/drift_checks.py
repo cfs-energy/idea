@@ -128,9 +128,7 @@ def first_named(records: List[Dict]) -> Optional[Dict]:
 
 
 # a role without /api/svm/svms gets 200 and no records for a CIFS server that is there
-NO_CIFS_RECORDS = (
-    'no CIFS server in the answer and the SVM is not visible: the role lacks /api/svm/svms'
-)
+NO_CIFS_RECORDS = 'no CIFS server in the answer and the SVM is not visible: the role lacks /api/svm/svms'
 CIFS_UNSEEN = (UNKNOWN, NO_CIFS_RECORDS)
 
 

@@ -540,7 +540,11 @@ class DirectoryCollector(HealthCollector):
             records = Utils.get_value_as_list('records', client.first_page(path), [])
             reason = read(metrics, filesystem, records) or 'ok'
             metrics.level(
-                'directory.check_ok', 1, check=check, reason=reason, filesystem=filesystem
+                'directory.check_ok',
+                1,
+                check=check,
+                reason=reason,
+                filesystem=filesystem,
             )
         except Exception as e:
             reason = DirectoryCollector._reason(e)
