@@ -481,7 +481,8 @@ class ModelUtils:
     def aws_job_id(job_id: Optional[str]) -> Optional[str]:
         """
         the PBS job id as AWS names and tags take it. An array parent's 123[] becomes 123-array:
-        stack names, tag values, log groups and metric namespaces all refuse brackets.
+        stack names, log groups and metric namespaces refuse brackets. The idea:JobId tag
+        carries the same value so lookups by tag and by name agree.
         """
         if job_id is not None and job_id.endswith('[]'):
             return f'{job_id[:-2]}{_ARRAY_JOB_SUFFIX}'
