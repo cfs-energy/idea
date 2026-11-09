@@ -335,7 +335,7 @@ def test_latest_reports_are_retained_per_target_and_joined_by_user(monkeypatch):
         [quota('*', 'data', 0, 0, kind='group')],
         [quota('user-a', 'data', 1, 1)],
     ):
-        service._quota_reports['data'] = (snapshot['measured_at'], records)
+        service._collected_reports['data'] = (snapshot['measured_at'], records)
         assert (
             service.usage_by_filesystem()[fs_id_from_host(ENDPOINT)]['zero_when_absent']
             is False
@@ -546,7 +546,7 @@ def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
         StorageTarget('home', 'svm-b.fs-test.fsx.example.invalid', 'reader', ''),
     ]
     monkeypatch.setattr(service, 'targets', lambda: targets)
-    service._quota_reports = {
+    service._collected_reports = {
         'data': (100, [quota('user-a', 'data', 10, 1), quota('*', 'data', 0, 0)]),
         'home': (
             200,
@@ -569,10 +569,10 @@ def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
     assert snapshot['measured_at'] == 100
     assert snapshot['complete'] and snapshot['zero_when_absent']
 
-    service._quota_reports['home'][1].pop()
+    service._collected_reports['home'][1].pop()
     snapshot = service.usage_by_filesystem()['fs-test']
     assert snapshot['complete'] and not snapshot['zero_when_absent']
-    del service._quota_reports['home']
+    del service._collected_reports['home']
     snapshot = service.usage_by_filesystem()['fs-test']
     assert not snapshot['complete'] and not snapshot['zero_when_absent']
     assert snapshot['users'] == {'user-a': 10}
@@ -586,7 +586,7 @@ def test_filesystem_deduplicates_targets_with_the_same_endpoint(monkeypatch):
     ]
     monkeypatch.setattr(service, 'targets', lambda: targets)
     for target in targets:
-        service._quota_reports[target.name] = (
+        service._collected_reports[target.name] = (
             100,
             [quota('user-a', 'data', 10, 1), quota('*', 'data', 0, 0)],
         )
@@ -596,7 +596,7 @@ def test_filesystem_deduplicates_targets_with_the_same_endpoint(monkeypatch):
     assert snapshot['total_bytes'] == 10
     assert snapshot['capacity_pool_bytes'] == 20
     assert snapshot['ssd_bytes'] == 30
-    del service._quota_reports['data']
+    del service._collected_reports['data']
     assert service.usage_by_filesystem()['fs-test'] == snapshot
 
 
@@ -627,16 +627,68 @@ def test_saved_snapshot_stands_until_this_process_has_every_report(monkeypatch):
     ]
     monkeypatch.setattr(service, 'targets', lambda: targets)
     assert service.usage_by_filesystem() == saved
-    service._quota_reports = {
+    service._collected_reports = {
         'data': (200, [quota('user-a', 'data', 10, 1), quota('*', 'data', 0, 0)])
     }
     assert service.usage_by_filesystem() == saved
-    service._quota_reports['home'] = (
+    service._collected_reports['home'] = (
         200,
         [quota('user-b', 'home', 5, 1), quota('*', 'home', 0, 0)],
     )
     snapshot = service.usage_by_filesystem()['fs-test']
     assert snapshot['complete'] and snapshot['users'] == {'user-a': 10, 'user-b': 5}
+
+
+def test_a_pane_quota_read_leaves_the_cost_snapshot_alone(monkeypatch):
+    import json
+
+    saved = {
+        'fs-09753a84872d3209b': dict(
+            filesystem_id='fs-09753a84872d3209b',
+            measured_at=100,
+            users={'alice': 30},
+            total_bytes=30,
+            complete=True,
+            zero_when_absent=True,
+            capacity_pool_bytes=5 * 2**40,
+            ssd_bytes=2**40,
+            allocation_pool='Quota bytes; unattributed rows remain unassigned',
+        )
+    }
+    context = FakeContext(
+        {
+            'cluster-manager.metrics.storage.enabled': True,
+            'cluster-manager.metrics.storage.usage_snapshot': json.dumps(saved),
+            'metrics.provider': 'cloudwatch',
+            'shared-storage': {'data': {'provider': 'fsx_netapp_ontap'}},
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.metrics.password_secret_arn': 'secret',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+        },
+        secrets={'secret': 'pw'},
+    )
+    reports = [quota('alice', 'data', 7, 1), quota('*', 'data', 0, 0)]
+    monkeypatch.setattr(OntapClient, 'quota_reports', lambda _: reports)
+    service = StorageMetricsService(context)
+    # a task that has not collected: the pane reads quotas, never volumes
+    service.refresh_quota_reports()
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 7
+    assert service.usage_by_filesystem() == saved
+
+    # one that has: the pane's later quota read does not move the snapshot's users or its time
+    monkeypatch.setattr(
+        OntapClient, 'volumes', lambda _: [volume('data', 100, 50, ssd=30, pool=20)]
+    )
+    service.run_once()
+    collected = service.usage_by_filesystem()
+    assert collected['fs-09753a84872d3209b']['capacity_pool_bytes'] == 20
+    assert collected['fs-09753a84872d3209b']['users'] == {'alice': 7}
+    later = [quota('alice', 'data', 9, 1), quota('*', 'data', 0, 0)]
+    monkeypatch.setattr(OntapClient, 'quota_reports', lambda _: later)
+    service._quota_attempted = 0
+    service.refresh_quota_reports(max_age=0)
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 9
+    assert service.usage_by_filesystem() == collected
 
 
 def test_volume_quota_excludes_only_matching_user_qtrees():

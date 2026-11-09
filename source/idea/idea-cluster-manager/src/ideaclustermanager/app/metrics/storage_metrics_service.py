@@ -312,6 +312,8 @@ class StorageMetricsService(SocaService):
         self.logger = context.logger('storage-metrics')
         self._provider_warning_logged = False
         self._quota_reports = {}
+        # what the hourly collection read, reports and volumes together: all the cost snapshot uses
+        self._collected_reports = {}
         self._volumes = {}
         self._quota_lock = threading.Lock()
         self._quota_refresh = threading.Lock()
@@ -444,8 +446,10 @@ class StorageMetricsService(SocaService):
         snapshots = Utils.from_json(
             self.context.config().get_string(self._config_key('usage_snapshot'), '{}')
         )
+        # not _quota_reports: the pane refreshes those alone, and a snapshot from reports with no
+        # volumes beside them is complete with no tier bytes, so the capacity-pool charge is lost
         with self._quota_lock:
-            reports = dict(self._quota_reports)
+            reports = dict(self._collected_reports)
             volumes = dict(self._volumes)
         targets = {}
         for target in self.targets():
@@ -719,10 +723,9 @@ class StorageMetricsService(SocaService):
                     reports = client.quota_reports()
                     with self._quota_lock:
                         self._volumes[target.name] = volumes
-                        self._quota_reports[target.name] = (
-                            arrow.utcnow().timestamp(),
-                            reports,
-                        )
+                        self._quota_reports[target.name] = self._collected_reports[
+                            target.name
+                        ] = (arrow.utcnow().timestamp(), reports)
                     published = publish_storage(metrics, client.fs_id, volumes, reports)
                     self.logger.info(
                         f'{target.name}: {published} storage gauges from {len(volumes)} volumes and {len(reports)} quota records'
