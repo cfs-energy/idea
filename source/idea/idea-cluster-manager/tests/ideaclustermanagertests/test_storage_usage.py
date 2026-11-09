@@ -967,7 +967,8 @@ def test_a_truncated_folder_is_partial_with_no_direct_file_figure(monkeypatch, t
     service, _ = analytics_service(monkeypatch, tree, folders)
     try:
         result = service.get_usage('alice', study=False)
-        assert result['partial'] is True
+        # the total is ONTAP's rollup for the folder itself, whole however short the list
+        assert result['partial'] is False
         assert 'files_here' not in result
         assert result['truncated'] is True
     finally:
@@ -1093,6 +1094,7 @@ def test_drill_down_through_a_symlink_is_refused(monkeypatch, tree, tmp_path):
 
 def test_outside_home_without_analytics_says_so_and_does_not_walk(monkeypatch, tree):
     service, source = analytics_service(monkeypatch, tree, {})
+    source.status.return_value = dict(state='off')
     monkeypatch.setattr(
         storage_usage, 'scan_as_user', Mock(side_effect=AssertionError('no walk'))
     )
@@ -1102,6 +1104,21 @@ def test_outside_home_without_analytics_says_so_and_does_not_walk(monkeypatch, t
         result = service.get_usage('alice', sibling)
         assert result['state'] == 'unavailable'
         assert 'storage analytics' in result['message']
+    finally:
+        service._study_workers.shutdown()
+        service._workers.shutdown()
+
+
+def test_outside_home_with_analytics_on_does_not_say_it_is_off(monkeypatch, tree):
+    # analytics is on but could not read this folder (ONTAP refused it)
+    service, source = analytics_service(monkeypatch, tree, {})
+    sibling = os.path.join(os.path.dirname(tree), 'shared-folder')
+    os.mkdir(sibling)
+    try:
+        result = service.get_usage('alice', sibling)
+        assert result['state'] == 'unavailable'
+        assert 'not on' not in result['message']
+        assert result['message'] == 'Storage analytics could not read this folder.'
     finally:
         service._study_workers.shutdown()
         service._workers.shutdown()

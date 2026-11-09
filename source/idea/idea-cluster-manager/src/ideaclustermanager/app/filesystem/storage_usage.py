@@ -31,6 +31,10 @@ STUDY_REFRESH_SECONDS = 60
 MAX_CONCURRENT_STUDIES = 2
 MAX_LARGEST = 25
 MIN_LARGEST_BYTES = 2**20
+OUTSIDE_HOME_MESSAGES = dict(
+    on='Storage analytics could not read this folder.',
+    initializing='Storage analytics is still taking its first measurement of this volume. Try again later.',
+)
 MAX_CACHED_VIEWS = 1000
 CANNOT_OPEN = 'That folder no longer exists or cannot be opened.'
 
@@ -321,8 +325,10 @@ class StorageUsageService:
             except OSError:
                 raise exceptions.unauthorized_access()
             readable = set(readable)
-            # A folder this person cannot open is left out, not kept at its place: where it sits
-            # in a largest-first list would say how big it is.
+            # A folder this person cannot open gets no row: its name is theirs to see, a size from
+            # ONTAP's login is not. Its bytes stay in the total, ONTAP's rollup of everything
+            # below, and in every row above it, so the total less the rows here still bounds what
+            # the hidden folders hold together. Taking them out would need a walk as this person.
             children = [row for row in found['children'] if row['name'] in readable]
             view = dict(
                 total=dict(found['self'], identity=identity_row),
@@ -475,7 +481,8 @@ class StorageUsageService:
             source='analytics',
             home=home,
             measured_at=view['measured_at'],
-            partial=bool(view['truncated'] or view['total'].get('partial')),
+            # the total is ONTAP's rollup for the folder itself, whole even when its list is cut
+            partial=bool(view['total'].get('partial')),
             total=view['total'],
             folders=view['folders'],
         )
@@ -536,10 +543,15 @@ class StorageUsageService:
         if from_analytics is not None:
             return from_analytics
         if folder is not None and os.path.commonpath([home, folder]) != home:
+            analytics = self._analytics()
+            state = analytics.status(folder)['state'] if analytics else 'off'
             return dict(
                 state='unavailable',
                 home=home,
-                message='Sizes for folders outside your home folder need storage analytics, which is not on for this volume.',
+                message=OUTSIDE_HOME_MESSAGES.get(
+                    state,
+                    'Sizes for folders outside your home folder need storage analytics, which is not on for this volume.',
+                ),
             )
         if folder is not None:
             try:
