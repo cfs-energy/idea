@@ -319,6 +319,17 @@ def test_no_cifs_record_is_unknown_not_drift(monkeypatch):
     assert not any(value == 2 for value, _ in checks.published['state'])
 
 
+def test_backup_retention_left_out_of_the_answer_reads_as_off(monkeypatch):
+    checks = harness(monkeypatch)
+    described = checks.context.aws().fsx().describe_file_systems.return_value
+    del described['FileSystems'][0]['OntapConfiguration']['AutomaticBackupRetentionDays']
+    checks.run_once()
+    found = {
+        (t['check'], t['setting']): t['current'] for _, t in checks.published['value']
+    }
+    assert found['fsx_parity', 'backup_retention_days'] == '0'
+
+
 def test_domain_controllers_that_cannot_be_read_make_dns_unknown(monkeypatch):
     checks = harness(monkeypatch)
     checks.context.aws().ds().describe_directories.side_effect = RuntimeError('denied')

@@ -414,7 +414,8 @@ class DriftChecks:
         settings = {
             'deployment_type': ontap.get('DeploymentType'),
             'storage_type': file_system.get('StorageType'),
-            'backup_retention_days': ontap.get('AutomaticBackupRetentionDays'),
+            # left out of the answer when automatic backups are off
+            'backup_retention_days': ontap.get('AutomaticBackupRetentionDays', 0),
             'disk_iops_mode': (ontap.get('DiskIopsConfiguration') or {}).get('Mode'),
             'ha_pairs': ontap.get('HAPairs'),
         }
