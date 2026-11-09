@@ -415,8 +415,14 @@ class FifoQueue:
         self.now = 0
         self.messages = []
         self.sequence = 0
+        self.dedupe_ids = set()
 
-    def send_message(self, MessageBody, MessageGroupId, **_):
+    def send_message(
+        self, MessageBody, MessageGroupId, MessageDeduplicationId=None, **_
+    ):
+        if MessageDeduplicationId and MessageDeduplicationId in self.dedupe_ids:
+            return
+        self.dedupe_ids.add(MessageDeduplicationId)
         self.sequence += 1
         self.messages.append(
             {
@@ -425,6 +431,7 @@ class FifoQueue:
                 'body': MessageBody,
                 'visible_at': 0,
                 'receives': 0,
+                'sent_at': self.now * 1000 + self.sequence,
             }
         )
 
@@ -443,8 +450,11 @@ class FifoQueue:
                     {
                         'Body': message['body'],
                         'ReceiptHandle': message['id'],
+                        'MessageId': message['id'],
                         'Attributes': {
-                            'ApproximateReceiveCount': str(message['receives'])
+                            'ApproximateReceiveCount': str(message['receives']),
+                            'MessageGroupId': message['group'],
+                            'SentTimestamp': str(message['sent_at']),
                         },
                     }
                 ]
@@ -664,3 +674,155 @@ def test_a_discarded_password_for_a_deleted_user_leaves_no_file(tmp_path):
     drain()
     assert queue.messages == []
     assert not file.exists()
+
+
+def password_sync(tmp_path, entity_tables):
+    # the real password task against a directory that records what it is given
+    module, manager, queue, tasks, _, password, drain = account_queue(tmp_path)
+    table = entity_tables['user']
+    table.put_item(Item={'username': 'user'})
+    user_dao = manager.context.accounts.user_dao
+    user_dao.table = table
+    user_dao.get_user.side_effect = lambda username: table.get_item(
+        Key={'username': username}
+    ).get('Item')
+    task = account_tasks.SyncPasswordInDirectoryServiceTask(manager.context)
+    manager.tasks[task.get_name()] = task
+    directory = {'down': False, 'applied': []}
+
+    def change_password(_, value):
+        if directory['down']:
+            raise RuntimeError('directory down')
+        directory['applied'].append(value)
+
+    manager.context.ldap_client.change_password.side_effect = change_password
+
+    def queue_password(value, group=None):
+        file = password(value)
+        file.write_text(value)
+        payload = {'username': 'user', 'password_file': str(file)}
+        if group is None:
+            manager.send('accounts.sync-password', payload, 'user')
+        else:
+            # as the release before lanes sent it
+            queue.send_message(
+                MessageBody=json.dumps(
+                    {'name': 'accounts.sync-password', 'payload': payload}
+                ),
+                MessageGroupId=group,
+            )
+        return file
+
+    return module, queue, directory, queue_password, drain, table
+
+
+def test_a_password_queued_before_the_upgrade_cannot_replace_a_newer_one(
+    tmp_path, entity_tables
+):
+    module, queue, directory, queue_password, drain, _ = password_sync(
+        tmp_path, entity_tables
+    )
+    old = queue_password('old', group='user')
+    # at the upgrade it waits out a failed attempt in the group it was sent to
+    queue.messages[0]['receives'] = 3
+    queue.messages[0]['visible_at'] = 150
+    queue.now += 1
+    queue_password('new')
+    drain()
+    assert directory['applied'] == ['new']
+    for attempt in range(1, module.TASK_MAX_ATTEMPTS + 1):
+        queue.now += module.retry_delay(attempt)
+        drain()
+    assert directory['applied'] == ['new']
+    assert queue.messages == []
+    assert not old.exists()
+
+
+def test_a_password_from_the_old_group_still_applies_in_send_order(
+    tmp_path, entity_tables
+):
+    # while the service rolls, a task of the earlier release can queue the newest one
+    _, queue, directory, queue_password, drain, table = password_sync(
+        tmp_path, entity_tables
+    )
+    directory['down'] = True
+    queue_password('first')
+    drain()
+    queue.now += 1
+    queue_password('second', group='user')
+    drain()
+    assert [message['group'] for message in queue.messages] == [
+        'user.password',
+        'user.password',
+    ]
+    directory['down'] = False
+    queue.now += 3600
+    drain()
+    assert directory['applied'] == ['first', 'second']
+    assert queue.messages == []
+    record = table.get_item(Key={'username': 'user'})['Item']
+    assert record['password_sync_sent_at'] == 1002
+
+
+def test_a_moved_message_is_not_queued_twice_when_its_delete_fails(
+    tmp_path, entity_tables
+):
+    _, queue, directory, queue_password, drain, _ = password_sync(
+        tmp_path, entity_tables
+    )
+    queue_password('only', group='user')
+    delete, failed = queue.delete_message, []
+
+    def fail_once(**kwargs):
+        if not failed:
+            failed.append(True)
+            raise RuntimeError('queue unavailable')
+        delete(**kwargs)
+
+    queue.delete_message = fail_once
+    drain()
+    queue.now += 3600
+    drain()
+    assert directory['applied'] == ['only']
+    assert queue.messages == []
+
+
+def test_a_redelivered_password_that_already_synced_is_done(tmp_path):
+    task, password = refused_password_task(tmp_path, None)
+    payload = {'username': 'user', 'password_file': str(password)}
+    task.invoke(payload)
+    assert not password.exists()
+    # acknowledged late: the same message comes back
+    task.invoke(payload)
+    task.context.ldap_client.change_password.assert_called_once()
+
+
+def test_a_password_file_on_an_absent_file_system_is_retried(tmp_path):
+    task, password = refused_password_task(tmp_path, None)
+    away = tmp_path / 'unmounted' / 'abc' / 'password.txt'
+    with pytest.raises(FileNotFoundError):
+        task.invoke({'username': 'user', 'password_file': str(away)})
+    task.context.ldap_client.change_password.assert_not_called()
+
+
+def membership_task(group):
+    context = Mock()
+    context.accounts.group_dao.get_group.return_value = group
+    context.ldap_client.is_readonly.return_value = False
+    return account_tasks.GroupMembershipUpdatedTask(context), context
+
+
+def test_removing_a_member_of_a_deleted_group_finishes_without_a_retry():
+    task, context = membership_task(None)
+    task.invoke({'group_name': 'gone', 'username': 'user', 'operation': 'remove'})
+    context.projects.user_projects_dao.group_member_removed.assert_called_once_with(
+        group_name='gone', username='user'
+    )
+    context.ldap_client.remove_user_from_group.assert_not_called()
+
+
+def test_adding_a_member_to_a_deleted_group_is_not_retried():
+    task, context = membership_task(None)
+    with pytest.raises(TaskCannotSucceed):
+        task.invoke({'group_name': 'gone', 'username': 'user', 'operation': 'add'})
+    context.projects.user_projects_dao.group_member_added.assert_not_called()

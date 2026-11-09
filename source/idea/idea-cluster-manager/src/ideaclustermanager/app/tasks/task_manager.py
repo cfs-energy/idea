@@ -258,6 +258,25 @@ class TaskManager(SocaService):
         self._delete(receipt_handle)
         return True
 
+    def _move_into_lane(self, task, payload, sqs_message):
+        # A release before lanes queued this task in its entity's own group, which is
+        # received alongside the lane. Run there it could finish after a newer message
+        # of the lane, so it joins the lane and runs in turn; sent_at keeps its age.
+        lane = getattr(task, 'lane', None)
+        group = sqs_message.get('Attributes', {}).get('MessageGroupId')
+        if not isinstance(lane, str) or not group or group.endswith(f'.{lane}'):
+            return False
+        self.logger.info(f'moving task {task.get_name()} into its lane: {lane}')
+        self.send(
+            task.get_name(),
+            payload,
+            message_group_id=group,
+            # a redelivery of this message must not queue it twice
+            message_dedupe_id=f'{sqs_message.get("MessageId")}.{lane}',
+        )
+        self._delete(sqs_message['ReceiptHandle'])
+        return True
+
     def get_task_queue_url(self) -> str:
         return self.context.config().get_string(
             'cluster-manager.task_queue_url', required=True
@@ -344,6 +363,11 @@ class TaskManager(SocaService):
                 return
 
             task = self.tasks[task_name]
+            attributes = sqs_message.get('Attributes', {})
+            sent_at = attributes.get('SentTimestamp')
+            if isinstance(task_payload, dict) and sent_at:
+                # the queue's own clock orders every message, whichever release sent it
+                task_payload.setdefault('sent_at', int(sent_at))
 
             if self._discard_deleted_user(task_name, task_payload, receipt_handle):
                 return
@@ -359,6 +383,8 @@ class TaskManager(SocaService):
                     receipt_handle,
                     RuntimeError(f'gave up after {TASK_MAX_ATTEMPTS} attempts'),
                 )
+                return
+            if self._move_into_lane(task, task_payload, sqs_message):
                 return
             task.invoke(task_payload)
             task_succeeded = True

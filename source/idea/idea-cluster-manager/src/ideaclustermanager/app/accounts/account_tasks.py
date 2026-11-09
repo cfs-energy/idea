@@ -18,8 +18,10 @@ __all__ = (
     'GroupMembershipUpdatedTask',
 )
 
+from botocore.exceptions import ClientError
+
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions, errorcodes
+from ideadatamodel import exceptions
 
 import ideaclustermanager
 from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
@@ -92,10 +94,15 @@ class GroupMembershipUpdatedTask(BaseTask):
         ds_readonly = self.context.ldap_client.is_readonly()
 
         if group is None:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.AUTH_GROUP_NOT_FOUND,
-                message=f'group not found: {group_name}',
+            # no retry brings a deleted group back, and each one would hold up every
+            # later task of this user
+            if operation == 'add':
+                raise TaskCannotSucceed(f'group not found: {group_name}')
+            # sync-group removes the group, and its members with it, from the directory
+            self.context.projects.user_projects_dao.group_member_removed(
+                group_name=group_name, username=username
             )
+            return
         if group['enabled']:
             if operation == 'add':
                 if ds_readonly:
@@ -200,6 +207,8 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
     # Passwords stay ordered among themselves; until the account reaches the
     # directory the change fails and retries without holding up the account's tasks.
     lane = 'password'
+    # user attribute: sent_at of the newest password applied
+    APPLIED = 'password_sync_sent_at'
 
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
@@ -217,8 +226,27 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
         self.logger.info(f'sync password for user: {username} in directory service')
 
-        with open(password_file, 'r') as f:
-            password = f.read()
+        # The lane runs one password at a time, so this check cannot race another
+        # change. A message can still arrive behind a newer one: moved in from the
+        # group an earlier release used, or queued twice. It must not undo the newer.
+        sent_at = payload.get('sent_at')
+        user = self.context.accounts.user_dao.get_user(username) or {}
+        if sent_at is not None and sent_at < user.get(self.APPLIED, 0):
+            self.logger.info(f'a newer password is already synced for user: {username}')
+            self.on_terminal_failure(payload)
+            return
+
+        try:
+            with open(password_file, 'r') as f:
+                password = f.read()
+        except FileNotFoundError:
+            if not os.path.isdir(os.path.dirname(os.path.dirname(password_file))):
+                # the shared file system is away, not the file
+                raise
+            # The file goes only once its message is finished with, so this is a
+            # redelivery of one that was: nothing is left to do, and no retry finds it.
+            self.logger.warning(f'password file is gone for user: {username}; done')
+            return
 
         try:
             self.context.ldap_client.change_password(username, password)
@@ -231,7 +259,23 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
                 'Desktop and SSH sign-in keep the old password until a new one is set.'
             ) from None
 
+        if sent_at is not None:
+            self._record_applied(username, sent_at)
         self._remove_password_file(password_file)
+
+    def _record_applied(self, username: str, sent_at: int):
+        try:
+            self.context.accounts.user_dao.table.update_item(
+                Key={'username': username},
+                UpdateExpression='SET #applied = :sent_at',
+                ConditionExpression='attribute_exists(username) AND '
+                '(attribute_not_exists(#applied) OR #applied < :sent_at)',
+                ExpressionAttributeNames={'#applied': self.APPLIED},
+                ExpressionAttributeValues={':sent_at': sent_at},
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
 
     def on_terminal_failure(self, payload: Dict):
         try:
