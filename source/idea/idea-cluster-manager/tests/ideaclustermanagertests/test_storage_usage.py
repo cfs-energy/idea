@@ -742,8 +742,11 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
     assert analytics._failed_at == 0
 
 
-def filer(monkeypatch, tree, answers, labels=(200, dict(records=[{}]))):
-    """FolderAnalytics over the real ONTAP client, with the HTTP layer answering by path."""
+def filer(
+    monkeypatch, tree, answers, labels=(200, dict(records=[{}])), volumes=None, closed=()
+):
+    """FolderAnalytics over the real ONTAP client, with the HTTP layer answering by path. The role
+    cannot read /files on the volumes in closed."""
     from ideaclustermanager.app.filesystem import ontap_analytics
     from ideaclustermanager.app.metrics import storage_metrics_service
 
@@ -752,21 +755,23 @@ def filer(monkeypatch, tree, answers, labels=(200, dict(records=[{}]))):
         ontap_analytics, 'OntapClient', storage_metrics_service.OntapClient
     )
     sent = []
+    listed = volumes or [
+        dict(
+            name='profiles',
+            uuid='u-1',
+            nas=dict(path='/profiles'),
+            files=dict(used=100),
+            analytics=dict(state='on', file_count=100),
+        )
+    ]
 
     def get(url, **kwargs):
         path = url.split('.invalid', 1)[1]
         sent.append(path)
         if path.startswith('/api/storage/volumes?'):
-            records = [
-                dict(
-                    name='profiles',
-                    uuid='u-1',
-                    nas=dict(path='/profiles'),
-                    files=dict(used=100),
-                    analytics=dict(state='on', file_count=100),
-                )
-            ]
-            return Mock(status_code=200, json=lambda: dict(records=records))
+            return Mock(status_code=200, json=lambda: dict(records=listed))
+        if any(f'/volumes/{uuid}/files/' in path for uuid in closed):
+            return Mock(status_code=403, json=lambda: {}, text='')
         if 'return_metadata' in path:
             return Mock(status_code=labels[0], json=lambda: labels[1], text='')
         for name, (status, page) in answers.items():
@@ -806,7 +811,7 @@ def test_a_filer_failure_still_backs_off_for_everyone(monkeypatch, tree, status)
 
 
 @pytest.mark.parametrize('status', (400, 403, 404))
-def test_a_refused_volume_root_backs_off_for_everyone(monkeypatch, tree, status):
+def test_a_refused_volume_root_backs_off_that_volume(monkeypatch, tree, status):
     # the labels read asks about the volume root, not the person's path: a refusal there is the
     # role's for the whole volume, so every request would otherwise ask again and get nothing
     listing = dict(records=[analytics_row('.', 1000, 40)])
@@ -818,6 +823,43 @@ def test_a_refused_volume_root_backs_off_for_everyone(monkeypatch, tree, status)
     assert analytics.status(tree) == dict(state='failed')
     assert analytics.folder(tree) is None
     assert len(sent) == reads
+
+
+def test_a_volume_the_role_cannot_read_leaves_the_others_on(monkeypatch, tree):
+    # the documented role opens /files on the home volume only, and shared sits on another volume
+    volumes = [
+        dict(
+            name=name,
+            uuid=uuid,
+            nas=dict(path=junction),
+            files=dict(used=100),
+            analytics=dict(state='on', file_count=100),
+        )
+        for name, uuid, junction in (
+            ('profiles', 'u-1', '/profiles'),
+            ('projects', 'u-2', '/profiles/Users/shared'),
+        )
+    ]
+    listing = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = filer(
+        monkeypatch,
+        tree,
+        {'%2Falice': (200, listing)},
+        volumes=volumes,
+        closed=('u-2',),
+    )
+    shared = os.path.join(os.path.dirname(os.path.dirname(tree)), 'shared')
+    assert analytics.status(shared)['uuid'] == 'u-2'
+    assert analytics.folder(shared) is None
+    reads = len(sent)
+    # that volume is not asked again for a minute, and says why
+    assert analytics.status(shared) == dict(state='failed')
+    assert analytics.folder(shared + '/x') is None
+    assert len(sent) == reads
+    # everyone's home is still read from analytics
+    assert analytics._failed_at == 0
+    assert analytics.status(tree)['state'] == 'on'
+    assert analytics.folder(tree)['self']['bytes'] == 1000
 
 
 def test_a_refused_content_read_is_about_that_path(monkeypatch, tree):

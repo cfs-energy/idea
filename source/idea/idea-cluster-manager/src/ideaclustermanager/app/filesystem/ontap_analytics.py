@@ -148,6 +148,7 @@ class FolderAnalytics:
         self._volumes = {}
         self._labels = {}
         self._failed_at = 0
+        self._refused_at = {}
 
     def _client(self, target):
         config = self.context.config()
@@ -182,8 +183,9 @@ class FolderAnalytics:
         return volumes
 
     def status(self, path):
-        """on, off, initializing, failed (the filer did not answer; backing off) or unavailable
-        (no analytics volume holds this path), with the volume and its relative path when on."""
+        """on, off, initializing, failed (the filer did not answer, or refused this volume;
+        backing off) or unavailable (no analytics volume holds this path), with the volume and its
+        relative path when on."""
         if time.monotonic() - self._failed_at < RETRY_SECONDS:
             return dict(state='failed')
         target, namespace = self._attachment(path)
@@ -220,6 +222,8 @@ class FolderAnalytics:
                 state='initializing',
                 progress=min(99, counted * 100 // used) if used else 0,
             )
+        if time.monotonic() - self._refused_at.get(volume['uuid'], 0) < RETRY_SECONDS:
+            return dict(state='failed')
         return dict(
             state='on',
             target=target,
@@ -325,9 +329,16 @@ class FolderAnalytics:
             try:
                 client = self._client(status['target'])
                 # about the volume root, not this path: a refusal here is the role's, for everyone
+                # on this volume. The documented role refuses every volume but home, so it says
+                # nothing about the others.
                 labels = self._bucket_labels(client, status['uuid'])
             except Exception as e:
-                self._failed(e)
+                if refused_this_path(e):
+                    code = getattr(e, 'status_code', type(e).__name__)
+                    self.logger.warning(f'storage analytics refused one volume: {code}')
+                    self._refused_at[status['uuid']] = time.monotonic()
+                else:
+                    self._failed(e)
                 return None
             try:
                 records, truncated = self._records(client, request)
