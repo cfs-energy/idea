@@ -18,6 +18,10 @@ CHECK_TIMEOUT_SECONDS = 5
 DROPS_MAX_BYTES = 1024 * 1024
 TCP_ESTABLISHED = '01'
 SSH_PORT_HEX = f'{22:04X}'
+# what sshd sends a connection it drops, under MaxStartups or a penalty (loopback has none)
+REFUSED = b'Not allowed at this time'
+# the line the task's own checks add to the tally when sshd refuses them (bastion_health.sh)
+LOOPBACK_REFUSED = b'loopback check refused'
 
 
 def active_sessions(proc_root: str = '/proc') -> int:
@@ -54,26 +58,60 @@ def established_connections(table: str = '/proc/net/tcp') -> int:
     return count
 
 
-def sshd_check(address=('127.0.0.1', 22)):
-    """whether sshd offers its banner, and how fast; closes the way the task's health check does."""
+def sshd_check(address=('127.0.0.1', 22), drops_file: str = DROPS_FILE):
+    """whether sshd offers its banner, and how fast; reads the banner and closes, as the task's
+    health check does, leaving nothing unread that would make the close a reset sshd logs.
+    A refusal is not up, since a user would be refused too, and is noted as a loopback drop."""
     started = time.monotonic()
     try:
         with socket.create_connection(address, CHECK_TIMEOUT_SECONDS) as connection:
             connection.settimeout(CHECK_TIMEOUT_SECONDS)
-            banner = connection.recv(64)
-            connection.sendall(b'SSH-2.0-idea-health\r\n')
-        return banner.startswith(b'SSH-'), time.monotonic() - started
+            banner = connection.recv(256)
     except OSError:
         return False, None
+    if banner.startswith(REFUSED):
+        try:
+            with open(drops_file, 'ab') as drops:
+                drops.write(LOOPBACK_REFUSED + b'\n')
+        except OSError:
+            pass
+    return banner.startswith(b'SSH-'), time.monotonic() - started
 
 
 class DropTally:
+    """
+    Drops by reason and source. sshd names only some MaxStartups drops and gives the rest as a
+    count, so the count is what is added up: 9.9 reports the episode so far ("in|exited
+    MaxStartups throttling ..., N connections dropped", with the next named drop already in N),
+    10.5 the drops it did not name ("additional N connections dropped"). loopback is the task's
+    own checks, which note each refusal themselves; sshd's own loopback lines are left out, as
+    they would count a check twice. Every other drop is remote: on 9.9 the episode less what was
+    named or noted, on 10.5 the unnamed drops less the checks' refusals sshd did not name, worked
+    out over everything read so far, as sshd names the drop that ends its rate limit before the
+    check that drop refused notes it.
+    ponytail: a loopback client other than the checks (a user's `ssh localhost`) is counted as
+    remote on 9.9 and not at all on 10.5 when sshd names it; name the checks' port if that matters.
+    A read that falls between sshd naming a check's drop and the check noting it, in a batch with
+    a 10.5 summary, counts that drop as remote once.
+    """
+
     def __init__(self, path: str = DROPS_FILE):
         self.path = path
         self.offset = 0
+        self.episode = 0
+        self.counted_ahead = False
+        # 10.5: checks' refusals sshd did not name, unnamed drops, and how many were remote
+        self.loopback_unnamed = 0
+        self.unnamed = 0
+        self.unnamed_remote = 0
 
     def read(self):
         counts = {}
+
+        def add(key, count=1):
+            if count > 0:
+                counts[key] = counts.get(key, 0) + count
+
         try:
             with open(self.path, 'rb') as handle:
                 handle.seek(self.offset)
@@ -82,16 +120,41 @@ class DropTally:
         except OSError:
             return counts
         for line in data.splitlines():
-            if b'Maxstartups' in line:
-                source = 'loopback' if b'127.0.0.1' in line else 'remote'
-                key = ('maxstartups', source)
+            if line.startswith(LOOPBACK_REFUSED):
+                add(('maxstartups', 'loopback'))
+                self.episode += 1
+                self.loopback_unnamed += 1
+            elif line.endswith(b' connections dropped'):
+                fields = line.split()
+                try:
+                    dropped = int(fields[-3])
+                except (IndexError, ValueError):
+                    continue
+                if b' additional ' in line:
+                    self.unnamed += dropped
+                    continue
+                add(('maxstartups', 'remote'), dropped - self.episode)
+                self.episode = max(dropped, self.episode)
+                if line.startswith(b'exited '):
+                    self.episode = 0
+                else:
+                    self.counted_ahead = True
+            elif b'Maxstartups' in line:
+                if self.counted_ahead:
+                    self.counted_ahead = False
+                elif b'127.0.0.1' in line:
+                    self.loopback_unnamed -= 1
+                else:
+                    add(('maxstartups', 'remote'))
+                    self.episode += 1
             elif b'before authentication' in line:
-                key = ('auth_timeout', 'remote')
+                add(('auth_timeout', 'remote'))
             elif b'client not responding' in line:
-                key = ('client_timeout', 'remote')
-            else:
-                continue
-            counts[key] = counts.get(key, 0) + 1
+                add(('client_timeout', 'remote'))
+        remote = self.unnamed - self.loopback_unnamed
+        if self.unnamed and remote > self.unnamed_remote:
+            add(('maxstartups', 'remote'), remote - self.unnamed_remote)
+            self.unnamed_remote = remote
         if self.offset > DROPS_MAX_BYTES:
             try:
                 os.truncate(self.path, 0)

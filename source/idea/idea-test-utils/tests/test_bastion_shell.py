@@ -362,7 +362,8 @@ class SshdHealthCheckLines(unittest.TestCase):
     """health-check connections never leave the container; every other sshd line does"""
 
     DROPPED = [
-        # the task's ssh-keyscan check
+        # the task's own checks, which read the banner and close (9.9), and a key scan
+        'Connection closed by 127.0.0.1 port 41022',
         'Connection closed by 127.0.0.1 port 41022 [preauth]',
         # the load balancer's TCP check, from its private addresses
         'Connection closed by 10.7.0.48 port 3151',
@@ -383,7 +384,7 @@ class SshdHealthCheckLines(unittest.TestCase):
         # a close from a public address is not the load balancer
         'Connection closed by 23.23.20.238 port 54871',
         'Connection closed by 172.32.0.1 port 22',
-        'Connection closed by 127.0.0.1 port 41022',
+        'Connection reset by 127.0.0.1 port 41022 [preauth]',
         'error: kex_exchange_identification: Connection closed by remote host',
         'Server listening on 0.0.0.0 port 22.',
     ]
@@ -403,14 +404,19 @@ class SshdHealthCheckLines(unittest.TestCase):
         result = subprocess.run(
             ['bash', '-c', script, 'filter', *lines],
             capture_output=True,
-            text=True,
             check=True,
         )
-        self.assertEqual(result.stdout, '')
-        return result.stderr.splitlines()
+        self.assertEqual(result.stdout, b'')
+        # bytes, split on LF alone, so a CR sshd sent stays on its line
+        return result.stderr.decode().split('\n')[:-1]
 
     def test_only_health_check_closes_are_dropped(self):
         self.assertEqual(self.run_filter(self.DROPPED + self.KEPT), self.KEPT)
+
+    def test_sshd_stderr_lines_ending_in_cr_lf_are_dropped_too(self):
+        # sshd -e ends every line in CR LF; a filter anchored at LF alone dropped nothing on dev
+        lines = [line + '\r' for line in self.DROPPED + self.KEPT]
+        self.assertEqual(self.run_filter(lines), [line + '\r' for line in self.KEPT])
 
     def test_an_all_dropped_stream_does_not_fail(self):
         self.assertEqual(self.run_filter(self.DROPPED), [])
@@ -420,8 +426,75 @@ class SshdHealthCheckLines(unittest.TestCase):
         self.assertIn('/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &\nsshd_pid=$!', text)
 
 
-if __name__ == '__main__':
-    unittest.main()
+class HealthCheck(unittest.TestCase):
+    """bastion_health.sh: one connection, the banner read and nothing sent, every refusal noted"""
+
+    def check(self, answer):
+        import socket
+        import threading
+
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(8)
+        listener.settimeout(0.1)
+        accepted = []
+        done = threading.Event()
+
+        def serve():
+            while not done.is_set():
+                try:
+                    connection, _ = listener.accept()
+                except socket.timeout:
+                    continue
+                with connection:
+                    connection.settimeout(5)
+                    connection.sendall(answer)
+                    # what the check sent before it closed
+                    received = b''
+                    try:
+                        while chunk := connection.recv(4096):
+                            received += chunk
+                    except OSError:
+                        pass
+                    accepted.append(received)
+
+        worker = threading.Thread(target=serve)
+        worker.start()
+        with tempfile.TemporaryDirectory() as folder:
+            drops = Path(folder) / 'drops'
+            drops.write_bytes(b'')
+            code = subprocess.run(
+                [
+                    'bash',
+                    str(
+                        ROOT
+                        / 'deployment/ecr/idea-control-plane/roles/bastion_health.sh'
+                    ),
+                    str(listener.getsockname()[1]),
+                ],
+                env={**__import__('os').environ, 'SSHD_DROPS_FILE': str(drops)},
+                capture_output=True,
+                timeout=20,
+            ).returncode
+            done.set()
+            worker.join()
+            listener.close()
+            return code, accepted, drops.read_bytes()
+
+    def test_a_refused_check_is_one_connection_noted_once(self):
+        # a second, unnoted connection would be one more drop in sshd's totals, counted as remote
+        self.assertEqual(
+            self.check(b'Not allowed at this time\r\n'),
+            (0, [b''], b'loopback check refused\n'),
+        )
+
+    def test_a_serving_sshd_is_one_connection_left_with_nothing_unread(self):
+        # nothing sent: sshd's answer to an identification would be unread at the close, which
+        # makes it a reset sshd logs on 10.5
+        self.assertEqual(self.check(b'SSH-2.0-OpenSSH_9.9\r\n'), (0, [b''], b''))
+
+    def test_anything_else_is_unhealthy(self):
+        self.assertEqual(self.check(b'\r\n')[::2], (1, b''))
 
 
 class BastionMetrics(unittest.TestCase):
@@ -467,6 +540,7 @@ class BastionMetrics(unittest.TestCase):
             tally = metrics.DropTally(drops.name)
             drops.write(
                 b'from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups\n'
+                b'loopback check refused\n'
                 b'past Maxstartups\npast Maxstartups\n'
                 b'Timeout before authentication\nTimeout, client not responding\n'
             )
@@ -508,6 +582,7 @@ class BastionMetrics(unittest.TestCase):
                     'drop connection #0 from [131.2.3.4]:5 on [10.0.0.1]:22 past Maxstartups',
                     'drop connection #0 from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups',
                     'Timeout, client not responding from user alice 131.2.3.4 port 5',
+                    'exited MaxStartups throttling after 00:00:15, 14 connections dropped\r',
                 ],
                 check=True,
             )
@@ -516,15 +591,13 @@ class BastionMetrics(unittest.TestCase):
         self.assertNotIn('alice', written)
         self.assertEqual(written.count('past Maxstartups'), 2)
         self.assertIn('Timeout, client not responding', written)
+        self.assertIn(
+            'exited MaxStartups throttling after 00:00:15, 14 connections dropped',
+            written,
+        )
 
-    # real lines: the first from idea-com's bastion, on the image's OpenSSH 9.9, the second from a
-    # local run of OpenSSH 10.5 with no LogLevel set, whose wording leaves out "past"
-    REAL_DROPS = (
-        'drop connection #0 from [127.0.0.1]:38122 on [127.0.0.1]:22 past Maxstartups',
-        'drop connection #1 from [127.0.0.1]:49327 on [127.0.0.1]:22222 Maxstartups',
-    )
-
-    def test_the_log_filter_and_the_tally_count_what_sshd_really_prints(self):
+    def tally_of(self, *lines):
+        """the counts sshd's lines leave once through the role's drop pattern and the tally"""
         script = (
             ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
         ).read_text()
@@ -533,38 +606,222 @@ class BastionMetrics(unittest.TestCase):
             for line in script.splitlines()
             if line.startswith('SSHD_DROP_LINES=')
         )
-        metrics = self.module()
-        for line in self.REAL_DROPS:
-            kept = subprocess.run(
+        # what the checks note goes to the tally directly, in order with sshd's lines
+        kept = ''.join(
+            line + '\n'
+            if line == 'loopback check refused'
+            else subprocess.run(
                 ['grep', '-oE', patterns],
-                input=line + '\n',
+                input=line + '\r\n',
                 capture_output=True,
                 text=True,
             ).stdout
-            self.assertNotEqual(kept, '', line)
-            with tempfile.NamedTemporaryFile('ab') as drops:
-                drops.write(kept.encode())
-                drops.flush()
-                self.assertEqual(
-                    metrics.DropTally(drops.name).read(),
-                    {('maxstartups', 'loopback'): 1},
-                )
-        remote = (
-            'drop connection #0 from [131.0.2.9]:5 on [10.0.0.1]:22 past Maxstartups'
+            for line in lines
         )
-        kept = subprocess.run(
-            ['grep', '-oE', patterns],
-            input=remote + '\n',
-            capture_output=True,
-            text=True,
-        ).stdout
-        self.assertNotIn('131.0.2.9', kept)
+        for address in ('131.0.2.9', '10.0.0.1'):
+            self.assertNotIn(address, kept)
         with tempfile.NamedTemporaryFile('ab') as drops:
             drops.write(kept.encode())
             drops.flush()
+            return self.module().DropTally(drops.name).read()
+
+    def test_every_drop_of_a_9_9_episode_is_counted_not_just_the_one_it_names(self):
+        # the dev control run on 9.9: 70 held connections, sshd named one drop and dropped 14
+        self.assertEqual(
+            self.tally_of(
+                'error: beginning MaxStartups throttling',
+                'drop connection #50 from [131.0.2.9]:5 on [10.0.0.1]:22 past Maxstartups',
+                'exited MaxStartups throttling after 00:00:15, 14 connections dropped',
+            ),
+            {('maxstartups', 'remote'): 14},
+        )
+
+    def test_a_long_9_9_episode_is_counted_as_it_goes_and_once(self):
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+
+            def read(*lines):
+                drops.write(b''.join(line + b'\n' for line in lines))
+                drops.flush()
+                return tally.read()
+
             self.assertEqual(
-                metrics.DropTally(drops.name).read(), {('maxstartups', 'remote'): 1}
+                read(b'past Maxstartups', b'loopback check refused'),
+                {('maxstartups', 'remote'): 1, ('maxstartups', 'loopback'): 1},
             )
+            # five minutes on: the count so far, which takes in the drop named next
+            self.assertEqual(
+                read(
+                    b'in MaxStartups throttling for 00:05:01, 40 connections dropped',
+                    b'past Maxstartups',
+                ),
+                {('maxstartups', 'remote'): 38},
+            )
+            self.assertEqual(
+                read(b'loopback check refused'), {('maxstartups', 'loopback'): 1}
+            )
+            self.assertEqual(
+                read(
+                    b'exited MaxStartups throttling after 00:06:00, 45 connections dropped'
+                ),
+                {('maxstartups', 'remote'): 4},
+            )
+            # the next episode starts from nothing
+            self.assertEqual(
+                read(
+                    b'past Maxstartups',
+                    b'exited MaxStartups throttling after 00:00:02, 3 connections dropped',
+                ),
+                {('maxstartups', 'remote'): 3},
+            )
+
+    def test_10_5_drops_it_does_not_name_are_counted(self):
+        # sshd 10.5's own summary line: its first word is not one more named drop
+        self.assertEqual(
+            self.tally_of(
+                'drop connection #50 from [131.0.2.9]:5 on [10.0.0.1]:22 Maxstartups',
+                'Maxstartups logging rate-limited: additional 9 connections dropped',
+            ),
+            {('maxstartups', 'remote'): 10},
+        )
+
+    def test_10_5_checks_refusals_it_does_not_name_are_not_remote(self):
+        # a local 10.5 run, slots held, five checks, a minute, two checks: sshd named six of the
+        # seven refusals and counted the seventh in the summary that the next drop set off
+        named = (
+            'drop connection #2 from [127.0.0.1]:{} on [127.0.0.1]:52737 Maxstartups'
+        )
+        refused = 'loopback check refused'
+        lines = []
+        for port in (52767, 52768, 52769, 52770):
+            lines += [named.format(port), refused]
+        lines += [refused, named.format(52861)]
+        lines += [
+            'Maxstartups logging rate-limited: additional 1 connections dropped',
+            refused,
+            named.format(52862),
+            refused,
+        ]
+        self.assertEqual(self.tally_of(*lines), {('maxstartups', 'loopback'): 7})
+
+    def test_10_5_remote_drops_in_a_summary_are_counted_without_the_checks(self):
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+
+            def read(*lines):
+                drops.write(b''.join(line + b'\n' for line in lines))
+                drops.flush()
+                return tally.read()
+
+            # a check refused unnamed, then the summary: one of its three was the check's
+            self.assertEqual(
+                read(
+                    b'Maxstartups',
+                    b'loopback check refused',
+                    b'Maxstartups logging rate-limited: additional 3 connections dropped',
+                ),
+                {('maxstartups', 'remote'): 3, ('maxstartups', 'loopback'): 1},
+            )
+            # a check refused unnamed, its summary not yet logged: nothing remote yet
+            self.assertEqual(
+                read(b'loopback check refused'), {('maxstartups', 'loopback'): 1}
+            )
+            self.assertEqual(
+                read(
+                    b'Maxstartups logging rate-limited: additional 4 connections dropped'
+                ),
+                {('maxstartups', 'remote'): 3},
+            )
+
+    def test_a_check_named_before_it_notes_its_refusal_is_not_remote(self):
+        # sshd names the drop before the check reads the refusal and notes it, so a read can
+        # fall in between
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+            for line in (
+                b'from [127.0.0.1]:5 on [127.0.0.1]:22 past Maxstartups',
+                b'loopback check refused',
+            ):
+                drops.write(line + b'\n')
+                drops.flush()
+                self.assertNotIn(('maxstartups', 'remote'), tally.read())
+
+    def test_sshd_naming_a_loopback_drop_does_not_count_the_check_twice(self):
+        # real lines: from idea-com's bastion on the image's 9.9, and a local run of 10.5; the
+        # check that was refused notes it itself
+        for line in (
+            'drop connection #0 from [127.0.0.1]:38122 on [127.0.0.1]:22 past Maxstartups',
+            'drop connection #1 from [127.0.0.1]:49327 on [127.0.0.1]:22222 Maxstartups',
+        ):
+            self.assertEqual(self.tally_of(line), {}, line)
+
+    def test_sshd_up_is_0_when_nothing_answers_or_sshd_refuses(self):
+        import socket
+        import threading
+
+        metrics = self.module()
+        closed = socket.socket()
+        closed.bind(('127.0.0.1', 0))
+        port = closed.getsockname()[1]
+        closed.close()
+        tally = SimpleNamespace(read=lambda: {})
+        metrics.active_sessions = lambda proc_root: 0
+        metrics.established_connections = lambda: 0
+        metrics.sshd_check = lambda real=metrics.sshd_check: real(('127.0.0.1', port))
+        found = metrics.lines('idea-com', tally)
+        self.assertIn(
+            'idea.health.bastion.sshd_up:0|g|#idea_cluster:idea-com|card:none', found
+        )
+        self.assertFalse([line for line in found if 'sshd_check_seconds' in line])
+
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+
+        def refuse():
+            connection, _ = listener.accept()
+            connection.sendall(b'Not allowed at this time\r\n')
+            connection.close()
+
+        worker = threading.Thread(target=refuse)
+        worker.start()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            self.assertEqual(
+                self.module().sshd_check(listener.getsockname(), drops.name)[0], False
+            )
+            worker.join()
+            listener.close()
+            self.assertEqual(
+                metrics.DropTally(drops.name).read(), {('maxstartups', 'loopback'): 1}
+            )
+
+    def test_sshd_check_sends_nothing_before_it_closes(self):
+        # sshd's answer to an identification would be unread at the close, a reset sshd logs
+        import socket
+        import threading
+
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        received = []
+
+        def serve():
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                connection.sendall(b'SSH-2.0-OpenSSH_9.9\r\n')
+                received.append(connection.recv(4096))
+
+        worker = threading.Thread(target=serve)
+        worker.start()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            up, _ = self.module().sshd_check(listener.getsockname(), drops.name)
+        worker.join()
+        listener.close()
+        self.assertEqual((up, received), (True, [b'']))
 
     def test_no_line_carries_a_hostname_derived_tag(self):
         metrics = self.module()
@@ -588,3 +845,158 @@ class BastionMetrics(unittest.TestCase):
             ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh'
         ).read_text()
         self.assertIn('bastion_metrics.py && break', script)
+
+
+class RealSshd(unittest.TestCase):
+    """
+    the health check against this machine's own sshd with every startup slot taken: sshd refuses
+    the check's connections and the task stays healthy. Its stderr goes through the role's filter,
+    so the CR LF it ends lines with is real too. Skipped where no sshd can run unprivileged.
+    """
+
+    def setUp(self):
+        import shutil
+        import socket
+        import time
+
+        sshd = '/usr/sbin/sshd'
+        if not Path(sshd).exists() or not shutil.which('ssh-keyscan'):
+            self.skipTest('no sshd and ssh-keyscan here')
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        subprocess.run(
+            [
+                'ssh-keygen',
+                '-q',
+                '-t',
+                'ed25519',
+                '-N',
+                '',
+                '-f',
+                str(self.folder / 'key'),
+            ],
+            check=True,
+        )
+        probe = socket.socket()
+        probe.bind(('127.0.0.1', 0))
+        self.port = probe.getsockname()[1]
+        probe.close()
+        config = self.folder / 'sshd_config'
+        lines = [
+            f'Port {self.port}',
+            'ListenAddress 127.0.0.1',
+            f'HostKey {self.folder / "key"}',
+            'UsePAM no',
+            'PidFile none',
+            # start = full: every connection past two is refused, none at random
+            'MaxStartups 2',
+            'LoginGraceTime 20',
+        ]
+        config.write_text('\n'.join(lines) + '\n')
+        # the role's loopback exemption, where this sshd has penalties at all
+        exempt = 'PerSourcePenaltyExemptList 127.0.0.0/8'
+        if (
+            subprocess.run(
+                [sshd, '-t', '-f', str(config), '-o', exempt.replace(' ', '=')],
+                capture_output=True,
+            ).returncode
+            == 0
+        ):
+            config.write_text(config.read_text() + exempt + '\n')
+        self.drops = self.folder / 'drops'
+        self.drops.write_bytes(b'')
+        self.stderr = self.folder / 'stderr'
+        role = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        script = (
+            'set -euo pipefail\n'
+            + role[
+                role.index('SSHD_HEALTH_CHECK_LINES=') : role.index('metrics_pid=\n')
+            ]
+            + f'export SSHD_DROPS_FILE={shlex.quote(str(self.drops))}\n'
+            + f'exec {sshd} -D -e -f {shlex.quote(str(config))} '
+            + f'2> >(sshd_log_filter 2>>{shlex.quote(str(self.stderr))})\n'
+        )
+        self.sshd = subprocess.Popen(['bash', '-c', script])
+        self.addCleanup(self.stop)
+        for _ in range(50):
+            try:
+                socket.create_connection(('127.0.0.1', self.port), 1).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            self.skipTest('sshd does not start unprivileged here')
+        # the connection above is a close without an identification string
+        time.sleep(0.3)
+
+    def stop(self):
+        if self.sshd.poll() is None:
+            self.sshd.terminate()
+            self.sshd.wait(10)
+
+    def health(self):
+        return subprocess.run(
+            [
+                'bash',
+                str(ROOT / 'deployment/ecr/idea-control-plane/roles/bastion_health.sh'),
+                str(self.port),
+            ],
+            env={**__import__('os').environ, 'SSHD_DROPS_FILE': str(self.drops)},
+            capture_output=True,
+            timeout=10,
+        ).returncode
+
+    def keyscan(self):
+        # the health check before 26.11.2's fix
+        return subprocess.run(
+            f'timeout 4 ssh-keyscan -t ed25519 -p {self.port} 127.0.0.1 >/dev/null 2>&1',
+            shell=True,
+        ).returncode
+
+    def test_a_full_sshd_stays_healthy_and_a_stopped_one_does_not(self):
+        import socket
+        import time
+
+        metrics = load(
+            'bastion_metrics',
+            'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
+        )
+        self.assertEqual(self.health(), 0)
+        up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
+        self.assertTrue(up)
+        time.sleep(0.5)
+        held = [socket.create_connection(('127.0.0.1', self.port), 5) for _ in range(2)]
+        try:
+            for connection in held:
+                connection.settimeout(5)
+                self.assertTrue(connection.recv(64).startswith(b'SSH-'))
+            # positive control: sshd really refuses the old check now; noted as the checks
+            # note theirs, as sshd counts it
+            self.assertNotEqual(self.keyscan(), 0)
+            with open(self.drops, 'ab') as drops:
+                drops.write(b'loopback check refused\n')
+            for _ in range(3):
+                self.assertEqual(self.health(), 0)
+            up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
+            self.assertFalse(up)
+        finally:
+            for connection in held:
+                connection.close()
+        time.sleep(0.5)
+        tally = metrics.DropTally(str(self.drops))
+        self.assertEqual(tally.read(), {('maxstartups', 'loopback'): 5})
+        self.assertEqual(self.health(), 0)
+        self.stop()
+        self.assertNotEqual(self.health(), 0)
+        up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
+        self.assertFalse(up)
+        # whatever sshd counted on the way out (9.9's episode summary) is the checks' own
+        self.assertNotIn(('maxstartups', 'remote'), tally.read())
+        # every check's close was CR LF terminated and none reached the log
+        log = self.stderr.read_bytes()
+        self.assertNotIn(b'by 127.0.0.1 port', log)
+        self.assertIn(b'Maxstartups\r\n', log)
+
+
+if __name__ == '__main__':
+    unittest.main()
