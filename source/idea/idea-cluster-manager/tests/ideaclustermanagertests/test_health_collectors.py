@@ -121,7 +121,7 @@ def test_every_stopped_task_is_counted_by_service_and_reason_in_its_bucket():
         'ecs.task_stops',
         2,
         bucket,
-        {'service': 'bastion-host', 'reason': 'health_check'},
+        {'ecs_service_name': 'bastion-host', 'reason': 'health_check'},
     ) in metrics.counts
     assert sum(c[1] for c in metrics.counts) == 4
 
@@ -214,11 +214,16 @@ def test_services_report_running_desired_and_rollouts():
             }
         ],
     )
-    assert metrics.value('ecs.tasks_running', service='vdc') == [1]
-    assert metrics.value('ecs.tasks_desired', service='vdc') == [2]
-    assert metrics.value('ecs.rollout_in_progress', service='vdc') == [1]
-    assert metrics.value('ecs.rollout_failed', service='vdc') == [0]
+    assert metrics.value('ecs.tasks_running', ecs_service_name='vdc') == [1]
+    assert metrics.value('ecs.tasks_desired', ecs_service_name='vdc') == [2]
+    assert metrics.value('ecs.rollout_in_progress', ecs_service_name='vdc') == [1]
+    assert metrics.value('ecs.rollout_failed', ecs_service_name='vdc') == [0]
     assert [c[1] for c in metrics.counts if c[0] == 'ecs.rollouts'] == [1]
+    # the agent adds its own service and ecs_service for the sending task: never reuse them
+    for _, _, tags in metrics.levels:
+        assert not {'service', 'ecs_service'} & set(tags)
+    for *_, tags in metrics.counts:
+        assert not {'service', 'ecs_service'} & set(tags)
 
 
 def test_no_ecs_cluster_means_no_call():

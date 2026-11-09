@@ -34,10 +34,10 @@ Every five minutes, from the module's existing ECS read.
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.ecs.task_stops` | `service`, `reason` | Stopped tasks in a five minute bucket. `reason`: `health_check`, `deployment`, `oom`, `container_exit`, `failed_to_start`, `maintenance`, `user_stop`, `scheduler`, `spot`, `other`. Use `.as_count()`. |
-| `idea.health.ecs.tasks_running`, `tasks_desired`, `tasks_pending` | `service` | The service's own counts. |
-| `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `service` | 1 while a deployment rolls out, or has failed. |
-| `idea.health.ecs.rollouts` | `service` | Deployments started in a five minute bucket. |
+| `idea.health.ecs.task_stops` | `ecs_service_name`, `reason` | Stopped tasks in a five minute bucket. `reason`: `health_check`, `deployment`, `oom`, `container_exit`, `failed_to_start`, `maintenance`, `user_stop`, `scheduler`, `spot`, `other`. Use `.as_count()`. |
+| `idea.health.ecs.tasks_running`, `tasks_desired`, `tasks_pending` | `ecs_service_name` | The service's own counts. |
+| `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `ecs_service_name` | 1 while a deployment rolls out, or has failed. |
+| `idea.health.ecs.rollouts` | `ecs_service_name` | Deployments started in a five minute bucket. |
 
 ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader rewrites a point rather than adding to it. Stops are lost only if every cluster manager task is gone for over 50 minutes.
 

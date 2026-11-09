@@ -97,8 +97,9 @@ def classify_stopped_task(task: Dict) -> str:
 
 class EcsTasksCollector(HealthCollector):
     """
-    Every stopped task and rollout, read from ECS itself, so no event is sampled and none is
-    counted twice across a change of leader. Needs nothing beyond the module's ECS read.
+    Every stopped task and rollout, read from ECS itself, so no event is sampled. Needs nothing
+    beyond the module's ECS read. The service is tagged ecs_service_name: the agent already puts
+    its own service and ecs_service on every point, for the task that sent it.
     """
 
     name = 'ecs'
@@ -154,7 +155,7 @@ class EcsTasksCollector(HealthCollector):
                     'ecs.task_stops',
                     total,
                     timestamp=bucket,
-                    service=service,
+                    ecs_service_name=service,
                     reason=reason,
                 )
         self._services(client, cluster, cluster_name, metrics, oldest)
@@ -172,23 +173,23 @@ class EcsTasksCollector(HealthCollector):
             ).get('services', []):
                 name = service['serviceName'].removeprefix(f'{cluster_name}-')
                 metrics.level(
-                    'ecs.tasks_running', service.get('runningCount', 0), service=name
+                    'ecs.tasks_running', service.get('runningCount', 0), ecs_service_name=name
                 )
                 metrics.level(
-                    'ecs.tasks_desired', service.get('desiredCount', 0), service=name
+                    'ecs.tasks_desired', service.get('desiredCount', 0), ecs_service_name=name
                 )
                 metrics.level(
-                    'ecs.tasks_pending', service.get('pendingCount', 0), service=name
+                    'ecs.tasks_pending', service.get('pendingCount', 0), ecs_service_name=name
                 )
                 deployments = service.get('deployments') or []
                 states = [d.get('rolloutState') for d in deployments]
                 metrics.level(
                     'ecs.rollout_in_progress',
                     1 if 'IN_PROGRESS' in states else 0,
-                    service=name,
+                    ecs_service_name=name,
                 )
                 metrics.level(
-                    'ecs.rollout_failed', 1 if 'FAILED' in states else 0, service=name
+                    'ecs.rollout_failed', 1 if 'FAILED' in states else 0, ecs_service_name=name
                 )
                 for deployment in deployments:
                     created = deployment.get('createdAt')
@@ -199,7 +200,7 @@ class EcsTasksCollector(HealthCollector):
         for key in [key for key in rollouts if key[0] < oldest]:
             del rollouts[key]
         for (bucket, name), seen in rollouts.items():
-            metrics.add('ecs.rollouts', len(seen), timestamp=bucket, service=name)
+            metrics.add('ecs.rollouts', len(seen), timestamp=bucket, ecs_service_name=name)
 
 
 # the file is on the shared mount: read in a child, so a hung read cannot take this thread with it.
