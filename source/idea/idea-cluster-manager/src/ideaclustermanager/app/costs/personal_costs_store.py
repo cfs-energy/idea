@@ -350,7 +350,12 @@ class PersonalCostsStore:
             state.get('run_started') or state.get('next_run', now.isoformat())
         )
         duration = state.get('last_duration', 1200)
-        expected = next_run.shift(seconds=duration)
+        # the seed runs inside a run and last_duration comes from runs without it, so its
+        # time moves the estimate, up to its budget: a seed stuck past that is overdue
+        seed = state.get('seed_seconds', 0)
+        if state.get('seeding_since'):
+            seed = (now - arrow.get(state['seeding_since'])).total_seconds()
+        expected = next_run.shift(seconds=duration + min(seed, SEED_BUDGET_SECONDS))
         heartbeat = (self.get(SYSTEM, 'heartbeat') or {}).get('as_of') or state.get(
             'heartbeat'
         )
