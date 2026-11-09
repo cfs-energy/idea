@@ -64,3 +64,33 @@ test("the upgrade log shows a map or list value as written, not [object Object]"
   assert.ok(lines.includes('deleting config entry - cluster.upgrade_hosts = ["a","b"]'));
   assert.ok(lines.every((line) => !line.includes("[object Object]")));
 });
+
+test("a refused settings write says the credentials only read settings and where to run it", async (context) => {
+  context.mock.method(DynamoDBClient.prototype, "send", async () => ({ Table: { TableStatus: "ACTIVE" } }));
+  context.mock.method(DynamoDBDocumentClient.prototype, "send", async (command: { constructor: { name: string } }) => {
+    if (command.constructor.name === "ScanCommand") return { Items: [{ key: "cluster.upgrade_hosts", value: "a" }] };
+    throw Object.assign(
+      new Error(
+        "User: arn:aws:sts::000000000000:assumed-role/sample-vdc-controller-task-role/x is not authorized to perform: " +
+          "dynamodb:UpdateItem on resource: arn:aws:dynamodb:us-east-1:000000000000:table/sample.cluster-settings",
+      ),
+      { name: "AccessDeniedException" },
+    );
+  });
+  const db = await ClusterConfigDb.open({
+    clusterName: "sample",
+    client: new DynamoDBClient({ region: "us-east-1" }),
+    awsRegion: "us-east-1",
+  });
+  const plain = (error: Error) =>
+    error.message.startsWith("These AWS credentials cannot change sample.cluster-settings") &&
+    error.message.includes("--aws-profile") &&
+    !error.message.includes("arn:aws");
+  await assert.rejects(() => db.setConfigEntry("cluster.locale", "en_US.UTF-8"), plain);
+  await assert.rejects(() => db.deleteConfigEntries("cluster.upgrade_"), plain);
+  // any other failure is left as it was
+  context.mock.method(DynamoDBDocumentClient.prototype, "send", async () => {
+    throw Object.assign(new Error("throttled"), { name: "ProvisionedThroughputExceededException" });
+  });
+  await assert.rejects(() => db.setConfigEntry("cluster.locale", "x"), /throttled/);
+});
