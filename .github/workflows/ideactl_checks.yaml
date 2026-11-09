@@ -95,6 +95,36 @@ jobs:
             --volume "$SMOKE_ROOT/config:/tmp/config" "$IMAGE" \
             config generate --values-file /tmp/values.yml --config-dir /tmp/config --force
           test -s "$SMOKE_ROOT/config/config/idea.yml"
+  bastion-sshd:
+    # the bastion's own OpenSSH (9.9 on AL2023) under the health check with every startup slot
+    # taken; the runner's Ubuntu 9.6 answers a refusal differently and skips that part
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188
+    steps:
+      - name: Install the bastion image's OpenSSH
+        # as the control-plane Dockerfile does: the newest OpenSSH past the base release
+        run: |
+          dnf install -y openssh-server openssh-clients python3 procps-ng coreutils tar gzip git shadow-utils
+          dnf upgrade -y --releasever=latest 'openssh*'
+          /usr/sbin/sshd -V
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run the bastion shell tests as root
+        working-directory: source/idea/idea-test-utils/tests
+        run: |
+          set -o pipefail
+          python3 test_bastion_shell.py -v 2>&1 | tee "$RUNNER_TEMP/root.log"
+          # OK alone, no skips: a skip here would leave the refusal path unproven on this sshd
+          grep -qx OK "$RUNNER_TEMP/root.log"
+      - name: Run the bastion shell tests unprivileged
+        working-directory: source/idea/idea-test-utils/tests
+        run: |
+          set -o pipefail
+          useradd --create-home bastion-test
+          chown -R bastion-test "$GITHUB_WORKSPACE"
+          runuser -u bastion-test -- python3 test_bastion_shell.py -v 2>&1 | tee "$RUNNER_TEMP/user.log"
+          grep -qx OK "$RUNNER_TEMP/user.log"
   private-parity:
     # Only reviewed main code may read private captures. Never run this on PR code.
     if: >-
