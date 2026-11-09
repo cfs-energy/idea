@@ -948,9 +948,11 @@ class RealSshd(unittest.TestCase):
         ).returncode
 
     def keyscan(self):
-        # the health check before 26.11.2's fix
+        # the health check before 26.11.2's fix, judged by the key it prints: an older
+        # ssh-keyscan (9.6 on the CI runner) exits 0 when it gets no key
         return subprocess.run(
-            f'timeout 4 ssh-keyscan -t ed25519 -p {self.port} 127.0.0.1 >/dev/null 2>&1',
+            f'timeout 4 ssh-keyscan -t ed25519 -p {self.port} 127.0.0.1 2>/dev/null'
+            ' | grep -q ssh-ed25519',
             shell=True,
         ).returncode
 
@@ -965,6 +967,8 @@ class RealSshd(unittest.TestCase):
         self.assertEqual(self.health(), 0)
         up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
         self.assertTrue(up)
+        # the control below can only fail: an sshd with free slots gives the old check its key
+        self.assertEqual(self.keyscan(), 0)
         time.sleep(0.5)
         held = [socket.create_connection(('127.0.0.1', self.port), 5) for _ in range(2)]
         try:
