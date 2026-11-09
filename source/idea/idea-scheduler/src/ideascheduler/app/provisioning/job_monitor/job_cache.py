@@ -462,11 +462,15 @@ class JobsDB:
                         if name in present:
                             continue
                         self._logger.info(f'adding column {name} to {table}')
-                        cursor.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {kind}')
+                        cursor.execute(
+                            f'ALTER TABLE {table} ADD COLUMN "{name}" {kind}'
+                        )
                         if table == FINISHED_JOBS_TABLE and name == 'indexed':
                             # records written before the marker existed were indexed as they were
                             # recorded; only records written from now on wait for the index.
-                            cursor.execute(f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1')
+                            cursor.execute(
+                                f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1'
+                            )
 
                 conn.commit()
                 self._logger.info('All tables created successfully')

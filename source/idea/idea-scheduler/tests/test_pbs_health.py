@@ -60,7 +60,8 @@ def test_a_server_mid_cycle_is_up():
 
 
 @pytest.mark.parametrize(
-    'payload', ['not json', '[]', '{"Server": []}', '{"Server": {}}', '{"Server": {"h": 1}}']
+    'payload',
+    ['not json', '[]', '{"Server": []}', '{"Server": {}}', '{"Server": {"h": 1}}'],
 )
 def test_an_answer_with_no_server_reports_down_and_never_ok(payload):
     # a 0 tagged ok said the server was fine and down at once; a raise sent no point at all
