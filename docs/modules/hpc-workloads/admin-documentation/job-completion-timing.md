@@ -1,7 +1,7 @@
 # Job completion timing
 
-A completion record describes the latest execution attempt for the exact PBS job or
-array subjob ID. It does not accumulate earlier attempts or the waits between them.
+A completion record describes the latest execution attempt for the exact PBS job ID.
+It does not accumulate earlier attempts or the waits between them.
 Hooks identify an attempt by numeric PBS `run_count`; multiple hosts with the same
 count belong to that attempt. Requeue, rerun and node replacement advance that count.
 Scheduler restarts preserve the hook history in SQLite.
@@ -26,3 +26,27 @@ after completion does not rewrite the completed record: unknown duration and cos
 remain unknown. Jobs with no start or execution hooks retain the never-started
 behavior. The completion timestamp for such a job records observation of completion,
 not measured execution time.
+
+## Array jobs
+
+An array job (`qsub -J`) is one job under its own ID, `123[]`. Its subjobs, `123[1]`
+and so on, share its job UID, stack and licenses, and are never jobs of their own. It
+has one row in Active jobs, which reads Running from its first subjob's start, one
+completion record, one cost and at most one started and one completed email.
+
+The record is written when PBS history shows the array finished. Its start is the first
+subjob's start and its end is the last subjob's end, so its duration and estimated cost
+cover the time its capacity was in use, waits between subjobs included. It lists how each
+subjob ended: state, exit status, whether `qdel` ended it, start and end. Its own exit
+status is 0 only when every submitted index finished with 0, and otherwise the first
+failed subjob's. PBS keeps the last subjob's status on the array, so that value is not
+used. If the subjobs' history cannot be read, the record has no exit status and no
+subjob list, and nothing treats it as a success.
+
+Begin and end hooks from subjobs are kept as one run per host for the array, from the
+first begin to the last end there. They can supply the pair when PBS history is gone,
+as for any job; a subjob's own result comes only from PBS history.
+
+The array's nodes stay while it has subjobs left to run, idle or not, and its stack is
+not deleted by the stack timeout once a subjob has started. Subjobs run on the capacity
+one subjob asks for, so on a single-job queue they run one after another.
