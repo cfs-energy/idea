@@ -483,12 +483,10 @@ class DriftChecks:
         results: List[DriftResult] = []
         values: List[DriftValue] = []
         addresses = config.get_list(SSH_CLIENT_IP_KEY, default=[]) or []
+        # an empty list is the shipped default and keeps the cluster's own prefix lists: an
+        # operator's choice, so never drift. the count is published for a fleet that wants one.
         results.append(
-            DriftResult(
-                'ssh_client_ip',
-                OK if addresses else DRIFT,
-                detail=f'{len(addresses)} entries',
-            )
+            DriftResult('ssh_client_ip', OK, detail=f'{len(addresses)} entries')
         )
         values.append(DriftValue('ssh_client_ip', 'digest', digest(addresses)))
         values.append(DriftValue('ssh_client_ip', 'count', str(len(set(addresses)))))

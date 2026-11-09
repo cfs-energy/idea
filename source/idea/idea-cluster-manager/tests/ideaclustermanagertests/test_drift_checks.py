@@ -430,11 +430,27 @@ def test_a_directory_that_cannot_be_reached_is_unknown_not_a_rejected_secret(
     assert states(checks.run_once())['ad_agent_bind'] == UNKNOWN
 
 
-def test_empty_ssh_client_ip_is_drift_and_the_value_is_a_digest(monkeypatch):
-    checks = harness(monkeypatch, Config(**{module.SSH_CLIENT_IP_KEY: []}))
+def test_empty_ssh_client_ip_is_the_default_not_drift_and_the_value_is_a_digest(
+    monkeypatch,
+):
+    # values.yml ships it empty, which keeps the cluster's own prefix lists
+    checks = harness(
+        monkeypatch,
+        Config(**{module.SSH_CLIENT_IP_KEY: []}),
+        values_yml=b'ssh_client_ip: []\n',
+    )
     results = checks.run_once()
-    assert states(results)['ssh_client_ip'] == DRIFT
-    assert states(results)['values_owned_settings'] == DRIFT
+    assert states(results)['ssh_client_ip'] == OK
+    assert states(results)['values_owned_settings'] == OK
+    counts = [
+        t['current']
+        for _, t in checks.published['value']
+        if t['check'] == 'ssh_client_ip' and t['setting'] == 'count'
+    ]
+    assert counts == ['0']
+    # emptied on the cluster while values.yml still lists one: the next upgrade changes it
+    checks = harness(monkeypatch, Config(**{module.SSH_CLIENT_IP_KEY: []}))
+    assert states(checks.run_once())['values_owned_settings'] == DRIFT
 
     ok = harness(monkeypatch)
     ok.run_once()
