@@ -126,12 +126,17 @@ def first_named(records: List[Dict]) -> Optional[Dict]:
     return records[0] if records else None
 
 
+# a role without /api/svm/svms gets 200 and no records for a CIFS server that is there
+NO_CIFS_RECORDS = 'no CIFS server in the answer: none joined, or the role lacks /api/svm/svms'
+
+
 def check_cifs(records: List[Dict], scope: str) -> List[DriftResult]:
-    """the checks read from the CIFS server. absent means this SVM has none joined."""
+    """the checks read from the CIFS server. no record cannot tell a missing server from a
+    role that cannot see the SVM, so it says nothing either way."""
     record = first_named(records)
     if record is None:
         return [
-            DriftResult(check, DRIFT, scope, 'the SVM has no CIFS server')
+            DriftResult(check, UNKNOWN, scope, NO_CIFS_RECORDS)
             for check in (
                 'ontap_cifs_session_security',
                 'ontap_cifs_aes',
@@ -210,10 +215,12 @@ def check_machine_account(
     account's own record would take reading the directory for something ONTAP already acts on.
     """
     cifs_record, ldap_record = first_named(cifs), first_named(ldap)
-    if cifs_record is None or ldap_record is None:
+    if cifs_record is None:
+        return [DriftResult('ontap_machine_account', UNKNOWN, scope, NO_CIFS_RECORDS)]
+    if ldap_record is None:
         return [
             DriftResult(
-                'ontap_machine_account', DRIFT, scope, 'no CIFS server or LDAP client'
+                'ontap_machine_account', DRIFT, scope, 'no LDAP client on the SVM'
             )
         ]
     state = Utils.get_value_as_dict('status', ldap_record, {}).get('state')

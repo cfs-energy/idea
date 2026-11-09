@@ -579,6 +579,16 @@ def test_a_path_the_login_cannot_read_reports_forbidden_and_the_others_go_on():
     )
 
 
+def test_no_cifs_record_is_not_read_as_ok():
+    # a role without /api/svm/svms gets 200 and no records, which says nothing about signing
+    metrics, _ = run_directory({LDAP: [{**SVM, 'status': {'state': 'up'}}], CIFS: []})
+    assert metrics.value(
+        'directory.check_ok', check='cifs_security', reason='no_records'
+    ) == [0]
+    assert metrics.value('directory.check_ok', check='cifs_security', reason='ok') == []
+    assert metrics.value('directory.check_ok', check='ldap', reason='ok') == [1]
+
+
 def test_event_reads_ask_for_names_and_times_and_nothing_else():
     assert 'fields=message.name,time' in EMS_PATH
     for never in ('log_message', 'parameters', 'byte_offset', '/files'):

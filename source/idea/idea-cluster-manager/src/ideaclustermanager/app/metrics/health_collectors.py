@@ -59,6 +59,10 @@ CIFS_PATH = (
 DNS_PATH = '/api/name-services/dns?fields=svm.name,servers&return_records=true'
 
 
+class NoRecords(Exception):
+    """a read that answered with nothing: the role may lack /api/svm/svms, so not an ok."""
+
+
 def service_of(group: Optional[str], cluster: str) -> Optional[str]:
     """service:idea-com-bastion-host is bastion-host; a standalone task has no service."""
     if not group or not group.startswith('service:'):
@@ -544,6 +548,8 @@ class DirectoryCollector(HealthCollector):
     def _reason(error: Exception) -> str:
         if isinstance(error, FileNotFoundError):
             return 'unsupported'
+        if isinstance(error, NoRecords):
+            return 'no_records'
         text = str(error)
         if '401' in text:
             return 'unauthorized'
@@ -575,6 +581,8 @@ class DirectoryCollector(HealthCollector):
             )
 
     def _cifs(self, metrics, filesystem, records):
+        if not records:
+            raise NoRecords()
         for record in records:
             value = Utils.get_value_as_string(
                 'session_security', Utils.get_value_as_dict('security', record, {})

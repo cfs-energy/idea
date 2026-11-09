@@ -308,6 +308,17 @@ def test_a_field_missing_from_the_answer_is_unknown_not_ok(monkeypatch):
         assert found[check] == UNKNOWN
 
 
+def test_no_cifs_record_is_unknown_not_drift(monkeypatch):
+    # a role without /api/svm/svms reads 200 and no records for a server that is joined
+    checks = harness(monkeypatch)
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    found = states(checks.run_once())
+    for check in ('ontap_cifs_session_security', 'ontap_cifs_aes', 'ontap_machine_account'):
+        assert found[check] == UNKNOWN
+    assert found['ontap_ldap_session_security'] == OK
+    assert not any(value == 2 for value, _ in checks.published['state'])
+
+
 def test_domain_controllers_that_cannot_be_read_make_dns_unknown(monkeypatch):
     checks = harness(monkeypatch)
     checks.context.aws().ds().describe_directories.side_effect = RuntimeError('denied')
