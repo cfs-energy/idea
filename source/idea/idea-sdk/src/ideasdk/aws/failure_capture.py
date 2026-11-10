@@ -127,16 +127,21 @@ PATH_SEGMENT = r'[^\s:,;"\'()\[\]<>=/]*'
 SYSTEM_PATH_ROOTS = (
     'bin|boot|dev|devices|etc|lib|lib64|opt|proc|root|run|sbin|sys|sysroot|usr|var'
 )
-# unit@instance where the unit is the system's own template, and address@network (a Lustre
-# NID): neither is someone at a host
-SYSTEM_AT_NAME = re.compile(
-    r'(?:systemd-[\w-]+|[\w-]*getty|user|user-runtime-dir|lvm2-pvscan|sshd-keygen|modprobe'
-    r'|\d+(?:\.\d+)*)@'
+# unit@instance where the unit is the system's own template: not someone at a host. the whole
+# name before the @, so a person whose name ends in "getty" is still someone
+SYSTEM_UNIT_AT = re.compile(
+    r'(?:systemd-[\w-]+|(?:serial-|container-|console-)?getty|user|user-runtime-dir'
+    r'|lvm2-pvscan|sshd-keygen|modprobe)@'
 )
+# address@network, a Lustre NID. digits alone are not one: 12345@example.org is an account
+LUSTRE_NID = re.compile(r'\d+(?:\.\d+){3}@(?:tcp|o2ib|kfi|gni|lo)\d*\.?$')
 
 
 def _someone_at_a_host(match: 're.Match') -> str:
-    return match.group(0) if SYSTEM_AT_NAME.match(match.group(0)) else '[user]'
+    token = match.group(0)
+    if SYSTEM_UNIT_AT.match(token) or LUSTRE_NID.match(token):
+        return token
+    return '[user]'
 
 
 USER_DATA: Tuple[Tuple['re.Pattern', str], ...] = (
@@ -188,19 +193,28 @@ USER_DATA: Tuple[Tuple['re.Pattern', str], ...] = (
         ),
         r'\1[user]',
     ),
-    # followed by a space only the word itself or the option names someone: "user alice",
-    # "--owner alice". "user_namespace not defined" and "scripts-user (...)" do not
+    # followed by a space, the next word is a name only after the word itself or an option
+    # ending in it: "user alice", "--owner alice", "--run-as-user alice". a longer key is not
+    # taken that way: every kernel prints "page_owner is disabled" and "__user pointer", and
+    # "user_namespace not defined" and "scripts-user (...)" name no one either. "user = x" was
+    # answered by the rule above
     (
         re.compile(
-            r'(?i)((?<![\w.-])(?:--?)?(?:user(?:name)?|owner|logname) +)'
-            r'("[^"\n]*"|\'[^\'\n]*\'|[^\s,;:]+)'
+            r'(?i)((?<![\w.-])(?:--?[\w-]*?)?(?:user(?:name)?|owner|logname) +)'
+            r'(?![=:])("[^"\n]*"|\'[^\'\n]*\'|[^\s,;:]+)'
         ),
         r'\1[user]',
     ),
 )
 # a shell trace repeats every command with its arguments: names, paths, whatever was typed
-# the console and the journal put a time and the unit that wrote the line in front of it
-LINE_PREFIX = r'^\s*(?:\[\s*\d+\.\d+\]\s+)?(?:[\w.@-]+(?:\[\d+\])?:\s+)?'
+# the console and the journal put a time and the unit that wrote the line in front of it, and
+# a system log file a date and the host before those
+LINE_PREFIX = (
+    r'^\s*(?:\[\s*\d+\.\d+\]\s+)?'
+    r'(?:(?:[A-Z][a-z]{2}\s+\d{1,2}\s+\d\d:\d\d:\d\d'
+    r'|\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[\d.,]*(?:Z|[+-]\d\d:?\d\d)?)\s+\S+\s+)?'
+    r'(?:[\w.@-]+(?:\[\d+\])?:\s+)?'
+)
 SHELL_TRACE_LINE = re.compile(LINE_PREFIX + r'\++\s')
 # the picture ssh-keygen draws of a new host key says nothing, and reads as names to the scrub
 RANDOMART_LINE = re.compile(

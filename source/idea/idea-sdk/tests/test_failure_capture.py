@@ -149,6 +149,13 @@ def test_package_lines_do_not_travel():
         ('uid=alice1 denied', 'alice'),
         ('uid=1001a denied', '1001a'),
         ('vncserver@alice.service failed', 'alice'),
+        # a name is not a system unit for ending like one, nor a network address for its digits
+        ('jgetty@example.org logged in', 'jgetty'),
+        ('1001234@example.org logged in', '1001234'),
+        ('10.4.85.97@example.org logged in', '10.4.85.97'),
+        # an option that ends in the word, with only a space before the name
+        ('dcv create-session --run-as-user alice x', 'alice'),
+        ('rsync --remote-user alice x', 'alice'),
     ],
 )
 def test_no_username_or_personal_path_travels(line, secret):
@@ -178,6 +185,25 @@ def test_a_shell_trace_line_behind_a_console_prefix_does_not_travel():
     assert lines == ['| [   39.1] cloud-init[2144]: real output']
 
 
+def test_a_shell_trace_line_behind_a_date_and_a_host_does_not_travel():
+    """what a system log file and `journalctl -o short-iso` put in front of the unit"""
+    lines = clean_for_log(
+        'Nov  9 22:42:43 ip-10-4-1-2 cloud-init[1503]: + configure --project quench7\n'
+        '2026-11-09T22:42:43.714089+00:00 ip-10-4-1-2 cloud-init[1503]: ++ start quench7\n'
+        '2026-11-09T22:42:43+0000 ip-10-4-1-2.example.internal cloud-init[1503]: + x q7\n'
+        'Nov 10 22:42:44 ip-10-4-1-2 cloud-init[1503]: real output\n',
+        1000,
+    )
+    assert lines == ['| Nov 10 22:42:44 ip-10-4-1-2 cloud-init[1503]: real output']
+
+
+def test_a_name_after_an_equals_sign_is_replaced_once():
+    assert clean_for_log('user = alice\nowner: alice x', 1000) == [
+        '| user = [user]',
+        '| owner: [user] x',
+    ]
+
+
 def test_host_key_pictures_do_not_travel():
     art = (
         'cloud-init[942]: +---[RSA 3072]----+\n'
@@ -201,6 +227,11 @@ def test_host_key_pictures_do_not_travel():
         'SELinux:  Class user_namespace not defined in policy.',
         'util.py[WARNING]: Running module scripts-user (<module cc_scripts_user>) failed',
         'LNet: Added LNI 10.4.85.97@tcp [8/256/0/180]',
+        'LNetError: no route to 10.4.85.97@o2ib1.',
+        # every kernel prints these two
+        'kernel: page_owner is disabled',
+        'kernel: Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization',
+        'systemd[1]: Started container-getty@1.service.',
         'input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0',
     ],
 )
