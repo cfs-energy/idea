@@ -630,8 +630,10 @@ def deregister_unreferenced_images(
             # two bakes promoting together each run this, and the listing still shows an
             # image for a moment after the other pass removed it: that pass has its
             # snapshots, and this one goes on to the rest
-            if not e.response.get('Error', {}).get('Code', '').startswith(
-                'InvalidAMIID'
+            if (
+                not e.response.get('Error', {})
+                .get('Code', '')
+                .startswith('InvalidAMIID')
             ):
                 raise
             continue

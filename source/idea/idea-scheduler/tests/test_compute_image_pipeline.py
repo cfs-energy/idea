@@ -267,9 +267,9 @@ def test_an_unpinned_queue_no_promotion_will_move_is_named():
     # the scheduler default is a target too, unless it is pinned
     svc.context.config.return_value.values['scheduler.compute_node_ami'] = 'ami-def'
     assert svc.targets_off_current() == expected + ['scheduler default (ami-def)']
-    svc.context.config.return_value.values[
-        'scheduler.images.default_image_pinned'
-    ] = True
+    svc.context.config.return_value.values['scheduler.images.default_image_pinned'] = (
+        True
+    )
     assert svc.targets_off_current() == expected
 
 

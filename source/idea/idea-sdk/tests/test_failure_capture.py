@@ -194,8 +194,8 @@ def test_host_key_pictures_do_not_travel():
     'line',
     [
         # every one of these was rewritten in a real capture, and none names anyone
-        "audit: type=1131 audit(1794263276.732:379): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='unit=systemd-poweroff comm=\"systemd\"'",
-        "audit: type=1131 audit(1.1:374): pid=1 uid=0 msg='unit=systemd-fsck@dev-disk-by\\x2duuid-7B77\\x2d95E7 comm=\"systemd\"'",
+        'audit: type=1131 audit(1794263276.732:379): pid=1 uid=0 auid=4294967295 ses=4294967295 msg=\'unit=systemd-poweroff comm="systemd"\'',
+        'audit: type=1131 audit(1.1:374): pid=1 uid=0 msg=\'unit=systemd-fsck@dev-disk-by\\x2duuid-7B77\\x2d95E7 comm="systemd"\'',
         'systemd[1]: Started serial-getty@ttyS0.service - Serial Getty on ttyS0.',
         'systemd[1]: Started user@1000.service.',
         'SELinux:  Class user_namespace not defined in policy.',

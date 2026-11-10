@@ -358,7 +358,10 @@ def test_bake_failure_reasons_are_a_small_vocabulary():
         ('The validation job timed out before completion.', 'canary'),
         ('PBS did not accept the validation job.', 'canary'),
         ('The validation node must launch on the exact candidate AMI.', 'canary'),
-        ('The candidate node must register with PBS and run the validation job.', 'canary'),
+        (
+            'The candidate node must register with PBS and run the validation job.',
+            'canary',
+        ),
         ('The data filesystem probe did not report a result.', 'canary'),
         ('the builder ran the 1 bootstrap, not 2', 'release_mismatch'),
         ('builder i-0 did not report ready within 60 minutes', 'step_timeout'),
