@@ -45,8 +45,9 @@ cover the time its capacity was in use, waits between subjobs included. It lists
 subjob ended: state, exit status, whether `qdel` ended it, start and end. Its own exit
 status is 0 only when every submitted index finished with 0, and otherwise the first
 failed subjob's. PBS keeps the last subjob's status on the array, so that value is not
-used. If the subjobs' history cannot be read, the record has no exit status and no
-subjob list, and nothing treats it as a success.
+used. An array with a subjob that `qdel` ended is recorded as ended by `qdel`, even when
+every subjob exited 0. If the subjobs' history cannot be read, the record has no exit
+status and no subjob list, and nothing treats it as a success.
 
 Begin and end hooks from subjobs are kept as one run per host for the array, from the
 first begin to the last end there. They can supply the pair when PBS history is gone,

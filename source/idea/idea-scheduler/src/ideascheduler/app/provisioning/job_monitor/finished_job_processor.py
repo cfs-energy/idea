@@ -476,7 +476,9 @@ class FinishedJobProcessor:
         together: 0 only when every submitted index finished with 0, otherwise the first
         failure's. PBS keeps the last subjob's status on the array, so a later success hides
         an earlier failure, and that value is never kept. With no history to read, or one
-        that cannot be read, the status is unknown, which nothing takes as success.
+        that cannot be read, the status is unknown, which nothing takes as success. An
+        array with a subjob qdel ended is itself recorded as ended by qdel, as a plain job
+        that qdel ended is whatever it exited with.
         """
         job.exit_status = None
         job.subjobs = None
@@ -494,6 +496,10 @@ class FinishedJobProcessor:
         if not subjobs:
             return
         job.subjobs = subjobs
+        if any(subjob.terminated is True for subjob in subjobs):
+            # qdel ended a subjob. It can still exit 0, and the array's own history only
+            # says so when the whole array was deleted.
+            job.terminated = True
         failed = [
             subjob.exit_status
             for subjob in subjobs

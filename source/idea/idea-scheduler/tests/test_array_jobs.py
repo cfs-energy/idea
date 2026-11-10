@@ -811,6 +811,38 @@ def test_an_array_all_of_whose_subjobs_exited_0_succeeded(world, done):
     assert job_succeeded(record)
 
 
+def test_an_array_with_a_subjob_qdel_ended_is_not_a_success_though_all_exited_0(world):
+    """
+    a subjob that traps qdel's signal exits 0 (seen on a plain job: substate 91, exit 0).
+    The array then read as a success, and its folders' removal was dated from the
+    successful time.
+    """
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
+    finish_array(world, subjobs=[subjob(1), subjob(2, start=30, terminated=True)])
+    assert world.pbs.jobs['7[]'].terminated is None
+    poll(world)
+    [record] = records(world)
+    assert record.exit_status == 0
+    assert record.terminated is True
+    assert not job_succeeded(record)
+    # no subjob's folder counts as a success, the stopped one's or its sibling's
+    by_id = scratch_records([record], ['7[]', '7[1]', '7[2]'])
+    assert [by_id[job_id].succeeded for job_id in ('7[]', '7[1]', '7[2]')] == [
+        False,
+        False,
+        False,
+    ]
+
+
+def test_a_subjob_with_no_word_on_qdel_does_not_mark_its_array_as_stopped(world):
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
+    finish_array(world, subjobs=[subjob(1), subjob(2, start=30, terminated=None)])
+    poll(world)
+    [record] = records(world)
+    assert record.exit_status == 0
+    assert record.terminated is None
+
+
 @pytest.mark.parametrize(
     'subjobs, submitted',
     [
