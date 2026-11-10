@@ -5,6 +5,7 @@ holds the directory agent and the ONTAP metrics login already. See docs for what
 """
 
 from ideaclustermanager.app.accounts.auth_constants import USER_HOME_DIR_BASE
+from ideaclustermanager.app.metrics.drift_checks import SIGNED_SESSION_SECURITY
 from ideaclustermanager.app.metrics.storage_metrics_service import (
     SVMS_PATH,
     OntapClient,
@@ -610,7 +611,8 @@ class DirectoryCollector(HealthCollector):
                 continue
             metrics.level(
                 'directory.ldap_session_signed',
-                0 if value == 'none' else 1,
+                # signed is what it is known to be, as in the drift checks: any other value is 0
+                1 if value in SIGNED_SESSION_SECURITY else 0,
                 svm=self._svm(record),
                 filesystem=filesystem,
             )

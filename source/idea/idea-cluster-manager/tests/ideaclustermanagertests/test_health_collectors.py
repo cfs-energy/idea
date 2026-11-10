@@ -594,6 +594,17 @@ def test_good_settings_read_as_good():
     assert metrics.value('directory.dns_on_domain_controllers') == [1]
 
 
+@pytest.mark.parametrize(
+    'value, signed', [('sign', 1), ('seal', 1), ('none', 0), ('simple', 0)]
+)
+def test_signed_is_sign_or_seal_and_nothing_else(value, signed):
+    # the docs and the drift check say sign or seal: a value neither knows is not signed
+    metrics, _ = run_directory(
+        {**GOOD, CIFS: [{**SVM, 'security': {'session_security': value}}]}
+    )
+    assert metrics.value('directory.ldap_session_signed') == [signed]
+
+
 def test_a_path_the_login_cannot_read_reports_forbidden_and_the_others_go_on():
     metrics, _ = run_directory({LDAP: [{**SVM, 'status': {'state': 'up'}}]})
     assert metrics.value('directory.ldap_up') == [1]
