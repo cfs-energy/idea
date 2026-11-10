@@ -7,6 +7,7 @@ writes (each line holds just the phrase that matched).
 """
 
 import os
+import re
 import socket
 import sys
 import time
@@ -19,6 +20,9 @@ DROPS_MAX_BYTES = 1024 * 1024
 TCP_ESTABLISHED = '01'
 SSH_PORT_HEX = f'{22:04X}'
 # what sshd sends a connection it drops, under MaxStartups or a penalty (loopback has none)
+# a login name may hold an @ itself, and sshd shows it in its monitor's and pre-auth titles;
+# a connection with several terminals (a shared ControlMaster) lists them: user@pts/0,pts/1
+SESSION_TITLE = re.compile(rb'(sshd|sshd-session): .*@(pts/\d+(,pts/\d+)*|notty)$')
 REFUSED = b'Not allowed at this time'
 # the line the task's own checks add to the tally when sshd refuses them (bastion_health.sh)
 LOOPBACK_REFUSED = b'loopback check refused'
@@ -35,7 +39,7 @@ def active_sessions(proc_root: str = '/proc') -> int:
                 title = handle.read(256).split(b'\0', 1)[0]
         except OSError:
             continue
-        if title.startswith((b'sshd: ', b'sshd-session: ')) and b'@' in title:
+        if SESSION_TITLE.match(title):
             count += 1
     return count
 
@@ -89,6 +93,11 @@ class DropTally:
     named or noted, on 10.5 the unnamed drops less the checks' refusals sshd did not name, worked
     out over everything read so far, as sshd names the drop that ends its rate limit before the
     check that drop refused notes it.
+    Remote drops are counted when sshd reports them, which is late: 9.9 names the first drop of an
+    episode and gives the total when it ends (its "in" line needs five minutes without a drop
+    inside an episode, so a flood never logs one), 10.5 every five minutes and when its log rate
+    limit ends. So remote is exact over an episode, reads 1 while a flood on 9.9 lasts, and a
+    flood that never ends is never counted past that; loopback is counted as it happens.
     ponytail: a loopback client other than the checks (a user's `ssh localhost`) is counted as
     remote on 9.9 and not at all on 10.5 when sshd names it; name the checks' port if that matters.
     A read that falls between sshd naming a check's drop and the check noting it, in a batch with
