@@ -221,7 +221,7 @@ class TaskManager(SocaService):
             self._cleanup(task, payload)
         self._delete(receipt_handle)
 
-    def _retry_later(self, receipt_handle, receive_count):
+    def _retry_later(self, task_name, message_id, receipt_handle, receive_count):
         delay = retry_delay(receive_count)
         try:
             self.context.aws().sqs().change_message_visibility(
@@ -233,8 +233,11 @@ class TaskManager(SocaService):
             # The receive visibility still bounds the wait.
             self.logger.exception('failed to schedule task retry')
             return
+        # the message id is on every line of this message's attempts, so retries of
+        # several tasks at once can be told apart
         self.logger.info(
-            f'task retry {receive_count + 1} of {TASK_MAX_ATTEMPTS} in {delay}s'
+            f'task {task_name} (message {message_id}) retry {receive_count + 1} '
+            f'of {TASK_MAX_ATTEMPTS} in {delay}s'
         )
 
     def _discard_deleted_user(self, task_name, payload, receipt_handle):
@@ -263,9 +266,11 @@ class TaskManager(SocaService):
         return True
 
     def _move_into_lane(self, task, payload, sqs_message):
-        # A release before lanes queued this task in its entity's own group, which is
-        # received alongside the lane. Run there it could finish after a newer message
-        # of the lane, so it joins the lane and runs in turn; sent_at keeps its age.
+        # A lane's task is in its entity's own group when it was sent to wait there for
+        # the tasks queued before it (send's behind_entity_tasks), or by a release
+        # before lanes. That group is received alongside the lane, so run there it could
+        # finish after a newer message of the lane: it joins the lane and runs in turn;
+        # sent_at keeps its age.
         lane = getattr(task, 'lane', None)
         group = sqs_message.get('Attributes', {}).get('MessageGroupId')
         entity = task.entity_ref(payload) if isinstance(lane, str) else None
@@ -342,6 +347,7 @@ class TaskManager(SocaService):
         receipt_handle = None
         task = None
         task_succeeded = False
+        message_id = sqs_message.get('MessageId')
         receive_count = int(
             sqs_message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
         )
@@ -361,7 +367,7 @@ class TaskManager(SocaService):
                 return
 
             self.logger.info(
-                f'executing task: {task_name} ({receipt_handle}), payload: {Utils.to_json(task_payload)}'
+                f'executing task: {task_name} (message {message_id}, {receipt_handle}), payload: {Utils.to_json(task_payload)}'
             )
 
             if task_name not in self.tasks:
@@ -381,7 +387,8 @@ class TaskManager(SocaService):
                 # The last attempt stopped without a result (deadline exit), or the
                 # message predates the attempt limit.
                 self.logger.error(
-                    f'task {task_name} gave up after {TASK_MAX_ATTEMPTS} attempts'
+                    f'task {task_name} (message {message_id}) gave up after '
+                    f'{TASK_MAX_ATTEMPTS} attempts'
                 )
                 self._give_up(
                     task,
@@ -420,17 +427,20 @@ class TaskManager(SocaService):
         except Exception as e:
             if self._discard_deleted_user(task_name, task_payload, receipt_handle):
                 return
-            self.logger.exception(f'failed to execute task: {task_name} - {e}')
+            self.logger.exception(
+                f'failed to execute task: {task_name} (message {message_id}) - {e}'
+            )
             if task is None or task_succeeded:
                 # Redelivery repeats an idempotent task; nothing failed to record.
                 return
             if receive_count >= TASK_MAX_ATTEMPTS:
                 self.logger.error(
-                    f'task {task_name} gave up after {TASK_MAX_ATTEMPTS} attempts'
+                    f'task {task_name} (message {message_id}) gave up after '
+                    f'{TASK_MAX_ATTEMPTS} attempts'
                 )
                 self._give_up(task, task_payload, receipt_handle, e)
             else:
-                self._retry_later(receipt_handle, receive_count)
+                self._retry_later(task_name, message_id, receipt_handle, receive_count)
 
     def task_queue_listener(self):
         while not self.exit.is_set():
@@ -471,14 +481,20 @@ class TaskManager(SocaService):
         payload: Dict,
         message_group_id: str = None,
         message_dedupe_id: str = None,
+        behind_entity_tasks: bool = False,
     ):
+        """
+        :param behind_entity_tasks: for a lane's task that needs what the entity's
+            queued tasks are still doing (a password needs its account created). It
+            waits its turn in their group, and only then joins its lane.
+        """
         task_message = {'name': task_name, 'payload': payload}
 
         if Utils.is_empty(message_group_id):
             message_group_id = task_name
         # Tasks in different lanes of one entity do not wait on each other's retries.
         lane = getattr(self.tasks.get(task_name), 'lane', None)
-        if lane:
+        if lane and not behind_entity_tasks:
             message_group_id = f'{message_group_id}.{lane}'
         if Utils.is_empty(message_dedupe_id):
             message_dedupe_id = Utils.sha256(Utils.to_json(task_message))

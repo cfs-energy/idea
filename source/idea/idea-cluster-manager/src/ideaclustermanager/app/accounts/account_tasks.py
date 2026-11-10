@@ -39,6 +39,7 @@ import ldap
 import os
 import pathlib
 import shutil
+import time
 
 
 class SyncGroupInDirectoryServiceTask(BaseTask):
@@ -164,12 +165,56 @@ def _remove_if_present(remove, name: str):
 
 
 class SyncUserInDirectoryServiceTask(BaseTask):
+    # user attribute: this task has put the account and its group in the directory
+    # and has not removed them since
+    IN_DIRECTORY = 'directory_account'
+    # Active Directory tells its other domain controllers of a change after 15 s
+    CATCH_UP_SECONDS = 30
+    CATCH_UP_INTERVAL = 2
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
 
     def get_name(self) -> str:
         return 'accounts.sync-user'
+
+    def _await_directory(self, user: Dict, group_too: bool):
+        # A read can be answered by a domain controller the account has not reached
+        # yet. Adding it there as well leaves two accounts, one of which survives a
+        # disable; skipping its removal there leaves one. So an account this task
+        # created is waited for. One removed by hand never appears, and is added again.
+        if not user.get(self.IN_DIRECTORY):
+            return
+        directory = self.context.ldap_client
+        deadline = time.monotonic() + self.CATCH_UP_SECONDS
+        # a removal that stopped part way has taken the group and left the account
+        while not (
+            directory.is_existing_user(user['username'])
+            and (not group_too or directory.is_existing_group(user['group_name']))
+        ):
+            if time.monotonic() >= deadline:
+                self.logger.warning(
+                    'the directory does not show an account that was created in it'
+                )
+                return
+            time.sleep(self.CATCH_UP_INTERVAL)
+
+    def _record_in_directory(self, user: Dict, present: bool):
+        if bool(user.get(self.IN_DIRECTORY)) == present:
+            return
+        try:
+            self.context.accounts.user_dao.table.update_item(
+                Key={'username': user['username']},
+                UpdateExpression='SET #flag = :yes' if present else 'REMOVE #flag',
+                # a record deleted meanwhile is not brought back
+                ConditionExpression='attribute_exists(username)',
+                ExpressionAttributeNames={'#flag': self.IN_DIRECTORY},
+                **({'ExpressionAttributeValues': {':yes': True}} if present else {}),
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
 
     def entity_ref(self, payload: Dict):
         return 'user', payload['username']
@@ -190,6 +235,7 @@ class SyncUserInDirectoryServiceTask(BaseTask):
             )
             return
 
+        self._await_directory(user, group_too=enabled)
         if enabled:
             self.logger.info(f'sync user: {username} TO directory service ...')
             self.context.ldap_client.sync_group(
@@ -210,6 +256,7 @@ class SyncUserInDirectoryServiceTask(BaseTask):
             else:
                 if self.context.ldap_client.is_sudo_user(username):
                     self.context.ldap_client.remove_sudo_user(username)
+            self._record_in_directory(user, True)
 
         else:
             self.logger.info(f'deleting user: {username} from directory service ...')
@@ -220,11 +267,13 @@ class SyncUserInDirectoryServiceTask(BaseTask):
                 _remove_if_present(directory.delete_user, username)
             if directory.is_sudo_user(username):
                 _remove_if_present(directory.remove_sudo_user, username)
+            self._record_in_directory(user, False)
 
 
 class SyncPasswordInDirectoryServiceTask(BaseTask):
-    # Passwords stay ordered among themselves; until the account reaches the
-    # directory the change fails and retries without holding up the account's tasks.
+    # Passwords stay ordered among themselves, and a failing one holds up none of the
+    # account's other tasks. One for an account not yet in the directory is sent
+    # behind the task that creates it, and joins this lane when that has finished.
     lane = 'password'
     # user attribute: sent_at of the newest password finished with, applied or given up
     APPLIED = 'password_sync_sent_at'

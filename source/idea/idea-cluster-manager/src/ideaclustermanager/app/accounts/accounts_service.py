@@ -50,6 +50,7 @@ import ldap
 import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 
@@ -796,6 +797,15 @@ class AccountsService:
                     f'No need to create group for username: {username}:   Group ({group_name}) already exists.'
                 )
 
+            # A release before 26.11.2 left a deleted user's group and project rows
+            # behind when the user was disabled first. A new user must not inherit them.
+            user_projects = self.context.projects.user_projects_dao
+            for project_id in user_projects.get_projects_by_username(username):
+                user_projects.delete_user_project(
+                    project_id=project_id, username=username
+                )
+            self.group_members_dao.delete_memberships_of(username)
+
             created_user = self.user_dao.create_user(
                 {
                     'username': username,
@@ -829,17 +839,21 @@ class AccountsService:
                 self.add_users_to_group([username], additional_group, notify=False)
                 joined_groups.append(additional_group)
 
+            account_sync_queued = False
             if Utils.is_not_empty(password):
-                self.change_ldap_password(username, password)
+                account_sync_queued = self.change_ldap_password(username, password)
 
             # queued only after the last step that can fail, so directory work never
-            # races a rollback of the account it targets.
-            self.task_manager.send(
-                task_name='accounts.sync-user',
-                payload={'username': username},
-                message_group_id=username,
-                message_dedupe_id=f'{username}.create-user.{nonce()}',
-            )
+            # races a rollback of the account it targets. Queued once: a second copy
+            # can ask a domain controller the first one's account has not reached,
+            # and add the account again.
+            if not account_sync_queued:
+                self.task_manager.send(
+                    task_name='accounts.sync-user',
+                    payload={'username': username},
+                    message_group_id=username,
+                    message_dedupe_id=f'{username}.create-user.{nonce()}',
+                )
             for joined_group in joined_groups:
                 self.send_group_membership_updated(joined_group, username, 'add')
             self.task_manager.send(
@@ -1209,17 +1223,18 @@ class AccountsService:
     def list_users(self, request: ListUsersRequest) -> ListUsersResult:
         return self.user_dao.list_users(request)
 
-    def change_ldap_password(self, username: str, password: str):
+    def change_ldap_password(self, username: str, password: str) -> bool:
         """
         Change password for given username in ldap or ad
         :param username:
         :param password:
-        :return:
+        :return: True when the task that creates the account was queued too
         """
         if not Utils.is_dir(self.ds_automation_dir):
             os.makedirs(self.ds_automation_dir)
             # noinspection OsChmod
             os.chmod(self.ds_automation_dir, 0o700)
+        self.remove_stranded_password_files()
 
         temp_dir = tempfile.mkdtemp(dir=self.ds_automation_dir)
         try:
@@ -1243,11 +1258,49 @@ class AccountsService:
                 task_name='accounts.sync-password',
                 payload={'username': username, 'password_file': password_file},
                 message_group_id=username,
+                # the directory has no account to give the password to until the
+                # task queued above has run
+                behind_entity_tasks=not is_user_synced,
             )
+            return not is_user_synced
         except Exception:
             # only the queued task removes the file, and none was queued
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise
+
+    # No queue keeps a message longer than this, so no task is left to read the file.
+    STRANDED_PASSWORD_FILE_SECONDS = 14 * 24 * 3600
+
+    def remove_stranded_password_files(self):
+        """
+        a password file outlives its task when the task is lost: a release that did
+        not clean up after a task it gave up on, or a queue purged by hand. Removes
+        only what change_ldap_password makes, a folder holding password.txt and
+        nothing else, and never fails the caller.
+        """
+        cutoff = time.time() - self.STRANDED_PASSWORD_FILE_SECONDS
+        try:
+            with os.scandir(self.ds_automation_dir) as entries:
+                folders = [e.path for e in entries if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            return
+        for folder in folders:
+            password_file = os.path.join(folder, 'password.txt')
+            try:
+                if os.listdir(folder) != ['password.txt']:
+                    continue
+                file = os.lstat(password_file)
+                if not stat.S_ISREG(file.st_mode):
+                    continue
+                if max(file.st_mtime, os.lstat(folder).st_mtime) > cutoff:
+                    continue
+                os.remove(password_file)
+                # not rmtree: anything that appeared meanwhile stays
+                os.rmdir(folder)
+                self.logger.info(f'removed a stranded password file: {folder}')
+            except OSError:
+                # another task removed it first, or the file system is away
+                continue
 
     def change_password(
         self, access_token: str, username: str, old_password: str, new_password: str

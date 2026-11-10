@@ -910,3 +910,214 @@ def test_adding_a_member_to_a_deleted_group_is_not_retried():
     with pytest.raises(TaskCannotSucceed):
         task.invoke({'group_name': 'gone', 'username': 'user', 'operation': 'add'})
     context.projects.user_projects_dao.group_member_added.assert_not_called()
+
+
+def test_a_retry_line_names_its_task_and_message_and_no_user():
+    # several users' tasks retry at once, and each line has to be told from the others
+    manager, context, task, message = build()
+    task.invoke.side_effect = RuntimeError('directory down')
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    lines = [call.args[0] for call in context.logger().info.call_args_list]
+    (retry,) = [line for line in lines if ' retry ' in line]
+    assert retry == 'task test.task (message m-1) retry 2 of 10 in 10s'
+    # the line that carries the payload carries the same id
+    assert any('message m-1' in line and 'executing' in line for line in lines)
+    failed = context.logger().exception.call_args.args[0]
+    assert 'test.task (message m-1)' in failed
+
+
+class Directory:
+    """what the account tasks ask of the directory, with two habits of Active
+    Directory: a read can be answered by a domain controller that a write has not
+    reached yet, and an account it does not have cannot be given a password."""
+
+    def __init__(self):
+        # one entry per add: a second add of one name is the copy the directory keeps
+        self.accounts = []
+        self.groups = []
+        self.passwords = {}
+        self.refused = 0
+        self.now = 0
+        # until then every read misses what was written
+        self.behind_until = 0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    def is_readonly(self):
+        return False
+
+    def is_existing_user(self, username):
+        return self.now >= self.behind_until and username in self.accounts
+
+    def is_existing_group(self, group_name):
+        return self.now >= self.behind_until and group_name in self.groups
+
+    def is_sudo_user(self, _):
+        return False
+
+    def sync_group(self, group_name, gid):
+        if not self.is_existing_group(group_name):
+            self.groups.append(group_name)
+
+    def sync_user(self, *, username, **_):
+        if not self.is_existing_user(username):
+            self.accounts.append(username)
+
+    def delete_user(self, username):
+        self.accounts.remove(username)
+
+    def delete_group(self, group_name):
+        self.groups.remove(group_name)
+
+    def add_user_to_group(self, usernames, group_name):
+        pass
+
+    def change_password(self, username, password):
+        if username not in self.accounts:
+            self.refused += 1
+            raise RuntimeError('not yet synced')
+        self.passwords[username] = password
+
+
+@pytest.fixture
+def live_accounts(context, monkeypatch, tmp_path):
+    # the real accounts service and the real tasks, joined by the queue's FIFO rules
+    queue, directory = FifoQueue(), Directory()
+    tasks = [
+        account_tasks.SyncUserInDirectoryServiceTask(context),
+        account_tasks.SyncGroupInDirectoryServiceTask(context),
+        account_tasks.SyncPasswordInDirectoryServiceTask(context),
+        account_tasks.GroupMembershipUpdatedTask(context),
+        account_tasks.CreateUserHomeDirectoryTask(context),
+    ]
+    home = tasks[-1]
+    home.invoke = Mock()
+    manager = TaskManager(context, tasks)
+    monkeypatch.setattr(context.aws(), 'sqs', lambda: queue, raising=False)
+    monkeypatch.setattr(manager, 'get_task_queue_url', lambda: 'queue')
+    monkeypatch.setattr(context, 'ldap_client', directory)
+    monkeypatch.setattr(context.accounts, 'ldap_client', directory)
+    monkeypatch.setattr(context.accounts, 'task_manager', manager)
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    # the wait for the directory to catch up runs on the directory's clock
+    monkeypatch.setattr(account_tasks, 'time', directory, raising=False)
+
+    def create(username):
+        from ideadatamodel import User
+
+        context.accounts.create_user(
+            user=User(
+                username=username,
+                email=f'{username}@example.com',
+                password='MockPassword_123',
+            ),
+            email_verified=True,
+        )
+
+    def drain():
+        while True:
+            messages = queue.receive_message(
+                VisibilityTimeout=manager._polling_visibility_timeout
+            ).get('Messages')
+            if not messages:
+                return
+            manager.execute_task(messages[0])
+
+    return context, manager, queue, directory, home, create, drain
+
+
+def names(queue):
+    return [json.loads(message['body'])['name'] for message in queue.messages]
+
+
+def test_a_new_user_is_put_in_the_directory_by_one_task(live_accounts):
+    # a second copy can ask a domain controller the account has not reached yet
+    _, _, queue, _, _, create, _ = live_accounts
+    create('tasks_new1')
+    assert names(queue).count('accounts.sync-user') == 1
+
+
+def test_a_new_users_password_waits_for_the_account_and_is_never_refused(
+    live_accounts,
+):
+    _, manager, queue, directory, home, create, drain = live_accounts
+    create('tasks_new2')
+    # the task that creates the account is still running
+    creating = queue.receive_message(VisibilityTimeout=600)['Messages'][0]
+    assert json.loads(creating['Body'])['name'] == 'accounts.sync-user'
+    drain()
+    # the home folder does not wait for it, and the password does
+    home.invoke.assert_called_once()
+    assert directory.refused == 0
+    assert directory.passwords == {}
+    manager.execute_task(creating)
+    drain()
+    assert directory.passwords == {'tasks_new2': 'MockPassword_123'}
+    assert directory.refused == 0
+    assert queue.messages == []
+
+
+def test_a_password_for_an_account_the_directory_has_goes_straight_to_its_lane(
+    live_accounts,
+):
+    context, manager, queue, directory, _, create, drain = live_accounts
+    create('tasks_new3')
+    drain()
+    # the account's other tasks are held up; a new password is not
+    manager.send('accounts.sync-user', {'username': 'tasks_new3'}, 'tasks_new3', 'u2')
+    queue.receive_message(VisibilityTimeout=600)
+    context.accounts.change_ldap_password('tasks_new3', 'second')
+    assert names(queue) == ['accounts.sync-user', 'accounts.sync-password']
+    drain()
+    assert directory.passwords == {'tasks_new3': 'second'}
+
+
+def test_an_account_is_not_added_again_while_the_directory_catches_up(live_accounts):
+    context, manager, _, directory, _, create, drain = live_accounts
+    create('tasks_new4')
+    drain()
+    assert directory.accounts == ['tasks_new4']
+    # the next read is answered by a domain controller the account reaches in 15 s
+    directory.behind_until = directory.now + 15
+    manager.send('accounts.sync-user', {'username': 'tasks_new4'}, 'tasks_new4', 'u2')
+    drain()
+    assert directory.accounts == ['tasks_new4']
+    assert directory.groups == ['tasks_new4-user-group']
+    assert directory.now >= 15
+
+
+def test_disabling_a_user_removes_an_account_the_first_read_does_not_show(
+    live_accounts,
+):
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_new5')
+    drain()
+    directory.behind_until = directory.now + 15
+    context.accounts.disable_user('tasks_new5')
+    drain()
+    assert directory.accounts == []
+    assert directory.groups == []
+    # and it is added again when the user is enabled, without waiting for it
+    waited = directory.now
+    context.accounts.enable_user('tasks_new5')
+    drain()
+    assert directory.accounts == ['tasks_new5']
+    assert directory.now == waited
+
+
+def test_an_account_removed_from_the_directory_by_hand_is_added_again(live_accounts):
+    _, manager, _, directory, _, create, drain = live_accounts
+    create('tasks_new6')
+    drain()
+    directory.accounts.clear()
+    manager.send('accounts.sync-user', {'username': 'tasks_new6'}, 'tasks_new6', 'u2')
+    drain()
+    assert directory.accounts == ['tasks_new6']
+    assert (
+        directory.now >= account_tasks.SyncUserInDirectoryServiceTask.CATCH_UP_SECONDS
+    )

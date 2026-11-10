@@ -21,6 +21,7 @@ import botocore.exceptions
 import ldap
 import os
 import pytest
+import time
 from typing import Optional
 from unittest.mock import Mock
 
@@ -860,8 +861,17 @@ def test_deleting_a_disabled_user_leaves_no_group_membership(
     context.accounts.disable_user('accounts_deleted3')
     members = context.accounts.group_members_dao.get_usernames_in_group
     assert 'accounts_deleted3' in members('default-project-group')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
     context.accounts.delete_user('accounts_deleted3')
     assert 'accounts_deleted3' not in members('default-project-group')
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted3'
+    )
 
 
 def test_deleting_a_user_survives_its_queued_copy_removing_the_account_first(
@@ -978,9 +988,10 @@ def test_a_stopped_delete_does_not_leave_user_pool_rights_the_record_no_longer_l
     directory.delete_user.side_effect = RuntimeError('directory down')
     with pytest.raises(RuntimeError):
         context.accounts.delete_user(username)
-    assert group_name not in context.accounts.user_dao.get_user(username)[
-        'additional_groups'
-    ]
+    assert (
+        group_name
+        not in context.accounts.user_dao.get_user(username)['additional_groups']
+    )
     removed_from_pool.assert_called_once()
     assert removed_from_pool.call_args.kwargs['Username'] == username
     assert removed_from_pool.call_args.kwargs['GroupName'] == group_name
@@ -1101,3 +1112,72 @@ def test_a_queued_password_file_is_readable_by_its_owner_only(
     (file,) = tmp_path.glob('*/password.txt')
     assert file.read_text() == 'secret-value'
     assert file.stat().st_mode & 0o777 == 0o600
+
+
+def stranded(folder, age_days, names=('password.txt',)):
+    folder.mkdir()
+    for name in names:
+        (folder / name).write_text('secret-value')
+    then = time.time() - age_days * 24 * 3600
+    for path in (*folder.iterdir(), folder):
+        os.utime(path, (then, then))
+    return folder
+
+
+def test_a_password_file_no_task_is_left_to_read_is_removed(
+    context: AppContext, monkeypatch, tmp_path
+):
+    # a release that gave up on a task without cleaning up after it left the file
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    old = stranded(tmp_path / 'tmpold', 15)
+    # the queue can still hold the task of anything younger than its longest retention
+    waiting = stranded(tmp_path / 'tmpwaiting', 13)
+    # only what a password change makes is removed
+    other = stranded(tmp_path / 'tmpother', 15, names=('password.txt', 'notes'))
+    not_a_password = stranded(tmp_path / 'tmpnotes', 15, names=('notes',))
+    (tmp_path / 'elsewhere').mkdir()
+    target = stranded(tmp_path / 'elsewhere' / 'kept', 15)
+    (tmp_path / 'tmplink').symlink_to(target, target_is_directory=True)
+    linked = tmp_path / 'tmplinked'
+    linked.mkdir()
+    (linked / 'password.txt').symlink_to(target / 'password.txt')
+
+    context.accounts.change_ldap_password('user', 'secret-value')
+
+    assert not old.exists()
+    for kept in (waiting, other, not_a_password, target, linked):
+        assert kept.exists(), kept
+    assert (target / 'password.txt').read_text() == 'secret-value'
+    assert len(list(tmp_path.glob('*/password.txt'))) == 5
+
+
+def test_a_sweep_that_cannot_read_the_folder_does_not_stop_a_password_change(
+    context: AppContext, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    monkeypatch.setattr(os, 'scandir', Mock(side_effect=OSError('stale file handle')))
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(list(tmp_path.glob('*/password.txt'))) == 1
+
+
+def test_a_new_user_does_not_inherit_rows_an_earlier_user_of_the_name_left(
+    context: AppContext,
+):
+    # before 26.11.2 deleting a disabled user left its group and project rows
+    username = 'accounts_reused1'
+    members = context.accounts.group_members_dao
+    projects = context.projects.user_projects_dao
+    members.create_membership('leftover-group', username)
+    members.create_membership('leftover-group', 'accounts_someone_else')
+    projects.create_user_project(project_id='leftover-project', username=username)
+    context.accounts.create_user(
+        user=User(
+            username=username,
+            email=f'{username}@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
+    assert members.get_usernames_in_group('leftover-group') == ['accounts_someone_else']
+    assert not projects.is_user_in_project(username, 'leftover-project')
+    assert username in members.get_usernames_in_group('default-project-group')
