@@ -18,6 +18,11 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
+{# on every pass: the GPU driver stage below can install a kernel and reboot into it #}
+{% with lustre_kernel = '$(uname -r)' %}
+{% include 'compute-node-ami-builder/_templates/lustre_kernel_check.jinja2' %}
+{% endwith %}
+
 {% with node_type = 'compute' %}
   {% include '_templates/linux/gpu_drivers.jinja2' %}
 {% endwith %}

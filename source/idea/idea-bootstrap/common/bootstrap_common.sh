@@ -229,6 +229,13 @@ function ensure_boot_kernel_bootable () {
   fail_bootstrap kernel-boot-mismatch "Kernel ${next} would not boot: it has no initramfs, one could not be built, and the running kernel could not be made the default."
 }
 
+# FSx for Lustre builds its client module per kernel, and a new kernel series ships before the
+# client for it does. A kernel without the module boots and then cannot mount Lustre, so nothing
+# may select one while the host has a kernel that carries it.
+function kernel_has_lustre_module () {
+  modinfo -k "${1}" -n lustre > /dev/null 2>&1
+}
+
 # /boot is a 1 GB partition on EL images and a generic desktop initramfs passed 260 MB. With a
 # second kernel the rebuild a later package triggers (it writes a new copy beside the old one)
 # ran out of room. A rescue image, one per machine id, has no use on an instance nobody can

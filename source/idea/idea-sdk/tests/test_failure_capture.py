@@ -655,6 +655,30 @@ def test_a_builder_that_never_reported_is_counted_as_a_step_timeout(monkeypatch)
     assert panic.metrics[0][1]['reason'] == 'kernel_panic'
 
 
+def test_a_bake_stopped_for_its_kernel_is_captured_with_that_reason(monkeypatch):
+    """the console of a builder with no Lustre module for its kernel names no known cause"""
+    from ideadatamodel import ImageBuildRecord, ImageKind
+    from ideasdk.aws.image_builds import capture_builder_failure
+
+    h = Harness(FakeEc2(HEALTHY_BOOT))
+    monkeypatch.setattr(
+        module.HealthMetrics,
+        'add',
+        lambda _, name, value=1, **tags: h.metrics.append((name, tags)),
+    )
+    record = ImageBuildRecord(
+        base_os='rhel9', architecture='x86_64', status='building', instance_id='i-1'
+    )
+    reason = (
+        'in-bake check bootstrap failed on builder i-1: a command failed: lustre: Kernel '
+        '5.14.0-741.14.1.el9_9.x86_64 has no FSx for Lustre client module. Lustre '
+        'filesystems cannot be mounted on this node (reason code: lustre-module-missing).'
+    )
+    capture_builder_failure(h.context, h.logger, ImageKind.COMPUTE, record, reason)
+    assert h.metrics[0][1]['reason'] == 'lustre_kernel'
+    assert 'reason=lustre_kernel' in h.shipped()
+
+
 def test_a_hung_read_still_counts_the_callers_reason(monkeypatch):
     block = threading.Event()
     monkeypatch.setattr(module, 'TIME_LIMIT_SECONDS', 0.1)

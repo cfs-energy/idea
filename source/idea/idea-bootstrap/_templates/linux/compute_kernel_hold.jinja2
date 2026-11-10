@@ -1,0 +1,14 @@
+{# Compute, where the cluster uses FSx for Lustre: keep the kernel series the image boots, as
+   desktops do. The package list names `kernel`, which installs the newest one of any series, and
+   the FSx repository has no client for a series Red Hat has only just shipped (5.14.0-741 and
+   6.12.0-264 in 2026-11): the host then boots a kernel with no Lustre module. set_kernel.jinja2
+   installs the newest kernel of the running series that the client has a module for and locks
+   it, so the package list cannot move it. Include before system_packages.jinja2; a compute
+   node passes lustre_scratch, whether its job asked for an FSx for Lustre scratch.
+   Amazon Linux 2023 ships the module inside every kernel package, and the Ubuntu package lists
+   name no kernel: neither needs this. A cluster without Lustre keeps taking the newest kernel. #}
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') or 'fsx_lustre' in (context.vars.enabled_drivers or ()) or (lustre_scratch | default(false))) %}
+{% with keep_kernel_series = true %}
+{% include '_templates/linux/set_kernel.jinja2' %}
+{% endwith %}
+{% endif %}

@@ -572,19 +572,20 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
 
 # EL kernel snapshots from 81d856e9, updated to defer reboot until cloud-final exits, to install
 # the newest kernel of the target series before locking it, to free /boot for it, to fail a
-# bootstrap that cannot put the running kernel back as the default, and to apply the initramfs test
-# and rescue removal to a series change as well.
+# bootstrap that cannot put the running kernel back as the default, to apply the initramfs test
+# and rescue removal to a series change as well, and to keep the running kernel when the newer one
+# has no FSx for Lustre module (compute bakes report a failure through their in-bake checks).
 @pytest.mark.parametrize(
     'base_os, expected',
     [
         (
             'amazonlinux2023',
-            '4c4c37bbb52dee6b5f35655a3febf99760d9aa50a900c8e7153d4e111844611b',
+            '4764e4ec8b8b47e3d7a7814730689af68fd7e97106ca5b8f4dce3306a2540e4c',
         ),
-        ('rhel8', 'd1de843dc461eee1579e6881c94f5528dd684ba08b15311cbe4d1fa60d4312a9'),
-        ('rocky8', 'd1de843dc461eee1579e6881c94f5528dd684ba08b15311cbe4d1fa60d4312a9'),
-        ('rhel9', 'acedf033b4dd45a9bb038b1caaacb269d87a2e4294905d841f21d156809c73b8'),
-        ('rocky9', 'acedf033b4dd45a9bb038b1caaacb269d87a2e4294905d841f21d156809c73b8'),
+        ('rhel8', '30d4ad519b8498e21c9ff0d89b9b3b55d02c51dd016ea721109095e37210bebb'),
+        ('rocky8', '30d4ad519b8498e21c9ff0d89b9b3b55d02c51dd016ea721109095e37210bebb'),
+        ('rhel9', 'e9b5f001eeb1946dbe1f71c305d3db6e87e1c41c42866f1c5be983d5be4a46cc'),
+        ('rocky9', 'e9b5f001eeb1946dbe1f71c305d3db6e87e1c41c42866f1c5be983d5be4a46cc'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
