@@ -348,7 +348,9 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
     def invoke(self, payload: Dict):
         username = payload['username']
 
-        self.logger.info(f'sync password for user: {username} in directory service')
+        # the task manager's line just before this names the user; these lines don't,
+        # so a scanner that follows the payload sees no user data in them
+        self.logger.info('sync password in directory service')
 
         # The lane runs one password at a time, so this check cannot race another
         # change. A message can still arrive behind a newer one: moved in from the
@@ -357,7 +359,7 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         user = self.context.accounts.user_dao.get_user(username) or {}
         applied = user.get(self.APPLIED, 0)
         if sent_at is not None and sent_at < applied:
-            self.logger.info(f'a newer password superseded this for user: {username}')
+            self.logger.info('a newer password superseded this one')
             self.on_terminal_failure(payload)
             # the newer one's outcome stands, a recorded failure included
             return NOTHING_DONE
@@ -376,7 +378,7 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         if password is None:
             # A redelivery of a message that was finished with, which is when its
             # password goes: nothing is left to do, and no retry finds it.
-            self.logger.warning(f'password is gone for user: {username}; done')
+            self.logger.warning('password is gone; done')
             # it may have ended in a recorded failure, which this must not clear
             return NOTHING_DONE
 
