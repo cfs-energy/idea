@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from test_bootstrap_shell_syntax import BASH, IDEA_BOOTSTRAP_DIR
-from test_image_bake_bootstrap import render
+from test_image_bake_bootstrap import gnu_sed, render
 
 RUNNING = '5.14.0-687.15.1.el9_8.x86_64'
 NEWEST = '5.14.0-687.65.1.el9_8.x86_64'
@@ -104,12 +104,17 @@ def test_a_host_already_on_the_newest_kernel_changes_nothing(tmp_path):
 
 
 def _run_removal(tmp_path, base_os, installed, status=0):
+    gnu_sed()  # the template edits dnf.conf in place
     script = render('_templates/linux/remove_superseded_kernels.jinja2', base_os)
     calls = tmp_path / 'calls'
     calls.write_text('')
     listing = tmp_path / 'installed'
     listing.write_text(''.join(line + '\n' for line in installed))
+    conf = tmp_path / 'dnf.conf'
+    if not conf.exists():
+        conf.write_text('[main]\ngpgcheck=1\ninstallonly_limit=3\n')
     stubs = f"""
+DNF_CONF={conf}
 rpm() {{ cat {listing}; }}
 uname() {{ echo {NEWEST}; }}
 df() {{ echo "df $*" >> {calls}; }}
@@ -152,8 +157,45 @@ def test_a_single_kernel_removes_nothing_and_a_failed_removal_only_warns(tmp_pat
     assert 'warning Unable to remove superseded kernels' in calls
 
 
+@pytest.mark.parametrize('base_os', EL)
+@pytest.mark.parametrize(
+    'before',
+    [
+        '[main]\ngpgcheck=1\ninstallonly_limit=3\nclean_requirements_on_remove=True\n',
+        '[main]\ngpgcheck=1\n',
+        '[main]\ninstallonly_limit = 5\n',
+    ],
+)
+def test_a_desktop_image_keeps_two_kernels_because_three_do_not_fit(
+    tmp_path, base_os, before
+):
+    """
+    measured on a rocky9 desktop image: /boot 936M, 555M free with one kernel, 232M with two,
+    and a kernel needs about 322M. dnf's default keeps three, so the second kernel update of
+    a long-lived desktop ran out of room.
+    """
+    conf = tmp_path / 'dnf.conf'
+    conf.write_text(before)
+    calls = _run_removal(tmp_path, base_os, [f'kernel-{NEWEST}'])
+    lines = conf.read_text().splitlines()
+    assert lines[0] == '[main]'
+    assert [x for x in lines if x.startswith('installonly_limit')] == [
+        'installonly_limit=2'
+    ]
+    assert set(before.splitlines()) - set(lines) <= {
+        'installonly_limit=3',
+        'installonly_limit = 5',
+    }
+    assert 'warning' not in calls
+
+
+def test_a_dnf_configuration_that_cannot_take_the_limit_only_warns(tmp_path):
+    (tmp_path / 'dnf.conf').write_text('# empty\n')
+    calls = _run_removal(tmp_path, 'rocky9', [f'kernel-{NEWEST}'])
+    assert 'warning Unable to keep two kernels' in calls
+
+
 def test_other_distributions_have_nothing_to_remove():
     for base_os in ('amazonlinux2023', 'ubuntu2404'):
-        assert 'dnf remove' not in render(
-            '_templates/linux/remove_superseded_kernels.jinja2', base_os
-        )
+        script = render('_templates/linux/remove_superseded_kernels.jinja2', base_os)
+        assert 'dnf remove' not in script and 'installonly_limit' not in script
