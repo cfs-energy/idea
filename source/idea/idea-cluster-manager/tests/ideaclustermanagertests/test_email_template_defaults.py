@@ -49,7 +49,9 @@ class Table:
     def put_item(self, Item):
         self.rows[Item['name']] = dict(Item)
 
-    def update_item(self, Key, ExpressionAttributeNames, ExpressionAttributeValues, **_):
+    def update_item(
+        self, Key, ExpressionAttributeNames, ExpressionAttributeValues, **_
+    ):
         self.updated.append(Key['name'])
         row = self.rows[Key['name']]
         for token, key in ExpressionAttributeNames.items():
@@ -139,7 +141,9 @@ def test_a_missing_template_is_created_and_every_other_is_untouched(service):
 
 
 def test_the_superseded_lists_are_hashes_of_earlier_texts_only():
-    assert default_text_hash(STORED_SUBJECT, STORED_BODY) in shipped()[NAME]['superseded']
+    assert (
+        default_text_hash(STORED_SUBJECT, STORED_BODY) in shipped()[NAME]['superseded']
+    )
     for name, template in shipped().items():
         for value in template.get('superseded') or []:
             assert re.fullmatch('[0-9a-f]{64}', value), name

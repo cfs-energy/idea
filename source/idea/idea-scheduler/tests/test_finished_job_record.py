@@ -639,12 +639,12 @@ def test_a_deletion_idea_recorded_is_not_asked_about(fake_context, pricing_spy):
 
 
 SERVER_LOG = """\
-11/09/2026 15:00:27;0008;Server@scheduler;Job;39.scheduler;Job to be deleted at request of eve@scheduler.idea-dev.us-east-2.local
-11/09/2026 15:00:27;0008;Server@scheduler;Job;307.scheduler;Job to be deleted at request of damian.desmond@scheduler.idea-dev.us-east-2.local
-11/09/2026 15:00:28;0008;Server@scheduler;Job;311[].scheduler;Job to be deleted at request of damian.desmond@scheduler.idea-dev.us-east-2.local
+11/09/2026 15:00:27;0008;Server@scheduler;Job;39.scheduler;Job to be deleted at request of eve@scheduler.cluster.local
+11/09/2026 15:00:27;0008;Server@scheduler;Job;307.scheduler;Job to be deleted at request of alice.liddell@scheduler.cluster.local
+11/09/2026 15:00:28;0008;Server@scheduler;Job;311[].scheduler;Job to be deleted at request of alice.liddell@scheduler.cluster.local
 11/09/2026 15:00:29;0100;Server@scheduler;Job;391.scheduler;enqueuing into test, state Q hop 1
-11/09/2026 22:46:30;0008;Server@scheduler;Job;391.scheduler;Job to be deleted at request of root@scheduler.idea-dev.us-east-2.local
-11/09/2026 14:58:25;0004;Server@scheduler;Que;iv-28463b57b918;deleted at request of root@scheduler.idea-dev.us-east-2.local
+11/09/2026 22:46:30;0008;Server@scheduler;Job;391.scheduler;Job to be deleted at request of root@scheduler.cluster.local
+11/09/2026 14:58:25;0004;Server@scheduler;Que;iv-28463b57b918;deleted at request of root@scheduler.cluster.local
 """
 
 
@@ -665,8 +665,8 @@ def test_who_deleted_a_job_is_read_from_the_pbs_server_log(tmp_path, monkeypatch
     scheduler = OpenPBSScheduler.__new__(OpenPBSScheduler)
     scheduler._deletion_log = DeletionLog()
     assert scheduler.get_job_deleted_by('391') == 'root'
-    assert scheduler.get_job_deleted_by('307') == 'damian.desmond'
-    assert scheduler.get_job_deleted_by('311[]') == 'damian.desmond'
+    assert scheduler.get_job_deleted_by('307') == 'alice.liddell'
+    assert scheduler.get_job_deleted_by('311[]') == 'alice.liddell'
     assert scheduler.get_job_deleted_by('39') == 'eve'
     # yesterday's log is read too
     assert scheduler.get_job_deleted_by('200') == 'carol'
@@ -675,18 +675,21 @@ def test_who_deleted_a_job_is_read_from_the_pbs_server_log(tmp_path, monkeypatch
     assert scheduler.get_job_deleted_by('iv-28463b57b918') is None
 
     # lines PBS adds later are picked up, a half-written one only once it is whole
-    line = '11/09/2026 23:09:30;0008;Server@scheduler;Job;394.scheduler;Job to be deleted at request of yor.forger@scheduler\n'
+    line = (
+        '11/09/2026 23:09:30;0008;Server@scheduler;Job;394.scheduler;'
+        'Job to be deleted at request of bob.stone@scheduler\n'
+    )
     with open(logs / '20261109', 'a') as log:
         log.write(line[:-20])
     assert scheduler.get_job_deleted_by('394') is None
     with open(logs / '20261109', 'a') as log:
         log.write(line[-20:])
-    assert scheduler.get_job_deleted_by('394') == 'yor.forger'
+    assert scheduler.get_job_deleted_by('394') == 'bob.stone'
     assert scheduler.get_job_deleted_by('391') == 'root'
 
     # a new day: nothing older than yesterday's log is kept
     (logs / '20261110').write_text('')
-    assert scheduler.get_job_deleted_by('394') == 'yor.forger'
+    assert scheduler.get_job_deleted_by('394') == 'bob.stone'
     assert scheduler.get_job_deleted_by('200') is None
 
     with pytest.raises(OSError):

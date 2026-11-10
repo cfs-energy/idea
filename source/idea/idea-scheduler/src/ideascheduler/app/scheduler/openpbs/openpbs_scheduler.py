@@ -55,7 +55,7 @@ class DeletionLog:
     only if it ran ("terminated by"); the server log has a line for every qdel:
 
         11/09/2026 22:46:30;0008;Server@scheduler;Job;391.scheduler;Job to be deleted at
-        request of root@scheduler.idea-dev.us-east-2.local
+        request of root@scheduler.cluster.local
 
     The two newest daily logs are followed from where the last read stopped, so a burst of
     deleted jobs costs one pass over the log and not one each.

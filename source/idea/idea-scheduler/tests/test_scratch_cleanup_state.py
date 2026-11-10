@@ -358,7 +358,18 @@ def test_only_a_whole_number_counts_as_a_job_number():
     context.shell = shell(qselect='9.s\n', qstat=qstat, scripts={'9.s': script})
     mentioned = source.active_jobs(ALIASES).mentioned_ids
     assert {'363', '364', '2', '365', '366', '367'} <= mentioned
-    assert not mentioned & {'3', '4', '5', '8', '17', '525', '645', '01218', '1218', '0'}
+    assert not mentioned & {
+        '3',
+        '4',
+        '5',
+        '8',
+        '17',
+        '525',
+        '645',
+        '01218',
+        '1218',
+        '0',
+    }
     assert '0366' not in mentioned, 'a folder is looked up by its number, with no zeros'
 
 
@@ -380,15 +391,17 @@ def test_a_script_that_cannot_be_read_for_a_live_job_stops():
 
 
 COMMAND_JOB = (
-    '"395.s":{\n"Job_Owner":"loid@h",\n'
+    '"395.s":{\n"Job_Owner":"carol@h",\n'
     '"Submit_arguments":"-h -q test -- /bin/cp -r /lustre/alice/123/restart 456",\n'
     '"executable":"<jsdl-hpcpa:Executable>/bin/cp</jsdl-hpcpa:Executable>",\n'
     '"argument_list":"<jsdl-hpcpa:Argument>-r</jsdl-hpcpa:Argument>"\n}'
 )
-SCRIPT_JOB = '"396.s":{\n"Job_Owner":"yor@h",\n"Submit_arguments":"job.sh"\n}'
+SCRIPT_JOB = '"396.s":{\n"Job_Owner":"dave@h",\n"Submit_arguments":"job.sh"\n}'
 
 
-@pytest.mark.parametrize('order', [(COMMAND_JOB, SCRIPT_JOB), (SCRIPT_JOB, COMMAND_JOB)])
+@pytest.mark.parametrize(
+    'order', [(COMMAND_JOB, SCRIPT_JOB), (SCRIPT_JOB, COMMAND_JOB)]
+)
 def test_a_job_submitted_as_a_command_has_no_script_to_read(order):
     """
     qsub -- command: printjob -s exits 1 with "Job N not found" while the job is active.
@@ -416,7 +429,9 @@ def test_an_interactive_job_has_no_script_to_read():
     assert source.active_jobs(ALIASES).base_ids == {'9'}
 
 
-@pytest.mark.parametrize('order', [(COMMAND_JOB, SCRIPT_JOB), (SCRIPT_JOB, COMMAND_JOB)])
+@pytest.mark.parametrize(
+    'order', [(COMMAND_JOB, SCRIPT_JOB), (SCRIPT_JOB, COMMAND_JOB)]
+)
 def test_a_command_job_does_not_excuse_another_jobs_unreadable_script(order):
     source, context = state()
     context.shell = shell(

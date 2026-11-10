@@ -14,9 +14,12 @@ from ideadatamodel import SocaJobState, errorcodes, exceptions
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSJob
 from ideascheduler.app.scheduler.openpbs.openpbs_qstat import OpenPBSQStat
 
-from test_array_jobs import array_job, cached_ids, poll, records, world  # noqa: F401
+import test_array_jobs
+from test_array_jobs import array_job, cached_ids, poll, records
 
 LOGGER = logging.getLogger('test_job_without_queue_profile')
+# the job cache, PBS and poll cycle the array tests run against
+world = test_array_jobs.world
 
 
 def queue_profiles(known=('test',)):
@@ -72,7 +75,7 @@ def test_a_queue_profile_that_cannot_be_looked_up_still_fails_the_listing():
         raise AssertionError('the listing hid a failed lookup')
 
 
-def test_a_job_that_fails_the_listing_does_not_stop_the_others_being_recorded(world):
+def test_a_job_that_fails_the_listing_does_not_stop_the_rest(world):
     """whatever makes one job unreadable, the rest are read one by one and recorded"""
     world.cache.sync(
         [
