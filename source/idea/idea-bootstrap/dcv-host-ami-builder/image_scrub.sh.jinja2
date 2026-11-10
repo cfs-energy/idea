@@ -101,6 +101,14 @@ rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
 # starts it again and it writes a new /var/log/syslog.
 systemctl stop syslog.socket 2>/dev/null || true
 systemctl stop rsyslog 2>/dev/null || true
+{% if context.base_os == 'amazonlinux2023' %}
+# rsyslog writes every line under the host name it read when it started. On AL2023, where IDEA
+# adds it, it starts at boot before cloud-init has named the clone: a compute node logged its
+# whole life under its builder's name, a desktop until its first reboot. Left disabled here, it
+# is enabled and started by the host's bootstrap (rsyslog.jinja2), which runs once the host
+# has its own name, and with no saved position it reads the journal from the start of the boot.
+systemctl disable rsyslog 2>/dev/null || true
+{% endif %}
 rm -f /var/lib/rsyslog/imjournal.state
 rm -f /var/log/messages* /var/log/syslog*
 rm -rf /var/log/journal/*

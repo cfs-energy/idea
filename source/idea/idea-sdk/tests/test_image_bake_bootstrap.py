@@ -1108,6 +1108,46 @@ def test_a_clone_does_not_boot_the_builders_cloudwatch_agent(
         )
 
 
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'rocky9', 'ubuntu2404'])
+def test_an_al2023_clone_does_not_log_under_its_builders_name(
+    tmp_path, builder, base_os
+):
+    """
+    every line of an AL2023 compute clone's system log carried its builder's host name, and
+    a desktop's until its first reboot: rsyslog keeps the name it read at its start, and the
+    image started it at boot, before cloud-init had named the clone.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    lines = [
+        x
+        for x in scrub.splitlines()
+        if re.match(r'systemctl \w+ (rsyslog|syslog\.socket)\b', x)
+    ]
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    expected = ['stop syslog.socket', 'stop rsyslog']
+    # only where IDEA adds rsyslog itself; elsewhere it is the system's and starts after
+    # the host has its name
+    if base_os == 'amazonlinux2023':
+        expected.append('disable rsyslog')
+    assert calls.read_text().splitlines() == expected
+    # a host without the unit must not fail its scrub
+    (tmp_path / 'bin/systemctl').write_text('#!/bin/bash\nexit 5\n')
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    # what turns it back on, on the same hosts: every clone's bootstrap, image or not
+    host = render('_templates/linux/rsyslog.jinja2', base_os)
+    assert ('systemctl enable rsyslog --now' in host) == (base_os == 'amazonlinux2023')
+    for name in (
+        'virtual-desktop-host-linux/setup.sh.jinja2',
+        'compute-node/setup.sh.jinja2',
+    ):
+        setup = Path(IDEA_BOOTSTRAP_DIR, name).read_text()
+        start = setup.index("include '_templates/linux/rsyslog.jinja2'")
+        # not inside a branch a baked host skips
+        assert 'baked-release' not in setup[setup.rindex('\nfi\n', 0, start) : start]
+
+
 def test_a_failed_scrub_names_the_command(tmp_path):
     scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
     trap = next(line for line in scrub.splitlines() if line.startswith('trap '))
