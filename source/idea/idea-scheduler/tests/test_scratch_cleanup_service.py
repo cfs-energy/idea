@@ -237,6 +237,10 @@ def world(tmp_path, monkeypatch):
         'cluster-manager.notifications.email.enabled': True,
         'scheduler.scratch_cleanup.file_systems': ['scratch'],
         'scheduler.scratch_cleanup.enabled': True,
+        # the test clock is the real one plus 90 days, so one real day a week it lands on
+        # the default digest day, Monday. A test that wants a digest day says so
+        # (digests_on); otherwise the day is one no test's clock reaches by an hour or two.
+        'scheduler.scratch_cleanup.digest_weekday': (LATER.weekday() + 3) % 7,
     }
 
     table = Mock()
