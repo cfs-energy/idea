@@ -165,8 +165,8 @@ class ActiveJobs:
 
     base_ids: FrozenSet[str] = frozenset()
     dependency_ids: FrozenSet[str] = frozenset()
-    # any number in an active job's script, arguments or environment: over-matches, and only
-    # keeps more
+    # any whole number in an active job's script, arguments or environment: over-matches,
+    # and only keeps more
     mentioned_ids: FrozenSet[str] = frozenset()
     # (owner, folder name) seen in an active job's paths or environment
     referenced_folders: FrozenSet[tuple] = frozenset()

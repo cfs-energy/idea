@@ -18,7 +18,7 @@ A folder stays unless all of these hold, and each runs again on the open folder 
 
 * PBS lists no job under that number in any state, no node is running one, and the job cache tracks none.
 * The owner has no active job at all. There is no setting for this.
-* No active job depends on it (a dependency PBS has already dropped is read from the finished job's record; jobs finished before 26.11.2 have none), names the folder in its working directory, output paths, environment, arguments or script, or mentions the job's number in its script, arguments or environment.
+* No active job depends on it (a dependency PBS has already dropped is read from the finished job's record; jobs finished before 26.11.2 have none), names the folder in its working directory, output paths, environment, arguments or script, or mentions the job's number in its script, arguments or environment. The number has to stand on its own (`363`, `363[2]`, `363.scheduler`, `job_363`, `out_0363.log`): digits inside another word, such as an instance type or an AMI id, are not a job number.
 * The job cache or job index holds a finished record for that number and owner, with start and end times, and the job ended long enough ago for how it finished. A job ended with `qdel` counts as failed even when it exited 0; jobs finished before 26.11.2 are read from their PBS comment for this.
 * The folder and the owner folder above it match the job owner's account, and it holds no one else's files.
 * Everything in the folder appeared and last changed while the job ran, from its first attempt's start to its end. A later change means something still uses it. Anything older means the data came from somewhere else, such as a reused job number.
@@ -71,7 +71,7 @@ A check stops and alerts rather than continuing when:
 
 * the path is not the configured Lustre file system
 * the file system is linked to a data repository, or that cannot be checked, because a delete could reach the S3 copy
-* PBS, the job cache or the job index cannot be read, or an active job's script cannot be read
+* PBS, the job cache or the job index cannot be read, or an active job's script cannot be read (a job submitted as a command with `qsub -- command`, or as an interactive session, has no script and does not stop a run)
 * PBS lists no active jobs while the job cache tracks some or nodes are running jobs
 * a check would remove more than the allowed share of capacity, or a backfill more than the allowed share of job folders
 * a removal fails, or something writes to a folder while it is being removed
