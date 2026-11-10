@@ -245,10 +245,16 @@ def test_an_arm64_image_does_not_ask_dracut_for_xen_drivers(
 
 @pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
 def test_both_bakes_drop_them_before_their_first_initramfs(builder):
-    setup = Path(IDEA_BOOTSTRAP_DIR, f'{builder}-ami-builder/setup.sh.jinja2').read_text()
+    setup = Path(
+        IDEA_BOOTSTRAP_DIR, f'{builder}-ami-builder/setup.sh.jinja2'
+    ).read_text()
     call = setup.index('\ndrop_xen_dracut_drivers\n')
     assert setup.index('bootstrap_common.sh') < call
     # kernel work, where the desktop bake has it in this script, and the package installs
-    for later in ('set_kernel.jinja2', 'epel_repo.jinja2', 'mount_shared_storage.jinja2'):
+    for later in (
+        'set_kernel.jinja2',
+        'epel_repo.jinja2',
+        'mount_shared_storage.jinja2',
+    ):
         assert later not in setup or call < setup.index(later)
     assert 'mount_shared_storage.jinja2' in setup

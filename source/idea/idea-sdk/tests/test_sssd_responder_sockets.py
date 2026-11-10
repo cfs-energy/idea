@@ -77,7 +77,9 @@ def test_a_socket_that_cannot_be_disabled_only_warns(tmp_path):
     assert 'warning Could not disable sssd-nss.socket' in calls
 
 
-@pytest.mark.parametrize('join', ['join_activedirectory.jinja2', 'join_openldap.jinja2'])
+@pytest.mark.parametrize(
+    'join', ['join_activedirectory.jinja2', 'join_openldap.jinja2']
+)
 def test_each_directory_join_disables_them_for_the_services_it_names(join):
     join = (TEMPLATES / join).read_text()
     services = re.search(r'^services = (.+)$', join, re.M).group(1).replace(',', '')
