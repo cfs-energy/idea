@@ -922,8 +922,8 @@ def test_a_nearly_empty_volume_is_not_held_back_by_its_own_inodes(monkeypatch, t
     assert [analytics.status(tree)['state'] for _ in range(3)] == ['on'] * 3
 
 
-def test_new_files_the_rollup_has_not_reached_are_not_a_first_scan(monkeypatch, tree):
-    volumes = [scanned_volume(used=10000, files=9000, folders=950)]
+def volume_states(monkeypatch, tree, volume):
+    volumes = [volume]
     analytics = fake_analytics(monkeypatch, tree, volumes=volumes)
 
     def state(volume):
@@ -931,20 +931,75 @@ def test_new_files_the_rollup_has_not_reached_are_not_a_first_scan(monkeypatch, 
         analytics._volumes.clear()
         return analytics.status(tree)['state']
 
-    assert analytics.status(tree)['state'] == 'on'
+    return volumes, state
+
+
+def test_new_files_the_rollup_has_not_reached_are_not_a_first_scan(monkeypatch, tree):
+    settled = scanned_volume(used=10000, files=9000, folders=950)
+    volumes, state = volume_states(monkeypatch, tree, settled)
+    assert state(settled) == 'on'
     # someone unpacks an archive: a quarter more inodes than the rollup has counted yet
     assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'on'
     # analytics switched off and on again starts the count from nothing: a first scan
     assert state(scanned_volume(used=13000, files=1200, folders=100)) == 'initializing'
     assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'initializing'
     assert state(scanned_volume(used=13000, files=11500, folders=950)) == 'on'
-    assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'on'
+    assert state(scanned_volume(used=16000, files=11500, folders=950)) == 'on'
+    # more new files than the rollup holds are not told apart from a first scan
+    assert state(scanned_volume(used=26000, files=11500, folders=950)) == 'initializing'
+    assert state(scanned_volume(used=13000, files=11500, folders=950)) == 'on'
     # and so does seeing it off
     assert state(scanned_volume(used=13000, files=0, state='off')) == 'off'
     assert state(scanned_volume(used=13000, files=9000, folders=950)) == 'initializing'
     # control: a process that never saw this volume finished holds it to the first-scan line
     fresh = fake_analytics(monkeypatch, tree, volumes=volumes)
     assert fresh.status(tree)['state'] == 'initializing'
+
+
+def test_a_scan_started_again_unseen_is_a_first_scan_however_far_along(
+    monkeypatch, tree
+):
+    # analytics went off and on with nobody asking in between, so this process never saw it
+    # off: the rollup holding less than it did is what says the scan started again
+    settled = scanned_volume(used=10000, files=9000, folders=950)
+    _, state = volume_states(monkeypatch, tree, settled)
+    assert state(settled) == 'on'
+    for files in (5500, 7000, 7900):
+        restarted = scanned_volume(used=10000, files=files, folders=950)
+        assert state(restarted) == 'initializing'
+        # control: the same shortfall with the rollup holding all it held is new files
+        assert state(settled) == 'on'
+        burst = scanned_volume(
+            used=9950 * 10000 // (files + 950), files=9000, folders=950
+        )
+        assert state(burst) == 'on'
+        assert state(settled) == 'on'
+    # files deleted since are not a scan started again: the volume shrank with the rollup
+    assert state(scanned_volume(used=6000, files=5000, folders=950)) == 'on'
+
+
+def test_new_files_the_rollup_never_reaches_stop_counting_as_new(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    settled = scanned_volume(used=10000, files=9000, folders=950)
+    behind = scanned_volume(used=13000, files=9000, folders=950)
+    _, state = volume_states(monkeypatch, tree, settled)
+    clock = [time.monotonic()]
+    monkeypatch.setattr(ontap_analytics.time, 'monotonic', lambda: clock[0])
+    assert state(settled) == 'on'
+    assert state(behind) == 'on'
+    clock[0] += 599
+    assert state(behind) == 'on'
+    # ten minutes: a process that never saw this volume finished has said first scan all
+    # along, and one that did agrees with it from here
+    clock[0] += 1
+    assert state(behind) == 'initializing'
+    assert state(behind) == 'initializing'
+    # control: the time allowed starts again once the rollup has caught up
+    assert state(scanned_volume(used=13000, files=12000, folders=950)) == 'on'
+    assert state(scanned_volume(used=16000, files=12000, folders=950)) == 'on'
+    clock[0] += 599
+    assert state(scanned_volume(used=16000, files=12000, folders=950)) == 'on'
 
 
 def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):

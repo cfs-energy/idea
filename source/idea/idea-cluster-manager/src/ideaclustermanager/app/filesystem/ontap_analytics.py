@@ -34,11 +34,17 @@ ANALYTICS_FIELDS = (
 LABELS_FIELD = 'analytics.by_modified_time.bytes_used.labels'
 LABELS_SECONDS = 3600
 MONTH = re.compile(r'^\d{4}-\d{2}$')
-# the first scan is finished once the rollup holds this much of the volume's inodes, and has
-# started again if it later holds less than the second: what was added since is only new files
-# the rollup has not reached, and that is not a first measurement
+# The first scan is finished once the rollup holds the first fraction of the volume's inodes.
+# A rollup that falls behind after that is behind on new files, not on a first measurement,
+# while all of these hold: it still holds that fraction of what it held when last seen
+# finished (a scan started again counts up from nothing), it holds the second fraction of the
+# volume, and it has been behind for less than the time below (ONTAP took 81 and 94 seconds
+# to count new files where measured). Otherwise the volume is held to the first fraction again.
+# A process that never saw the volume finished has only the first fraction to go on, so two
+# tasks can differ over a burst of new files, for no longer than that time.
 SCAN_COMPLETE_FRACTION = 0.9
 SCAN_RESTARTED_FRACTION = 0.5
+CATCHING_UP_SECONDS = 600
 # files.used also counts what ONTAP keeps on the volume for itself, about a hundred inodes on
 # the volumes measured. On a nearly empty volume those outnumber what people wrote.
 VOLUME_OWN_INODES = 500
@@ -179,7 +185,9 @@ class FolderAnalytics:
         self._labels = {}
         self._failed_at = 0
         self._refused_at = {}
-        self._scanned = set()
+        # per volume: the inodes its rollup held when last seen finished, and since when it
+        # has been behind on new files
+        self._scanned = {}
 
     def _client(self, target):
         config = self.context.config()
@@ -242,7 +250,7 @@ class FolderAnalytics:
         state = analytics.get('state')
         uuid = volume['uuid']
         if state not in ('on', 'initializing'):
-            self._scanned.discard(uuid)
+            self._scanned.pop(uuid, None)
             return dict(state='off')
         # ONTAP says on within seconds of enabling and reports no scan progress, so the first
         # scan shows only as the volume's rollup catching up with its inodes. files.used counts
@@ -250,18 +258,27 @@ class FolderAnalytics:
         # files alone a volume with one folder to nine files never finishes.
         used = (volume.get('files') or {}).get('used') or 0
         counted = analytics.get('file_count', 0) + analytics.get('subdir_count', 0)
-        wanted = (
-            SCAN_RESTARTED_FRACTION if uuid in self._scanned else SCAN_COMPLETE_FRACTION
-        )
-        if state == 'initializing' or used - counted > max(
-            VOLUME_OWN_INODES, used * (1 - wanted)
+        behind = used - counted
+        now = time.monotonic()
+        finished, since = self._scanned.get(uuid, (None, None))
+        if state == 'on' and behind <= max(
+            VOLUME_OWN_INODES, used * (1 - SCAN_COMPLETE_FRACTION)
         ):
-            self._scanned.discard(uuid)
+            self._scanned[uuid] = (counted, None)
+        elif (
+            state == 'on'
+            and finished is not None
+            and counted >= finished * SCAN_COMPLETE_FRACTION
+            and behind <= max(VOLUME_OWN_INODES, used * (1 - SCAN_RESTARTED_FRACTION))
+            and now - (since or now) < CATCHING_UP_SECONDS
+        ):
+            self._scanned[uuid] = (finished, since or now)
+        else:
+            self._scanned.pop(uuid, None)
             return dict(
                 state='initializing',
                 progress=min(99, counted * 100 // used) if used else 0,
             )
-        self._scanned.add(uuid)
         if time.monotonic() - self._refused_at.get(uuid, 0) < RETRY_SECONDS:
             return dict(state='failed')
         return dict(
