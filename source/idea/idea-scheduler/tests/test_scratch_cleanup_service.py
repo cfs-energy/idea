@@ -2562,6 +2562,8 @@ def run_on(world, name):
 
 
 def test_notices_about_one_file_system_do_not_clear_another(world, tmp_path):
+    # no digest on this run, whatever day it is: a first notice is a target of its own
+    world.config['scheduler.scratch_cleanup.digest_weekday'] = (DAY + 1) % 7
     other = second_file_system(world, tmp_path)
     here = job_folder(world)
     there = folder_on(other)
