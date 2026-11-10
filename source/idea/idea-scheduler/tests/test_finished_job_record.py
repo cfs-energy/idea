@@ -9,6 +9,7 @@ finished jobs table with its provisioning error rather than be deleted from the 
 from ideasdk.config.soca_config import SocaConfig
 import logging
 from typing import Dict, List, Optional
+from unittest.mock import Mock
 
 import arrow
 import pytest
@@ -112,6 +113,11 @@ class FakeScheduler:
 
     def __init__(self, jobs_by_id=None):
         self.jobs_by_id = jobs_by_id if jobs_by_id is not None else {}
+        # who the PBS server log says asked for a job's deletion
+        self.deleted_by = {}
+
+    def get_job_deleted_by(self, job_id):
+        return self.deleted_by.get(job_id)
 
     def list_jobs(self, job_ids=None, **_):
         return [
@@ -332,7 +338,7 @@ def test_a_held_job_that_leaves_pbs_is_recorded_by_who_held_it(
         assert (record.disposition, record.reason_class, record.status_reason) == (
             DISPOSITION_DELETED,
             'cancelled',
-            'Cancelled by the owner.',
+            'Cancelled.',
         )
     elif recorded_error[0] == 'CAPACITY_UNAVAILABLE':
         # deleted while it waited: the wait it was in stays on the record
@@ -574,6 +580,7 @@ def test_clean_run_error_message_stays_unset(fake_context, pricing_spy):
 @pytest.mark.parametrize('error', [None, QUEUE_LIMIT_ERROR])
 def test_user_deleted_unprovisioned_job_keeps_record(fake_context, pricing_spy, error):
     job = make_job(provisioned=False, error_message=error)
+    fake_context.scheduler.deleted_by[job.job_id] = job.owner
     build_poller(fake_context)._process_unprovisioned_jobs([job])
     assert fake_context.job_cache.finished_jobs == [job]
     build_poller(fake_context)._index_pending_jobs()
@@ -582,6 +589,93 @@ def test_user_deleted_unprovisioned_job_keeps_record(fake_context, pricing_spy, 
     assert job.reason_class == 'cancelled'
     assert job.status_reason == 'Cancelled by the owner.'
     assert pricing_spy.calls == []
+
+
+@pytest.mark.parametrize(
+    'deleted_by, reason_class, status_reason',
+    [
+        ('mockuser', 'cancelled', 'Cancelled by the owner.'),
+        # seen on a cluster: root's qdel of a queued job was recorded as the owner's
+        ('root', 'administrator', 'Deleted by root.'),
+        # PBS did not say: the record does not guess
+        (None, 'cancelled', 'Cancelled.'),
+        (OSError('server_logs: permission denied'), 'cancelled', 'Cancelled.'),
+    ],
+)
+@pytest.mark.parametrize('provisioned', [False, True])
+def test_a_deleted_job_is_recorded_under_who_pbs_says_deleted_it(
+    fake_context, pricing_spy, provisioned, deleted_by, reason_class, status_reason
+):
+    job = make_job(provisioned=provisioned)
+    if isinstance(deleted_by, Exception):
+        fake_context.scheduler.get_job_deleted_by = Mock(side_effect=deleted_by)
+    else:
+        fake_context.scheduler.deleted_by[job.job_id] = deleted_by
+    poller = build_poller(fake_context)
+    if provisioned:
+        poller._process_finished_jobs([job])
+    else:
+        poller._process_unprovisioned_jobs([job])
+    [record] = fake_context.job_cache.finished_jobs
+    assert (record.disposition, record.reason_class, record.status_reason) == (
+        'deleted',
+        reason_class,
+        status_reason,
+    )
+
+
+def test_a_deletion_idea_recorded_is_not_asked_about(fake_context, pricing_spy):
+    """the portal's own deletes run qdel as the owner; what they recorded stands"""
+    job = make_job(
+        provisioned=False,
+        disposition='deleted',
+        reason_class='administrator',
+        status_reason='Deleted by an administrator.',
+    )
+    fake_context.scheduler.deleted_by[job.job_id] = job.owner
+    build_poller(fake_context)._process_unprovisioned_jobs([job])
+    assert job.reason_class == 'administrator'
+    assert job.status_reason == 'Deleted by an administrator.'
+
+
+SERVER_LOG = """\
+11/09/2026 15:00:27;0008;Server@scheduler;Job;39.scheduler;Job to be deleted at request of eve@scheduler.idea-dev.us-east-2.local
+11/09/2026 15:00:27;0008;Server@scheduler;Job;307.scheduler;Job to be deleted at request of damian.desmond@scheduler.idea-dev.us-east-2.local
+11/09/2026 15:00:28;0008;Server@scheduler;Job;311[].scheduler;Job to be deleted at request of damian.desmond@scheduler.idea-dev.us-east-2.local
+11/09/2026 15:00:29;0100;Server@scheduler;Job;391.scheduler;enqueuing into test, state Q hop 1
+11/09/2026 22:46:30;0008;Server@scheduler;Job;391.scheduler;Job to be deleted at request of root@scheduler.idea-dev.us-east-2.local
+11/09/2026 14:58:25;0004;Server@scheduler;Que;iv-28463b57b918;deleted at request of root@scheduler.idea-dev.us-east-2.local
+"""
+
+
+def test_who_deleted_a_job_is_read_from_the_pbs_server_log(tmp_path, monkeypatch):
+    """the log lines are a cluster's own, OpenPBS 23.06.06"""
+    from ideascheduler.app.scheduler.openpbs import OpenPBSScheduler
+
+    logs = tmp_path / 'server_logs'
+    logs.mkdir()
+    (logs / '20261107').write_text(SERVER_LOG.replace('root@', 'old@'))
+    (logs / '20261108').write_text(
+        '11/08/2026 09:00:00;0008;Server@scheduler;Job;200.scheduler;'
+        'Job to be deleted at request of carol@scheduler\n'
+    )
+    (logs / '20261109').write_text(SERVER_LOG)
+    monkeypatch.setenv('PBS_HOME', str(tmp_path))
+    scheduler = OpenPBSScheduler.__new__(OpenPBSScheduler)
+    assert scheduler.get_job_deleted_by('391') == 'root'
+    assert scheduler.get_job_deleted_by('307') == 'damian.desmond'
+    assert scheduler.get_job_deleted_by('311[]') == 'damian.desmond'
+    assert scheduler.get_job_deleted_by('39') == 'eve'
+    # yesterday's log is read too, and nothing older
+    assert scheduler.get_job_deleted_by('200') == 'carol'
+    (logs / '20261110').write_text('')
+    assert scheduler.get_job_deleted_by('200') is None
+    # a job nobody deleted, and a queue's delete line, name nobody
+    assert scheduler.get_job_deleted_by('392') is None
+    assert scheduler.get_job_deleted_by('iv-28463b57b918') is None
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'missing'))
+    with pytest.raises(OSError):
+        scheduler.get_job_deleted_by('391')
 
 
 def test_user_deleted_job_after_provisioning_is_not_priced(fake_context, pricing_spy):

@@ -161,6 +161,9 @@ class Pbs:
     def get_job(self, job_id):
         return self.jobs.get(job_id)
 
+    def get_job_deleted_by(self, job_id):
+        return None
+
     def get_array_subjobs(self, job_id):
         if self.subjob_error:
             raise self.subjob_error
@@ -456,6 +459,8 @@ def test_the_scheduler_the_app_builds_can_read_subjob_history():
     assert wrapper.get_array_subjobs('359[]') == (2, [])
     wrapper._scheduler.get_job_history_state.return_value = SocaJobState.FINISHED
     assert wrapper.get_job_history_state('359[]') == SocaJobState.FINISHED
+    wrapper._scheduler.get_job_deleted_by.return_value = 'root'
+    assert wrapper.get_job_deleted_by('391') == 'root'
 
 
 def test_qselect_names_a_begun_array_by_its_own_letter():

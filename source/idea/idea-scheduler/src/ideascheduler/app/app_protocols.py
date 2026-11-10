@@ -336,6 +336,9 @@ class SocaSchedulerProtocol(SocaBaseProtocol):
     ) -> Tuple[Optional[int], List[SocaJobSubjob]]: ...
 
     @abstractmethod
+    def get_job_deleted_by(self, job_id: str) -> Optional[str]: ...
+
+    @abstractmethod
     def delete_job(self, job_id: str): ...
 
     @abstractmethod

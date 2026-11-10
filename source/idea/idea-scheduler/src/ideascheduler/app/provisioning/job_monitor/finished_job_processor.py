@@ -309,11 +309,28 @@ class ProcessFinishedJob:
                 # waiting signals' 'Job held' for an owner's hold or a dependency, not a
                 # reason. a recorded wait (capacity, a queue limit) stays the reason class.
                 self.job.reason_class = 'cancelled'
-                self.job.status_reason = 'Cancelled by the owner.'
+                self.job.status_reason = 'Cancelled.'
+                deleted_by = self._deleted_by()
+                if deleted_by == self.job.owner:
+                    self.job.status_reason = 'Cancelled by the owner.'
+                elif deleted_by:
+                    # only a PBS manager or operator can delete someone else's job
+                    self.job.reason_class = 'administrator'
+                    self.job.status_reason = f'Deleted by {deleted_by}.'
         elif self.job.disposition == 'held':
             self.job.reason_class = self.job.reason_class or 'retries_exhausted'
         self.job.reason_class = self.job.reason_class or 'unknown'
         self.job.status_reason = self.job.status_reason or self.job.error_message
+
+    def _deleted_by(self) -> Optional[str]:
+        """who PBS says deleted the job. Not knowing is an answer: the record says less."""
+        try:
+            return self._context.scheduler.get_job_deleted_by(self.job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{self.job.log_tag} could not read who deleted the job: {e}'
+            )
+            return None
 
     def invoke_unprovisioned(self) -> Optional[SocaJob]:
         """

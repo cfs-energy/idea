@@ -142,6 +142,9 @@ class SocaScheduler(SocaSchedulerProtocol):
     ) -> Tuple[Optional[int], List[SocaJobSubjob]]:
         return self._scheduler.get_array_subjobs(job_id=job_id)
 
+    def get_job_deleted_by(self, job_id: str) -> Optional[str]:
+        return self._scheduler.get_job_deleted_by(job_id=job_id)
+
     def delete_job(self, job_id: str):
         self._scheduler.delete_job(job_id)
 

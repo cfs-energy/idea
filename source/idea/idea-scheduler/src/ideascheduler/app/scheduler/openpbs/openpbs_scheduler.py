@@ -528,6 +528,29 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             converter=self._converter,
         ).get_array_subjobs(job_id)
 
+    def get_job_deleted_by(self, job_id: str) -> Optional[str]:
+        """
+        the user PBS deleted this job for, or None when PBS does not say. A job's history
+        names who ended it only if it ran ("terminated by"); the server log names them for
+        every qdel: "Job;391.scheduler;Job to be deleted at request of root@scheduler".
+        """
+        entry = f';Job;{job_id}.'.encode()
+        request = b';Job to be deleted at request of '
+        log_dir = os.path.join(
+            os.environ.get('PBS_HOME', '/var/spool/pbs'), 'server_logs'
+        )
+        # ponytail: reads the two newest daily logs whole, once per job deleted with a
+        # bare qdel before it started. Read from the end if that ever shows up as slow.
+        for name in sorted(os.listdir(log_dir), reverse=True)[:2]:
+            deleted_by = None
+            with open(os.path.join(log_dir, name), 'rb') as log:
+                for line in log:
+                    if entry in line and request in line:
+                        deleted_by = line.rpartition(request)[2].split(b'@')[0]
+            if deleted_by:
+                return deleted_by.decode(errors='replace').strip()
+        return None
+
     def delete_job(self, job_id: str):
         result = self._shell.invoke(
             [
