@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import ldap
 import pytest
@@ -379,6 +379,7 @@ def use_real_account_transitions(context):
     )
     context.ldap_client = accounts.ldap_client
     context.ldap_client.is_readonly.return_value = False
+    context.ldap_client.one_server = MagicMock()
     accounts.task_manager.send.side_effect = lambda **kwargs: (
         SyncUserInDirectoryServiceTask(context).invoke(kwargs['payload'])
     )

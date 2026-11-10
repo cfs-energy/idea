@@ -30,7 +30,9 @@ from ldap.controls.vlv import VLVRequestControl, VLVResponseControl  # noqa
 from ldap.controls.sss import SSSRequestControl, SSSResponseControl  # noqa
 from ldappool import ConnectionManager  # noqa
 from abc import abstractmethod
+from contextlib import contextmanager, nullcontext
 import base64
+import threading
 
 
 class LdapClientOptions(SocaBaseModel):
@@ -52,7 +54,8 @@ class LdapClientOptions(SocaBaseModel):
     password_max_age: Optional[float] = Field(default=None)
 
 
-DEFAULT_LDAP_CONNECTION_POOL_SIZE = 10
+# each task worker (10 at most) can hold one for the length of a task, see one_server
+DEFAULT_LDAP_CONNECTION_POOL_SIZE = 20
 DEFAULT_LDAP_CONNECTION_RETRY_MAX = 60
 DEFAULT_LDAP_CONNECTION_RETRY_DELAY = 10
 DEFAULT_LDAP_CONNECTION_TIMEOUT = 10
@@ -127,6 +130,7 @@ class AbstractLDAPClient:
                         f'Confirming configured option: {opt_d.get("name")}({opt_d.get("code")}) -> {ldap.get_option(opt_d.get("code"))}'
                     )
 
+        self._one_server = threading.local()
         self.logger.debug(f'Starting LDAP connection pool to {self.ldap_uri}')
         self.connection_manager = ConnectionManager(
             uri=self.ldap_uri,
@@ -499,6 +503,15 @@ class AbstractLDAPClient:
         """
         returns an LDAP connection object bound to ROOT user from the connection pool
         """
+        held = getattr(self._one_server, 'held', None)
+        if held is not None:
+            conn, reconnects = held
+            if getattr(conn, '_reconnects_done', 0) != reconnects:
+                raise exceptions.general_exception(
+                    'the directory connection was replaced part way through a task; '
+                    'what the task read may be from another server'
+                )
+            return nullcontext(conn)
         res = self.connection_manager.connection(
             bind=self.ldap_root_bind, passwd=self.ldap_root_password
         )
@@ -506,6 +519,29 @@ class AbstractLDAPClient:
         #    self.logger.debug(f"LDAP CM returning conn ({res})")
 
         return res
+
+    @contextmanager
+    def one_server(self):
+        """
+        every directory call this thread makes inside the block uses one connection.
+
+        The pool's connections can be to different domain controllers, and a change
+        takes seconds to pass from one to the next. A read on one and the write it
+        decides on another adds an entry twice, or skips removing one. A connection
+        that had to be re-opened may be to another server, so the next call fails and
+        the caller starts again.
+        """
+        if getattr(self._one_server, 'held', None) is not None:
+            yield
+            return
+        with self.connection_manager.connection(
+            bind=self.ldap_root_bind, passwd=self.ldap_root_password
+        ) as conn:
+            self._one_server.held = (conn, getattr(conn, '_reconnects_done', 0))
+            try:
+                yield
+            finally:
+                self._one_server.held = None
 
     @staticmethod
     def convert_ldap_group(ldap_group: Dict) -> Optional[Dict]:

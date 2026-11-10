@@ -16,6 +16,7 @@ import { asBoolFlag } from '../../src/cli/commands/deploy.ts';
 import { checkClusterStatus, connectionInfo, modulesTable, sessionManagerUrl, statusEndpoints } from '../../src/cli/commands/status.ts';
 import { buildProgram, run } from '../../src/cli/main.ts';
 import { ClusterConfig, ClusterConfigError } from '../../src/config/cluster-config.ts';
+import { ClusterSettingsWriteDenied } from '../../src/config/cluster-config-db.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome } from '../support/deploy-harness.ts';
 
 const CLUSTER = 'sample-cluster';
@@ -495,6 +496,23 @@ describe('the commander wiring reaches each action', () => {
       0,
     );
     assert.deepEqual(deps.writes, [{ op: 'setConfigEntry', payload: { key: 'global-settings.x', value: 7 } }]);
+  });
+
+  it('config set refused by the credentials exits 1 with the plain message and writes nothing more', async () => {
+    const deps = fakeDeps();
+    deps.configWriter = async () =>
+      ({
+        setConfigEntry: async () => {
+          throw new ClusterSettingsWriteDenied('sample.cluster-settings', new Error('AccessDeniedException'));
+        },
+      }) as never;
+    assert.equal(
+      await run(args('config', 'set', 'Key=global-settings.x,Type=int,Value=7', 'Key=global-settings.y,Type=int,Value=8', '--force'), deps),
+      1,
+    );
+    assert.equal(deps.stderr.length, 1);
+    assert.match(deps.stderr[0] ?? '', /^These AWS credentials cannot change sample\.cluster-settings/);
+    assert.deepEqual(deps.writes, []);
   });
 
   it('config delete deletes each prefix, trimmed', async () => {

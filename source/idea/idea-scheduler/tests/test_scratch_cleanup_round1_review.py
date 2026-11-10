@@ -218,6 +218,8 @@ def test_subjobs_of_one_array_do_not_replace_each_others_record(world):
 
 
 def test_a_digest_day_hiccup_retries_on_the_next_check(world):
+    # the check an hour on is still the digest day, whatever hour the suite runs at
+    world.now = world.now.replace(hour=12)
     digests_on(world)
     due_in(world, days=10)
     world.state.records_error = module.StateUnavailable('index busy')

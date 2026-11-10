@@ -304,7 +304,6 @@ def context(ddb_local):
         task_manager=context.task_manager,
         token_service=None,
     )
-    context.accounts.create_defaults()
 
     context.token_service = TokenService(
         context=context,
@@ -326,6 +325,8 @@ def context(ddb_local):
         accounts_service=context.accounts,
         task_manager=context.task_manager,
     )
+    # as the application does: every service is built before any default is created
+    context.accounts.create_defaults()
 
     yield context
 

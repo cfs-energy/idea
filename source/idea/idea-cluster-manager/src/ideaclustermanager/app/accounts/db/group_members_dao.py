@@ -22,7 +22,7 @@ from ideaclustermanager.app.accounts.auth_utils import AuthUtils
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 
 from typing import List
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 
 
 class GroupMembersDAO:
@@ -69,6 +69,20 @@ class GroupMembersDAO:
             raise exceptions.invalid_params('group_name is required')
 
         self.table.delete_item(Key={'group_name': group_name, 'username': username})
+
+    def delete_memberships_of(self, username: str):
+        # ponytail: the table is keyed by group, so this reads all of it once per
+        # created user; give it a username index if that read ever shows up
+        scan = {'FilterExpression': Attr('username').eq(username)}
+        while True:
+            result = self.table.scan(**scan)
+            for item in Utils.get_value_as_list('Items', result, []):
+                self.table.delete_item(
+                    Key={'group_name': item['group_name'], 'username': username}
+                )
+            if 'LastEvaluatedKey' not in result:
+                return
+            scan['ExclusiveStartKey'] = result['LastEvaluatedKey']
 
     def has_users_in_group(self, group_name: str) -> bool:
         query_result = self.table.query(
