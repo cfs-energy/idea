@@ -636,6 +636,7 @@ class ComputeImageService:
                 record.log_link = builder_log_link(self.context, record.instance_id)
             self._save(record)
 
+        step = None
         try:
             if record.status in ('building', 'checking'):
                 record = resume_record(self.context, self.records, record, self._logger)
@@ -717,7 +718,9 @@ class ComputeImageService:
                     'The compute candidate has no successful in-bake checks.'
                 )
             progress({'status': 'test_launching'})
+            step = 'canary'
             ComputeImageCanary(self.context).validate(record, progress)
+            step = None
             progress(
                 {'validated_on': datetime.now(timezone.utc), 'status': 'promoting'}
             )
@@ -761,6 +764,7 @@ class ComputeImageService:
                 record,
                 record.error,
                 context=self.context,
+                step=step,
             )
             self._dispose(record)
 

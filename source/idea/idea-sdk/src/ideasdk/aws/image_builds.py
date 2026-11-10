@@ -264,9 +264,12 @@ def report_bake_failure(
     record: ImageBuildRecord,
     reason: Optional[str],
     context=None,
+    step: Optional[str] = None,
 ) -> None:
     """
-    the one line every failed pipeline bake logs. the log monitor matches BAKE_FAILED_MARKER,
+    the one line every failed pipeline bake logs. step names the pipeline step that failed when
+    the caller knows it (the compute test launch): its sentences come from the node and the
+    job, so the text alone does not say. the log monitor matches BAKE_FAILED_MARKER,
     since shipped service logs arrive without a level a monitor could use. the same failure is
     counted as a metric, since the log only lasts as long as its index
     """
@@ -286,7 +289,10 @@ def report_bake_failure(
             arch=record.architecture,
             variant=getattr(record.variant, 'value', record.variant) or 'cpu',
         )
-        metrics.add('bake.failures', reason=classify_bake_failure(reason), **row)
+        tag = classify_bake_failure(reason)
+        metrics.add(
+            'bake.failures', reason=step if step and tag == 'other' else tag, **row
+        )
         metrics.level('bake.row_state', 1, status='failed', **row)
 
 
@@ -305,7 +311,8 @@ _BAKE_REASONS = (
     (re.compile(r'in-bake check results unreadable'), 'checks_unreadable'),
     (re.compile(r'in-bake check (\w+)'), None),
     (re.compile(r'^ready_gate\b'), 'ready_gate'),
-    (re.compile(r'canary', re.I), 'canary'),
+    # the compute test launch says "validation job" or "validation node", not its own name
+    (re.compile(r'canary|validation (?:job|node)|filesystem probe', re.I), 'canary'),
     (re.compile(r'the builder ran'), 'release_mismatch'),
     (re.compile(r'from the vendor'), 'no_source_image'),
     (re.compile(r'no ss-base stack'), 'no_base_stack'),
@@ -357,6 +364,10 @@ class ImageRowsCollector:
             )
             status = str(getattr(record.status, 'value', record.status) or 'unknown')
             current[(row['os'], row['arch'], row['variant'], status)] = None
+            if status != 'failed':
+                # a failure is sent at once by whoever failed the row. retried before this
+                # collector's next run, it was never seen here and stayed at 1
+                metrics.level('bake.row_state', 0, status='failed', **row)
             metrics.level('bake.row_state', 1, status=status, **row)
             # a pinned row keeps its image on purpose, an unsupported one never had one
             if self.release and status not in ('pinned', 'unsupported'):
@@ -603,7 +614,17 @@ def deregister_unreferenced_images(
     for image in candidates:
         if image['ImageId'] in in_use:
             continue
-        ec2.deregister_image(ImageId=image['ImageId'])
+        try:
+            ec2.deregister_image(ImageId=image['ImageId'])
+        except ClientError as e:
+            # two bakes promoting together each run this, and the listing still shows an
+            # image for a moment after the other pass removed it: that pass has its
+            # snapshots, and this one goes on to the rest
+            if not e.response.get('Error', {}).get('Code', '').startswith(
+                'InvalidAMIID'
+            ):
+                raise
+            continue
         removed.append(image['ImageId'])
         delete_unshared_snapshots(ec2, image)
     if removed:

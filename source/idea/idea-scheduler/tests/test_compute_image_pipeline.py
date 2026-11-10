@@ -1183,6 +1183,45 @@ def test_a_bake_that_fails_on_its_own_logs_the_line_the_monitor_matches(monkeypa
     ]
 
 
+def test_a_test_launch_failure_is_counted_as_one_whatever_its_text_says(monkeypatch):
+    """
+    "The validation job timed out before completion." was counted with reason other: the
+    count read the sentence, and the test launch's sentences do not name it.
+    """
+    svc = service()
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *a: None, raising=False
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *a: None)
+    report = Mock()
+    monkeypatch.setattr(module, 'report_bake_failure', report)
+    monkeypatch.setattr(
+        module.ComputeImageCanary,
+        'validate',
+        Mock(side_effect=exceptions.general_exception('/data is mounted read-only')),
+    )
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    assert report.call_args.kwargs['step'] == 'canary'
+    # a failure before the test launch is not one
+    report.reset_mock()
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder,
+        'wait_for_image',
+        Mock(side_effect=exceptions.general_exception('no image')),
+        raising=False,
+    )
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    assert report.call_args.kwargs['step'] is None
+
+
 # a failed bake explains itself
 
 PANIC = 'Likely cause: the operating system crashed while starting (kernel panic).'

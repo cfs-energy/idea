@@ -12,6 +12,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+from botocore.exceptions import ClientError
 
 from ideadatamodel import (
     ImageBuildRecord,
@@ -1018,6 +1019,46 @@ def test_cleanup_keeps_an_image_a_launch_template_or_setting_names():
 
     assert h.pipeline._deregister_unreferenced() == ['ami-old']
     assert h.ec2.deleted_snapshots == ['snap-ami-old']
+
+
+def test_cleanup_goes_on_past_an_image_another_pass_already_removed():
+    """
+    two bakes promoting together each run cleanup: the second still listed the image the
+    first had just deregistered, failed on it and logged "image cleanup failed".
+    """
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    for image_id in ('ami-gone', 'ami-old'):
+        h.ec2.add_image(image_id, name=f'idea-dcv-host-rocky9-{image_id}')
+    deregister = h.ec2.deregister_image
+
+    def racing(ImageId):
+        if ImageId == 'ami-gone':
+            raise ClientError(
+                {'Error': {'Code': 'InvalidAMIID.Unavailable', 'Message': 'gone'}},
+                'DeregisterImage',
+            )
+        deregister(ImageId)
+
+    h.ec2.deregister_image = racing
+    h.pipeline._logger = Mock()
+    h.pipeline.cleanup()
+    assert h.ec2.deregistered == ['ami-old']
+    # the other pass owns the first image's snapshots
+    assert h.ec2.deleted_snapshots == ['snap-ami-old']
+    h.pipeline._logger.error.assert_not_called()
+
+
+def test_cleanup_still_reports_an_image_it_could_not_deregister():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    h.ec2.add_image('ami-old', name='idea-dcv-host-rocky9-ami-old')
+    h.ec2.deregister_image = Mock(
+        side_effect=ClientError(
+            {'Error': {'Code': 'UnauthorizedOperation', 'Message': 'no'}},
+            'DeregisterImage',
+        )
+    )
+    with pytest.raises(ClientError):
+        h.pipeline._deregister_unreferenced()
 
 
 def test_cleanup_deletes_nothing_when_a_reference_cannot_be_read():
