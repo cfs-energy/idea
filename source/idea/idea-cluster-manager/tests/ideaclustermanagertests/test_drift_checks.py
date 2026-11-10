@@ -412,6 +412,39 @@ def test_ontap_with_no_login_is_unknown_and_efs_has_no_ontap_checks(monkeypatch)
     assert not [c for c in states(efs.run_once()) if c.startswith('ontap_')]
 
 
+def test_an_entry_with_no_login_on_an_svm_another_entry_reads_reports_nothing(
+    monkeypatch,
+):
+    # /data and /idea_apps on one SVM with one metrics login, as on the production clusters:
+    # the second entry read unknown on all eight checks and paged after two days, for ever
+    ontap = {'provider': 'fsx_netapp_ontap'}
+    dns = 'shared-storage.{}.fsx_netapp_ontap.svm.management_dns'
+    checks = harness(
+        monkeypatch,
+        Config(
+            **{
+                'shared-storage': {'data': ontap, 'ideaapps': ontap, 'other': ontap},
+                dns.format('data'): ENDPOINT,
+                dns.format('ideaapps'): f'https://{ENDPOINT.upper()}/',
+                dns.format('other'): 'svm-2.fs-0abc.fsx.us-east-2.amazonaws.com',
+            }
+        ),
+    )
+    results = checks.run_once()
+    by_scope = {scope: set() for scope in ('data', 'ideaapps', 'other')}
+    for result in results:
+        if result.scope in by_scope:
+            by_scope[result.scope].add((result.state, result.detail))
+    assert by_scope['ideaapps'] == set()
+    assert not [t for _, t in checks.published['state'] if t['scope'] == 'ideaapps']
+    # the SVM itself is still read, under the entry that has the login
+    assert {state for state, _ in by_scope['data']} == {OK}
+    # and an SVM no login reads is still unknown, never silent
+    assert by_scope['other'] == {(UNKNOWN, 'no_login')}
+    # an entry with no endpoint matches nothing
+    assert DriftChecks.svm_of(None) is None and DriftChecks.svm_of(' ') is None
+
+
 def test_the_ad_secret_is_bound_and_never_logged(monkeypatch):
     checks = harness(monkeypatch)
     checks.context.ldap_client.root_password_binds.return_value = False

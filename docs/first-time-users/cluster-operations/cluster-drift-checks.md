@@ -18,7 +18,7 @@ About once a day the cluster manager leader reads the settings that must hold on
 | `values_owned_settings` | Settings that `values.yml` overwrites on each upgrade match the copy in the cluster bucket. Drift here means the next upgrade changes that setting | `values/values.yml` in the cluster bucket, only those keys |
 | `settings_must_match` | Keys the release fixes hold the template's value. Today, the desktop and scheduler provisioning timeouts. The log line names any that differ | Settings |
 
-A cluster with no file server on ONTAP has no `ontap_*` checks. A file server with no metrics login reports `no_login`.
+A cluster with no file server on ONTAP has no `ontap_*` checks. These are an SVM's settings, so they are reported once per SVM, under the shared-storage entry whose metrics login reads it: a second entry on the same SVM (the same `svm.management_dns`) with no login of its own reports nothing. An entry on an SVM that no login reads reports `unknown` with `no_login` on every check until it has one, and the two day alert below fires for it.
 
 ONTAP reads use the storage metrics login, and read configuration and volume names only: never a file or a user. The login's role needs these paths added once per SVM, from `fsxadmin`. Until then those checks read `unknown` with `forbidden` in the log, and nothing else is affected. Without `/api/svm/svms` the CIFS read answers with no server even when one is joined, so the CIFS checks and `ontap_machine_account` read `unknown`, never drift. With it, an SVM that has no CIFS server reads `drift` when its shared-storage entry has `svm.smb_dns` (the cluster mounts it over SMB) and `ok` when it does not (NFS only):
 

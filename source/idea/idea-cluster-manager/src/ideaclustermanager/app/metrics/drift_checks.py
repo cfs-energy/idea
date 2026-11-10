@@ -352,6 +352,18 @@ class DriftChecks:
             == PROVIDER
         ]
 
+    def management_dns(self, name: str) -> Optional[str]:
+        return self.context.config().get_string(
+            f'shared-storage.{name}.{PROVIDER}.svm.management_dns'
+        )
+
+    @staticmethod
+    def svm_of(endpoint: Optional[str]) -> Optional[str]:
+        """the SVM an endpoint names, however it is spelled. None matches nothing."""
+        host = (endpoint or '').strip().lower()
+        host = host.removeprefix('https://').removeprefix('http://').rstrip('/')
+        return host or None
+
     @staticmethod
     def svm_visible(client) -> bool:
         try:
@@ -601,10 +613,15 @@ class DriftChecks:
             )
             controllers = controller_answer.get('found')
             targets = {t.name: t for t in self.storage_metrics.targets()}
+            read_svms = {self.svm_of(t.endpoint) for t in targets.values()}
             for name in entries:
                 target = targets.get(name)
                 scope = tag_value(name)
                 if target is None:
+                    # these are the SVM's settings: an entry on an SVM another entry's login
+                    # reads is read there, and a second copy here could only ever say unknown
+                    if self.svm_of(self.management_dns(name)) in read_svms:
+                        continue
                     results.extend(
                         DriftResult(c, UNKNOWN, scope, 'no_login') for c in ONTAP_CHECKS
                     )
