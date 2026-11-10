@@ -201,6 +201,12 @@ def test_qstat_writes_a_lone_array_index_as_a_number():
     assert OpenPBSJob(array_indices_remaining='-').array_indices_remaining == '-'
 
 
+def test_a_text_field_qstat_writes_as_a_number_does_not_fail_the_listing():
+    """qsub -A 1234 and -P 2026: the same bare number, on fields anyone can set"""
+    job = OpenPBSJob(id='12.scheduler', Account_Name=1234, project=2026, comment=1.5)
+    assert (job.Account_Name, job.project, job.comment) == ('1234', '2026', '1.5')
+
+
 def test_a_qstat_listing_with_a_running_subjob_is_read():
     context = Mock()
     context.queue_profiles.get_queue_profile.return_value = None

@@ -123,17 +123,21 @@ class OpenPBSJob(SocaBaseModel):
     Variable_List: Optional[dict] = Field(default=None)
 
     @field_validator(
+        'Account_Name',
         'array_index',
         'array_indices_remaining',
         'array_indices_submitted',
+        'comment',
+        'project',
         mode='before',
     )
     @classmethod
-    def _index_as_text(cls, value):
-        # qstat's JSON writes a lone index as a number: "array_index":1, and
-        # "array_indices_remaining":3 while one index is left. A range stays a string.
+    def _number_as_text(cls, value):
+        # qstat's JSON writes a value that reads as a number bare: "array_index":1,
+        # "array_indices_remaining":3 while one index is left, and the same for an account
+        # or project named in digits. One such job must not fail every listing.
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return str(int(value))
+            return str(int(value)) if float(value).is_integer() else str(value)
         return value
 
     @staticmethod
