@@ -984,7 +984,8 @@ def test_new_files_the_rollup_never_reaches_stop_counting_as_new(monkeypatch, tr
     settled = scanned_volume(used=10000, files=9000, folders=950)
     behind = scanned_volume(used=13000, files=9000, folders=950)
     _, state = volume_states(monkeypatch, tree, settled)
-    clock = [time.monotonic()]
+    # whole seconds: from a real reading, 599 more and then 1 more can land a hair short of 600
+    clock = [1000.0]
     monkeypatch.setattr(ontap_analytics.time, 'monotonic', lambda: clock[0])
     assert state(settled) == 'on'
     assert state(behind) == 'on'
@@ -1637,7 +1638,8 @@ def test_the_biggest_folders_drop_one_the_person_can_no_longer_open(monkeypatch,
         kept: dict(self=row(kept, 2**20), children=[], measured_at=NOW),
     }
     service, _ = analytics_service(monkeypatch, tree, folders)
-    clock = [time.monotonic()]
+    # whole seconds: a real reading moved on by 59 and 1, or by 60 twice, can miss the minute
+    clock = [1000.0]
     monkeypatch.setattr(storage_usage.time, 'monotonic', lambda: clock[0])
 
     def largest():
