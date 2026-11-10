@@ -544,11 +544,17 @@ class OpenPBSJob(SocaBaseModel):
         state = self.soca_job_state
         start_time = self.parse_pbs_datetime(self.stime)
         terminated = None
+        done = state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+        if done and Utils.is_empty(self.exec_host) and Utils.is_empty(self.exec_vnode):
+            # deleted while it was queued. Once its array has begun PBS lists it as done
+            # with status 0, the comment 'Subjob finished' and the array's start and end,
+            # the same as one that ran and passed. Only a subjob that ran has a host, so
+            # this one is recorded as ended by qdel with no status and no times of its own.
+            return SocaJobSubjob(
+                job_id=self.id.split('.')[0], state=state, terminated=True
+            )
         # a done subjob reads X while its array is active and F in history, same substates
-        if (
-            state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
-            and self.substate is not None
-        ):
+        if done and self.substate is not None:
             terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
         return SocaJobSubjob(
             job_id=self.id.split('.')[0],

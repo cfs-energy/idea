@@ -138,6 +138,8 @@ class Pbs:
         # what asking for one job alone does: 'drop' lists nothing though PBS has the job
         self.listing = None
         self.state_error = None
+        # who the PBS server log says asked for a job's or a subjob's deletion
+        self.deleted_by = {}
 
     def list_jobs_ids(self, raise_on_error=False):
         if self.on_qselect:
@@ -162,7 +164,7 @@ class Pbs:
         return self.jobs.get(job_id)
 
     def get_job_deleted_by(self, job_id):
-        return None
+        return self.deleted_by.get(job_id)
 
     def get_array_subjobs(self, job_id):
         if self.subjob_error:
@@ -280,6 +282,8 @@ def history_entry(state='F', exit_status=0, substate=92, start=0, seconds=30, **
         'Exit_status': exit_status,
         'stime': str(START.shift(seconds=start).int_timestamp),
         'resources_used': {'walltime': f'00:00:{seconds:02d}'},
+        # every subjob that ran has its host; one deleted while queued has none
+        'exec_host': '10.0.0.7/0',
     }
     values.update(fields)
     return {key: value for key, value in values.items() if value is not None}
@@ -356,6 +360,60 @@ def test_subjobs_that_t_leaves_out_are_asked_for_by_id():
     assert submitted == 2
     assert [found.job_id for found in subjobs] == ['359[2]']
     assert subjobs[0].terminated is True
+
+
+@pytest.mark.parametrize(
+    'deleted',
+    [
+        # after its array finished: 411[2] and 420[2], both deleted while queued
+        dict(state='F', substate=92, exit_status=0, comment='Subjob finished'),
+        # while its begun array is active
+        dict(state='X', substate=70, exit_status=0, comment='Subjob finished'),
+        # before its array began: no status and no start either
+        dict(state='X', substate=10, exit_status=None, stime=None),
+    ],
+)
+def test_a_subjob_deleted_while_queued_is_not_read_as_a_run_that_passed(deleted):
+    """
+    qdel 411[2] while it was queued. PBS history then read F, substate 92, Exit_status 0,
+    "Subjob finished", with the array's start time: field for field a subjob that ran and
+    passed, and it was recorded as one. What it lacks is a host, which every subjob that
+    ran has.
+    """
+    shell = Shell(
+        {
+            ('-t', '359[]'): (
+                0,
+                {
+                    '359[].scheduler': PARENT_HISTORY,
+                    '359[1].scheduler': history_entry(),
+                    '359[2].scheduler': history_entry(
+                        resources_used=None, exec_host=None, **deleted
+                    ),
+                },
+            )
+        }
+    )
+    qstat = OpenPBSQStat(context=Mock(), logger=LOGGER, shell=shell, converter=None)
+    _, subjobs = qstat.get_array_subjobs('359[]')
+    ran, never_ran = sorted(subjobs, key=lambda found: found.job_id)
+    assert (ran.exit_status, ran.terminated) == (0, False)
+    assert ran.start_time == START.datetime
+    assert never_ran.job_id == '359[2]'
+    assert never_ran.terminated is True
+    assert never_ran.exit_status is None
+    assert (never_ran.start_time, never_ran.end_time) == (None, None)
+
+
+def test_a_subjob_that_ran_is_known_by_its_vnode_if_pbs_gives_no_host():
+    entry = OpenPBSJob(
+        id='359[1].scheduler',
+        job_state='F',
+        substate=92,
+        Exit_status=0,
+        exec_vnode='(10.0.0.7:ncpus=1)',
+    )
+    assert (entry.as_subjob().exit_status, entry.as_subjob().terminated) == (0, False)
 
 
 def test_subjobs_are_still_read_if_qstat_refuses_t_with_history():
@@ -565,6 +623,35 @@ def test_a_subjobs_run_event_refreshes_its_array(world, monitor):
 
     assert cached_ids(world.cache) == ['7[]']
     assert world.cache.get_job('7[]').state == SocaJobState.SUBJOB_BEGUN
+
+
+def test_an_array_reads_begun_from_its_first_subjobs_run_event(world, monitor):
+    """
+    The run event re-reads the array in the second PBS marks it begun, and 6 of 8 arrays
+    still read queued: the portal said "Provisioning" through the first subjob's whole
+    run. A subjob's run event is itself the proof that its array has begun.
+    """
+    world.cache.sync([array_job('7[]')])
+    world.pbs.jobs['7[]'] = array_job('7[]', SocaJobState.QUEUED)
+
+    monitor.job_running(run_event(1))
+    sync_running(monitor)
+
+    assert world.cache.get_job('7[]').state == SocaJobState.SUBJOB_BEGUN
+
+
+def test_a_plain_job_pbs_still_lists_as_queued_is_not_rewritten_by_its_run_event(
+    world, monitor
+):
+    world.cache.sync([array_job('8')])
+    world.pbs.jobs['8'] = array_job('8', SocaJobState.QUEUED)
+
+    monitor.job_running(
+        SocaJob(job_id='8', queue='test', queue_type='test', owner='alice')
+    )
+    sync_running(monitor)
+
+    assert world.cache.get_job('8').state == SocaJobState.QUEUED
 
 
 def test_an_array_is_announced_as_started_once(world, monitor):
@@ -832,6 +919,59 @@ def test_an_array_with_a_subjob_qdel_ended_is_not_a_success_though_all_exited_0(
         False,
         False,
     ]
+
+
+@pytest.mark.parametrize(
+    'deleted_by, reason',
+    [
+        ('alice', 'Subjob 7[2] cancelled by the owner.'),
+        ('root', 'Subjob 7[2] deleted by root.'),
+        (None, None),
+    ],
+)
+def test_an_array_with_a_subjob_deleted_before_it_ran_says_so(
+    world, deleted_by, reason
+):
+    """
+    411[] with 411[2] deleted while queued was recorded exit 0, ran, not terminated. The
+    array did run and the rest passed, so it is not failed; it has no status of its own,
+    it is marked as ended by qdel, and its owner reads which subjob and who.
+    """
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
+    never_ran = SocaJobSubjob(
+        job_id='7[2]', state=SocaJobState.FINISHED, terminated=True
+    )
+    finish_array(
+        world, subjobs=[subjob(1), never_ran, subjob(3, start=30)], submitted=3
+    )
+    world.pbs.deleted_by['7[2]'] = deleted_by
+    poll(world)
+    [record] = records(world)
+    assert record.exit_status is None
+    assert record.terminated is True
+    assert (record.disposition, record.reason_class) == ('ran', 'unknown')
+    assert record.status_reason == reason
+    assert not job_succeeded(record)
+    assert [(found.job_id, found.terminated) for found in record.subjobs] == [
+        ('7[1]', False),
+        ('7[2]', True),
+        ('7[3]', False),
+    ]
+
+
+def test_an_array_deleted_while_it_ran_names_who_deleted_it(world):
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
+    finish_array(
+        world, subjobs=[subjob(1), subjob(2, exit_status=271, terminated=True)]
+    )
+    world.pbs.deleted_by.update({'7[]': 'alice', '7[2]': 'root'})
+    poll(world)
+    [record] = records(world)
+    assert (record.exit_status, record.disposition) == (271, 'failed')
+    assert (record.reason_class, record.status_reason) == (
+        'cancelled',
+        'Cancelled by the owner.',
+    )
 
 
 def test_a_subjob_with_no_word_on_qdel_does_not_mark_its_array_as_stopped(world):
