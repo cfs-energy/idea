@@ -319,13 +319,42 @@ class ProcessFinishedJob:
                     self.job.status_reason = f'Deleted by {deleted_by}.'
         elif self.job.disposition == 'held':
             self.job.reason_class = self.job.reason_class or 'retries_exhausted'
+        elif self.job.terminated and not self.job.status_reason:
+            self._apply_deleted_while_running()
         self.job.reason_class = self.job.reason_class or 'unknown'
         self.job.status_reason = self.job.status_reason or self.job.error_message
 
-    def _deleted_by(self) -> Optional[str]:
+    def _apply_deleted_while_running(self):
+        """
+        qdel ended a job that had started. It is still whatever it exited with, and its
+        owner reads who stopped it beside that, as for a job deleted while queued. For an
+        array it is the first subjob qdel ended that is named: the array itself ran on.
+        """
+        job = self.job
+        deleted_by = self._deleted_by()
+        if deleted_by:
+            mine = deleted_by == job.owner
+            job.reason_class = job.reason_class or (
+                'cancelled' if mine else 'administrator'
+            )
+            job.status_reason = (
+                'Cancelled by the owner.' if mine else f'Deleted by {deleted_by}.'
+            )
+            return
+        for subjob in job.subjobs or []:
+            if subjob.terminated is not True:
+                continue
+            deleted_by = self._deleted_by(subjob.job_id)
+            if deleted_by == job.owner:
+                job.status_reason = f'Subjob {subjob.job_id} cancelled by the owner.'
+            elif deleted_by:
+                job.status_reason = f'Subjob {subjob.job_id} deleted by {deleted_by}.'
+            return
+
+    def _deleted_by(self, job_id: Optional[str] = None) -> Optional[str]:
         """who PBS says deleted the job. Not knowing is an answer: the record says less."""
         try:
-            return self._context.scheduler.get_job_deleted_by(self.job.job_id)
+            return self._context.scheduler.get_job_deleted_by(job_id or self.job.job_id)
         except Exception as e:
             self._logger.warning(
                 f'{self.job.log_tag} could not read who deleted the job: {e}'

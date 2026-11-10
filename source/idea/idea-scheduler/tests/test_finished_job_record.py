@@ -624,6 +624,68 @@ def test_a_deleted_job_is_recorded_under_who_pbs_says_deleted_it(
     )
 
 
+@pytest.mark.parametrize(
+    'deleted_by, reason_class, status_reason',
+    [
+        ('mockuser', 'cancelled', 'Cancelled by the owner.'),
+        ('root', 'administrator', 'Deleted by root.'),
+        # PBS did not say who: the record stays as it was
+        (None, 'unknown', None),
+    ],
+)
+def test_a_job_deleted_while_it_ran_says_who_deleted_it(
+    fake_context, pricing_spy, deleted_by, reason_class, status_reason
+):
+    """
+    seen on a cluster: a job its owner cancelled while it ran read "Failed (exit 143)"
+    with nothing beside it. It is still failed with that status, and scratch still keeps
+    its folder for the failed time; the record now also says who stopped it.
+    """
+    from ideascheduler.app.scratch_cleanup.job_state import job_succeeded
+
+    start_time = arrow.get('2026-11-10T20:00:43Z')
+    fake_context.scheduler.jobs_by_id = {
+        '14906': make_job(
+            provisioned=True,
+            state=SocaJobState.FINISHED,
+            exit_status=143,
+            terminated=True,
+            start_time=start_time.datetime,
+            end_time=start_time.shift(seconds=217).datetime,
+        )
+    }
+    fake_context.scheduler.deleted_by['14906'] = deleted_by
+
+    build_poller(fake_context)._process_finished_jobs([make_job(provisioned=True)])
+
+    [record] = fake_context.job_cache.finished_jobs
+    assert (record.disposition, record.exit_status) == ('failed', 143)
+    assert (record.reason_class, record.status_reason) == (reason_class, status_reason)
+    assert not job_succeeded(record)
+
+
+def test_a_job_that_failed_on_its_own_is_not_asked_who_deleted_it(
+    fake_context, pricing_spy
+):
+    start_time = arrow.get('2026-11-10T20:00:43Z')
+    fake_context.scheduler.jobs_by_id = {
+        '14906': make_job(
+            provisioned=True,
+            state=SocaJobState.FINISHED,
+            exit_status=1,
+            terminated=False,
+            start_time=start_time.datetime,
+            end_time=start_time.shift(seconds=217).datetime,
+        )
+    }
+    fake_context.scheduler.get_job_deleted_by = Mock(side_effect=AssertionError)
+
+    build_poller(fake_context)._process_finished_jobs([make_job(provisioned=True)])
+
+    [record] = fake_context.job_cache.finished_jobs
+    assert (record.reason_class, record.status_reason) == ('unknown', None)
+
+
 def test_a_deletion_idea_recorded_is_not_asked_about(fake_context, pricing_spy):
     """the portal's own deletes run qdel as the owner; what they recorded stands"""
     job = make_job(

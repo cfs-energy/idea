@@ -34,6 +34,9 @@ _OUTCOME_FIELDS = (
     'mtime',
     'resources_used',
     'array_indices_submitted',
+    # where it ran: a done subjob with neither never ran
+    'exec_host',
+    'exec_vnode',
 )
 
 

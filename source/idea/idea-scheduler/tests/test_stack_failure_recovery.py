@@ -308,6 +308,8 @@ def test_housekeeper_deletes_failed_stack_and_retries(
     assert mock_job_monitor.modified_jobs == [job.job_id]
     # the failed cycle is counted, so a stack that keeps failing cannot retry forever
     assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    # a failed create is retried up to the cap; only nodes that never ran the job hold it
+    assert mock_scheduler.held_jobs == []
 
 
 def test_housekeeper_leaves_job_alone_on_unmapped_stack_status(
@@ -437,19 +439,10 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     deleted, and the job is held with a comment instead of retried silently: a retry
     launches the same broken nodes again while the job looks like it is simply waiting.
     """
-    import arrow
-    from types import SimpleNamespace
-
-    monkeypatch.setattr(
-        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.COMPLETED
-    )
-    monkeypatch.setattr(
-        JobProvisioningUtil,
-        'stack',
-        property(
-            lambda _self: SimpleNamespace(creation_time=arrow.utcnow().shift(hours=-3))
-        ),
-    )
+    # check_status itself is asked, as on a cluster: it reports a created stack past the
+    # timeout as TIMEOUT, which the sweep took for a failed create and retried. Seen as
+    # "attempt 1 of 3 ... will be re-tried", a new stack, and no hold.
+    created_stack(monkeypatch, minutes_ago=31)
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
     mock_scheduler.live_jobs[job.job_id] = job
@@ -463,6 +456,165 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     assert comment.startswith('IDEA: held. Nodes launched but the job did not start in')
     assert comment.endswith(f'qrls {job.job_id} to retry')
     assert len(comment) <= 128
+    # the reason the owner reads, recorded as the platform's hold
+    held = job_cache.get_job(job.job_id)
+    assert held.reason_class == 'stack_timeout'
+    assert 'nodes launched but the job did not start in 30 min' in held.error_message
+
+
+def created_stack(monkeypatch, minutes_ago: int, stack_id: Optional[str] = None):
+    """a compute stack that reached CREATE_COMPLETE, as cloudformation describes it"""
+    import arrow
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        JobProvisioningUtil,
+        'stack',
+        property(
+            lambda _self: SimpleNamespace(
+                stack_status='CREATE_COMPLETE',
+                stack_id=stack_id,
+                creation_time=arrow.utcnow().shift(minutes=-minutes_ago),
+                soca_keep_forever=False,
+                soca_terminate_when_idle=0,
+            )
+        ),
+    )
+
+
+class MockInstanceCache:
+    def __init__(self, instances):
+        self.instances = instances
+
+    def list_compute_instances(self, job_id=None, states=None, **_):
+        return [
+            instance
+            for instance in self.instances
+            if instance.soca_job_id == job_id and instance.state in states
+        ]
+
+
+def job_instance(job: SocaJob, bootstrap_status=None, stack=None, state='running'):
+    from ideadatamodel import EC2Instance, constants
+
+    tags = {
+        constants.IDEA_TAG_JOB_ID: job.job_id.replace('[]', '-array'),
+        'aws:cloudformation:stack-id': stack or job.params.stack_id,
+    }
+    if bootstrap_status:
+        tags['idea:BootstrapStatus'] = bootstrap_status
+    return EC2Instance(
+        {
+            'InstanceId': 'i-0123456789abcdef0',
+            'InstanceType': 't3.micro',
+            'State': {'Name': state},
+            'Tags': [{'Key': key, 'Value': value} for key, value in tags.items()],
+        }
+    )
+
+
+def test_a_node_too_small_to_bootstrap_holds_its_job_at_once_and_says_so(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    """
+    a compute node that cannot set itself up for lack of memory tags itself and stops.
+    Nothing read the tag: the job showed "Provisioning" for the whole timeout, three
+    times over. The sweep already has the instance, so the first one after the tag holds
+    the job and names the instance type.
+    """
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status='insufficient-memory')]
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == [job.get_compute_stack()]
+    assert mock_scheduler.reset_jobs == [job.job_id]
+    assert mock_scheduler.held_jobs == [job.job_id]
+    comment = mock_scheduler.comments[job.job_id]
+    assert comment.startswith('IDEA: held. Instance type t3.micro is too small')
+    assert len(comment) <= 128
+    held = job_cache.get_job(job.job_id)
+    assert held.reason_class == 'stack_timeout'
+    assert 'instance type t3.micro is too small' in held.error_message
+    assert ',' not in held.error_message, 'qalter splits on commas'
+
+
+@pytest.mark.parametrize(
+    'instance',
+    [
+        # still setting itself up, or failed some other way: the timeout decides
+        dict(),
+        dict(bootstrap_status='reboot-failed'),
+        # a node of an earlier stack of this job, on its way out
+        dict(bootstrap_status='insufficient-memory', stack='arn:earlier-stack'),
+        dict(bootstrap_status='insufficient-memory', state='shutting-down'),
+    ],
+)
+def test_a_job_is_not_held_as_too_small_without_its_own_nodes_word(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    instance,
+):
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache([job_instance(job, **instance)])
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.held_jobs == []
+    assert mock_scheduler.reset_jobs == []
+
+
+def test_a_begun_array_is_left_alone_though_a_node_says_it_is_too_small(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job.job_id = '357[]'
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job.model_copy(
+        update={'state': SocaJobState.SUBJOB_BEGUN}
+    )
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status='insufficient-memory')]
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.held_jobs == []
+    assert job_cache.get_job(job.job_id).state == SocaJobState.SUBJOB_BEGUN
+
+
+def test_a_begun_array_past_the_timeout_is_not_held(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    """406[]: its row read queued at 30 minutes with its first subjob still running"""
+    created_stack(monkeypatch, minutes_ago=31)
+    job = mock_job(provisioned=True)
+    job.job_id = '357[]'
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job.model_copy(
+        update={'state': SocaJobState.SUBJOB_BEGUN}
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.held_jobs == []
+    assert mock_scheduler.reset_jobs == []
 
 
 @pytest.mark.parametrize(

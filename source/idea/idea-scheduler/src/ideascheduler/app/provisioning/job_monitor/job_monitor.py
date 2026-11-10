@@ -331,6 +331,17 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         if len(jobs) == 0:
                             continue
 
+                        if job_type == 'running':
+                            for job in jobs:
+                                # a subjob's run event is filed under its array, and PBS
+                                # can still list the array as queued in the second its
+                                # first subjob starts. The event is the proof it has begun.
+                                if (
+                                    ModelUtils.is_array_job_id(job.job_id)
+                                    and job.state == SocaJobState.QUEUED
+                                ):
+                                    job.state = SocaJobState.SUBJOB_BEGUN
+
                         self._context.job_cache.sync(jobs=jobs)
 
                         if job_type == 'modified':
