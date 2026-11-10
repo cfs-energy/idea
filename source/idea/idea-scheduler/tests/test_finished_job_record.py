@@ -651,6 +651,7 @@ SERVER_LOG = """\
 def test_who_deleted_a_job_is_read_from_the_pbs_server_log(tmp_path, monkeypatch):
     """the log lines are a cluster's own, OpenPBS 23.06.06"""
     from ideascheduler.app.scheduler.openpbs import OpenPBSScheduler
+    from ideascheduler.app.scheduler.openpbs.openpbs_scheduler import DeletionLog
 
     logs = tmp_path / 'server_logs'
     logs.mkdir()
@@ -662,20 +663,57 @@ def test_who_deleted_a_job_is_read_from_the_pbs_server_log(tmp_path, monkeypatch
     (logs / '20261109').write_text(SERVER_LOG)
     monkeypatch.setenv('PBS_HOME', str(tmp_path))
     scheduler = OpenPBSScheduler.__new__(OpenPBSScheduler)
+    scheduler._deletion_log = DeletionLog()
     assert scheduler.get_job_deleted_by('391') == 'root'
     assert scheduler.get_job_deleted_by('307') == 'damian.desmond'
     assert scheduler.get_job_deleted_by('311[]') == 'damian.desmond'
     assert scheduler.get_job_deleted_by('39') == 'eve'
-    # yesterday's log is read too, and nothing older
+    # yesterday's log is read too
     assert scheduler.get_job_deleted_by('200') == 'carol'
-    (logs / '20261110').write_text('')
-    assert scheduler.get_job_deleted_by('200') is None
     # a job nobody deleted, and a queue's delete line, name nobody
     assert scheduler.get_job_deleted_by('392') is None
     assert scheduler.get_job_deleted_by('iv-28463b57b918') is None
-    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'missing'))
+
+    # lines PBS adds later are picked up, a half-written one only once it is whole
+    line = '11/09/2026 23:09:30;0008;Server@scheduler;Job;394.scheduler;Job to be deleted at request of yor.forger@scheduler\n'
+    with open(logs / '20261109', 'a') as log:
+        log.write(line[:-20])
+    assert scheduler.get_job_deleted_by('394') is None
+    with open(logs / '20261109', 'a') as log:
+        log.write(line[-20:])
+    assert scheduler.get_job_deleted_by('394') == 'yor.forger'
+    assert scheduler.get_job_deleted_by('391') == 'root'
+
+    # a new day: nothing older than yesterday's log is kept
+    (logs / '20261110').write_text('')
+    assert scheduler.get_job_deleted_by('394') == 'yor.forger'
+    assert scheduler.get_job_deleted_by('200') is None
+
     with pytest.raises(OSError):
-        scheduler.get_job_deleted_by('391')
+        DeletionLog(str(tmp_path / 'missing')).deleted_by('391')
+
+
+def test_a_burst_of_deleted_jobs_reads_the_server_log_once(tmp_path, monkeypatch):
+    """qdel of a few thousand queued jobs must not cost a pass over the log for each"""
+    from ideascheduler.app.scheduler.openpbs.openpbs_scheduler import DeletionLog
+
+    logs = tmp_path / 'server_logs'
+    logs.mkdir()
+    (logs / '20261109').write_text(SERVER_LOG * 200)
+    size = (logs / '20261109').stat().st_size
+    log = DeletionLog(str(logs))
+    read_bytes = []
+    read = log._read
+
+    def measured(name):
+        before = log._offsets.get(name, 0)
+        read(name)
+        read_bytes.append(log._offsets[name] - before)
+
+    monkeypatch.setattr(log, '_read', measured)
+    for _ in range(50):
+        assert log.deleted_by('391') == 'root'
+    assert read_bytes == [size] + [0] * 49
 
 
 def test_user_deleted_job_after_provisioning_is_not_priced(fake_context, pricing_spy):
