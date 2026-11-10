@@ -431,10 +431,21 @@ export class ClusterManagerStack extends IdeaBaseStack {
   /**
    * A new password waits for its directory sync task in a secret the application makes and the
    * task deletes: `<cluster>-password-sync-<random>`. The task role may make a secret of that name
-   * only with the two tags its read and delete then require, and may set no other tag on one: with
-   * `idea:ModuleName` the policy template's statement for the module's own secrets would let the
-   * role overwrite a waiting password. The sweep of strays lists secrets with the health collectors'
-   * ListSecrets. Out of the policy template for the same reason as theirs.
+   * only with its two tags, and may set no other tag on one: with `idea:ModuleName` the policy
+   * template's statement for the module's own secrets would let the role overwrite a waiting
+   * password.
+   *
+   * The read and the delete are scoped by that name alone, with no tag condition. A condition on
+   * the secret's tags cannot match a secret that is gone, so the role was told AccessDenied where
+   * the task needs ResourceNotFound to tell a password that is gone from one it may not read.
+   * The name is scope enough: the application only ever reads the secret its own tagged create
+   * returned, and no other cluster's secrets fall under this prefix. `idea-dev-password-sync-` is
+   * not a prefix of `idea-dev2-password-sync-`, and a cluster cannot be named
+   * `<other>-password-sync-...`, a cluster name being at most 11 characters (cluster-config-db.ts).
+   * What the name does not exclude is a secret someone else in the account makes under this prefix.
+   *
+   * The sweep of strays lists secrets with the health collectors' ListSecrets. Out of the policy
+   * template for the same reason as theirs.
    */
   private passwordSecretStatements(): iam.PolicyStatement[] {
     const resources = [this.stack.formatArn({ service: 'secretsmanager', resource: `secret:${this.clusterName}-password-sync-*` })];
@@ -454,7 +465,6 @@ export class ClusterManagerStack extends IdeaBaseStack {
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'],
         resources,
-        conditions: { StringEquals: tagged('secretsmanager:ResourceTag') },
       }),
     ];
   }

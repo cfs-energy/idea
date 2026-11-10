@@ -410,8 +410,9 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
                 # the answer while a deleted secret is still being removed
                 code == 'InvalidRequestException' and 'deletion' in str(error)
             )
-            # The role may read a secret by its tags, so one that is gone can also be
-            # answered as denied.
+            # The role reads by the secret's name, so one that is gone answers
+            # ResourceNotFound. A denial is a fault in the role: it is retried and then
+            # recorded, and counts as nothing to do only for a finished message.
             if finished and (gone or code == 'AccessDeniedException'):
                 return None
             if gone:
@@ -497,8 +498,8 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
                 raise PasswordSecretUnavailable(
                     f'The secret of a password could not be deleted ({code}).'
                 ) from None
-            # A secret already deleted can be answered as denied, as in the read, and
-            # no retry changes a real denial. The sweep removes what this leaves.
+            # No retry changes a denial, and the password is applied already. The
+            # sweep removes what this leaves.
             self.logger.warning('password secret not deleted: gone already, or denied')
 
     def _remove_password_file(self, password_file: str):

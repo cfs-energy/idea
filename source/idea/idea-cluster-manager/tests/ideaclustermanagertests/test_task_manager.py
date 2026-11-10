@@ -341,7 +341,7 @@ def test_a_secret_that_cannot_be_read_is_retried_and_kept(error, code):
 
 
 def test_a_gone_secret_answered_as_denied_is_done_only_for_a_finished_message():
-    # a role allowed by the secret's tags can be told "denied" about one that is gone
+    # a denial is not proof the secret is gone: retried unless the message is finished
     task, secrets, payload = secret_password_task(applied=5)
     del secrets.secrets[payload['password_secret']]
     secrets.gone_code = 'AccessDeniedException'

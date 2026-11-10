@@ -98,8 +98,9 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       'elasticloadbalancing:DescribeListenerCertificates',
       'secretsmanager:ListSecrets',
     ]);
-    // A password waits for its sync task in a secret: this name only, made only with the two tags
-    // that the read and the delete require and no other tag, in the partition the cluster is in.
+    // A password waits for its sync task in a secret: this name only, made only with its two tags
+    // and no other, in the partition the cluster is in. The read and the delete carry no condition:
+    // one on the secret's tags answers AccessDenied for a secret that is gone, not ResourceNotFound.
     const passwords = statements.filter((statement) => JSON.stringify(statement).includes('-password-sync-'));
     const named = 'arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:idea-test1-password-sync-*';
     const tagged = (key: string) => ({ [`${key}/idea:ClusterName`]: 'idea-test1', [`${key}/idea:Purpose`]: 'password-sync' });
@@ -108,7 +109,7 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
         Effect: 'Allow', Action: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'], Resource: named,
         Condition: { StringEquals: tagged('aws:RequestTag'), 'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:ClusterName', 'idea:Purpose'] } },
       },
-      { Effect: 'Allow', Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'], Resource: named, Condition: { StringEquals: tagged('secretsmanager:ResourceTag') } },
+      { Effect: 'Allow', Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'], Resource: named },
     ]);
     // No other statement on the role creates, tags, untags, deletes or re-policies a secret. This
     // says nothing of reading or writing a secret's value: the template grants both by tag, and

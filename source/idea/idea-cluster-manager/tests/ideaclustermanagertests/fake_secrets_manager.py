@@ -20,7 +20,8 @@ class FakeSecretsManager:
         self.list_calls: List[Dict] = []
         # set to an exception to have the next calls of that operation raise it
         self.failing: Dict[str, Exception] = {}
-        # what a role scoped by tags is told about a secret that no longer exists
+        # what the role is told about a secret that no longer exists; one scoped by the
+        # secret's tags would be told AccessDeniedException
         self.gone_code = 'ResourceNotFoundException'
         # ARNs whose delete is refused
         self.undeletable = set()

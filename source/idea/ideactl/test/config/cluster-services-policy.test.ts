@@ -98,7 +98,7 @@ it('can use a customer managed Secrets Manager key for a password secret', () =>
 });
 
 it('grants no read or write of a waiting password through the tags of the module\'s own secrets', () => {
-  // the task role's own statements for a password secret are in the stack, held to these two tags
+  // the task role's own statements for a password secret are in the stack: made with these two tags only
   const password = {'idea:ClusterName': 'example', 'idea:Purpose': 'password-sync'};
   const own = {'idea:ClusterName': 'example', 'idea:ModuleName': 'cluster-manager'};
   const matches = (statement: {Condition?: unknown}, tags: Record<string, string>) =>
