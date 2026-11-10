@@ -31,6 +31,7 @@ from ideadatamodel import (
 )
 from ideadatamodel.scheduler.scheduler_model import SocaJobProvisioningOptions
 from ideasdk.utils import Utils
+from ideascheduler.app.notifications.job_notifications import JobNotifications
 from ideascheduler.app.provisioning.job_monitor import finished_job_processor
 from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
 from ideascheduler.app.provisioning.job_monitor.job_monitor import (
@@ -763,6 +764,46 @@ def test_every_cached_job_with_a_record_on_file_is_dropped_by_its_own_id(world):
     assert poller._process_finished_jobs([cached]) == ['60']
     assert poller._process_unprovisioned_jobs([unprovisioned]) == ['61']
     assert world.context.job_notifications.completed == []
+
+
+def test_an_arrays_emails_do_not_carry_its_subjob_list():
+    """
+    The email is one SQS message. 2,000 subjobs on the record are already more than a
+    message may hold, and the send was refused: no completed email for a wide array.
+    """
+    client = Mock()
+    config = Mock(get_string=lambda key, required=False: 'job-completed')
+    job = array_job(
+        '7[]',
+        SocaJobState.FINISHED,
+        notifications={'started': True, 'completed': True},
+        subjobs=[
+            SocaJobSubjob(
+                job_id=f'7[{index}]',
+                state=SocaJobState.FINISHED,
+                exit_status=0,
+                terminated=False,
+                start_time=START.datetime,
+                end_time=START.shift(seconds=90).datetime,
+            )
+            for index in range(1, 10001)
+        ],
+    )
+    notifications = JobNotifications(
+        context=Mock(config=lambda: config), notifications_client=client
+    )
+
+    notifications.job_completed(job)
+    notifications.job_started(job)
+
+    assert client.send_notification.call_count == 2
+    for call in client.send_notification.call_args_list:
+        sent = call.kwargs['notification'].params['job']
+        assert 'subjobs' not in sent
+        assert (sent['job_id'], sent['job_uid']) == ('7[]', UID)
+        assert len(json.dumps(sent)) < 16 * 1024
+    # the record itself keeps the list
+    assert len(job.subjobs) == 10000
 
 
 # ------------------------------------------------------------------ nodes
