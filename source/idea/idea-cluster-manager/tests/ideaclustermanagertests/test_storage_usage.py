@@ -1117,7 +1117,8 @@ def test_a_permission_change_reaches_a_view_already_served_within_a_minute(
         os.chmod(tree + '/closed', 0o700)
         os.chmod(tree + '/opened', 0)
         clock[0] += storage_usage.VIEW_SECONDS - 1
-        assert listed() == (['opened'], 1), 'control: inside the minute it is the same view'
+        # control: inside the minute it is the same view
+        assert listed() == (['opened'], 1)
         clock[0] += 1
         assert listed() == (['closed'], 1)
     finally:
