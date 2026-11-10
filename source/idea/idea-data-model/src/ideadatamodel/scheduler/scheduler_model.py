@@ -29,6 +29,7 @@ __all__ = (
     'SocaJobExecution',
     'SocaJobExecutionHost',
     'SocaJobNotifications',
+    'SocaJobSubjob',
     'SocaJob',
     'SocaComputeNodeState',
     'SocaSchedulerInfo',
@@ -679,6 +680,21 @@ class SocaJobEstimatedBudgetUsage(SocaBaseModel):
     job_usage_percent_with_savings: Optional[float] = Field(default=None)
 
 
+class SocaJobSubjob(SocaBaseModel):
+    """
+    how one subjob of an array ended, read from PBS history when the array finished. An array
+    is one job with one record; this is the only place a subjob's own outcome is kept.
+    """
+
+    job_id: Optional[str] = Field(default=None)
+    state: Optional[SocaJobState] = Field(default=None)
+    exit_status: Optional[int] = Field(default=None, strict=False)
+    # PBS ended it with qdel (history substate 91); None when PBS has not said
+    terminated: Optional[bool] = Field(default=None)
+    start_time: Optional[datetime] = Field(default=None)
+    end_time: Optional[datetime] = Field(default=None)
+
+
 class SocaJob(SocaBaseModel):
     cluster_name: Optional[str] = Field(default=None)
     cluster_version: Optional[str] = Field(default=None)
@@ -696,6 +712,10 @@ class SocaJob(SocaBaseModel):
     exit_status: Optional[int] = Field(default=None, strict=False)
     # PBS ended it with qdel (history substate 91); None when PBS has not said
     terminated: Optional[bool] = Field(default=None)
+    # an array's subjobs as PBS history gave them when the array finished. exit_status above
+    # is then 0 only if every one of them exited 0, and the first failure's status otherwise;
+    # None when their history could not be read, which is never taken as success.
+    subjobs: Optional[List[SocaJobSubjob]] = Field(default=None)
     # jobs that wait on this one (PBS before* dependencies). PBS drops a satisfied dependency
     # from the waiting job, and keeps it here on the finished record
     dependent_job_ids: Optional[List[str]] = Field(default=None)

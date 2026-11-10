@@ -74,7 +74,13 @@ class OpenPBSQSelect:
     def get_queue_select_state_filter(self) -> str:
         result = ''
         for state in self.job_state:
-            result = f'{result}{state.value[0].upper()}'
+            # PBS's letter is the state's first, except for an array's two: B for one that
+            # has begun and X for a subjob that is done. S is a suspended job.
+            letter = {
+                SocaJobState.SUBJOB_BEGUN: 'B',
+                SocaJobState.SUBJOB_EXPIRED: 'X',
+            }.get(state, state.value[0].upper())
+            result = f'{result}{letter}'
         return result
 
     @property

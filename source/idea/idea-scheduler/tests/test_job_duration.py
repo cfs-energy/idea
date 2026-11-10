@@ -511,7 +511,7 @@ def test_zero_stime_is_not_a_started_job(context):
 
 
 @pytest.mark.parametrize('history', ['missing', 'complete', 'start_only'])
-@pytest.mark.parametrize('job_id', ['14906', '14906[1]'])
+@pytest.mark.parametrize('job_id', ['14906'])
 @pytest.mark.parametrize('attempt', ['single', 'rerun', 'node_failure'])
 @pytest.mark.parametrize('cached_times', ['missing', 'start_only', 'old_pair'])
 @pytest.mark.parametrize(
@@ -624,10 +624,11 @@ def test_serialized_hooks_recover_duration_without_pbs_history(
         assert cached.start_time == (
             previous_start.datetime if cached_times != 'missing' else None
         )
-        # Use the real history adapter, including array state X and missing walltime.
+        # Use the real history adapter, including missing walltime. An array is finished
+        # under its own id from its subjobs' history: test_array_jobs.py.
         fresh = build_pbs_job(
             id=job_id + '.scheduler',
-            job_state='X' if '[' in job_id else 'F',
+            job_state='F',
             stime=str(start.shift(seconds=1).int_timestamp),
             resources_used={'walltime': '00:01:59'} if history == 'complete' else None,
             run_count=count,

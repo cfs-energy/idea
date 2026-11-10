@@ -16,7 +16,16 @@ from ideascheduler.app.accounts_guard import (
 )
 import ideascheduler
 
-from ideadatamodel import exceptions, SocaJob, SocaJobState, JobUpdates, JobUpdate
+from ideadatamodel import (
+    exceptions,
+    SocaJob,
+    SocaJobState,
+    SocaJobExecutionHost,
+    SocaJobExecutionRun,
+    JobUpdates,
+    JobUpdate,
+)
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.service import SocaService
 from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
@@ -172,6 +181,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         # queues with a recent queuejob event, watched with short rescans
         self._queued_sweep_expiry: Dict[str, arrow.Arrow] = {}
         self._queued_sweep_last_attempt: Dict[str, arrow.Arrow] = {}
+        # arrays whose start was announced before the cache showed them begun
+        self._begun_arrays: Set[str] = set()
+        self._begun_arrays_lock = RLock()
 
     def _initialize(self):
         self._job_submission_monitor = Thread(
@@ -217,7 +229,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
             if provisioning_queue is None:
                 continue
 
-            if job.state == SocaJobState.RUNNING:
+            if job.state in (SocaJobState.RUNNING, SocaJobState.SUBJOB_BEGUN):
                 # if job execution has started running, ensure the job is deleted from provisioning queue.
                 provisioning_queue.delete(job_id=job.job_id)
                 continue
@@ -608,6 +620,39 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         """
         self._state.job_queued(job=job)
 
+    @staticmethod
+    def _as_array(job: SocaJob) -> Optional[SocaJob]:
+        """
+        a subjob's event, renamed to its array: PBS reports a subjob's run, begin and end
+        under 123[4], and the array 123[] is the job the cache, its stack and its record
+        know. None for any other job.
+        """
+        parent_id = ModelUtils.array_parent_id(job.job_id)
+        if parent_id is None:
+            return None
+        return job.model_copy(update={'job_id': parent_id})
+
+    def _first_start_of_array(self, job_id: str, cached_job: Optional[SocaJob]) -> bool:
+        """
+        whether this is the first subjob of an array to start, as far as this process and
+        the cache can tell. An array is started once, however many subjobs it has.
+        """
+        if cached_job is not None and cached_job.state == SocaJobState.SUBJOB_BEGUN:
+            return False
+        with self._begun_arrays_lock:
+            if job_id in self._begun_arrays:
+                return False
+            if len(self._begun_arrays) >= 256:
+                # the cache says begun soon after the first start; forget what it covers
+                self._begun_arrays = {
+                    begun
+                    for begun in self._begun_arrays
+                    if getattr(self._context.job_cache.get_job(begun), 'state', None)
+                    not in (None, SocaJobState.SUBJOB_BEGUN)
+                }
+            self._begun_arrays.add(job_id)
+            return True
+
     def job_modified(self, job: SocaJob):
         """
         should be called when job modifications are validated successfully (qalter)
@@ -615,15 +660,23 @@ class JobMonitor(SocaService, JobMonitorProtocol):
 
         :param job: SocaJob built using the event received from Scheduler
         """
-        self._state.job_modified(job=job)
+        self._state.job_modified(job=self._as_array(job) or job)
 
     def job_running(self, job: SocaJob):
         """
         should be called when job is running
         """
+        array = self._as_array(job)
+        if array is not None:
+            job = array
+
+        # for a subjob this re-reads its array, which PBS now reports as begun
         self._state.job_running(job=job)
 
         cached_job = self._context.job_cache.get_job(job.job_id)
+
+        if array is not None and not self._first_start_of_array(job.job_id, cached_job):
+            return
 
         if cached_job is not None:
             job = cached_job
@@ -649,9 +702,40 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         job_id = job.job_id
         execution_host = execution_hosts[0]
 
+        parent_id = ModelUtils.array_parent_id(job_id)
+        if parent_id is not None:
+            job_id = parent_id
+            execution_host = self._array_execution_host(parent_id, execution_host)
+
         self._context.job_cache.log_job_execution(
             job_id=job_id, execution_host=execution_host
         )
+
+    def _array_execution_host(
+        self, job_id: str, execution_host: SocaJobExecutionHost
+    ) -> SocaJobExecutionHost:
+        """
+        a subjob's begin or end on a host, folded into its array's one run there: from the
+        first subjob to begin on the host to the last to end. Each subjob's own result comes
+        from PBS history when the array finishes, so none is kept here, and an array of
+        thousands stays one small row per host.
+        """
+        if execution_host.execution is None or not execution_host.execution.runs:
+            return execution_host
+        runs = list(execution_host.execution.runs)
+        for known in self._context.job_cache.get_job_execution_hosts(job_id) or []:
+            if known.host == execution_host.host and known.execution is not None:
+                runs.extend(known.execution.runs or [])
+        starts = [run.start for run in runs if run.start is not None]
+        ends = [run.end for run in runs if run.end is not None]
+        execution_host.execution.runs = [
+            SocaJobExecutionRun(
+                run_id='1',
+                start=min(starts) if starts else None,
+                end=max(ends) if ends else None,
+            )
+        ]
+        return execution_host
 
     def start(self):
         if self._is_running:

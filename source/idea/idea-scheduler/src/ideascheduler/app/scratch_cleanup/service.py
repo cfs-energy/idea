@@ -404,6 +404,9 @@ class ScratchCleanupService:
         ended = _iso(_as_utc(job.end_time))
         if not ended:
             return
+        # an array's folders share one date, counted from the array's end: the failed one
+        # unless every subjob succeeded. A scan and a backfill work out the same date from
+        # each subjob's entry on the array's record.
         outcome = 'succeeded' if job_succeeded(job) else 'failed'
         existing = self.store.get_removal(key)
         if (
@@ -1170,7 +1173,7 @@ class ScratchCleanupService:
             self.store.put_removal(
                 _row_key(row),
                 {
-                    'job_id': record.job_id,
+                    'job_id': record.array_id or record.job_id,
                     'job_uid': record.job_uid,
                     'owner': record.owner,
                     'end_time': _iso(_as_utc(record.end_time)),
@@ -2173,8 +2176,9 @@ def _resume_until(
 
 
 def job_key(job) -> str:
-    # an array's subjobs share a job uid
-    return f'{job.job_uid or job.owner}:{job.job_id}'
+    # an array's subjobs share a job uid, and its folders share the array's one date
+    job_id = getattr(job, 'array_id', None) or job.job_id
+    return f'{job.job_uid or job.owner}:{job_id}'
 
 
 def _row_key(row: Row) -> str:

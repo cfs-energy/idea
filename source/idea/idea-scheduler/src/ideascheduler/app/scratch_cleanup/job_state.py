@@ -38,7 +38,15 @@ _VARIABLE_LIST = re.compile(
 )
 _JOB_OWNER = re.compile(r'"Job_Owner"\s*:\s*"([^"@]+)')
 _STOPPED_COMMENT = re.compile(r'delete|terminat|kill|abort', re.IGNORECASE)
-_NUMBER = re.compile(r'(?<![0-9])[0-9]{1,18}(?![0-9])', re.ASCII)
+# a number standing on its own, as a job id does: 363, 363[2], 363.scheduler, job_363. The
+# digits inside an AMI id or an instance type (ami-01218e645c17e525d, t3.medium) are not
+# one. Leading zeros are dropped, so out_0363 still names job 363.
+_NUMBER = re.compile(r'(?<![0-9A-Za-z])0*([0-9]{1,18})(?![0-9A-Za-z])', re.ASCII)
+# how PBS shows a job submitted as a command (qsub -- command) or as an interactive
+# session (qsub -I): neither has a script
+_NO_SCRIPT = re.compile(
+    r'"executable"\s*:\s*"<jsdl-hpcpa:Executable>|"interactive"\s*:\s*"?[Tt]rue'
+)
 
 
 def _folders_named(text: str, mount_aliases: Sequence[str]) -> Set[Tuple[str, str]]:
@@ -49,6 +57,28 @@ def _folders_named(text: str, mount_aliases: Sequence[str]) -> Set[Tuple[str, st
         )
         found.update(pattern.findall(text))
     return found
+
+
+def _has_no_script(text: str, job_id: str, pbs_ids: Sequence[str]) -> bool:
+    """
+    whether qstat shows this job was submitted with no script. Only its own entry is read:
+    from where its id opens one to where the next listed job's does. Anything else, such as
+    an entry that cannot be found, is not proof, and the caller stops.
+    """
+
+    def entry_start(pbs_id: str) -> int:
+        found = re.search(r'"' + re.escape(pbs_id) + r'"\s*:\s*\{', text)
+        return found.start() if found else -1
+
+    start = entry_start(job_id)
+    if start < 0:
+        return False
+    later = [
+        position
+        for position in (entry_start(other) for other in pbs_ids if other != job_id)
+        if position > start
+    ]
+    return _NO_SCRIPT.search(text, start, min(later, default=len(text))) is not None
 
 
 class StateUnavailable(Exception):
@@ -133,7 +163,7 @@ class ScratchJobState:
             raise StateUnavailable('qstat did not name the owner of every active job.')
         owners.update(job.owner.lower() for job in cached if job.owner)
         referenced = _folders_named(text, mount_aliases)
-        for script in self._scripts(pbs_ids):
+        for script in self._scripts(pbs_ids, text):
             mentioned.update(_NUMBER.findall(script))
             referenced.update(_folders_named(script, mount_aliases))
         return ActiveJobs(
@@ -160,10 +190,12 @@ class ScratchJobState:
             raise StateUnavailable('qstat listed none of the active jobs.')
         return text
 
-    def _scripts(self, pbs_ids: List[str]) -> List[str]:
+    def _scripts(self, pbs_ids: List[str], text: str) -> List[str]:
         """
         each active job's script, which can reach a folder its submission never names. A script
-        does not change once submitted, so each is read once.
+        does not change once submitted, so each is read once. A job submitted as a command
+        or as an interactive session has no script to read: what it runs is in its
+        submission, which is already searched.
         """
         wanted = set(pbs_ids)
         self._script_cache = {
@@ -181,6 +213,8 @@ class ScratchJobState:
                     self._script_cache[job_id] = str(result.stdout or '').replace(
                         '\\/', '/'
                     )
+                elif _has_no_script(text, job_id, pbs_ids):
+                    self._script_cache[job_id] = ''
                 elif self._context.scheduler.is_job_active(job_id):
                     raise StateUnavailable(
                         f'The script of active job {job_id} could not be read.'
@@ -197,21 +231,33 @@ class ScratchJobState:
         """every record under these numbers, from the cache and the index"""
         jobs: Dict[Tuple, SocaJob] = {}
         context = self._context
+        job_id_forms = set(job_id_forms)
         try:
             for form in job_id_forms:
                 for job in context.job_cache.list_completed_jobs(job_id=form):
-                    jobs[(job.job_uid or job.job_id, job.owner)] = job
+                    jobs[(job.job_uid or job.job_id, job.job_id, job.owner)] = job
             store = context.document_store
             if store.is_enabled():
                 if not store.is_initialized():
                     raise StateUnavailable('The job index is not ready.')
                 for job in store.find_jobs_by_id(sorted(job_id_forms)):
-                    jobs.setdefault((job.job_uid or job.job_id, job.owner), job)
+                    jobs.setdefault(
+                        (job.job_uid or job.job_id, job.job_id, job.owner), job
+                    )
         except StateUnavailable:
             raise
         except Exception as e:
             raise StateUnavailable(f'Job records could not be read: {e}') from e
-        return [_as_record(job) for job in jobs.values()]
+        records = [_as_record(job) for job in jobs.values()]
+        # an array has one record, which carries how each of its subjobs ended. A subjob's
+        # folder is judged by its own entry there.
+        records.extend(
+            _as_subjob_record(job, subjob)
+            for job in jobs.values()
+            for subjob in job.subjobs or []
+            if subjob.job_id in job_id_forms
+        )
+        return records
 
     def find_job(self, record: JobRecord) -> Optional[SocaJob]:
         """the full job behind a record, to mark its folder as removed"""
@@ -235,9 +281,12 @@ def job_succeeded(job: SocaJob) -> bool:
     """
     success has to be shown: PBS Exit_status 0, on a finished job the scheduler recorded as having
     run, with nothing saying it was stopped. Older records carry no disposition, and a job deleted
-    while running can still exit 0, so those are failures, which only wait longer. An array
-    parent's status is 0 only when every subjob's was.
+    while running can still exit 0, so those are failures, which only wait longer. PBS keeps
+    the last subjob's status on an array, so an array's own 0 counts only with the subjob
+    outcomes it was worked out from; a record without them is from an earlier build.
     """
+    if str(job.job_id).endswith('[]') and not job.subjobs:
+        return False
     return (
         is_finished(job)
         and job.exit_status == 0
@@ -266,6 +315,36 @@ def _first_run_start(job: SocaJob) -> Optional[datetime]:
         if run.start is not None
     ]
     return min(starts) if starts else None
+
+
+def _as_subjob_record(job: SocaJob, subjob) -> JobRecord:
+    """
+    one subjob of an array, from the array's record. Success has to be shown for the subjob
+    itself (finished, exit status 0, and PBS saying qdel did not end it) and for its array,
+    whose folders share one date: the array's end plus the successful time only when every
+    subjob succeeded. A subjob can end weeks before its array does, so the date never counts
+    from the subjob's own end; that only bounds when its files were written. Without its own
+    end the record is incomplete and the folder stays.
+    """
+    array = _as_record(job)
+    finished = subjob.state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+    return JobRecord(
+        job_id=str(subjob.job_id),
+        job_uid=array.job_uid,
+        owner=array.owner,
+        finished=finished and array.finished,
+        succeeded=(
+            finished
+            and subjob.exit_status == 0
+            and subjob.terminated is False
+            and array.succeeded
+        ),
+        start_time=subjob.start_time,
+        end_time=array.end_time if subjob.end_time else None,
+        dependents=array.dependents,
+        array_id=array.job_id,
+        run_end=subjob.end_time,
+    )
 
 
 def _as_record(job: SocaJob) -> JobRecord:

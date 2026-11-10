@@ -298,7 +298,10 @@ def test_finished_job_processor_publishes_one_counter_per_second(context, monkey
     monkeypatch.setattr(
         JobCompletionMetrics, 'metrics_provider', property(lambda _: 'dogstatsd')
     )
-    jobs = [_job(job_uid='first'), _job(job_uid='second')]
+    jobs = [
+        _job(job_uid='first', state=SocaJobState.FINISHED),
+        _job(job_uid='second', state=SocaJobState.FINISHED),
+    ]
     jobs[1].job_id = '43'
     scheduler = Mock()
     monkeypatch.setattr(context, 'scheduler', scheduler)

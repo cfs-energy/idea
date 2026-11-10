@@ -21,6 +21,7 @@ from ideadatamodel import (
     ProvisioningStatus,
     EC2Instance,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.aws.ecs_task import current_task_arn
 from ideasdk.utils import Utils
 from ideasdk.metrics import BaseMetrics
@@ -288,10 +289,13 @@ class NodeHouseKeepingSession:
 
         if instance.is_soca_ephemeral_capacity:
             job = self._context.job_cache.get_job(job_id=instance.soca_job_id)
+            # an array stays begun from its first subjob's start to its last one's end, and
+            # its nodes sit idle in between: between subjobs, or while the rest wait
             if job is not None and job.state in (
                 SocaJobState.QUEUED,
                 SocaJobState.RUNNING,
                 SocaJobState.HELD,
+                SocaJobState.SUBJOB_BEGUN,
             ):
                 self._logger.debug(
                     f'{self.log_tag(instance)} cannot terminate - job {instance.soca_job_id} is {job.state}'
@@ -337,7 +341,13 @@ class NodeHouseKeepingSession:
                 context=self._context,
                 logger=self._logger,
                 job_group=node.job_group,
-                job_state=[SocaJobState.QUEUED, SocaJobState.HELD],
+                # a begun array still has subjobs to run, and PBS lists it as neither
+                # queued nor held
+                job_state=[
+                    SocaJobState.QUEUED,
+                    SocaJobState.HELD,
+                    SocaJobState.SUBJOB_BEGUN,
+                ],
             ).get_count()
             if pending_jobs > 0:
                 self._logger.info(
@@ -1107,6 +1117,69 @@ class NodeHouseKeepingSession:
                 f'{job.log_tag} failed to hold after stack timeout: {e}'
             )
 
+    def _not_started(self, job: SocaJob) -> bool:
+        """
+        whether PBS itself says the job has not started. The sweep below works from the job
+        cache, and a row can read queued for a job that runs: its run event was lost, or the
+        cache was restored from an older copy. A stack is only deleted under a job PBS has
+        queued, held or waiting, and for an array only if every subjob reads the same; any
+        other answer, or none, leaves the stack alone, and what PBS said is written to the
+        cache so the next sweep reads it there.
+        """
+        try:
+            live_job = self._context.scheduler.get_job(job_id=job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} job state could not be read; stack left in place: {e}'
+            )
+            return False
+        if live_job is None:
+            self._logger.info(f'{job.log_tag} job is gone; stack left in place')
+            return False
+        waiting = (SocaJobState.QUEUED, SocaJobState.HELD, SocaJobState.WAITING)
+        if live_job.state not in waiting:
+            self._logger.info(
+                f'{job.log_tag} job is {live_job.state} in the scheduler; stack left in place'
+            )
+            self._context.job_cache.sync(jobs=[live_job])
+            return False
+        if not ModelUtils.is_array_job_id(job.job_id):
+            return True
+
+        # an array's own state is not proof that none of its subjobs runs: what PBS reports
+        # for a begun array that is held and released has not been seen. Every index it was
+        # submitted with has to read as not started, and anything short of that keeps the
+        # stack. Not started is queued, held or waiting, or done with no start time: a
+        # subjob deleted while queued never ran, and must not cost an array that never got
+        # its nodes the retry. One that ran keeps its start time when it is done.
+        try:
+            submitted, subjobs = self._context.scheduler.get_array_subjobs(job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} subjobs could not be read; stack left in place: {e}'
+            )
+            return False
+        done = (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+        if any(
+            subjob.state not in waiting
+            and not (subjob.state in done and subjob.start_time is None)
+            for subjob in subjobs
+        ):
+            self._logger.info(
+                f'{job.log_tag} array is {live_job.state} in the scheduler with a subjob '
+                f'begun; stack left in place'
+            )
+            self._context.job_cache.sync(
+                jobs=[live_job.model_copy(update={'state': SocaJobState.SUBJOB_BEGUN})]
+            )
+            return False
+        if submitted is None or len(subjobs) < submitted:
+            self._logger.warning(
+                f'{job.log_tag} {len(subjobs)} of {submitted} subjobs read; stack left in place'
+            )
+            return False
+        return True
+
     def retry_provisioning_cleanup(self):
         """
         retry provisioning clean-up
@@ -1310,6 +1383,9 @@ class NodeHouseKeepingSession:
                     delete_stack = True
                     stack_failure_reason_class = REASON_CLASS_CLOUDFORMATION
                     stack_failure_message = f'ProvisioningStatus: {provisioning_status}'
+
+                if delete_stack and not self._not_started(job):
+                    continue
 
                 if delete_stack:
                     stack_name = job.get_compute_stack()

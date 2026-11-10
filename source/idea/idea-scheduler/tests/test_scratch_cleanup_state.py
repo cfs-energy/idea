@@ -342,6 +342,37 @@ def test_numbers_in_the_environment_and_arguments_count():
     assert '2026' not in mentioned, 'only the fields a person sets'
 
 
+def test_only_a_whole_number_counts_as_a_job_number():
+    """
+    seen on a cluster: one job's instance type and AMI id kept the folders of jobs 3, 17, 525
+    and 645 as referenced. A job id stands on its own; digits inside another word do not.
+    """
+    qstat = (
+        '{"Jobs":{"9.s":{\n"Submit_arguments":"-N s4jobs -l instance_type=t3.medium '
+        '-l instance_ami=ami-01218e645c17e525d -l mem=8gb -v PREV=363,OLD=364[2] job.sh",\n'
+        '"Variable_List":{\n"FROM":"365.scheduler"\n},\n'
+        '"ctime":"Thu Jan 22 11:12:13 2026"\n}}}'
+    )
+    script = 'cp out_0366.log /tmp; x=job_367; y=c5n.2xlarge; z=i-0cfe47831e2715e4e\n'
+    source, context = state()
+    context.shell = shell(qselect='9.s\n', qstat=qstat, scripts={'9.s': script})
+    mentioned = source.active_jobs(ALIASES).mentioned_ids
+    assert {'363', '364', '2', '365', '366', '367'} <= mentioned
+    assert not mentioned & {
+        '3',
+        '4',
+        '5',
+        '8',
+        '17',
+        '525',
+        '645',
+        '01218',
+        '1218',
+        '0',
+    }
+    assert '0366' not in mentioned, 'a folder is looked up by its number, with no zeros'
+
+
 def test_scripts_are_read_once_per_job():
     seen = []
     source, context = state()
@@ -357,6 +388,61 @@ def test_a_script_that_cannot_be_read_for_a_live_job_stops():
     context.scheduler.is_job_active.return_value = True
     with pytest.raises(StateUnavailable):
         source.active_jobs(ALIASES)
+
+
+COMMAND_JOB = (
+    '"395.s":{\n"Job_Owner":"carol@h",\n'
+    '"Submit_arguments":"-h -q test -- /bin/cp -r /lustre/alice/123/restart 456",\n'
+    '"executable":"<jsdl-hpcpa:Executable>/bin/cp</jsdl-hpcpa:Executable>",\n'
+    '"argument_list":"<jsdl-hpcpa:Argument>-r</jsdl-hpcpa:Argument>"\n}'
+)
+SCRIPT_JOB = '"396.s":{\n"Job_Owner":"dave@h",\n"Submit_arguments":"job.sh"\n}'
+
+
+@pytest.mark.parametrize(
+    'order', [(COMMAND_JOB, SCRIPT_JOB), (SCRIPT_JOB, COMMAND_JOB)]
+)
+def test_a_job_submitted_as_a_command_has_no_script_to_read(order):
+    """
+    qsub -- command: printjob -s exits 1 with "Job N not found" while the job is active.
+    Seen on a cluster, where one such job stopped every scratch run. What it runs is in
+    its submission, which is searched like any other job's.
+    """
+    source, context = state()
+    context.shell = shell(
+        qselect='395.s\n396.s\n',
+        qstat='{"Jobs":{' + ','.join(order) + '}}',
+        scripts={'396.s': 'echo 789\n'},
+    )
+    context.scheduler.is_job_active.return_value = True
+    active = source.active_jobs(ALIASES)
+    assert active.base_ids == {'395', '396'}
+    assert ('alice', '123') in active.referenced_folders
+    assert {'456', '789'} <= active.mentioned_ids
+
+
+def test_an_interactive_job_has_no_script_to_read():
+    qstat = '{"Jobs":{"9.s":{"Job_Owner":"alice@h","interactive":"True"}}}'
+    source, context = state()
+    context.shell = shell(qselect='9.s\n', qstat=qstat, scripts={})
+    context.scheduler.is_job_active.return_value = True
+    assert source.active_jobs(ALIASES).base_ids == {'9'}
+
+
+@pytest.mark.parametrize(
+    'order', [(COMMAND_JOB, SCRIPT_JOB), (SCRIPT_JOB, COMMAND_JOB)]
+)
+def test_a_command_job_does_not_excuse_another_jobs_unreadable_script(order):
+    source, context = state()
+    context.shell = shell(
+        qselect='395.s\n396.s\n',
+        qstat='{"Jobs":{' + ','.join(order) + '}}',
+        scripts={},
+    )
+    context.scheduler.is_job_active.return_value = True
+    with pytest.raises(StateUnavailable) as raised:
+        source.active_jobs(ALIASES)
+    assert '396.s' in str(raised.value)
 
 
 def test_a_job_that_ended_while_being_read_is_not_a_failure():

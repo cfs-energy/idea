@@ -12,6 +12,7 @@
 import ideascheduler
 from ideadatamodel.scheduler import (
     SocaJob,
+    SocaJobSubjob,
     SocaComputeNode,
     SocaComputeNodeState,
     SocaQueue,
@@ -21,7 +22,7 @@ from ideadatamodel.scheduler import (
 from ideascheduler.app.scheduler.openpbs import OpenPBSScheduler
 from ideascheduler.app.app_protocols import SocaSchedulerProtocol
 
-from typing import List, Optional, Dict, Any, Generator
+from typing import List, Optional, Dict, Any, Generator, Tuple
 import arrow
 
 
@@ -132,6 +133,17 @@ class SocaScheduler(SocaSchedulerProtocol):
 
     def get_job(self, job_id: str) -> Optional[SocaJob]:
         return self._scheduler.get_job(job_id=job_id)
+
+    def get_job_history_state(self, job_id: str) -> Optional[SocaJobState]:
+        return self._scheduler.get_job_history_state(job_id=job_id)
+
+    def get_array_subjobs(
+        self, job_id: str
+    ) -> Tuple[Optional[int], List[SocaJobSubjob]]:
+        return self._scheduler.get_array_subjobs(job_id=job_id)
+
+    def get_job_deleted_by(self, job_id: str) -> Optional[str]:
+        return self._scheduler.get_job_deleted_by(job_id=job_id)
 
     def delete_job(self, job_id: str):
         self._scheduler.delete_job(job_id)

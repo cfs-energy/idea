@@ -8,7 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from pydantic import Field
+from pydantic import Field, field_validator
 
 import ideascheduler
 from ideadatamodel import (
@@ -22,6 +22,7 @@ from ideadatamodel import (
     SocaJobExecutionRun,
     SocaJobExecutionResourcesUsed,
     SocaJobNotifications,
+    SocaJobSubjob,
     HpcQueueProfile,
 )
 from ideasdk.utils import Utils
@@ -120,6 +121,24 @@ class OpenPBSJob(SocaBaseModel):
     umask: Optional[str] = Field(default=None)
     User_List: Optional[dict] = Field(default=None)
     Variable_List: Optional[dict] = Field(default=None)
+
+    @field_validator(
+        'Account_Name',
+        'array_index',
+        'array_indices_remaining',
+        'array_indices_submitted',
+        'comment',
+        'project',
+        mode='before',
+    )
+    @classmethod
+    def _number_as_text(cls, value):
+        # qstat's JSON writes a value that reads as a number bare: "array_index":1,
+        # "array_indices_remaining":3 while one index is left, and the same for an account
+        # or project named in digits. One such job must not fail every listing.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(int(value)) if float(value).is_integer() else str(value)
+        return value
 
     @staticmethod
     def to_soca_job_state(state: str) -> Optional[SocaJobState]:
@@ -497,6 +516,49 @@ class OpenPBSJob(SocaBaseModel):
             )
         return Utils.get_value_as_string('walltime', resources_used)
 
+    def get_end_time(
+        self, state: Optional[SocaJobState], start_time: Optional[datetime]
+    ) -> Optional[datetime]:
+        # end time computation using wall time from resources used.
+        # a job terminated before its execution host reported resources_used has no walltime.
+        # mtime is the time such a job entered the finished state.
+        if (
+            state not in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+            or start_time is None
+        ):
+            return None
+        resources_used_walltime = self.get_resources_used_wall_time()
+        if Utils.is_not_empty(resources_used_walltime):
+            total_seconds = Utils.walltime_to_seconds(resources_used_walltime)
+            return arrow.get(start_time).shift(seconds=total_seconds).datetime
+        modified_time = self.parse_pbs_datetime(self.mtime)
+        if modified_time is not None and modified_time >= start_time:
+            return modified_time
+        return None
+
+    def as_subjob(self) -> SocaJobSubjob:
+        """
+        one subjob's outcome for its array's record. Read straight from the PBS fields: an
+        array can have thousands, and none of them is provisioned or priced on its own.
+        """
+        state = self.soca_job_state
+        start_time = self.parse_pbs_datetime(self.stime)
+        terminated = None
+        # a done subjob reads X while its array is active and F in history, same substates
+        if (
+            state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+            and self.substate is not None
+        ):
+            terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
+        return SocaJobSubjob(
+            job_id=self.id.split('.')[0],
+            state=state,
+            exit_status=self.Exit_status,
+            terminated=terminated,
+            start_time=start_time,
+            end_time=self.get_end_time(state=state, start_time=start_time),
+        )
+
     def as_soca_job(
         self,
         context: ideascheduler.AppContext,
@@ -550,22 +612,7 @@ class OpenPBSJob(SocaBaseModel):
         # "stime": "1635187450" from execution hosts
         start_time = self.parse_pbs_datetime(self.stime)
 
-        # end time computation using wall time from resources used.
-        # a job terminated before its execution host reported resources_used has no walltime.
-        # mtime is the time such a job entered the finished state.
-        end_time = None
-        if (
-            state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
-            and start_time is not None
-        ):
-            resources_used_walltime = self.get_resources_used_wall_time()
-            if Utils.is_not_empty(resources_used_walltime):
-                total_seconds = Utils.walltime_to_seconds(resources_used_walltime)
-                end_time = arrow.get(start_time).shift(seconds=total_seconds).datetime
-            else:
-                modified_time = self.parse_pbs_datetime(self.mtime)
-                if modified_time is not None and modified_time >= start_time:
-                    end_time = modified_time
+        end_time = self.get_end_time(state=state, start_time=start_time)
 
         if job_builder is None:
             # the project is passed so params are rebuilt against the project's current

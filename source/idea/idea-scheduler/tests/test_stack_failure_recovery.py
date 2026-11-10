@@ -8,8 +8,10 @@ not - and that neither of them resets a job on a stack status they cannot interp
 """
 
 import logging
+from datetime import datetime, timezone
 from threading import Event
 from typing import Dict, List, Optional
+from unittest.mock import Mock
 
 import pytest
 
@@ -19,6 +21,7 @@ from ideadatamodel import (
     SocaJobLicenseAsk,
     SocaJobParams,
     SocaJobState,
+    SocaJobSubjob,
     errorcodes,
 )
 from ideadatamodel.aws.cloudformation_stack import CloudFormationStack
@@ -40,6 +43,7 @@ from ideascheduler.app.provisioning.node_monitor.node_house_keeper import (
 )
 
 LOG_TAG = 'test_stack_failure_recovery'
+RAN_AT = datetime(2026, 11, 9, 22, 12, 2, tzinfo=timezone.utc)
 
 
 class MockScheduler:
@@ -51,6 +55,9 @@ class MockScheduler:
         self.job_attributes: Dict[str, Dict] = {}
         self.comments: Dict[str, str] = {}
         self.live_jobs: Dict[str, SocaJob] = {}
+        # an array's id -> (indices submitted, each subjob's state as PBS lists it, or its
+        # state and the start time of one that ran)
+        self.subjobs: Dict[str, tuple] = {}
 
     def reset_job(self, job_id: str) -> bool:
         self.reset_jobs.append(job_id)
@@ -70,6 +77,18 @@ class MockScheduler:
 
     def get_job(self, job_id: str) -> Optional[SocaJob]:
         return self.live_jobs.get(job_id)
+
+    def get_array_subjobs(self, job_id: str):
+        submitted, states = self.subjobs[job_id]
+        return submitted, [
+            SocaJobSubjob(
+                job_id=f'{job_id[:-1]}{index}]',
+                **dict(zip(('state', 'start_time'), state))
+                if isinstance(state, tuple)
+                else {'state': state},
+            )
+            for index, state in enumerate(states, start=1)
+        ]
 
 
 class MockJobMonitor:
@@ -253,6 +272,7 @@ def test_housekeeper_deletes_failed_stack_and_retries(
     )
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
 
     housekeeping_session(context).retry_provisioning_cleanup()
 
@@ -405,6 +425,7 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     )
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
 
     housekeeping_session(context).retry_provisioning_cleanup()
 
@@ -415,3 +436,215 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     assert comment.startswith('IDEA: held. Nodes launched but the job did not start in')
     assert comment.endswith(f'qrls {job.job_id} to retry')
     assert len(comment) <= 128
+
+
+@pytest.mark.parametrize(
+    'status', [ProvisioningStatus.COMPLETED, ProvisioningStatus.TIMEOUT]
+)
+@pytest.mark.parametrize(
+    'job_id, live_state',
+    [
+        # an array whose first subjob began: PBS reports the run under 357[1], so the
+        # array's own row can still read queued
+        ('357[]', SocaJobState.SUBJOB_BEGUN),
+        # any job whose run event was lost
+        ('358', SocaJobState.RUNNING),
+        ('359', SocaJobState.EXIT),
+    ],
+)
+def test_the_timeout_sweep_leaves_the_stack_of_a_job_that_runs(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    status,
+    job_id,
+    live_state,
+):
+    """
+    the sweep reads queued rows from the job cache. A row can read queued for a job that
+    runs, so PBS is asked before a stack is deleted: seen on a cluster as the stack of a
+    running array deleted 31 minutes after it was created.
+    """
+    import arrow
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(JobProvisioningUtil, 'check_status', lambda _self: status)
+    monkeypatch.setattr(
+        JobProvisioningUtil,
+        'stack',
+        property(
+            lambda _self: SimpleNamespace(
+                creation_time=arrow.utcnow().shift(minutes=-31)
+            )
+        ),
+    )
+    job = mock_job(provisioned=True)
+    job.job_id = job_id
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job_id] = job.model_copy(update={'state': live_state})
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.reset_jobs == []
+    assert mock_scheduler.held_jobs == []
+    # what PBS said is kept, so the next sweep does not look at this job at all
+    assert job_cache.get_job(job_id).state == live_state
+    housekeeping_session(context).retry_provisioning_cleanup()
+    assert deleted_stacks == []
+
+
+@pytest.mark.parametrize('answer', ['gone', 'error'])
+def test_the_timeout_sweep_leaves_a_stack_when_pbs_gives_no_answer(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    answer,
+):
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.TIMEOUT
+    )
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    if answer == 'error':
+        monkeypatch.setattr(
+            mock_scheduler, 'get_job', Mock(side_effect=RuntimeError('qstat failed'))
+        )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.reset_jobs == []
+
+
+def timed_out_array(job_cache, mock_scheduler, monkeypatch, live_state) -> SocaJob:
+    """a provisioned array whose row reads queued, on a stack past the timeout"""
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.TIMEOUT
+    )
+    job = mock_job(provisioned=True)
+    job.job_id = '357[]'
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job.model_copy(update={'state': live_state})
+    return job
+
+
+@pytest.mark.parametrize('live_state', [SocaJobState.QUEUED, SocaJobState.HELD])
+@pytest.mark.parametrize(
+    'begun',
+    [
+        SocaJobState.RUNNING,
+        SocaJobState.EXIT,
+        (SocaJobState.SUBJOB_EXPIRED, RAN_AT),
+        (SocaJobState.FINISHED, RAN_AT),
+    ],
+)
+def test_the_timeout_sweep_does_not_take_an_arrays_own_state_as_not_started(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    live_state,
+    begun,
+):
+    """
+    What PBS reports for a begun array after qhold and qrls has not been seen. If it reads
+    queued or held while a subjob runs, or with one done and the rest to come, the stack
+    stays: the subjobs are asked, not only the array.
+    """
+    job = timed_out_array(job_cache, mock_scheduler, monkeypatch, live_state)
+    mock_scheduler.subjobs[job.job_id] = (3, [begun, SocaJobState.QUEUED, live_state])
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.reset_jobs == []
+    assert mock_scheduler.held_jobs == []
+    # kept as begun, which protects its nodes and takes it out of this sweep
+    assert job_cache.get_job(job.job_id).state == SocaJobState.SUBJOB_BEGUN
+
+
+@pytest.mark.parametrize(
+    'answer',
+    [
+        # not every index listed, the count not known, and no answer at all
+        (3, [SocaJobState.QUEUED]),
+        (None, [SocaJobState.QUEUED, SocaJobState.QUEUED]),
+        (None, []),
+        None,
+    ],
+)
+def test_the_timeout_sweep_keeps_an_arrays_stack_unless_every_subjob_is_read(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    answer,
+):
+    job = timed_out_array(job_cache, mock_scheduler, monkeypatch, SocaJobState.QUEUED)
+    if answer is not None:
+        mock_scheduler.subjobs[job.job_id] = answer
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert mock_scheduler.reset_jobs == []
+    assert job_cache.get_job(job.job_id).state == SocaJobState.QUEUED
+
+
+def test_the_timeout_sweep_still_retries_an_array_that_never_started(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    job = timed_out_array(job_cache, mock_scheduler, monkeypatch, SocaJobState.QUEUED)
+    mock_scheduler.subjobs[job.job_id] = (2, [SocaJobState.QUEUED, SocaJobState.HELD])
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert len(deleted_stacks) == 1
+    assert mock_scheduler.reset_jobs == [job.job_id]
+
+
+@pytest.mark.parametrize(
+    'stack_status', [ProvisioningStatus.TIMEOUT, ProvisioningStatus.FAILED]
+)
+@pytest.mark.parametrize(
+    'deleted', [SocaJobState.SUBJOB_EXPIRED, SocaJobState.FINISHED]
+)
+def test_a_subjob_deleted_while_queued_does_not_cost_an_unstarted_array_its_retry(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    stack_status,
+    deleted,
+):
+    """
+    qsub -J 1-3, the nodes never join, and the owner deletes 357[2] while it is queued. PBS
+    lists that subjob as done, with no start time because it never ran. Nothing has started,
+    so the stack is deleted and the array retried as before, and the row is not written as
+    begun, which would take it out of this sweep with its nodes left running.
+    """
+    job = timed_out_array(job_cache, mock_scheduler, monkeypatch, SocaJobState.QUEUED)
+    monkeypatch.setattr(JobProvisioningUtil, 'check_status', lambda _self: stack_status)
+    mock_scheduler.subjobs[job.job_id] = (
+        3,
+        [SocaJobState.QUEUED, deleted, SocaJobState.QUEUED],
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert len(deleted_stacks) == 1
+    assert mock_scheduler.reset_jobs == [job.job_id]
+    assert job_cache.get_job(job.job_id).state != SocaJobState.SUBJOB_BEGUN

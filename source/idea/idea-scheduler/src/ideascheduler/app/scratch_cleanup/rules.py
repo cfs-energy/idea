@@ -148,6 +148,15 @@ class JobRecord:
     succeeded: bool = True
     # numbers of the jobs that waited on this one, which PBS no longer lists on them
     dependents: FrozenSet[str] = frozenset()
+    # a subjob's record only: its array's id, under which the array's one removal date is
+    # kept, and the subjob's own end. end_time is then the array's, which is what the
+    # retention counts from; the subjob's own end closes the window its files must fall in.
+    array_id: Optional[str] = None
+    run_end: Optional[datetime] = None
+
+    @property
+    def window_end(self) -> Optional[datetime]:
+        return self.run_end or self.end_time
 
 
 @dataclass(frozen=True)
@@ -156,8 +165,8 @@ class ActiveJobs:
 
     base_ids: FrozenSet[str] = frozenset()
     dependency_ids: FrozenSet[str] = frozenset()
-    # any number in an active job's script, arguments or environment: over-matches, and only
-    # keeps more
+    # any whole number in an active job's script, arguments or environment: over-matches,
+    # and only keeps more
     mentioned_ids: FrozenSet[str] = frozenset()
     # (owner, folder name) seen in an active job's paths or environment
     referenced_folders: FrozenSet[tuple] = frozenset()
@@ -257,9 +266,13 @@ def decide_job(
         return JobDecision(Reason.NO_FINISHED_RECORD)
     if any(r.dependents & active.base_ids for r in matching):
         return JobDecision(Reason.REFERENCED_BY_ACTIVE_JOB, matching)
-    # a subjob's own record decides. Without one its array's does: PBS finishes an array only
-    # when every subjob has, and a status of 0 means every subjob's was 0
-    matching = [r for r in matching if r.job_id == folder_name] or matching
+    # a subjob's own record decides. Without one its array's shows only that every subjob is
+    # over, since PBS finishes an array when the last one has. It cannot show this subjob
+    # succeeded: PBS keeps the last subjob's status on the array, and a later success hides an
+    # earlier failure. So the folder waits the longer of the two times.
+    own = [r for r in matching if r.job_id == folder_name]
+    outcome_shown = bool(own) or len(shape.job_id_forms) == 1
+    matching = own or matching
 
     if owner_uid is None:
         return JobDecision(Reason.OWNER_UNKNOWN, matching)
@@ -273,6 +286,8 @@ def decide_job(
 
     decision = JobDecision(Reason.ELIGIBLE, matching)
     required = min_age if all(r.succeeded for r in matching) else failed_min_age
+    if not outcome_shown:
+        required = max(min_age, failed_min_age)
     if _aware(now) - _aware(decision.latest_end) < required:
         decision.reason = Reason.TOO_RECENT
     return decision
@@ -313,7 +328,7 @@ def decide_contents(
     windows = [
         (
             _aware(r.first_run_start or r.start_time) - CLOCK_SLACK,
-            _aware(r.end_time) + CLOCK_SLACK,
+            _aware(r.window_end) + CLOCK_SLACK,
         )
         for r in records
         if r.start_time and r.end_time
@@ -337,7 +352,7 @@ def job_time_bounds(records: Sequence[JobRecord]) -> tuple:
     """the earliest and latest a job under this number could have touched its folder"""
     return (
         min(_aware(r.first_run_start or r.start_time) for r in records) - CLOCK_SLACK,
-        max(_aware(r.end_time) for r in records) + CLOCK_SLACK,
+        max(_aware(r.window_end) for r in records) + CLOCK_SLACK,
     )
 
 

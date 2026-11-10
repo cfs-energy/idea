@@ -6,7 +6,7 @@ It is off on every cluster until an administrator turns it on, and a dry run unt
 
 ## Where removals come from
 
-The finished-job path records each job that ran. **Successful** has to be shown: PBS exit status 0 on a job recorded as having run, with nothing saying it was stopped. **Failed** is anything else: a nonzero status, none at all, killed, deleted by its owner or an administrator, or an older record with no disposition, because a job deleted while running can still exit 0. An array subjob goes by its own record if it has one. Without one it takes its array's, which PBS finishes only when every subjob has and which is 0 only if every subjob's was, so a mixed array waits the failed time. No subjob's folder goes while any of its array is active. A duplicate finish event changes nothing, a job that finishes again takes the new date, and a job the scheduler is tracking again loses its date.
+The finished-job path records each job that ran. **Successful** has to be shown: PBS exit status 0 on a job recorded as having run, with nothing saying it was stopped. **Failed** is anything else: a nonzero status, none at all, killed, deleted by its owner or an administrator, or an older record with no disposition, because a job deleted while running can still exit 0. An array has one record, which lists how each subjob ended, and a subjob's folder goes by its own entry there: a subjob that failed waits the failed time whatever the rest of its array did. The array's folders get their dates together, counted from the array's end however early a subjob ended, and a backfill gives the same date: the successful time only when every subjob succeeded, so the folders of a mixed array all wait the failed time. A subjob's files must still date from that subjob's own run. A subjob with no entry of its own has only the array's record, which shows that every subjob is over and never that this one succeeded, since PBS keeps the last subjob's exit status on the array: its folder waits the longer of the two times. No subjob's folder goes while any of its array is active. A duplicate finish event changes nothing, a job that finishes again takes the new date, and a job the scheduler is tracking again loses its date.
 
 An hourly check looks in that record for what is due. It never walks the file system to find candidates, so a folder no job record names cannot be chosen. Most jobs have no folder, and their record simply ends on the date.
 
@@ -18,7 +18,7 @@ A folder stays unless all of these hold, and each runs again on the open folder 
 
 * PBS lists no job under that number in any state, no node is running one, and the job cache tracks none.
 * The owner has no active job at all. There is no setting for this.
-* No active job depends on it (a dependency PBS has already dropped is read from the finished job's record; jobs finished before 26.11.2 have none), names the folder in its working directory, output paths, environment, arguments or script, or mentions the job's number in its script, arguments or environment.
+* No active job depends on it (a dependency PBS has already dropped is read from the finished job's record; jobs finished before 26.11.2 have none), names the folder in its working directory, output paths, environment, arguments or script, or mentions the job's number in its script, arguments or environment. The number has to stand on its own (`363`, `363[2]`, `363.scheduler`, `job_363`, `out_0363.log`): digits inside another word, such as an instance type or an AMI id, are not a job number.
 * The job cache or job index holds a finished record for that number and owner, with start and end times, and the job ended long enough ago for how it finished. A job ended with `qdel` counts as failed even when it exited 0; jobs finished before 26.11.2 are read from their PBS comment for this.
 * The folder and the owner folder above it match the job owner's account, and it holds no one else's files.
 * Everything in the folder appeared and last changed while the job ran, from its first attempt's start to its end. A later change means something still uses it. Anything older means the data came from somewhere else, such as a reused job number.
@@ -71,7 +71,7 @@ A check stops and alerts rather than continuing when:
 
 * the path is not the configured Lustre file system
 * the file system is linked to a data repository, or that cannot be checked, because a delete could reach the S3 copy
-* PBS, the job cache or the job index cannot be read, or an active job's script cannot be read
+* PBS, the job cache or the job index cannot be read, or an active job's script cannot be read (a job submitted as a command with `qsub -- command`, or as an interactive session, has no script and does not stop a run)
 * PBS lists no active jobs while the job cache tracks some or nodes are running jobs
 * a check would remove more than the allowed share of capacity, or a backfill more than the allowed share of job folders
 * a removal fails, or something writes to a folder while it is being removed
