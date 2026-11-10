@@ -660,7 +660,8 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         }
 
         const job = result.job;
-        const savedAs = job?.name ? `${job.name}_${job.job_uid}` : job?.job_uid;
+        // the scheduler names the script it kept; a name rebuilt here would miss its sanitizing
+        const savedAs = result.job_script_path?.split('/').pop();
         return (
             <SpaceBetween size="l" direction="vertical">
                 <Alert
@@ -668,7 +669,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                     header={`Job ${job?.job_id || ''} submitted`}
                     action={<Button href="#/home/active-jobs">View active jobs</Button>}
                 >
-                    The script is saved as <Box variant="code">~/jobs/{savedAs}.que</Box> for later review or resubmission.
+                    {savedAs && <>The script is saved as <Box variant="code">~/jobs/{savedAs}</Box> for later review or resubmission.</>}
                 </Alert>
                 <Container header={<Header>Job details</Header>}>
                     <Table

@@ -151,7 +151,7 @@ def test_accepted_submission_returns_the_job_id(context, monkeypatch, tmp_path):
     assert result.accepted is True
     assert result.job.job_id == '1234'
     # a queued job keeps its script in the owner's jobs dir; a refused one is removed
-    assert submitted_scripts(tmp_path) == []
+    assert submitted_scripts(tmp_path) == [os.path.basename(result.job_script_path)]
 
 
 def test_refused_submission_leaves_no_job_id_on_the_result(

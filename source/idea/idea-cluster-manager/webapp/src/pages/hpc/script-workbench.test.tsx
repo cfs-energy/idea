@@ -190,6 +190,17 @@ describe('script workbench', () => {
         );
     });
 
+    it('names the saved script by the file the scheduler kept', async () => {
+        await submitRejectedJob({...accepted(), job: {job_id: '101', job_uid: 'uid1', name: 'r&d run'}, job_script_path: '/shared/home/alice/jobs/r_d_run_uid1.que'});
+        expect(await screen.findByText('~/jobs/r_d_run_uid1.que')).toBeInTheDocument();
+    });
+
+    it('does not claim a saved script when the scheduler kept none', async () => {
+        await submitRejectedJob(accepted());
+        expect(await screen.findByText('Job 101 submitted')).toBeInTheDocument();
+        expect(screen.queryByText(/The script is saved as/)).toBeNull();
+    });
+
     async function checkWithEstimate(estimate: Partial<SubmitJobResult>) {
         const context = initTestAppContext();
         vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue({...DRY_RUN_ACCEPTED, ...estimate});

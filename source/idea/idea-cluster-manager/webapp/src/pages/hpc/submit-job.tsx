@@ -1584,6 +1584,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     render() {
+        // set by the scheduler only when it kept the script; an older scheduler removes the
+        // script and returns no path, so there is nothing to open and no path to guess.
+        const scriptPath = this.state.submitJobResult?.job_script_path
         return (
             <IdeaAppLayout
                 ideaPageId={this.props.ideaPageId}
@@ -1674,25 +1677,18 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                                                             </Box>
                                                             <Box textAlign="right">
                                                                 <SpaceBetween size="m" direction="vertical">
-                                                                    <div>
-                                                                        <Button
-                                                                            iconName="external"
-                                                                            variant="primary"
-                                                                            onClick={() => {
-                                                                                if (this.state.submitJobResult?.job) {
-                                                                                    const job = this.state.submitJobResult.job;
-                                                                                    const jobName = job.name || '';
-                                                                                    const jobUid = job.job_uid || '';
-                                                                                    const username = job.owner || AppContext.get().auth().getUsername() || 'clusteradmin';
-                                                                                    const filePath = `/data/home/${username}/jobs/${jobName}_${jobUid}.que`;
-                                                                                    window.location.href = `/#/home/script-workbench?file=${encodeURIComponent(filePath)}`;
-                                                                                }
-                                                                            }}
-                                                                        >
-                                                                            Open in Script Workbench
-                                                                        </Button>
-                                                                    </div>
-                                                                    {this.isDryRun() && (
+                                                                    {scriptPath && (
+                                                                        <div>
+                                                                            <Button
+                                                                                iconName="external"
+                                                                                variant="primary"
+                                                                                href={`#/home/script-workbench?file=${encodeURIComponent(scriptPath)}`}
+                                                                            >
+                                                                                Open in Script Workbench
+                                                                            </Button>
+                                                                        </div>
+                                                                    )}
+                                                                    {this.isDryRun() && scriptPath && (
                                                                         <Alert type="info">
                                                                             You can edit this script before final submission by opening it in the Script Workbench.
                                                                         </Alert>

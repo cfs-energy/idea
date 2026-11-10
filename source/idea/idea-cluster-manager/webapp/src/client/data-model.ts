@@ -2819,6 +2819,7 @@ export interface SubmitJobResult {
   service_quota_unavailable?: boolean;
   estimated_bom_cost?: SocaJobEstimatedBOMCost;
   budget_usage?: SocaJobEstimatedBudgetUsage;
+  job_script_path?: string;
 }
 export interface TailFileRequest {
   file?: string;
