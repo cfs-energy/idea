@@ -1335,6 +1335,8 @@ class VirtualDesktopSessionUtils:
         a row is removed out of band. Each document is checked against the table with a
         consistent read, so a desktop created a moment ago is never dropped.
         """
+        # ponytail: pages by offset, which the index refuses past 10,000 documents; the
+        # sweep then fails with a warning and drops nothing. page with search_after then
         page_size = 100
         indexed: List[VirtualDesktopSession] = []
         while True:
