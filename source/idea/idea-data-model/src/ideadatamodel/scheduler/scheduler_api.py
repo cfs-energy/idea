@@ -317,6 +317,8 @@ class SubmitJobResult(SocaPayload):
     service_quota_unavailable: Optional[bool] = Field(default=None)
     estimated_bom_cost: Optional[SocaJobEstimatedBOMCost] = Field(default=None)
     budget_usage: Optional[SocaJobEstimatedBudgetUsage] = Field(default=None)
+    # where the submitted script was kept; unset when it was not kept
+    job_script_path: Optional[str] = Field(default=None)
 
     @property
     def job_uid(self) -> Optional[str]:

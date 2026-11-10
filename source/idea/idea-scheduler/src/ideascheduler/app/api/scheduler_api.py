@@ -579,8 +579,10 @@ class SchedulerAPI(BaseAPI):
         finally:
             os.close(dir_fd)
 
-        # the script stays in the owner's jobs dir only when the submit command succeeded;
-        # a refusal, a dry run or an exception before then leaves no file behind.
+        # the script stays in the owner's jobs dir, where the owner and an administrator read
+        # it afterwards, when the job was queued or a dry run passed; the result then names it.
+        # a refusal, a failed dry run or an exception leaves no file behind.
+        keep_script = False
         try:
             if job_script_interpreter == 'pbs':
                 job_submit_command = ['cd', job_submission_dir, '&&', 'qsub']
@@ -641,6 +643,19 @@ class SchedulerAPI(BaseAPI):
                         else JOB_INTERNAL_ERROR_MESSAGE,
                     )
 
+                # a dry run is never 'accepted', so a passed one is a report with no findings
+                findings = [
+                    entry
+                    for report in (
+                        submission_result.validations,
+                        submission_result.incidentals,
+                    )
+                    if report is not None
+                    for entry in report.results or []
+                ]
+                keep_script = dry_run is None or not findings
+                if keep_script:
+                    submission_result.job_script_path = job_submit_script
                 return submission_result
 
             elif job_script_interpreter == 'bash':
@@ -659,7 +674,10 @@ class SchedulerAPI(BaseAPI):
                 result = self.context.shell.invoke(command)
 
                 if result.returncode == 0:
-                    return SubmitJobResult(accepted=True)
+                    keep_script = True
+                    return SubmitJobResult(
+                        accepted=True, job_script_path=job_submit_script
+                    )
                 else:
                     self.logger.error(f'Failed to submit job: {result}')
                     raise exceptions.soca_exception(
@@ -667,12 +685,11 @@ class SchedulerAPI(BaseAPI):
                         JOB_INTERNAL_ERROR_MESSAGE,
                     )
         finally:
-            # qsub copies the script into the PBS spool, so the file has no reader after
-            # submission; removing it on every outcome leaves nothing root-created behind.
-            try:
-                os.remove(job_submit_script)
-            except OSError:
-                pass
+            if not keep_script:
+                try:
+                    os.remove(job_submit_script)
+                except OSError:
+                    pass
 
     def list_queues(self, context: ApiInvocationContext):
         """

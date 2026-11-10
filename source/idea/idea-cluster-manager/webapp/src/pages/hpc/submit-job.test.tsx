@@ -253,6 +253,24 @@ describe('submit job page', () => {
         expect(screen.queryByText('Error Code')).toBeNull();
     });
 
+    // the scheduler sanitizes the job name and picks the mount and extension, so the page opens
+    // the path it was given and never one rebuilt from the job.
+    it('opens the script the scheduler kept in the script workbench', async () => {
+        const path = '/shared/home/alice/jobs/r_d_run_uid1.que';
+        const user = await submitWithResult({dry_run: 'true', accepted: false, job: {name: 'r&d run', job_uid: 'uid1', owner: 'alice'}, job_script_path: path});
+        await user.click(await screen.findByRole('tab', {name: 'Job Script'}));
+        expect(await screen.findByRole('link', {name: 'Open in Script Workbench'}))
+            .toHaveAttribute('href', `#/home/script-workbench?file=${encodeURIComponent(path)}`);
+    });
+
+    it('offers no script to open when the scheduler kept none', async () => {
+        const user = await submitWithResult({dry_run: 'true', accepted: false, job: {name: 'test-job', job_uid: 'uid1', owner: 'alice'}});
+        await user.click(await screen.findByRole('tab', {name: 'Job Script'}));
+        expect(await screen.findByText('PBS Job Script')).toBeInTheDocument();
+        expect(screen.queryByText('Open in Script Workbench')).toBeNull();
+        expect(screen.queryByText(/opening it in the Script Workbench/)).toBeNull();
+    });
+
     it('offers a way forward when no application is available', async () => {
         const navigate = vi.fn();
         render(<NoApplications navigate={navigate}/>);
