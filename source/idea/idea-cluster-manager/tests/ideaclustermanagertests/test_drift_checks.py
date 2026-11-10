@@ -592,6 +592,65 @@ def test_an_entry_with_no_login_on_an_svm_another_entry_reads_reports_nothing(
     assert DriftChecks.svm_of(None) is None and DriftChecks.svm_of(' ') is None
 
 
+@pytest.mark.parametrize('endpoint', ['https://', '/', ' '])
+def test_a_login_whose_endpoint_names_no_svm_stands_in_for_no_entry(
+    monkeypatch, endpoint
+):
+    # both sides normalise to nothing, and nothing must not match nothing: the entry with no
+    # login and no endpoint was skipped as if that login read its SVM
+    ontap = {'provider': 'fsx_netapp_ontap'}
+    checks = harness(
+        monkeypatch, Config(**{'shared-storage': {'data': ontap, 'ideaapps': ontap}})
+    )
+    checks.storage_metrics.targets.return_value = [
+        StorageTarget('data', endpoint, 'idea-metrics', 'password-key')
+    ]
+    found = {
+        (result.state, result.detail)
+        for result in checks.run_once()
+        if result.scope == 'ideaapps'
+    }
+    assert found == {(UNKNOWN, 'no_login')}
+
+
+@pytest.mark.parametrize(
+    'smb_entry, same_svm, expected',
+    [
+        # the entry that mounts over SMB has no login: the one that reads the SVM answers for it
+        ('ideaapps', True, DRIFT),
+        ('data', True, DRIFT),
+        (None, True, OK),
+        # an SMB mount of another SVM says nothing about this one
+        ('ideaapps', False, OK),
+    ],
+)
+def test_no_cifs_server_is_drift_where_any_entry_on_the_svm_mounts_over_smb(
+    monkeypatch, smb_entry, same_svm, expected
+):
+    ontap = {'provider': 'fsx_netapp_ontap'}
+    key = 'shared-storage.{}.fsx_netapp_ontap.svm.{}'
+    config = {
+        'shared-storage': {'data': ontap, 'ideaapps': ontap},
+        key.format('data', 'management_dns'): ENDPOINT,
+        key.format('ideaapps', 'management_dns'): (
+            f'https://{ENDPOINT.upper()}/' if same_svm else f'other-{ENDPOINT}'
+        ),
+    }
+    if smb_entry:
+        config[key.format(smb_entry, 'smb_dns')] = 'SVM1.CORP.EXAMPLE'
+    checks = harness(monkeypatch, Config(**config))
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    FakeOntap.answers['/api/svm/svms'] = [{'name': 'svm1'}]
+    found = {r.check: r.state for r in checks.run_once() if r.scope == 'data'}
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
+        assert found[check] == expected
+    assert found['ontap_ldap_session_security'] == OK
+
+
 def test_the_ad_secret_is_bound_and_never_logged(monkeypatch):
     checks = harness(monkeypatch)
     checks.context.ldap_client.root_password_binds.return_value = False

@@ -364,6 +364,23 @@ class DriftChecks:
         host = host.removeprefix('https://').removeprefix('http://').rstrip('/')
         return host or None
 
+    def smb_expected(self, target) -> bool:
+        """
+        whether the cluster mounts the target's SVM over SMB, by any entry on it. the CIFS server
+        is the SVM's, and the entry that mounts it over SMB need not be the one with the login.
+        """
+        svm = self.svm_of(target.endpoint)
+        return any(
+            Utils.is_not_empty(
+                self.context.config().get_string(
+                    f'shared-storage.{name}.{PROVIDER}.svm.smb_dns'
+                )
+            )
+            for name in self.ontap_entries()
+            if name == target.name
+            or (svm is not None and self.svm_of(self.management_dns(name)) == svm)
+        )
+
     @staticmethod
     def svm_visible(client) -> bool:
         try:
@@ -411,12 +428,7 @@ class DriftChecks:
         missing = CIFS_UNSEEN
         if cifs == []:
             missing = no_cifs_server(
-                self.svm_visible(client),
-                Utils.is_not_empty(
-                    self.context.config().get_string(
-                        f'shared-storage.{target.name}.{PROVIDER}.svm.smb_dns'
-                    )
-                ),
+                self.svm_visible(client), self.smb_expected(target)
             )
         if cifs is not None:
             results.extend(check_cifs(cifs, scope, missing))
@@ -614,6 +626,8 @@ class DriftChecks:
             controllers = controller_answer.get('found')
             targets = {t.name: t for t in self.storage_metrics.targets()}
             read_svms = {self.svm_of(t.endpoint) for t in targets.values()}
+            # a login whose endpoint names no SVM reads none, so it stands in for no entry
+            read_svms.discard(None)
             for name in entries:
                 target = targets.get(name)
                 scope = tag_value(name)
