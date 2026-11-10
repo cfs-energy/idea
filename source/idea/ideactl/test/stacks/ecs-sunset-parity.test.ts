@@ -54,6 +54,7 @@ export function templateDigest(template: any): string {
 // builder log, and the VDC the digest checkpoint.
 // The bastion health check runs the role's check script, which also passes a sshd that refuses it
 // under MaxStartups.
+// The cluster manager application policy carries the two password secret statements.
 // Keep hashing every field except the three validated random values above.
 test('all eleven ECS module templates match the reviewed v26.11.1 baseline', async () => {
   const baseline = JSON.parse(readFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), 'utf8'));
