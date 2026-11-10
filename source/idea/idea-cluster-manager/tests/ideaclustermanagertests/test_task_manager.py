@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime
 
 import boto3
@@ -112,11 +113,22 @@ def test_hanging_task_terminates_worker_and_replacement_has_capacity(
 )
 def test_deleted_user_is_acknowledged_without_invoking_task(name):
     manager, context, task, message = build(name)
+    message['MessageId'] = 'm-1'
     context.accounts.user_dao.get_user.return_value = None
     manager.execute_task(message)
     task.invoke.assert_not_called()
     context.aws().sqs().delete_message.assert_called_once()
-    context.logger().warning.assert_called_once()
+    # every delete ends the user's queued tasks this way: not a warning, and the
+    # task did not fail
+    context.logger().warning.assert_not_called()
+    (dropped,) = [
+        call.args[0]
+        for call in context.logger().info.call_args_list
+        if 'dropped' in call.args[0]
+    ]
+    assert dropped == (
+        f'task {name} (message m-1) dropped before it ran: its user is deleted'
+    )
 
 
 @pytest.mark.parametrize('deleted', [True, False])
@@ -127,8 +139,14 @@ def test_ldap_absence_only_discarded_when_account_is_deleted(deleted):
         None if deleted else {'username': 'user'},
     ]
     task.invoke.side_effect = ldap.NO_SUCH_OBJECT()
+    message['MessageId'] = 'm-1'
     manager.execute_task(message)
     assert context.aws().sqs().delete_message.call_count == int(deleted)
+    if deleted:
+        context.logger().warning.assert_called_once_with(
+            'task accounts.sync-password (message m-1) failed and is dropped: '
+            'its user is deleted'
+        )
 
 
 def test_a_task_that_cannot_succeed_is_recorded_and_stops_blocking_its_group():
@@ -927,6 +945,36 @@ def test_a_retry_line_names_its_task_and_message_and_no_user():
     assert 'test.task (message m-1)' in failed
 
 
+@pytest.mark.parametrize(
+    'error, level',
+    [(TaskCannotSucceed('refused'), 'error'), (ldap.ALREADY_EXISTS(), 'warning')],
+)
+def test_the_line_a_task_ends_on_names_its_message(error, level):
+    # a refused password ends on this line, and several users can end at once
+    manager, context, task, message = build()
+    task.invoke.side_effect = error
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    (line,) = [call.args[0] for call in getattr(context.logger(), level).call_args_list]
+    assert 'test.task (message m-1)' in line
+    completed = [
+        call.args[0]
+        for call in context.logger().info.call_args_list
+        if 'completed' in call.args[0]
+    ]
+    assert completed == []
+
+
+def test_the_completed_line_names_its_message():
+    manager, context, task, message = build()
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    lines = [call.args[0] for call in context.logger().info.call_args_list]
+    assert any(
+        line.startswith('completed task: test.task (message m-1') for line in lines
+    )
+
+
 class Directory:
     """what the account tasks ask of the directory, with two habits of Active
     Directory: a read can be answered by a domain controller that a write has not
@@ -939,8 +987,14 @@ class Directory:
         self.passwords = {}
         self.refused = 0
         self.now = 0
-        # until then every read misses what was written
+        # until then the domain controller that is behind misses what was written
         self.behind_until = 0
+        # reads the pool still gives to the one that is up to date; then the other
+        self.fresh_reads = 0
+        self.held = None
+        self.sudo_failures = 0
+        # the domain controller that is behind still shows what was removed
+        self.removed = []
 
     def monotonic(self):
         return self.now
@@ -951,13 +1005,33 @@ class Directory:
     def is_readonly(self):
         return False
 
+    @contextmanager
+    def one_server(self):
+        # whichever domain controller the pool gives next answers the whole block
+        self.held = 'fresh' if self.fresh_reads > 0 else 'behind'
+        try:
+            yield
+        finally:
+            self.held = None
+
+    def shows(self):
+        if self.now >= self.behind_until or self.held == 'fresh':
+            return True
+        if self.held is None and self.fresh_reads > 0:
+            self.fresh_reads -= 1
+            return True
+        return False
+
     def is_existing_user(self, username):
-        return self.now >= self.behind_until and username in self.accounts
+        return username in (self.accounts if self.shows() else self.removed)
 
     def is_existing_group(self, group_name):
-        return self.now >= self.behind_until and group_name in self.groups
+        return group_name in (self.groups if self.shows() else self.removed)
 
     def is_sudo_user(self, _):
+        if self.sudo_failures:
+            self.sudo_failures -= 1
+            raise ldap.SERVER_DOWN()
         return False
 
     def sync_group(self, group_name, gid):
@@ -970,9 +1044,11 @@ class Directory:
 
     def delete_user(self, username):
         self.accounts.remove(username)
+        self.removed.append(username)
 
     def delete_group(self, group_name):
         self.groups.remove(group_name)
+        self.removed.append(group_name)
 
     def add_user_to_group(self, usernames, group_name):
         pass
@@ -1147,5 +1223,156 @@ def test_a_removal_does_not_wait_out_an_account_its_other_copy_removed(live_acco
     task.invoke({'username': 'tasks_new7'})
     assert directory.now - started == task.CATCH_UP_INTERVAL
     assert (
-        task.IN_DIRECTORY not in table.get_item(Key={'username': 'tasks_new7'})['Item']
+        table.get_item(Key={'username': 'tasks_new7'})['Item'][task.IN_DIRECTORY]
+        is False
     )
+
+
+def test_an_attempt_that_fails_after_its_add_does_not_add_the_account_again(
+    live_accounts,
+):
+    _, _, queue, directory, _, create, drain = live_accounts
+    create('tasks_new8')
+    # the account is added, then the task fails
+    directory.sudo_failures = 1
+    drain()
+    assert directory.accounts == ['tasks_new8']
+    assert 'accounts.sync-user' in names(queue)
+    # its retry comes while the domain controller it asks is still behind
+    directory.behind_until = directory.now + 15
+    queue.now += 10
+    directory.now += 10
+    drain()
+    assert directory.accounts == ['tasks_new8']
+    assert directory.groups == ['tasks_new8-user-group']
+    assert directory.passwords == {'tasks_new8': 'MockPassword_123'}
+
+
+def test_the_read_that_decides_an_add_is_answered_by_the_server_the_wait_saw(
+    live_accounts,
+):
+    _, manager, _, directory, _, create, drain = live_accounts
+    create('tasks_new9')
+    drain()
+    # the pool's next two reads go to the domain controller that has the account,
+    # the ones after to one the account reaches in 15 s
+    directory.behind_until = directory.now + 15
+    directory.fresh_reads = 2
+    manager.send('accounts.sync-user', {'username': 'tasks_new9'}, 'tasks_new9', 'u2')
+    drain()
+    assert directory.accounts == ['tasks_new9']
+    assert directory.groups == ['tasks_new9-user-group']
+
+
+def test_disabling_removes_an_account_only_the_waited_on_server_shows(live_accounts):
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_new10')
+    drain()
+    directory.behind_until = directory.now + 15
+    directory.fresh_reads = 1
+    context.accounts.disable_user('tasks_new10')
+    drain()
+    assert directory.accounts == []
+    assert directory.groups == []
+
+
+def test_enabling_a_user_waits_for_its_removal_to_reach_the_server_asked(
+    live_accounts,
+):
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_new11')
+    drain()
+    context.accounts.disable_user('tasks_new11')
+    drain()
+    assert directory.accounts == []
+    # the domain controller asked next still shows the account for 15 s; updating
+    # it there would leave the user enabled with no account
+    started = directory.now
+    directory.behind_until = started + 15
+    context.accounts.enable_user('tasks_new11')
+    drain()
+    assert directory.accounts == ['tasks_new11']
+    assert directory.groups == ['tasks_new11-user-group']
+    assert directory.now - started >= 15
+    # a user disabled long ago is not waited for
+    context.accounts.disable_user('tasks_new11')
+    drain()
+    started = directory.now
+    context.accounts.enable_user('tasks_new11')
+    drain()
+    assert directory.accounts == ['tasks_new11']
+    assert directory.now == started
+
+
+class Connections:
+    """a pool whose every connection may be to a different domain controller"""
+
+    def __init__(self):
+        self.made = []
+        self.in_use = 0
+
+    @contextmanager
+    def connection(self, bind=None, passwd=None):
+        conn = Mock(_reconnects_done=0)
+        conn.search_s.return_value = []
+        self.made.append(conn)
+        self.in_use += 1
+        try:
+            yield conn
+        finally:
+            self.in_use -= 1
+
+
+def directory_client():
+    from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+        ActiveDirectoryClient,
+    )
+
+    client = ActiveDirectoryClient.__new__(ActiveDirectoryClient)
+    client.logger = Mock()
+    client.options = Mock(uri='ldap://idea.local', domain_name='idea.local')
+    client._root_username = client._root_password = 'root'
+    client._one_server = threading.local()
+    client.connection_manager = Connections()
+    return client, client.connection_manager
+
+
+def test_one_server_gives_a_read_and_the_write_after_it_the_same_connection():
+    client, pool = directory_client()
+    client.search_s('ou=users')
+    client.add_s('cn=a', [])
+    # control: on their own they can go to two domain controllers
+    assert len(pool.made) == 2
+
+    with client.one_server():
+        client.search_s('ou=users')
+        with client.one_server():
+            client.add_s('cn=a', [])
+        client.modify_s('cn=a', [])
+        client.delete_s('cn=a')
+        other_thread = threading.Thread(target=client.search_s, args=('ou=users',))
+        other_thread.start()
+        other_thread.join()
+        assert pool.in_use == 1
+    held, elsewhere = pool.made[2:]
+    held.search_s.assert_called_once()
+    held.add_s.assert_called_once()
+    held.modify_s.assert_called_once()
+    held.delete_s.assert_called_once()
+    # another thread's call is not on the connection this one holds
+    elsewhere.search_s.assert_called_once()
+    assert pool.in_use == 0
+    client.search_s('ou=users')
+    assert len(pool.made) == 5
+
+
+def test_one_server_stops_when_its_connection_was_reopened():
+    # the library re-opens a dropped connection by itself, perhaps to another server
+    client, pool = directory_client()
+    with pytest.raises(Exception, match='replaced part way'):
+        with client.one_server():
+            client.search_s('ou=users')
+            pool.made[0]._reconnects_done = 1
+            client.add_s('cn=a', [])
+    pool.made[0].add_s.assert_not_called()
+    assert pool.in_use == 0

@@ -165,8 +165,9 @@ def _remove_if_present(remove, name: str):
 
 
 class SyncUserInDirectoryServiceTask(BaseTask):
-    # user attribute: this task has put the account and its group in the directory
-    # and has not removed them since
+    # user attribute. True: set before this task first adds the account and its group
+    # to the directory, so an attempt that stops after its add leaves it set. False:
+    # the task has removed them. Absent: the task has not handled the account yet.
     IN_DIRECTORY = 'directory_account'
     # Active Directory tells its other domain controllers of a change after 15 s
     CATCH_UP_SECONDS = 30
@@ -180,42 +181,56 @@ class SyncUserInDirectoryServiceTask(BaseTask):
         return 'accounts.sync-user'
 
     def _await_directory(self, user: Dict, group_too: bool):
-        # A read can be answered by a domain controller the account has not reached
-        # yet. Adding it there as well leaves two accounts, one of which survives a
-        # disable; skipping its removal there leaves one. So an account this task
-        # created is waited for. One removed by hand never appears, and is added again.
-        if not user.get(self.IN_DIRECTORY):
+        # A read can be answered by a domain controller that this task's last change
+        # has not reached yet. Adding an account it does not show yet leaves two, one
+        # of which survives a disable; skipping its removal leaves one; and updating
+        # one it still shows after a removal leaves none. So the directory is waited
+        # on until it shows what was last done. An account removed or added by hand
+        # never does, and after the wait the task goes by what it reads.
+        recorded = user.get(self.IN_DIRECTORY)
+        if recorded is None:
             return
         directory = self.context.ldap_client
+        username, group_name = user['username'], user['group_name']
+
+        def caught_up():
+            if not recorded:
+                return not directory.is_existing_user(
+                    username
+                ) and not directory.is_existing_group(group_name)
+            # a removal that stopped part way has taken the group and left the account
+            return directory.is_existing_user(username) and (
+                not group_too or directory.is_existing_group(group_name)
+            )
+
         deadline = time.monotonic() + self.CATCH_UP_SECONDS
-        # a removal that stopped part way has taken the group and left the account
-        while not (
-            directory.is_existing_user(user['username'])
-            and (not group_too or directory.is_existing_group(user['group_name']))
-        ):
+        while not caught_up():
             if time.monotonic() >= deadline:
                 self.logger.warning(
-                    'the directory does not show an account that was created in it'
+                    'the directory does not show an account that a task set out to '
+                    'create in it'
+                    if recorded
+                    else 'the directory still shows an account that was removed from it'
                 )
                 return
             time.sleep(self.CATCH_UP_INTERVAL)
             # deleting a user runs the removal itself beside the copy it queued: the
             # one that comes second must not wait out an account the first removed
-            current = self.context.accounts.user_dao.get_user(user['username'])
-            if not current or not current.get(self.IN_DIRECTORY):
+            current = self.context.accounts.user_dao.get_user(username)
+            if not current or current.get(self.IN_DIRECTORY) is not recorded:
                 return
 
     def _record_in_directory(self, user: Dict, present: bool):
-        if bool(user.get(self.IN_DIRECTORY)) == present:
+        if user.get(self.IN_DIRECTORY) is present:
             return
         try:
             self.context.accounts.user_dao.table.update_item(
                 Key={'username': user['username']},
-                UpdateExpression='SET #flag = :yes' if present else 'REMOVE #flag',
+                UpdateExpression='SET #flag = :present',
                 # a record deleted meanwhile is not brought back
                 ConditionExpression='attribute_exists(username)',
                 ExpressionAttributeNames={'#flag': self.IN_DIRECTORY},
-                **({'ExpressionAttributeValues': {':yes': True}} if present else {}),
+                ExpressionAttributeValues={':present': present},
             )
         except ClientError as error:
             if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
@@ -227,9 +242,6 @@ class SyncUserInDirectoryServiceTask(BaseTask):
     def invoke(self, payload: Dict):
         username = payload['username']
         user = self.context.accounts.user_dao.get_user(username)
-        group_name = user['group_name']
-        enabled = user['enabled']
-        sudo = Utils.get_value_as_bool('sudo', user, False)
         readonly = self.context.ldap_client.is_readonly()
         if keeps_directory_account(self.context, user):
             return
@@ -240,8 +252,20 @@ class SyncUserInDirectoryServiceTask(BaseTask):
             )
             return
 
+        # the wait, each read and the write decided on it are answered by one domain
+        # controller: one that has the account cannot be followed by one that has not
+        with self.context.ldap_client.one_server():
+            self._sync(user)
+
+    def _sync(self, user: Dict):
+        username = user['username']
+        group_name = user['group_name']
+        enabled = user['enabled']
+        sudo = Utils.get_value_as_bool('sudo', user, False)
         self._await_directory(user, group_too=enabled)
         if enabled:
+            # before the add: the retry of an attempt that fails after it must wait too
+            self._record_in_directory(user, True)
             self.logger.info(f'sync user: {username} TO directory service ...')
             self.context.ldap_client.sync_group(
                 group_name=user['group_name'], gid=user['gid']
@@ -261,7 +285,6 @@ class SyncUserInDirectoryServiceTask(BaseTask):
             else:
                 if self.context.ldap_client.is_sudo_user(username):
                     self.context.ldap_client.remove_sudo_user(username)
-            self._record_in_directory(user, True)
 
         else:
             self.logger.info(f'deleting user: {username} from directory service ...')

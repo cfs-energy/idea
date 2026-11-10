@@ -240,7 +240,9 @@ class TaskManager(SocaService):
             f'of {TASK_MAX_ATTEMPTS} in {delay}s'
         )
 
-    def _discard_deleted_user(self, task_name, payload, receipt_handle):
+    def _discard_deleted_user(
+        self, task_name, payload, receipt_handle, message_id, failed=False
+    ):
         if task_name not in {
             'accounts.sync-user',
             'accounts.sync-password',
@@ -258,7 +260,17 @@ class TaskManager(SocaService):
             return False
         # LDAP absence alone can mean replication lag; only the authoritative
         # account record establishes that retrying this work is obsolete.
-        self.logger.warning(f'failed task for deleted user; discarding: {task_name}')
+        if failed:
+            self.logger.warning(
+                f'task {task_name} (message {message_id}) failed and is dropped: '
+                'its user is deleted'
+            )
+        else:
+            # every delete leaves the user's queued tasks to end here
+            self.logger.info(
+                f'task {task_name} (message {message_id}) dropped before it ran: '
+                'its user is deleted'
+            )
         task = self.tasks.get(task_name)
         if task is not None:
             self._cleanup(task, payload)
@@ -381,7 +393,9 @@ class TaskManager(SocaService):
                 # the queue's own clock orders every message, whichever release sent it
                 task_payload.setdefault('sent_at', int(sent_at))
 
-            if self._discard_deleted_user(task_name, task_payload, receipt_handle):
+            if self._discard_deleted_user(
+                task_name, task_payload, receipt_handle, message_id
+            ):
                 return
             if receive_count > TASK_MAX_ATTEMPTS:
                 # The last attempt stopped without a result (deadline exit), or the
@@ -406,7 +420,7 @@ class TaskManager(SocaService):
             _task_end = Utils.current_time_ms()
             _task_duration = int(_task_end - _task_start)
             self.logger.info(
-                f'completed task: {task_name} ({receipt_handle}), duration: {_task_duration}ms'
+                f'completed task: {task_name} (message {message_id}, {receipt_handle}), duration: {_task_duration}ms'
             )
 
             self.logger.debug(f'Attempting to delete task handle ({receipt_handle})')
@@ -416,16 +430,21 @@ class TaskManager(SocaService):
 
         except ldap.ALREADY_EXISTS as e:
             self.logger.warning(
-                f'failed to execute task due to LDAP exists error: {task_name} - {task_payload} - {e}'
+                f'failed to execute task due to LDAP exists error: {task_name} '
+                f'(message {message_id}) - {task_payload} - {e}'
             )
             self._give_up(task, task_payload, receipt_handle, e)
 
         except TaskCannotSucceed as e:
-            self.logger.error(f'task {task_name} cannot succeed: {e}')
+            self.logger.error(
+                f'task {task_name} (message {message_id}) cannot succeed: {e}'
+            )
             self._give_up(task, task_payload, receipt_handle, e)
 
         except Exception as e:
-            if self._discard_deleted_user(task_name, task_payload, receipt_handle):
+            if self._discard_deleted_user(
+                task_name, task_payload, receipt_handle, message_id, failed=True
+            ):
                 return
             self.logger.exception(
                 f'failed to execute task: {task_name} (message {message_id}) - {e}'
