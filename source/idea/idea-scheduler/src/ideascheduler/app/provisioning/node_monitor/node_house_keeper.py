@@ -1149,7 +1149,9 @@ class NodeHouseKeepingSession:
         # an array's own state is not proof that none of its subjobs runs: what PBS reports
         # for a begun array that is held and released has not been seen. Every index it was
         # submitted with has to read as not started, and anything short of that keeps the
-        # stack.
+        # stack. Not started is queued, held or waiting, or done with no start time: a
+        # subjob deleted while queued never ran, and must not cost an array that never got
+        # its nodes the retry. One that ran keeps its start time when it is done.
         try:
             submitted, subjobs = self._context.scheduler.get_array_subjobs(job.job_id)
         except Exception as e:
@@ -1157,7 +1159,12 @@ class NodeHouseKeepingSession:
                 f'{job.log_tag} subjobs could not be read; stack left in place: {e}'
             )
             return False
-        if any(subjob.state not in waiting for subjob in subjobs):
+        done = (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+        if any(
+            subjob.state not in waiting
+            and not (subjob.state in done and subjob.start_time is None)
+            for subjob in subjobs
+        ):
             self._logger.info(
                 f'{job.log_tag} array is {live_job.state} in the scheduler with a subjob '
                 f'begun; stack left in place'
