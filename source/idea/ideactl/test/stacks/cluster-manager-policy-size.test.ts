@@ -115,6 +115,9 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       .flatMap((resource) => resource.Properties.PolicyDocument.Statement as Json[]);
     const writes = /^(\*|secretsmanager:(\*|Create.*|Tag.*|Untag.*|Delete.*|Update.*|PutResourcePolicy))$/;
     assert.deepEqual(everyStatement.filter((statement) => [statement.Action].flat().some((action: string) => writes.test(action)) && !passwords.includes(statement)), []);
+    // the password secret sweep waits 5 days, which is safe only while the tasks queue keeps 4
+    const tasks = Object.values(resources).find((resource) => resource.Properties?.QueueName === 'idea-test1-cluster-manager-tasks.fifo')!;
+    assert.equal(tasks.Properties.MessageRetentionPeriod, 4 * 24 * 3600);
     const normalize = (statements: Json[]) => statements.map((statement) => JSON.stringify(resolve(iam.PolicyStatement.fromJson(statement).toStatementJson()))).sort();
     assert.deepEqual(normalize(statements.filter((statement) => !health.includes(statement) && !passwords.includes(statement))), normalize(expected));
     console.log(`GovCloud task inline: ${inlineBytes}; managed: ${managed.map(size).join(', ')} bytes`);

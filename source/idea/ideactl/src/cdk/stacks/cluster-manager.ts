@@ -65,6 +65,10 @@ import { renderPolicy } from '../policy.ts';
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
 /** `constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS` / `SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS`. */
 const SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS = 16;
+// The SQS default, set so it cannot move unseen: cluster-manager deletes a password secret whose
+// task was lost once the secret is 5 days old (STRAY_PASSWORD_SECRET_SECONDS in accounts_service.py),
+// which is safe only while no message outlives that. Raise that bound before raising this.
+const CLUSTER_TASKS_RETENTION_DAYS = 4;
 const SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS = 3;
 /** `constants.SQS_VISIBILITY_TASKS` / `SQS_VISIBILITY_NOTIFICATIONS`. */
 const SQS_VISIBILITY_SECONDS = 30;
@@ -230,6 +234,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       contentBasedDeduplication: true,
       encryptionMasterKey: kmsKeyId,
       visibilityTimeout: Duration.seconds(SQS_VISIBILITY_SECONDS),
+      retentionPeriod: Duration.days(CLUSTER_TASKS_RETENTION_DAYS),
       deadLetterQueue: { maxReceiveCount: SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS, queue: clusterTasksDlq },
     });
     // Both queues use the module name for their `Name` tag.

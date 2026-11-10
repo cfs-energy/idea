@@ -1171,16 +1171,16 @@ def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
     context: AppContext, secrets
 ):
     prefix = 'idea-mock-password-sync-'
-    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=15)
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=5.1)
     kept = [
-        # the queue can still hold the task of anything younger than its retention
-        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=13),
+        # the queue keeps a task 4 days: a day past that, nothing is left to read it
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=4.9),
         # each of the name and the three tags is required
-        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=15),
-        secrets.add(f'{prefix}untagged', age_days=15),
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=5.1),
+        secrets.add(f'{prefix}untagged', age_days=5.1),
         *(
             secrets.add(
-                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=15
+                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=5.1
             )
             for n, key in enumerate(PASSWORD_TAGS)
         ),

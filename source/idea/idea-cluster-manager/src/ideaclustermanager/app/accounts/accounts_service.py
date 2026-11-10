@@ -1300,6 +1300,11 @@ class AccountsService:
         }
 
     PASSWORD_SECRET_SWEEP_SECONDS = 3600
+    # The tasks queue keeps a message 4 days (the stack sets its retention), and a
+    # password can wait there that long behind a stopped cluster-manager or other
+    # passwords. This must stay above that retention: a secret swept while its message
+    # is still queued is a password the task reports as done and never applies.
+    STRAY_PASSWORD_SECRET_SECONDS = 5 * 24 * 3600
 
     def remove_stray_password_secrets(self):
         """
@@ -1312,9 +1317,7 @@ class AccountsService:
         if now < self._next_password_secret_sweep:
             return
         self._next_password_secret_sweep = now + self.PASSWORD_SECRET_SWEEP_SECONDS
-        # As for the files: a task can wait in the queue this long, behind a stopped
-        # cluster-manager or other passwords, and must still find its secret.
-        cutoff = time.time() - self.STRANDED_PASSWORD_FILE_SECONDS
+        cutoff = time.time() - self.STRAY_PASSWORD_SECRET_SECONDS
         wanted = self.password_secret_tags
         try:
             secrets = self.context.aws().secretsmanager()
