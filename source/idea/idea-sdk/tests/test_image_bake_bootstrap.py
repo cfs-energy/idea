@@ -1024,7 +1024,12 @@ def test_compute_cleanup_keeps_the_private_tmp_of_running_services(tmp_path):
             (root / base / name).mkdir()
             (root / base / name / 'file').write_text('x')
             removed.append(root / base / name)
-    line = line.replace('/var/tmp', f'{root}/var/tmp').replace(' /tmp', f' {root}/tmp')
+    # in one pass: on Linux the test's own directory is under /tmp, and a second replace
+    # would rewrite the path the first one had just written
+    line = re.sub(
+        r'(?<=\s)(/var/tmp|/tmp)(?=\s)', lambda m: f'{root}{m.group(1)}', line
+    )
+    assert line.count(str(root)) == 2
     subprocess.run(['bash', '-ec', line], check=True)
     assert all(path.is_dir() for path in kept)
     assert not any(path.exists() for path in removed)
