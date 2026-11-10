@@ -104,10 +104,10 @@ def test_message_is_bounded_and_keeps_error_codes():
         {'route': '/home/file-browser?cwd=/data'},
         {'route': '/virtual-desktop/sessions/abc123'},
         {'route': '/home\nforged=line'},
-        # a live path with the shape of a route: dev usernames passed the old pattern
-        {'route': '/home/guien'},
-        {'route': '/data/home/choso/secret'},
-        {'route': '/cluster/users/guien'},
+        # a live path with the shape of a route: a username passed the old pattern
+        {'route': '/home/alice'},
+        {'route': '/data/home/bob/secret'},
+        {'route': '/cluster/users/alice'},
         {'route': '/virtual-desktop/sessions/:anything'},
         {'app_version': '1 2'},
         {'api_namespace': 'not a namespace'},
