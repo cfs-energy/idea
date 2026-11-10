@@ -1304,7 +1304,7 @@ test("original cleared IDs restore protection even when their tags disappear", a
   });
 });
 
-for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "metrics.cost.enabled", "unrelated.last_published"]) {
+for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "accounts.reconcile.last_run", "metrics.backfill.cost", "metrics.backfill.jobs", "accounts.reconcile.enabled", "metrics.cost.enabled", "unrelated.last_published"]) {
   test(`completion scopes runtime checkpoint exceptions: ${suffix}`, async () => {
     await withFixture(async ({ deps, rows }) => {
       rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
@@ -1315,8 +1315,23 @@ for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_colle
         await deploy(input);
         rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = 2;
       };
-      if (suffix.endsWith("last_collected") || suffix.endsWith("last_completed") || suffix.endsWith("usage_snapshot")) await upgradeCluster(deps, containerOptions);
+      // metrics.backfill.jobs is the scheduler's row; under the cluster manager it is not a checkpoint
+      if (/last_collected$|last_completed$|usage_snapshot$|reconcile\.last_run$|backfill\.cost$/.test(suffix)) await upgradeCluster(deps, containerOptions);
       else await assert.rejects(upgradeCluster(deps, containerOptions), /Completion verification failed for setting/);
+    });
+  });
+}
+
+for (const key of ["vdc.software_stacks.expiry_last_digest_on", "scheduler.metrics.backfill.jobs"]) {
+  test(`completion lets an application advance ${key} during the upgrade`, async () => {
+    await withFixture(async ({ deps, rows }) => {
+      rows[`${clusterName}.cluster-settings`]!.push(setting(key, 1));
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = 2;
+      };
+      await upgradeCluster(deps, containerOptions);
     });
   });
 }

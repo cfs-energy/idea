@@ -350,7 +350,7 @@ Finish a rolling upgrade in one go for the same reason: a 26.11.1 collector that
 
 ### Scheduler Log Archive Expiry
 
-The first `ideactl bootstrap` after upgrading applies the 400 day expiry on `logs/<scheduler module id>/` in the cluster bucket and deletes older archives, with no prompt. `upgrade-cluster` and `ideactl deploy`, even with `--module-id all`, do not apply it. Each scheduler module has its own `<module id>.log_archive.s3_retention_days`. To keep archives for ever, run this before that first bootstrap:
+The first `ideactl bootstrap` after upgrading applies the 400 day expiry on `logs/<scheduler module id>/` in the cluster bucket and deletes older archives, with no prompt. `upgrade-cluster` and `ideactl deploy`, even `ideactl deploy all`, do not apply it. Each scheduler module has its own `<module id>.log_archive.s3_retention_days`. To keep archives for ever, run this before that first bootstrap:
 
 ```bash
 ./idea-admin.sh config set "Key=scheduler.log_archive.s3_retention_days,Type=int,Value=0" --cluster-name <CLUSTER_NAME> --aws-region <REGION>

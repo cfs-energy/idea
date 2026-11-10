@@ -165,7 +165,7 @@ test('ideactl in a task shell is the documented CLI, and the scheduler commands 
   assert.ok(finalStage.indexOf('COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl') > finalStage.indexOf('pip install --no-cache-dir "${PKG}"'));
   const bin = mkdtempSync(join(tmpdir(), 'ideactl-'));
   try {
-    for (const name of ['node', 'idea-scheduler-cli']) {
+    for (const name of ['node', 'idea-scheduler-cli', 'idea-cluster-manager-cli', 'idea-vdc-cli']) {
       writeFileSync(join(bin, name), `#!/bin/bash\necho ${name} "$@"\n`);
       chmodSync(join(bin, name), 0o755);
     }
@@ -189,6 +189,23 @@ test('ideactl in a task shell is the documented CLI, and the scheduler commands 
       assert.equal(refused.stdout, '');
       assert.equal(refused.stderr.trim(), `ideactl jobs runs in the scheduler task's shell (container scheduler-container); this is the ${role} task`);
       assert.equal(inTask(role, 'about').stdout.trim(), 'node main.js about');
+    }
+    // logs and app-module-clean-up exist in each module's CLI, and the cluster manager and the desktop controller have commands of their own
+    for (const [role, cli, own] of [['scheduler', 'idea-scheduler-cli', 'provision-always-on-nodes'], ['cluster-manager', 'idea-cluster-manager-cli', 'accounts'], ['cluster-manager', 'idea-cluster-manager-cli', 'groups'], ['cluster-manager', 'idea-cluster-manager-cli', 'ldap'], ['vdc', 'idea-vdc-cli', 'update-base-stacks'], ['vdc', 'idea-vdc-cli', 'build-desktop-image']] as const) {
+      for (const command of ['logs', 'app-module-clean-up', own]) assert.equal(inTask(role, command, '--help').stdout.trim(), `${cli} ${command} --help`);
+    }
+    assert.equal(run('logs'), 'idea-scheduler-cli logs');
+    assert.equal(inTask('scheduler', 'accounts').stderr.trim(), "ideactl accounts runs in the cluster-manager task's shell (container cluster-manager-container); this is the scheduler task");
+    assert.equal(inTask('cluster-manager', 'reindex-software-stacks').stderr.trim(), "ideactl reindex-software-stacks runs in the vdc task's shell (container controller-container); this is the cluster-manager task");
+    const nowhere = inTask('bastion-host', 'logs');
+    assert.equal(nowhere.status, 2);
+    assert.equal(nowhere.stderr.trim(), "ideactl logs runs in the cluster-manager, vdc or scheduler task's shell; this is the bastion-host task");
+    // every command a module CLI registers is routed, so none falls through to the administrator as unknown
+    const wrapper = readFileSync(new URL('deployment/ecr/idea-control-plane/ideactl.sh', root), 'utf8');
+    for (const module of ['idea-scheduler/src/ideascheduler', 'idea-cluster-manager/src/ideaclustermanager', 'idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller']) {
+      const registered = [...readFileSync(new URL(`source/idea/${module}/cli/cli_main.py`, root), 'utf8').matchAll(/^main\.add_command\((\w+)\)/gm)].map((match) => match[1]!.replace(/_commands$/, '').replaceAll('_', '-'));
+      assert.ok(registered.length >= 5);
+      for (const command of registered) assert.match(wrapper, new RegExp(`[ |]${command}[|)]`), command);
     }
   } finally {
     rmSync(bin, { recursive: true, force: true });
