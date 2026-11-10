@@ -1430,6 +1430,16 @@ def report_sessions():
                 start - 30 * day,
                 stopped_on=start - 30 * day,
             ),
+            # stopped an hour into the period, and no run on record to bring it back: only
+            # the filter's lower bound keeps it
+            doc(
+                'edge',
+                'user-d',
+                'STOPPED',
+                start - 10 * day,
+                start + day // 24,
+                stopped_on=start + day // 24,
+            ),
             # counted with unknown hours whatever the period
             doc('undated', 'user-c', 'STOPPED', None, None),
             doc('zero', 'user-c', 'STOPPED', start + day, 0),
@@ -1646,11 +1656,31 @@ def test_period_bounded_read_gives_the_same_insights_as_the_full_read(monkeypatc
     assert results[0].desktops.hours and results[0].desktops.idle_hours
 
 
+# bound here: the test below replaces the method, and a wrong filter that called it by name
+# would call itself, fail the desktop read, and differ for that reason alone
+REAL_PERIOD_QUERY = ReportingSources.desktop_period_query
+
+
+def without_live_desktops(selected, scope):
+    query = REAL_PERIOD_QUERY(selected, scope)
+    lower = query['bool']['filter'][-1]['bool']
+    lower['should'] = [clause for clause in lower['should'] if 'terms' not in clause]
+    return query
+
+
 WRONG_PERIOD_FILTERS = {
     'no documents': lambda selected, scope: {'bool': {'must_not': [{'match_all': {}}]}},
-    'the month before': lambda selected, scope: ReportingSources.desktop_period_query(
-        period('2024-01-01', '2024-01-31'), scope
+    # the upper bound: a period that ended before any of these desktops was created. The month
+    # before is no control: it keeps the live desktops, and the runs bring back the rest.
+    'a period years before': lambda selected, scope: REAL_PERIOD_QUERY(
+        period('2020-01-01', '2020-01-31'), scope
     ),
+    # the lower bound, both halves: what stopped inside the period, and what is still running
+    # on a last write from before it
+    'a lower bound a day late': lambda selected, scope: REAL_PERIOD_QUERY(
+        period('2024-02-02', '2024-02-29'), scope
+    ),
+    'live desktops written before the period left out': without_live_desktops,
 }
 
 
@@ -1667,12 +1697,13 @@ def test_a_wrong_period_filter_changes_the_report_and_insights(monkeypatch, wron
     docs, history, heads = period_fixture()
 
     def both(unfiltered):
-        report = built(read_report(docs, unfiltered, history, heads)[0])
+        data = read_report(docs, unfiltered, history, heads)[0]
+        report = built(data)
         data, _, _, context = read_report(docs, unfiltered, history, heads, {}, True)
         insights = InsightsService(context, Mock()).build(
             data, period(), 'USD', 'UTC', time.monotonic() + 30, None
         )
-        return report, insights.model_dump(exclude={'updated_at'})
+        return report, insights.model_dump(exclude={'updated_at'}), data['warnings']
 
     full = both(True)
     assert both(False) == full
@@ -1681,9 +1712,12 @@ def test_a_wrong_period_filter_changes_the_report_and_insights(monkeypatch, wron
         'desktop_period_query',
         staticmethod(WRONG_PERIOD_FILTERS[wrong]),
     )
-    report, insights = both(False)
+    report, insights, warnings = both(False)
     assert report != full[0]
     assert insights != full[1]
+    # the read worked and returned other documents: a read that failed differs too
+    assert warnings == full[2]
+    assert report[3] == full[0][3]
 
 
 def test_heads_scan_until_the_index_is_seeded_then_never():
