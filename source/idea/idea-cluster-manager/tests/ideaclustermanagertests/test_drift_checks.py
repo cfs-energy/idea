@@ -21,7 +21,11 @@ from ideaclustermanager.app.metrics.drift_checks import (
     analytics_value,
     digest,
 )
-from ideaclustermanager.app.metrics.storage_metrics_service import StorageTarget
+from ideaclustermanager.app.metrics import storage_metrics_service
+from ideaclustermanager.app.metrics.storage_metrics_service import (
+    OntapClient,
+    StorageTarget,
+)
 from ideasdk.metrics.health import CollectorRunner
 
 SOURCE = Path(__file__).parents[3]
@@ -343,6 +347,149 @@ def test_no_cifs_server_on_a_visible_svm_is_drift_only_where_smb_is_mounted(
     ):
         assert found[check] == expected
     assert found['ontap_ldap_session_security'] == OK
+
+
+# What ONTAP 9 on FSx answers, field for field, with the names and ids replaced: the CIFS and
+# LDAP records of an SVM whose session security was none, taken while it was, and those of one
+# that signs. Every key ONTAP sent is kept, so a rule that reads the wrong one shows here.
+RECORDED_SVM = {'uuid': '00000000-0000-0000-0000-000000000001', 'name': 'svm1'}
+RECORDED_CIFS_SECURITY = {
+    'restrict_anonymous': 'no_enumeration',
+    'smb_signing': False,
+    'smb_encryption': False,
+    'kdc_encryption': True,
+    'lm_compatibility_level': 'lm_ntlm_ntlmv2_krb',
+    'aes_netlogon_enabled': False,
+    'try_ldap_channel_binding': True,
+    'ldap_referral_enabled': False,
+    'advertised_kdc_encryptions': ['aes_256', 'aes_128', 'rc4', 'des'],
+    'encrypt_dc_connection': False,
+    'use_start_tls': False,
+    'session_security': 'none',
+    'use_ldaps': False,
+}
+RECORDED_LDAP_STATUS = {
+    'state': 'up',
+    'message': 'Connected to LDAP server "10.0.0.10".',
+    'dn_message': ['All the configured DNs are available.'],
+    'code': 0,
+    'ipv4_state': 'down',
+    'ipv6_state': 'down',
+}
+
+
+def recorded_answers(cifs_enabled=True, ldap_state='up', ldap_security='sign', **cifs):
+    """the four reads and the SVM listing, as pages of ONTAP's own envelope."""
+
+    def page(*records):
+        return {'records': list(records), 'num_records': len(records), '_links': {}}
+
+    return {
+        '/api/protocols/cifs/services': page(
+            {
+                'svm': RECORDED_SVM,
+                'enabled': cifs_enabled,
+                'security': {
+                    **RECORDED_CIFS_SECURITY,
+                    'session_security': 'sign',
+                    **cifs,
+                },
+            }
+        ),
+        '/api/name-services/ldap': page(
+            {
+                'svm': RECORDED_SVM,
+                'session_security': ldap_security,
+                'status': {**RECORDED_LDAP_STATUS, 'state': ldap_state},
+            }
+        ),
+        '/api/name-services/dns': page(
+            {
+                'uuid': RECORDED_SVM['uuid'],
+                'servers': DC,
+                'dynamic_dns': {
+                    'enabled': True,
+                    'use_secure': True,
+                    'time_to_live': 'P1D',
+                    'fqdn': 'SVM1.corp.example',
+                },
+                'svm': {'name': 'svm1'},
+            }
+        ),
+        '/api/storage/volumes': page(*GOOD_VOLUMES),
+        '/api/svm/svms': page(RECORDED_SVM),
+    }
+
+
+def over_the_real_client(monkeypatch, answers):
+    """the drift checks through OntapClient itself, with only the HTTP call replaced."""
+    checks = harness(monkeypatch)
+    monkeypatch.setattr(module, 'OntapClient', OntapClient)
+
+    def get(url, **kwargs):
+        path = url.split('amazonaws.com', 1)[1]
+        body = next(v for k, v in answers.items() if path.startswith(k))
+        return Mock(status_code=200, json=lambda: body, text='')
+
+    monkeypatch.setattr(storage_metrics_service.requests, 'get', get)
+    return checks
+
+
+CIFS_FAMILY = {
+    'ontap_cifs_session_security',
+    'ontap_cifs_aes',
+    'ontap_machine_account',
+}
+
+
+@pytest.mark.parametrize(
+    'weak, drifted',
+    [
+        # the record as it was read on the SVM that failed: signing none, AES still on
+        (dict(session_security='none'), {'ontap_cifs_session_security'}),
+        (
+            dict(session_security='none', ldap_security='none'),
+            {'ontap_cifs_session_security', 'ontap_ldap_session_security'},
+        ),
+        (
+            dict(advertised_kdc_encryptions=['rc4', 'des'], kdc_encryption=False),
+            {'ontap_cifs_aes'},
+        ),
+        (dict(cifs_enabled=False), {'ontap_machine_account'}),
+        (dict(ldap_state='down'), {'ontap_machine_account'}),
+        (
+            dict(
+                session_security='none',
+                advertised_kdc_encryptions=['rc4', 'des'],
+                cifs_enabled=False,
+            ),
+            CIFS_FAMILY,
+        ),
+    ],
+)
+def test_a_weak_setting_on_an_svm_the_role_sees_is_drift_on_that_check_alone(
+    monkeypatch, weak, drifted
+):
+    # the three CIFS checks had been seen ok, unknown and falsely drift, never truly drift:
+    # each weak setting, in ONTAP's own answer, must read 2 on its check and 0 on the others
+    checks = over_the_real_client(monkeypatch, recorded_answers(**weak))
+    found = states(checks.run_once())
+    ontap = {check for check in found if check.startswith('ontap_')}
+    assert {check for check in ontap if found[check] == DRIFT} == drifted
+    assert {found[check] for check in ontap - drifted} == {OK}
+    published = {
+        tags['check']: value
+        for value, tags in checks.published['state']
+        if tags['scope'] == 'data'
+    }
+    assert {check for check, value in published.items() if value == 2} == drifted
+
+
+def test_the_same_svm_with_every_setting_right_is_ok_on_every_check(monkeypatch):
+    # the control: the recorded answer of an SVM that signs reads no drift at all
+    checks = over_the_real_client(monkeypatch, recorded_answers())
+    found = states(checks.run_once())
+    assert {found[check] for check in module.ONTAP_CHECKS} == {OK}
 
 
 def test_backup_retention_left_out_of_the_answer_reads_as_off(monkeypatch):
