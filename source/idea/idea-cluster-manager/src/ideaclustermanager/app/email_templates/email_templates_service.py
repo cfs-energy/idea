@@ -29,6 +29,14 @@ from ideasdk.context import SocaContext
 from ideaclustermanager.app.email_templates.email_templates_dao import EmailTemplatesDAO
 from ideaclustermanager.app.app_utils import ClusterManagerUtils
 
+from typing import Optional
+import hashlib
+
+
+def default_text_hash(subject: Optional[str], body: Optional[str]) -> str:
+    """what email_templates.yml lists under a template's `superseded`"""
+    return hashlib.sha256(f'{subject}\n{body}'.encode()).hexdigest()
+
 
 class EmailTemplatesService:
     def __init__(self, context: SocaContext):
@@ -154,11 +162,27 @@ class EmailTemplatesService:
             templates = Utils.from_yaml(f.read())['templates']
 
         for template in templates:
+            superseded = template.pop('superseded', None) or []
             name = template['name']
             existing = self.email_templates_dao.get_email_template(name)
-            if existing is not None:
-                continue
-            self.logger.info(f'creating default email template: {name} ...')
-            self.create_email_template(
-                CreateEmailTemplateRequest(template=EmailTemplate(**template))
-            )
+            if existing is None:
+                self.logger.info(f'creating default email template: {name} ...')
+                self.create_email_template(
+                    CreateEmailTemplateRequest(template=EmailTemplate(**template))
+                )
+            elif (
+                default_text_hash(existing.get('subject'), existing.get('body'))
+                in superseded
+            ):
+                # the stored text is an earlier default word for word, so nobody edited
+                # it. An edited template never equals one and is left alone.
+                self.logger.info(
+                    f'updating default email template: {name} (unedited earlier default) ...'
+                )
+                self.email_templates_dao.update_email_template(
+                    {
+                        'name': name,
+                        'subject': template['subject'],
+                        'body': template['body'],
+                    }
+                )

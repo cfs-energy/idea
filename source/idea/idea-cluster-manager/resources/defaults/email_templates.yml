@@ -82,6 +82,15 @@ templates:
       {% if page_url %}<a href="{{page_url}}">Open Scratch cleanup</a>{% endif %}
       <hr>
       <i> This is an automated email, please do not respond.</i>
+    # Templates are only added to a cluster, never overwritten, so a fix to one above does
+    # not reach a cluster that already stores it. To let it: list the sha256 of
+    # "<subject>\n<body>" of each text the template shipped with before. A stored template
+    # that still equals one was never edited and takes the new subject and body; an edited
+    # one is left alone. ideaclustermanager.app.email_templates.email_templates_service
+    # .default_text_hash(subject, body) gives the value.
+    superseded:
+      # 26.11.2-rc.2 and rc.3: named a count the service does not send
+      - b22e94075284b650d7608a6e3a5d879d56b40cc50deb574c604571dcca1a76e2
   - name: "virtual-desktop-controller.session-provisioning"
     title: "Virtual Desktop Provisioning"
     template_type: jinja2
