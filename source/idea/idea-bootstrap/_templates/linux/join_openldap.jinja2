@@ -113,6 +113,8 @@ pam-auth-update --enable sss
 {% endif %}
 
 systemctl enable sssd
+# the responders named in `services` above
+disable_sssd_responder_sockets nss pam autofs sudo
 systemctl restart sssd
 
 grep -q "sudoers: files sss" /etc/nsswitch.conf

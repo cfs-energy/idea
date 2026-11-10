@@ -1,7 +1,7 @@
 """
 An Ubuntu 24.04 desktop came up `degraded`: sssd-nss.socket, sssd-pam.socket and
 sssd-pam-priv.socket failed. Ubuntu enables a socket unit per sssd responder, and each one
-refuses to start when sssd.conf names its responder in `services`, as the AD join does.
+refuses to start when sssd.conf names its responder in `services`, as both directory joins do.
 """
 
 import os
@@ -9,10 +9,12 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from test_bootstrap_shell_syntax import BASH, IDEA_BOOTSTRAP_DIR
 
 COMMON = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
-JOIN = Path(IDEA_BOOTSTRAP_DIR, '_templates/linux/join_activedirectory.jinja2')
+TEMPLATES = Path(IDEA_BOOTSTRAP_DIR, '_templates/linux')
 
 
 def _run(tmp_path, units, disable_rc=0):
@@ -75,9 +77,11 @@ def test_a_socket_that_cannot_be_disabled_only_warns(tmp_path):
     assert 'warning Could not disable sssd-nss.socket' in calls
 
 
-def test_the_ad_join_disables_them_for_the_services_it_names():
-    join = JOIN.read_text()
+@pytest.mark.parametrize('join', ['join_activedirectory.jinja2', 'join_openldap.jinja2'])
+def test_each_directory_join_disables_them_for_the_services_it_names(join):
+    join = (TEMPLATES / join).read_text()
     services = re.search(r'^services = (.+)$', join, re.M).group(1).replace(',', '')
-    call = f'disable_sssd_responder_sockets {services}'
+    call = f'disable_sssd_responder_sockets {services}\n'
     assert join.index('" > /etc/sssd/sssd.conf') < join.index(call)
-    assert join.index(call) < join.index('systemctl restart sssd')
+    # the last restart: nothing after the call starts sssd again with the sockets back
+    assert join.index(call) < join.rindex('systemctl restart sssd')
