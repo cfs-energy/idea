@@ -5,6 +5,7 @@ rocky9 bake with no space left. Rescue images go before the new kernel arrives; 
 the image came with goes once the bake runs the new one.
 """
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -199,3 +200,55 @@ def test_other_distributions_have_nothing_to_remove():
     for base_os in ('amazonlinux2023', 'ubuntu2404'):
         script = render('_templates/linux/remove_superseded_kernels.jinja2', base_os)
         assert 'dnf remove' not in script and 'installonly_limit' not in script
+
+
+@pytest.mark.parametrize(
+    'machine, content, kept',
+    [
+        ('aarch64', 'add_drivers+=" xen-netfront xen-blkfront "\n', False),
+        # x86_64 instances can be Xen, and anything else in the file is someone's own
+        ('x86_64', 'add_drivers+=" xen-netfront xen-blkfront "\n', True),
+        ('aarch64', 'add_drivers+=" xen-netfront xen-blkfront nvme "\n', True),
+        ('aarch64', None, False),
+    ],
+)
+def test_an_arm64_image_does_not_ask_dracut_for_xen_drivers(
+    tmp_path, machine, content, kept
+):
+    """
+    a rocky9 arm64 clone's kdump build logged "Failed to find module 'xen_netfront'" and
+    "dracut: FAILED": the vendor image wrote /etc/dracut.conf.d/xen.conf on every architecture
+    until 2024-02.
+    """
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    function = re.search(
+        r'function drop_xen_dracut_drivers \(\) \{\n.*?\n\}\n', common, re.S
+    )[0]
+    conf = tmp_path / 'xen.conf'
+    other = tmp_path / '90-idea-no-rescue.conf'
+    other.write_text('dracut_rescue_image="no"\n')
+    if content is not None:
+        conf.write_text(content)
+    result = subprocess.run(
+        [
+            BASH,
+            '-euc',
+            f'uname() {{ echo {machine}; }}\n{function}drop_xen_dracut_drivers\n',
+        ],
+        env={**os.environ, 'DRACUT_CONF_DIR': str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert conf.exists() == kept and other.exists()
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+def test_both_bakes_drop_them_before_their_first_initramfs(builder):
+    setup = Path(IDEA_BOOTSTRAP_DIR, f'{builder}-ami-builder/setup.sh.jinja2').read_text()
+    call = setup.index('\ndrop_xen_dracut_drivers\n')
+    assert setup.index('bootstrap_common.sh') < call
+    # kernel work, where the desktop bake has it in this script, and the package installs
+    for later in ('set_kernel.jinja2', 'epel_repo.jinja2', 'mount_shared_storage.jinja2'):
+        assert later not in setup or call < setup.index(later)
+    assert 'mount_shared_storage.jinja2' in setup
