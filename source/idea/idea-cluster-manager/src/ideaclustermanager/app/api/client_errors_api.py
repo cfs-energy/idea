@@ -7,7 +7,7 @@ import ideaclustermanager
 
 from ideadatamodel import errorcodes, exceptions
 from ideasdk.api import ApiInvocationContext, BaseAPI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 MAX_REPORTS_PER_HOUR = 60
 MAX_TRACKED_USERS = 5000
@@ -36,6 +36,67 @@ ERROR_CODES = frozenset(
     for name, value in vars(errorcodes).items()
     if name.isupper() and isinstance(value, str)
 ) | {'NETWORK_ERROR', 'REQUEST_TIMEOUT', 'SERVER_ERROR'}
+# The portal's own routes, as client-error-reporter.ts lists them, plus what it sends when a
+# page matches none. A shape check is not enough: /home/<username> has the shape of a route.
+ROUTES = frozenset(
+    [
+        '/',
+        '/auth/challenge',
+        '/auth/confirm-forgot-password',
+        '/auth/forgot-password',
+        '/auth/login',
+        '/cluster/ai-usage',
+        '/cluster/email-templates',
+        '/cluster/groups',
+        '/cluster/projects',
+        '/cluster/reconciliation-runs',
+        '/cluster/services',
+        '/cluster/settings/*',
+        '/cluster/status',
+        '/cluster/user-costs',
+        '/cluster/users',
+        '/dashboard',
+        '/home',
+        '/home/account-settings',
+        '/home/active-jobs',
+        '/home/completed-jobs',
+        '/home/custom-dashboard',
+        '/home/file-browser',
+        '/home/file-browser/tail',
+        '/home/my-costs',
+        '/home/script-workbench',
+        '/home/shared-desktops',
+        '/home/ssh-access',
+        '/home/terminal',
+        '/home/virtual-desktops',
+        '/reporting/*',
+        '/soca/active-jobs',
+        '/soca/applications',
+        '/soca/applications/create',
+        '/soca/applications/update',
+        '/soca/completed-jobs',
+        '/soca/custom-amis',
+        '/soca/jobs/submit-job',
+        '/soca/licenses',
+        '/soca/licenses/create',
+        '/soca/licenses/update',
+        '/soca/queues',
+        '/soca/queues/create',
+        '/soca/queues/update',
+        '/soca/scratch-cleanup',
+        '/soca/settings/*',
+        '/virtual-desktop/dashboard',
+        '/virtual-desktop/debug',
+        '/virtual-desktop/permission-profiles',
+        '/virtual-desktop/permission-profiles/:profile_id',
+        '/virtual-desktop/sessions',
+        '/virtual-desktop/sessions/:idea_session_id',
+        '/virtual-desktop/settings/*',
+        '/virtual-desktop/software-stacks',
+        '/virtual-desktop/software-stacks/:software_stack_id',
+        '/unknown',
+    ]
+)
 QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"|`[^`]*`")
 TOKEN_EDGE = '()[]{},;:.!'
 
@@ -63,16 +124,20 @@ class ClientErrorReport(BaseModel):
         'api_failure',
         'list_load_failed',
     ]
-    # a route pattern, never a live path: fixed segments, :params and a trailing *
-    route: str = Field(
-        pattern=r'^/(?:(?:[a-z][a-z-]{0,39}|:[a-z_]{1,40}|\*)(?:/|$)){0,8}$',
-        max_length=200,
-    )
+    # one of the portal's route patterns, never a live path
+    route: str
     app_version: str = Field(pattern=r'^[0-9A-Za-z.+-]{1,40}$')
     api_namespace: Optional[str] = Field(
         default=None, pattern=r'^[A-Z][A-Za-z]{0,40}\.[A-Z][A-Za-z0-9]{0,60}$'
     )
     message: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator('route')
+    @classmethod
+    def a_known_route(cls, route: str) -> str:
+        if route not in ROUTES:
+            raise ValueError('not a portal route')
+        return route
 
 
 class ClientErrorsAPI(BaseAPI):

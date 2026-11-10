@@ -412,7 +412,7 @@ def test_a_row_from_before_these_fields_reads_as_empty_and_writes_nothing_new():
 def edit_api(old, **new_fields):
     api = admin_api(old)
     api._validate_update_software_stack_request = lambda item: (item, True)
-    api.software_stack_db.update.side_effect = lambda item: item
+    api.software_stack_db.update.side_effect = lambda item, **_: item
     api.software_stack_db.set_expiry.side_effect = lambda item, on: item
     api.controller_utils = Mock()
     api.controller_utils.describe_image_id.return_value = {'ImageId': old.ami_id}
@@ -428,15 +428,144 @@ def test_an_edit_that_asks_to_clear_the_date_clears_it():
     old = stack('dated', expires_on=NOW + timedelta(days=5))
     api = edit_api(old, clear_expires_on=True)
     assert api.software_stack_db.update.call_args.args[0].expires_on is None
-    api.software_stack_db.set_expiry.assert_called_once()
-    assert api.software_stack_db.set_expiry.call_args.args[1] is None
+    assert api.software_stack_db.update.call_args.kwargs == {'clear_expires_on': True}
+    api.software_stack_db.set_expiry.assert_not_called()
 
 
 def test_an_edit_that_says_nothing_about_the_date_keeps_it():
     on = NOW + timedelta(days=5)
     api = edit_api(stack('dated', expires_on=on))
     assert api.software_stack_db.update.call_args.args[0].expires_on == on
+    assert api.software_stack_db.update.call_args.kwargs == {'clear_expires_on': False}
     api.software_stack_db.set_expiry.assert_not_called()
+
+
+class Row:
+    """one table row behind update_item, enough of DynamoDB for SET and REMOVE"""
+
+    def __init__(self, item):
+        self.item = dict(item)
+
+    def update_item(self, **request):
+        old = dict(self.item)
+        names = request['ExpressionAttributeNames']
+        sets, _, removes = request['UpdateExpression'][4:].partition(' REMOVE ')
+        for token in sets.split(', '):
+            name, value = token.split(' = ')
+            self.item[names[name]] = request['ExpressionAttributeValues'][value]
+        for name in filter(None, removes.split(', ')):
+            self.item.pop(names[name], None)
+        new = request['ReturnValues'] == 'ALL_NEW'
+        return {'Attributes': dict(self.item) if new else old}
+
+
+def edit_through_the_table(monkeypatch, stored, **request_fields):
+    """a real edit against one row; returns the row and the index documents the edit's
+    events carry, as the update handler builds them"""
+    row = Row(
+        VirtualDesktopSoftwareStackDB.convert_software_stack_object_to_db_dict(stored)
+    )
+    monkeypatch.setattr(VirtualDesktopSoftwareStackDB, '_table', row)
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db.context = Mock()
+    db._table_name = 'stacks'
+    events = []
+    db.context.events_client.publish_event.side_effect = lambda event: events.append(
+        event
+    )
+    api = admin_api(None)
+    api.software_stack_db = db
+    db.get = lambda stack_id, base_os: db.convert_db_dict_to_software_stack_object(
+        row.item
+    )
+    api._validate_update_software_stack_request = lambda item: (item, True)
+    api.controller_utils = Mock()
+    api.controller_utils.describe_image_id.return_value = {'ImageId': stored.ami_id}
+    new = stack(stored.stack_id, **request_fields)
+    new.projects = []
+    call = Mock()
+    call.get_request_payload_as.return_value = Mock(software_stack=new)
+    api.update_software_stack(call)
+    documents = [
+        db.convert_software_stack_object_to_index_dict(
+            db.convert_db_dict_to_software_stack_object(event.detail['new_value'])
+        )
+        for event in events
+    ]
+    return row, events, documents
+
+
+def index_after(start, documents):
+    """the index merges each update into the stored document"""
+    indexed = dict(start)
+    for document in documents:
+        indexed.update(document)
+    return indexed
+
+
+def test_a_cleared_date_is_gone_from_the_index_whatever_order_its_updates_land_in(
+    monkeypatch,
+):
+    # dev, 6 of 10 clears: the edit sent the old date and then null as two index updates,
+    # two controller tasks took one each, and the old date landed last
+    import itertools
+
+    on = NOW + timedelta(days=5)
+    stored = stack('dated', expires_on=on, owner='a-person')
+    row, events, documents = edit_through_the_table(
+        monkeypatch, stored, clear_expires_on=True
+    )
+    assert 'expires_on' not in row.item
+    assert documents
+    before = {'expires_on': int(on.timestamp() * 1000), 'owner': 'a-person'}
+    for order in itertools.permutations(documents):
+        assert index_after(before, order)['expires_on'] is None
+    assert index_after(before, documents)['owner'] == 'a-person'
+
+
+def test_an_edit_that_keeps_the_date_keeps_it_in_the_table_and_the_index(monkeypatch):
+    on = NOW + timedelta(days=5)
+    row, events, documents = edit_through_the_table(
+        monkeypatch, stack('dated', expires_on=on), description='new words'
+    )
+    assert row.item['expires_on'] == int(on.timestamp() * 1000)
+    assert [document['expires_on'] for document in documents] == [
+        row.item['expires_on']
+    ]
+
+
+def test_a_cleared_owner_is_gone_from_the_index(monkeypatch):
+    # dev, 3 of 3: the table held an empty owner and the list kept the old name, since an
+    # empty owner reads back as none and the index document then left the key out
+    row, events, documents = edit_through_the_table(
+        monkeypatch, stack('owned', owner='a-person'), owner=''
+    )
+    assert row.item['owner'] == ''
+    assert index_after({'owner': 'a-person'}, documents)['owner'] is None
+    read = VirtualDesktopSoftwareStackDB.__new__(
+        VirtualDesktopSoftwareStackDB
+    ).convert_index_dict_to_software_stack_object(index_after({}, documents))
+    assert not read.owner
+
+
+def test_every_event_for_one_stack_is_in_one_ordered_group(monkeypatch):
+    # a base_os passed as the enum formatted as 'VirtualDesktopBaseOS.NAME-<id>', a second
+    # group beside 'amazonlinux2023-<id>', so the queue kept no order between the two
+    row = Row({'base_os': 'amazonlinux2023', 'stack_id': 'dated', 'ami_id': 'ami-old'})
+    monkeypatch.setattr(VirtualDesktopSoftwareStackDB, '_table', row)
+    db = VirtualDesktopSoftwareStackDB.__new__(VirtualDesktopSoftwareStackDB)
+    db.context = Mock()
+    db._table_name = 'stacks'
+    db.convert_db_dict_to_software_stack_object = Mock()
+    item = stack('dated')
+    db.update(item)
+    db.set_expiry(item, NOW)
+    db.repoint_image(item, 'ami-dated', 'ami-new')
+    groups = [
+        call.kwargs['event'].event_group_id
+        for call in db.context.events_client.publish_event.call_args_list
+    ]
+    assert groups == ['amazonlinux2023-dated'] * 3
 
 
 def test_clearing_removes_the_attribute_and_only_the_date(monkeypatch):

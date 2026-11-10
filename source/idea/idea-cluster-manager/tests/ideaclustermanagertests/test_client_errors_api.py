@@ -11,6 +11,7 @@ import pytest
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
 from ideaclustermanager.app.api.client_errors_api import (
     MAX_REPORTS_PER_HOUR,
+    ROUTES,
     ClientErrorsAPI,
     sanitize_message,
 )
@@ -103,6 +104,11 @@ def test_message_is_bounded_and_keeps_error_codes():
         {'route': '/home/file-browser?cwd=/data'},
         {'route': '/virtual-desktop/sessions/abc123'},
         {'route': '/home\nforged=line'},
+        # a live path with the shape of a route: dev usernames passed the old pattern
+        {'route': '/home/guien'},
+        {'route': '/data/home/choso/secret'},
+        {'route': '/cluster/users/guien'},
+        {'route': '/virtual-desktop/sessions/:anything'},
         {'app_version': '1 2'},
         {'api_namespace': 'not a namespace'},
         {'message': 'x' * 1001},
@@ -141,3 +147,25 @@ def test_the_request_log_never_carries_the_payload():
     context.namespace = 'Portal.ReportClientError'
     context.get_request.return_value = {'payload': GOOD}
     assert invoker.get_request_logging_payload(context)['payload'] == {'redacted': True}
+
+
+def test_the_routes_accepted_are_the_ones_the_portal_sends():
+    """the page reports a pattern from its own list, or /unknown: the server takes nothing else"""
+    import re
+    from pathlib import Path
+
+    reporter = Path(__file__).parents[2] / 'webapp/src/common/client-error-reporter.ts'
+    source = reporter.read_text()
+    listed = source[source.index('export const ROUTE_PATTERNS = [') :]
+    sent = set(re.findall(r'^\s+"([^"]+)",$', listed[: listed.index('];')], re.M))
+    assert len(sent) > 40
+    assert "?? '/unknown'" in source
+    assert ROUTES == sent | {'/unknown'}
+
+
+@pytest.mark.parametrize('route', sorted(ROUTES))
+def test_every_portal_route_is_accepted(route):
+    api, logger = make_api()
+    context = make_context({**GOOD, 'route': route})
+    api.invoke(context)
+    context.success.assert_called_once_with({'accepted': True})

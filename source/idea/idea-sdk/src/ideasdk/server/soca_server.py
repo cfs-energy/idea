@@ -1243,10 +1243,17 @@ class SocaServer(SocaService):
 
     async def generate_download_url_route(self, http_request, **_):
         """Generate a temporary signed URL for secure file downloads"""
+        # set before anything can raise: the handlers below name both in their log line
+        username = file_path = None
         try:
             username = self._api_invocation_handler.get_username(http_request)
             if Utils.is_empty(username):
-                raise exceptions.unauthorized_access()
+                # no session: the same answer /download gives, and nothing to log
+                return sanic.response.json(
+                    {'error_code': errorcodes.UNAUTHORIZED_ACCESS, 'success': False},
+                    status=401,
+                    dumps=Utils.to_json,
+                )
 
             # Parse request body
             body = http_request.json

@@ -372,6 +372,7 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         # command limit. Waiting here leaves desktop provisioning off this path.
         next_refresh = 0
         next_session_counts = 0
+        next_index_sweep = 0
         while not self._bootstrap_exit.is_set():
             # Reuse the minute loop so a later election or failover still rebuilds once.
             self._reindex_software_stacks()
@@ -389,6 +390,20 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             except Exception as e:
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Bootstrap refresh sweep failed: {" ".join(str(e).splitlines())}'
+                )
+            # a desktop with no table row leaves the admin listing within 6 hours, and at
+            # startup. its own timer and guard: a failed bootstrap refresh must not stop it
+            try:
+                if (
+                    self._bootstrap_session_utils is not None
+                    and time.monotonic() >= next_index_sweep
+                    and self.context.is_leader()
+                ):
+                    next_index_sweep = time.monotonic() + 6 * 60 * 60
+                    self._bootstrap_session_utils.drop_index_entries_without_a_row()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Desktop index sweep failed: {" ".join(str(e).splitlines())}'
                 )
             # a host that aborted its bootstrap never reports back: fail its desktop within
             # a minute instead of at the provisioning timeout.

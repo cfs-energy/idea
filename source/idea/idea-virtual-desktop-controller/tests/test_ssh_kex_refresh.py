@@ -527,3 +527,15 @@ def test_stack_expiry_runs_on_the_leader_and_a_failure_costs_only_itself(refresh
     # the loop wakes at 0, 60, 21599, 21600, 21660, 43200; not before leadership
     assert app._stack_expiry.tick.call_count == 5
     assert app._session_counts.publish.call_count == 3
+
+
+def test_the_index_sweep_runs_at_start_and_every_six_hours_on_the_leader(refresh_loop):
+    app, clock = refresh_loop
+    app.context.is_leader.side_effect = lambda: clock.now >= 60
+    calls = []
+    sweep = app._bootstrap_session_utils.drop_index_entries_without_a_row
+    sweep.side_effect = lambda: calls.append(clock.now)
+    # a bootstrap refresh that fails must not stop the listing being cleaned
+    app._bootstrap_session_utils.refresh_bootstrap.side_effect = RuntimeError('x')
+    app._refresh_bootstrap_loop()
+    assert calls == [60, 21660]

@@ -1033,12 +1033,11 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
             old_software_stack.min_storage = new_software_stack.min_storage
 
-        clear_expiry = new_software_stack.clear_expires_on
-        new_software_stack = self.software_stack_db.update(old_software_stack)
-        if clear_expiry:
-            new_software_stack = self.software_stack_db.set_expiry(
-                new_software_stack, None
-            )
+        # one write and one index update: the date goes with the rest of the edit
+        new_software_stack = self.software_stack_db.update(
+            old_software_stack,
+            clear_expires_on=bool(new_software_stack.clear_expires_on),
+        )
 
         ss_projects = []
         for project in new_software_stack.projects:

@@ -3,6 +3,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import ideascheduler
 from ideadatamodel import SocaJob, SocaSortOrder
 from ideadatamodel.scheduler import ListJobsRequest
+from ideascheduler.app.documents.document_store import JOB_SEARCH_FIELDS
 
 # the columns an active jobs list can order. queue_time newest first is the order the
 # job cache already pages in.
@@ -13,7 +14,6 @@ _SORT_VALUES: Dict[str, Callable[[SocaJob], object]] = {
     'project': lambda job: job.project.lower() if job.project else None,
     'queue_time': lambda job: job.queue_time,
 }
-_SEARCHED_FIELDS = ('job_id', 'name', 'owner', 'queue', 'project', 'state')
 
 
 def _text(value: object) -> str:
@@ -25,7 +25,7 @@ def _matches(job: SocaJob, key: str, value: object) -> bool:
         needle = _text(value).lower()
         return any(
             needle in _text(getattr(job, field)).lower()
-            for field in _SEARCHED_FIELDS
+            for field in JOB_SEARCH_FIELDS
             if getattr(job, field, None) is not None
         )
     # a client may name the keyword sub-field the completed jobs index needs
