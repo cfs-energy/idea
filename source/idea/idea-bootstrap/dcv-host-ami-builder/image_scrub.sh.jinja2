@@ -88,6 +88,11 @@ rm -rf /root/bootstrap/logs
 # The agent keeps a read offset per log path: a clone resumed its new bootstrap log at the
 # builder's offset, so the stream started minutes into the host's bootstrap.
 systemctl stop amazon-cloudwatch-agent 2>/dev/null || true
+# Left enabled, it started on every clone's first boot with the builder's settings, only to be
+# stopped half a minute later when the host's bootstrap wrote its own: on an AL2023 desktop
+# that stop hung until systemd killed it at 90 s. The host's bootstrap enables it when it
+# starts it (amazon-cloudwatch-agent-ctl -s), and it reads each log from the start.
+systemctl disable amazon-cloudwatch-agent 2>/dev/null || true
 rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
 # That agent ships the system log from its start on a clone, and rsyslog with no saved
 # position replays the journal: both held the builder's lines, so every node's log stream

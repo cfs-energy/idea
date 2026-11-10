@@ -1071,6 +1071,38 @@ def test_scrub_leaves_no_builder_lines_for_a_clones_log_stream(
     assert scrub.index('systemctl stop amazon-cloudwatch-agent') < start
 
 
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'rocky9', 'ubuntu2404'])
+def test_a_clone_does_not_boot_the_builders_cloudwatch_agent(tmp_path, builder, base_os):
+    """
+    the image kept the agent enabled, so a clone started it at boot with the builder's
+    settings and its bootstrap stopped it 34 s later: 90 s lost to a stop that hung (AL2023).
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    lines = [x for x in scrub.splitlines() if 'amazon-cloudwatch-agent' in x and x[0] != '#']
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    assert calls.read_text().splitlines()[:2] == [
+        'stop amazon-cloudwatch-agent',
+        'disable amazon-cloudwatch-agent',
+    ]
+    # a host without the agent installed must not fail its scrub
+    stub = tmp_path / 'bin/systemctl'
+    stub.write_text('#!/bin/bash\nexit 5\n')
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    # what turns it back on: the host's bootstrap starts it through the agent's own tool,
+    # whose start enables the unit
+    host = Path(IDEA_BOOTSTRAP_DIR, '_templates/linux/cloudwatch_agent.jinja2').read_text()
+    assert 'amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s ' in host
+    for name in (
+        'virtual-desktop-host-linux/setup.sh.jinja2',
+        'compute-node/compute_node.sh.jinja2',
+    ):
+        assert "include '_templates/linux/cloudwatch_agent.jinja2'" in Path(
+            IDEA_BOOTSTRAP_DIR, name
+        ).read_text()
+
+
 def test_a_failed_scrub_names_the_command(tmp_path):
     scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
     trap = next(line for line in scrub.splitlines() if line.startswith('trap '))
