@@ -912,7 +912,8 @@ class AbstractLDAPClient:
                 base=self.ldap_user_base, filterstr=filterstr
             )
 
-            ldap_result = Utils.get_value_as_list('result', search_result)
+            # no match reads as no list at all
+            ldap_result = Utils.get_value_as_list('result', search_result, default=[])
             total = len(ldap_result)
 
         else:
