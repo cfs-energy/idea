@@ -739,7 +739,7 @@ def test_a_later_page_that_fails_is_truncated_and_trips_nothing(monkeypatch, tre
     found = analytics.folder(tree)
     assert found['truncated'] is True
     assert [r['name'] for r in found['children']] == ['first']
-    assert analytics._failed_at == 0
+    assert analytics._failed_at == float('-inf')
 
 
 def filer(
@@ -802,7 +802,7 @@ def test_one_persons_refused_path_leaves_analytics_on_for_everyone(
     assert analytics.folder(tree + '/.bashrc') is None
     assert analytics.status(tree)['state'] == 'on'
     assert analytics.folder(tree)['self']['bytes'] == 1000
-    assert analytics._failed_at == 0
+    assert analytics._failed_at == float('-inf')
 
 
 @pytest.mark.parametrize('status', (401, 429, 500, 503))
@@ -862,7 +862,7 @@ def test_a_volume_the_role_cannot_read_leaves_the_others_on(monkeypatch, tree):
     assert analytics.folder(shared + '/x') is None
     assert len(sent) == reads
     # everyone's home is still read from analytics
-    assert analytics._failed_at == 0
+    assert analytics._failed_at == float('-inf')
     assert analytics.status(tree)['state'] == 'on'
     assert analytics.folder(tree)['self']['bytes'] == 1000
 
@@ -1001,6 +1001,23 @@ def test_new_files_the_rollup_never_reaches_stop_counting_as_new(monkeypatch, tr
     assert state(scanned_volume(used=16000, files=12000, folders=950)) == 'on'
     clock[0] += 599
     assert state(scanned_volume(used=16000, files=12000, folders=950)) == 'on'
+
+
+def test_a_host_started_seconds_ago_has_no_failure_to_back_off_from(monkeypatch, tree):
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    # the monotonic clock counts from boot: five seconds up is not a failure five seconds ago,
+    # for the filer or for any one volume
+    monkeypatch.setattr(ontap_analytics.time, 'monotonic', lambda: 5.0)
+    analytics = fake_analytics(monkeypatch, tree)
+    assert analytics.status(tree)['state'] == 'on'
+    # control: a refusal and a failure that did happen still back off
+    analytics._refused_at['u-1'] = 5.0
+    assert analytics.status(tree) == dict(state='failed')
+    del analytics._refused_at['u-1']
+    assert analytics.status(tree)['state'] == 'on'
+    analytics._failed(RuntimeError('unreachable'))
+    assert analytics.status(tree) == dict(state='failed')
 
 
 def test_analytics_off_or_unreachable_is_soft(monkeypatch, tree):

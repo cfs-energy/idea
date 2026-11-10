@@ -130,7 +130,7 @@ class ComputeImageService:
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
-        self._last_sweep = 0.0
+        self._last_sweep = float('-inf')
         # validation queues the last sweep could not delete, so each is warned about once
         self._queues_left = set()
         # what targets_off_current last named, so it is logged when it changes, and when it

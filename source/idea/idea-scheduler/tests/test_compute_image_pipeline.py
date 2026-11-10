@@ -1446,3 +1446,27 @@ def test_a_canary_failure_does_not_read_the_builder_again(monkeypatch):
     svc.records.put(record)
     svc._run_pipeline(record)
     capture.assert_not_called()
+
+
+def test_a_scheduler_host_started_seconds_ago_sweeps_builders_on_its_first_tick(
+    monkeypatch,
+):
+    class AfterTheSweep(Exception):
+        pass
+
+    monkeypatch.setattr(module, 'ImageBuildRecordsDB', Mock())
+    monkeypatch.setattr(module, 'ImageBuildRunner', Mock())
+    monkeypatch.setattr(module, 'image_builds_table_name', Mock())
+    # the monotonic clock counts from boot: five seconds up is not a sweep five seconds ago
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 5.0)
+    svc = ComputeImageService(Mock())
+    svc._enforce_time_limit = Mock()
+    svc.sweep_builders = Mock()
+    svc.context.config.side_effect = AfterTheSweep
+    with pytest.raises(AfterTheSweep):
+        svc.tick(datetime.now(timezone.utc))
+    svc.sweep_builders.assert_called_once()
+    # control: the next tick is inside the half hour
+    with pytest.raises(AfterTheSweep):
+        svc.tick(datetime.now(timezone.utc))
+    svc.sweep_builders.assert_called_once()

@@ -2393,3 +2393,16 @@ def test_a_capture_that_finds_nothing_leaves_the_reason_alone(monkeypatch):
     monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', lambda *a: None)
     h.pipeline._fail(failing_row(h), 'in-bake check failed')
     assert h.row().error == 'in-bake check failed'
+
+
+def test_a_controller_host_started_seconds_ago_cleans_up_on_its_first_tick(monkeypatch):
+    # the monotonic clock counts from boot: five seconds up is not a cleanup five seconds ago
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 5.0)
+    # no stacks: nothing bakes or fails, so nothing else brings the cleanup forward
+    h = Harness(stacks=[])
+    h.pipeline.cleanup = Mock()
+    h.pipeline.tick(now=T0)
+    h.pipeline.cleanup.assert_called_once()
+    # control: the next tick is inside the half hour
+    h.pipeline.tick(now=T0)
+    h.pipeline.cleanup.assert_called_once()

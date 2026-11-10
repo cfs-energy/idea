@@ -183,7 +183,8 @@ class FolderAnalytics:
         self._folder_locks = {}
         self._volumes = {}
         self._labels = {}
-        self._failed_at = 0
+        # never: the monotonic clock can read less than the back-off on a host just started
+        self._failed_at = float('-inf')
         self._refused_at = {}
         # per volume: the inodes its rollup held when last seen finished, and since when it
         # has been behind on new files
@@ -279,7 +280,7 @@ class FolderAnalytics:
                 state='initializing',
                 progress=min(99, counted * 100 // used) if used else 0,
             )
-        if time.monotonic() - self._refused_at.get(uuid, 0) < RETRY_SECONDS:
+        if time.monotonic() - self._refused_at.get(uuid, float('-inf')) < RETRY_SECONDS:
             return dict(state='failed')
         return dict(
             state='on',

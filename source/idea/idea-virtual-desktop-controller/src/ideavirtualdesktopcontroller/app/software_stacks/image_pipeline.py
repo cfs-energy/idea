@@ -194,7 +194,7 @@ class DesktopImagePipeline:
         self.version = version or ideavirtualdesktopcontroller.__version__
         self.host = socket.gethostname()
         self._logger = context.logger('desktop-image-pipeline')
-        self._last_cleanup = 0.0
+        self._last_cleanup = float('-inf')
 
     def managed(self) -> List[ImageBuildRecord]:
         """the pipeline's rows; custom (ad hoc) build records are never listed, run or promoted"""
