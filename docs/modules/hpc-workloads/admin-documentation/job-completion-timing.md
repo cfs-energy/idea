@@ -47,6 +47,11 @@ Begin and end hooks from subjobs are kept as one run per host for the array, fro
 first begin to the last end there. They can supply the pair when PBS history is gone,
 as for any job; a subjob's own result comes only from PBS history.
 
+The emails describe the array and do not carry the subjob list; that is on the record.
+
 The array's nodes stay while it has subjobs left to run, idle or not, and its stack is
-not deleted by the stack timeout once a subjob has started. Subjobs run on the capacity
-one subjob asks for, so on a single-job queue they run one after another.
+not deleted by the stack timeout once a subjob has started. Before that delete the
+scheduler asks PBS for the array and for every subjob, and deletes only when the array
+and each index it was submitted with read queued, held or waiting. A subjob in any other
+state, an index PBS does not list or no answer keeps the stack. Subjobs run on the
+capacity one subjob asks for, so on a single-job queue they run one after another.

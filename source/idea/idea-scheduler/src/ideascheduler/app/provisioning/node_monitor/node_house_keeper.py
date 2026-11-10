@@ -21,6 +21,7 @@ from ideadatamodel import (
     ProvisioningStatus,
     EC2Instance,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.aws.ecs_task import current_task_arn
 from ideasdk.utils import Utils
 from ideasdk.metrics import BaseMetrics
@@ -1121,8 +1122,9 @@ class NodeHouseKeepingSession:
         whether PBS itself says the job has not started. The sweep below works from the job
         cache, and a row can read queued for a job that runs: its run event was lost, or the
         cache was restored from an older copy. A stack is only deleted under a job PBS has
-        queued, held or waiting; any other answer, or none, leaves the stack alone, and what
-        PBS said is written to the cache so the next sweep reads it there.
+        queued, held or waiting, and for an array only if every subjob reads the same; any
+        other answer, or none, leaves the stack alone, and what PBS said is written to the
+        cache so the next sweep reads it there.
         """
         try:
             live_job = self._context.scheduler.get_job(job_id=job.job_id)
@@ -1134,17 +1136,42 @@ class NodeHouseKeepingSession:
         if live_job is None:
             self._logger.info(f'{job.log_tag} job is gone; stack left in place')
             return False
-        if live_job.state in (
-            SocaJobState.QUEUED,
-            SocaJobState.HELD,
-            SocaJobState.WAITING,
-        ):
+        waiting = (SocaJobState.QUEUED, SocaJobState.HELD, SocaJobState.WAITING)
+        if live_job.state not in waiting:
+            self._logger.info(
+                f'{job.log_tag} job is {live_job.state} in the scheduler; stack left in place'
+            )
+            self._context.job_cache.sync(jobs=[live_job])
+            return False
+        if not ModelUtils.is_array_job_id(job.job_id):
             return True
-        self._logger.info(
-            f'{job.log_tag} job is {live_job.state} in the scheduler; stack left in place'
-        )
-        self._context.job_cache.sync(jobs=[live_job])
-        return False
+
+        # an array's own state is not proof that none of its subjobs runs: what PBS reports
+        # for a begun array that is held and released has not been seen. Every index it was
+        # submitted with has to read as not started, and anything short of that keeps the
+        # stack.
+        try:
+            submitted, subjobs = self._context.scheduler.get_array_subjobs(job.job_id)
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} subjobs could not be read; stack left in place: {e}'
+            )
+            return False
+        if any(subjob.state not in waiting for subjob in subjobs):
+            self._logger.info(
+                f'{job.log_tag} array is {live_job.state} in the scheduler with a subjob '
+                f'begun; stack left in place'
+            )
+            self._context.job_cache.sync(
+                jobs=[live_job.model_copy(update={'state': SocaJobState.SUBJOB_BEGUN})]
+            )
+            return False
+        if submitted is None or len(subjobs) < submitted:
+            self._logger.warning(
+                f'{job.log_tag} {len(subjobs)} of {submitted} subjobs read; stack left in place'
+            )
+            return False
+        return True
 
     def retry_provisioning_cleanup(self):
         """
