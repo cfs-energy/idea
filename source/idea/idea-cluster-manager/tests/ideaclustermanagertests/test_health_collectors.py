@@ -416,7 +416,41 @@ def test_secrets_are_listed_for_this_cluster_and_never_read():
     )
     assert metrics.value('secret.age_days', secret='ad-admin') == [30]
     assert metrics.value('secret.days_to_rotation', secret='ad-admin') == [2]
+    assert metrics.value('secret.password_sync_waiting') == [0]
     client.get_secret_value.assert_not_called()
+
+
+def test_passwords_waiting_for_their_sync_are_counted_and_never_named():
+    def password(name, age):
+        return {
+            'Name': f'idea-com-password-sync-{name}',
+            'CreatedDate': NOW - age,
+            'Tags': [
+                {'Key': 'idea:ClusterName', 'Value': 'idea-com'},
+                {'Key': 'idea:Purpose', 'Value': 'password-sync'},
+            ],
+        }
+
+    client = Mock()
+    client.get_paginator.return_value = SimpleNamespace(
+        paginate=lambda Filters: [
+            {
+                'SecretList': [
+                    password('just-set', timedelta(minutes=59)),
+                    password('stuck', timedelta(minutes=61)),
+                    password('stray', timedelta(days=3)),
+                    {'Name': 'idea-com-ad-admin', 'CreatedDate': NOW},
+                ]
+            }
+        ]
+    )
+    metrics = Recorder()
+    SecretsCollector(context_with(secretsmanager=client)).collect(
+        metrics, NOW.timestamp()
+    )
+    # each password set would otherwise start a series under a random name
+    assert [tags for _, _, tags in metrics.levels if tags] == [{'secret': 'ad-admin'}]
+    assert metrics.value('secret.password_sync_waiting') == [2]
 
 
 def test_ad_queue_and_a_loop_that_stopped_reaching_it():

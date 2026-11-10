@@ -344,6 +344,14 @@ class CertificatesCollector(HealthCollector):
         return None
 
 
+def _holds_a_password(secret: Dict) -> bool:
+    # as accounts_service.py tags them
+    return any(
+        tag.get('Key') == 'idea:Purpose' and tag.get('Value') == 'password-sync'
+        for tag in secret.get('Tags', [])
+    )
+
+
 class SecretsCollector(HealthCollector):
     """how long since each of the cluster's secrets changed. Metadata: no secret value is read."""
 
@@ -367,6 +375,20 @@ class SecretsCollector(HealthCollector):
             ]
         ):
             secrets.extend(page.get('SecretList', []))
+        # A password waiting for its directory sync task is a secret of its own, under
+        # a random name: a series each would never end. One count instead, of those
+        # an hour old, which the task should have deleted within seconds.
+        passwords = [secret for secret in secrets if _holds_a_password(secret)]
+        secrets = [secret for secret in secrets if not _holds_a_password(secret)]
+        metrics.level(
+            'secret.password_sync_waiting',
+            sum(
+                1
+                for secret in passwords
+                if secret.get('CreatedDate') is not None
+                and now - secret['CreatedDate'].timestamp() > 3600
+            ),
+        )
         for secret in sorted(secrets, key=lambda s: s.get('Name', ''))[
             : self.MAX_SECRETS
         ]:
