@@ -134,6 +134,9 @@ class SocaScheduler(SocaSchedulerProtocol):
     def get_job(self, job_id: str) -> Optional[SocaJob]:
         return self._scheduler.get_job(job_id=job_id)
 
+    def get_job_history_state(self, job_id: str) -> Optional[SocaJobState]:
+        return self._scheduler.get_job_history_state(job_id=job_id)
+
     def get_array_subjobs(
         self, job_id: str
     ) -> Tuple[Optional[int], List[SocaJobSubjob]]:

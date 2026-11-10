@@ -12,7 +12,7 @@ import logging
 from datetime import timedelta
 from threading import Event
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import arrow
 import pytest
@@ -135,6 +135,9 @@ class Pbs:
         self.subjobs = {}
         self.subjob_error = None
         self.on_qselect = None
+        # what asking for one job alone does: 'drop' lists nothing though PBS has the job
+        self.listing = None
+        self.state_error = None
 
     def list_jobs_ids(self, raise_on_error=False):
         if self.on_qselect:
@@ -142,7 +145,18 @@ class Pbs:
         return list(self.active)
 
     def list_jobs(self, job_ids=None, **_):
-        return [self.jobs[job_id] for job_id in job_ids or [] if job_id in self.jobs]
+        job_ids = job_ids or []
+        if self.listing == 'drop' and len(job_ids) > 1:
+            # qstat exits 153 for a page with an id it does not know
+            return []
+        if self.listing == 'unreadable':
+            return []
+        return [self.jobs[job_id] for job_id in job_ids if job_id in self.jobs]
+
+    def get_job_history_state(self, job_id):
+        if self.state_error:
+            raise self.state_error
+        return self.jobs[job_id].state if job_id in self.jobs else None
 
     def get_job(self, job_id):
         return self.jobs.get(job_id)
@@ -368,6 +382,67 @@ def test_a_failed_history_read_is_not_an_array_with_no_subjobs():
         qstat.get_array_subjobs('359[]')
 
 
+def test_only_pbs_not_knowing_a_job_shows_that_it_is_gone():
+    shell = Shell(
+        {
+            ('357[]',): (0, {'357[].scheduler': {'job_state': 'B', 'substate': 70}}),
+            ('359[]',): (0, {'359[].scheduler': PARENT_HISTORY}),
+            ('12',): (153, None),
+            ('13',): (1, None),
+            ('14',): (0, {}),
+            ('15',): (0, {'15.scheduler': {'substate': 42}}),
+        }
+    )
+    qstat = OpenPBSQStat(context=Mock(), logger=LOGGER, shell=shell, converter=None)
+    assert qstat.get_history_state('357[]') == SocaJobState.SUBJOB_BEGUN
+    assert qstat.get_history_state('359[]') == SocaJobState.FINISHED
+    assert qstat.get_history_state('12') is None
+    assert shell.commands[-1] == [
+        '/opt/pbs/bin/qstat', '-E', '-x', '-f', '-F', 'json', '12',
+    ]  # fmt: skip
+    # a failure, an answer with no entry and an entry with no state are not "gone"
+    for job_id in ('13', '14', '15'):
+        with pytest.raises(Exception):
+            qstat.get_history_state(job_id)
+
+
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_an_id_pbs_does_not_know_does_not_cost_a_listing_its_other_jobs(stream):
+    """
+    qstat exits 153 when one id is unknown and still prints the jobs it found. Which stream
+    carries them beside the error lines was not pinned down, so both are read, and the page
+    after a failed one is still asked for.
+    """
+    found = json.dumps({'Jobs': {'7[].scheduler': {'job_state': 'F', 'queue': 'test'}}})
+    last = json.dumps({'Jobs': {'150.scheduler': {'job_state': 'F', 'queue': 'test'}}})
+    unknown = 'qstat: Unknown Job Id 8.scheduler\n'
+    job_ids = ['7[]', '8'] + [str(number) for number in range(52, 151)]
+    asked = []
+
+    def invoke(cmd, **_):
+        asked.append(cmd[cmd.index('json') + 1 :])
+        if len(asked) == 2:
+            return SimpleNamespace(returncode=0, stdout=last, stderr='')
+        return SimpleNamespace(
+            returncode=153,
+            stdout=found if stream == 'stdout' else '',
+            stderr=unknown + (found if stream == 'stderr' else ''),
+        )
+
+    context = Mock()
+    qstat = OpenPBSQStat(
+        context=context,
+        logger=LOGGER,
+        shell=SimpleNamespace(invoke=invoke),
+        converter=None,
+        job_ids=job_ids,
+        job_state=SocaJobState.FINISHED,
+    )
+    with patch.object(OpenPBSJob, 'as_soca_job', lambda self, **_: self.id):
+        assert qstat.list_jobs() == ['7[].scheduler', '150.scheduler']
+    assert asked == [job_ids[:100], job_ids[100:]]
+
+
 def test_the_scheduler_the_app_builds_can_read_subjob_history():
     """the app talks to PBS through a wrapper; a method missing there stops it starting"""
     from ideascheduler.app.scheduler.openpbs import OpenPBSScheduler
@@ -379,6 +454,8 @@ def test_the_scheduler_the_app_builds_can_read_subjob_history():
     wrapper._scheduler = Mock()
     wrapper._scheduler.get_array_subjobs.return_value = (2, [])
     assert wrapper.get_array_subjobs('359[]') == (2, [])
+    wrapper._scheduler.get_job_history_state.return_value = SocaJobState.FINISHED
+    assert wrapper.get_job_history_state('359[]') == SocaJobState.FINISHED
 
 
 def test_qselect_names_a_begun_array_by_its_own_letter():
@@ -628,6 +705,84 @@ def test_a_job_pbs_still_has_live_is_never_recorded_as_finished(world, state):
     assert records(world) == []
     assert world.context.job_notifications.completed == []
     assert cached_ids(world.cache) == ['41']
+
+
+def test_a_job_the_listing_drops_is_asked_alone_before_it_is_taken_as_gone(world):
+    """
+    an array ends in the same cycle as a job PBS no longer knows, and the listing answers
+    for neither. The array is still in history: it is recorded from there, with its own
+    status and its subjobs, and not from its cached row for good.
+    """
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
+    world.cache.sync([array_job('8', SocaJobState.RUNNING, job_uid='purged-uid')])
+    finish_array(world, subjobs=[subjob(1, exit_status=3), subjob(2, start=30)])
+    world.pbs.listing = 'drop'
+    poll(world)
+    by_id = {record.job_id: record for record in records(world)}
+    assert sorted(by_id) == ['7[]', '8']
+    assert by_id['7[]'].exit_status == 3
+    assert [found.job_id for found in by_id['7[]'].subjobs] == ['7[1]', '7[2]']
+    assert by_id['7[]'].end_time is not None
+    # the job PBS does not know is recorded from its cached row, as before
+    assert by_id['8'].exit_status is None
+    assert cached_ids(world.cache) == []
+
+
+@pytest.mark.parametrize(
+    'state', [SocaJobState.RUNNING, SocaJobState.SUBJOB_BEGUN, SocaJobState.EXIT]
+)
+@pytest.mark.parametrize('listing', ['drop', 'unreadable'])
+def test_a_live_job_the_listing_drops_is_never_recorded(world, state, listing):
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
+    world.cache.sync([array_job('8', SocaJobState.RUNNING, job_uid='purged-uid')])
+    world.pbs.jobs['7[]'] = array_job('7[]', state, start_time=START.datetime)
+    world.pbs.listing = listing
+    poll(world)
+    assert [record.job_id for record in records(world)] == ['8']
+    assert world.context.job_notifications.completed == ['8']
+    assert cached_ids(world.cache) == ['7[]']
+
+
+def test_a_job_pbs_gives_no_answer_for_is_not_taken_as_gone(world):
+    world.cache.sync([array_job('41', SocaJobState.RUNNING)])
+    world.pbs.state_error = RuntimeError('qstat: cannot connect to server')
+    poll(world)
+    assert records(world) == []
+    assert cached_ids(world.cache) == ['41']
+    world.pbs.state_error = None
+    poll(world)
+    assert [record.job_id for record in records(world)] == ['41']
+    assert cached_ids(world.cache) == []
+
+
+def test_a_finished_job_whose_entry_cannot_be_read_is_recorded_from_the_cache(world):
+    """a queue profile deleted under a job: PBS says finished, the listing converts nothing"""
+    world.cache.sync([array_job('41', SocaJobState.RUNNING)])
+    world.pbs.jobs['41'] = array_job('41', SocaJobState.FINISHED)
+    world.pbs.listing = 'unreadable'
+    poll(world)
+    assert [record.job_id for record in records(world)] == ['41']
+    assert cached_ids(world.cache) == []
+
+
+@pytest.mark.parametrize(
+    'state', [SocaJobState.QUEUED, SocaJobState.HELD, SocaJobState.SUBJOB_BEGUN]
+)
+def test_a_job_with_no_capacity_that_pbs_still_has_is_not_recorded(world, state):
+    """357[] after its stack was taken: no capacity, and not over until PBS says so"""
+    world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN, provisioned=False)])
+    world.pbs.jobs['7[]'] = array_job('7[]', state, provisioned=False)
+    poll(world)
+    assert records(world) == []
+    assert cached_ids(world.cache) == ['7[]']
+    world.pbs.state_error = RuntimeError('qstat: cannot connect to server')
+    del world.pbs.jobs['7[]']
+    poll(world)
+    assert records(world) == []
+    world.pbs.state_error = None
+    poll(world)
+    assert [record.job_id for record in records(world)] == ['7[]']
+    assert cached_ids(world.cache) == []
 
 
 def test_a_job_cached_after_pbs_was_asked_is_not_taken_as_gone(world):

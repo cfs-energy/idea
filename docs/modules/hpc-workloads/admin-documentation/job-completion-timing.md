@@ -6,6 +6,11 @@ Hooks identify an attempt by numeric PBS `run_count`; multiple hosts with the sa
 count belong to that attempt. Requeue, rerun and node replacement advance that count.
 Scheduler restarts preserve the hook history in SQLite.
 
+A job is recorded only when PBS has shown it is over: history says finished, or PBS
+answers that it no longer knows the job, in which case the record is made from the
+scheduler's cached copy. A job missing from a listing is asked about on its own first.
+While PBS still has it in another state, or gives no answer, it stays tracked.
+
 Fresh terminal PBS history supplies both timestamps from one snapshot. Neither
 missing endpoint is filled from cached job timestamps or hooks. If history has
 neither endpoint, the latest hook attempt can supply the pair. When PBS history is
@@ -52,6 +57,7 @@ The emails describe the array and do not carry the subjob list; that is on the r
 The array's nodes stay while it has subjobs left to run, idle or not, and its stack is
 not deleted by the stack timeout once a subjob has started. Before that delete the
 scheduler asks PBS for the array and for every subjob, and deletes only when the array
-and each index it was submitted with read queued, held or waiting. A subjob in any other
+and each index it was submitted with read queued, held or waiting. A subjob deleted
+while queued never ran, has no start time, and counts as not started. A subjob in any other
 state, an index PBS does not list or no answer keeps the stack. Subjobs run on the
 capacity one subjob asks for, so on a single-job queue they run one after another.

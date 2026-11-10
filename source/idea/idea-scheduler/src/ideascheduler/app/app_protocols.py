@@ -328,6 +328,9 @@ class SocaSchedulerProtocol(SocaBaseProtocol):
     def get_job(self, job_id: str) -> Optional[SocaJob]: ...
 
     @abstractmethod
+    def get_job_history_state(self, job_id: str) -> Optional[SocaJobState]: ...
+
+    @abstractmethod
     def get_array_subjobs(
         self, job_id: str
     ) -> Tuple[Optional[int], List[SocaJobSubjob]]: ...

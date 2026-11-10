@@ -510,6 +510,14 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             job_ids=[job_id],
         ).get_job()
 
+    def get_job_history_state(self, job_id: str) -> Optional[SocaJobState]:
+        return OpenPBSQStat(
+            context=self._context,
+            logger=self._logger,
+            shell=self._shell,
+            converter=self._converter,
+        ).get_history_state(job_id)
+
     def get_array_subjobs(
         self, job_id: str
     ) -> Tuple[Optional[int], List[SocaJobSubjob]]:

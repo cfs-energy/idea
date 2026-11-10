@@ -23,7 +23,7 @@ from ideadatamodel.reporting.efficiency import latest_run_id
 from ideascheduler.app.aws import PricingHelper, AwsBudgetsHelper
 from ideasdk.utils import Utils
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from threading import Thread, Event
 import arrow
 import logging
@@ -511,18 +511,12 @@ class FinishedJobProcessor:
         metrics_batch = JobCompletionBatch(self._context)
         recorded_ids = []
         for cached in jobs:
-            finished_job = history.get(cached.job_id, cached)
+            finished_job = cached
             try:
-                from_history = cached.job_id in history
-                if from_history and finished_job.state != SocaJobState.FINISHED:
-                    # PBS still has it in another state. Being absent from one listing is
-                    # not proof that a job is over, so it stays tracked and is asked about
-                    # again next cycle.
-                    self._logger.info(
-                        f'{finished_job.log_tag} not finished in PBS '
-                        f'(state: {finished_job.state}); left in the job cache'
-                    )
+                if not self._may_record(cached, history):
                     continue
+                from_history = cached.job_id in history
+                finished_job = history.get(cached.job_id, cached)
                 # a record under this job_uid from another id is not this job's: an earlier
                 # build could file an array's subjob there. This job's own replaces it.
                 stored = self._recorded_job(cached.job_uid)
@@ -563,6 +557,42 @@ class FinishedJobProcessor:
             self._logger.exception(f'failed to publish completion metrics: {error}')
         return recorded_ids
 
+    def _may_record(self, cached: SocaJob, history: Dict[str, SocaJob]) -> bool:
+        """
+        whether PBS has shown this job to be over. One the listing returned is judged by
+        its state there. One it left out is asked about on its own before it is taken as
+        gone, because the listing can drop a job PBS still has: one id PBS no longer knows
+        can cost a page its other jobs. Only PBS answering that it does not know this id,
+        or that it is finished, lets the job be recorded; what is read here is added to
+        history. No answer raises, which leaves the job tracked for the next cycle.
+        """
+        if cached.job_id not in history:
+            state = self._context.scheduler.get_job_history_state(cached.job_id)
+            if state is None:
+                return True
+            for job in self._context.scheduler.list_jobs(
+                job_ids=[cached.job_id], job_state=SocaJobState.FINISHED
+            ):
+                history[job.job_id] = job
+            if cached.job_id not in history:
+                # PBS has it and its entry cannot be read here, as for a queue whose
+                # profile is gone. Finished is still PBS's word that it is over.
+                if state != SocaJobState.FINISHED:
+                    self._logger.info(
+                        f'{cached.log_tag} not finished in PBS (state: {state}); '
+                        f'left in the job cache'
+                    )
+                return state == SocaJobState.FINISHED
+        if history[cached.job_id].state == SocaJobState.FINISHED:
+            return True
+        # PBS still has it in another state. Being absent from one listing is not proof
+        # that a job is over, so it stays tracked and is asked about again next cycle.
+        self._logger.info(
+            f'{cached.log_tag} not finished in PBS '
+            f'(state: {history[cached.job_id].state}); left in the job cache'
+        )
+        return False
+
     def _process_unprovisioned_jobs(self, jobs: List[SocaJob]):
         """
         write jobs that never got capacity straight to the finished jobs table. they
@@ -572,6 +602,15 @@ class FinishedJobProcessor:
         recorded_ids = []
         for job in jobs:
             try:
+                # the same proof as for a job that ran: PBS says it is finished, or that
+                # it does not know it. No answer raises and the job stays tracked.
+                state = self._context.scheduler.get_job_history_state(job.job_id)
+                if state not in (None, SocaJobState.FINISHED):
+                    self._logger.info(
+                        f'{job.log_tag} not finished in PBS (state: {state}); '
+                        f'left in the job cache'
+                    )
+                    continue
                 stored = self._recorded_job(job.job_uid)
                 if stored is not None and stored.job_id == job.job_id:
                     recorded_ids.append(job.job_id)

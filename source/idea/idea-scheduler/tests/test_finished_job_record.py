@@ -118,6 +118,10 @@ class FakeScheduler:
             self.jobs_by_id[job_id] for job_id in job_ids if job_id in self.jobs_by_id
         ]
 
+    def get_job_history_state(self, job_id):
+        job = self.jobs_by_id.get(job_id)
+        return job.state if job is not None else None
+
     @staticmethod
     def get_array_subjobs(job_id):
         return None, []

@@ -196,6 +196,7 @@ class OpenPBSQStat:
             [self.qstat_bin, '-E', '-x', '-f', '-F', 'json'] + args,
             skip_error_logging=True,
         )
+        self._shell_result = result
         if result.returncode not in (
             0,
             openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_JOB_ID,
@@ -216,6 +217,27 @@ class OpenPBSQStat:
             )
             for job_id, job in jobs.items()
         }
+
+    def get_history_state(self, job_id: str) -> Optional[SocaJobState]:
+        """
+        the state qstat -x gives this one job, live or finished, or None when PBS answers
+        that it does not know the id. Only that answer shows a job is gone: any other
+        failure, or an answer that does not name the job, raises.
+        """
+        pbs_job = self._history([job_id]).get(job_id)
+        state = pbs_job.soca_job_state if pbs_job is not None else None
+        if state is not None:
+            return state
+        if (
+            pbs_job is None
+            and self._shell_result.returncode
+            == openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_JOB_ID
+        ):
+            return None
+        raise exceptions.SocaException(
+            error_code=errorcodes.SCHEDULER_ERROR,
+            message=f'qstat gave no answer for job {job_id}: {self._shell_result}',
+        )
 
     def get_array_subjobs(
         self, job_id: str
@@ -329,6 +351,11 @@ class OpenPBSQStat:
             "timestamp":1634779109,
               ..
         """
+        # where PBS writes the jobs it did find, beside the errors, has not been pinned
+        # down: read stdout, and stderr with the error lines taken out when that is empty
+        if not Utils.is_empty(self._shell_result.stdout):
+            return self._handle_qstat_result()
+
         output = str(self._shell_result.stderr)
 
         lines = output.splitlines()
@@ -417,10 +444,8 @@ class OpenPBSQStat:
             return
 
         page_size = 100
-        start = 0
-        remaining = len(job_ids)
         result = None
-        while remaining > 0:
+        for start in range(0, len(job_ids), page_size):
             job_ids_to_get = job_ids[start : start + page_size]
 
             get_jobs_cmd = cmd + job_ids_to_get
@@ -432,9 +457,13 @@ class OpenPBSQStat:
                 jobs = self._handle_qstat_result()
                 for job in jobs:
                     yield job
-                start += page_size
-
-            remaining -= page_size
+            elif (
+                result.returncode == openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_JOB_ID
+                and start + page_size < len(job_ids)
+            ):
+                # one id PBS no longer knows must not cost the rest of its page
+                for job in self._handle_unknown_job_id_error():
+                    yield job
 
         if result.returncode == 0:
             return
