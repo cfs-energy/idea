@@ -1558,6 +1558,59 @@ def test_study_never_descends_into_or_names_what_the_person_cannot_open(
         service._workers.shutdown()
 
 
+def test_the_biggest_folders_drop_one_the_person_can_no_longer_open(monkeypatch, tree):
+    if os.geteuid() == 0:
+        pytest.skip('root opens anything')
+    reports = tree + '/reports'
+    nested = reports + '/nested'
+    kept = tree + '/kept'
+    for path in (nested, kept):
+        os.makedirs(path, exist_ok=True)
+    folders = {
+        tree: dict(
+            self=row(tree, 100 * 2**20),
+            children=[row(reports, 90 * 2**20), row(kept, 2**20)],
+            measured_at=NOW,
+        ),
+        reports: dict(
+            self=row(reports, 90 * 2**20),
+            children=[row(nested, 85 * 2**20)],
+            measured_at=NOW,
+        ),
+        nested: dict(self=row(nested, 85 * 2**20), children=[], measured_at=NOW),
+        kept: dict(self=row(kept, 2**20), children=[], measured_at=NOW),
+    }
+    service, _ = analytics_service(monkeypatch, tree, folders)
+    clock = [time.monotonic()]
+    monkeypatch.setattr(storage_usage.time, 'monotonic', lambda: clock[0])
+
+    def largest():
+        result = service.get_usage('alice')
+        return [item['name'] for item in result.get('largest', [])]
+
+    try:
+        service.get_usage('alice')
+        service._study_workers.shutdown(wait=True)
+        assert largest() == ['nested', 'kept']
+        # the study's list is kept for 15 minutes; who may open what in it is not
+        os.chmod(reports, 0)
+        clock[0] += storage_usage.VIEW_SECONDS - 1
+        # control: inside the minute it is the list the study left
+        assert largest() == ['nested', 'kept']
+        clock[0] += 1
+        assert largest() == ['kept']
+        # still the same study, and opened again it is listed again
+        assert clock[0] - service._studies['alice']['finished'] < (
+            storage_usage.STUDY_SECONDS
+        )
+        os.chmod(reports, 0o700)
+        clock[0] += storage_usage.VIEW_SECONDS
+        assert largest() == ['nested', 'kept']
+    finally:
+        os.chmod(reports, 0o700)
+        service._workers.shutdown()
+
+
 def test_refresh_requeries_ontap_without_multiplying_studies(monkeypatch, tree):
     folders = {tree: dict(self=row(tree, 10), children=[], measured_at=NOW)}
     service, source = analytics_service(monkeypatch, tree, folders)

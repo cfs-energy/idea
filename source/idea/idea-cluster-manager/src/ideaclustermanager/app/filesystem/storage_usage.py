@@ -425,9 +425,9 @@ class StorageUsageService:
             hot.sort(key=lambda row: -row['bytes'])
             paths = [row['path'] for row in hot[: MAX_LARGEST * 2]]
             readable = set(readable_paths_as_user(identity, mount, paths))
-            study['largest'] = [row for row in hot if row['path'] in readable][
-                :MAX_LARGEST
-            ]
+            largest = [row for row in hot if row['path'] in readable][:MAX_LARGEST]
+            study['shown'] = (time.monotonic(), largest, largest)
+            study['largest'] = largest
             progress['total'] = progress['done']
             progress['step'] = 'Finished'
             progress['steps'][2]['state'] = 'done'
@@ -454,6 +454,7 @@ class StorageUsageService:
                 study = dict(
                     finished=None,
                     largest=None if study is None else study.get('largest'),
+                    shown=(0, None, None) if study is None else study['shown'],
                     progress=dict(
                         running=True,
                         step='Reading your home folder',
@@ -472,6 +473,21 @@ class StorageUsageService:
                     self._study, study, username, identity, mount, home, refresh
                 )
         return study
+
+    def _largest(self, study, identity, mount):
+        """The study's biggest folders, less any this person can no longer open. The study asked
+        when it ended, and its list is kept for 15 minutes and carried into the next study, so
+        it is asked again as often as a folder view is."""
+        rows = study['largest']
+        if not rows:
+            return rows
+        checked_at, checked, visible = study['shown']
+        if checked is not rows or time.monotonic() - checked_at >= VIEW_SECONDS:
+            paths = [row['path'] for row in rows]
+            readable = set(readable_paths_as_user(identity, mount, paths))
+            visible = [row for row in rows if row['path'] in readable]
+            study['shown'] = (time.monotonic(), rows, visible)
+        return visible
 
     def _usage_from_analytics(
         self, username, identity, mount, home, folder, refresh, study
@@ -511,8 +527,9 @@ class StorageUsageService:
             return result
         running = self._study_for(username, identity, mount, home, refresh)
         result['progress'] = running['progress']
-        if running['largest']:
-            result['largest'] = running['largest']
+        largest = self._largest(running, identity, mount)
+        if largest:
+            result['largest'] = largest
         status = self._analytics().status(home)
         result['volume'] = status.get('volume')
         target = status.get('target')
