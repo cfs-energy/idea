@@ -129,6 +129,8 @@ class ComputeImageService:
         self._last_sweep = 0.0
         # validation queues the last sweep could not delete, so each is warned about once
         self._queues_left = set()
+        # what targets_off_current last named, so it is logged when it changes
+        self._off_current = []
 
     # listing
 
@@ -1151,6 +1153,46 @@ class ComputeImageService:
         )
         protected.discard(None)
         return protected
+
+    def targets_off_current(self) -> List[str]:
+        """
+        unpinned queue profiles, and an unpinned scheduler default, on an image that is no
+        row's current one. a promotion moves a target only off the image its row had, and
+        only off an image the pipeline manages, so nothing will ever move these: every row
+        can read current while a queue launches something older. named once per change
+        """
+        current = {row.current_image_id for row in self.list_rows()}
+        names = []
+        for profile in self._queue_profiles():
+            params = profile.default_job_params
+            if (
+                params is None
+                or not params.instance_ami
+                or profile.image_pinned
+                or (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX)
+            ):
+                continue
+            if params.instance_ami not in current:
+                names.append(f'queue profile {profile.name} ({params.instance_ami})')
+        config = self.context.config()
+        default = config.get_string('scheduler.compute_node_ami', default=None)
+        if (
+            default
+            and default not in current
+            and not config.get_bool(
+                'scheduler.images.default_image_pinned', default=False
+            )
+        ):
+            names.append(f'{SCHEDULER_DEFAULT_REFERENCE} ({default})')
+        if names != self._off_current:
+            if names:
+                self._logger.warning(
+                    'not pinned and not on a current compute image, so no promotion '
+                    f'will move them: {"; ".join(names)}. Pin each one, or set it to '
+                    "its row's current image."
+                )
+            self._off_current = names
+        return names
 
     def deregister_unreferenced_images(self) -> List[str]:
         """failed candidates and generations older than previous: image and snapshots"""

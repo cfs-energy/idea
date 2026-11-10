@@ -450,6 +450,22 @@ def test_a_row_retried_between_two_runs_does_not_stay_failed():
     assert states == {'failed': 1, 'building': 0}
 
 
+def test_targets_no_promotion_will_move_are_counted_beside_the_rows():
+    rows = [ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='current')]
+    names = ['queue profile arm-compute (ami-old)']
+    metrics = Recorder()
+    ImageRowsCollector(
+        ImageKind.COMPUTE, lambda: rows, release='26.11.2', off_current=lambda: names
+    ).collect(metrics)
+    assert [
+        (v, t) for n, v, t in metrics.levels if n == 'bake.targets_off_current'
+    ] == [(1, {'kind': 'compute'})]
+    # desktop promotions move every unpinned stack, so that module sends none
+    metrics = Recorder()
+    ImageRowsCollector(ImageKind.DESKTOP, lambda: rows).collect(metrics)
+    assert not [n for n, v, t in metrics.levels if n == 'bake.targets_off_current']
+
+
 def test_rows_report_state_age_and_duration_and_a_left_state_reads_zero():
     now = datetime(2026, 11, 6, tzinfo=timezone.utc)
     rows = [

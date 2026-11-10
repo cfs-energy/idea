@@ -345,10 +345,13 @@ class ImageRowsCollector:
         kind: ImageKind,
         list_rows: Callable[[], List[ImageBuildRecord]],
         release: Optional[str] = None,
+        off_current: Optional[Callable[[], List[str]]] = None,
     ):
         self.kind = kind
         self.list_rows = list_rows
         self.release = release
+        # the unpinned things that launch an image no row calls current, by name
+        self.off_current = off_current
         self.previous: Dict[Tuple[str, str, str, str], None] = {}
 
     def collect(self, metrics, now: Optional[datetime] = None) -> None:
@@ -390,6 +393,13 @@ class ImageRowsCollector:
                 )
         if self.release:
             metrics.level('bake.rows_behind_release', behind, kind=self.kind.value)
+        if self.off_current is not None:
+            # every row can be current while a queue still launches an older image
+            metrics.level(
+                'bake.targets_off_current',
+                len(self.off_current()),
+                kind=self.kind.value,
+            )
         # a row that left a state reads zero once, rather than stopping at one
         for os_, arch, variant, status in self.previous.keys() - current.keys():
             metrics.level(

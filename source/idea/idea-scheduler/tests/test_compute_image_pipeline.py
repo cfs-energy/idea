@@ -236,6 +236,43 @@ def test_promotion_leaves_targets_on_an_unmanaged_default(monkeypatch):
     assert candidate.current_image_id == 'ami-new'
 
 
+def test_an_unpinned_queue_no_promotion_will_move_is_named():
+    """
+    dev: every row was current on the release while the arm-compute profile, not pinned,
+    still launched an image from two months before. the follow rule only moves a profile
+    off the image its row had, so it never catches up and nothing said so.
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    def profile(name, ami, pinned=False):
+        return HpcQueueProfile(
+            name=name,
+            image_pinned=pinned,
+            default_job_params=SocaJobParams(base_os='rocky9', instance_ami=ami),
+        )
+
+    svc = service(
+        [
+            profile('normal', 'ami-old'),
+            profile('arm-compute', 'ami-left-behind'),
+            profile('licensed', 'ami-admins-own', pinned=True),
+            profile('iv-0123456789ab', 'ami-candidate'),
+        ]
+    )
+    expected = ['queue profile arm-compute (ami-left-behind)']
+    assert svc.targets_off_current() == expected
+    assert svc.targets_off_current() == expected
+    warnings = [c.args[0] for c in svc._logger.warning.call_args_list]
+    assert len(warnings) == 1 and 'arm-compute (ami-left-behind)' in warnings[0]
+    # the scheduler default is a target too, unless it is pinned
+    svc.context.config.return_value.values['scheduler.compute_node_ami'] = 'ami-def'
+    assert svc.targets_off_current() == expected + ['scheduler default (ami-def)']
+    svc.context.config.return_value.values[
+        'scheduler.images.default_image_pinned'
+    ] = True
+    assert svc.targets_off_current() == expected
+
+
 def test_promotion_does_not_advance_the_row_when_the_current_image_cannot_be_read(
     monkeypatch,
 ):
