@@ -1157,7 +1157,8 @@ def test_a_permission_change_reaches_a_view_already_served_within_a_minute(
         )
     }
     service, _ = analytics_service(monkeypatch, tree, folders)
-    clock = [time.monotonic()]
+    # whole seconds: from a real reading, 59 more and then 1 more can land a hair short of 60
+    clock = [100.0]
     monkeypatch.setattr(storage_usage.time, 'monotonic', lambda: clock[0])
 
     def listed():
