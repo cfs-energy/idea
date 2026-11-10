@@ -1,6 +1,7 @@
 # Begin: OpenSSH update
 {# The distribution's newest OpenSSH, whatever the base image shipped. Nothing else pulls it:
-   compute bakes run no package upgrade, the dnf family's upgrade is an opt-in flag, and AL2023's
+   compute bakes upgrade only what the package list names (the kernel is on it, OpenSSH is not),
+   the dnf family's upgrade is an opt-in flag, and AL2023's
    repositories are locked to the base image's release unless asked for the latest. A bake that
    cannot get it fails, as a stale image must not be published; a host that is booting keeps
    the version it has and says so. #}

@@ -378,6 +378,35 @@ def test_bake_failure_reasons_are_a_small_vocabulary():
         assert classify_bake_failure(text) == expected
 
 
+def test_a_kernel_with_no_lustre_module_has_its_own_bake_failure_reason():
+    for text, expected in (
+        # what the lustre check's modprobe said on the builders that booted the new kernels
+        (
+            'in-bake check lustre failed on builder i-0: modprobe: FATAL: Module lustre '
+            'not found in directory /lib/modules/5.14.0-741.14.1.el9_9.aarch64',
+            'lustre_kernel',
+        ),
+        # the bootstrap's own stop, before the reboot or after it
+        (
+            'in-bake check bootstrap failed on builder i-0: a command failed: lustre: '
+            'Kernel 6.12.0-264.9.1.el10_3.x86_64 has no FSx for Lustre client module. '
+            'Lustre filesystems cannot be mounted on this node '
+            '(reason code: lustre-module-missing).',
+            'lustre_kernel',
+        ),
+        # a client that could not be downloaded or a mount that is missing is not the kernel
+        (
+            'in-bake check bootstrap failed on builder i-0: a command failed: lustre: '
+            'Unable to install the FSx for Lustre client for kernel 5.14.0-687.el9_8. '
+            'Lustre filesystems cannot be mounted on this node '
+            '(reason code: lustre-client-install-failed).',
+            'check_bootstrap',
+        ),
+        ('in-bake check lustre failed on builder i-0: ', 'check_lustre'),
+    ):
+        assert classify_bake_failure(text) == expected
+
+
 def test_a_bake_stopped_by_its_time_limit_is_counted_as_one():
     # the text the limit writes, not a made up one; a waiting reason must not outrank it
     for error in (None, 'no EC2 capacity after 4 tries: x', 'the canary failed'):

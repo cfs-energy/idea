@@ -308,6 +308,13 @@ _BAKE_REASONS = (
         'step_timeout',
     ),
     (re.compile(r'capacity', re.I), 'capacity'),
+    # the kernel the builder runs, or would boot, has no FSx for Lustre module: the bootstrap's
+    # own reason code, or what the lustre check's modprobe prints. before the check names, as
+    # it arrives inside the bootstrap or the lustre check
+    (
+        re.compile(r'reason code: lustre-module-missing|Module lustre not found'),
+        'lustre_kernel',
+    ),
     (re.compile(r'in-bake check results unreadable'), 'checks_unreadable'),
     (re.compile(r'in-bake check (\w+)'), None),
     (re.compile(r'^ready_gate\b'), 'ready_gate'),
@@ -321,7 +328,7 @@ _BAKE_REASONS = (
 
 
 # the host's console may say nothing of these: the capture then carries the bake's own reason
-TIMEOUT_REASONS = ('time_limit', 'step_timeout')
+CAPTURE_REASONS = ('time_limit', 'step_timeout', 'lustre_kernel')
 
 
 def classify_bake_failure(reason: Optional[str]) -> str:
@@ -440,7 +447,7 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
             release=record.release,
             log_group=f'/{context.cluster_name()}/{context.module_id()}/ami-builder',
             log_stream=f'bootstrap_{record.instance_id}',
-            fallback_reason=bake_reason if bake_reason in TIMEOUT_REASONS else None,
+            fallback_reason=bake_reason if bake_reason in CAPTURE_REASONS else None,
         ),
     )
 

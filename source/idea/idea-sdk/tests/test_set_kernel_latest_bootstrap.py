@@ -93,6 +93,7 @@ class Host:
         dracut_ok=False,
         grubby_ok=True,
         package_default=False,
+        lustre_kernels=(),
     ):
         self.boot = tmp_path / 'boot'
         self.bin = tmp_path / 'bin'
@@ -114,6 +115,13 @@ class Host:
             (self.bin / name).symlink_to(shutil.which(name))
         log = f'echo "$(basename "$0") $*" >> {self.calls}\n'
         self.stub('uname', f'echo {running}')
+        # modinfo -k <kernel> -n lustre: the kernels the Lustre client has a module for
+        self.stub(
+            'modinfo',
+            'case "$2" in '
+            + ''.join(f'{k}) exit 0 ;; ' for k in lustre_kernels)
+            + 'esac\nexit 1',
+        )
         self.stub('rpm', 'echo kernel6.12')
         image = f'{self.boot}/initramfs-{newest}.img'
         installed = (
@@ -159,6 +167,7 @@ class Host:
                 re.search(rf'function {name} \(\) {{\n.*?\n}}\n', common, re.S)[0]
                 for name in (
                     'kernel_initramfs_ready',
+                    'kernel_has_lustre_module',
                     'boot_loader_default_kernel',
                     'restore_default_kernel',
                     'drop_rescue_images',
@@ -306,6 +315,38 @@ def test_a_new_kernel_with_no_vmlinuz_does_not_stay_selected(context, tmp_path):
     calls = host.run(render(context.config(), 'rocky9'))
     assert host.default.read_text().strip().endswith(f'vmlinuz-{OLD}')
     assert not any(c.startswith('reboot') for c in calls)
+
+
+@pytest.mark.parametrize('base_os', ['rocky9', 'amazonlinux2023'])
+def test_a_newer_kernel_the_lustre_client_has_no_module_for_is_not_booted(
+    context, tmp_path, base_os
+):
+    # the package made itself the default; the running kernel is the one that mounts Lustre
+    host = Host(
+        tmp_path,
+        running=OLD,
+        newest=FIXED,
+        package_default=True,
+        lustre_kernels=(OLD,),
+    )
+    calls = host.run(render(context.config(), base_os))
+    assert host.default.read_text().strip().endswith(f'vmlinuz-{OLD}')
+    assert any('has no FSx for Lustre module; keeping' in c for c in calls)
+    assert not any(c.startswith('reboot') for c in calls)
+    # the lock then follows the running kernel
+    assert 'release ' in calls
+
+
+@pytest.mark.parametrize('lustre_kernels', [(), (OLD, FIXED), (FIXED,)])
+def test_the_lustre_module_only_decides_when_the_newer_kernel_would_lose_it(
+    context, tmp_path, lustre_kernels
+):
+    # no client yet, a module for both kernels, or one only for the newer kernel
+    calls = Host(
+        tmp_path, running=OLD, newest=FIXED, lustre_kernels=lustre_kernels
+    ).run(render(context.config(), 'rocky9'))
+    assert f'reboot Kernel update to {FIXED}' in calls
+    assert f'release {FIXED}' in calls
 
 
 def test_the_newest_already_running_changes_nothing(context, tmp_path):

@@ -1,10 +1,16 @@
 # Begin: Kernel Version Management
 
-# rhel10, rocky10, ubuntu2604 are absent: only the eVDI setup includes this template, none has eVDI support.
+# Desktops and their bakes include this template. Compute includes it through
+# compute_kernel_hold.jinja2, on EL when the cluster uses FSx for Lustre.
 function fail_kernel_bootstrap() {
   local bootstrap_status="${1}"
   log_error "${2}"
   echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+{% if compute_image_bake | default(false) %}
+  # compute bakes have no ERR trap: record the reason and tag the builder failed now
+  echo "${bootstrap_status}: ${2}" >> /var/lib/idea/bake-failed
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh"
+{% else %}
   local AWS
   local AWS_INSTANCE_ID
   AWS=$(command -v aws)
@@ -13,6 +19,7 @@ function fail_kernel_bootstrap() {
       --resources "${AWS_INSTANCE_ID}" \
       --region "{{ context.aws_region }}" \
       --tags "Key=idea:BootstrapStatus,Value=${bootstrap_status}" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=${bootstrap_status}"
+{% endif %}
   exit 1
 }
 
@@ -110,14 +117,16 @@ if ! rpm -q --provides -f "/boot/vmlinuz-${TARGET_KERNEL_ABI}" 2>/dev/null | gre
   fail_kernel_bootstrap lustre-module-missing "The running kernel ${TARGET_KERNEL_ABI} does not provide kmod-lustre-client, the FSx for Lustre module."
 fi
 TARGET_KERNEL_VERSION="$(echo "${TARGET_KERNEL_ABI}" | cut -d. -f1-2)*"
-{% elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('rhel8', 'rocky8') and not (keep_kernel_series | default(false)) %}
 TARGET_KERNEL_VERSION="4.18.0-553*"
-{% elif context.base_os in ('rhel9', 'rocky9') %}
+{% elif context.base_os in ('rhel9', 'rocky9') and not (keep_kernel_series | default(false)) %}
 {# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm #}
 TARGET_KERNEL_VERSION="5.14.0-687*"
-{% elif context.base_os in ('rhel10', 'rocky10') %}
+{% elif context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
 {# the series the image boots: fsx_lustre_client.jinja2 has a client for the 10.1 and 10.2 series,
-   and pinning it keeps a package upgrade from moving the host to a kernel without one #}
+   and pinning it keeps a package upgrade from moving the host to a kernel without one. Compute
+   (keep_kernel_series) does the same on every EL release: its client is installed for the kernel
+   the image boots, and the FSx repository has none for a series Red Hat has only just shipped. #}
 TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
 {% endif %}
 
@@ -310,6 +319,12 @@ function update_within_target_series() {
   # means saying so.
   if ! kernel_initramfs_ready "${newest}"; then
     log_warning "Kernel ${newest} has no initramfs; keeping ${current_kernel}"
+    keep_running_kernel_default "${current_kernel}"
+    return 0
+  fi
+  # The Lustre client's module is linked into a new kernel only when their symbols still match.
+  if kernel_has_lustre_module "${current_kernel}" && ! kernel_has_lustre_module "${newest}"; then
+    log_warning "Kernel ${newest} has no FSx for Lustre module; keeping ${current_kernel}, which has one"
     keep_running_kernel_default "${current_kernel}"
     return 0
   fi
