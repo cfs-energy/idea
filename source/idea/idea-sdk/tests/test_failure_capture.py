@@ -141,6 +141,14 @@ def test_package_lines_do_not_travel():
         ('HOME=/home/alice', 'alice'),
         ('cannot open ~alice/x', 'alice'),
         ('cannot open C:\\Users\\alice\\x', 'alice'),
+        ('Invalid user alice from 10.0.0.1 port 22', 'alice'),
+        ('New session 3 of user alice.', 'alice'),
+        ('runuser --user alice -- true', 'alice'),
+        ('mount --owner alice x', 'alice'),
+        ('username alice not found', 'alice'),
+        ('uid=alice1 denied', 'alice'),
+        ('uid=1001a denied', '1001a'),
+        ('vncserver@alice.service failed', 'alice'),
     ],
 )
 def test_no_username_or_personal_path_travels(line, secret):
@@ -158,6 +166,46 @@ def test_a_shell_trace_line_does_not_travel():
         '+ configure --project quench7\n++ start quench7\nreal output\n', 1000
     )
     assert lines == ['| real output']
+
+
+def test_a_shell_trace_line_behind_a_console_prefix_does_not_travel():
+    lines = clean_for_log(
+        '[   39.065233] cloud-init[2144]: + [[ -f /root/bootstrap/logs/userdata.log ]]\n'
+        'cloud-init[2144]: ++ id -un alice\n'
+        '[   39.1] cloud-init[2144]: real output\n',
+        1000,
+    )
+    assert lines == ['| [   39.1] cloud-init[2144]: real output']
+
+
+def test_host_key_pictures_do_not_travel():
+    art = (
+        'cloud-init[942]: +---[RSA 3072]----+\n'
+        'cloud-init[942]: |     o o+=o@B. o |\n'
+        '[   38.1] cloud-init[942]: |            .o.oo|\n'
+        'cloud-init[942]: +----[SHA256]-----+\n'
+        '+-----------------+\n'
+        'Kernel panic - not syncing\n'
+    )
+    assert clean_for_log(art, 1000) == ['| Kernel panic - not syncing']
+
+
+@pytest.mark.parametrize(
+    'line',
+    [
+        # every one of these was rewritten in a real capture, and none names anyone
+        "audit: type=1131 audit(1794263276.732:379): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='unit=systemd-poweroff comm=\"systemd\"'",
+        "audit: type=1131 audit(1.1:374): pid=1 uid=0 msg='unit=systemd-fsck@dev-disk-by\\x2duuid-7B77\\x2d95E7 comm=\"systemd\"'",
+        'systemd[1]: Started serial-getty@ttyS0.service - Serial Getty on ttyS0.',
+        'systemd[1]: Started user@1000.service.',
+        'SELinux:  Class user_namespace not defined in policy.',
+        'util.py[WARNING]: Running module scripts-user (<module cc_scripts_user>) failed',
+        'LNet: Added LNI 10.4.85.97@tcp [8/256/0/180]',
+        'input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0',
+    ],
+)
+def test_what_names_no_one_is_left_as_the_host_wrote_it(line):
+    assert clean_for_log(line, 1000) == [f'| {line}']
 
 
 def test_the_known_owner_is_gone_wherever_it_is():

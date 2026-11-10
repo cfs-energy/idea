@@ -125,8 +125,20 @@ REDACTIONS: Tuple[Tuple['re.Pattern', str], ...] = (
 PATH_SEGMENT = r'[^\s:,;"\'()\[\]<>=/]*'
 # a path outside these is someone's: a home, a project, a shared mount, scratch.
 SYSTEM_PATH_ROOTS = (
-    'bin|boot|dev|etc|lib|lib64|opt|proc|root|run|sbin|sys|sysroot|usr|var'
+    'bin|boot|dev|devices|etc|lib|lib64|opt|proc|root|run|sbin|sys|sysroot|usr|var'
 )
+# unit@instance where the unit is the system's own template, and address@network (a Lustre
+# NID): neither is someone at a host
+SYSTEM_AT_NAME = re.compile(
+    r'(?:systemd-[\w-]+|[\w-]*getty|user|user-runtime-dir|lvm2-pvscan|sshd-keygen|modprobe'
+    r'|\d+(?:\.\d+)*)@'
+)
+
+
+def _someone_at_a_host(match: 're.Match') -> str:
+    return match.group(0) if SYSTEM_AT_NAME.match(match.group(0)) else '[user]'
+
+
 USER_DATA: Tuple[Tuple['re.Pattern', str], ...] = (
     # paths first, so a name inside one goes with it
     (re.compile(r'\b[A-Za-z]:\\\S+'), '[path]'),
@@ -143,11 +155,16 @@ USER_DATA: Tuple[Tuple['re.Pattern', str], ...] = (
     ),
     (re.compile(r'(?<![\w/])~[\w.-]*(?:/\S*)?'), '[path]'),
     # names in the places system tools put them
-    (re.compile(r'[\w.+-]+@[\w.-]+'), '[user]'),
-    (re.compile(r'\b[\w.-]+\\+[\w.$-]+'), '[user]'),
+    (re.compile(r'[\w.+-]+@[\w.-]+'), _someone_at_a_host),
+    # DOMAIN\name, but not the \x2d systemd writes for a dash in a unit name
+    (re.compile(r'\b[\w.-]+\\+(?!x2d)[\w.$-]+'), '[user]'),
     (re.compile(r'(\b[ug]id=\d+)\([^)\s]*\)'), r'\1'),
+    # a directory name, never a number: audit lines carry uid=0 on every line
     (
-        re.compile(r'(?i)\b(uid|cn|mail|samaccountname|userprincipalname)=[^,\s]+'),
+        re.compile(
+            r'(?i)\b(uid|cn|mail|samaccountname|userprincipalname)='
+            r'(?!\d+(?:[,\s]|$))[^,\s]+'
+        ),
         r'\1=[user]',
     ),
     (
@@ -166,14 +183,29 @@ USER_DATA: Tuple[Tuple['re.Pattern', str], ...] = (
     ),
     (
         re.compile(
-            r'(?i)([\w.-]*(?:user(?:name)?|owner|logname)[\w.-]*["\']?\s*[:= ]\s*)'
+            r'(?i)([\w.-]*(?:user(?:name)?|owner|logname)[\w.-]*["\']?\s*[:=]\s*)'
+            r'("[^"\n]*"|\'[^\'\n]*\'|[^\s,;:]+)'
+        ),
+        r'\1[user]',
+    ),
+    # followed by a space only the word itself or the option names someone: "user alice",
+    # "--owner alice". "user_namespace not defined" and "scripts-user (...)" do not
+    (
+        re.compile(
+            r'(?i)((?<![\w.-])(?:--?)?(?:user(?:name)?|owner|logname) +)'
             r'("[^"\n]*"|\'[^\'\n]*\'|[^\s,;:]+)'
         ),
         r'\1[user]',
     ),
 )
 # a shell trace repeats every command with its arguments: names, paths, whatever was typed
-SHELL_TRACE_LINE = re.compile(r'^\s*\++\s')
+# the console and the journal put a time and the unit that wrote the line in front of it
+LINE_PREFIX = r'^\s*(?:\[\s*\d+\.\d+\]\s+)?(?:[\w.@-]+(?:\[\d+\])?:\s+)?'
+SHELL_TRACE_LINE = re.compile(LINE_PREFIX + r'\++\s')
+# the picture ssh-keygen draws of a new host key says nothing, and reads as names to the scrub
+RANDOMART_LINE = re.compile(
+    LINE_PREFIX + r'(?:\|.{17}\||\+-+\[[^\]]*\]-+\+|\+-{17}\+)\s*$'
+)
 # what a package transaction prints: what is installed is not why a host failed, and on GovCloud
 # it is exactly what must not spread. the restricted dataset is the control; this just sends less.
 PACKAGE_LINE = re.compile(
@@ -262,6 +294,7 @@ def clean_for_log(
         if line.strip()
         and not PACKAGE_LINE.match(line)
         and not SHELL_TRACE_LINE.match(line)
+        and not RANDOMART_LINE.match(line)
     ]
     kept: List[str] = []
     used = 0
