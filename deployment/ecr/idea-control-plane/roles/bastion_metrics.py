@@ -93,6 +93,11 @@ class DropTally:
     named or noted, on 10.5 the unnamed drops less the checks' refusals sshd did not name, worked
     out over everything read so far, as sshd names the drop that ends its rate limit before the
     check that drop refused notes it.
+    Remote drops are counted when sshd reports them, which is late: 9.9 names the first drop of an
+    episode and gives the total when it ends (its "in" line needs five minutes without a drop
+    inside an episode, so a flood never logs one), 10.5 every five minutes and when its log rate
+    limit ends. So remote is exact over an episode, reads 1 while a flood on 9.9 lasts, and a
+    flood that never ends is never counted past that; loopback is counted as it happens.
     ponytail: a loopback client other than the checks (a user's `ssh localhost`) is counted as
     remote on 9.9 and not at all on 10.5 when sshd names it; name the checks' port if that matters.
     A read that falls between sshd naming a check's drop and the check noting it, in a batch with
