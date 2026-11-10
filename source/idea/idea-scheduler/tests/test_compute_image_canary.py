@@ -474,6 +474,64 @@ def test_cleanup_deletes_a_stuck_job_and_reports_what_stayed(monkeypatch):
     assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
 
 
+def test_cleanup_asks_for_the_queue_only_once_its_node_has_left_pbs(monkeypatch):
+    """
+    PBS answers busy while a node belongs to the queue, a minute or two after the job. each
+    refused delete is two error lines: 24 to 50 for every canary that passed.
+    """
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = False
+    node = SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')
+    other = SocaComputeNode(host='ip-10-0-0-2', queue='normal')
+    context.scheduler.list_nodes.side_effect = [[node, other]] * 20 + [[other]]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    )
+    assert errors == []
+    context.queue_profiles.delete_queue_profile.assert_called_once_with(
+        queue_profile_id='q'
+    )
+    assert module.time.monotonic() == 100
+
+
+def test_cleanup_names_a_node_that_never_left(monkeypatch):
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = False
+    context.scheduler.list_nodes.return_value = [
+        SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')
+    ]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    )
+    assert errors == ['The validation queue iv-abc still has a node in PBS.']
+    context.queue_profiles.delete_queue_profile.assert_not_called()
+    assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
+
+
+@pytest.mark.parametrize('node', [True, False])
+def test_the_sweeps_reap_never_waits(monkeypatch, node):
+    """the leader's tick runs it, and the same thread enforces the bake time limit"""
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.list_jobs.return_value = [SimpleNamespace(job_id='12')]
+    context.scheduler.is_job_active.return_value = True
+    context.scheduler.list_nodes.return_value = (
+        [SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')] if node else []
+    )
+    busy = exceptions.soca_exception(module.errorcodes.SCHEDULER_QUEUE_BUSY, 'busy')
+    context.queue_profiles.delete_queue_profile.side_effect = busy
+    profile = SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    errors = ComputeImageCanary(context).reap(profile, patience=0)
+    assert module.time.monotonic() == 0
+    context.scheduler.delete_job.assert_called_once_with('12')
+    assert any('did not leave PBS' in e for e in errors)
+    # one try at most, and none while PBS is sure to refuse
+    assert context.queue_profiles.delete_queue_profile.call_count == (0 if node else 1)
+    assert len(errors) == 2
+
+
 def _resolver(monkeypatch, lookups, uid=5062):
     """this host's passwd and group as the user sync leaves them, one answer per poll"""
     from ideasdk.aws import validation_identity

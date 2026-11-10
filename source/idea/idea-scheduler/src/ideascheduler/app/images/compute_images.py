@@ -105,6 +105,9 @@ SCHEDULER_DEFAULT_REFERENCE = 'scheduler default'
 VALIDATED_IMAGE_TAG = 'idea:ComputeImageValidated'
 # a row can roll back from either idle state that keeps current + previous
 ROLLBACK_IDLE_STATUSES = ('current', 'failed')
+# the leader's cleanup sweep, and how soon it runs again when a validation queue was still busy
+SWEEP_SECONDS = 1800
+SWEEP_RETRY_SECONDS = 60
 
 
 class RowMoved(Exception):
@@ -124,6 +127,8 @@ class ComputeImageService:
         self._stop = threading.Event()
         self._thread = None
         self._last_sweep = 0.0
+        # validation queues the last sweep could not delete, so each is warned about once
+        self._queues_left = set()
 
     # listing
 
@@ -1066,16 +1071,26 @@ class ComputeImageService:
         # failed cleanup or a restart; reap it so the queues do not accumulate
         candidates = {r.image_id for r in records if r.image_id}
         canary = ComputeImageCanary(self.context)
+        left = set()
         for profile in self.context.queue_profiles.list_queue_profiles():
             params = profile.default_job_params
             if (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX) and (
                 params is None or params.instance_ami not in candidates
             ):
-                errors = canary.reap(profile)
+                # no waiting here: this thread also enforces the bake time limit, and a
+                # queue PBS held busy kept it from doing so for three minutes a sweep
+                errors = canary.reap(profile, patience=0)
                 if errors:
-                    self._logger.warning(
-                        f'validation queue {profile.name} not reaped: {"; ".join(errors)}'
-                    )
+                    left.add(profile.name)
+                    if profile.name not in self._queues_left:
+                        self._logger.warning(
+                            f'validation queue {profile.name} not reaped yet: '
+                            f'{"; ".join(errors)}'
+                        )
+        if left:
+            # PBS lets a queue go once its job and node have left: ask again shortly
+            self._last_sweep = time.monotonic() - SWEEP_SECONDS + SWEEP_RETRY_SECONDS
+        self._queues_left = left
         self._remove_queueless_validation_capacity()
         result = (
             self.context.aws()
@@ -1203,7 +1218,7 @@ class ComputeImageService:
             self._enforce_time_limit(now)
         except Exception:
             self._logger.exception('Bake time limit check failed')
-        if time.monotonic() - self._last_sweep > 1800:
+        if time.monotonic() - self._last_sweep > SWEEP_SECONDS:
             self._last_sweep = time.monotonic()
             try:
                 self.sweep_builders(now)

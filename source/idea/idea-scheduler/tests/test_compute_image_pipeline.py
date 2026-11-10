@@ -658,10 +658,59 @@ def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch)
     ]
     reaped = []
     monkeypatch.setattr(
-        module.ComputeImageCanary, 'reap', lambda self, p: reaped.append(p.name) or []
+        module.ComputeImageCanary,
+        'reap',
+        lambda self, p, patience: reaped.append((p.name, patience)) or [],
     )
+    svc._last_sweep = before = module.time.monotonic()
     svc.sweep_builders(datetime.now(timezone.utc))
-    assert reaped == ['iv-left']
+    # without waiting: the sweep runs on the thread that enforces the bake time limit
+    assert reaped == [('iv-left', 0)]
+    assert svc._last_sweep == before
+
+
+def test_a_validation_queue_pbs_still_holds_is_asked_for_again_within_a_minute(
+    monkeypatch,
+):
+    """
+    the sweep waited up to 180 s on the leader's tick for each busy queue, so a 3 minute
+    bake limit fired 3 min 10 s late.
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {}
+    svc.context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    svc.context.queue_profiles.list_queue_profiles.return_value = [
+        HpcQueueProfile(
+            name='iv-busy', default_job_params=SocaJobParams(instance_ami='ami-old')
+        ),
+    ]
+    answers = [['The validation queue iv-busy still has a node in PBS.']] * 2 + [[]]
+    monkeypatch.setattr(
+        module.ComputeImageCanary, 'reap', lambda self, p, patience: answers.pop(0)
+    )
+    now = datetime.now(timezone.utc)
+
+    def due_in():
+        return module.SWEEP_SECONDS - (module.time.monotonic() - svc._last_sweep)
+
+    svc._last_sweep = module.time.monotonic()
+    svc.sweep_builders(now)
+    assert 55 < due_in() <= module.SWEEP_RETRY_SECONDS
+    svc.sweep_builders(now)
+    assert 55 < due_in() <= module.SWEEP_RETRY_SECONDS
+    # said once, not on every retry
+    warnings = [c.args[0] for c in svc._logger.warning.call_args_list]
+    assert [w for w in warnings if 'iv-busy' in w] == [
+        'validation queue iv-busy not reaped yet: '
+        'The validation queue iv-busy still has a node in PBS.'
+    ]
+    svc._last_sweep = module.time.monotonic()
+    svc.sweep_builders(now)
+    assert due_in() > module.SWEEP_SECONDS - 5
 
 
 def _capacity_instance(queue, stack='idea-stack', running=True):
