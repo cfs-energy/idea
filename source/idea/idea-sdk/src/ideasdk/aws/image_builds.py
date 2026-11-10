@@ -345,7 +345,7 @@ class ImageRowsCollector:
         kind: ImageKind,
         list_rows: Callable[[], List[ImageBuildRecord]],
         release: Optional[str] = None,
-        off_current: Optional[Callable[[], List[str]]] = None,
+        off_current: Optional[Callable[[], Optional[List[str]]]] = None,
     ):
         self.kind = kind
         self.list_rows = list_rows
@@ -393,12 +393,12 @@ class ImageRowsCollector:
                 )
         if self.release:
             metrics.level('bake.rows_behind_release', behind, kind=self.kind.value)
-        if self.off_current is not None:
-            # every row can be current while a queue still launches an older image
+        # every row can be current while a queue still launches an older image. None is a
+        # target seen off too recently to tell from a promotion in flight: no point this run
+        off_current = self.off_current() if self.off_current is not None else None
+        if off_current is not None:
             metrics.level(
-                'bake.targets_off_current',
-                len(self.off_current()),
-                kind=self.kind.value,
+                'bake.targets_off_current', len(off_current), kind=self.kind.value
             )
         # a row that left a state reads zero once, rather than stopping at one
         for os_, arch, variant, status in self.previous.keys() - current.keys():

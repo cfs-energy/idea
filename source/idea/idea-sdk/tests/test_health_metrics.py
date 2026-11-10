@@ -463,6 +463,13 @@ def test_targets_no_promotion_will_move_are_counted_beside_the_rows():
     assert [
         (v, t) for n, v, t in metrics.levels if n == 'bake.targets_off_current'
     ] == [(1, {'kind': 'compute'})]
+    # a target seen off too recently to tell from a promotion in flight: no point, not a 0
+    metrics = Recorder()
+    ImageRowsCollector(
+        ImageKind.COMPUTE, lambda: rows, release='26.11.2', off_current=lambda: None
+    ).collect(metrics)
+    assert not [n for n, v, t in metrics.levels if n == 'bake.targets_off_current']
+    assert [n for n, v, t in metrics.levels if n == 'bake.rows_behind_release']
     # desktop promotions move every unpinned stack, so that module sends none
     metrics = Recorder()
     ImageRowsCollector(ImageKind.DESKTOP, lambda: rows).collect(metrics)

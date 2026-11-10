@@ -214,6 +214,7 @@ def build_service(config, ec2, profiles=()) -> ComputeImageService:
     service._last_sweep = float('inf')  # tests that want the builder sweep call it
     service._queues_left = set()
     service._off_current = []
+    service._off_since = {}
     service._save = lambda record: service.records.put(record.model_copy(deep=True))
     context.is_leader.return_value = True
     context.cluster_name.return_value = 'test-cluster'

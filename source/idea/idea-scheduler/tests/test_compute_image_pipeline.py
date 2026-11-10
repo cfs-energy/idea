@@ -236,7 +236,7 @@ def test_promotion_leaves_targets_on_an_unmanaged_default(monkeypatch):
     assert candidate.current_image_id == 'ami-new'
 
 
-def test_an_unpinned_queue_no_promotion_will_move_is_named():
+def test_an_unpinned_queue_no_promotion_will_move_is_named(monkeypatch):
     """
     dev: every row was current on the release while the arm-compute profile, not pinned,
     still launched an image from two months before. the follow rule only moves a profile
@@ -259,18 +259,63 @@ def test_an_unpinned_queue_no_promotion_will_move_is_named():
             profile('iv-0123456789ab', 'ami-candidate'),
         ]
     )
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
     expected = ['queue profile arm-compute (ami-left-behind)']
+    # the first sight of it could be a promotion caught half way: not known yet
+    assert svc.targets_off_current() is None
+    svc._logger.warning.assert_not_called()
+    clock[0] += module.OFF_CURRENT_CONFIRM_SECONDS
     assert svc.targets_off_current() == expected
     assert svc.targets_off_current() == expected
     warnings = [c.args[0] for c in svc._logger.warning.call_args_list]
     assert len(warnings) == 1 and 'arm-compute (ami-left-behind)' in warnings[0]
     # the scheduler default is a target too, unless it is pinned
     svc.context.config.return_value.values['scheduler.compute_node_ami'] = 'ami-def'
+    assert svc.targets_off_current() is None
+    clock[0] += module.OFF_CURRENT_CONFIRM_SECONDS
     assert svc.targets_off_current() == expected + ['scheduler default (ami-def)']
     svc.context.config.return_value.values['scheduler.images.default_image_pinned'] = (
         True
     )
     assert svc.targets_off_current() == expected
+
+
+def test_a_target_caught_between_a_promotion_and_its_own_move_is_never_named(
+    monkeypatch,
+):
+    """
+    a promotion moves the row, its queues and the default in one write, but the collector
+    reads them one after the other, and the default from a config that follows the table
+    by seconds: for a moment the row is on the new image and a target still on the old one.
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    normal = HpcQueueProfile(
+        name='normal',
+        default_job_params=SocaJobParams(base_os='rocky9', instance_ami='ami-old'),
+    )
+    svc = service([normal])
+    values = svc.context.config.return_value.values
+    values['scheduler.compute_node_ami'] = 'ami-old'
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
+    assert svc.targets_off_current() == []
+    # the row has moved; this process has not seen the queue or the default follow yet
+    svc.records.put(row(current_image_id='ami-new', previous_image_id='ami-old'))
+    assert svc.targets_off_current() is None
+    clock[0] += 5
+    normal.default_job_params.instance_ami = values['scheduler.compute_node_ami'] = (
+        'ami-new'
+    )
+    assert svc.targets_off_current() == []
+    # long after, the same queue left behind for real is told from that first sight
+    normal.default_job_params.instance_ami = 'ami-old'
+    clock[0] += 10 * module.OFF_CURRENT_CONFIRM_SECONDS
+    assert svc.targets_off_current() is None
+    clock[0] += module.OFF_CURRENT_CONFIRM_SECONDS
+    assert svc.targets_off_current() == ['queue profile normal (ami-old)']
+    svc._logger.warning.assert_called_once()
 
 
 def test_promotion_does_not_advance_the_row_when_the_current_image_cannot_be_read(

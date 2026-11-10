@@ -108,6 +108,10 @@ ROLLBACK_IDLE_STATUSES = ('current', 'failed')
 # the leader's cleanup sweep, and how soon it runs again when a validation queue was still busy
 SWEEP_SECONDS = 1800
 SWEEP_RETRY_SECONDS = 60
+# how long a target has to stay off every current image before it is named. a promotion moves
+# the row and its targets in one write, but the rows, the queue profiles and the default are
+# read one after the other, the default from a config that follows the table by seconds
+OFF_CURRENT_CONFIRM_SECONDS = 60
 
 
 class RowMoved(Exception):
@@ -129,8 +133,10 @@ class ComputeImageService:
         self._last_sweep = 0.0
         # validation queues the last sweep could not delete, so each is warned about once
         self._queues_left = set()
-        # what targets_off_current last named, so it is logged when it changes
+        # what targets_off_current last named, so it is logged when it changes, and when it
+        # first found each one off
         self._off_current = []
+        self._off_since = {}
 
     # listing
 
@@ -1154,12 +1160,15 @@ class ComputeImageService:
         protected.discard(None)
         return protected
 
-    def targets_off_current(self) -> List[str]:
+    def targets_off_current(self) -> Optional[List[str]]:
         """
         unpinned queue profiles, and an unpinned scheduler default, on an image that is no
         row's current one. a promotion moves a target only off the image its row had, and
         only off an image the pipeline manages, so nothing will ever move these: every row
-        can read current while a queue launches something older. named once per change
+        can read current while a queue launches something older. named once per change.
+        one read cannot tell that from a promotion caught half way, so a target is named
+        once it has stayed off for OFF_CURRENT_CONFIRM_SECONDS, and while one is still
+        waiting the answer is None: not known yet, rather than a count that leaves it out
         """
         current = {row.current_image_id for row in self.list_rows()}
         names = []
@@ -1184,6 +1193,14 @@ class ComputeImageService:
             )
         ):
             names.append(f'{SCHEDULER_DEFAULT_REFERENCE} ({default})')
+        now = time.monotonic()
+        # each name carries its image, so a target that moved to another image starts again
+        self._off_since = {name: self._off_since.get(name, now) for name in names}
+        if any(
+            now - since < OFF_CURRENT_CONFIRM_SECONDS
+            for since in self._off_since.values()
+        ):
+            return None
         if names != self._off_current:
             if names:
                 self._logger.warning(
