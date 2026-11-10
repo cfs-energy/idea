@@ -1352,6 +1352,10 @@ class NodeHouseKeepingSession:
                         f'{job.log_tag} Failed to reset job in scheduler: {reset_error}'
                     )
                     raise  # Re-raise to trigger the outer exception handler
+                # the job holds no capacity now. its license count is recorded again when
+                # it is next provisioned; left in place it would count against that retry
+                # and against every other job asking for the license.
+                self._context.job_cache.release_active_licenses(job.job_id)
 
                 if stack_failure_reason_class == REASON_CLASS_STACK_TIMEOUT:
                     # nodes launched but the job never started on them, usually a node that
