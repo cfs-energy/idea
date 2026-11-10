@@ -209,6 +209,36 @@ def test_configuration_status_distinguishes_setup_states():
         assert (status['status'], status['reason']) == expected
 
 
+def test_attachments_on_one_svm_are_set_up_by_one_login():
+    # idea-dev: /data carries the login, /idea_apps is another volume of the same SVM and is
+    # read through it. The admin cost page said "missing_credentials" with storage costs whole.
+    def status(apps_endpoint):
+        prefix = 'shared-storage.{}.fsx_netapp_ontap.'
+        values = {
+            'metrics.provider': 'dogstatsd',
+            'cluster-manager.metrics.storage.enabled': True,
+            'shared-storage': {
+                'data': {'provider': 'fsx_netapp_ontap'},
+                'ideaapps': {'provider': 'fsx_netapp_ontap'},
+            },
+            prefix.format('data') + 'metrics.username': 'reader',
+            prefix.format('data') + 'metrics.password_secret_arn': 'secret-reference',
+            prefix.format('data') + 'svm.management_dns': ENDPOINT,
+            prefix.format('ideaapps') + 'svm.management_dns': apps_endpoint,
+        }
+        service = StorageMetricsService(FakeContext(values))
+        assert [target.name for target in service.targets()] == ['data']
+        found = service.configuration_status()
+        return found['status'], found['reason']
+
+    assert status(ENDPOINT) == ('enabled', 'configured')
+    assert status(f'https://{ENDPOINT.upper()}/') == ('enabled', 'configured')
+    # control: an SVM no login reads, and an attachment that does not say which SVM it is on
+    other = ENDPOINT.replace('svm-064990494a2dbd4c2', 'svm-0aaaaaaaaaaaaaaaa')
+    assert status(other) == ('not_configured', 'missing_credentials')
+    assert status(None) == ('not_configured', 'missing_credentials')
+
+
 def test_targets_require_username_secret_reference_and_endpoint():
     base = {
         'metrics.provider': 'cloudwatch',
