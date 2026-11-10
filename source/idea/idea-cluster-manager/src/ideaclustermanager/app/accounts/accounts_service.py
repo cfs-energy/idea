@@ -1271,7 +1271,20 @@ class AccountsService:
         )
         if kms_key_id:
             request['KmsKeyId'] = kms_key_id
-        return self.context.aws().secretsmanager().create_secret(**request)['ARN']
+        try:
+            return self.context.aws().secretsmanager().create_secret(**request)['ARN']
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as error:
+            # the caller may be anyone at the sign-in page, and the AWS message names
+            # the role and the account
+            self.logger.error(
+                f'a password secret could not be made: {self._error_code(error)}'
+            )
+            raise exceptions.general_exception(
+                'The password could not be set right now. Try again.'
+            ) from None
 
     def _queue_password_sync(self, username: str, password_secret: str) -> bool:
         try:

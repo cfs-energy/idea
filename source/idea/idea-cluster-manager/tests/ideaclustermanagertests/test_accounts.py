@@ -1268,9 +1268,17 @@ def test_a_password_the_secret_cannot_hold_is_not_given_to_the_user_pool(
     password_change,
 ):
     secrets, in_user_pool, change, send = password_change
-    secrets.failing['CreateSecret'] = client_error('InternalServiceError', 'Create')
-    with pytest.raises(botocore.exceptions.ClientError):
+    secrets.failing['CreateSecret'] = client_error(
+        'AccessDeniedException', 'CreateSecret', 'arn:aws:iam::123456789012:role/r'
+    )
+    with pytest.raises(exceptions.SocaException) as refused:
         change()
+    # the sign-in page calls two of these: nothing of the AWS error reaches it
+    assert (
+        refused.value.message == 'The password could not be set right now. Try again.'
+    )
+    assert 'arn:' not in str(refused.value) and 'Access' not in str(refused.value)
+    assert refused.value.__suppress_context__
     # nothing changed: sign-in and the directory still agree on the old password
     in_user_pool.assert_not_called()
     send.assert_not_called()

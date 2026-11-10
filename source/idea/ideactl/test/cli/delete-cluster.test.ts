@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { Command } from "commander";
 
@@ -266,8 +267,31 @@ test("a password secret that cannot be deleted does not stop the cluster delete"
     async deleteSecret() {},
   });
   await deleteCluster(deps, allOptions());
-  assert.ok(trace.includes(`err:failed to delete password secrets named ${target}-password-sync-*: AccessDeniedException`));
+  assert.ok(trace.includes(`err:failed to list password secrets named ${target}-password-sync-*: AccessDeniedException`));
   assert.ok(trace.includes(`delete-stack:${target}-cluster`));
+});
+
+test("one password secret that cannot be deleted does not keep the others", async () => {
+  const tags = { [CLUSTER_NAME_TAG]: target, "idea:Purpose": "password-sync" };
+  const { deps, trace } = makeDeps({
+    async listSecrets() {
+      return ["stuck", "left"].map((arn) => ({ arn, name: `${target}-password-sync-${arn}`, tags }));
+    },
+    async deleteSecret(arn) {
+      if (arn === "stuck") throw Object.assign(new Error("not allowed on arn:aws:secretsmanager:secret"), { name: "AccessDeniedException" });
+      trace.push(`delete-secret:${arn}`);
+    },
+  });
+  await deleteCluster(deps, allOptions());
+  assert.ok(trace.includes("delete-secret:left"));
+  assert.ok(trace.includes(`err:failed to delete password secret ${target}-password-sync-stuck: AccessDeniedException`));
+});
+
+test("the delete policy lets the operator find and delete the password secrets", () => {
+  const policy = readFileSync(new URL("../../resources/installer_policies/idea-admin-delete-policy.yml", import.meta.url), "utf8");
+  for (const action of ["secretsmanager:ListSecrets", "secretsmanager:DeleteSecret"]) {
+    assert.match(policy, new RegExp(`^      - ${action}$`, "m"));
+  }
 });
 
 test("refuses cluster deletion without confirmation before any destructive operation", async () => {

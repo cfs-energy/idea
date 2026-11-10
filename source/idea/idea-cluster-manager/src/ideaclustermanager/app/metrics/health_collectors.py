@@ -345,11 +345,12 @@ class CertificatesCollector(HealthCollector):
 
 
 def _holds_a_password(secret: Dict) -> bool:
-    # as accounts_service.py tags them
-    return any(
-        tag.get('Key') == 'idea:Purpose' and tag.get('Value') == 'password-sync'
-        for tag in secret.get('Tags', [])
-    )
+    # as accounts_service.py tags them, in any cluster: none gets a series of its own
+    return _tags(secret).get('idea:Purpose') == 'password-sync'
+
+
+def _tags(secret: Dict) -> Dict:
+    return {tag.get('Key'): tag.get('Value') for tag in secret.get('Tags', [])}
 
 
 class SecretsCollector(HealthCollector):
@@ -385,7 +386,9 @@ class SecretsCollector(HealthCollector):
             sum(
                 1
                 for secret in passwords
-                if secret.get('CreatedDate') is not None
+                # the filter above matches a tag value by prefix: this cluster's only
+                if _tags(secret).get('idea:ClusterName') == cluster
+                and secret.get('CreatedDate') is not None
                 and now - secret['CreatedDate'].timestamp() > 3600
             ),
         )

@@ -527,9 +527,16 @@ async function deletePasswordSecrets(deps: DeleteClusterDeps, clusterName: strin
     const secrets = (await deps.listSecrets(prefix)).filter((secret) =>
       secret.name.startsWith(prefix) && secret.tags[CLUSTER_NAME_TAG] === clusterName && secret.tags["idea:Purpose"] === "password-sync");
     if (secrets.length > 0) deps.out(`deleting ${secrets.length} password secret(s) left by cluster-manager ...`);
-    for (const secret of secrets) await deps.deleteSecret(secret.arn);
+    for (const secret of secrets) {
+      try {
+        await deps.deleteSecret(secret.arn);
+      } catch (error) {
+        // the rest are still deleted
+        deps.err(`failed to delete password secret ${secret.name}: ${error instanceof Error ? error.name : String(error)}`);
+      }
+    }
   } catch (error) {
-    deps.err(`failed to delete password secrets named ${prefix}*: ${error instanceof Error ? error.name : String(error)}`);
+    deps.err(`failed to list password secrets named ${prefix}*: ${error instanceof Error ? error.name : String(error)}`);
   }
 }
 

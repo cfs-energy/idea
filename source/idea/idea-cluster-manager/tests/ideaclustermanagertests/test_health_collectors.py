@@ -421,12 +421,12 @@ def test_secrets_are_listed_for_this_cluster_and_never_read():
 
 
 def test_passwords_waiting_for_their_sync_are_counted_and_never_named():
-    def password(name, age):
+    def password(name, age, cluster='idea-com'):
         return {
-            'Name': f'idea-com-password-sync-{name}',
+            'Name': f'{cluster}-password-sync-{name}',
             'CreatedDate': NOW - age,
             'Tags': [
-                {'Key': 'idea:ClusterName', 'Value': 'idea-com'},
+                {'Key': 'idea:ClusterName', 'Value': cluster},
                 {'Key': 'idea:Purpose', 'Value': 'password-sync'},
             ],
         }
@@ -439,6 +439,8 @@ def test_passwords_waiting_for_their_sync_are_counted_and_never_named():
                     password('just-set', timedelta(minutes=59)),
                     password('stuck', timedelta(minutes=61)),
                     password('stray', timedelta(days=3)),
+                    # the list's tag filter matches by prefix: not this cluster's
+                    password('theirs', timedelta(days=3), cluster='idea-com2'),
                     {'Name': 'idea-com-ad-admin', 'CreatedDate': NOW},
                 ]
             }
