@@ -148,6 +148,15 @@ class JobRecord:
     succeeded: bool = True
     # numbers of the jobs that waited on this one, which PBS no longer lists on them
     dependents: FrozenSet[str] = frozenset()
+    # a subjob's record only: its array's id, under which the array's one removal date is
+    # kept, and the subjob's own end. end_time is then the array's, which is what the
+    # retention counts from; the subjob's own end closes the window its files must fall in.
+    array_id: Optional[str] = None
+    run_end: Optional[datetime] = None
+
+    @property
+    def window_end(self) -> Optional[datetime]:
+        return self.run_end or self.end_time
 
 
 @dataclass(frozen=True)
@@ -319,7 +328,7 @@ def decide_contents(
     windows = [
         (
             _aware(r.first_run_start or r.start_time) - CLOCK_SLACK,
-            _aware(r.end_time) + CLOCK_SLACK,
+            _aware(r.window_end) + CLOCK_SLACK,
         )
         for r in records
         if r.start_time and r.end_time
@@ -343,7 +352,7 @@ def job_time_bounds(records: Sequence[JobRecord]) -> tuple:
     """the earliest and latest a job under this number could have touched its folder"""
     return (
         min(_aware(r.first_run_start or r.start_time) for r in records) - CLOCK_SLACK,
-        max(_aware(r.end_time) for r in records) + CLOCK_SLACK,
+        max(_aware(r.window_end) for r in records) + CLOCK_SLACK,
     )
 
 

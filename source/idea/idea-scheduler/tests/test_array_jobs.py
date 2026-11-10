@@ -9,6 +9,7 @@ The PBS shapes used here were read on a cluster running OpenPBS 23.06.06.
 
 import json
 import logging
+from datetime import timedelta
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -48,6 +49,15 @@ from ideascheduler.app.scheduler.openpbs.openpbs_qstat import (
     array_indices,
 )
 from ideascheduler.app.scratch_cleanup.job_state import ScratchJobState, job_succeeded
+from ideascheduler.app.scratch_cleanup.rules import (
+    ActiveJobs,
+    FolderContents,
+    Reason,
+    decide_contents,
+    decide_job,
+    parse_folder_name,
+)
+from ideascheduler.app.scratch_cleanup.service import job_key
 from test_finished_job_record import (
     FakeDocumentStore,
     FakeJobNotifications,
@@ -936,14 +946,90 @@ def test_a_subjob_folder_is_judged_by_its_own_entry_on_the_arrays_record():
     assert sorted(found) == ['7[1]', '7[]']
     assert found['7[1]'].finished and not found['7[1]'].succeeded
     assert found['7[1]'].job_uid == UID and found['7[1]'].owner == 'alice'
-    assert found['7[1]'].end_time == START.shift(seconds=30).datetime
+    assert found['7[1]'].run_end == START.shift(seconds=30).datetime
 
     found = scratch_records([finished_array()], {'7[2]', '7[]'})
     assert sorted(found) == ['7[2]', '7[]']
-    assert found['7[2]'].succeeded
     assert found['7[2]'].start_time == START.shift(seconds=30).datetime
-    assert found['7[2]'].end_time == START.shift(seconds=230).datetime
+    assert found['7[2]'].run_end == START.shift(seconds=230).datetime
     assert not found['7[]'].succeeded
+    # the folders of a mixed array all wait the failed time, as its one date says
+    assert not found['7[2]'].succeeded
+
+    passed = finished_array(
+        exit_status=0, disposition='ran', subjobs=[subjob(1), subjob(2, start=30)]
+    )
+    assert scratch_records([passed], {'7[2]', '7[]'})['7[2]'].succeeded
+
+
+def decide_folder(found, name, now):
+    return decide_job(
+        owner_folder='alice',
+        folder_name=name,
+        shape=parse_folder_name(name),
+        folder_uid=1,
+        owner_folder_uid=1,
+        owner_uid=1,
+        active=ActiveJobs(),
+        records=list(found.values()),
+        now=now,
+        min_age=timedelta(days=30),
+        failed_min_age=timedelta(days=60),
+    )
+
+
+def test_a_subjob_folders_date_counts_from_its_arrays_end():
+    """
+    A wide array on a single-job queue runs its subjobs one after another, here over 40
+    days. Subjob 1's folder waits the 30 days from the array's end, not from its own end 40
+    days earlier, whether the date comes from a finished job, a scan or a backfill: they
+    share the array's one removal record. Its files must still date from its own run.
+    """
+    last = START.shift(days=40)
+    array = finished_array(
+        exit_status=0,
+        disposition='ran',
+        end_time=last.shift(hours=1).datetime,
+        subjobs=[
+            subjob(1, seconds=3600),
+            subjob(2, start=40 * 86400, seconds=3600),
+        ],
+    )
+    found = scratch_records([array], {'7[1]', '7[]'})
+    own = found['7[1]']
+    assert own.succeeded
+    assert own.end_time == array.end_time
+    assert own.run_end == START.shift(hours=1).datetime
+    assert job_key(own) == job_key(array) == f'{UID}:7[]'
+
+    decision = decide_folder(found, '7[1]', last.shift(days=1).datetime)
+    assert decision.reason == Reason.TOO_RECENT
+    assert decision.latest_end == array.end_time
+    assert decide_folder(found, '7[1]', last.shift(days=29).datetime).reason == (
+        Reason.TOO_RECENT
+    )
+    decision = decide_folder(found, '7[1]', last.shift(days=31).datetime)
+    assert decision.reason == Reason.ELIGIBLE
+
+    during = FolderContents(
+        oldest_change=START.shift(minutes=1).datetime,
+        newest_change=START.shift(minutes=50).datetime,
+    )
+    assert decide_contents(during, decision.records) == Reason.ELIGIBLE
+    # written by something else while the rest of the array ran
+    later = FolderContents(
+        oldest_change=START.shift(minutes=1).datetime,
+        newest_change=START.shift(days=3).datetime,
+    )
+    assert decide_contents(later, decision.records) == Reason.CHANGED_AFTER_JOB
+
+
+def test_a_subjob_entry_with_no_end_of_its_own_keeps_the_folder():
+    array = finished_array(subjobs=[subjob(1, end_time=None)])
+    found = scratch_records([array], {'7[1]', '7[]'})
+    assert found['7[1]'].end_time is None
+    decision = decide_folder(found, '7[1]', START.shift(days=400).datetime)
+    assert decision.reason == Reason.RECORD_INCOMPLETE
 
 
 @pytest.mark.parametrize(

@@ -286,18 +286,30 @@ def _first_run_start(job: SocaJob) -> Optional[datetime]:
 def _as_subjob_record(job: SocaJob, subjob) -> JobRecord:
     """
     one subjob of an array, from the array's record. Success has to be shown for the subjob
-    itself: finished, exit status 0, and PBS saying qdel did not end it.
+    itself (finished, exit status 0, and PBS saying qdel did not end it) and for its array,
+    whose folders share one date: the array's end plus the successful time only when every
+    subjob succeeded. A subjob can end weeks before its array does, so the date never counts
+    from the subjob's own end; that only bounds when its files were written. Without its own
+    end the record is incomplete and the folder stays.
     """
+    array = _as_record(job)
     finished = subjob.state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
     return JobRecord(
         job_id=str(subjob.job_id),
-        job_uid=job.job_uid or None,
-        owner=job.owner or None,
-        finished=finished,
-        succeeded=finished and subjob.exit_status == 0 and subjob.terminated is False,
+        job_uid=array.job_uid,
+        owner=array.owner,
+        finished=finished and array.finished,
+        succeeded=(
+            finished
+            and subjob.exit_status == 0
+            and subjob.terminated is False
+            and array.succeeded
+        ),
         start_time=subjob.start_time,
-        end_time=subjob.end_time,
-        dependents=_as_record(job).dependents,
+        end_time=array.end_time if subjob.end_time else None,
+        dependents=array.dependents,
+        array_id=array.job_id,
+        run_end=subjob.end_time,
     )
 
 

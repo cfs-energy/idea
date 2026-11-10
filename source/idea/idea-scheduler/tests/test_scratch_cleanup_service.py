@@ -2053,6 +2053,41 @@ def test_a_backfill_lists_each_subjob_folder(world):
     assert all(folder.exists() for folder in folders.values())
 
 
+def test_a_backfill_dates_a_subjob_folder_from_its_arrays_end(world):
+    """
+    Subjob 1 ended 40 days before its array did. Its folder goes on the array's one record,
+    dated from the array's end, the same record a finished array writes. Dated from its own
+    end it would be past due the day the backfill ran.
+    """
+    world.config['scheduler.scratch_cleanup.max_run_share_percent'] = 100
+    folders = {i: job_folder(world, f'66[{i}]', with_record=False) for i in (1, 2)}
+    array = record('66[]', end_time=REAL_NOW + timedelta(days=40))
+    world.state.records['66[]'] = [array]
+    for i in (1, 2):
+        world.state.records[f'66[{i}]'] = [
+            record(
+                f'66[{i}]',
+                job_uid=array.job_uid,
+                array_id='66[]',
+                end_time=array.end_time,
+                run_end=REAL_NOW + timedelta(minutes=1),
+            )
+        ]
+    world.now = REAL_NOW + timedelta(days=71)
+    result = preview(world)
+    assert [row.action for row in result.rows] == ['schedule', 'schedule']
+    world.service.start_backfill(result.preview_id, result.confirm_phrase, 'admin')
+    wait_for_run(world)
+    assert list(world.store.removals) == [module.job_key(array)]
+    [row] = world.store.removals.values()
+    assert row['job_id'] == '66[]'
+    assert row['end_time'] == array.end_time.isoformat()
+    assert row['remove_at'] == (array.end_time + timedelta(days=30)).isoformat()
+    assert all(folder.exists() for folder in folders.values())
+    # and a second backfill finds them already on that record
+    assert [row.action for row in preview(world).rows] == ['scheduled', 'scheduled']
+
+
 def test_renaming_a_folder_keeps_it_for_good(world):
     folder = job_folder(world)
     renamed = folder.with_name('keep-this')
