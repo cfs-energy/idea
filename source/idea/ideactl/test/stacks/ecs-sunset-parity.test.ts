@@ -49,7 +49,7 @@ export function templateDigest(template: any): string {
 // The scheduler and VDC roles no longer carry policy writes on service-linked roles.
 // Analytics builds no dashboard route on the external load balancer unless it is enabled.
 // The scheduler role can reach its scratch cleanup table and describe data repository associations.
-// The cluster manager gets a policy for the health collectors; the bastion, their switch.
+// The cluster manager application policy carries the health collectors grants; the bastion, their switch.
 // The scheduler and VDC roles can read the console of this cluster's instances, the scheduler its
 // builder log, and the VDC the digest checkpoint.
 // The bastion health check runs the role's check script, which also passes a sshd that refuses it

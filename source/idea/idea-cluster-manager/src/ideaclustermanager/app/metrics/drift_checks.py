@@ -352,6 +352,35 @@ class DriftChecks:
             == PROVIDER
         ]
 
+    def management_dns(self, name: str) -> Optional[str]:
+        return self.context.config().get_string(
+            f'shared-storage.{name}.{PROVIDER}.svm.management_dns'
+        )
+
+    @staticmethod
+    def svm_of(endpoint: Optional[str]) -> Optional[str]:
+        """the SVM an endpoint names, however it is spelled. None matches nothing."""
+        host = (endpoint or '').strip().lower()
+        host = host.removeprefix('https://').removeprefix('http://').rstrip('/')
+        return host or None
+
+    def smb_expected(self, target) -> bool:
+        """
+        whether the cluster mounts the target's SVM over SMB, by any entry on it. the CIFS server
+        is the SVM's, and the entry that mounts it over SMB need not be the one with the login.
+        """
+        svm = self.svm_of(target.endpoint)
+        return any(
+            Utils.is_not_empty(
+                self.context.config().get_string(
+                    f'shared-storage.{name}.{PROVIDER}.svm.smb_dns'
+                )
+            )
+            for name in self.ontap_entries()
+            if name == target.name
+            or (svm is not None and self.svm_of(self.management_dns(name)) == svm)
+        )
+
     @staticmethod
     def svm_visible(client) -> bool:
         try:
@@ -399,12 +428,7 @@ class DriftChecks:
         missing = CIFS_UNSEEN
         if cifs == []:
             missing = no_cifs_server(
-                self.svm_visible(client),
-                Utils.is_not_empty(
-                    self.context.config().get_string(
-                        f'shared-storage.{target.name}.{PROVIDER}.svm.smb_dns'
-                    )
-                ),
+                self.svm_visible(client), self.smb_expected(target)
             )
         if cifs is not None:
             results.extend(check_cifs(cifs, scope, missing))
@@ -483,12 +507,10 @@ class DriftChecks:
         results: List[DriftResult] = []
         values: List[DriftValue] = []
         addresses = config.get_list(SSH_CLIENT_IP_KEY, default=[]) or []
+        # an empty list is the shipped default and keeps the cluster's own prefix lists: an
+        # operator's choice, so never drift. the count is published for a fleet that wants one.
         results.append(
-            DriftResult(
-                'ssh_client_ip',
-                OK if addresses else DRIFT,
-                detail=f'{len(addresses)} entries',
-            )
+            DriftResult('ssh_client_ip', OK, detail=f'{len(addresses)} entries')
         )
         values.append(DriftValue('ssh_client_ip', 'digest', digest(addresses)))
         values.append(DriftValue('ssh_client_ip', 'count', str(len(set(addresses)))))
@@ -603,10 +625,17 @@ class DriftChecks:
             )
             controllers = controller_answer.get('found')
             targets = {t.name: t for t in self.storage_metrics.targets()}
+            read_svms = {self.svm_of(t.endpoint) for t in targets.values()}
+            # a login whose endpoint names no SVM reads none, so it stands in for no entry
+            read_svms.discard(None)
             for name in entries:
                 target = targets.get(name)
                 scope = tag_value(name)
                 if target is None:
+                    # these are the SVM's settings: an entry on an SVM another entry's login
+                    # reads is read there, and a second copy here could only ever say unknown
+                    if self.svm_of(self.management_dns(name)) in read_svms:
+                        continue
                     results.extend(
                         DriftResult(c, UNKNOWN, scope, 'no_login') for c in ONTAP_CHECKS
                     )

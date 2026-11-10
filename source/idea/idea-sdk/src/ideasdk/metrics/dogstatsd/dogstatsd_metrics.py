@@ -88,9 +88,13 @@ class DogStatsdMetrics(DatadogFormat, MetricsProviderProtocol):
             and metric_type in ('g', 'c')
         )
         if stamped and name.startswith(HEALTH_PREFIX):
-            # a health bucket's whole total is sent again by each read and by the next leader:
-            # an empty host tag drops the agent's host, so another sender rewrites the point
-            tags = [*tags, 'host:']
+            # a health bucket's whole total is sent again by each read and by the next leader, so
+            # nothing of the sender may be in its tags or the next sender adds a series. an empty
+            # host drops the agent's host. dd.internal.card:none drops the tags the agent takes
+            # from the sending container (image, task version), which change on every upgrade:
+            # the agent reads this tag always, and the card field below only with
+            # dogstatsd_origin_detection_client on.
+            tags = [*tags, 'host:', 'dd.internal.card:none']
         line = f'{metric_name}:{self._value(value)}|{metric_type}'
         if len(tags) > 0:
             line = f'{line}|#{",".join(tags)}'

@@ -83,19 +83,23 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       }
     }
     assert.ok(inlineBytes < 10240, `inline total: ${inlineBytes}`);
-    assert.equal(managed.length, 4);
+    // IAM attaches 10 managed policies to a role. 26.11.1 left room for 5 of the operator's own
+    // (cluster.iam.ec2_managed_policy_arns) on a Bedrock cluster; a grant added since must not take one.
+    assert.equal(managed.length, 3);
+    assert.ok(10 - role.Properties.ManagedPolicyArns.length >= 5, `attached: ${role.Properties.ManagedPolicyArns.length}`);
     assert.ok(managed.some((doc) => JSON.stringify(doc).includes('bedrock:CreateInferenceProfile')));
     // the health collectors read metadata and are the one grant outside the template
-    const health = managed.filter((doc) => JSON.stringify(doc).includes('acm:DescribeCertificate'));
+    const statements = managed.flatMap((doc) => doc.Statement as Json[]);
+    const health = statements.filter((statement) => JSON.stringify(statement).includes('acm:DescribeCertificate'));
     assert.equal(health.length, 1);
-    assert.deepEqual(health[0]!.Statement[0].Action.sort(), [
+    assert.deepEqual(health[0]!.Action.sort(), [
       'acm:DescribeCertificate',
       'ds:DescribeDirectories',
       'elasticloadbalancing:DescribeListenerCertificates',
       'secretsmanager:ListSecrets',
     ]);
     const normalize = (statements: Json[]) => statements.map((statement) => JSON.stringify(resolve(iam.PolicyStatement.fromJson(statement).toStatementJson()))).sort();
-    assert.deepEqual(normalize(managed.filter((doc) => !health.includes(doc)).flatMap((doc) => doc.Statement)), normalize(expected));
+    assert.deepEqual(normalize(statements.filter((statement) => !health.includes(statement))), normalize(expected));
     console.log(`GovCloud task inline: ${inlineBytes}; managed: ${managed.map(size).join(', ')} bytes`);
   } finally {
     IdeaCodeAsset.prototype.assetPath = originalAssetPath;
