@@ -357,7 +357,21 @@ def test_bake_failure_reasons_are_a_small_vocabulary():
         ('in-bake check results unreadable: e', 'checks_unreadable'),
         ('ready_gate: not READY in 600s', 'ready_gate'),
         ('the canary failed', 'canary'),
+        # the compute test launch's own sentences, none of which says canary
+        ('The validation job timed out before completion.', 'canary'),
+        ('PBS did not accept the validation job.', 'canary'),
+        ('The validation node must launch on the exact candidate AMI.', 'canary'),
+        (
+            'The candidate node must register with PBS and run the validation job.',
+            'canary',
+        ),
+        ('The data filesystem probe did not report a result.', 'canary'),
         ('the builder ran the 1 bootstrap, not 2', 'release_mismatch'),
+        ('builder i-0 did not report ready within 60 minutes', 'step_timeout'),
+        ('image ami-0 was not available within 60 minutes', 'step_timeout'),
+        ('builder i-0 did not stop within 10 minutes', 'step_timeout'),
+        ('builder i-0 did not stop after sysprep within 30 minutes', 'step_timeout'),
+        ('Reading compute in-bake checks timed out.', 'step_timeout'),
         ('something new with i-0abc in it', 'other'),
         (None, 'other'),
     ):
@@ -396,6 +410,73 @@ def test_a_reported_bake_failure_is_also_counted_with_its_row():
         'reason': 'canary',
         'variant': 'cpu',
     }
+
+
+def test_a_failure_whose_text_names_no_step_is_counted_under_the_step_that_failed():
+    record = ImageBuildRecord(
+        base_os='rocky9', architecture='x86_64', release='26.11.2', status='failed'
+    )
+
+    def reason(text, step):
+        found = context()
+        report_bake_failure(
+            Mock(), ImageKind.COMPUTE, record, text, context=found, step=step
+        )
+        return {d['Name']: d['Value'] for d in found.published[-2]['Dimensions']}[
+            'reason'
+        ]
+
+    # what the node's own probe wrote, which no pattern can list
+    assert reason('/data is mounted read-only', 'canary') == 'canary'
+    assert reason('/data is mounted read-only', None) == 'other'
+    # a text that names its cause keeps it
+    limit = bake_time_limit_reason(record, timedelta(minutes=3))
+    assert reason(limit, 'canary') == 'time_limit'
+
+
+def test_a_row_retried_between_two_runs_does_not_stay_failed():
+    """
+    the failure's 1 is sent by whoever failed the row. refreshed a minute later, the row was
+    never seen failed by this collector, which closes only states it saw, so the series
+    ended on 1.
+    """
+    rows = [ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='current')]
+    collected = ImageRowsCollector(ImageKind.COMPUTE, lambda: rows)
+    collected.collect(Recorder())
+    # failed and refreshed between the two runs
+    rows[0].status = 'building'
+    metrics = Recorder()
+    collected.collect(metrics)
+    states = {t['status']: v for n, v, t in metrics.levels if n == 'bake.row_state'}
+    assert states == {'failed': 0, 'building': 1, 'current': 0}
+    rows[0].status = 'failed'
+    metrics = Recorder()
+    collected.collect(metrics)
+    states = {t['status']: v for n, v, t in metrics.levels if n == 'bake.row_state'}
+    assert states == {'failed': 1, 'building': 0}
+
+
+def test_targets_no_promotion_will_move_are_counted_beside_the_rows():
+    rows = [ImageBuildRecord(base_os='rocky9', architecture='x86_64', status='current')]
+    names = ['queue profile arm-compute (ami-old)']
+    metrics = Recorder()
+    ImageRowsCollector(
+        ImageKind.COMPUTE, lambda: rows, release='26.11.2', off_current=lambda: names
+    ).collect(metrics)
+    assert [
+        (v, t) for n, v, t in metrics.levels if n == 'bake.targets_off_current'
+    ] == [(1, {'kind': 'compute'})]
+    # a target seen off too recently to tell from a promotion in flight: no point, not a 0
+    metrics = Recorder()
+    ImageRowsCollector(
+        ImageKind.COMPUTE, lambda: rows, release='26.11.2', off_current=lambda: None
+    ).collect(metrics)
+    assert not [n for n, v, t in metrics.levels if n == 'bake.targets_off_current']
+    assert [n for n, v, t in metrics.levels if n == 'bake.rows_behind_release']
+    # desktop promotions move every unpinned stack, so that module sends none
+    metrics = Recorder()
+    ImageRowsCollector(ImageKind.DESKTOP, lambda: rows).collect(metrics)
+    assert not [n for n, v, t in metrics.levels if n == 'bake.targets_off_current']
 
 
 def test_rows_report_state_age_and_duration_and_a_left_state_reads_zero():

@@ -177,7 +177,7 @@ Hooks are plain bash scripts on the cluster's shared `/apps` file system and app
 
 ### Queues follow the managed image
 
-A queue profile or the cluster default compute image moves to each new compute image only when it already points at a managed image or a stock vendor image. A queue on an image IDEA didn't build in the pipeline, such as an older hand-built image, stays where it is. Point it at the row's current image once (edit the queue profile), and it follows from then on. To keep a queue on a fixed image on purpose, pin it (see [Roll back and pin](#roll-back-and-pin)).
+A queue profile or the cluster default compute image moves to each new compute image only when it already points at a managed image or a stock vendor image. A queue on an image IDEA didn't build in the pipeline, such as an older hand-built image, stays where it is. Point it at the row's current image once (edit the queue profile), and it follows from then on. Until then every row can read current while that queue launches the older image: `idea.health.bake.targets_off_current` counts such queues and the scheduler log names them. To keep a queue on a fixed image on purpose, pin it (see [Roll back and pin](#roll-back-and-pin)).
 
 ## Custom images tab
 

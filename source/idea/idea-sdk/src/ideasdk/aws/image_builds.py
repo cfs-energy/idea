@@ -264,9 +264,12 @@ def report_bake_failure(
     record: ImageBuildRecord,
     reason: Optional[str],
     context=None,
+    step: Optional[str] = None,
 ) -> None:
     """
-    the one line every failed pipeline bake logs. the log monitor matches BAKE_FAILED_MARKER,
+    the one line every failed pipeline bake logs. step names the pipeline step that failed when
+    the caller knows it (the compute test launch): its sentences come from the node and the
+    job, so the text alone does not say. the log monitor matches BAKE_FAILED_MARKER,
     since shipped service logs arrive without a level a monitor could use. the same failure is
     counted as a metric, since the log only lasts as long as its index
     """
@@ -286,23 +289,39 @@ def report_bake_failure(
             arch=record.architecture,
             variant=getattr(record.variant, 'value', record.variant) or 'cpu',
         )
-        metrics.add('bake.failures', reason=classify_bake_failure(reason), **row)
+        tag = classify_bake_failure(reason)
+        metrics.add(
+            'bake.failures', reason=step if step and tag == 'other' else tag, **row
+        )
         metrics.level('bake.row_state', 1, status='failed', **row)
 
 
 # what a bake failure's text says, as a tag. each row's error is a sentence built from these.
 _BAKE_REASONS = (
     (BAKE_TIME_LIMIT_TEXT, 'time_limit'),
+    # one step's own wait ran out before the bake's limit: a hung builder, with the defaults
+    (
+        re.compile(
+            r'did not report ready within|was not available within'
+            r'|did not stop (?:after sysprep )?within|in-bake checks timed out'
+        ),
+        'step_timeout',
+    ),
     (re.compile(r'capacity', re.I), 'capacity'),
     (re.compile(r'in-bake check results unreadable'), 'checks_unreadable'),
     (re.compile(r'in-bake check (\w+)'), None),
     (re.compile(r'^ready_gate\b'), 'ready_gate'),
-    (re.compile(r'canary', re.I), 'canary'),
+    # the compute test launch says "validation job" or "validation node", not its own name
+    (re.compile(r'canary|validation (?:job|node)|filesystem probe', re.I), 'canary'),
     (re.compile(r'the builder ran'), 'release_mismatch'),
     (re.compile(r'from the vendor'), 'no_source_image'),
     (re.compile(r'no ss-base stack'), 'no_base_stack'),
     (re.compile(r'candidate image'), 'image_unavailable'),
 )
+
+
+# the host's console may say nothing of these: the capture then carries the bake's own reason
+TIMEOUT_REASONS = ('time_limit', 'step_timeout')
 
 
 def classify_bake_failure(reason: Optional[str]) -> str:
@@ -326,10 +345,13 @@ class ImageRowsCollector:
         kind: ImageKind,
         list_rows: Callable[[], List[ImageBuildRecord]],
         release: Optional[str] = None,
+        off_current: Optional[Callable[[], Optional[List[str]]]] = None,
     ):
         self.kind = kind
         self.list_rows = list_rows
         self.release = release
+        # the unpinned things that launch an image no row calls current, by name
+        self.off_current = off_current
         self.previous: Dict[Tuple[str, str, str, str], None] = {}
 
     def collect(self, metrics, now: Optional[datetime] = None) -> None:
@@ -345,6 +367,10 @@ class ImageRowsCollector:
             )
             status = str(getattr(record.status, 'value', record.status) or 'unknown')
             current[(row['os'], row['arch'], row['variant'], status)] = None
+            if status != 'failed':
+                # a failure is sent at once by whoever failed the row. retried before this
+                # collector's next run, it was never seen here and stayed at 1
+                metrics.level('bake.row_state', 0, status='failed', **row)
             metrics.level('bake.row_state', 1, status=status, **row)
             # a pinned row keeps its image on purpose, an unsupported one never had one
             if self.release and status not in ('pinned', 'unsupported'):
@@ -367,6 +393,13 @@ class ImageRowsCollector:
                 )
         if self.release:
             metrics.level('bake.rows_behind_release', behind, kind=self.kind.value)
+        # every row can be current while a queue still launches an older image. None is a
+        # target seen off too recently to tell from a promotion in flight: no point this run
+        off_current = self.off_current() if self.off_current is not None else None
+        if off_current is not None:
+            metrics.level(
+                'bake.targets_off_current', len(off_current), kind=self.kind.value
+            )
         # a row that left a state reads zero once, rather than stopping at one
         for os_, arch, variant, status in self.previous.keys() - current.keys():
             metrics.level(
@@ -392,6 +425,7 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
         ImageRowStatus.CHECKING.value,
     ):
         return None
+    bake_reason = classify_bake_failure(reason)
     return capture_failure(
         context,
         logger,
@@ -406,9 +440,7 @@ def capture_builder_failure(context, logger, kind, record, reason) -> Optional[s
             release=record.release,
             log_group=f'/{context.cluster_name()}/{context.module_id()}/ami-builder',
             log_stream=f'bootstrap_{record.instance_id}',
-            fallback_reason=(
-                'time_limit' if classify_bake_failure(reason) == 'time_limit' else None
-            ),
+            fallback_reason=bake_reason if bake_reason in TIMEOUT_REASONS else None,
         ),
     )
 
@@ -592,7 +624,19 @@ def deregister_unreferenced_images(
     for image in candidates:
         if image['ImageId'] in in_use:
             continue
-        ec2.deregister_image(ImageId=image['ImageId'])
+        try:
+            ec2.deregister_image(ImageId=image['ImageId'])
+        except ClientError as e:
+            # two bakes promoting together each run this, and the listing still shows an
+            # image for a moment after the other pass removed it: that pass has its
+            # snapshots, and this one goes on to the rest
+            if (
+                not e.response.get('Error', {})
+                .get('Code', '')
+                .startswith('InvalidAMIID')
+            ):
+                raise
+            continue
         removed.append(image['ImageId'])
         delete_unshared_snapshots(ec2, image)
     if removed:

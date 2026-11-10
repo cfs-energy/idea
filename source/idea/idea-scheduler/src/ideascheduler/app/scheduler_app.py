@@ -203,6 +203,9 @@ class SchedulerApp(ideasdk.app.SocaApp):
                     ImageKind.COMPUTE,
                     lambda: self.context.compute_image_service.list_rows(),
                     release=ideascheduler.__version__,
+                    off_current=lambda: (
+                        self.context.compute_image_service.targets_off_current()
+                    ),
                 ),
                 PbsHealthCollector(),
                 StorageMountsCollector(self.context),

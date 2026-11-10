@@ -923,7 +923,19 @@ class DesktopImagePipeline:
         if not self.records.put_if(record, {**fence, **expected}):
             raise LostOwnership()
 
+    def _owns(self, record: ImageBuildRecord) -> bool:
+        stored = self.records.get(record.base_os, record.architecture, record.variant)
+        return (
+            stored is not None
+            and stored.host == self.host
+            and started_on_item(stored) == started_on_item(record)
+        )
+
     def _fail(self, record: ImageBuildRecord, reason: str):
+        # a worker the time limit left behind wakes long after its row was failed and its
+        # builder read: reading it again counted one bake as two failures
+        if not self._owns(record):
+            return
         reason = with_cause(
             reason,
             capture_builder_failure(

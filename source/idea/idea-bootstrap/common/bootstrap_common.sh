@@ -241,6 +241,30 @@ function drop_rescue_images () {
   rm -f "${boot}"/*-0-rescue-* "${boot}"/.vmlinuz-0-rescue-* "${boot}"/loader/entries/*-0-rescue.conf
 }
 
+# Rocky 9 EC2 images built before February 2024 ask dracut for the Xen drivers on every
+# architecture. No arm64 instance runs on Xen and its kernel has no such modules, so every
+# initramfs and kdump build on one logged "Failed to find module 'xen_netfront'" and
+# "dracut: FAILED". Only the file exactly as that image wrote it is removed.
+function drop_xen_dracut_drivers () {
+  local conf="${DRACUT_CONF_DIR:-/etc/dracut.conf.d}/xen.conf"
+  [[ "$(uname -m)" == "aarch64" && -f "${conf}" ]] || return 0
+  [[ "$(cat "${conf}")" != 'add_drivers+=" xen-netfront xen-blkfront "' ]] || rm -f "${conf}"
+}
+
+# Ubuntu enables a socket unit for each sssd responder (sssd-nss.socket and the rest). A
+# responder that sssd.conf also names in `services` is started by sssd itself, and its socket
+# unit then refuses to start at every boot: the unit is failed and the host reads degraded.
+function disable_sssd_responder_sockets () {
+  local service unit
+  for service in "$@"; do
+    for unit in "sssd-${service}.socket" "sssd-${service}-priv.socket"; do
+      systemctl cat "${unit}" >/dev/null 2>&1 || continue
+      systemctl disable --now "${unit}" >/dev/null 2>&1 || log_warning "Could not disable ${unit}"
+      systemctl reset-failed "${unit}" >/dev/null 2>&1 || true
+    done
+  done
+}
+
 function set_reboot_required () {
   log_info "Reboot Required: ${1}"
   echo -n "yes" > ${BOOTSTRAP_DIR}/reboot_required.txt

@@ -272,6 +272,8 @@ homedir_substring = ${IDEA_CLUSTER_DATA_DIR}/home
 chmod 600 /etc/sssd/sssd.conf
 
 systemctl enable sssd
+# the responders named in `services` above
+disable_sssd_responder_sockets nss pam
 systemctl restart sssd
 
 # note: sss is removed for nsswitch to compared to openldap, to avoid mail spams.

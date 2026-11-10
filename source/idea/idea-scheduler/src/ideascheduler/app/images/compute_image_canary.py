@@ -114,20 +114,36 @@ class ComputeImageCanary:
     def __init__(self, context):
         self.context = context
 
-    def reap(self, profile) -> list:
-        """remove a hidden validation queue and whatever jobs are left in it"""
+    def reap(self, profile, patience=CLEANUP_SECONDS) -> list:
+        """
+        remove a hidden validation queue and whatever jobs are left in it. patience is how
+        long to wait for PBS to let them go: the leader's tick passes 0 and asks again later
+        """
         errors = []
         for job in self.context.scheduler.list_jobs(queue=profile.name):
-            errors += self._release(job.job_id, None)
-        return errors + self._release(None, profile)
+            errors += self._release(job.job_id, None, patience)
+        return errors + self._release(None, profile, patience)
 
-    def _release(self, job_id, created) -> list:
+    def _has_node(self, queue) -> bool:
+        """
+        PBS answers "busy" for a queue a node still belongs to, and a canary's node stays a
+        minute or two after its job, until its stack is deleted
+        """
+        try:
+            return bool(queue) and any(
+                node.queue == queue for node in self.context.scheduler.list_nodes()
+            )
+        except Exception:
+            return False  # unknown: the delete itself says what PBS thinks
+
+    def _release(self, job_id, created, patience=CLEANUP_SECONDS) -> list:
         """
         wait for the job to leave PBS, delete it only if it is still queued or running after
-        the exiting window, then delete the hidden queue, retrying while PBS reports it busy
+        the exiting window, then delete the hidden queue once its node has left, retrying
+        while PBS reports it busy
         """
         scheduler = self.context.scheduler
-        deadline = time.monotonic() + CLEANUP_SECONDS
+        deadline = time.monotonic() + patience
         errors = []
 
         def gone(seconds) -> bool:
@@ -150,6 +166,17 @@ class ComputeImageCanary:
         except Exception as error:
             errors.append(str(error))
         while created:
+            # asked only once PBS can say yes: every refused delete logs two errors, and
+            # each successful canary logged 24 to 50 of them waiting for its node to go
+            name = getattr(created, 'name', None)
+            if self._has_node(name):
+                if time.monotonic() >= deadline:
+                    errors.append(
+                        f'The validation queue {name} still has a node in PBS.'
+                    )
+                    break
+                time.sleep(5)
+                continue
             try:
                 self.context.queue_profiles.delete_queue_profile(
                     queue_profile_id=created.queue_profile_id

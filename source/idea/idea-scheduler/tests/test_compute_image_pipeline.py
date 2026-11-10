@@ -236,6 +236,88 @@ def test_promotion_leaves_targets_on_an_unmanaged_default(monkeypatch):
     assert candidate.current_image_id == 'ami-new'
 
 
+def test_an_unpinned_queue_no_promotion_will_move_is_named(monkeypatch):
+    """
+    dev: every row was current on the release while the arm-compute profile, not pinned,
+    still launched an image from two months before. the follow rule only moves a profile
+    off the image its row had, so it never catches up and nothing said so.
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    def profile(name, ami, pinned=False):
+        return HpcQueueProfile(
+            name=name,
+            image_pinned=pinned,
+            default_job_params=SocaJobParams(base_os='rocky9', instance_ami=ami),
+        )
+
+    svc = service(
+        [
+            profile('normal', 'ami-old'),
+            profile('arm-compute', 'ami-left-behind'),
+            profile('licensed', 'ami-admins-own', pinned=True),
+            profile('iv-0123456789ab', 'ami-candidate'),
+        ]
+    )
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
+    expected = ['queue profile arm-compute (ami-left-behind)']
+    # the first sight of it could be a promotion caught half way: not known yet
+    assert svc.targets_off_current() is None
+    svc._logger.warning.assert_not_called()
+    clock[0] += module.OFF_CURRENT_CONFIRM_SECONDS
+    assert svc.targets_off_current() == expected
+    assert svc.targets_off_current() == expected
+    warnings = [c.args[0] for c in svc._logger.warning.call_args_list]
+    assert len(warnings) == 1 and 'arm-compute (ami-left-behind)' in warnings[0]
+    # the scheduler default is a target too, unless it is pinned
+    svc.context.config.return_value.values['scheduler.compute_node_ami'] = 'ami-def'
+    assert svc.targets_off_current() is None
+    clock[0] += module.OFF_CURRENT_CONFIRM_SECONDS
+    assert svc.targets_off_current() == expected + ['scheduler default (ami-def)']
+    svc.context.config.return_value.values['scheduler.images.default_image_pinned'] = (
+        True
+    )
+    assert svc.targets_off_current() == expected
+
+
+def test_a_target_caught_between_a_promotion_and_its_own_move_is_never_named(
+    monkeypatch,
+):
+    """
+    a promotion moves the row, its queues and the default in one write, but the collector
+    reads them one after the other, and the default from a config that follows the table
+    by seconds: for a moment the row is on the new image and a target still on the old one.
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    normal = HpcQueueProfile(
+        name='normal',
+        default_job_params=SocaJobParams(base_os='rocky9', instance_ami='ami-old'),
+    )
+    svc = service([normal])
+    values = svc.context.config.return_value.values
+    values['scheduler.compute_node_ami'] = 'ami-old'
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, 'monotonic', lambda: clock[0])
+    assert svc.targets_off_current() == []
+    # the row has moved; this process has not seen the queue or the default follow yet
+    svc.records.put(row(current_image_id='ami-new', previous_image_id='ami-old'))
+    assert svc.targets_off_current() is None
+    clock[0] += 5
+    normal.default_job_params.instance_ami = values['scheduler.compute_node_ami'] = (
+        'ami-new'
+    )
+    assert svc.targets_off_current() == []
+    # long after, the same queue left behind for real is told from that first sight
+    normal.default_job_params.instance_ami = 'ami-old'
+    clock[0] += 10 * module.OFF_CURRENT_CONFIRM_SECONDS
+    assert svc.targets_off_current() is None
+    clock[0] += module.OFF_CURRENT_CONFIRM_SECONDS
+    assert svc.targets_off_current() == ['queue profile normal (ami-old)']
+    svc._logger.warning.assert_called_once()
+
+
 def test_promotion_does_not_advance_the_row_when_the_current_image_cannot_be_read(
     monkeypatch,
 ):
@@ -658,10 +740,59 @@ def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch)
     ]
     reaped = []
     monkeypatch.setattr(
-        module.ComputeImageCanary, 'reap', lambda self, p: reaped.append(p.name) or []
+        module.ComputeImageCanary,
+        'reap',
+        lambda self, p, patience: reaped.append((p.name, patience)) or [],
     )
+    svc._last_sweep = before = module.time.monotonic()
     svc.sweep_builders(datetime.now(timezone.utc))
-    assert reaped == ['iv-left']
+    # without waiting: the sweep runs on the thread that enforces the bake time limit
+    assert reaped == [('iv-left', 0)]
+    assert svc._last_sweep == before
+
+
+def test_a_validation_queue_pbs_still_holds_is_asked_for_again_within_a_minute(
+    monkeypatch,
+):
+    """
+    the sweep waited up to 180 s on the leader's tick for each busy queue, so a 3 minute
+    bake limit fired 3 min 10 s late.
+    """
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {}
+    svc.context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    svc.context.queue_profiles.list_queue_profiles.return_value = [
+        HpcQueueProfile(
+            name='iv-busy', default_job_params=SocaJobParams(instance_ami='ami-old')
+        ),
+    ]
+    answers = [['The validation queue iv-busy still has a node in PBS.']] * 2 + [[]]
+    monkeypatch.setattr(
+        module.ComputeImageCanary, 'reap', lambda self, p, patience: answers.pop(0)
+    )
+    now = datetime.now(timezone.utc)
+
+    def due_in():
+        return module.SWEEP_SECONDS - (module.time.monotonic() - svc._last_sweep)
+
+    svc._last_sweep = module.time.monotonic()
+    svc.sweep_builders(now)
+    assert 55 < due_in() <= module.SWEEP_RETRY_SECONDS
+    svc.sweep_builders(now)
+    assert 55 < due_in() <= module.SWEEP_RETRY_SECONDS
+    # said once, not on every retry
+    warnings = [c.args[0] for c in svc._logger.warning.call_args_list]
+    assert [w for w in warnings if 'iv-busy' in w] == [
+        'validation queue iv-busy not reaped yet: '
+        'The validation queue iv-busy still has a node in PBS.'
+    ]
+    svc._last_sweep = module.time.monotonic()
+    svc.sweep_builders(now)
+    assert due_in() > module.SWEEP_SECONDS - 5
 
 
 def _capacity_instance(queue, stack='idea-stack', running=True):
@@ -1183,6 +1314,45 @@ def test_a_bake_that_fails_on_its_own_logs_the_line_the_monitor_matches(monkeypa
     ]
 
 
+def test_a_test_launch_failure_is_counted_as_one_whatever_its_text_says(monkeypatch):
+    """
+    "The validation job timed out before completion." was counted with reason other: the
+    count read the sentence, and the test launch's sentences do not name it.
+    """
+    svc = service()
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *a: None, raising=False
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *a: None)
+    report = Mock()
+    monkeypatch.setattr(module, 'report_bake_failure', report)
+    monkeypatch.setattr(
+        module.ComputeImageCanary,
+        'validate',
+        Mock(side_effect=exceptions.general_exception('/data is mounted read-only')),
+    )
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    assert report.call_args.kwargs['step'] == 'canary'
+    # a failure before the test launch is not one
+    report.reset_mock()
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder,
+        'wait_for_image',
+        Mock(side_effect=exceptions.general_exception('no image')),
+        raising=False,
+    )
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    assert report.call_args.kwargs['step'] is None
+
+
 # a failed bake explains itself
 
 PANIC = 'Likely cause: the operating system crashed while starting (kernel panic).'
@@ -1220,6 +1390,40 @@ def test_a_failing_builder_is_read_before_it_goes_and_the_row_says_why(monkeypat
     stored = svc.records.get('rocky9', 'x86_64')
     assert stored.status == 'failed'
     assert stored.error == f'the builder never finished {PANIC}'
+
+
+@pytest.mark.parametrize(
+    'stored',
+    [
+        {'status': 'failed', 'started_on': LIMIT_NOW},
+        {'status': 'building', 'started_on': LIMIT_NOW + timedelta(hours=3)},
+    ],
+)
+def test_a_worker_left_behind_by_the_limit_does_not_read_the_builder_again(
+    monkeypatch, stored
+):
+    """the time limit already captured this bake; a second read counted it twice"""
+    svc = service()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    monkeypatch.setattr(svc, 'default_base_ami', lambda *a: 'ami-stock')
+    builder = Mock()
+    builder.get_ami_full_name.return_value = 'idea-rocky9-1'
+    record = row(status='queued', started_on=LIMIT_NOW)
+    svc.records.put(record)
+
+    def build(progress):
+        progress({'instance_id': 'i-builder'})
+        # the limit fails the row, or a retry takes it, while this worker still waits
+        svc.records.put(row(instance_id='i-builder', **stored))
+        raise exceptions.general_exception(
+            'builder i-builder did not report ready within 60 minutes'
+        )
+
+    builder.build.side_effect = build
+    svc._run_pipeline(record, builder)
+    capture.assert_not_called()
+    assert svc.records.get('rocky9', 'x86_64').status == stored['status']
 
 
 def test_a_canary_failure_does_not_read_the_builder_again(monkeypatch):

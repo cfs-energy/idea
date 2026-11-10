@@ -12,6 +12,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+from botocore.exceptions import ClientError
 
 from ideadatamodel import (
     ImageBuildRecord,
@@ -1018,6 +1019,46 @@ def test_cleanup_keeps_an_image_a_launch_template_or_setting_names():
 
     assert h.pipeline._deregister_unreferenced() == ['ami-old']
     assert h.ec2.deleted_snapshots == ['snap-ami-old']
+
+
+def test_cleanup_goes_on_past_an_image_another_pass_already_removed():
+    """
+    two bakes promoting together each run cleanup: the second still listed the image the
+    first had just deregistered, failed on it and logged "image cleanup failed".
+    """
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    for image_id in ('ami-gone', 'ami-old'):
+        h.ec2.add_image(image_id, name=f'idea-dcv-host-rocky9-{image_id}')
+    deregister = h.ec2.deregister_image
+
+    def racing(ImageId):
+        if ImageId == 'ami-gone':
+            raise ClientError(
+                {'Error': {'Code': 'InvalidAMIID.Unavailable', 'Message': 'gone'}},
+                'DeregisterImage',
+            )
+        deregister(ImageId)
+
+    h.ec2.deregister_image = racing
+    h.pipeline._logger = Mock()
+    h.pipeline.cleanup()
+    assert h.ec2.deregistered == ['ami-old']
+    # the other pass owns the first image's snapshots
+    assert h.ec2.deleted_snapshots == ['snap-ami-old']
+    h.pipeline._logger.error.assert_not_called()
+
+
+def test_cleanup_still_reports_an_image_it_could_not_deregister():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    h.ec2.add_image('ami-old', name='idea-dcv-host-rocky9-ami-old')
+    h.ec2.deregister_image = Mock(
+        side_effect=ClientError(
+            {'Error': {'Code': 'UnauthorizedOperation', 'Message': 'no'}},
+            'DeregisterImage',
+        )
+    )
+    with pytest.raises(ClientError):
+        h.pipeline._deregister_unreferenced()
 
 
 def test_cleanup_deletes_nothing_when_a_reference_cannot_be_read():
@@ -2313,6 +2354,27 @@ def test_a_row_past_its_limit_while_building_is_read_too(monkeypatch):
     monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', lambda *a: PANIC)
     h.pipeline._enforce_time_limit(T0)
     assert h.row().error.endswith(PANIC)
+
+
+def test_a_fenced_out_worker_does_not_read_the_builder_again(monkeypatch):
+    """the time limit already captured this bake; a second read counted it twice"""
+    h = Harness()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    record = failing_row(h)
+    newer = h.row()
+    newer.status = 'failed'
+    newer.host = module.TIME_LIMIT_OWNER
+    h.records.put(newer)
+    h.pipeline._fail(record, 'builder i-builder did not report ready within 60 minutes')
+    capture.assert_not_called()
+    # nor one that a retry of the row has replaced
+    retry = h.row()
+    retry.status, retry.host, retry.started_on = 'building', 'leader', T0 + timedelta(1)
+    h.records.put(retry)
+    h.pipeline._fail(record, 'builder i-builder did not report ready within 60 minutes')
+    capture.assert_not_called()
+    assert h.row().status == 'building'
 
 
 def test_a_failed_test_launch_does_not_read_the_builder_again(monkeypatch):

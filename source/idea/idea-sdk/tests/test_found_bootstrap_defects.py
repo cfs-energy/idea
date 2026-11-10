@@ -43,9 +43,9 @@ def test_the_compute_bake_lets_kdump_finish_before_clearing_var_tmp():
         'rhel8',
         variables={'image_kind': 'compute'},
     )
-    assert script.index('systemctl start kdump.service') < script.index(
-        'rm -rf /var/tmp/*'
-    )
+    clear = script.index('find /var/tmp /tmp ')
+    assert script.index('systemctl start kdump.service') < clear
+    assert 'rm -rf /var/tmp/*' not in script
 
 
 def test_sssd_does_not_attempt_dns_updates():

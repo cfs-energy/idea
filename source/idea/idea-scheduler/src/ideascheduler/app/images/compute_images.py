@@ -105,6 +105,13 @@ SCHEDULER_DEFAULT_REFERENCE = 'scheduler default'
 VALIDATED_IMAGE_TAG = 'idea:ComputeImageValidated'
 # a row can roll back from either idle state that keeps current + previous
 ROLLBACK_IDLE_STATUSES = ('current', 'failed')
+# the leader's cleanup sweep, and how soon it runs again when a validation queue was still busy
+SWEEP_SECONDS = 1800
+SWEEP_RETRY_SECONDS = 60
+# how long a target has to stay off every current image before it is named. a promotion moves
+# the row and its targets in one write, but the rows, the queue profiles and the default are
+# read one after the other, the default from a config that follows the table by seconds
+OFF_CURRENT_CONFIRM_SECONDS = 60
 
 
 class RowMoved(Exception):
@@ -124,6 +131,12 @@ class ComputeImageService:
         self._stop = threading.Event()
         self._thread = None
         self._last_sweep = 0.0
+        # validation queues the last sweep could not delete, so each is warned about once
+        self._queues_left = set()
+        # what targets_off_current last named, so it is logged when it changes, and when it
+        # first found each one off
+        self._off_current = []
+        self._off_since = {}
 
     # listing
 
@@ -600,6 +613,16 @@ class ComputeImageService:
                 raise RowMoved()
             raise
 
+    def _moved(self, record) -> bool:
+        """what _save would refuse, asked before the builder is read for a failure"""
+        stored = self.records.get(record.base_os, record.row_key().range_key())
+        return (
+            stored is None
+            or stored.status not in IMAGE_ROW_IN_FLIGHT
+            or self.records.to_item(stored).get('started_on')
+            != self.records.to_item(record).get('started_on')
+        )
+
     def _start_row(self, record, builder=None):
         key = (record.base_os, record.row_key().range_key())
         with self._lock:
@@ -626,6 +649,7 @@ class ComputeImageService:
                 record.log_link = builder_log_link(self.context, record.instance_id)
             self._save(record)
 
+        step = None
         try:
             if record.status in ('building', 'checking'):
                 record = resume_record(self.context, self.records, record, self._logger)
@@ -707,7 +731,9 @@ class ComputeImageService:
                     'The compute candidate has no successful in-bake checks.'
                 )
             progress({'status': 'test_launching'})
+            step = 'canary'
             ComputeImageCanary(self.context).validate(record, progress)
+            step = None
             progress(
                 {'validated_on': datetime.now(timezone.utc), 'status': 'promoting'}
             )
@@ -719,6 +745,8 @@ class ComputeImageService:
         except Exception as error:
             if not self.context.is_leader():
                 return  # The new leader resumes the persisted row.
+            if self._moved(record):
+                return  # the time limit already read the builder and counted the failure
             self._logger.exception('Compute image validation failed')
             reason = (
                 getattr(error, 'message', None)
@@ -749,6 +777,7 @@ class ComputeImageService:
                 record,
                 record.error,
                 context=self.context,
+                step=step,
             )
             self._dispose(record)
 
@@ -1050,16 +1079,26 @@ class ComputeImageService:
         # failed cleanup or a restart; reap it so the queues do not accumulate
         candidates = {r.image_id for r in records if r.image_id}
         canary = ComputeImageCanary(self.context)
+        left = set()
         for profile in self.context.queue_profiles.list_queue_profiles():
             params = profile.default_job_params
             if (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX) and (
                 params is None or params.instance_ami not in candidates
             ):
-                errors = canary.reap(profile)
+                # no waiting here: this thread also enforces the bake time limit, and a
+                # queue PBS held busy kept it from doing so for three minutes a sweep
+                errors = canary.reap(profile, patience=0)
                 if errors:
-                    self._logger.warning(
-                        f'validation queue {profile.name} not reaped: {"; ".join(errors)}'
-                    )
+                    left.add(profile.name)
+                    if profile.name not in self._queues_left:
+                        self._logger.warning(
+                            f'validation queue {profile.name} not reaped yet: '
+                            f'{"; ".join(errors)}'
+                        )
+        if left:
+            # PBS lets a queue go once its job and node have left: ask again shortly
+            self._last_sweep = time.monotonic() - SWEEP_SECONDS + SWEEP_RETRY_SECONDS
+        self._queues_left = left
         self._remove_queueless_validation_capacity()
         result = (
             self.context.aws()
@@ -1120,6 +1159,57 @@ class ComputeImageService:
         )
         protected.discard(None)
         return protected
+
+    def targets_off_current(self) -> Optional[List[str]]:
+        """
+        unpinned queue profiles, and an unpinned scheduler default, on an image that is no
+        row's current one. a promotion moves a target only off the image its row had, and
+        only off an image the pipeline manages, so nothing will ever move these: every row
+        can read current while a queue launches something older. named once per change.
+        one read cannot tell that from a promotion caught half way, so a target is named
+        once it has stayed off for OFF_CURRENT_CONFIRM_SECONDS, and while one is still
+        waiting the answer is None: not known yet, rather than a count that leaves it out
+        """
+        current = {row.current_image_id for row in self.list_rows()}
+        names = []
+        for profile in self._queue_profiles():
+            params = profile.default_job_params
+            if (
+                params is None
+                or not params.instance_ami
+                or profile.image_pinned
+                or (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX)
+            ):
+                continue
+            if params.instance_ami not in current:
+                names.append(f'queue profile {profile.name} ({params.instance_ami})')
+        config = self.context.config()
+        default = config.get_string('scheduler.compute_node_ami', default=None)
+        if (
+            default
+            and default not in current
+            and not config.get_bool(
+                'scheduler.images.default_image_pinned', default=False
+            )
+        ):
+            names.append(f'{SCHEDULER_DEFAULT_REFERENCE} ({default})')
+        now = time.monotonic()
+        # each name carries its image, so a target that moved to another image starts again
+        self._off_since = {name: self._off_since.get(name, now) for name in names}
+        if any(
+            now - since < OFF_CURRENT_CONFIRM_SECONDS
+            for since in self._off_since.values()
+        ):
+            return None
+        if names != self._off_current:
+            if names:
+                self._logger.warning(
+                    'not pinned and not on a current compute image, so no promotion '
+                    f'will move them: {"; ".join(names)}. Pin each one, or set it to '
+                    "its row's current image."
+                )
+            self._off_current = names
+        return names
 
     def deregister_unreferenced_images(self) -> List[str]:
         """failed candidates and generations older than previous: image and snapshots"""
@@ -1187,7 +1277,7 @@ class ComputeImageService:
             self._enforce_time_limit(now)
         except Exception:
             self._logger.exception('Bake time limit check failed')
-        if time.monotonic() - self._last_sweep > 1800:
+        if time.monotonic() - self._last_sweep > SWEEP_SECONDS:
             self._last_sweep = time.monotonic()
             try:
                 self.sweep_builders(now)
