@@ -145,15 +145,47 @@ sssd_pid=$!
 #     the banner and close, and any other loopback client that leaves before authenticating:
 #     Connection closed by 127.0.0.1 port N
 #     Connection closed by 127.0.0.1 port N [preauth]
-#   the load balancer's TCP check from its private addresses, which closes before sending an SSH
-#     identification string (no [preauth]: no session existed):
+#   the load balancer's TCP check, which closes before sending an SSH identification string (no
+#     [preauth]: no session existed), from an address in the VPC or a cluster subnet
+#     (IDEA_VPC_CIDRS, the load balancer's own networks):
 #     Connection closed by 10.x.y.z port N
-#     private is 10/8, 172.16/12, 192.168/16 and 100.64/10, the shared range a VPC's secondary
-#     CIDR is usually taken from; a VPC on any other range keeps these lines
-# Logins, failed and invalid-user attempts, disconnects after authentication, any close from a
-# public address and every other sshd line still reach the task log.
-# sshd -e ends each line in CR LF, so the CR is allowed before the end.
-SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[preauth\])?|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))(\.[0-9]{1,3}){2}) port [0-9]+)'$'\r''?$'
+#     The same close from any other address, private ones included (a VPN, a peered network, a
+#     port scan from the office), reaches the task log. With no IDEA_VPC_CIDRS only the loopback
+#     lines are dropped.
+#     ponytail: any host in the VPC that connects and leaves without a word is dropped as well;
+#     pass the load balancer's subnets or node addresses if those closes are ever wanted.
+# Logins, failed and invalid-user attempts, disconnects after authentication and every other sshd
+# line still reach the task log.
+# sshd -e ends each line in CR LF, so the CR is allowed before the end. An entry that is not an
+# IPv4 network, or is wider than /8 (no VPC is), is passed over.
+# shellcheck disable=SC2016  # an awk program, not shell
+SSHD_HEALTH_CHECK_LINES='
+function number(address,  octet) {
+  split(address, octet, ".")
+  return ((octet[1] * 256 + octet[2]) * 256 + octet[3]) * 256 + octet[4]
+}
+BEGIN {
+  entries = split(networks, entry, ",")
+  for (i = 1; i <= entries; i++) {
+    if (entry[i] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) continue
+    split(entry[i], part, "/")
+    if (part[2] < 8 || part[2] > 32) continue
+    size[++count] = 2 ^ (32 - part[2])
+    network[count] = int(number(part[1]) / size[count])
+  }
+}
+{
+  line = $0
+  sub(/\r$/, "", line)
+  if (line ~ /^Connection closed by 127\.0\.0\.1 port [0-9]+( \[preauth\])?$/) next
+  if (line ~ /^Connection closed by [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ port [0-9]+$/) {
+    split(line, word, " ")
+    address = number(word[4])
+    for (i = 1; i <= count; i++) if (int(address / size[i]) == network[i]) next
+  }
+  print
+  fflush()
+}'
 # Connections sshd dropped go to a tally for the metrics process: only the phrase, and the
 # address only when it is loopback, so the file holds nothing about anyone. tee -p and a local file: a
 # dead tally costs a count, never sshd's stderr. At its default log level sshd names only some
@@ -161,6 +193,11 @@ SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+( \[prea
 # "in|exited MaxStartups throttling ..., N connections dropped" (the episode so far), 10.5
 # "Maxstartups logging rate-limited: additional N connections dropped", matched whole so that
 # its first word is not taken for a named drop.
+# sshd gives those counts late, so the remote count is exact for an episode but not minute by
+# minute. 9.9 names the first drop and logs the total when the episode ends ("exited"): its "in"
+# line needs five minutes without a drop inside an episode, a gap a flood never has. 10.5
+# logs its count every five minutes and when its rate limit ends. While a flood lasts the count
+# of remote drops reads 1; the checks' own refusals are noted as they happen.
 # sshd also logs the name a client offers, as it came and before any login ("Invalid user NAME
 # from ..."), so the phrases are taken only from lines sshd itself begins with them, cut where
 # its own words end: a name never reaches the second pattern. A name may hold a line break too,
@@ -173,7 +210,7 @@ sshd_drop_phrases() {
 }
 sshd_log_filter() {
   tee -p >(sshd_drop_phrases >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
-    | grep --line-buffered -v -E "${SSHD_HEALTH_CHECK_LINES}" >&2 || true
+    | LC_ALL=C awk -v networks="${IDEA_VPC_CIDRS:-}" "${SSHD_HEALTH_CHECK_LINES}" >&2 || true
 }
 metrics_pid=
 if [[ "${IDEA_BASTION_METRICS:-false}" == true ]]; then
