@@ -529,7 +529,9 @@ def test_an_edit_that_keeps_the_date_keeps_it_in_the_table_and_the_index(monkeyp
         monkeypatch, stack('dated', expires_on=on), description='new words'
     )
     assert row.item['expires_on'] == int(on.timestamp() * 1000)
-    assert [document['expires_on'] for document in documents] == [row.item['expires_on']]
+    assert [document['expires_on'] for document in documents] == [
+        row.item['expires_on']
+    ]
 
 
 def test_a_cleared_owner_is_gone_from_the_index(monkeypatch):

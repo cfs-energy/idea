@@ -563,7 +563,9 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         index_dict.setdefault(
             software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None
         )
-        index_dict.setdefault(software_stacks_constants.SOFTWARE_STACK_DB_OWNER_KEY, None)
+        index_dict.setdefault(
+            software_stacks_constants.SOFTWARE_STACK_DB_OWNER_KEY, None
+        )
 
         project_ids = Utils.get_value_as_list(
             software_stacks_constants.SOFTWARE_STACK_DB_PROJECTS_KEY, index_dict, []
@@ -842,7 +844,9 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         a second index update, and the two can land in either order."""
         db_entry = self.convert_software_stack_object_to_db_dict(software_stack)
         if clear_expires_on:
-            db_entry.pop(software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None)
+            db_entry.pop(
+                software_stacks_constants.SOFTWARE_STACK_DB_EXPIRES_ON_KEY, None
+            )
         db_entry[software_stacks_constants.SOFTWARE_STACK_DB_UPDATED_ON_KEY] = (
             Utils.current_time_ms()
         )

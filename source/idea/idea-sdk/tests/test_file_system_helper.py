@@ -792,7 +792,9 @@ def test_asking_for_a_download_link_with_no_session_is_refused_not_a_server_erro
     server._api_invocation_handler.get_username.return_value = None
     response = run_generate_download_url(server, Mock(json={'file': '/data/x'}))
     assert response.status == 401
-    assert Utils.from_json(response.body)['error_code'] == errorcodes.UNAUTHORIZED_ACCESS
+    assert (
+        Utils.from_json(response.body)['error_code'] == errorcodes.UNAUTHORIZED_ACCESS
+    )
     server._logger.error.assert_not_called()
 
 

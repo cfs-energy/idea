@@ -55,7 +55,9 @@ def test_a_document_with_no_row_is_dropped_and_one_with_a_row_stays():
     utils = sweep([live, a_session('gone')], {('a-person', 'live'): live})
     assert utils.drop_index_entries_without_a_row() == 1
     assert deleted(utils) == ['gone']
-    assert len(utils.context.analytics_service.return_value.post_entry.call_args_list) == 1
+    assert (
+        len(utils.context.analytics_service.return_value.post_entry.call_args_list) == 1
+    )
 
 
 def test_every_page_of_the_index_is_read():
