@@ -440,7 +440,11 @@ class SshdHealthCheckLines(unittest.TestCase):
             + text[start:end]
             + 'printf "%s\\n" "$@" | sshd_log_filter'
         )
-        env = {name: value for name, value in os.environ.items() if name != 'IDEA_VPC_CIDRS'}
+        env = {
+            name: value
+            for name, value in os.environ.items()
+            if name != 'IDEA_VPC_CIDRS'
+        }
         if vpc_cidrs is not None:
             env['IDEA_VPC_CIDRS'] = vpc_cidrs
         result = subprocess.run(
@@ -1211,6 +1215,8 @@ class RealSshd(unittest.TestCase):
             'bastion_metrics',
             'deployment/ecr/idea-control-plane/roles/bastion_metrics.py',
         )
+        # a line the filter keeps reaches the log while sshd runs, not when the filter ends
+        self.assertIn(b'Server listening on 127.0.0.1 port', self.stderr.read_bytes())
         self.assertEqual(self.health(), 0)
         up, _ = metrics.sshd_check(('127.0.0.1', self.port), str(self.drops))
         self.assertTrue(up)
