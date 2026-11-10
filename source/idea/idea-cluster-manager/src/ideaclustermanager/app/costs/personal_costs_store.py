@@ -27,6 +27,7 @@ HEAD_SUBJECTS_SEEDED = 'head-subjects-seeded'
 SEED_CHECKPOINT = 'seed-head-subjects:'
 SEED_SEGMENTS = 8
 SEED_BUDGET_SECONDS = 120
+OVERDUE_GRACE_SECONDS = 60
 
 
 def window_storage(costs, start_date, end_date):
@@ -361,8 +362,11 @@ class PersonalCostsStore:
         heartbeat = (self.get(SYSTEM, 'heartbeat') or {}).get('as_of') or state.get(
             'heartbeat'
         )
+        # an estimate, not a deadline: a run with more people or a new day to compute outlasts
+        # the one before, and the collector looks for work once a minute. Overdue is past the
+        # estimate by that minute, or by as long as the last run took when that is longer.
         delayed = bool(state) and (
-            expected < now
+            expected.shift(seconds=max(OVERDUE_GRACE_SECONDS, duration)) < now
             or not heartbeat
             or (now - arrow.get(heartbeat)).total_seconds() > 180
         )

@@ -53,6 +53,17 @@ def fs_id_from_host(host: str) -> str:
     return ''
 
 
+def svm_host(endpoint: Optional[str]) -> str:
+    """one SVM however its management endpoint is written: attachments on it share one read."""
+    return (
+        (endpoint or '')
+        .lower()
+        .removeprefix('https://')
+        .removeprefix('http://')
+        .rstrip('/')
+    )
+
+
 CONTENT_PARAMETERS = {'byte_offset', 'length', 'stream_name'}
 
 
@@ -312,6 +323,8 @@ class StorageMetricsService(SocaService):
         self.logger = context.logger('storage-metrics')
         self._provider_warning_logged = False
         self._quota_reports = {}
+        # what the hourly collection read, reports and volumes together: all the cost snapshot uses
+        self._collected_reports = {}
         self._volumes = {}
         self._quota_lock = threading.Lock()
         self._quota_refresh = threading.Lock()
@@ -444,17 +457,14 @@ class StorageMetricsService(SocaService):
         snapshots = Utils.from_json(
             self.context.config().get_string(self._config_key('usage_snapshot'), '{}')
         )
+        # not _quota_reports: the pane refreshes those alone, and a snapshot from reports with no
+        # volumes beside them is complete with no tier bytes, so the capacity-pool charge is lost
         with self._quota_lock:
-            reports = dict(self._quota_reports)
+            reports = dict(self._collected_reports)
             volumes = dict(self._volumes)
         targets = {}
         for target in self.targets():
-            endpoint = (
-                target.endpoint.lower()
-                .removeprefix('https://')
-                .removeprefix('http://')
-                .rstrip('/')
-            )
+            endpoint = svm_host(target.endpoint)
             retained = targets.get(endpoint)
             if retained is None or (
                 target.name in reports
@@ -568,16 +578,14 @@ class StorageMetricsService(SocaService):
                 provider=provider,
                 has_efs=has_efs,
             )
+        # One login reads a whole SVM, every volume and quota on it, so an attachment is set up
+        # when it or another attachment on its SVM carries one: what targets() collects from.
+        read = {svm_host(target.endpoint) for target in self.targets()}
         for name in ontap:
-            prefix = f'shared-storage.{name}.{PROVIDER}'
-            if any(
-                Utils.is_empty(config.get_string(key))
-                for key in (
-                    f'{prefix}.metrics.username',
-                    f'{prefix}.metrics.password_secret_arn',
-                    f'{prefix}.svm.management_dns',
-                )
-            ):
+            endpoint = config.get_string(
+                f'shared-storage.{name}.{PROVIDER}.svm.management_dns'
+            )
+            if svm_host(endpoint) not in read:
                 return dict(
                     status='not_configured',
                     reason='missing_credentials',
@@ -719,10 +727,9 @@ class StorageMetricsService(SocaService):
                     reports = client.quota_reports()
                     with self._quota_lock:
                         self._volumes[target.name] = volumes
-                        self._quota_reports[target.name] = (
-                            arrow.utcnow().timestamp(),
-                            reports,
-                        )
+                        self._quota_reports[target.name] = self._collected_reports[
+                            target.name
+                        ] = (arrow.utcnow().timestamp(), reports)
                     published = publish_storage(metrics, client.fs_id, volumes, reports)
                     self.logger.info(
                         f'{target.name}: {published} storage gauges from {len(volumes)} volumes and {len(reports)} quota records'

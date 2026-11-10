@@ -88,8 +88,10 @@ class ClusterFileBrowserAPI(FileBrowserAPI):
         asked_volume, asked_endpoint = asked.get('volume'), asked.get('endpoint')
         for quota in quotas:
             quota.pop('endpoint', None)
-        # The home's size counts everyone's files in it and the quota only this person's, so this
-        # is a floor. A partial home total would make it a guess in the other direction too.
+        # The home's size counts everyone's files in it and the quota only this person's, and the
+        # two are different measurements: on dev a home of 100,000 small files came to 9% more
+        # in the folder's size than in the quota. Both only lower this, so it is a floor, and
+        # the pane says so. A partial home total would make it a guess in the other direction.
         if volume and used and not result.get('partial'):
             result['outside_home_bytes'] = max(0, sum(used) - result['total']['bytes'])
         if quotas:

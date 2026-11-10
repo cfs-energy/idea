@@ -532,7 +532,7 @@ def test_collector_snapshot_sums_volumes_per_filesystem(service):
     collector.targets = lambda: [
         SimpleNamespace(name='data', endpoint='svm-test.fs-test.fsx.example')
     ]
-    collector._quota_reports['data'] = (
+    collector._collected_reports['data'] = (
         123,
         [
             {

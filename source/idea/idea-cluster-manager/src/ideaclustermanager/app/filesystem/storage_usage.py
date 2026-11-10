@@ -37,6 +37,11 @@ OUTSIDE_HOME_MESSAGES = dict(
     initializing='Storage analytics is still taking its first measurement of this volume. Try again later.',
 )
 MAX_CACHED_VIEWS = 1000
+# what a person may open is asked again this often, so a permission change shows within a minute
+# and the pane's one-second polls during a study do not each fork to ask
+VIEW_SECONDS = 60
+# to pass through a folder on the way to another takes search permission on it, not read
+THROUGH = getattr(os, 'O_PATH', getattr(os, 'O_SEARCH', os.O_RDONLY))
 CANNOT_OPEN = 'That folder no longer exists or cannot be opened.'
 
 
@@ -229,13 +234,17 @@ def open_directory(home, folder, trusted_root=False):
     folder = os.path.abspath(folder)
     if os.path.commonpath([home, folder]) != home:
         raise exceptions.unauthorized_access()
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    relative = os.path.relpath(folder, home)
+    components = [] if relative == '.' else relative.split(os.sep)
+    # Only the folder asked for is opened to read. One above it is passed through, as a shell
+    # would: a parent that can be entered but not listed does not close what is inside it.
+    flags = [THROUGH | os.O_DIRECTORY | os.O_NOFOLLOW] * len(components)
+    flags.append(os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     # The mount point comes from cluster settings, a person's home folder does not.
-    fd = os.open(home, flags & ~os.O_NOFOLLOW if trusted_root else flags)
+    fd = os.open(home, flags[0] & ~os.O_NOFOLLOW if trusted_root else flags[0])
     try:
-        relative = os.path.relpath(folder, home)
-        for component in [] if relative == '.' else relative.split(os.sep):
-            child = os.open(component, flags, dir_fd=fd)
+        for component, mode in zip(components, flags[1:]):
+            child = os.open(component, mode, dir_fd=fd)
             os.close(fd)
             fd = child
         yield fd
@@ -318,8 +327,8 @@ class StorageUsageService:
             return None
         key = (username, path, found['measured_at'])
         with self._lock:
-            view = self._views.get(key)
-        if view is None:
+            checked_at, view = self._views.get(key, (0, None))
+        if view is None or time.monotonic() - checked_at >= VIEW_SECONDS:
             names = [row['name'] for row in found['children']]
             try:
                 identity_row, readable = inspect_as_user(identity, mount, path, names)
@@ -362,7 +371,8 @@ class StorageUsageService:
                     ),
                 )
             with self._lock:
-                self._views[key] = view
+                self._views[key] = (time.monotonic(), view)
+                self._views.move_to_end(key)
                 while len(self._views) > MAX_CACHED_VIEWS:
                     self._views.popitem(last=False)
         return view
@@ -415,9 +425,9 @@ class StorageUsageService:
             hot.sort(key=lambda row: -row['bytes'])
             paths = [row['path'] for row in hot[: MAX_LARGEST * 2]]
             readable = set(readable_paths_as_user(identity, mount, paths))
-            study['largest'] = [row for row in hot if row['path'] in readable][
-                :MAX_LARGEST
-            ]
+            largest = [row for row in hot if row['path'] in readable][:MAX_LARGEST]
+            study['shown'] = (time.monotonic(), largest, largest)
+            study['largest'] = largest
             progress['total'] = progress['done']
             progress['step'] = 'Finished'
             progress['steps'][2]['state'] = 'done'
@@ -444,6 +454,7 @@ class StorageUsageService:
                 study = dict(
                     finished=None,
                     largest=None if study is None else study.get('largest'),
+                    shown=(0, None, None) if study is None else study['shown'],
                     progress=dict(
                         running=True,
                         step='Reading your home folder',
@@ -462,6 +473,21 @@ class StorageUsageService:
                     self._study, study, username, identity, mount, home, refresh
                 )
         return study
+
+    def _largest(self, study, identity, mount):
+        """The study's biggest folders, less any this person can no longer open. The study asked
+        when it ended, and its list is kept for 15 minutes and carried into the next study, so
+        it is asked again as often as a folder view is."""
+        rows = study['largest']
+        if not rows:
+            return rows
+        checked_at, checked, visible = study['shown']
+        if checked is not rows or time.monotonic() - checked_at >= VIEW_SECONDS:
+            paths = [row['path'] for row in rows]
+            readable = set(readable_paths_as_user(identity, mount, paths))
+            visible = [row for row in rows if row['path'] in readable]
+            study['shown'] = (time.monotonic(), rows, visible)
+        return visible
 
     def _usage_from_analytics(
         self, username, identity, mount, home, folder, refresh, study
@@ -501,8 +527,9 @@ class StorageUsageService:
             return result
         running = self._study_for(username, identity, mount, home, refresh)
         result['progress'] = running['progress']
-        if running['largest']:
-            result['largest'] = running['largest']
+        largest = self._largest(running, identity, mount)
+        if largest:
+            result['largest'] = largest
         status = self._analytics().status(home)
         result['volume'] = status.get('volume')
         target = status.get('target')

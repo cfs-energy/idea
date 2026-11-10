@@ -1430,6 +1430,46 @@ def report_sessions():
                 start - 30 * day,
                 stopped_on=start - 30 * day,
             ),
+            # each ended an hour into the period on one date only, every other date it gives is
+            # from before it, and no run on record brings it back: only that date's half of the
+            # filter's lower bound keeps it
+            doc(
+                'edge-stopped',
+                'user-d',
+                'STOPPED',
+                start - 10 * day,
+                start - 5 * day,
+                stopped_on=start + day // 24,
+            ),
+            doc(
+                'edge-updated', 'user-d', 'STOPPED', start - 10 * day, start + day // 24
+            ),
+            doc(
+                'edge-deleted',
+                'user-d',
+                'STOPPED',
+                start - 10 * day,
+                start - 5 * day,
+                deleted_on=start + day // 24,
+            ),
+            doc(
+                'edge-warned',
+                'user-d',
+                'STOPPED',
+                start - 10 * day,
+                start - 5 * day,
+                cleanup_warning_stop_time=start + day // 24,
+            ),
+            # created in the period's last minute and stopped after it: only an upper bound at
+            # the period's very end keeps it
+            doc(
+                'late',
+                'user-e',
+                'STOPPED',
+                end - 60000,
+                end + day // 24,
+                stopped_on=end + day // 24,
+            ),
             # counted with unknown hours whatever the period
             doc('undated', 'user-c', 'STOPPED', None, None),
             doc('zero', 'user-c', 'STOPPED', start + day, 0),
@@ -1601,9 +1641,14 @@ def test_period_bounded_read_builds_the_same_report_as_the_full_read(capsys):
     assert rows['user-a']['desktop_hours'] > 24 * 28  # the desktop running throughout
     assert rows['user-b']['desktop_hours'] == Decimal(3 * 24)  # only the late run
     assert rows['user-c']['coverage']['desktop_hours']['missing_records'] == 2
+    # an hour each, by the stop, the last write, the deletion and the stop it was warned of
+    assert rows['user-d']['desktop_hours'] == Decimal(4)
+    assert (
+        rows['user-e']['desktop_hours'] == Decimal(1) / 60
+    )  # the period's last minute
     projects = {row['key'] for row in expected[0]['project']}
     assert {'deleted-project', '!unassigned'} <= projects
-    assert new_index.returned < 15
+    assert new_index.returned < 25
     assert new_table.calls['Scan'] == 0 and old_table.calls['Scan'] >= 8
     assert new_table.calls['RCU'] * 100 < old_table.calls['RCU']
     with capsys.disabled():
@@ -1646,11 +1691,72 @@ def test_period_bounded_read_gives_the_same_insights_as_the_full_read(monkeypatc
     assert results[0].desktops.hours and results[0].desktops.idle_hours
 
 
+# bound here: the test below replaces the method, and a wrong filter that called it by name
+# would call itself, fail the desktop read, and differ for that reason alone
+REAL_PERIOD_QUERY = ReportingSources.desktop_period_query
+
+
+def without_lower_bound(dropped):
+    """the real filter with one half of its lower bound left out"""
+
+    def wrong(selected, scope):
+        query = REAL_PERIOD_QUERY(selected, scope)
+        lower = query['bool']['filter'][-1]['bool']
+        kept = [
+            clause
+            for clause in lower['should']
+            if dropped not in clause and dropped not in clause.get('range', {})
+        ]
+        # not vacuous: the half named is one the real filter has
+        assert len(kept) < len(lower['should'])
+        lower['should'] = kept
+        return query
+
+    return wrong
+
+
+def with_upper_bound(moved):
+    """the real filter with its upper bound somewhere else in the period"""
+
+    def wrong(selected, scope):
+        query = REAL_PERIOD_QUERY(selected, scope)
+        (created,) = (
+            clause['range']['created_on']
+            for clause in query['bool']['filter'][-2]['bool']['should']
+            if 'range' in clause
+        )
+        created['lt'] = moved(created['lt'])
+        return query
+
+    return wrong
+
+
+DAY_MS = 86400000
 WRONG_PERIOD_FILTERS = {
     'no documents': lambda selected, scope: {'bool': {'must_not': [{'match_all': {}}]}},
-    'the month before': lambda selected, scope: ReportingSources.desktop_period_query(
-        period('2024-01-01', '2024-01-31'), scope
+    # the upper bound: a period that ended before any of these desktops was created. The month
+    # before is no control: it keeps the live desktops, and the runs bring back the rest.
+    'a period years before': lambda selected, scope: REAL_PERIOD_QUERY(
+        period('2020-01-01', '2020-01-31'), scope
     ),
+    # the upper bound again, inside the period: a desktop created on its last day is in it
+    'a period that ends a day early': lambda selected, scope: REAL_PERIOD_QUERY(
+        period('2024-02-01', '2024-02-28'), scope
+    ),
+    'an upper bound a day early': with_upper_bound(lambda end: end - DAY_MS),
+    'an upper bound twenty days early': with_upper_bound(lambda end: end - 20 * DAY_MS),
+    # the lower bound: what ended inside the period, by each date that can say so, and what is
+    # still running on a last write from before it
+    'a lower bound a day late': lambda selected, scope: REAL_PERIOD_QUERY(
+        period('2024-02-02', '2024-02-29'), scope
+    ),
+    'stopped inside the period left out': without_lower_bound('stopped_on'),
+    'last written inside the period left out': without_lower_bound('updated_on'),
+    'deleted inside the period left out': without_lower_bound('deleted_on'),
+    'due to stop inside the period left out': without_lower_bound(
+        'cleanup_warning_stop_time'
+    ),
+    'live desktops written before the period left out': without_lower_bound('terms'),
 }
 
 
@@ -1667,12 +1773,13 @@ def test_a_wrong_period_filter_changes_the_report_and_insights(monkeypatch, wron
     docs, history, heads = period_fixture()
 
     def both(unfiltered):
-        report = built(read_report(docs, unfiltered, history, heads)[0])
+        data = read_report(docs, unfiltered, history, heads)[0]
+        report = built(data)
         data, _, _, context = read_report(docs, unfiltered, history, heads, {}, True)
         insights = InsightsService(context, Mock()).build(
             data, period(), 'USD', 'UTC', time.monotonic() + 30, None
         )
-        return report, insights.model_dump(exclude={'updated_at'})
+        return report, insights.model_dump(exclude={'updated_at'}), data['warnings']
 
     full = both(True)
     assert both(False) == full
@@ -1681,9 +1788,12 @@ def test_a_wrong_period_filter_changes_the_report_and_insights(monkeypatch, wron
         'desktop_period_query',
         staticmethod(WRONG_PERIOD_FILTERS[wrong]),
     )
-    report, insights = both(False)
+    report, insights, warnings = both(False)
     assert report != full[0]
     assert insights != full[1]
+    # the read worked and returned other documents: a read that failed differs too
+    assert warnings == full[2]
+    assert report[3] == full[0][3]
 
 
 def test_heads_scan_until_the_index_is_seeded_then_never():
