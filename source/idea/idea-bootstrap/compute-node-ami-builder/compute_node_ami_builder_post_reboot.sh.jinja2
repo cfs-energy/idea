@@ -54,7 +54,12 @@ else
   if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
     systemctl start kdump.service || log_warning "kdump did not start; a clone builds its own initrd"
   fi
-  rm -rf /var/tmp/* /tmp/* /var/crash/*
+  # A running service with PrivateTmp (kdump on EL9) has its /tmp and /var/tmp here, under
+  # systemd-private-*. With those deleted its stop cannot run: the scrub's kdump restart left
+  # the crash kernel loaded, start answered "already running", and the initrd stayed older
+  # than fstab, so every EL9 clone rebuilt it. systemd removes each one when its service stops.
+  find /var/tmp /tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private-*' ! -name '.*' -exec rm -rf {} +
+  rm -rf /var/crash/*
   rm -f /etc/udev/rules.d/70-persistent-net.rules
   grep -l "Created by cloud-init on instance boot automatically" /etc/sysconfig/network-scripts/ifcfg-* | xargs rm -f
   {% if context.config.get_string('scheduler.provider') == 'openpbs' %}

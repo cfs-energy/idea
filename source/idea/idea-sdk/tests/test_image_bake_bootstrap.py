@@ -923,7 +923,9 @@ def test_scrub_restarts_kdump_after_its_last_fstab_write(
     scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
     restart = scrub.index('systemctl restart kdump.service')
     last_fstab_write = max(
-        i for i, line in enumerate(scrub.splitlines()) if '/etc/fstab' in line
+        i
+        for i, line in enumerate(scrub.splitlines())
+        if '/etc/fstab' in line and line.startswith('sed -i')
     )
     assert scrub.count('\n', 0, restart) > last_fstab_write
     start = scrub.rindex('\nif ', 0, restart)
@@ -932,6 +934,104 @@ def test_scrub_restarts_kdump_after_its_last_fstab_write(
     # a kdump that will not start costs each clone a rebuild, not the bake
     subprocess.run(['bash', '-ec', block], check=True, env=env)
     assert ('restart kdump.service' in calls.read_text()) == enabled
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('rebuilt_by_restart', [True, False])
+def test_scrub_rebuilds_a_kdump_initrd_the_restart_left_older_than_fstab(
+    tmp_path, builder, rebuilt_by_restart
+):
+    """
+    EL9 compute clones still rebuilt: the restart returned 0 with the crash kernel still
+    loaded ("already running"), so the initrd stayed older than fstab and nothing said so.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    restart = scrub.index('systemctl restart kdump.service')
+    start = scrub.rindex('\nif ', 0, restart)
+    block = scrub[start : scrub.index('\nfi\n', restart) + 4]
+    root = tmp_path / 'root'
+    (root / 'boot').mkdir(parents=True)
+    (root / 'etc').mkdir()
+    initrd = root / 'boot/initramfs-5.14.0-687.66.1.el9_8.x86_64kdump.img'
+    initrd.write_text('built at boot')
+    fstab = root / 'etc/fstab'
+    fstab.write_text('UUID=1 / xfs defaults 0 0\n')
+    os.utime(initrd, (1000, 1000))
+    os.utime(fstab, (2000, 2000))
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    stub = tmp_path / 'bin/systemctl'
+    if rebuilt_by_restart:
+        stub.write_text(
+            stub.read_text().replace(
+                '#!/bin/bash\n',
+                f'#!/bin/bash\n[[ "$1" != restart ]] || touch -d @3000 {initrd}\n',
+            )
+        )
+    for name, body in (
+        ('uname', 'echo 5.14.0-687.66.1.el9_8.x86_64'),
+        ('journalctl', 'echo "kdumpctl[1]: kdump: Kdump already running: [WARNING]"'),
+        ('kdumpctl', f'echo "$*" >> {tmp_path}/kdumpctl.log; touch -d @3000 {initrd}'),
+    ):
+        tool = tmp_path / 'bin' / name
+        tool.write_text(f'#!/bin/bash\n{body}\n')
+        tool.chmod(0o755)
+    block = block.replace('/boot/', f'{root}/boot/').replace(
+        '/etc/fstab', f'{root}/etc/fstab'
+    )
+    result = subprocess.run(
+        ['bash', '-ec', block], check=True, env=env, capture_output=True, text=True
+    )
+    rebuilds = tmp_path / 'kdumpctl.log'
+    assert rebuilds.exists() != rebuilt_by_restart
+    if not rebuilt_by_restart:
+        assert rebuilds.read_text() == 'rebuild\n'
+    assert initrd.stat().st_mtime >= fstab.stat().st_mtime
+    # the builder log names what kdump said and both times: the journal is deleted next
+    assert 'kdump: kdumpctl[1]: kdump: Kdump already running' in result.stdout
+    assert str(initrd) in result.stdout and str(fstab) in result.stdout
+    assert ('older than' in result.stdout) != rebuilt_by_restart
+
+
+def test_scrub_is_traced_in_the_builder_log(tmp_path):
+    scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    lines = scrub.splitlines()
+    # after the environment is read, before the first command that changes the host
+    assert lines.index('set -x') < next(
+        i for i, line in enumerate(lines) if line.startswith('systemctl ')
+    )
+
+
+def test_compute_cleanup_keeps_the_private_tmp_of_running_services(tmp_path):
+    """
+    kdump.service on EL9 has PrivateTmp: with its directory deleted the service cannot be
+    stopped, and the scrub's restart rebuilt nothing.
+    """
+    post = render(
+        'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+        'rocky9',
+    )
+    line = next(x for x in post.splitlines() if '/var/tmp' in x and 'rm ' in x).strip()
+    root = tmp_path / 'root'
+    kept, removed = [], []
+    for base in ('tmp', 'var/tmp'):
+        private = root / base / 'systemd-private-0819df-kdump.service-AbCdEf/tmp'
+        private.mkdir(parents=True)
+        kept.append(private)
+        hidden = root / base / '.font-unix'
+        hidden.mkdir()
+        kept.append(hidden)
+        for name in ('cloud-init', 'pbs_boot_check'):
+            (root / base / name).mkdir()
+            (root / base / name / 'file').write_text('x')
+            removed.append(root / base / name)
+    line = line.replace('/var/tmp', f'{root}/var/tmp').replace(
+        ' /tmp', f' {root}/tmp'
+    )
+    subprocess.run(['bash', '-ec', line], check=True)
+    assert all(path.is_dir() for path in kept)
+    assert not any(path.exists() for path in removed)
+    # still after kdump has been started, so nothing is deleted under a build in progress
+    assert post.index('systemctl start kdump.service') < post.index(line.split()[0])
 
 
 @pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])

@@ -4,6 +4,8 @@ set -e
 # the failed check names the command that stopped the scrub
 trap 'rc=$?; echo "scrub: ${BASH_COMMAND} (exit ${rc})" >> /var/lib/idea/bake-failed' ERR
 source /etc/environment
+# Traced like the script that runs it: the builder log is the only record of what scrub did.
+set -x
 # Shared by the compute builder (image_kind = 'compute'), which has no DCV.
 {% set compute = image_kind is defined and image_kind == 'compute' %}
 
@@ -68,6 +70,17 @@ grep -Eq '^[^#[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab
 # kdump config or dump target differs. A clone's own mount edits land after kdump has started.
 if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
   systemctl restart kdump.service || echo "kdump did not restart; each clone rebuilds its initrd"
+  # A restart can return 0 without rebuilding: when the stop cannot run, the crash kernel stays
+  # loaded and the start answers "already running". The journal goes below, so the builder log
+  # says what the restart left, and an initrd still older than fstab is rebuilt directly.
+  kdump_initrd="/boot/initramfs-$(uname -r)kdump.img"
+  journalctl -u kdump.service -b --no-pager -o short-iso -n 12 2>&1 | sed 's/^/kdump: /' || true
+  stat -c 'kdump: %y %n' "${kdump_initrd}" /etc/fstab 2>&1 || true
+  if [[ ! -f "${kdump_initrd}" || "$(stat -c %Y "${kdump_initrd}")" -lt "$(stat -c %Y /etc/fstab)" ]]; then
+    echo "kdump: ${kdump_initrd} is missing or older than /etc/fstab after the restart; rebuilding it"
+    kdumpctl rebuild || echo "kdump did not rebuild; each clone rebuilds its initrd"
+    stat -c 'kdump: %y %n' "${kdump_initrd}" 2>&1 || true
+  fi
 fi
 (crontab -l 2>/dev/null | grep -v '_ami_builder_post_reboot.sh' || true) | crontab -
 # Checks have captured the evidence; retain JSON, remove host-specific bootstrap logs.
