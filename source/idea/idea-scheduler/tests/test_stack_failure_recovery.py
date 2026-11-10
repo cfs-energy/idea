@@ -246,6 +246,7 @@ def test_housekeeper_releases_the_licenses_of_a_job_it_resets(
     other = mock_job(provisioned=True)
     other.params.licenses = [SocaJobLicenseAsk(name=license_name, count=1)]
     job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
     job_cache.add_active_licenses([job, other])
     assert job_cache.get_active_license_count(license_name=license_name) == 3
 
@@ -258,6 +259,32 @@ def test_housekeeper_releases_the_licenses_of_a_job_it_resets(
         context, 'license_service', MockLicenseService(3), raising=False
     )
     JobProvisioningUtil(context=context, jobs=[job]).check_licenses()
+
+
+def test_housekeeper_keeps_the_licenses_of_a_job_the_scheduler_says_is_running(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    """
+    the cache can read queued for a job that runs. its stack is left in place, the job is
+    not reset, and it still holds its licenses: giving them back would let another job in.
+    """
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.FAILED
+    )
+    license_name = f'license_{Utils.short_uuid()}'
+    job = mock_job(provisioned=True)
+    job.params.licenses = [SocaJobLicenseAsk(name=license_name, count=2)]
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job.model_copy(
+        update={'state': SocaJobState.RUNNING}
+    )
+    job_cache.add_active_licenses([job])
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert mock_scheduler.reset_jobs == []
+    assert deleted_stacks == []
+    assert job_cache.get_active_license_count(license_name=license_name) == 2
 
 
 def test_housekeeper_deletes_failed_stack_and_retries(
