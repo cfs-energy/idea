@@ -1230,12 +1230,34 @@ class AccountsService:
         :param password:
         :return: True when the task that creates the account was queued too
         """
+        return self._queue_password_sync(username, self._hold_password(password))
+
+    def _set_password(self, username: str, password: str, change_in_user_pool):
+        """
+        The secret is made before the user pool takes the password: were Secrets
+        Manager to fail after it, sign-in to the portal would have a password the
+        directory never gets. Made first, a failure leaves nothing changed.
+        :return: what change_in_user_pool returned
+        """
+        password_secret = self._hold_password(password)
+        try:
+            result = change_in_user_pool()
+        except Exception:
+            self._drop_password_secret(password_secret)
+            raise
+        if result is False:
+            # the user pool has not taken the password
+            self._drop_password_secret(password_secret)
+        else:
+            self._queue_password_sync(username, password_secret)
+        return result
+
+    def _hold_password(self, password: str) -> str:
         # ponytail: the file sweep goes with the password_file branch of
         # accounts.sync-password, in the release after 26.11.2
         self.remove_stranded_password_files()
         self.remove_stray_password_secrets()
 
-        secrets = self.context.aws().secretsmanager()
         request = {
             'Name': f'{self.password_secret_prefix}{Utils.uuid()}',
             'SecretString': password,
@@ -1249,7 +1271,9 @@ class AccountsService:
         )
         if kms_key_id:
             request['KmsKeyId'] = kms_key_id
-        password_secret = secrets.create_secret(**request)['ARN']
+        return self.context.aws().secretsmanager().create_secret(**request)['ARN']
+
+    def _queue_password_sync(self, username: str, password_secret: str) -> bool:
         try:
             is_user_synced = self.ldap_client.is_existing_user(username)
             if not is_user_synced:
@@ -1271,40 +1295,46 @@ class AccountsService:
             return not is_user_synced
         except Exception:
             # only the queued task deletes the secret, and none was queued
-            try:
-                secrets.delete_secret(
-                    SecretId=password_secret, ForceDeleteWithoutRecovery=True
-                )
-            except (
-                botocore.exceptions.ClientError,
-                botocore.exceptions.BotoCoreError,
-            ) as error:
-                # the sweep removes it; the caller is told why the change failed
-                self.logger.warning(
-                    'a password secret that was not queued could not be deleted: '
-                    f'{type(error).__name__}'
-                )
+            self._drop_password_secret(password_secret)
             raise
+
+    def _drop_password_secret(self, password_secret: str):
+        try:
+            self.context.aws().secretsmanager().delete_secret(
+                SecretId=password_secret, ForceDeleteWithoutRecovery=True
+            )
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as error:
+            # the sweep removes it; the caller is told why the change failed
+            self.logger.warning(
+                'a password secret that was not queued could not be deleted: '
+                f'{self._error_code(error)}'
+            )
 
     @property
     def password_secret_prefix(self) -> str:
-        # the task role may create, read and delete secrets of this name only
+        # the task role may create, read and delete secrets of this name only, with
+        # the tags below
         return f'{self.context.cluster_name()}-password-sync-'
 
     @property
     def password_secret_tags(self) -> dict:
         return {
+            # No idea:ModuleName: the role may read and write the value of every
+            # secret of this cluster that carries it, and must not overwrite these.
             constants.IDEA_TAG_CLUSTER_NAME: self.context.cluster_name(),
-            constants.IDEA_TAG_MODULE_NAME: 'cluster-manager',
             'idea:Purpose': 'password-sync',
         }
 
     PASSWORD_SECRET_SWEEP_SECONDS = 3600
     # The tasks queue keeps a message 4 days (the stack sets its retention), and a
     # password can wait there that long behind a stopped cluster-manager or other
-    # passwords. This must stay above that retention: a secret swept while its message
-    # is still queued is a password the task reports as done and never applies.
-    STRAY_PASSWORD_SECRET_SECONDS = 5 * 24 * 3600
+    # passwords. One moved into the password lane is sent again, which starts the 4
+    # days over: two retention periods, plus a day. This must stay above that. A secret
+    # swept while its message is still queued is a password that is never applied.
+    STRAY_PASSWORD_SECRET_SECONDS = 9 * 24 * 3600
 
     def remove_stray_password_secrets(self):
         """
@@ -1337,17 +1367,34 @@ class AccountsService:
                         continue
                     if secret['CreatedDate'].timestamp() > cutoff:
                         continue
-                    secrets.delete_secret(
-                        SecretId=secret['ARN'], ForceDeleteWithoutRecovery=True
-                    )
-                    self.logger.info('removed a stray password secret')
+                    try:
+                        secrets.delete_secret(
+                            SecretId=secret['ARN'], ForceDeleteWithoutRecovery=True
+                        )
+                        self.logger.info('removed a stray password secret')
+                    except (
+                        botocore.exceptions.ClientError,
+                        botocore.exceptions.BotoCoreError,
+                    ) as error:
+                        # the others are still looked at
+                        self.logger.warning(
+                            'could not delete a stray password secret: '
+                            f'{self._error_code(error)}'
+                        )
         except (
             botocore.exceptions.ClientError,
             botocore.exceptions.BotoCoreError,
         ) as error:
             self.logger.warning(
-                f'could not look for stray password secrets: {type(error).__name__}'
+                f'could not look for stray password secrets: {self._error_code(error)}'
             )
+
+    @staticmethod
+    def _error_code(error: Exception) -> str:
+        # the message of an AWS error names the role and the secret
+        if isinstance(error, botocore.exceptions.ClientError):
+            return error.response['Error']['Code']
+        return type(error).__name__
 
     # No queue keeps a message longer than this, so no task is left to read the file.
     STRANDED_PASSWORD_FILE_SECONDS = 14 * 24 * 3600
@@ -1393,15 +1440,16 @@ class AccountsService:
         """
 
         # change password in user pool before changing in ldap
-        self.user_pool.change_password(
-            username=username,
-            access_token=access_token,
-            old_password=old_password,
-            new_password=new_password,
+        self._set_password(
+            username,
+            new_password,
+            lambda: self.user_pool.change_password(
+                username=username,
+                access_token=access_token,
+                old_password=old_password,
+                new_password=new_password,
+            ),
         )
-
-        # sync password change in ldap
-        self.change_ldap_password(username=username, password=new_password)
 
     # public API methods for user onboarding, login, forgot password flows.
 
@@ -1488,11 +1536,15 @@ class AccountsService:
 
         self.logger.debug(f'respond_to_auth_challenge() - Request: {request}')
 
-        result = self.user_pool.respond_to_auth_challenge(request)
+        result = None
 
-        if result.auth is not None:
-            self.change_ldap_password(request.username, request.new_password)
+        def respond():
+            nonlocal result
+            result = self.user_pool.respond_to_auth_challenge(request)
+            # another challenge follows: no password is set yet
+            return result.auth is not None
 
+        self._set_password(request.username, request.new_password, respond)
         return result
 
     def forgot_password(self, username: str):
@@ -1522,11 +1574,14 @@ class AccountsService:
         if Utils.is_empty(confirmation_code):
             raise exceptions.invalid_params('confirmation_code is required')
 
-        # update user-pool first to verify confirmation code.
-        self.user_pool.confirm_forgot_password(username, password, confirmation_code)
-
-        # sync with LDAP/AD
-        self.change_ldap_password(username, password)
+        # the user pool verifies the confirmation code; then sync with LDAP/AD
+        self._set_password(
+            username,
+            password,
+            lambda: self.user_pool.confirm_forgot_password(
+                username, password, confirmation_code
+            ),
+        )
 
     def sign_out(self, refresh_token: str, sso_auth: bool):
         """

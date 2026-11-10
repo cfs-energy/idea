@@ -22,6 +22,8 @@ class FakeSecretsManager:
         self.failing: Dict[str, Exception] = {}
         # what a role scoped by tags is told about a secret that no longer exists
         self.gone_code = 'ResourceNotFoundException'
+        # ARNs whose delete is refused
+        self.undeletable = set()
 
     def _check(self, operation: str):
         if operation in self.failing:
@@ -57,6 +59,8 @@ class FakeSecretsManager:
         assert ForceDeleteWithoutRecovery is True
         if SecretId not in self.secrets:
             raise client_error(self.gone_code, 'DeleteSecret')
+        if SecretId in self.undeletable:
+            raise client_error('AccessDeniedException', 'DeleteSecret', SecretId)
         del self.secrets[SecretId]
         self.deleted.append(SecretId)
         return {}

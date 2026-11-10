@@ -234,6 +234,42 @@ test("runs the 13 deletion phases in order", async () => {
   assertBefore(trace, "delete-alarms:target-alarm", `delete-log:${target}-log`);
 });
 
+test("deletes the password secrets cluster-manager left, and only this cluster's", async () => {
+  const tags = { [CLUSTER_NAME_TAG]: target, "idea:Purpose": "password-sync" };
+  const prefix = `${target}-password-sync-`;
+  const { deps, trace } = makeDeps({
+    async listSecrets(namePrefix) {
+      trace.push(`list-secrets:${namePrefix}`);
+      return [
+        { arn: "left", name: `${prefix}1`, tags },
+        { arn: "other-cluster", name: `${prefix}2`, tags: { ...tags, [CLUSTER_NAME_TAG]: "idea-test1" } },
+        { arn: "other-purpose", name: `${prefix}3`, tags: { [CLUSTER_NAME_TAG]: target } },
+        { arn: "other-name", name: `${target}-cluster-manager-terminal-ca`, tags },
+      ];
+    },
+    async deleteSecret(arn) {
+      trace.push(`delete-secret:${arn}`);
+    },
+  });
+  await deleteCluster(deps, allOptions());
+  assert.deepEqual(trace.filter((entry) => entry.startsWith("delete-secret:")), ["delete-secret:left"]);
+  // once cluster-manager is gone, so it makes no more
+  assertBefore(trace, `delete-stack:${target}-analytics`, `list-secrets:${prefix}`);
+  assertBefore(trace, "delete-secret:left", `delete-stack:${target}-cluster`);
+});
+
+test("a password secret that cannot be deleted does not stop the cluster delete", async () => {
+  const { deps, trace } = makeDeps({
+    async listSecrets() {
+      throw Object.assign(new Error("not allowed on arn:aws:secretsmanager:secret"), { name: "AccessDeniedException" });
+    },
+    async deleteSecret() {},
+  });
+  await deleteCluster(deps, allOptions());
+  assert.ok(trace.includes(`err:failed to delete password secrets named ${target}-password-sync-*: AccessDeniedException`));
+  assert.ok(trace.includes(`delete-stack:${target}-cluster`));
+});
+
 test("refuses cluster deletion without confirmation before any destructive operation", async () => {
   const { deps, trace } = makeDeps({
     async prompt() {

@@ -12,7 +12,7 @@ from unittest.mock import Mock
 
 import ldap
 import pytest
-from botocore.exceptions import ClientError, EndpointConnectionError
+from botocore.exceptions import EndpointConnectionError
 
 from ideadatamodel import constants, errorcodes, exceptions
 from ideaclustermanager.app.accounts import account_tasks
@@ -269,42 +269,72 @@ def test_a_password_given_up_on_leaves_no_secret_and_is_recorded():
 def test_a_password_given_up_on_is_recorded_when_its_secret_cannot_be_deleted():
     task, secrets, payload = secret_password_task()
     secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
-    with pytest.raises(ClientError):
+    with pytest.raises(account_tasks.PasswordSecretUnavailable):
         task.on_terminal_failure({**payload, 'sent_at': 5})
     # an older password queued behind it must still not replace it
     assert recorded(task) == [5]
 
 
-@pytest.mark.parametrize(
-    'code, message',
-    [
-        ('ResourceNotFoundException', ''),
-        ('InvalidRequestException', 'the secret was marked for deletion'),
-    ],
+GONE = [
+    ('ResourceNotFoundException', ''),
+    ('InvalidRequestException', 'the secret was marked for deletion'),
+]
+AN_ARN = (
+    'arn:aws:secretsmanager:us-east-1:123456789012:secret:x by arn:aws:iam::1:role/r'
 )
+
+
+@pytest.mark.parametrize('code, message', GONE)
 def test_a_redelivered_password_whose_secret_is_gone_is_done(code, message):
     task, secrets, payload = secret_password_task()
-    task.invoke(payload)
-    # acknowledged late: the same message comes back
+    task.invoke({**payload, 'sent_at': 5})
+    # acknowledged late: the same message comes back, recorded as finished
+    task.context.accounts.user_dao.get_user.return_value['password_sync_sent_at'] = 5
     secrets.failing['GetSecretValue'] = client_error(code, 'GetSecretValue', message)
-    assert task.invoke(payload) is account_tasks.NOTHING_DONE
+    assert task.invoke({**payload, 'sent_at': 5}) is account_tasks.NOTHING_DONE
     task.context.ldap_client.change_password.assert_called_once()
 
 
+@pytest.mark.parametrize('code, message', GONE)
+@pytest.mark.parametrize('applied', [None, 4])
+def test_a_password_whose_secret_went_before_it_was_applied_fails_for_all_to_see(
+    code, message, applied
+):
+    # swept or deleted by hand: the directory never got it, and no retry will
+    task, secrets, payload = secret_password_task(applied=applied)
+    secrets.failing['GetSecretValue'] = client_error(code, 'GetSecretValue', message)
+    with pytest.raises(TaskCannotSucceed) as raised:
+        task.invoke({**payload, 'sent_at': 5})
+    assert str(raised.value) == (
+        'The new password was not synced to the directory; set it again.'
+    )
+    task.context.ldap_client.change_password.assert_not_called()
+
+
 @pytest.mark.parametrize(
-    'error',
+    'error, code',
     [
-        client_error('AccessDeniedException', 'GetSecretValue'),
-        client_error('InternalServiceError', 'GetSecretValue'),
-        client_error('InvalidRequestException', 'GetSecretValue', 'not this one'),
-        EndpointConnectionError(endpoint_url='https://secretsmanager.invalid'),
+        (client_error('AccessDeniedException', 'Get', AN_ARN), 'AccessDeniedException'),
+        (client_error('InternalServiceError', 'Get', AN_ARN), 'InternalServiceError'),
+        (client_error('InvalidRequestException', 'Get', AN_ARN), 'InvalidRequestExc'),
+        (
+            EndpointConnectionError(endpoint_url='https://secretsmanager.invalid'),
+            'EndpointConnectionError',
+        ),
     ],
 )
-def test_a_secret_that_cannot_be_read_is_retried_and_kept(error):
+def test_a_secret_that_cannot_be_read_is_retried_and_kept(error, code):
     task, secrets, payload = secret_password_task()
     secrets.failing['GetSecretValue'] = error
-    with pytest.raises(type(error)):
+    with pytest.raises(account_tasks.PasswordSecretUnavailable) as raised:
         task.invoke({**payload, 'sent_at': 5})
+    # what the user's record keeps if every retry ends this way: no role, no secret
+    assert str(raised.value).startswith(
+        'The new password was not synced to the directory: Secrets Manager did not '
+        f'return it ({code}'
+    )
+    assert 'arn:' not in str(raised.value)
+    assert raised.value.__suppress_context__
     task.context.ldap_client.change_password.assert_not_called()
     assert list(secrets.secrets) == [payload['password_secret']]
     assert secrets.deleted == []
@@ -316,7 +346,7 @@ def test_a_gone_secret_answered_as_denied_is_done_only_for_a_finished_message():
     del secrets.secrets[payload['password_secret']]
     secrets.gone_code = 'AccessDeniedException'
     assert task.invoke({**payload, 'sent_at': 5}) is account_tasks.NOTHING_DONE
-    with pytest.raises(ClientError):
+    with pytest.raises(account_tasks.PasswordSecretUnavailable):
         task.invoke({**payload, 'sent_at': 6})
     task.context.ldap_client.change_password.assert_not_called()
     # and superseded, its delete is answered the same way: still nothing to retry
@@ -325,9 +355,10 @@ def test_a_gone_secret_answered_as_denied_is_done_only_for_a_finished_message():
 
 def test_a_secret_that_could_not_be_deleted_is_deleted_by_the_retry():
     task, secrets, payload = secret_password_task()
-    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
-    with pytest.raises(ClientError):
+    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'D', AN_ARN)
+    with pytest.raises(account_tasks.PasswordSecretUnavailable) as raised:
         task.invoke({**payload, 'sent_at': 5})
+    assert 'arn:' not in str(raised.value)
     del secrets.failing['DeleteSecret']
     task.context.accounts.user_dao.get_user.return_value['password_sync_sent_at'] = 5
     assert task.invoke({**payload, 'sent_at': 5}) is None

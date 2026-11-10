@@ -98,24 +98,27 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       'elasticloadbalancing:DescribeListenerCertificates',
       'secretsmanager:ListSecrets',
     ]);
-    // A password waits for its sync task in a secret: this name only, made only with the tags
-    // that the read and the delete require, in the partition the cluster is in.
+    // A password waits for its sync task in a secret: this name only, made only with the two tags
+    // that the read and the delete require and no other tag, in the partition the cluster is in.
     const passwords = statements.filter((statement) => JSON.stringify(statement).includes('-password-sync-'));
     const named = 'arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:idea-test1-password-sync-*';
-    const tagged = (key: string) => ({ StringEquals: {
-      [`${key}/idea:ClusterName`]: 'idea-test1', [`${key}/idea:ModuleName`]: 'cluster-manager', [`${key}/idea:Purpose`]: 'password-sync',
-    } });
+    const tagged = (key: string) => ({ [`${key}/idea:ClusterName`]: 'idea-test1', [`${key}/idea:Purpose`]: 'password-sync' });
     assert.deepEqual(resolve(passwords), [
-      { Effect: 'Allow', Action: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'], Resource: named, Condition: tagged('aws:RequestTag') },
-      { Effect: 'Allow', Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'], Resource: named, Condition: tagged('secretsmanager:ResourceTag') },
+      {
+        Effect: 'Allow', Action: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'], Resource: named,
+        Condition: { StringEquals: tagged('aws:RequestTag'), 'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:ClusterName', 'idea:Purpose'] } },
+      },
+      { Effect: 'Allow', Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'], Resource: named, Condition: { StringEquals: tagged('secretsmanager:ResourceTag') } },
     ]);
-    // nothing else on the role makes, tags or deletes a secret, or holds a secretsmanager wildcard
+    // No other statement on the role creates, tags, untags, deletes or re-policies a secret. This
+    // says nothing of reading or writing a secret's value: the template grants both by tag, and
+    // cluster-services-policy.test.ts shows those tags are not a password secret's.
     const everyStatement = Object.values(resources)
       .filter((resource) => ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy'].includes(resource.Type))
       .flatMap((resource) => resource.Properties.PolicyDocument.Statement as Json[]);
-    const writes = /^(\*|secretsmanager:(\*|Create.*|Tag.*|Untag.*|Delete.*|Update.*|PutResourcePolicy))$/;
-    assert.deepEqual(everyStatement.filter((statement) => [statement.Action].flat().some((action: string) => writes.test(action)) && !passwords.includes(statement)), []);
-    // the password secret sweep waits 5 days, which is safe only while the tasks queue keeps 4
+    const manages = /^(\*|secretsmanager:(\*|Create.*|Tag.*|Untag.*|Delete.*|Update.*|PutResourcePolicy))$/;
+    assert.deepEqual(everyStatement.filter((statement) => [statement.Action].flat().some((action: string) => manages.test(action)) && !passwords.includes(statement)), []);
+    // the password secret sweep waits 9 days, which is safe only while the tasks queue keeps 4
     const tasks = Object.values(resources).find((resource) => resource.Properties?.QueueName === 'idea-test1-cluster-manager-tasks.fifo')!;
     assert.equal(tasks.Properties.MessageRetentionPeriod, 4 * 24 * 3600);
     const normalize = (statements: Json[]) => statements.map((statement) => JSON.stringify(resolve(iam.PolicyStatement.fromJson(statement).toStatementJson()))).sort();

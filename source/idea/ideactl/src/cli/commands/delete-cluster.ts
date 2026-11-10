@@ -126,6 +126,13 @@ export interface DeleteClusterDeps {
   listHostedZoneRecords?(hostedZoneId: string): Promise<HostedZoneRecordSet[]>;
   deleteHostedZoneRecords?(hostedZoneId: string, records: HostedZoneRecordSet[]): Promise<void>;
   deleteLogGroup(name: string): Promise<void>;
+  /**
+   * Secrets whose name starts with the prefix. cluster-manager makes one per password set and its
+   * task deletes it, so no stack owns one that is left. Optional for a replay implementation.
+   */
+  listSecrets?(namePrefix: string): Promise<Array<{ arn: string; name: string; tags: Record<string, string> }>>;
+  /** Without a recovery window. */
+  deleteSecret?(arn: string): Promise<void>;
   accountId(): Promise<string>;
   bucketExists(name: string): Promise<boolean>;
   deleteAllBucketObjectVersions(name: string): Promise<void>;
@@ -509,6 +516,23 @@ async function deleteCloudwatchLogs(deps: DeleteClusterDeps, options: DeleteClus
   }
 }
 
+/**
+ * A password still waiting for its directory sync task when cluster-manager stopped is in a secret
+ * no stack owns. Only this cluster's: the name and both tags cluster-manager gives one.
+ */
+async function deletePasswordSecrets(deps: DeleteClusterDeps, clusterName: string): Promise<void> {
+  if (deps.listSecrets === undefined || deps.deleteSecret === undefined) return;
+  const prefix = `${clusterName}-password-sync-`;
+  try {
+    const secrets = (await deps.listSecrets(prefix)).filter((secret) =>
+      secret.name.startsWith(prefix) && secret.tags[CLUSTER_NAME_TAG] === clusterName && secret.tags["idea:Purpose"] === "password-sync");
+    if (secrets.length > 0) deps.out(`deleting ${secrets.length} password secret(s) left by cluster-manager ...`);
+    for (const secret of secrets) await deps.deleteSecret(secret.arn);
+  } catch (error) {
+    deps.err(`failed to delete password secrets named ${prefix}*: ${error instanceof Error ? error.name : String(error)}`);
+  }
+}
+
 export class DeleteClusterAbort extends Error {}
 
 /**
@@ -636,6 +660,9 @@ export async function deleteCluster(deps: DeleteClusterDeps, options: DeleteClus
     deps.out(`deleting ${ecsStacks.length} container capacity stack(s) ...`);
     await deleteStackGroup(deps, options, ecsStacks, retryState);
   }
+
+  // cluster-manager is gone with its stack, so no new one appears
+  await deletePasswordSecrets(deps, options.clusterName);
 
   deps.out(`deleting ${identityStacks.length} identity-provider stack(s) ...`);
   await deleteIdentityProviderStacks(deps, options, identityStacks, retryState);

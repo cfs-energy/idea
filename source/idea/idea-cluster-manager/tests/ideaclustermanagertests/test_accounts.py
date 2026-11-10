@@ -1091,12 +1091,13 @@ def secrets(context: AppContext, monkeypatch, tmp_path):
     monkeypatch.setattr(fake, 'deleted', [])
     monkeypatch.setattr(fake, 'list_calls', [])
     monkeypatch.setattr(fake, 'failing', {})
+    monkeypatch.setattr(fake, 'undeletable', set())
     return fake
 
 
 PASSWORD_TAGS = {
+    # not idea:ModuleName: the role may overwrite any secret of the cluster that has it
     'idea:ClusterName': 'idea-mock',
-    'idea:ModuleName': 'cluster-manager',
     'idea:Purpose': 'password-sync',
 }
 
@@ -1171,16 +1172,16 @@ def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
     context: AppContext, secrets
 ):
     prefix = 'idea-mock-password-sync-'
-    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=5.1)
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=9.1)
     kept = [
-        # the queue keeps a task 4 days: a day past that, nothing is left to read it
-        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=4.9),
-        # each of the name and the three tags is required
-        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=5.1),
-        secrets.add(f'{prefix}untagged', age_days=5.1),
+        # a task moved into the password lane can be queued for twice the 4 days
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=8.9),
+        # each of the name and the two tags is required
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=9.1),
+        secrets.add(f'{prefix}untagged', age_days=9.1),
         *(
             secrets.add(
-                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=5.1
+                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=9.1
             )
             for n, key in enumerate(PASSWORD_TAGS)
         ),
@@ -1201,6 +1202,116 @@ def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
     # not on every password: the next look is an hour away
     context.accounts.change_ldap_password('user', 'secret-value')
     assert len(secrets.list_calls) == 1
+
+
+def test_a_stray_secret_that_cannot_be_deleted_does_not_keep_the_others(
+    context: AppContext, monkeypatch, secrets
+):
+    prefix = 'idea-mock-password-sync-'
+    stuck, old = (
+        secrets.add(f'{prefix}{name}', tags=PASSWORD_TAGS, age_days=10)
+        for name in ('a-stuck', 'b-old')
+    )
+    secrets.undeletable.add(stuck)
+    warning = Mock()
+    monkeypatch.setattr(context.accounts.logger, 'warning', warning)
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert secrets.deleted == [old]
+    warning.assert_called_once_with(
+        'could not delete a stray password secret: AccessDeniedException'
+    )
+
+
+def user_pool_password_changes(context, user_pool):
+    from ideadatamodel.auth import RespondToAuthChallengeRequest
+
+    accounts = context.accounts
+    return {
+        'change': (
+            user_pool.change_password,
+            lambda: accounts.change_password('token', 'user', 'old', 'secret-value'),
+        ),
+        'forgot': (
+            user_pool.confirm_forgot_password,
+            lambda: accounts.confirm_forgot_password('user', 'secret-value', '123456'),
+        ),
+        'challenge': (
+            user_pool.respond_to_auth_challenge,
+            lambda: accounts.respond_to_auth_challenge(
+                RespondToAuthChallengeRequest(
+                    username='user',
+                    challenge_name='NEW_PASSWORD_REQUIRED',
+                    session='session',
+                    new_password='secret-value',
+                )
+            ),
+        ),
+    }
+
+
+@pytest.fixture
+def password_change(context: AppContext, monkeypatch, secrets, request):
+    user_pool, send = Mock(), Mock()
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    in_user_pool, change = user_pool_password_changes(context, user_pool)[request.param]
+    return secrets, in_user_pool, change, send
+
+
+every_password_change = pytest.mark.parametrize(
+    'password_change', ['change', 'forgot', 'challenge'], indirect=True
+)
+
+
+@every_password_change
+def test_a_password_the_secret_cannot_hold_is_not_given_to_the_user_pool(
+    password_change,
+):
+    secrets, in_user_pool, change, send = password_change
+    secrets.failing['CreateSecret'] = client_error('InternalServiceError', 'Create')
+    with pytest.raises(botocore.exceptions.ClientError):
+        change()
+    # nothing changed: sign-in and the directory still agree on the old password
+    in_user_pool.assert_not_called()
+    send.assert_not_called()
+
+
+@every_password_change
+def test_a_password_the_user_pool_refuses_leaves_no_secret(password_change):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = RuntimeError('wrong old password')
+    with pytest.raises(RuntimeError):
+        change()
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    send.assert_not_called()
+
+
+@every_password_change
+def test_a_password_the_user_pool_took_is_queued_with_the_secret_made_before(
+    password_change,
+):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = lambda *_, **__: Mock(held=list(secrets.secrets))
+    result = change()
+    (arn,) = secrets.secrets
+    if result is not None:
+        # the secret was there when the user pool was asked
+        assert result.held == [arn]
+    assert send.call_args_list[-1].kwargs['payload'] == {
+        'username': 'user',
+        'password_secret': arn,
+    }
+
+
+@pytest.mark.parametrize('password_change', ['challenge'], indirect=True)
+def test_a_challenge_that_sets_no_password_leaves_no_secret(password_change):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.return_value = Mock(auth=None)
+    assert change().auth is None
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    send.assert_not_called()
 
 
 def test_a_sweep_that_cannot_list_secrets_does_not_stop_a_password_change(

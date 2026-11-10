@@ -18,7 +18,7 @@ __all__ = (
     'GroupMembershipUpdatedTask',
 )
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from ideasdk.utils import Utils
 from ideadatamodel import errorcodes, exceptions
@@ -40,6 +40,16 @@ import os
 import pathlib
 import shutil
 import time
+
+
+class PasswordSecretUnavailable(Exception):
+    """Secrets Manager failed a password task. Says so without the role or the secret."""
+
+
+def _error_code(error: Exception) -> str:
+    if isinstance(error, ClientError):
+        return error.response['Error']['Code']
+    return type(error).__name__
 
 
 class SyncGroupInDirectoryServiceTask(BaseTask):
@@ -364,8 +374,8 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
             # release after 26.11.2: no queue holds a message that long.
             password = self._read_password_file(payload['password_file'])
         if password is None:
-            # The password goes only once its message is finished with, so this is a
-            # redelivery of one that was: nothing is left to do, and no retry finds it.
+            # A redelivery of a message that was finished with, which is when its
+            # password goes: nothing is left to do, and no retry finds it.
             self.logger.warning(f'password is gone for user: {username}; done')
             # it may have ended in a recorded failure, which this must not clear
             return NOTHING_DONE
@@ -392,19 +402,27 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
                 .secretsmanager()
                 .get_secret_value(SecretId=password_secret)['SecretString']
             )
-        except ClientError as error:
-            code = error.response['Error']['Code']
-            if code == 'ResourceNotFoundException':
+        except (ClientError, BotoCoreError) as error:
+            code = _error_code(error)
+            gone = code == 'ResourceNotFoundException' or (
+                # the answer while a deleted secret is still being removed
+                code == 'InvalidRequestException' and 'deletion' in str(error)
+            )
+            # The role may read a secret by its tags, so one that is gone can also be
+            # answered as denied.
+            if finished and (gone or code == 'AccessDeniedException'):
                 return None
-            # the answer while a deleted secret is still being removed
-            if code == 'InvalidRequestException' and 'deletion' in str(error):
-                return None
-            # The role may read a secret by its tags, so one that is gone can be
-            # answered as denied. Then only a message recorded as finished is done.
-            if code == 'AccessDeniedException' and finished:
-                return None
-            # unreachable, or really denied: the retry finds out
-            raise
+            if gone:
+                # deleted before the password was applied: swept, or by hand
+                raise TaskCannotSucceed(
+                    'The new password was not synced to the directory; set it again.'
+                ) from None
+            # Unreachable or denied: the retry finds out. Not the error's own text,
+            # which names the role and the secret, and is kept on the user.
+            raise PasswordSecretUnavailable(
+                'The new password was not synced to the directory: Secrets Manager '
+                f'did not return it ({code}). Set it again if this does not clear.'
+            ) from None
 
     @staticmethod
     def _read_password_file(password_file: str):
@@ -468,13 +486,15 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
             self.context.aws().secretsmanager().delete_secret(
                 SecretId=payload['password_secret'], ForceDeleteWithoutRecovery=True
             )
-        except ClientError as error:
-            code = error.response['Error']['Code']
+        except (ClientError, BotoCoreError) as error:
+            code = _error_code(error)
             if code == 'ResourceNotFoundException':
                 return
             if code != 'AccessDeniedException':
                 # unreachable: the retry deletes it
-                raise
+                raise PasswordSecretUnavailable(
+                    f'The secret of a password could not be deleted ({code}).'
+                ) from None
             # A secret already deleted can be answered as denied, as in the read, and
             # no retry changes a real denial. The sweep removes what this leaves.
             self.logger.warning('password secret not deleted: gone already, or denied')

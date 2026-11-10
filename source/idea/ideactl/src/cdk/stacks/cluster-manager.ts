@@ -66,8 +66,9 @@ const MODULE_CLUSTER_MANAGER = 'cluster-manager';
 /** `constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS` / `SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS`. */
 const SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS = 16;
 // The SQS default, set so it cannot move unseen: cluster-manager deletes a password secret whose
-// task was lost once the secret is 5 days old (STRAY_PASSWORD_SECRET_SECONDS in accounts_service.py),
-// which is safe only while no message outlives that. Raise that bound before raising this.
+// task was lost once the secret is 9 days old (STRAY_PASSWORD_SECRET_SECONDS in accounts_service.py):
+// twice this, since a message moved into the password lane is sent again, plus a day. That is safe
+// only while no message outlives it. Raise that bound before raising this.
 const CLUSTER_TASKS_RETENTION_DAYS = 4;
 const SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS = 3;
 /** `constants.SQS_VISIBILITY_TASKS` / `SQS_VISIBILITY_NOTIFICATIONS`. */
@@ -430,26 +431,30 @@ export class ClusterManagerStack extends IdeaBaseStack {
   /**
    * A new password waits for its directory sync task in a secret the application makes and the
    * task deletes: `<cluster>-password-sync-<random>`. The task role may make a secret of that name
-   * only with the tags its read and delete then require. The sweep of strays lists secrets with the
-   * health collectors' ListSecrets. Out of the policy template for the same reason as theirs.
+   * only with the two tags its read and delete then require, and may set no other tag on one: with
+   * `idea:ModuleName` the policy template's statement for the module's own secrets would let the
+   * role overwrite a waiting password. The sweep of strays lists secrets with the health collectors'
+   * ListSecrets. Out of the policy template for the same reason as theirs.
    */
   private passwordSecretStatements(): iam.PolicyStatement[] {
     const resources = [this.stack.formatArn({ service: 'secretsmanager', resource: `secret:${this.clusterName}-password-sync-*` })];
-    const tagged = (key: string) => ({ StringEquals: {
+    const tagged = (key: string) => ({
       [`${key}/idea:ClusterName`]: this.clusterName,
-      [`${key}/idea:ModuleName`]: 'cluster-manager',
       [`${key}/idea:Purpose`]: 'password-sync',
-    } });
+    });
     return [
       new iam.PolicyStatement({
         actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
         resources,
-        conditions: tagged('aws:RequestTag'),
+        conditions: {
+          StringEquals: tagged('aws:RequestTag'),
+          'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:ClusterName', 'idea:Purpose'] },
+        },
       }),
       new iam.PolicyStatement({
         actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'],
         resources,
-        conditions: tagged('secretsmanager:ResourceTag'),
+        conditions: { StringEquals: tagged('secretsmanager:ResourceTag') },
       }),
     ];
   }
