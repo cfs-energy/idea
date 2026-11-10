@@ -49,9 +49,7 @@ import botocore.exceptions
 import ldap
 import os
 import re
-import shutil
 import stat
-import tempfile
 import time
 
 
@@ -105,6 +103,7 @@ class AccountsService:
         self.ds_automation_dir = self.context.config().get_string(
             'directoryservice.automation_dir', required=True
         )
+        self._next_password_secret_sweep = 0.0
 
     def is_cluster_administrator(self, username: str) -> bool:
         cluster_administrator = self.context.config().get_string(
@@ -1225,26 +1224,33 @@ class AccountsService:
 
     def change_ldap_password(self, username: str, password: str) -> bool:
         """
-        Change password for given username in ldap or ad
+        Change password for given username in ldap or ad. The password waits for its
+        task in a Secrets Manager secret that the task deletes, never in a file.
         :param username:
         :param password:
         :return: True when the task that creates the account was queued too
         """
-        if not Utils.is_dir(self.ds_automation_dir):
-            os.makedirs(self.ds_automation_dir)
-            # noinspection OsChmod
-            os.chmod(self.ds_automation_dir, 0o700)
+        # ponytail: the file sweep goes with the password_file branch of
+        # accounts.sync-password, in the release after 26.11.2
         self.remove_stranded_password_files()
+        self.remove_stray_password_secrets()
 
-        temp_dir = tempfile.mkdtemp(dir=self.ds_automation_dir)
+        secrets = self.context.aws().secretsmanager()
+        request = {
+            'Name': f'{self.password_secret_prefix}{Utils.uuid()}',
+            'SecretString': password,
+            'Tags': [
+                {'Key': key, 'Value': value}
+                for key, value in self.password_secret_tags.items()
+            ],
+        }
+        kms_key_id = self.context.config().get_string(
+            'cluster.secretsmanager.kms_key_id'
+        )
+        if kms_key_id:
+            request['KmsKeyId'] = kms_key_id
+        password_secret = secrets.create_secret(**request)['ARN']
         try:
-            password_file = os.path.join(temp_dir, 'password.txt')
-            with open(
-                os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
-                'w',
-            ) as f:
-                f.write(password)
-
             is_user_synced = self.ldap_client.is_existing_user(username)
             if not is_user_synced:
                 self.task_manager.send(
@@ -1256,7 +1262,7 @@ class AccountsService:
 
             self.task_manager.send(
                 task_name='accounts.sync-password',
-                payload={'username': username, 'password_file': password_file},
+                payload={'username': username, 'password_secret': password_secret},
                 message_group_id=username,
                 # the directory has no account to give the password to until the
                 # task queued above has run
@@ -1264,9 +1270,81 @@ class AccountsService:
             )
             return not is_user_synced
         except Exception:
-            # only the queued task removes the file, and none was queued
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            # only the queued task deletes the secret, and none was queued
+            try:
+                secrets.delete_secret(
+                    SecretId=password_secret, ForceDeleteWithoutRecovery=True
+                )
+            except (
+                botocore.exceptions.ClientError,
+                botocore.exceptions.BotoCoreError,
+            ) as error:
+                # the sweep removes it; the caller is told why the change failed
+                self.logger.warning(
+                    'a password secret that was not queued could not be deleted: '
+                    f'{type(error).__name__}'
+                )
             raise
+
+    @property
+    def password_secret_prefix(self) -> str:
+        # the task role may create, read and delete secrets of this name only
+        return f'{self.context.cluster_name()}-password-sync-'
+
+    @property
+    def password_secret_tags(self) -> dict:
+        return {
+            constants.IDEA_TAG_CLUSTER_NAME: self.context.cluster_name(),
+            constants.IDEA_TAG_MODULE_NAME: 'cluster-manager',
+            'idea:Purpose': 'password-sync',
+        }
+
+    PASSWORD_SECRET_SWEEP_SECONDS = 3600
+
+    def remove_stray_password_secrets(self):
+        """
+        a password secret outlives its task when the task is lost: a queue purged by
+        hand, or a delete Secrets Manager did not take. Looks at most once an hour,
+        the first time on the first password set after a start, removes only secrets
+        with this cluster's password name and tags, and never fails the caller.
+        """
+        now = time.monotonic()
+        if now < self._next_password_secret_sweep:
+            return
+        self._next_password_secret_sweep = now + self.PASSWORD_SECRET_SWEEP_SECONDS
+        # As for the files: a task can wait in the queue this long, behind a stopped
+        # cluster-manager or other passwords, and must still find its secret.
+        cutoff = time.time() - self.STRANDED_PASSWORD_FILE_SECONDS
+        wanted = self.password_secret_tags
+        try:
+            secrets = self.context.aws().secretsmanager()
+            pages = secrets.get_paginator('list_secrets').paginate(
+                Filters=[
+                    {'Key': 'name', 'Values': [self.password_secret_prefix]},
+                    {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+                ]
+            )
+            for page in pages:
+                for secret in page.get('SecretList', []):
+                    # the filters match by prefix, and on any tag
+                    tags = {tag['Key']: tag['Value'] for tag in secret.get('Tags', [])}
+                    if not secret['Name'].startswith(self.password_secret_prefix):
+                        continue
+                    if any(tags.get(key) != value for key, value in wanted.items()):
+                        continue
+                    if secret['CreatedDate'].timestamp() > cutoff:
+                        continue
+                    secrets.delete_secret(
+                        SecretId=secret['ARN'], ForceDeleteWithoutRecovery=True
+                    )
+                    self.logger.info('removed a stray password secret')
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as error:
+            self.logger.warning(
+                f'could not look for stray password secrets: {type(error).__name__}'
+            )
 
     # No queue keeps a message longer than this, so no task is left to read the file.
     STRANDED_PASSWORD_FILE_SECONDS = 14 * 24 * 3600
@@ -1275,7 +1353,7 @@ class AccountsService:
         """
         a password file outlives its task when the task is lost: a release that did
         not clean up after a task it gave up on, or a queue purged by hand. Removes
-        only what change_ldap_password makes, a folder holding password.txt and
+        only what change_ldap_password made up to 26.11.1, a folder holding password.txt and
         nothing else, and never fails the caller.
         """
         cutoff = time.time() - self.STRANDED_PASSWORD_FILE_SECONDS

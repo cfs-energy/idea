@@ -12,6 +12,7 @@ from unittest.mock import Mock
 
 import ldap
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from ideadatamodel import constants, errorcodes, exceptions
 from ideaclustermanager.app.accounts import account_tasks
@@ -25,6 +26,10 @@ from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
 from ideaclustermanager.app.tasks import task_manager as task_manager_module
 from ideaclustermanager.app.tasks.task_manager import TASK_MAX_ATTEMPTS, TaskManager
+from ideaclustermanagertests.fake_secrets_manager import (
+    FakeSecretsManager,
+    client_error,
+)
 from ideaclustermanagertests.metrics_fakes import FakeConfig
 
 
@@ -193,6 +198,154 @@ def test_any_other_directory_failure_keeps_the_file_for_the_retry(tmp_path):
     with pytest.raises(RuntimeError):
         task.invoke({'username': 'user', 'password_file': str(password)})
     assert password.exists()
+
+
+def secret_password_task(side_effect=None, applied=None):
+    context = Mock()
+    context.config.return_value = FakeConfig({})
+    context.ldap_client.change_password.side_effect = side_effect
+    user = {'username': 'user'}
+    if applied is not None:
+        user['password_sync_sent_at'] = applied
+    context.accounts.user_dao.get_user.return_value = user
+    secrets = FakeSecretsManager()
+    context.aws.return_value.secretsmanager.return_value = secrets
+    arn = secrets.add('idea-mock-password-sync-abc')
+    task = account_tasks.SyncPasswordInDirectoryServiceTask(context)
+    return task, secrets, {'username': 'user', 'password_secret': arn}
+
+
+def recorded(task):
+    return [
+        call.kwargs['ExpressionAttributeValues'][':sent_at']
+        for call in task.context.accounts.user_dao.table.update_item.call_args_list
+    ]
+
+
+def test_a_password_is_read_from_its_secret_and_the_secret_deleted():
+    task, secrets, payload = secret_password_task()
+    assert task.invoke({**payload, 'sent_at': 5}) is None
+    task.context.ldap_client.change_password.assert_called_once_with(
+        'user', 'secret-value'
+    )
+    assert secrets.secrets == {}
+    assert secrets.deleted == [payload['password_secret']]
+    assert recorded(task) == [5]
+    logged = str(task.logger.mock_calls)
+    assert 'secret-value' not in logged and payload['password_secret'] not in logged
+
+
+def test_a_password_the_directory_refuses_leaves_no_secret():
+    task, secrets, payload = secret_password_task(PasswordRefused())
+    with pytest.raises(TaskCannotSucceed) as raised:
+        task.invoke(payload)
+    assert 'secret-value' not in str(raised.value)
+    assert secrets.secrets == {}
+
+
+def test_any_other_directory_failure_keeps_the_secret_for_the_retry():
+    task, secrets, payload = secret_password_task(RuntimeError('directory busy'))
+    with pytest.raises(RuntimeError):
+        task.invoke(payload)
+    assert list(secrets.secrets) == [payload['password_secret']]
+
+
+def test_a_superseded_password_is_not_applied_and_leaves_no_secret():
+    task, secrets, payload = secret_password_task(applied=9)
+    assert task.invoke({**payload, 'sent_at': 5}) is account_tasks.NOTHING_DONE
+    task.context.ldap_client.change_password.assert_not_called()
+    assert secrets.secrets == {}
+
+
+# the task manager ends a message it gives up on, one whose user is deleted and one
+# past its attempts through this
+def test_a_password_given_up_on_leaves_no_secret_and_is_recorded():
+    task, secrets, payload = secret_password_task()
+    task.on_terminal_failure({**payload, 'sent_at': 5})
+    assert secrets.secrets == {}
+    assert recorded(task) == [5]
+
+
+def test_a_password_given_up_on_is_recorded_when_its_secret_cannot_be_deleted():
+    task, secrets, payload = secret_password_task()
+    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
+    with pytest.raises(ClientError):
+        task.on_terminal_failure({**payload, 'sent_at': 5})
+    # an older password queued behind it must still not replace it
+    assert recorded(task) == [5]
+
+
+@pytest.mark.parametrize(
+    'code, message',
+    [
+        ('ResourceNotFoundException', ''),
+        ('InvalidRequestException', 'the secret was marked for deletion'),
+    ],
+)
+def test_a_redelivered_password_whose_secret_is_gone_is_done(code, message):
+    task, secrets, payload = secret_password_task()
+    task.invoke(payload)
+    # acknowledged late: the same message comes back
+    secrets.failing['GetSecretValue'] = client_error(code, 'GetSecretValue', message)
+    assert task.invoke(payload) is account_tasks.NOTHING_DONE
+    task.context.ldap_client.change_password.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        client_error('AccessDeniedException', 'GetSecretValue'),
+        client_error('InternalServiceError', 'GetSecretValue'),
+        client_error('InvalidRequestException', 'GetSecretValue', 'not this one'),
+        EndpointConnectionError(endpoint_url='https://secretsmanager.invalid'),
+    ],
+)
+def test_a_secret_that_cannot_be_read_is_retried_and_kept(error):
+    task, secrets, payload = secret_password_task()
+    secrets.failing['GetSecretValue'] = error
+    with pytest.raises(type(error)):
+        task.invoke({**payload, 'sent_at': 5})
+    task.context.ldap_client.change_password.assert_not_called()
+    assert list(secrets.secrets) == [payload['password_secret']]
+    assert secrets.deleted == []
+
+
+def test_a_gone_secret_answered_as_denied_is_done_only_for_a_finished_message():
+    # a role allowed by the secret's tags can be told "denied" about one that is gone
+    task, secrets, payload = secret_password_task(applied=5)
+    del secrets.secrets[payload['password_secret']]
+    secrets.gone_code = 'AccessDeniedException'
+    assert task.invoke({**payload, 'sent_at': 5}) is account_tasks.NOTHING_DONE
+    with pytest.raises(ClientError):
+        task.invoke({**payload, 'sent_at': 6})
+    task.context.ldap_client.change_password.assert_not_called()
+    # and superseded, its delete is answered the same way: still nothing to retry
+    assert task.invoke({**payload, 'sent_at': 4}) is account_tasks.NOTHING_DONE
+
+
+def test_a_secret_that_could_not_be_deleted_is_deleted_by_the_retry():
+    task, secrets, payload = secret_password_task()
+    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
+    with pytest.raises(ClientError):
+        task.invoke({**payload, 'sent_at': 5})
+    del secrets.failing['DeleteSecret']
+    task.context.accounts.user_dao.get_user.return_value['password_sync_sent_at'] = 5
+    assert task.invoke({**payload, 'sent_at': 5}) is None
+    assert secrets.secrets == {}
+
+
+def test_a_password_file_an_earlier_release_queued_is_still_applied_and_removed(
+    tmp_path,
+):
+    task, password = refused_password_task(tmp_path, None)
+    secrets = task.context.aws.return_value.secretsmanager.return_value
+    task.invoke({'username': 'user', 'password_file': str(password)})
+    task.context.ldap_client.change_password.assert_called_once_with(
+        'user', 'secret-value'
+    )
+    assert not password.parent.exists()
+    secrets.get_secret_value.assert_not_called()
+    secrets.delete_secret.assert_not_called()
 
 
 def test_the_directory_client_says_when_a_password_is_refused():

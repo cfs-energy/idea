@@ -337,7 +337,6 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
     def invoke(self, payload: Dict):
         username = payload['username']
-        password_file = payload['password_file']
 
         self.logger.info(f'sync password for user: {username} in directory service')
 
@@ -346,22 +345,28 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         # group an earlier release used, or queued twice. It must not undo the newer.
         sent_at = payload.get('sent_at')
         user = self.context.accounts.user_dao.get_user(username) or {}
-        if sent_at is not None and sent_at < user.get(self.APPLIED, 0):
+        applied = user.get(self.APPLIED, 0)
+        if sent_at is not None and sent_at < applied:
             self.logger.info(f'a newer password superseded this for user: {username}')
             self.on_terminal_failure(payload)
             # the newer one's outcome stands, a recorded failure included
             return NOTHING_DONE
 
-        try:
-            with open(password_file, 'r') as f:
-                password = f.read()
-        except FileNotFoundError:
-            if not os.path.isdir(os.path.dirname(os.path.dirname(password_file))):
-                # the shared file system is away, not the file
-                raise
-            # The file goes only once its message is finished with, so this is a
+        if 'password_secret' in payload:
+            password = self._read_password_secret(
+                payload['password_secret'],
+                finished=sent_at is not None and sent_at <= applied,
+            )
+        else:
+            # ponytail: messages 26.11.1 and the 26.11.2 release candidates queued
+            # carry a file on the apps file system. Remove this branch, the file
+            # half of _forget_password and remove_stranded_password_files in the
+            # release after 26.11.2: no queue holds a message that long.
+            password = self._read_password_file(payload['password_file'])
+        if password is None:
+            # The password goes only once its message is finished with, so this is a
             # redelivery of one that was: nothing is left to do, and no retry finds it.
-            self.logger.warning(f'password file is gone for user: {username}; done')
+            self.logger.warning(f'password is gone for user: {username}; done')
             # it may have ended in a recorded failure, which this must not clear
             return NOTHING_DONE
 
@@ -370,7 +375,7 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         except PasswordRefused:
             # the same password is refused every time, and each retry would hold up any
             # later password behind it
-            self._remove_password_file(password_file)
+            self._forget_password(payload)
             raise TaskCannotSucceed(
                 'The directory refused this password, so it was not synced. '
                 'Desktop and SSH sign-in keep the old password until a new one is set.'
@@ -378,7 +383,39 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
         if sent_at is not None:
             self._record_applied(username, sent_at)
-        self._remove_password_file(password_file)
+        self._forget_password(payload)
+
+    def _read_password_secret(self, password_secret: str, finished: bool):
+        try:
+            return (
+                self.context.aws()
+                .secretsmanager()
+                .get_secret_value(SecretId=password_secret)['SecretString']
+            )
+        except ClientError as error:
+            code = error.response['Error']['Code']
+            if code == 'ResourceNotFoundException':
+                return None
+            # the answer while a deleted secret is still being removed
+            if code == 'InvalidRequestException' and 'deletion' in str(error):
+                return None
+            # The role may read a secret by its tags, so one that is gone can be
+            # answered as denied. Then only a message recorded as finished is done.
+            if code == 'AccessDeniedException' and finished:
+                return None
+            # unreachable, or really denied: the retry finds out
+            raise
+
+    @staticmethod
+    def _read_password_file(password_file: str):
+        try:
+            with open(password_file, 'r') as f:
+                return f.read()
+        except FileNotFoundError:
+            if not os.path.isdir(os.path.dirname(os.path.dirname(password_file))):
+                # the shared file system is away, not the file
+                raise
+            return None
 
     def _change_password(self, user: Dict, username: str, password: str):
         # The directory service chooses the domain controller it asks, and an account
@@ -415,13 +452,32 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
     def on_terminal_failure(self, payload: Dict):
         try:
-            self._remove_password_file(payload['password_file'])
+            self._forget_password(payload)
         except FileNotFoundError:
             pass
-        # An older password still queued behind this one must not become the
-        # directory's password once this one is given up on.
-        if payload.get('sent_at') is not None:
-            self._record_applied(payload['username'], payload['sent_at'])
+        finally:
+            # An older password still queued behind this one must not become the
+            # directory's password once this one is given up on.
+            if payload.get('sent_at') is not None:
+                self._record_applied(payload['username'], payload['sent_at'])
+
+    def _forget_password(self, payload: Dict):
+        if 'password_secret' not in payload:
+            return self._remove_password_file(payload['password_file'])
+        try:
+            self.context.aws().secretsmanager().delete_secret(
+                SecretId=payload['password_secret'], ForceDeleteWithoutRecovery=True
+            )
+        except ClientError as error:
+            code = error.response['Error']['Code']
+            if code == 'ResourceNotFoundException':
+                return
+            if code != 'AccessDeniedException':
+                # unreachable: the retry deletes it
+                raise
+            # A secret already deleted can be answered as denied, as in the read, and
+            # no retry changes a real denial. The sweep removes what this leaves.
+            self.logger.warning('password secret not deleted: gone already, or denied')
 
     def _remove_password_file(self, password_file: str):
         password_file_path = pathlib.Path(password_file)

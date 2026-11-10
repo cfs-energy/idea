@@ -16,11 +16,13 @@ Test Cases for AccountsService
 from ideaclustermanager import AppContext
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
+from ideaclustermanagertests.fake_secrets_manager import client_error
 
 import botocore.exceptions
 import ldap
 import os
 import pytest
+import re
 import time
 from typing import Optional
 from unittest.mock import Mock
@@ -1078,11 +1080,61 @@ def test_a_user_whose_delete_stopped_after_its_accounts_went_cannot_be_enabled(
     assert context.accounts.user_dao.get_user('accounts_deleted11')['enabled'] is False
 
 
-@pytest.mark.parametrize('failing', ['directory', 'queue'])
-def test_a_password_that_could_not_be_queued_leaves_no_file(
-    context: AppContext, monkeypatch, tmp_path, failing
-):
+@pytest.fixture
+def secrets(context: AppContext, monkeypatch, tmp_path):
+    # no file is ever written for a password set by this release
     monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    monkeypatch.setattr(context.accounts, '_next_password_secret_sweep', 0.0)
+    fake = context.aws().secretsmanager()
+    monkeypatch.setattr(fake, 'secrets', {})
+    monkeypatch.setattr(fake, 'created', [])
+    monkeypatch.setattr(fake, 'deleted', [])
+    monkeypatch.setattr(fake, 'list_calls', [])
+    monkeypatch.setattr(fake, 'failing', {})
+    return fake
+
+
+PASSWORD_TAGS = {
+    'idea:ClusterName': 'idea-mock',
+    'idea:ModuleName': 'cluster-manager',
+    'idea:Purpose': 'password-sync',
+}
+
+
+@pytest.mark.parametrize('kms_key_id', [None, 'customer-key-id'])
+def test_a_password_waits_for_its_task_in_a_secret_and_never_in_a_file(
+    context: AppContext, monkeypatch, tmp_path, secrets, kms_key_id
+):
+    send = Mock()
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    if kms_key_id:
+        context.config().put('cluster.secretsmanager.kms_key_id', kms_key_id)
+    try:
+        context.accounts.change_ldap_password('user', 'secret-value')
+    finally:
+        context.config().put('cluster.secretsmanager.kms_key_id', None)
+
+    (request,) = secrets.created
+    assert re.fullmatch(r'idea-mock-password-sync-[0-9a-f-]{36}', request['Name'])
+    assert request['SecretString'] == 'secret-value'
+    assert {tag['Key']: tag['Value'] for tag in request['Tags']} == PASSWORD_TAGS
+    # the cluster's key when it has one, else the account's default key
+    assert request.get('KmsKeyId') == kms_key_id
+    assert set(request) == {'Name', 'SecretString', 'Tags'} | (
+        {'KmsKeyId'} if kms_key_id else set()
+    )
+    (arn,) = secrets.secrets
+    queued = send.call_args_list[-1].kwargs
+    assert queued['task_name'] == 'accounts.sync-password'
+    assert queued['payload'] == {'username': 'user', 'password_secret': arn}
+    assert 'secret-value' not in str(send.call_args_list)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('failing', ['directory', 'queue'])
+def test_a_password_that_could_not_be_queued_leaves_no_secret(
+    context: AppContext, monkeypatch, tmp_path, secrets, failing
+):
     if failing == 'directory':
         monkeypatch.setattr(
             context.accounts.ldap_client,
@@ -1097,21 +1149,66 @@ def test_a_password_that_could_not_be_queued_leaves_no_file(
         )
     with pytest.raises(RuntimeError):
         context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_queued_password_file_is_readable_by_its_owner_only(
-    context: AppContext, monkeypatch, tmp_path
+def test_a_secret_that_cannot_be_deleted_does_not_hide_why_the_queue_failed(
+    context: AppContext, monkeypatch, secrets
 ):
-    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
-    umask = os.umask(0)
-    try:
+    monkeypatch.setattr(
+        context.accounts.task_manager,
+        'send',
+        Mock(side_effect=RuntimeError('queue unavailable')),
+    )
+    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
+    with pytest.raises(RuntimeError, match='queue unavailable'):
         context.accounts.change_ldap_password('user', 'secret-value')
-    finally:
-        os.umask(umask)
-    (file,) = tmp_path.glob('*/password.txt')
-    assert file.read_text() == 'secret-value'
-    assert file.stat().st_mode & 0o777 == 0o600
+
+
+def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
+    context: AppContext, secrets
+):
+    prefix = 'idea-mock-password-sync-'
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=15)
+    kept = [
+        # the queue can still hold the task of anything younger than its retention
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=13),
+        # each of the name and the three tags is required
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=15),
+        secrets.add(f'{prefix}untagged', age_days=15),
+        *(
+            secrets.add(
+                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=15
+            )
+            for n, key in enumerate(PASSWORD_TAGS)
+        ),
+    ]
+
+    context.accounts.change_ldap_password('user', 'secret-value')
+
+    assert secrets.deleted == [old]
+    assert set(kept) < set(secrets.secrets)
+    assert secrets.list_calls == [
+        {
+            'Filters': [
+                {'Key': 'name', 'Values': [prefix]},
+                {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+            ]
+        }
+    ]
+    # not on every password: the next look is an hour away
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+
+
+def test_a_sweep_that_cannot_list_secrets_does_not_stop_a_password_change(
+    context: AppContext, secrets
+):
+    secrets.failing['ListSecrets'] = client_error('AccessDeniedException', 'List')
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.secrets) == 1
 
 
 def stranded(folder, age_days, names=('password.txt',)):
@@ -1125,10 +1222,9 @@ def stranded(folder, age_days, names=('password.txt',)):
 
 
 def test_a_password_file_no_task_is_left_to_read_is_removed(
-    context: AppContext, monkeypatch, tmp_path
+    context: AppContext, tmp_path, secrets
 ):
     # a release that gave up on a task without cleaning up after it left the file
-    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
     old = stranded(tmp_path / 'tmpold', 15)
     # the queue can still hold the task of anything younger than its longest retention
     waiting = stranded(tmp_path / 'tmpwaiting', 13)
@@ -1148,16 +1244,15 @@ def test_a_password_file_no_task_is_left_to_read_is_removed(
     for kept in (waiting, other, not_a_password, target, linked):
         assert kept.exists(), kept
     assert (target / 'password.txt').read_text() == 'secret-value'
-    assert len(list(tmp_path.glob('*/password.txt'))) == 5
+    assert len(list(tmp_path.glob('*/password.txt'))) == 4
 
 
 def test_a_sweep_that_cannot_read_the_folder_does_not_stop_a_password_change(
-    context: AppContext, monkeypatch, tmp_path
+    context: AppContext, monkeypatch, secrets
 ):
-    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
     monkeypatch.setattr(os, 'scandir', Mock(side_effect=OSError('stale file handle')))
     context.accounts.change_ldap_password('user', 'secret-value')
-    assert len(list(tmp_path.glob('*/password.txt'))) == 1
+    assert len(secrets.secrets) == 1
 
 
 def test_a_new_user_does_not_inherit_rows_an_earlier_user_of_the_name_left(

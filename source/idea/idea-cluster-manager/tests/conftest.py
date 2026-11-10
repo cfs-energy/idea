@@ -30,6 +30,7 @@ from ideaclustermanager.app.accounts.cognito_user_pool import (
 )
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
+from ideaclustermanagertests.fake_secrets_manager import FakeSecretsManager
 from ideaclustermanagertests.mock_ldap_client import MockLdapClient
 
 from ideatestutils import MockInstanceTypes, MockConfig
@@ -250,6 +251,8 @@ def context(ddb_local):
         AwsClientProvider, 'dynamodb_table', lambda *_: mock_dynamodb_table_resource
     )
     monkeypatch.setattr(AwsClientProvider, 'cognito_idp', lambda *_: mock_cognito_idp)
+    secrets_manager = FakeSecretsManager()
+    monkeypatch.setattr(AwsClientProvider, 'secretsmanager', lambda *_: secrets_manager)
 
     mock_config = MockConfig()
 

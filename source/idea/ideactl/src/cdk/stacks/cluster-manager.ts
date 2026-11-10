@@ -423,6 +423,33 @@ export class ClusterManagerStack extends IdeaBaseStack {
   }
 
   /**
+   * A new password waits for its directory sync task in a secret the application makes and the
+   * task deletes: `<cluster>-password-sync-<random>`. The task role may make a secret of that name
+   * only with the tags its read and delete then require. The sweep of strays lists secrets with the
+   * health collectors' ListSecrets. Out of the policy template for the same reason as theirs.
+   */
+  private passwordSecretStatements(): iam.PolicyStatement[] {
+    const resources = [this.stack.formatArn({ service: 'secretsmanager', resource: `secret:${this.clusterName}-password-sync-*` })];
+    const tagged = (key: string) => ({ StringEquals: {
+      [`${key}/idea:ClusterName`]: this.clusterName,
+      [`${key}/idea:ModuleName`]: 'cluster-manager',
+      [`${key}/idea:Purpose`]: 'password-sync',
+    } });
+    return [
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
+        resources,
+        conditions: tagged('aws:RequestTag'),
+      }),
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'],
+        resources,
+        conditions: tagged('secretsmanager:ResourceTag'),
+      }),
+    ];
+  }
+
+  /**
    * The cluster-manager task on the container stack's capacity.
    *
    * It starts after the three endpoints, because a service may not name a target group that has no
@@ -462,7 +489,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
           'ds:DescribeDirectories',
         ],
         resources: ['*'],
-      })],
+      }), ...this.passwordSecretStatements()],
       tables: [],
       projects: [],
     };

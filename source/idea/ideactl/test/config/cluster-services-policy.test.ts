@@ -87,3 +87,12 @@ for (const enabled of [undefined, 'false', 'true']) {
     }
   });
 }
+
+it('can use a customer managed Secrets Manager key for a password secret', () => {
+  const kms = (extra: Record<string, string>) => policy(false, extra, true).filter(s => s.Action.includes('kms:GenerateDataKey'));
+  assert.deepEqual(kms({}), []);
+  const [statement, ...rest] = kms({'cluster.kms.key_type': 'customer-managed', 'cluster.secretsmanager.kms_key_id': 'secrets-key'});
+  assert.deepEqual(rest, []);
+  assert.deepEqual(statement!.Action, ['kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey']);
+  assert.deepEqual(statement!.Resource, [`arn:aws:kms:us-east-1:${'0'.repeat(12)}:key/secrets-key`]);
+});
