@@ -199,6 +199,11 @@ class SyncUserInDirectoryServiceTask(BaseTask):
                 )
                 return
             time.sleep(self.CATCH_UP_INTERVAL)
+            # deleting a user runs the removal itself beside the copy it queued: the
+            # one that comes second must not wait out an account the first removed
+            current = self.context.accounts.user_dao.get_user(user['username'])
+            if not current or not current.get(self.IN_DIRECTORY):
+                return
 
     def _record_in_directory(self, user: Dict, present: bool):
         if bool(user.get(self.IN_DIRECTORY)) == present:

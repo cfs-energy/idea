@@ -1121,3 +1121,31 @@ def test_an_account_removed_from_the_directory_by_hand_is_added_again(live_accou
     assert (
         directory.now >= account_tasks.SyncUserInDirectoryServiceTask.CATCH_UP_SECONDS
     )
+
+
+def test_a_removal_does_not_wait_out_an_account_its_other_copy_removed(live_accounts):
+    # deleting a user removes the account itself while the copy it queued can run too
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_new7')
+    drain()
+    task = account_tasks.SyncUserInDirectoryServiceTask(context)
+    table = context.accounts.user_dao.table
+    context.accounts.user_dao.update_user({'username': 'tasks_new7', 'enabled': False})
+    sleep = directory.sleep
+
+    def other_copy_finishes(seconds):
+        sleep(seconds)
+        directory.accounts.clear()
+        task._record_in_directory(
+            {'username': 'tasks_new7', task.IN_DIRECTORY: True}, False
+        )
+
+    # this copy read the record before the other one finished
+    directory.accounts.clear()
+    directory.sleep = other_copy_finishes
+    started = directory.now
+    task.invoke({'username': 'tasks_new7'})
+    assert directory.now - started == task.CATCH_UP_INTERVAL
+    assert (
+        task.IN_DIRECTORY not in table.get_item(Key={'username': 'tasks_new7'})['Item']
+    )
