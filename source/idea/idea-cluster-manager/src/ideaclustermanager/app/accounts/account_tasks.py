@@ -21,7 +21,7 @@ __all__ = (
 from botocore.exceptions import ClientError
 
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions
+from ideadatamodel import errorcodes, exceptions
 
 import ideaclustermanager
 from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
@@ -119,7 +119,7 @@ class GroupMembershipUpdatedTask(BaseTask):
                     self.logger.info(
                         f'add member: {username} to group: {group_name} in directory service ...'
                     )
-                    self.context.ldap_client.add_user_to_group([username], group_name)
+                    self._add_member(username, group_name)
 
                 # update membership in user projects (DynamoDB)
                 self.logger.info(
@@ -146,6 +146,25 @@ class GroupMembershipUpdatedTask(BaseTask):
                 self.context.projects.user_projects_dao.group_member_removed(
                     group_name=group_name, username=username
                 )
+
+    def _add_member(self, username: str, group_name: str):
+        directory = self.context.ldap_client
+        user = self.context.accounts.user_dao.get_user(username) or {}
+        if user.get(SyncUserInDirectoryServiceTask.IN_DIRECTORY) is not True:
+            directory.add_user_to_group([username], group_name)
+            return
+        # sync-user added this account, perhaps seconds ago on another domain
+        # controller. The one asked here is waited on until it shows the account, where
+        # the add failed and was retried; one that never shows it fails as before.
+        with directory.one_server():
+            deadline = (
+                time.monotonic() + SyncUserInDirectoryServiceTask.CATCH_UP_SECONDS
+            )
+            while (
+                not directory.is_existing_user(username) and time.monotonic() < deadline
+            ):
+                time.sleep(SyncUserInDirectoryServiceTask.CATCH_UP_INTERVAL)
+            directory.add_user_to_group([username], group_name)
 
 
 def keeps_directory_account(context, user: Dict) -> bool:
@@ -347,7 +366,7 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
             return NOTHING_DONE
 
         try:
-            self.context.ldap_client.change_password(username, password)
+            self._change_password(user, username, password)
         except PasswordRefused:
             # the same password is refused every time, and each retry would hold up any
             # later password behind it
@@ -360,6 +379,25 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
         if sent_at is not None:
             self._record_applied(username, sent_at)
         self._remove_password_file(password_file)
+
+    def _change_password(self, user: Dict, username: str, password: str):
+        # The directory service chooses the domain controller it asks, and an account
+        # reaches the others some seconds after sync-user added it. One recorded as
+        # added is waited for here; the failure and its retry are left for an account
+        # that is really missing.
+        added = user.get(SyncUserInDirectoryServiceTask.IN_DIRECTORY) is True
+        deadline = time.monotonic() + SyncUserInDirectoryServiceTask.CATCH_UP_SECONDS
+        while True:
+            try:
+                return self.context.ldap_client.change_password(username, password)
+            except exceptions.SocaException as error:
+                if (
+                    not added
+                    or error.error_code != errorcodes.AUTH_USER_NOT_FOUND
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+            time.sleep(SyncUserInDirectoryServiceTask.CATCH_UP_INTERVAL)
 
     def _record_applied(self, username: str, sent_at: int):
         try:

@@ -148,19 +148,27 @@ class TaskManager(SocaService):
             max_workers=self._max_workers, thread_name_prefix='task-executor'
         )
 
-    def _task_expired(self, task, payload, receive_count):
+    def _task_expired(self, task, payload, receive_count, message_id=None):
         # Python cannot safely cancel a running thread. The supervisor must replace the
         # process; leaving the receipt unacknowledged preserves FIFO retry ordering.
         try:
+            name = task.get_name() if task is not None else None
             os.write(
-                2, b'Task deadline exceeded; terminating worker process for restart\n'
+                2,
+                f'Task {name} (message {message_id}) deadline exceeded; '
+                'terminating worker process for restart\n'.encode(),
             )
             faulthandler.dump_traceback(all_threads=True)
             if task is not None and receive_count >= TASK_MAX_ATTEMPTS:
                 # Bound the write even if credentials or the database client hang.
                 writer = threading.Thread(
                     target=self._update_task_failure,
-                    args=(task, payload, TimeoutError('Task deadline exceeded')),
+                    args=(
+                        task,
+                        payload,
+                        TimeoutError('Task deadline exceeded'),
+                        message_id,
+                    ),
                     daemon=True,
                 )
                 writer.start()
@@ -176,10 +184,13 @@ class TaskManager(SocaService):
             receive_count = int(
                 message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
             )
+            message_id = message.get('MessageId')
         except (ValueError, TypeError, AttributeError):
-            task, payload, receive_count = None, None, 1
+            task, payload, receive_count, message_id = None, None, 1, None
         timer = threading.Timer(
-            self._task_timeout, self._task_expired, args=(task, payload, receive_count)
+            self._task_timeout,
+            self._task_expired,
+            args=(task, payload, receive_count, message_id),
         )
         timer.daemon = True
         timer.start()
@@ -209,16 +220,18 @@ class TaskManager(SocaService):
             QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
         )
 
-    def _cleanup(self, task, payload):
+    def _cleanup(self, task, payload, message_id):
         try:
             task.on_terminal_failure(payload)
         except Exception:
-            self.logger.exception(f'cleanup failed for task: {task.get_name()}')
+            self.logger.exception(
+                f'cleanup failed for task: {task.get_name()} (message {message_id})'
+            )
 
-    def _give_up(self, task, payload, receipt_handle, error):
+    def _give_up(self, task, payload, receipt_handle, error, message_id):
         if task is not None:
-            self._update_task_failure(task, payload, error)
-            self._cleanup(task, payload)
+            self._update_task_failure(task, payload, error, message_id)
+            self._cleanup(task, payload, message_id)
         self._delete(receipt_handle)
 
     def _retry_later(self, task_name, message_id, receipt_handle, receive_count):
@@ -231,7 +244,9 @@ class TaskManager(SocaService):
             )
         except Exception:
             # The receive visibility still bounds the wait.
-            self.logger.exception('failed to schedule task retry')
+            self.logger.exception(
+                f'failed to schedule retry of task {task_name} (message {message_id})'
+            )
             return
         # the message id is on every line of this message's attempts, so retries of
         # several tasks at once can be told apart
@@ -273,7 +288,7 @@ class TaskManager(SocaService):
             )
         task = self.tasks.get(task_name)
         if task is not None:
-            self._cleanup(task, payload)
+            self._cleanup(task, payload, message_id)
         self._delete(receipt_handle)
         return True
 
@@ -289,13 +304,18 @@ class TaskManager(SocaService):
         # that release's group was the entity's bare id; a name's ending proves nothing
         if not entity or group != entity[1]:
             return False
-        self.logger.info(f'moving task {task.get_name()} into its lane: {lane}')
-        self.send(
+        message_id = sqs_message.get('MessageId')
+        moved_as = self.send(
             task.get_name(),
             payload,
             message_group_id=group,
             # a redelivery of this message must not queue it twice
-            message_dedupe_id=f'{sqs_message.get("MessageId")}.{lane}',
+            message_dedupe_id=f'{message_id}.{lane}',
+        )
+        # the lane's copy is a new message: this line is what joins its id to the old one
+        self.logger.info(
+            f'moved task {task.get_name()} (message {message_id}) into its lane: '
+            f'{lane}, as message {moved_as}'
         )
         self._delete(sqs_message['ReceiptHandle'])
         return True
@@ -305,7 +325,7 @@ class TaskManager(SocaService):
             'cluster-manager.task_queue_url', required=True
         )
 
-    def _update_task_failure(self, task, payload, error=None):
+    def _update_task_failure(self, task, payload, error=None, message_id=None):
         try:
             entity = task.entity_ref(payload)
             if entity is None:
@@ -349,9 +369,15 @@ class TaskManager(SocaService):
                 )
         except ClientError as error:
             if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
-                self.logger.exception('failed to update task failure marker')
+                self.logger.exception(
+                    'failed to update task failure marker of task '
+                    f'{task.get_name()} (message {message_id})'
+                )
         except Exception:
-            self.logger.exception('failed to update task failure marker')
+            self.logger.exception(
+                'failed to update task failure marker of task '
+                f'{task.get_name()} (message {message_id})'
+            )
 
     def execute_task(self, sqs_message: Dict):
         task_name = None
@@ -374,7 +400,7 @@ class TaskManager(SocaService):
 
             if Utils.is_any_empty(task_name, task_payload):
                 self.logger.error(
-                    f'Invalid task - Body: {message_body} Handle: {receipt_handle} - {Utils.to_json(task_message)}'
+                    f'Invalid task (message {message_id}) - Body: {message_body} Handle: {receipt_handle} - {Utils.to_json(task_message)}'
                 )
                 return
 
@@ -383,7 +409,10 @@ class TaskManager(SocaService):
             )
 
             if task_name not in self.tasks:
-                self.logger.warning(f'no task registered for task name: {task_name}')
+                self.logger.warning(
+                    f'no task registered for task name: {task_name} '
+                    f'(message {message_id})'
+                )
                 return
 
             task = self.tasks[task_name]
@@ -409,6 +438,7 @@ class TaskManager(SocaService):
                     task_payload,
                     receipt_handle,
                     RuntimeError(f'gave up after {TASK_MAX_ATTEMPTS} attempts'),
+                    message_id,
                 )
                 return
             if self._move_into_lane(task, task_payload, sqs_message):
@@ -416,14 +446,17 @@ class TaskManager(SocaService):
             result = task.invoke(task_payload)
             task_succeeded = True
             if result is not NOTHING_DONE:
-                self._update_task_failure(task, task_payload)
+                self._update_task_failure(task, task_payload, message_id=message_id)
             _task_end = Utils.current_time_ms()
             _task_duration = int(_task_end - _task_start)
             self.logger.info(
                 f'completed task: {task_name} (message {message_id}, {receipt_handle}), duration: {_task_duration}ms'
             )
 
-            self.logger.debug(f'Attempting to delete task handle ({receipt_handle})')
+            self.logger.debug(
+                f'Attempting to delete task handle ({receipt_handle}) of task '
+                f'{task_name} (message {message_id})'
+            )
             self.context.aws().sqs().delete_message(
                 QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
             )
@@ -433,13 +466,13 @@ class TaskManager(SocaService):
                 f'failed to execute task due to LDAP exists error: {task_name} '
                 f'(message {message_id}) - {task_payload} - {e}'
             )
-            self._give_up(task, task_payload, receipt_handle, e)
+            self._give_up(task, task_payload, receipt_handle, e, message_id)
 
         except TaskCannotSucceed as e:
             self.logger.error(
                 f'task {task_name} (message {message_id}) cannot succeed: {e}'
             )
-            self._give_up(task, task_payload, receipt_handle, e)
+            self._give_up(task, task_payload, receipt_handle, e, message_id)
 
         except Exception as e:
             if self._discard_deleted_user(
@@ -457,7 +490,7 @@ class TaskManager(SocaService):
                     f'task {task_name} (message {message_id}) gave up after '
                     f'{TASK_MAX_ATTEMPTS} attempts'
                 )
-                self._give_up(task, task_payload, receipt_handle, e)
+                self._give_up(task, task_payload, receipt_handle, e, message_id)
             else:
                 self._retry_later(task_name, message_id, receipt_handle, receive_count)
 
@@ -521,12 +554,18 @@ class TaskManager(SocaService):
         self.logger.debug(
             f'send task: {task_name}, message group id: {message_group_id}, DedupeId: {message_dedupe_id}'
         )
-        self.context.aws().sqs().send_message(
-            QueueUrl=self.get_task_queue_url(),
-            MessageBody=Utils.to_json(task_message),
-            MessageDeduplicationId=message_dedupe_id,
-            MessageGroupId=message_group_id,
+        sent = (
+            self.context.aws()
+            .sqs()
+            .send_message(
+                QueueUrl=self.get_task_queue_url(),
+                MessageBody=Utils.to_json(task_message),
+                MessageDeduplicationId=message_dedupe_id,
+                MessageGroupId=message_group_id,
+            )
         )
+        # the id the queue gave it, which every line about its attempts will carry
+        return sent.get('MessageId') if isinstance(sent, dict) else None
 
     def start(self):
         self.task_monitor_thread.start()

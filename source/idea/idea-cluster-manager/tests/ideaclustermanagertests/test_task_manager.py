@@ -1,7 +1,9 @@
+import ast
 from contextlib import contextmanager
 from datetime import datetime
 
 import boto3
+import inspect
 import json
 import subprocess
 import sys
@@ -11,7 +13,7 @@ from unittest.mock import Mock
 import ldap
 import pytest
 
-from ideadatamodel import constants
+from ideadatamodel import constants, errorcodes, exceptions
 from ideaclustermanager.app.accounts import account_tasks
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideaclustermanager.app.accounts.db.group_dao import GroupDAO
@@ -21,6 +23,7 @@ from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
 from ideaclustermanager.app.projects import project_tasks
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 from ideaclustermanager.app.tasks.base_task import BaseTask, TaskCannotSucceed
+from ideaclustermanager.app.tasks import task_manager as task_manager_module
 from ideaclustermanager.app.tasks.task_manager import TASK_MAX_ATTEMPTS, TaskManager
 from ideaclustermanagertests.metrics_fakes import FakeConfig
 
@@ -46,6 +49,7 @@ def run_worker(hang, final=False, write_hangs=False):
     )
     manager._task_timeout = 0.05
     task.entity_ref.return_value = ('user', 'user')
+    message['MessageId'] = 'm-1'
     message['Attributes'] = {
         'ApproximateReceiveCount': str(TASK_MAX_ATTEMPTS if final else 1)
     }
@@ -93,6 +97,10 @@ def test_hanging_task_terminates_worker_and_replacement_has_capacity(
         )
         assert result.returncode == expected, result.stderr
         assert ('acknowledged' in result.stdout) is not hang
+        # the line the process ends on says which task and message ran out of time
+        assert (
+            'Task test.task (message m-1) deadline exceeded' in result.stderr
+        ) is hang
         if hang and final:
             marker = json.loads(result.stdout.strip())
             assert marker['task'] == 'test.task'
@@ -433,15 +441,16 @@ class FifoQueue:
         self.now = 0
         self.messages = []
         self.sequence = 0
-        self.dedupe_ids = set()
+        self.dedupe_ids = {}
 
     def send_message(
         self, MessageBody, MessageGroupId, MessageDeduplicationId=None, **_
     ):
         if MessageDeduplicationId and MessageDeduplicationId in self.dedupe_ids:
-            return
-        self.dedupe_ids.add(MessageDeduplicationId)
+            # the queue answers a repeat with the id of the message it kept
+            return {'MessageId': self.dedupe_ids[MessageDeduplicationId]}
         self.sequence += 1
+        self.dedupe_ids[MessageDeduplicationId] = str(self.sequence)
         self.messages.append(
             {
                 'id': str(self.sequence),
@@ -452,6 +461,7 @@ class FifoQueue:
                 'sent_at': self.now * 1000 + self.sequence,
             }
         )
+        return {'MessageId': str(self.sequence)}
 
     def receive_message(self, VisibilityTimeout, **_):
         seen = set()
@@ -975,6 +985,110 @@ def test_the_completed_line_names_its_message():
     )
 
 
+def logged(context, level):
+    return [call.args[0] for call in getattr(context.logger(), level).call_args_list]
+
+
+def test_the_moved_line_names_the_message_it_was_and_the_message_it_became(tmp_path):
+    # a new user's password is moved into its lane as a new message; without both ids
+    # on one line only the username in two payloads joins its lines
+    _, manager, queue, tasks, ran, password, drain = account_queue(tmp_path)
+    queue.send_message(
+        MessageBody=json.dumps(
+            {
+                'name': 'accounts.sync-password',
+                'payload': {'username': 'user', 'password_file': str(password(1))},
+            }
+        ),
+        MessageGroupId='user',
+    )
+    drain()
+    assert ran == [('accounts.sync-password', None)]
+    (moved,) = [line for line in logged(manager.context, 'info') if 'its lane' in line]
+    assert moved == (
+        'moved task accounts.sync-password (message 1) into its lane: password, '
+        'as message 2'
+    )
+    assert any(
+        line.startswith('completed task: accounts.sync-password (message 2')
+        for line in logged(manager.context, 'info')
+    )
+
+
+def test_an_unregistered_task_line_names_its_message():
+    manager, context, task, message = build()
+    message['Body'] = json.dumps({'name': 'gone.task', 'payload': {'n': 1}})
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    assert logged(context, 'warning') == [
+        'no task registered for task name: gone.task (message m-1)'
+    ]
+
+
+def test_an_invalid_task_line_names_its_message():
+    manager, context, task, message = build()
+    message['Body'] = json.dumps({'name': 'test.task'})
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    (line,) = logged(context, 'error')
+    assert line.startswith('Invalid task (message m-1)')
+
+
+def test_a_failed_cleanup_line_names_its_task_and_message():
+    manager, context, task, message = build()
+    task.invoke.side_effect = TaskCannotSucceed('refused')
+    task.on_terminal_failure.side_effect = RuntimeError('file system away')
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    assert logged(context, 'exception') == [
+        'cleanup failed for task: test.task (message m-1)'
+    ]
+
+
+def test_a_failure_marker_that_cannot_be_written_names_its_task_and_message():
+    manager, context, task, message = build()
+    task.entity_ref.return_value = ('user', 'user')
+    task.invoke.side_effect = TaskCannotSucceed('refused')
+    context.accounts.user_dao.table.update_item.side_effect = RuntimeError('down')
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    assert logged(context, 'exception') == [
+        'failed to update task failure marker of task test.task (message m-1)'
+    ]
+
+
+def test_a_retry_that_cannot_be_scheduled_names_its_task_and_message():
+    manager, context, task, message = build()
+    task.invoke.side_effect = RuntimeError('directory down')
+    context.aws().sqs().change_message_visibility.side_effect = RuntimeError('down')
+    message['MessageId'] = 'm-1'
+    manager.execute_task(message)
+    assert logged(context, 'exception')[-1] == (
+        'failed to schedule retry of task test.task (message m-1)'
+    )
+
+
+def test_every_line_about_a_received_task_names_its_message():
+    # the changelog promises it; a line added later without the id fails here
+    tree = ast.parse(inspect.getsource(task_manager_module))
+    without = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for call in ast.walk(function):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and ast.unparse(call.func.value) == 'self.logger'
+            ):
+                continue
+            named = {n.id for n in ast.walk(call) if isinstance(n, ast.Name)}
+            if 'message_id' not in named:
+                without.add(function.name)
+    # these four have no received message: settings, the pool, the poll, the send
+    assert without == {'__init__', '_reserve_slot', 'task_queue_listener', 'send'}
+
+
 class Directory:
     """what the account tasks ask of the directory, with two habits of Active
     Directory: a read can be answered by a domain controller that a write has not
@@ -995,6 +1109,9 @@ class Directory:
         self.sudo_failures = 0
         # the domain controller that is behind still shows what was removed
         self.removed = []
+        # until then the one the directory service asks for a password is behind too
+        self.password_behind_until = 0
+        self.members = []
 
     def monotonic(self):
         return self.now
@@ -1051,12 +1168,17 @@ class Directory:
         self.removed.append(group_name)
 
     def add_user_to_group(self, usernames, group_name):
-        pass
+        for username in usernames:
+            if not self.is_existing_user(username):
+                raise ldap.NO_SUCH_OBJECT()
+            self.members.append((group_name, username))
 
     def change_password(self, username, password):
-        if username not in self.accounts:
+        if username not in self.accounts or self.now < self.password_behind_until:
             self.refused += 1
-            raise RuntimeError('not yet synced')
+            raise exceptions.soca_exception(
+                error_code=errorcodes.AUTH_USER_NOT_FOUND, message='not yet synced'
+            )
         self.passwords[username] = password
 
 
@@ -1136,6 +1258,74 @@ def test_a_new_users_password_waits_for_the_account_and_is_never_refused(
     assert directory.passwords == {'tasks_new2': 'MockPassword_123'}
     assert directory.refused == 0
     assert queue.messages == []
+
+
+def test_a_new_users_password_waits_for_the_domain_controller_it_is_given(
+    live_accounts,
+):
+    # the task that added the account is done, and the directory service asks a
+    # domain controller the account reaches 15 s later
+    _, _, queue, directory, _, create, drain = live_accounts
+    directory.password_behind_until = 15
+    create('tasks_wait1')
+    drain()
+    assert directory.passwords == {'tasks_wait1': 'MockPassword_123'}
+    # in one attempt: nothing is left waiting on a retry
+    assert queue.messages == []
+    assert 15 <= directory.now < 20
+
+
+def password_attempt(context, directory, tmp_path, username):
+    file = tmp_path / 'password.txt'
+    file.write_text('next')
+    task = account_tasks.SyncPasswordInDirectoryServiceTask(context)
+    task.invoke({'username': username, 'password_file': str(file)})
+
+
+def test_a_password_stops_waiting_for_an_account_the_directory_never_shows(
+    live_accounts, tmp_path
+):
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_wait2')
+    drain()
+    # removed from the directory by hand
+    directory.accounts.clear()
+    started = directory.now
+    with pytest.raises(exceptions.SocaException) as raised:
+        password_attempt(context, directory, tmp_path, 'tasks_wait2')
+    assert raised.value.error_code == errorcodes.AUTH_USER_NOT_FOUND
+    assert directory.now - started == 30
+
+
+def test_a_password_does_not_wait_for_an_account_no_task_added(live_accounts, tmp_path):
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_wait3')
+    drain()
+    directory.accounts.clear()
+    context.accounts.user_dao.table.update_item(
+        Key={'username': 'tasks_wait3'},
+        UpdateExpression='REMOVE directory_account',
+    )
+    started = directory.now
+    with pytest.raises(exceptions.SocaException):
+        password_attempt(context, directory, tmp_path, 'tasks_wait3')
+    assert directory.now == started
+
+
+def test_a_membership_waits_for_the_domain_controller_to_show_the_new_account(
+    live_accounts,
+):
+    # the account was added on one domain controller and this task is given the other
+    context, manager, queue, directory, _, create, drain = live_accounts
+    create('tasks_wait4')
+    drain()
+    directory.behind_until = directory.now + 15
+    started = directory.now
+    task = account_tasks.GroupMembershipUpdatedTask(context)
+    group = context.accounts.user_dao.get_user('tasks_wait4')['group_name']
+    task.invoke({'group_name': group, 'username': 'tasks_wait4', 'operation': 'add'})
+    assert (group, 'tasks_wait4') in directory.members
+    assert 15 <= directory.now - started < 20
 
 
 def test_a_password_for_an_account_the_directory_has_goes_straight_to_its_lane(
