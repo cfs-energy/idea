@@ -382,41 +382,54 @@ class SiteHook(unittest.TestCase):
 class SshdHealthCheckLines(unittest.TestCase):
     """health-check connections never leave the container; every other sshd line does"""
 
+    # the dev cluster's VPC, a secondary CIDR that is not a whole octet, and one on a public range
+    VPC_CIDRS = '10.4.0.0/16,100.64.8.0/22,198.51.100.128/25'
     DROPPED = [
         # the task's own checks, which read the banner and close (9.9), and a key scan
         'Connection closed by 127.0.0.1 port 41022',
         'Connection closed by 127.0.0.1 port 41022 [preauth]',
-        # the load balancer's TCP check, from its private addresses
-        'Connection closed by 10.7.0.48 port 3151',
-        'Connection closed by 172.31.4.9 port 22',
-        'Connection closed by 192.168.1.20 port 60000',
-        # a VPC's secondary range in shared address space, 100.64.0.0/10
-        'Connection closed by 100.64.3.7 port 5123',
-        'Connection closed by 100.127.255.254 port 5123',
+        # the load balancer's TCP check, from its addresses in the VPC
+        'Connection closed by 10.4.246.13 port 3151',
+        'Connection closed by 10.4.0.0 port 22',
+        'Connection closed by 10.4.255.255 port 60000',
+        'Connection closed by 100.64.8.0 port 5123',
+        'Connection closed by 100.64.11.255 port 5123',
+        'Connection closed by 198.51.100.128 port 5123',
+        'Connection closed by 198.51.100.200 port 5123',
     ]
     KEPT = [
         'Accepted publickey for alice from 23.23.20.238 port 61737 ssh2: RSA SHA256:abc',
-        'Accepted publickey for alice from 10.7.0.48 port 61737 ssh2: RSA SHA256:abc',
-        'Failed publickey for alice from 10.7.0.48 port 5000 ssh2: RSA SHA256:abc',
+        'Accepted publickey for alice from 10.4.0.48 port 61737 ssh2: RSA SHA256:abc',
+        'Failed publickey for alice from 10.4.0.48 port 5000 ssh2: RSA SHA256:abc',
         'Invalid user admin from 81.218.86.52 port 18694',
-        'Connection closed by invalid user admin 10.7.0.48 port 5000 [preauth]',
+        'Connection closed by invalid user admin 10.4.0.48 port 5000 [preauth]',
         'Connection closed by authenticating user alice 127.0.0.1 port 5000 [preauth]',
         'Disconnected from user alice 23.23.20.238 port 63564',
-        'Received disconnect from 10.7.0.48 port 5000:11: Bye Bye [preauth]',
+        'Received disconnect from 10.4.0.48 port 5000:11: Bye Bye [preauth]',
         # a client that sent its identification and left before authenticating
-        'Connection closed by 10.7.0.48 port 5000 [preauth]',
+        'Connection closed by 10.4.0.48 port 5000 [preauth]',
         # a close from a public address is not the load balancer
         'Connection closed by 23.23.20.238 port 54871',
-        'Connection closed by 172.32.0.1 port 22',
-        'Connection closed by 100.63.0.1 port 22',
-        'Connection closed by 100.128.0.1 port 22',
+        # nor is one from a private address outside the VPC: the VPN client whose 1,209 held
+        # connections left no close line on dev, and the other private ranges
+        'Connection closed by 10.251.26.25 port 56542',
+        'Connection closed by 10.3.255.255 port 22',
+        'Connection closed by 10.5.0.0 port 22',
+        'Connection closed by 172.31.4.9 port 22',
+        'Connection closed by 192.168.1.20 port 60000',
+        'Connection closed by 100.64.3.7 port 5123',
+        # either side of the networks that do not end on an octet
+        'Connection closed by 100.64.7.255 port 5123',
+        'Connection closed by 100.64.12.0 port 5123',
+        'Connection closed by 198.51.100.127 port 5123',
+        'Connection closed by 198.51.101.128 port 5123',
         'Connection reset by 127.0.0.1 port 41022 [preauth]',
         'error: kex_exchange_identification: Connection closed by remote host',
         'Server listening on 0.0.0.0 port 22.',
     ]
 
-    def run_filter(self, lines):
-        import subprocess
+    def run_filter(self, lines, vpc_cidrs=VPC_CIDRS):
+        import os
 
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
         start = text.index('SSHD_HEALTH_CHECK_LINES=')
@@ -427,10 +440,14 @@ class SshdHealthCheckLines(unittest.TestCase):
             + text[start:end]
             + 'printf "%s\\n" "$@" | sshd_log_filter'
         )
+        env = {name: value for name, value in os.environ.items() if name != 'IDEA_VPC_CIDRS'}
+        if vpc_cidrs is not None:
+            env['IDEA_VPC_CIDRS'] = vpc_cidrs
         result = subprocess.run(
             ['bash', '-c', script, 'filter', *lines],
             capture_output=True,
             check=True,
+            env=env,
         )
         self.assertEqual(result.stdout, b'')
         # bytes, split on LF alone, so a CR sshd sent stays on its line
@@ -446,6 +463,25 @@ class SshdHealthCheckLines(unittest.TestCase):
 
     def test_an_all_dropped_stream_does_not_fail(self):
         self.assertEqual(self.run_filter(self.DROPPED), [])
+
+    def test_without_the_vpc_networks_only_the_loopback_closes_are_dropped(self):
+        for vpc_cidrs in (None, ''):
+            self.assertEqual(
+                self.run_filter(self.DROPPED + self.KEPT, vpc_cidrs),
+                self.DROPPED[2:] + self.KEPT,
+            )
+
+    def test_an_entry_that_is_no_vpc_network_drops_nothing(self):
+        # everything, a prefix past 32, words, a missing prefix and IPv6: each passed over, and
+        # the network after them still read
+        self.assertEqual(
+            self.run_filter(
+                self.DROPPED + self.KEPT,
+                '0.0.0.0/0,10.0.0.0/7,10.251.26.0/33,vpc,10.251.26.25,fd00::/8,,'
+                + self.VPC_CIDRS,
+            ),
+            self.KEPT,
+        )
 
     def test_sshd_logs_through_the_filter(self):
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
@@ -703,7 +739,8 @@ class BastionMetrics(unittest.TestCase):
                 read(b'past Maxstartups', b'loopback check refused'),
                 {('maxstartups', 'remote'): 1, ('maxstartups', 'loopback'): 1},
             )
-            # five minutes on: the count so far, which takes in the drop named next
+            # the first drop after five minutes without one: the count so far, which takes in
+            # the drop named next (a flood never has such a gap, see the test below)
             self.assertEqual(
                 read(
                     b'in MaxStartups throttling for 00:05:01, 40 connections dropped',
@@ -727,6 +764,33 @@ class BastionMetrics(unittest.TestCase):
                     b'exited MaxStartups throttling after 00:00:02, 3 connections dropped',
                 ),
                 {('maxstartups', 'remote'): 3},
+            )
+
+    def test_a_9_9_flood_reads_1_remote_until_sshd_gives_its_total_at_the_end(self):
+        # the dev flood of 2 min 48 s on 9.9, minute by minute: sshd named the first drop and
+        # logged nothing more until the episode ended, so the 852 arrive in the last minute;
+        # the checks' own refusals are counted in the minute they happen
+        metrics = self.module()
+        with tempfile.NamedTemporaryFile('ab') as drops:
+            tally = metrics.DropTally(drops.name)
+
+            def minute(*lines):
+                drops.write(b''.join(line + b'\n' for line in lines))
+                drops.flush()
+                return tally.read()
+
+            refused = b'loopback check refused'
+            self.assertEqual(
+                minute(b'past Maxstartups', *[refused] * 7),
+                {('maxstartups', 'remote'): 1, ('maxstartups', 'loopback'): 7},
+            )
+            self.assertEqual(minute(*[refused] * 8), {('maxstartups', 'loopback'): 8})
+            self.assertEqual(
+                minute(
+                    *[refused] * 5,
+                    b'exited MaxStartups throttling after 00:02:48, 873 connections dropped',
+                ),
+                {('maxstartups', 'loopback'): 5, ('maxstartups', 'remote'): 852},
             )
 
     def test_10_5_drops_it_does_not_name_are_counted(self):
