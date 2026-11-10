@@ -501,12 +501,21 @@ class FinishedJobProcessor:
             return []
 
         # qstat -x answers for live jobs as well as finished ones
-        history = {
-            job.job_id: job
-            for job in self._context.scheduler.list_jobs(
-                job_ids=[job.job_id for job in jobs], job_state=SocaJobState.FINISHED
+        try:
+            history = {
+                job.job_id: job
+                for job in self._context.scheduler.list_jobs(
+                    job_ids=[job.job_id for job in jobs],
+                    job_state=SocaJobState.FINISHED,
+                )
+            }
+        except Exception as e:
+            # one job that cannot be read must not hold up the rest: each is asked
+            # about on its own below, and only the one that fails waits
+            self._logger.warning(
+                f'finished jobs could not be read together, reading one by one: {e}'
             )
-        }
+            history = {}
 
         metrics_batch = JobCompletionBatch(self._context)
         recorded_ids = []

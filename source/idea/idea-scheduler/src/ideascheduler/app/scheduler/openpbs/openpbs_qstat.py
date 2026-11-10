@@ -20,7 +20,7 @@ from ideascheduler.app.scheduler.openpbs import OpenPBSConverter, OpenPBSJob
 from ideascheduler.app.scheduler.openpbs import openpbs_constants
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
-from typing import Dict, Optional, List, Generator, Tuple
+from typing import Dict, Optional, List, Generator, Set, Tuple
 import logging
 import orjson
 import re
@@ -35,6 +35,10 @@ _OUTCOME_FIELDS = (
     'resources_used',
     'array_indices_submitted',
 )
+
+
+# jobs already warned about, so a listing every few seconds says it once
+_NO_PROFILE_SEEN: Set[str] = set()
 
 
 def array_indices(submitted: Optional[str]) -> Optional[range]:
@@ -292,11 +296,26 @@ class OpenPBSQStat:
             for job_id, job in jobs.items():
                 pbs_job = OpenPBSJob(id=job_id, **job)
 
-                queue_profile = self._context.queue_profiles.get_queue_profile(
-                    queue_name=pbs_job.queue
-                )
+                try:
+                    queue_profile = self._context.queue_profiles.get_queue_profile(
+                        queue_name=pbs_job.queue
+                    )
+                except exceptions.SocaException as e:
+                    if e.error_code != errorcodes.SCHEDULER_QUEUE_PROFILE_NOT_FOUND:
+                        raise
+                    queue_profile = None
 
                 if queue_profile is None:
+                    # a queue profile deleted under its job: one job that cannot be
+                    # read must not cost the listing every other job
+                    if job_id not in _NO_PROFILE_SEEN:
+                        if len(_NO_PROFILE_SEEN) >= 1000:
+                            _NO_PROFILE_SEEN.clear()
+                        _NO_PROFILE_SEEN.add(job_id)
+                        self._logger.warning(
+                            f'job {job_id} is left out of job listings: its queue '
+                            f'{pbs_job.queue} has no queue profile'
+                        )
                     continue
 
                 soca_job = pbs_job.as_soca_job(
