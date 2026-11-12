@@ -232,6 +232,16 @@
       "allowedVersions": "<7"
     },
     {
+      "description": "opensearch-py 3.1 and later hard-require opensearch-protobufs, which pulls grpcio and protobuf for a gRPC transport this codebase never constructs",
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchDepNames": [
+        "opensearch-py"
+      ],
+      "allowedVersions": "<3.1"
+    },
+    {
       "description": "Cloudscape components 3.0.1410 gave Toggle role switch, which 3.0.1411 reverted",
       "matchPackageNames": [
         "@cloudscape-design/components"
