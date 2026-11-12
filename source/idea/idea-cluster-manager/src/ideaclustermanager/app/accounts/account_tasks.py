@@ -291,7 +291,12 @@ class SyncUserInDirectoryServiceTask(BaseTask):
         group_name = user['group_name']
         enabled = user['enabled']
         sudo = Utils.get_value_as_bool('sudo', user, False)
-        self._await_directory(user, group_too=enabled)
+        # A removal already recorded is not waited on before removing again: deleting a
+        # user runs the removal beside the copy it queued, and the second to run can ask
+        # a domain controller that shows the account for 15 s more. Whatever that one
+        # still shows is removed from it too, and what it no longer shows is left.
+        if enabled or user.get(self.IN_DIRECTORY) is not False:
+            self._await_directory(user, group_too=enabled)
         if enabled:
             # before the add: the retry of an attempt that fails after it must wait too
             self._record_in_directory(user, True)

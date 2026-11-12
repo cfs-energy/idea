@@ -1296,6 +1296,8 @@ class Directory:
         # until then the one the directory service asks for a password is behind too
         self.password_behind_until = 0
         self.members = []
+        # removed again, on the domain controller that still showed them
+        self.deleted_behind = []
 
     def monotonic(self):
         return self.now
@@ -1343,13 +1345,22 @@ class Directory:
         if not self.is_existing_user(username):
             self.accounts.append(username)
 
+    def _delete(self, entries, name):
+        if name in entries:
+            entries.remove(name)
+            self.removed.append(name)
+        elif not self.shows() and name in self.removed:
+            # the domain controller that is behind removes the entry it still shows
+            self.removed.remove(name)
+            self.deleted_behind.append(name)
+        else:
+            raise ldap.NO_SUCH_OBJECT()
+
     def delete_user(self, username):
-        self.accounts.remove(username)
-        self.removed.append(username)
+        self._delete(self.accounts, username)
 
     def delete_group(self, group_name):
-        self.groups.remove(group_name)
-        self.removed.append(group_name)
+        self._delete(self.groups, group_name)
 
     def add_user_to_group(self, usernames, group_name):
         for username in usernames:
@@ -1600,6 +1611,41 @@ def test_a_removal_does_not_wait_out_an_account_its_other_copy_removed(live_acco
         table.get_item(Key={'username': 'tasks_new7'})['Item'][task.IN_DIRECTORY]
         is False
     )
+
+
+def test_a_removal_does_not_wait_for_a_server_its_other_copy_has_not_reached(
+    live_accounts,
+):
+    # Accounts.DeleteUser sat for 16.6 s: the copy it queued had removed the account on
+    # one domain controller and recorded it, and its own removal then asked another,
+    # which showed the account for 15 s more
+    context, _, _, directory, _, create, drain = live_accounts
+    create('tasks_new12')
+    drain()
+    context.accounts.disable_user('tasks_new12')
+    drain()
+    task = account_tasks.SyncUserInDirectoryServiceTask(context)
+    table = context.accounts.user_dao.table
+    assert directory.accounts == []
+    assert (
+        table.get_item(Key={'username': 'tasks_new12'})['Item'][task.IN_DIRECTORY]
+        is False
+    )
+
+    started = directory.now
+    directory.behind_until = started + 15
+    task.invoke({'username': 'tasks_new12'})
+
+    assert directory.now == started
+    # what that domain controller still showed is removed from it, not left to arrive
+    assert directory.deleted_behind == ['tasks_new12-user-group', 'tasks_new12']
+    assert (directory.accounts, directory.groups) == ([], [])
+    # and enabling the user still waits for the removal to reach the server it asks
+    directory.removed.extend(directory.deleted_behind)
+    context.accounts.enable_user('tasks_new12')
+    drain()
+    assert directory.accounts == ['tasks_new12']
+    assert directory.now - started >= 15
 
 
 def test_an_attempt_that_fails_after_its_add_does_not_add_the_account_again(
