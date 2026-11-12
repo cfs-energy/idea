@@ -595,6 +595,16 @@ class FinishedJobProcessor:
                 ):
                     if getattr(cached, field) is not None:
                         setattr(finished_job, field, getattr(cached, field))
+                # PBS history is read against the queue profile as it is now. What the
+                # job was provisioned with is on its cached row.
+                if cached.is_provisioned() and cached.params and finished_job.params:
+                    for field in ('instance_ami', 'instance_types'):
+                        if getattr(cached.params, field):
+                            setattr(
+                                finished_job.params,
+                                field,
+                                getattr(cached.params, field),
+                            )
                 if ModelUtils.is_array_job_id(finished_job.job_id):
                     self._apply_subjob_outcomes(finished_job, from_history)
                 recorded_job = ProcessFinishedJob(

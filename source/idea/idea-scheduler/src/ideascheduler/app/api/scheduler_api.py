@@ -61,6 +61,26 @@ import pwd
 import re
 import shutil
 
+QSUB_DIRECTIVE_ERROR = 'qsub: directive error:'
+
+
+def qsub_directive_refusal(stderr: Optional[str]) -> Optional[str]:
+    """
+    what to tell the owner of a script with a #PBS line qsub cannot read, or None. qsub
+    reads those lines itself, before it asks the server: nothing reaches the submit hook,
+    so no result is recorded, and it is the script that is wrong, not the scheduler.
+    """
+    for line in Utils.get_as_string(stderr, '').splitlines():
+        if line.startswith(QSUB_DIRECTIVE_ERROR):
+            directive = line.removeprefix(QSUB_DIRECTIVE_ERROR).strip()
+            return (
+                f"This job can't be queued: qsub refused a line of the script "
+                f'(directive error: {directive}). Correct the line that reads '
+                f'#PBS {directive} and submit again.'
+            )
+    return None
+
+
 # how long a completed submission can be replayed for: must be at least
 # SERVICE_WORKER_REPLY_TIMEOUT (660s), the delay before the webapp shows a client timeout.
 JOB_SUBMISSION_DEDUPE_TTL_SECONDS = 900
@@ -614,7 +634,8 @@ class SchedulerAPI(BaseAPI):
                         self.logger.error(f'Failed to submit job: {result}')
                         raise exceptions.soca_exception(
                             errorcodes.JOB_SUBMISSION_FAILED,
-                            JOB_INTERNAL_ERROR_MESSAGE,
+                            qsub_directive_refusal(result.stderr)
+                            or JOB_INTERNAL_ERROR_MESSAGE,
                         )
                     # rc == 0 but the tracker has no record for this job_uid (tracker TTL
                     # miss): avoid the opaque AttributeError and report clearly instead.

@@ -157,8 +157,16 @@ def test_node_that_never_reported_is_reclaimed_after_timeout_from_launch(context
     context.config().pop(
         'scheduler.job_provisioning.node_unavailable_timeout_seconds', default=None
     )
+    from types import SimpleNamespace
+
+    from ideadatamodel import SocaJob, SocaJobState
+
     node = build_node(last_used_time=None)
     node.states = [SocaComputeNodeState.DOWN, SocaComputeNodeState.UNKNOWN]
+    # its job still exists: one that is gone gives its node up at once
+    context.job_cache = SimpleNamespace(
+        get_job=lambda job_id: SocaJob(job_id=job_id, state=SocaJobState.HELD)
+    )
     session = NodeHouseKeepingSession(
         context=context, logger=logging.getLogger(LOG_TAG)
     )

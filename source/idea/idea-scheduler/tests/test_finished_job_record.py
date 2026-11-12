@@ -1584,3 +1584,83 @@ def test_a_failed_index_lookup_still_records_the_job(fake_context, pricing_spy):
     assert ids == ['14906']
     assert [job.job_uid for job in fake_context.job_cache.finished_jobs] == ['uid-3']
     assert fake_context.job_notifications.completed == ['14906']
+
+
+# ------------------------------------------- what a job launched, not what its queue says now
+
+
+def test_a_record_names_the_image_and_type_the_job_launched_not_its_queues_current_ones(
+    context, fake_context, pricing_spy
+):
+    """
+    433 and 456 launched an image that never joins, on a larger type, and never started.
+    Their queue profile was put back to the baked image and t3.micro, they were deleted,
+    and their records named the profile's image and type: the record is PBS history, and a
+    job read from PBS takes what it did not name itself from its queue profile as it is at
+    that read. The row written when the job was provisioned is what says what it launched.
+    """
+    from ideadatamodel import HpcQueueProfile
+    from ideasdk.utils import Utils
+    from ideascheduler.app.provisioning import JobCache
+    from ideascheduler.app.scheduler.openpbs import OpenPBSJob
+
+    def profile(image: str, instance_type: str) -> HpcQueueProfile:
+        return HpcQueueProfile(
+            name='test',
+            default_job_params=SocaJobParams(
+                instance_ami=image, instance_types=[instance_type], base_os='rocky9'
+            ),
+        )
+
+    job_id = str(Utils.current_time_ms())
+    stack = f'idea-mock-test-ondemand-{job_id}'
+
+    def read_from_pbs(state: str, queue_profile: HpcQueueProfile) -> SocaJob:
+        return OpenPBSJob(
+            id=f'{job_id}.scheduler',
+            Job_Owner='mockuser@scheduler',
+            queue='test',
+            job_state=state,
+            Resource_List={
+                'select': f'1:ncpus=1:compute_node={stack}',
+                'nodect': 1,
+                'ncpus': 1,
+                'job_uid': f'uid{job_id}',
+                'stack_id': f'arn:aws:cloudformation:us-east-2:123456789012:stack/{stack}/1',
+            },
+        ).as_soca_job(context=context, queue_profile=queue_profile)
+
+    cache = JobCache(context=context)
+    fake_context.job_cache = cache
+
+    # provisioned while the profile named the image that never joins
+    launched = read_from_pbs('Q', profile('ami-unbakedmock0001', 'c5.large'))
+    assert launched.is_provisioned()
+    assert launched.params.instance_ami == 'ami-unbakedmock0001'
+    cache.sync(jobs=[launched])
+
+    # the profile is put back. A later read of the live job does not rewrite the row
+    restored = profile('ami-bakedmock000001', 't3.micro')
+    cache.sync(jobs=[read_from_pbs('Q', restored)])
+    cached = cache.get_job(job_id)
+    assert cached.params.instance_ami == 'ami-unbakedmock0001'
+    assert cached.params.instance_types == ['c5.large']
+
+    # deleted: PBS history, read against the profile as it is now, says the new ones
+    history = read_from_pbs('F', restored)
+    assert history.params.instance_ami == 'ami-bakedmock000001'
+    assert history.params.instance_types == ['t3.micro']
+    fake_context.scheduler.jobs_by_id = {job_id: history}
+
+    build_poller(fake_context)._process_finished_jobs([cached])
+
+    record = cache.get_completed_job(job_id)
+    assert record.params.instance_ami == 'ami-unbakedmock0001'
+    assert record.params.instance_types == ['c5.large']
+
+    # a job that is provisioned again, on a new stack, is on what that stack launched
+    again = read_from_pbs('Q', restored)
+    again.params.stack_id = again.params.stack_id[:-1] + '2'
+    cache.sync(jobs=[again])
+    assert cache.get_job(job_id).params.instance_types == ['t3.micro']
+    cache.delete_jobs(job_ids=[job_id])
