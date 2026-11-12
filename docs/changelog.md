@@ -92,6 +92,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/).
 * **Portal**: the desktop image page saves and shows its owner and expiry, and an expiry day reads the same in every time zone. Default client timeout is 180 s, was 600 s. `/download` and `/upload` refusals use real status codes, and `/generate-download-url` with no session answers 401, where it answered 500 and logged a traceback. The `qsub` hook wording needs the updated hook on the scheduler.
 * IDEA-323: the release job retries its tag read-back when public ECR serves a stale manifest.
 * Tools and Python locks are updated. `.ruff.toml` holds the lint rule set the repository already enforces under ruff 0.17.
+* **Dependencies**: AWS SDK for JavaScript 3.1164.0, CDK CLI 2.1148.0, commander 15.1.0, undici 8.12.4, Cloudscape components 3.0.1413, Vite 8.3.7, @vitejs/plugin-react 6.2.1, Sass 1.108.1, and jsdom 31 for the portal tests. opensearch-py stays below 3.1, which would add grpcio and protobuf for a transport IDEA does not use.
 
 ## [26.11.1] - 2026-11-04
 
