@@ -46,7 +46,7 @@
     "@testing-library/user-event": "14.6.8",
     "@types/node": "26.6.6",
     "@types/nunjucks": "3.2.6",
-    "@vitejs/plugin-react": "5.2.0",
+    "@vitejs/plugin-react": "6.3.0",
     "fake-indexeddb": "6.2.7",
     "jsdom": "26.1.0",
     "sass": "1.107.1",
