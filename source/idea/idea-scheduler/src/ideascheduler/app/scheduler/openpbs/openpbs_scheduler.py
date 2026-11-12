@@ -505,6 +505,9 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             if e.error_code == errorcodes.SCHEDULER_ERROR:
                 if f'Unknown queue {queue}' in e.message:
                     return None
+                # a name PBS cannot parse as a queue (too long for one) names no queue
+                if "illegal 'destination' value" in e.message:
+                    return None
             raise e
 
     def is_queue_enabled(self, queue: str) -> bool:

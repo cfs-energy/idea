@@ -25,6 +25,9 @@ from ideascheduler.app.provisioning import JobProvisioningQueue, JobProvisioner
 from typing import List, Dict, Optional
 from threading import RLock
 
+# PBS_MAXQUEUENAME: the longest queue name the scheduler accepts
+SCHEDULER_QUEUE_NAME_MAX_LENGTH = 15
+
 
 class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
     """
@@ -98,6 +101,7 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
             raise exceptions.invalid_params('queue_profile.name is required')
         if Utils.is_empty(queue_profile.queues):
             raise exceptions.invalid_params('queue_profile.queues is required')
+        self.validate_queue_names(queue_profile.queues)
         if Utils.is_empty(queue_profile.scaling_mode) and not Utils.get_as_bool(
             queue_profile.keep_forever, False
         ):
@@ -151,6 +155,21 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
                 + (f': {reasons}' if reasons else ''),
                 ref=validation_result,
             )
+
+    @staticmethod
+    def validate_queue_names(queue_names: List[str]):
+        """
+        refuse a queue name the scheduler cannot hold, before anything is written. PBS
+        answers a longer one with "illegal 'destination' value", and by then the profile
+        row existed with a queue that could be neither created nor deleted.
+        """
+        for queue_name in queue_names:
+            if len(queue_name) > SCHEDULER_QUEUE_NAME_MAX_LENGTH:
+                raise exceptions.invalid_params(
+                    f'Queue name {queue_name} is {len(queue_name)} characters long. '
+                    f'The scheduler allows {SCHEDULER_QUEUE_NAME_MAX_LENGTH}. '
+                    f'Use a shorter queue name.'
+                )
 
     def cache_get(
         self,
@@ -211,13 +230,14 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
         # set enabled to explicit false during creation
         queue_profile.enabled = False
 
+        # scheduler queues come first, as on an update: a profile is never written with
+        # a queue the scheduler refused, which could then be neither used nor deleted
+        self._create_queues(queue_names=queue_profile.queues)
+
         db_queue_profile = self.queue_profile_dao.convert_to_db(queue_profile)
         db_created = self.queue_profile_dao.create_queue_profile(db_queue_profile)
 
         created = self.queue_profile_dao.convert_from_db(db_created)
-
-        if Utils.is_not_empty(queue_profile.queues):
-            self._create_queues(queue_names=created.queues)
 
         self.cache_set(created)
 
@@ -454,6 +474,7 @@ class HpcQueueProfilesService(SocaService, HpcQueueProfilesServiceProtocol):
     ):
         if Utils.is_empty(queue_names):
             raise exceptions.invalid_params('queue_names[] is required')
+        self.validate_queue_names(queue_names)
 
         queue_profile = self.get_queue_profile(queue_profile_id, queue_profile_name)
 

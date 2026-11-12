@@ -398,3 +398,192 @@ def test_create_queue_profile_rejects_ami_architecture_mismatch(queue_profiles_s
         if entry.message is not None
     ]
     assert any('ami-arm64mockimage00) is arm64' in message for message in messages)
+
+
+# a queue name PBS cannot hold: the real service and the real scheduler class, over a
+# qmgr and qstat that answer as PBS does, and a table that keeps what is put in it
+
+
+class PbsQueues:
+    """qmgr and qstat for queues: 15 characters is the longest name PBS takes"""
+
+    def __init__(self):
+        self.queues: List[str] = []
+        self.commands: List[str] = []
+        self.refuse_create = False
+
+    @staticmethod
+    def result(returncode: int = 0, stdout: str = '', stderr: str = ''):
+        from subprocess import CompletedProcess
+
+        from ideasdk.shell.shell_invoker import ShellInvocationResult
+
+        return ShellInvocationResult(
+            command=['pbs'],
+            result=CompletedProcess(['pbs'], returncode, stdout, stderr),
+            total_time_ms=5,
+        )
+
+    def invoke(self, cmd=None, **_):
+        import json
+
+        from ideascheduler.app.scheduler.openpbs import openpbs_constants
+
+        self.commands.append(' '.join(cmd))
+        if cmd[0] == openpbs_constants.QSTAT:
+            names = cmd[5:] or self.queues
+            if any(len(name) > 15 for name in cmd[5:]):
+                return self.result(1, stderr="qstat: illegal 'destination' value")
+            if any(name not in self.queues for name in names):
+                return self.result(
+                    openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_QUEUE,
+                    stderr=f'qstat: Unknown queue {names[0]}',
+                )
+            queue = {
+                'queue_type': 'Execution',
+                'total_jobs': 0,
+                'state_count': 'Transit:0 Queued:0 Held:0 Waiting:0 Running:0 Exiting:0 Begun:0 ',
+                'enabled': 'True',
+                'started': 'True',
+            }
+            return self.result(
+                stdout=json.dumps({'Queue': {name: queue for name in names}})
+            )
+        verb, _, name = cmd[2].split(' ')[:3]
+        if verb == 'create':
+            if len(name) > 15 or self.refuse_create:
+                return self.result(
+                    1, stderr=f'qmgr obj={name} svr=default: Illegal attribute or name'
+                )
+            self.queues.append(name)
+        elif verb == 'delete':
+            self.queues.remove(name)
+        return self.result()
+
+
+class ProfilesTable:
+    def __init__(self):
+        self.rows: Dict[str, Dict] = {}
+
+    def put_item(self, Item):  # noqa: N803
+        self.rows[Item['queue_profile_id']] = Item
+
+    def get_item(self, Key):  # noqa: N803
+        row = self.rows.get(Key['queue_profile_id'])
+        return {'Item': row} if row else {}
+
+    def delete_item(self, Key):  # noqa: N803
+        self.rows.pop(Key['queue_profile_id'], None)
+
+    def scan(self, **_):
+        return {'Items': list(self.rows.values())}
+
+
+@pytest.fixture()
+def pbs_queue_profiles(context, monkeypatch):
+    from ideascheduler.app.scheduler.openpbs.openpbs_scheduler import OpenPBSScheduler
+
+    monkeypatch.setattr(HpcQueueProfilesDAO, 'initialize', lambda self: None)
+    pbs = PbsQueues()
+    scheduler = OpenPBSScheduler(context=context)
+    scheduler._shell = pbs
+    context.scheduler = scheduler
+    service = HpcQueueProfilesService(context=context)
+    table = ProfilesTable()
+    service.queue_profile_dao.table = table
+    # the table's own filter is dynamodb's; one row at most carries a name here
+    monkeypatch.setattr(
+        service.queue_profile_dao,
+        'get_queue_profile_by_name',
+        lambda name: next(
+            (row for row in table.rows.values() if row['name'] == name), None
+        ),
+    )
+    return service, pbs, table
+
+
+def profile_named(name: str, queues: List[str]) -> HpcQueueProfile:
+    return HpcQueueProfile(
+        name=name,
+        title=name,
+        projects=[Project(project_id='project-1')],
+        queues=queues,
+        queue_mode=SocaQueueMode.FIFO,
+        scaling_mode='single-job',
+        terminate_when_idle=0,
+        default_job_params=SocaJobParams(
+            instance_types=['c5.large'], base_os='amazonlinux2023'
+        ),
+    )
+
+
+def test_a_queue_name_longer_than_pbs_allows_is_refused_before_anything_is_written(
+    pbs_queue_profiles,
+):
+    """
+    CreateQueueProfile with queue rc9-kernel-proof (16 characters) failed at qmgr, after
+    the profile row was written: a profile whose queue could not exist.
+    """
+    service, pbs, table = pbs_queue_profiles
+
+    with pytest.raises(exceptions.SocaException) as refused:
+        service.create_queue_profile(
+            profile_named('rc9-kernel-proof', ['rc9-kernel-proof'])
+        )
+
+    assert refused.value.error_code == errorcodes.INVALID_PARAMS
+    assert (
+        'Queue name rc9-kernel-proof is 16 characters long. The scheduler allows 15. '
+        'Use a shorter queue name.'
+    ) in refused.value.message
+    assert table.rows == {}
+    assert pbs.commands == []
+
+    # 15 characters is a queue
+    created = service.create_queue_profile(
+        profile_named('rc9-kernel-proof', ['rc9-kernel-pro'])
+    )
+    assert pbs.queues == ['rc9-kernel-pro']
+    assert [row['queues'] for row in table.rows.values()] == [['rc9-kernel-pro']]
+
+    # and the same check guards a queue added to a profile later
+    with pytest.raises(exceptions.SocaException) as refused:
+        service.create_queues(
+            queue_names=['rc9-kernel-proof'],
+            queue_profile_id=created.queue_profile_id,
+        )
+    assert 'is 16 characters long' in refused.value.message
+    assert pbs.queues == ['rc9-kernel-pro']
+
+
+def test_a_profile_is_not_written_when_the_scheduler_refuses_its_queue(
+    pbs_queue_profiles,
+):
+    service, pbs, table = pbs_queue_profiles
+    pbs.refuse_create = True
+
+    with pytest.raises(exceptions.SocaException):
+        service.create_queue_profile(profile_named('refused', ['refused']))
+
+    assert table.rows == {}
+
+
+def test_a_profile_whose_queue_pbs_cannot_have_can_be_deleted(pbs_queue_profiles):
+    """
+    The half-created profile could not be deleted either: DeleteQueueProfile asked PBS for
+    the queue and failed on "qstat: illegal 'destination' value". The queue PBS has under
+    a legal name goes with the profile as before.
+    """
+    service, pbs, table = pbs_queue_profiles
+    pbs.queues = ['rc9-kproof']
+    table.rows['p-1'] = {
+        'queue_profile_id': 'p-1',
+        'name': 'rc9-kernel-proof',
+        'queues': ['rc9-kernel-proof', 'rc9-kproof'],
+        'enabled': False,
+    }
+
+    service.delete_queue_profile(queue_profile_id='p-1')
+
+    assert table.rows == {}
+    assert pbs.queues == []

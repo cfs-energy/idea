@@ -590,6 +590,47 @@ def test_submit_job_raises_only_when_tracker_empty(context, monkeypatch):
     assert exc_info.value.message == JOB_INTERNAL_ERROR_MESSAGE
 
 
+@pytest.mark.parametrize('dry_run', [None, 'true'], ids=['submit', 'dry-run'])
+def test_submit_job_reports_a_line_qsub_refuses_as_the_scripts_fault(
+    context, monkeypatch, dry_run
+):
+    """
+    "#PBS -N js proof/rc8": qsub stops at the line ("qsub: directive error: -N js
+    proof/rc8") before the submit hook runs, so the tracker has nothing, and the owner was
+    told "The scheduler hit an internal error", on a dry run too.
+    """
+    api = _prepare_submit(
+        context,
+        monkeypatch,
+        returncode=1,
+        stderr='qsub: directive error: -N js proof/rc8',
+    )
+    context.job_submission_tracker = _FakeTracker(None)
+
+    request = SubmitJobRequest(
+        job_owner=CONTEXT_USER,
+        job_script=Utils.base64_encode('#PBS -N js proof/rc8\necho hi\n'),
+        job_script_interpreter='pbs',
+    )
+
+    from ideadatamodel.scheduler import DryRunOption
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        api._submit_job(
+            request=request,
+            job_owner=CONTEXT_USER,
+            dry_run=DryRunOption(dry_run) if dry_run else None,
+        )
+
+    assert exc_info.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
+    assert exc_info.value.message == (
+        "This job can't be queued: qsub refused a line of the script (directive error: "
+        '-N js proof/rc8). Correct the line that reads #PBS -N js proof/rc8 and submit '
+        'again.'
+    )
+    assert os.listdir(_jobs_dir(context)) == []
+
+
 # --- job read scoping: Scheduler.GetActiveJob / Scheduler.GetCompletedJob ---
 
 OTHER_USER = 'someone-else'
