@@ -252,3 +252,16 @@ describe.each((['localStorage', 'sessionStorage'] as const).flatMap(storage =>
         await expect(callback.isLoggedIn()).resolves.toBe(true);
     });
 });
+
+describe('reporting access check', () => {
+    it('tells a failed check apart from being denied', async () => {
+        const reporting = {getCapabilities: vi.fn().mockRejectedValue(new Error('network'))};
+        client.isLoggedIn.mockResolvedValue(true);
+        const service = new AuthService({...props, reporting} as unknown as AuthServiceProps);
+        await (service as any).acceptClaims(claims, (service as any).sessionVersion);
+        await vi.waitFor(() => expect(reporting.getCapabilities).toHaveBeenCalled());
+        await vi.waitFor(() => expect(service.isReportingResolved()).toBe(true));
+        expect(service.canReadReporting()).toBe(false);
+        expect(service.isReportingCheckFailed()).toBe(true);
+    });
+});

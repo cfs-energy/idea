@@ -11,7 +11,7 @@
 
 from ideadatamodel import exceptions, constants, errorcodes
 from ideasdk.utils import Utils, ModuleMetadataHelper
-from ideasdk.config.soca_config import SocaConfig
+from ideasdk.config.soca_config import SocaConfig, logged_value
 from ideasdk.dynamodb.dynamodb_stream_subscriber import DynamoDBStreamSubscriber
 from ideasdk.dynamodb.dynamodb_stream_subscription import DynamoDBStreamSubscription
 from ideasdk.aws import AwsClientProvider, AWSClientProviderOptions
@@ -477,7 +477,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             for config_entry in config_entries_to_delete:
                 key = config_entry['key']
                 value = Utils.get_any_value('value', config_entry)
-                self.log_info(f'deleting config entry - {key} = {value}')
+                self.log_info(
+                    f'deleting config entry - {key} = {logged_value(key, value)}'
+                )
                 self.cluster_settings_table.delete_item(Key={'key': key})
             self.log_info(f'deleted {total} config entries')
         else:
@@ -497,7 +499,7 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         return value
 
     def set_config_entry(self, key: str, value: Any, source: str = 'sdk'):
-        self.log_info(f'updating config: {key} = {value}')
+        self.log_info(f'updating config: {key} = {logged_value(key, value)}')
         self.cluster_settings_table.update_item(
             Key={'key': key},
             UpdateExpression='SET #value=:value, #source=:source ADD #version :version',
@@ -549,7 +551,9 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
             ):
                 return False
             raise
-        self.log_info(f'updating config: {key} = {value} (was {expected})')
+        self.log_info(
+            f'updating config: {key} = {logged_value(key, value)} (was {logged_value(key, expected)})'
+        )
         return True
 
     def get_cluster_s3_bucket(self) -> str:

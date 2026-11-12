@@ -14,6 +14,7 @@
 import React, {Component, RefObject} from "react";
 
 import {
+    Alert,
     Box,
     Button,
     Cards,
@@ -43,11 +44,22 @@ import UpdateSessionPermissionModal from "./forms/virtual-desktop-update-session
 import dot from "dot-object";
 import VirtualDesktopCreateSessionForm from "./forms/virtual-desktop-create-session-form";
 import VirtualDesktopUtilsClient from "../../client/virtual-desktop-utils-client";
+import {IdeaFormValidate} from "../../components/form-field/form-field";
+import {downloadDcvFile, getConnectionInfo, openInNewTab, POPUP_BLOCKED_MESSAGE} from "./desktop-connection";
 
 
 const OS_FILTER_LINUX_ID = 'linux'
 const OS_FILTER_WINDOWS_ID = 'windows'
 const OS_FILTER_ALL_ID = '$all'
+
+/** The row a list filter shows. The listing can hold rows from another filter: see mergeSessions. */
+export function matchesOsFilter(session: VirtualDesktopSession, osFilter: string): boolean {
+    if (osFilter === OS_FILTER_ALL_ID) {
+        return true
+    }
+    const isWindows = (session.base_os ?? session.software_stack?.base_os ?? '').includes('windows')
+    return osFilter === OS_FILTER_WINDOWS_ID ? isWindows : !isWindows
+}
 
 export interface MyVirtualDesktopSessionsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -71,9 +83,13 @@ export interface MyVirtualDesktopSessionsState {
     sessions: Map<string, VirtualDesktopSession>
     loading: boolean
     screenshots: { [k: string]: ScreenShotState }
+    // desktops whose last preview request came back with nothing, by remote session id
+    previewFailed: { [k: string]: boolean }
     selectedSession: VirtualDesktopSession | undefined
     selectedSessionApplicableInstanceTypes: SocaUserInputChoice[]
     osFilter: string,
+    // the last listing request failed: the rows on screen, if any, are the last known state
+    listError: boolean
     showDcvClientHelpModal: boolean
     showCreateSessionForm: boolean
     showUpdateSessionForm: boolean
@@ -81,7 +97,7 @@ export interface MyVirtualDesktopSessionsState {
     confirmAction: MyVirtualDesktopConfirmModalActionProps
     activeConnectionConfirmModalOnConfirm: () => void
     userProjects: Project[]
-    defaultProject: Project | undefined
+    userProjectsFailed: boolean
     softwareStacks: { [k: string]: VirtualDesktopSoftwareStack }
 }
 
@@ -151,6 +167,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     refreshInterval: any
     quickRefresh: any
     readySince: { [k: string]: number } = {}
+    listRequest = 0
     virtualDesktopSettings: any
     componentMounted: boolean
 
@@ -171,16 +188,18 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             sessions: new Map<string, VirtualDesktopSession>(),
             loading: true,
             screenshots: {},
+            previewFailed: {},
             selectedSession: undefined,
             selectedSessionApplicableInstanceTypes: [],
             osFilter: OS_FILTER_ALL_ID,
+            listError: false,
             showDcvClientHelpModal: false,
             showCreateSessionForm: false,
             showUpdateSessionForm: false,
             showUpdateSessionPermissionForm: false,
             softwareStacks: {},
             userProjects: [],
-            defaultProject: undefined,
+            userProjectsFailed: false,
             confirmAction: {
                 actionTitle: '',
                 actionText: '',
@@ -207,21 +226,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             this.virtualDesktopSettings = settings
         })
 
-        this.getProjectsClient().getUserProjects({
-            username: AppContext.get().auth().getUsername()
-        }).then(result => {
-            this.setState({
-                userProjects: result.projects!
-            })
-        })
-
-        this.getProjectsClient().getProject({
-            project_name: 'default'
-        }).then(result => {
-            this.setState({
-                defaultProject: result.project
-            })
-        })
+        this.loadUserProjects().finally()
 
         const refresh = () => {
             if (!this.componentMounted) {
@@ -238,6 +243,21 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             loading: false
         }))
         this.refreshInterval = setInterval(refresh, 30000)
+    }
+
+    loadUserProjects(): Promise<void> {
+        return this.getProjectsClient().getUserProjects({
+            username: AppContext.get().auth().getUsername()
+        }).then(result => {
+            this.setState({
+                userProjects: result.projects!,
+                userProjectsFailed: false
+            })
+        }).catch(() => {
+            this.setState({
+                userProjectsFailed: true
+            })
+        })
     }
 
     componentWillUnmount() {
@@ -321,6 +341,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     }
 
     fetchSessions(): Promise<boolean> {
+        const request = ++this.listRequest
         return AppContext.get().client().virtualDesktop().listSessions({
             filters: [{
                 key: 'base_os',
@@ -330,18 +351,23 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 page_size: 100
             }
         }).then(result => {
+            // an answer for an older filter or an earlier poll must not replace a newer one
+            if (request !== this.listRequest) {
+                return false
+            }
+            this.setState({listError: false})
             return this.setSessions(result?.listing, true)
-        }).catch(error => {
-            this.props.onFlashbarChange({
-                items: [
-                    {
-                        content: error.message,
-                        type: 'error',
-                        dismissible: true
-                    }
-                ]
-            })
+        }).catch(() => {
+            if (request === this.listRequest) {
+                this.setState({listError: true})
+            }
             return false
+        })
+    }
+
+    retryList = () => {
+        this.setState({loading: true}, () => {
+            this.fetchSessions().finally(() => this.setState({loading: false}))
         })
     }
 
@@ -418,19 +444,27 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 continue
             }
             const batch = screenshots.slice(i, i + batchSize)
-            let result = await this.getVirtualDesktopClient().getSessionScreenshot({
+            // one failed batch must not cost the desktops in the next one their preview
+            const result = await this.getVirtualDesktopClient().getSessionScreenshot({
                 screenshots: batch
+            }).catch(() => undefined)
+            result?.success?.forEach((screenshot => {
+                screenshotState[screenshot.dcv_session_id!] = {
+                    data: screenshot.image_data!,
+                    time: moment()
+                }
+            }))
+            const previewFailed = {...this.state.previewFailed}
+            batch.forEach(({dcv_session_id}) => {
+                if (result?.success?.some(screenshot => screenshot.dcv_session_id === dcv_session_id)) {
+                    delete previewFailed[dcv_session_id!]
+                } else {
+                    previewFailed[dcv_session_id!] = true
+                }
             })
-            if (result.success) {
-                result.success.forEach((screenshot => {
-                    screenshotState[screenshot.dcv_session_id!] = {
-                        data: screenshot.image_data!,
-                        time: moment()
-                    }
-                }))
-            }
             this.setState({
-                screenshots: screenshotState
+                screenshots: screenshotState,
+                previewFailed
             })
             if (i + batchSize < screenshots.length) {
                 await delay(1000)
@@ -475,11 +509,11 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     }
 
     buildSessionFailureMessage(session: VirtualDesktopSession, action: string): string {
-        const name = Utils.isNotEmpty(session.name) ? session.name : session.idea_session_id
+        const name = Utils.isNotEmpty(session.name) ? `virtual desktop ${session.name}` : 'this desktop'
         if (Utils.isNotEmpty(session.failure_reason)) {
-            return `Could not ${action} virtual desktop ${name}: ${session.failure_reason}`
+            return `Could not ${action} ${name}: ${session.failure_reason}`
         }
-        return `Could not ${action} virtual desktop ${name}. No reason was returned, contact your administrator.`
+        return `Could not ${action} ${name}. No reason was returned, contact your administrator.`
     }
 
     // session actions answer with a successful envelope and report per-session failures in
@@ -496,13 +530,32 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
         )
     }
 
-    // IdeaException.message is optional, so fall back to the error code rather than an empty banner.
+    // IdeaException.message is optional, so fall back to a next step rather than an empty banner or a bare code.
     displayActionError = (error: any, action: string) => {
-        let message = error?.message
-        if (Utils.isEmpty(message)) {
-            message = Utils.isNotEmpty(error?.errorCode) ? `request failed with error code: ${error.errorCode}` : `${error}`
-        }
+        const message = Utils.isNotEmpty(error?.message) ? error.message : 'Try again, or ask your administrator.'
         this.setFlashMessage(`Could not ${action} virtual desktop: ${message}`, 'error')
+    }
+
+    // Open connections are the one refusal a person can override: they confirm, and it is sent again
+    // with force. Anything else is reported as it is, because force would skip the check that refused it.
+    confirmOrReportFailed = (failed: VirtualDesktopSession[] | undefined, action: string, force: (session: VirtualDesktopSession) => Promise<{ success?: VirtualDesktopSession[], failed?: VirtualDesktopSession[] }>) => {
+        const connected = (failed ?? []).filter(entry => (entry.connection_count ?? 0) > 0)
+        this.displayFailedSessions((failed ?? []).filter(entry => !connected.includes(entry)), action)
+        connected.forEach(entry => {
+            this.setState({
+                selectedSession: entry,
+                activeConnectionConfirmModalOnConfirm: () => {
+                    force(entry).then(result => {
+                        this.displayFailedSessions(result.failed, action)
+                        this.setSessions(result.success).finally()
+                    }).catch(error => {
+                        this.displayActionError(error, action)
+                    })
+                }
+            }, () => {
+                this.getActiveConnectionConfirmModal().show()
+            })
+        })
     }
 
     onDeleteSession = (session: VirtualDesktopSession): Promise<boolean> => {
@@ -527,32 +580,13 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                                 }
                             ]
                         }).then(result => {
-                            if (result.failed && result.failed.length > 0) {
-                                // we got failure. We should treat this as error.
-                                result.failed.forEach(entry => {
-                                    this.setState({
-                                        selectedSession: entry,
-                                        activeConnectionConfirmModalOnConfirm: () => {
-                                            this.getVirtualDesktopClient().deleteSessions({
-                                                sessions: [
-                                                    {
-                                                        idea_session_id: this.state.selectedSession?.idea_session_id,
-                                                        dcv_session_id: this.state.selectedSession?.dcv_session_id,
-                                                        force: true
-                                                    }
-                                                ]
-                                            }).then(result => {
-                                                this.displayFailedSessions(result.failed, 'terminate')
-                                                this.setSessions(result.success).finally()
-                                            }).catch(error => {
-                                                this.displayActionError(error, 'terminate')
-                                            })
-                                        }
-                                    }, () => {
-                                        this.getActiveConnectionConfirmModal().show()
-                                    })
-                                })
-                            }
+                            this.confirmOrReportFailed(result.failed, 'terminate', (entry) => this.getVirtualDesktopClient().deleteSessions({
+                                sessions: [{
+                                    idea_session_id: entry.idea_session_id,
+                                    dcv_session_id: entry.dcv_session_id,
+                                    force: true
+                                }]
+                            }))
                             this.setSessions(result.success).finally()
                         }).catch(error => {
                             this.displayActionError(error, 'terminate')
@@ -587,32 +621,13 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                                 }
                             ]
                         }).then(result => {
-                            if (result.failed && result.failed.length > 0) {
-                                // we got failure. We should treat this as error.
-                                result.failed.forEach(entry => {
-                                    this.setState({
-                                        selectedSession: entry,
-                                        activeConnectionConfirmModalOnConfirm: () => {
-                                            this.getVirtualDesktopClient().rebootSessions({
-                                                sessions: [
-                                                    {
-                                                        idea_session_id: this.state.selectedSession?.idea_session_id,
-                                                        dcv_session_id: this.state.selectedSession?.dcv_session_id,
-                                                        force: true
-                                                    }
-                                                ]
-                                            }).then(result => {
-                                                this.displayFailedSessions(result.failed, 'reboot')
-                                                this.setSessions(result.success).finally()
-                                            }).catch(error => {
-                                                this.displayActionError(error, 'reboot')
-                                            })
-                                        }
-                                    }, () => {
-                                        this.getActiveConnectionConfirmModal().show()
-                                    })
-                                })
-                            }
+                            this.confirmOrReportFailed(result.failed, 'reboot', (entry) => this.getVirtualDesktopClient().rebootSessions({
+                                sessions: [{
+                                    idea_session_id: entry.idea_session_id,
+                                    dcv_session_id: entry.dcv_session_id,
+                                    force: true
+                                }]
+                            }))
                             this.setSessions(result.success).finally()
                         }).catch(error => {
                             this.displayActionError(error, 'reboot')
@@ -660,32 +675,13 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                                 }
                             ]
                         }).then(result => {
-                            if (result.failed && result.failed.length > 0) {
-                                // we got failure. We should treat this as error.
-                                result.failed.forEach(entry => {
-                                    this.setState({
-                                        selectedSession: entry,
-                                        activeConnectionConfirmModalOnConfirm: () => {
-                                            this.getVirtualDesktopClient().stopSessions({
-                                                sessions: [
-                                                    {
-                                                        idea_session_id: this.state.selectedSession?.idea_session_id,
-                                                        dcv_session_id: this.state.selectedSession?.dcv_session_id,
-                                                        force: true
-                                                    }
-                                                ]
-                                            }).then(result => {
-                                                this.displayFailedSessions(result.failed, 'stop')
-                                                this.setSessions(result.success).finally()
-                                            }).catch(error => {
-                                                this.displayActionError(error, 'stop')
-                                            })
-                                        }
-                                    }, () => {
-                                        this.getActiveConnectionConfirmModal().show()
-                                    })
-                                })
-                            }
+                            this.confirmOrReportFailed(result.failed, 'stop', (entry) => this.getVirtualDesktopClient().stopSessions({
+                                sessions: [{
+                                    idea_session_id: entry.idea_session_id,
+                                    dcv_session_id: entry.dcv_session_id,
+                                    force: true
+                                }]
+                            }))
                             this.setSessions(result.success).finally()
                         }).catch(error => {
                             this.displayActionError(error, 'stop')
@@ -721,46 +717,15 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
 
     onDownloadDcvSessionFile = (session: VirtualDesktopSession): Promise<boolean> => {
         if (session.recovering) {
-            this.setFlashMessage('Your desktop session is restarting. Try connecting again in a few minutes.', 'info')
+            this.setFlashMessage('Restarting. Try again in a few minutes.', 'info')
             return Promise.resolve(false)
         }
-        return this.getVirtualDesktopClient().getSessionConnectionInfo({
-            connection_info: {
-                idea_session_id: session.idea_session_id,
-                idea_session_owner: session.owner,
-                dcv_session_id: session.dcv_session_id
-            }
-        }).then(result => {
-            if (result.connection_info?.failure_reason) {
-                throw new Error(result.connection_info.failure_reason)
-            }
-            if (!result.connection_info?.access_token) {
-                throw new Error('Connection details are unavailable. Try again in a few minutes.')
-            }
-            let endpoint = result.connection_info?.endpoint
-            if (endpoint === undefined) {
-                endpoint = AppContext.get().getAlbEndpoint()
-            }
-            const url = new URL(endpoint)
-            let sessionFileContent = '[version]\n'
-            sessionFileContent += 'format=1.0\n'
-            sessionFileContent += '[connect]\n'
-            sessionFileContent += `user=${AppContext.get().auth().getUsername()}\n`
-            sessionFileContent += `sessionid=${result.connection_info?.dcv_session_id ?? session.dcv_session_id}\n`
-            sessionFileContent += `host=${url.host}\n`
-            sessionFileContent += `port=443\n`
-            sessionFileContent += `webport=443\n`
-            sessionFileContent += `quicport=443\n`
-            sessionFileContent += `certificatevalidationpolicy=accept-untrusted\n`
-            sessionFileContent += `authtoken=${result.connection_info?.access_token}\n`
-
-            const element = document.createElement('a')
-            element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(sessionFileContent))
-            element.setAttribute('download', `${session.name}.dcv`)
-            element.style.display = 'none'
-            document.body.appendChild(element)
-            element.click()
-            document.body.removeChild(element)
+        return getConnectionInfo(this.getVirtualDesktopClient(), {
+            idea_session_id: session.idea_session_id,
+            idea_session_owner: session.owner,
+            dcv_session_id: session.dcv_session_id
+        }).then(info => {
+            downloadDcvFile(info, `${session.name}`, session.dcv_session_id)
             return true
         }).catch(error => {
             this.displayActionError(error, 'download the DCV client file for')
@@ -770,25 +735,19 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
 
     onLaunchSession = (session: VirtualDesktopSession): Promise<boolean> => {
         if (session.recovering) {
-            this.setFlashMessage('Your desktop session is restarting. Try connecting again in a few minutes.', 'info')
+            this.setFlashMessage('Restarting. Try again in a few minutes.', 'info')
             return Promise.resolve(false)
         }
-        return this.getVirtualDesktopClient().getSessionConnectionInfo({
-            connection_info: {
-                idea_session_id: session.idea_session_id,
-                idea_session_owner: session.owner,
-                dcv_session_id: session.dcv_session_id
+        return getConnectionInfo(this.getVirtualDesktopClient(), {
+            idea_session_id: session.idea_session_id,
+            idea_session_owner: session.owner,
+            dcv_session_id: session.dcv_session_id
+        }).then(info => {
+            // the request above took long enough that the browser no longer counts this as the click
+            if (!openInNewTab(info)) {
+                this.setFlashMessage(POPUP_BLOCKED_MESSAGE, 'error')
+                return false
             }
-        }).then(result => {
-            if (result.connection_info?.failure_reason) {
-                throw new Error(result.connection_info.failure_reason)
-            }
-            if (!result.connection_info?.access_token) {
-                throw new Error('Connection details are unavailable. Try again in a few minutes.')
-            }
-            return `${result.connection_info?.endpoint}${result.connection_info?.web_url_path}?authToken=${result.connection_info?.access_token}#${result.connection_info?.dcv_session_id}`
-        }).then(url => {
-            window.open(url);
             return true
         }).catch(error => {
             this.displayActionError(error, 'connect to')
@@ -820,11 +779,17 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
     }
 
     showCreateSessionForm() {
-        this.setState({
+        const open = () => this.setState({
             showCreateSessionForm: true
         }, () => {
             this.getCreateSessionForm().showModal()
         })
+        // the form is where the projects are needed, so a failed page load gets another try here
+        if (this.state.userProjectsFailed) {
+            this.loadUserProjects().finally(open)
+        } else {
+            open()
+        }
     }
 
 
@@ -860,7 +825,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 ref={this.updateSessionForm}
                 name={"update-session"}
                 modal={true}
-                title={"Update Session Details for " + this.state.selectedSession?.name}
+                title={"Rename or resize " + this.state.selectedSession?.name}
                 modalSize={"medium"}
                 onCancel={() => {
                     this.hideUpdateSessionForm()
@@ -898,22 +863,21 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 params={[
                     {
                         name: 'session_name',
-                        title: 'Session Name',
-                        description: 'Enter a name for the virtual desktop',
+                        title: 'Desktop name',
                         data_type: 'str',
                         param_type: 'text',
-                        help_text: 'Session Name is required and cannot exceed more than 24 characters',
+                        help_text: 'Use 3 to 24 characters.',
                         default: this.state.selectedSession?.name,
                         validate: {
                             required: true,
-                            regex: '^.{3,24}$'
-                        }
+                            regex: '^.{3,24}$',
+                            message: 'Use 3 to 24 characters.'
+                        } as IdeaFormValidate
                     },
                     {
                         name: 'instance_type',
-                        title: 'Virtual Desktop Size',
-                        description: 'Select a virtual desktop instance type',
-                        help_text: this.state.selectedSession?.hibernation_enabled ? 'You can not update Virtual Desktop Size because Hibernation is enabled for this machine.' : '',
+                        title: 'Desktop size',
+                        help_text: this.state.selectedSession?.hibernation_enabled ? "A desktop that hibernates can't change size." : '',
                         data_type: 'str',
                         readonly: this.state.selectedSession?.hibernation_enabled,
                         default: this.state.selectedSession?.server?.instance_type,
@@ -974,6 +938,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 defaultName={`MyDesktop${(this.state.sessions.size) + 1}`}
                 maxRootVolumeMemory={this.virtualDesktopSettings?.dcv_session.max_root_volume_memory}
                 projects={this.state.userProjects}
+                projectsLoadFailed={this.state.userProjectsFailed}
                 onSubmit={(session_name, username, project_id, base_os, software_stack_id, session_type, instance_type, storage_size, hibernation_enabled, vpc_subnet_id) => {
                     return this.getVirtualDesktopClient().createSession({
                         session: {
@@ -1017,7 +982,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
         return (
             <IdeaConfirm
                 ref={this.activeConnectionConfirmModal}
-                title="Active connections exist!"
+                title="This desktop is in use"
                 onConfirm={this.state.activeConnectionConfirmModalOnConfirm}
                 onCancel={() => {
                     this.setState({
@@ -1025,7 +990,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                     })
                 }}
             >
-                There exists {this.state.selectedSession?.connection_count} active connection(s). Are you sure you want to continue?
+                {this.state.selectedSession?.connection_count === 1 ? 'There is 1 open connection.' : `There are ${this.state.selectedSession?.connection_count} open connections.`} Anyone connected will be disconnected. Continue?
             </IdeaConfirm>
         )
     }
@@ -1080,11 +1045,34 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
         return this.state.directoryServiceProvider === 'activedirectory' || this.state.directoryServiceProvider === 'aws_managed_activedirectory'
     }
 
+    /** Empty only means no desktops once the listing has answered, and only for the filter in use. */
+    buildEmpty() {
+        let message = 'No desktops yet'
+        let action = <Button onClick={() => this.showCreateSessionForm()}>Launch desktop</Button>
+        if (this.state.listError) {
+            message = 'Your desktops could not be loaded. They are not affected.'
+            action = <Button onClick={this.retryList}>Try again</Button>
+        } else if (this.state.osFilter !== OS_FILTER_ALL_ID) {
+            message = `No ${this.state.osFilter === OS_FILTER_WINDOWS_ID ? 'Windows' : 'Linux'} desktops.`
+            action = <Button onClick={() => this.setState({osFilter: OS_FILTER_ALL_ID}, this.retryList)}>Show all desktops</Button>
+        }
+        return <Box textAlign="center" color="inherit" padding={{top: 'xxxl', bottom: "s"}}>
+            <SpaceBetween size="m">
+                <Box variant="strong">{message}</Box>
+                {action}
+            </SpaceBetween>
+        </Box>
+    }
+
     buildListing() {
 
         const getSessions = (): VirtualDesktopSession[] => {
             let sessions: VirtualDesktopSession[] = []
-            this.state.sessions.forEach((session) => sessions.push(session))
+            this.state.sessions.forEach((session) => {
+                if (matchesOsFilter(session, this.state.osFilter)) {
+                    sessions.push(session)
+                }
+            })
             sessions.sort((session_a, session_b) => {
                 if (session_a.created_on === undefined && session_b.created_on === undefined) {
                     return 0
@@ -1109,25 +1097,13 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             header={
                 <div style={{display: 'flex', justifyContent: 'flex-end'}}>
                     <SpaceBetween direction="horizontal" size="l">
-                        <Button variant="normal" iconName="refresh" ariaLabel="Refresh desktops" onClick={() => {
-                            this.setState({
-                                loading: true
-                            }, () => {
-                                this.fetchSessions().then(() => {
-                                    this.setState({
-                                        loading: false
-                                    })
-                                })
-                            })
-                        }}/>
+                        <Button variant="normal" iconName="refresh" ariaLabel="Refresh desktops" onClick={this.retryList}/>
                         <SegmentedControl
                             selectedId={this.state.osFilter}
                             onChange={({detail}) => {
                                 this.setState({
                                     osFilter: detail.selectedId
-                                }, () => {
-                                    this.fetchSessions().finally()
-                                })
+                                }, () => this.fetchSessions())
                             }}
                             options={[
                                 {text: "All", id: OS_FILTER_ALL_ID},
@@ -1171,18 +1147,20 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                                 onShowSchedule={this.onShowSchedule}
                                 onUpdateSessionPermission={this.onShareSession}
                                 onUpdateSession={(session) => {
-                                    return new Promise<boolean>((resolve) =>
-                                        this.getVirtualDesktopUtilsClient().listAllowedInstanceTypesForSession({
-                                            session: session
-                                        }).then(result => {
-                                            this.setState({
-                                                selectedSession: session,
-                                                selectedSessionApplicableInstanceTypes: Utils.generateInstanceTypeListing(result.listing)
-                                            }, () => {
-                                                this.showUpdateSessionForm()
-                                                resolve(true)
-                                            })
-                                        }))
+                                    return this.getVirtualDesktopUtilsClient().listAllowedInstanceTypesForSession({
+                                        session: session
+                                    }).then(result => new Promise<boolean>((resolve) => {
+                                        this.setState({
+                                            selectedSession: session,
+                                            selectedSessionApplicableInstanceTypes: Utils.generateInstanceTypeListing(result.listing)
+                                        }, () => {
+                                            this.showUpdateSessionForm()
+                                            resolve(true)
+                                        })
+                                    })).catch(error => {
+                                        this.displayActionError(error, 'update')
+                                        return false
+                                    })
                                 }}
                                 onConnectHelp={(session) => {
                                     return new Promise<boolean>((resolve) => {
@@ -1195,6 +1173,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                                     })
                                 }}
                                 screenshot={this.state.screenshots[session?.dcv_session_id!]?.data}
+                                previewFailed={this.state.previewFailed[session?.dcv_session_id!]}
                             />
                         }
                     }
@@ -1217,14 +1196,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                     cards: 4
                 }
             ]}
-            empty={
-                <Box textAlign="center" color="inherit" padding={{top: 'xxxl', bottom: "s"}}>
-                    <SpaceBetween size="m">
-                        <Box variant="strong">No desktops yet</Box>
-                        <Button onClick={() => this.showCreateSessionForm()}>Launch desktop</Button>
-                    </SpaceBetween>
-                </Box>
-            }
+            empty={this.buildEmpty()}
             items={getSessions()}
         />
     }
@@ -1255,6 +1227,8 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 contentType={"cards"}
                 content={
                     <div>
+                        {this.state.listError && this.state.sessions.size > 0 &&
+                            <Alert type="warning" action={<Button onClick={this.retryList}>Try again</Button>}>Could not refresh. Showing the last known state.</Alert>}
                         {this.buildListing()}
                         {this.state.showCreateSessionForm && this.buildCreateSessionForm()}
                         {this.state.showUpdateSessionForm && this.buildUpdateSessionForm()}

@@ -303,7 +303,7 @@ class CostMetricsService(SocaService):
 
     def get_lookback_days(self) -> int:
         return max(
-            1, self.context.config().get_int(self._config_key('lookback_days'), 3)
+            1, self.context.config().get_int(self._config_key('lookback_days'), 7)
         )
 
     def reader(self) -> CostExplorerReader:

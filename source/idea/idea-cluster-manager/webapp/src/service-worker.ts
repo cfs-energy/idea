@@ -126,7 +126,8 @@ self.addEventListener('message', (event) => {
                     IDEA_AUTH_CONTEXT.invoke(
                         event.data.options.url,
                         event.data.options.request,
-                        event.data.options.isPublic
+                        event.data.options.isPublic,
+                        event.data.options.timeout
                     ).then(result => {
                         event.ports[0].postMessage({
                             response: result

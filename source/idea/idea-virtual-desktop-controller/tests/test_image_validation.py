@@ -8,6 +8,8 @@ desktop and candidate stack are always deleted.
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from botocore.exceptions import ClientError
 
@@ -305,6 +307,22 @@ def test_windows_filesystems_are_the_smb_shares():
     assert shared_filesystems(config, windows=False) == [
         ('data', '/data'),
         ('home', '/home'),
+    ]
+
+
+def test_a_share_name_stored_with_doubled_separators_is_probed_as_mapped():
+    config = MagicMock()
+    config.get_config.return_value = {
+        'data': {
+            'provider': 'fsx_netapp_ontap',
+            'fsx_netapp_ontap': {
+                'svm': {'smb_dns': 'svm.example'},
+                'volume': {'cifs_share_name': 'Users$\\\\home\\\\%UserName%'},
+            },
+        },
+    }
+    assert shared_filesystems(config, windows=True) == [
+        ('data', '\\\\svm.example\\Users$\\home\\%UserName%')
     ]
 
 
@@ -648,3 +666,185 @@ def test_refused_listing_requires_existence_except_for_unprovable_per_user_paths
     )
     assert home.endswith('$true')
     assert script.count('function Probe-Share') == 1
+
+
+BAKE_ONE = datetime(2026, 11, 6, 8, tzinfo=timezone.utc)
+BAKE_TWO = datetime(2026, 11, 6, 11, tzinfo=timezone.utc)
+
+
+def attempt(started_on):
+    return RECORD.model_copy(update={'started_on': started_on})
+
+
+def test_each_bake_tests_on_its_own_stack_and_desktop():
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    tester, _ = launcher(api, Clock())
+    project = Mock()
+    first = tester._candidate_stack(attempt(BAKE_ONE), STACK, project, 'cpu')
+    second = tester._candidate_stack(attempt(BAKE_TWO), STACK, project, 'cpu')
+    assert first.stack_id != second.stack_id
+    assert first.stack_id.startswith('ss-validate-rocky9-x86-64-')
+    assert module.validation_session_name(
+        attempt(BAKE_ONE), 'cpu'
+    ) != module.validation_session_name(attempt(BAKE_TWO), 'cpu')
+
+
+def test_a_worker_left_behind_cannot_delete_the_stack_of_its_retry():
+    # the time limit gave up on bake one and its thread woke up after bake two began
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    tester, _ = launcher(api, Clock())
+    project = Mock()
+    stale = tester._candidate_stack(attempt(BAKE_ONE), STACK, project, 'cpu')
+    retry = tester._candidate_stack(attempt(BAKE_TWO), STACK, project, 'cpu')
+    tester._delete(None, stale)
+    api.software_stack_db.delete.assert_called_once_with(stale)
+    assert stale.stack_id != retry.stack_id
+
+
+def test_giving_up_on_a_bake_leaves_the_test_launch_of_its_retry_alone():
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    tester, _ = launcher(api, Clock())
+    stale_name = module.validation_session_name(attempt(BAKE_ONE), 'cpu')
+    retry_name = module.validation_session_name(attempt(BAKE_TWO), 'cpu')
+    rows = [
+        VirtualDesktopSession(idea_session_id='stale', name=stale_name),
+        VirtualDesktopSession(idea_session_id='retry', name=retry_name),
+    ]
+    api.session_db = Mock()
+    api.session_db._table.query.return_value = {'Items': rows}
+    api.session_db.convert_db_dict_to_session_object = lambda item: item
+    api.session_utils = Mock()
+    api.software_stack_db = Mock()
+    api.software_stack_db.get.return_value = 'the-stack'
+    assert tester.discard(attempt(BAKE_ONE), ImagePipelineSettings()) == ['stale']
+    stack_id = api.software_stack_db.get.call_args.args[0]
+    assert stack_id == module.validation_stack_id(attempt(BAKE_ONE), 'cpu')
+
+
+def test_a_stack_left_behind_by_a_dead_bake_is_reaped():
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    tester, _ = launcher(api, Clock())
+    api.session_db = Mock()
+    api.session_db._table.query.return_value = {'Items': []}
+    api.software_stack_db = Mock()
+    now = datetime.now(tz=timezone.utc)
+    old = VirtualDesktopSoftwareStack(
+        stack_id='ss-validate-rocky9-x86-64-abc', created_on=now - timedelta(hours=9)
+    )
+    young = VirtualDesktopSoftwareStack(
+        stack_id='ss-validate-rocky9-arm64-abc', created_on=now
+    )
+    other = VirtualDesktopSoftwareStack(
+        stack_id='ss-base-rocky9', created_on=now - timedelta(hours=9)
+    )
+    api.software_stack_db.list_all_from_db.return_value = Mock(
+        listing=[old, young, other], cursor=None
+    )
+    tester.reap(ImagePipelineSettings(), timedelta(hours=2))
+    api.software_stack_db.delete.assert_called_once_with(old)
+
+
+def test_discard_removes_only_this_rows_test_desktop_and_candidate_stack():
+    api = FakeApi([VirtualDesktopSessionState.READY])
+    tester, _ = launcher(api, Clock())
+    rows = [
+        VirtualDesktopSession(idea_session_id='mine', name='validate-rocky9-x86_64'),
+        VirtualDesktopSession(idea_session_id='arm', name='validate-rocky9-arm64'),
+        VirtualDesktopSession(idea_session_id='own', name='my-desktop'),
+    ]
+    api.session_db = Mock()
+    api.session_db._table.query.return_value = {'Items': rows}
+    api.session_db.convert_db_dict_to_session_object = lambda item: item
+    api.session_utils = Mock()
+    api.software_stack_db = Mock()
+    api.software_stack_db.get.return_value = 'the-stack'
+    discarded = tester.discard(RECORD, ImagePipelineSettings())
+    assert discarded == ['mine']
+    terminated = api.session_utils.terminate_sessions.call_args.args[0]
+    assert [s.idea_session_id for s in terminated] == ['mine']
+    assert terminated[0].force is True
+    api.software_stack_db.get.assert_called_once_with(
+        'ss-validate-rocky9-x86-64', 'rocky9'
+    )
+    api.software_stack_db.delete.assert_called_once_with('the-stack')
+
+
+def test_the_reboot_waits_out_the_state_the_hosts_own_reboot_event_causes():
+    clock = Clock()
+    api = FakeApi(
+        [
+            VirtualDesktopSessionState.INITIALIZING,
+            VirtualDesktopSessionState.INITIALIZING,
+            VirtualDesktopSessionState.READY,
+        ]
+    )
+    tester, _ = launcher(api, clock)
+    seen = []
+
+    def reboot(sessions):
+        seen.append(len(api.states))
+        return [], []
+
+    api.session_utils.reboot_sessions.side_effect = reboot
+    session = VirtualDesktopSession(idea_session_id='sess-1', owner='idea-validate')
+    result = tester._reboot(session, 900)
+    assert result.ok is True and result.name == 'reboot_ready'
+    # asked only once the session read READY, the last of the three states
+    assert seen == [1]
+
+
+def test_a_session_that_never_settles_fails_without_asking_for_a_reboot():
+    clock = Clock()
+    api = FakeApi([VirtualDesktopSessionState.INITIALIZING])
+    tester, _ = launcher(api, clock)
+    session = VirtualDesktopSession(idea_session_id='sess-1', owner='idea-validate')
+    result = tester._reboot(session, 900)
+    assert result.ok is False and 'not READY within 900 s' in result.detail
+    api.session_utils.reboot_sessions.assert_not_called()
+
+
+def test_a_test_desktop_that_failed_is_read_before_it_is_deleted_and_says_why(
+    monkeypatch,
+):
+    clock = Clock()
+    api = FakeApi([VirtualDesktopSessionState.PROVISIONING])
+    tester, context = launcher(api, clock)
+    context.aws().logs().get_log_events.return_value = {'events': []}
+    seen = []
+
+    def capture(ctx, logger, host):
+        seen.append((host, api.session_utils.terminate_sessions.call_count))
+        return (
+            'Likely cause: the operating system crashed while starting (kernel panic).'
+        )
+
+    monkeypatch.setattr(
+        'ideavirtualdesktopcontroller.app.sessions.image_validation.capture_failure',
+        capture,
+    )
+    checks = tester.test_launch(
+        RECORD, STACK, ImagePipelineSettings(ready_gate_seconds_linux=300)
+    )
+    host, deleted_before = seen[0]
+    assert deleted_before == 0
+    assert host.kind == 'desktop_bake' and host.instance_id == 'i-desk'
+    assert host.log_stream == 'bootstrap_i-desk' and host.failure == 'ready_gate'
+    assert checks[-1].detail.startswith('Likely cause: the operating system crashed')
+    # the row keeps only the first 300 characters of this
+    assert 'not READY within 300 s' in checks[-1].detail
+    api.session_utils.terminate_sessions.assert_called_once()
+
+
+def test_a_capture_that_blows_up_still_deletes_the_test_desktop(monkeypatch):
+    clock = Clock()
+    api = FakeApi([VirtualDesktopSessionState.PROVISIONING])
+    tester, context = launcher(api, clock)
+    monkeypatch.setattr(
+        'ideavirtualdesktopcontroller.app.sessions.image_validation.capture_failure',
+        Mock(side_effect=RuntimeError('aws is gone')),
+    )
+    checks = tester.test_launch(
+        RECORD, STACK, ImagePipelineSettings(ready_gate_seconds_linux=300)
+    )
+    assert checks[-1].ok is False
+    api.session_utils.terminate_sessions.assert_called_once()

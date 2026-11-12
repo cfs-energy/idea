@@ -76,19 +76,15 @@ IDEA automatically performs DryRun action to validate whether your job can run o
 
 <pre class="language-bash"><code class="lang-bash"><strong># Example1: Trying to submit a job with an invalid instance type
 </strong><strong>$ qsub -l instance_type=fake_instance -- /bin/sleep 60
-</strong>qsub: Job submission failed and cannot be queued:
+</strong>qsub: This job can't be queued:
 
-* Below parameters failed to be validated:
-
-[INVALID_EC2_INSTANCE_TYPE] ec2 instance_type is invalid: fake_instance
+- ec2 instance_type is invalid: fake_instance
 
 # Example2: Trying to submit a job with more nodes than the per-job limit allows
 [clusteradmin@ip-10-0-142-68 ~]$ qsub -l instance_type=m5.large  -l nodes=6000 -- /bin/sleep 60
-qsub: Job submission failed and cannot be queued:
+qsub: This job can't be queued:
 
-* Below parameters failed to be validated:
-
-[nodes] You have requested 6000 nodes, but a single job can request at most 100 nodes. Reduce the no. of nodes (the web portal computes nodes from the requested cpus) or ask your cluster administrator to raise the limit.
+- You have requested 6000 nodes, but a single job can request at most 100 nodes. Reduce the no. of nodes (the web portal computes nodes from the requested cpus) or ask your cluster administrator to raise the limit.
 
 
 </code></pre>

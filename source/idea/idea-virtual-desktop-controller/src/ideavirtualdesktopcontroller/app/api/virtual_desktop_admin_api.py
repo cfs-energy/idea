@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import re
 from typing import Dict, Callable
 
 import ideavirtualdesktopcontroller
@@ -57,6 +58,10 @@ from ideadatamodel import (
     ResumeSessionsResponse,
     ListSessionsRequest,
     CreateSoftwareStackRequest,
+    ExtendSoftwareStackRequest,
+    ExtendSoftwareStackResponse,
+    ListOrphanInstancesRequest,
+    ListOrphanInstancesResponse,
     CreateSoftwareStackResponse,
     UpdateSoftwareStackRequest,
     UpdateSoftwareStackResponse,
@@ -82,13 +87,18 @@ from ideadatamodel import (
 from ideadatamodel import errorcodes, exceptions
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import (
+    MAX_EXTEND_DAYS,
+    OrphanInstances,
+    StackExpiry,
+)
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
-from datetime import datetime
+from datetime import datetime, timedelta
 from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     BASE_STACK_MIN_STORAGE_GB,
 )
 
-# the monthly vendor check; the scheduler reads the same key for compute rows
+# the monthly rebuild; the scheduler reads the same key for compute rows
 IMAGE_REFRESH_SCHEDULE_KEY = (
     'virtual-desktop-controller.software_stacks.image_refresh_schedule'
 )
@@ -97,6 +107,8 @@ IMAGE_REFRESH_LAST_RUN_KEY = (
     'virtual-desktop-controller.software_stacks.image_refresh_last_run_on'
 )
 
+
+STACK_OWNER_PATTERN = re.compile(r'[A-Za-z0-9._@-]{0,128}')
 
 # app (client-credentials) tokens are authorized by module scope, users by elevation:
 # reads take <module>/read, mutations <module>/write. a namespace absent from this map
@@ -149,6 +161,8 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
             'VirtualDesktopAdmin.DeleteSoftwareStack': self.delete_software_stack,
             'VirtualDesktopAdmin.GetSoftwareStackInfo': self.get_software_stack_info,
             'VirtualDesktopAdmin.ListSoftwareStacks': self.list_software_stacks,
+            'VirtualDesktopAdmin.ExtendSoftwareStack': self.extend_software_stack,
+            'VirtualDesktopAdmin.ListOrphanInstances': self.list_orphan_instances,
             'VirtualDesktopAdmin.CreateSoftwareStackFromSession': self.create_software_stack_from_session,
             'VirtualDesktopAdmin.CreatePermissionProfile': self.create_permission_profile,
             'VirtualDesktopAdmin.UpdatePermissionProfile': self.update_permission_profile,
@@ -741,8 +755,46 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
     def list_software_stacks(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListSoftwareStackRequest)
-        result = self._list_software_stacks(request)
+        result = self._annotate_software_stacks(self._list_software_stacks(request))
         context.success(result)
+
+    def extend_software_stack(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ExtendSoftwareStackRequest)
+        if Utils.is_any_empty(request.stack_id, request.base_os):
+            raise exceptions.invalid_params('stack_id and base_os are required')
+        if request.days is not None and not 1 <= request.days <= MAX_EXTEND_DAYS:
+            raise exceptions.invalid_params(
+                f'days must be between 1 and {MAX_EXTEND_DAYS}'
+            )
+        stack = self.software_stack_db.get(
+            stack_id=request.stack_id, base_os=request.base_os
+        )
+        if stack is None:
+            raise exceptions.invalid_params(f'no such stack: {request.stack_id}')
+        expiry = StackExpiry(self.context)
+        updated = self.software_stack_db.set_expiry(
+            stack, expiry.extended_date(stack, request.days)
+        )
+        expiry.annotate([updated])
+        context.success(ExtendSoftwareStackResponse(software_stack=updated))
+
+    def list_orphan_instances(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ListOrphanInstancesRequest)
+        # the model has already made this an int; a grace past a year is no grace period, and
+        # one past what a timedelta holds would fail as a server error
+        minutes = request.min_age_minutes
+        if minutes is not None and not 0 <= minutes <= 525600:
+            raise exceptions.invalid_params(
+                'min_age_minutes must be a whole number of minutes from 0 to 525600 (a year)'
+            )
+        finder = OrphanInstances(self.context, self.session_db)
+        context.success(
+            ListOrphanInstancesResponse(
+                listing=finder.list()
+                if minutes is None
+                else finder.list(min_age=timedelta(minutes=minutes))
+            )
+        )
 
     def list_sessions(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ListSessionsRequest)
@@ -843,6 +895,18 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
         if Utils.is_not_empty(new_software_stack.description):
             old_software_stack.description = new_software_stack.description
+        # empty clears the owner; absent keeps it. a date only ever moves through here on purpose
+        if new_software_stack.owner is not None:
+            owner = new_software_stack.owner.strip()
+            if not STACK_OWNER_PATTERN.fullmatch(owner):
+                raise exceptions.invalid_params(
+                    'owner must be a username, or empty for no owner'
+                )
+            old_software_stack.owner = owner
+        if new_software_stack.clear_expires_on:
+            old_software_stack.expires_on = None
+        elif new_software_stack.expires_on is not None:
+            old_software_stack.expires_on = new_software_stack.expires_on
         if Utils.is_not_empty(new_software_stack.name):
             old_software_stack.name = new_software_stack.name
         if Utils.is_not_empty(new_software_stack.enabled):
@@ -969,7 +1033,11 @@ class VirtualDesktopAdminAPI(VirtualDesktopAPI):
 
             old_software_stack.min_storage = new_software_stack.min_storage
 
-        new_software_stack = self.software_stack_db.update(old_software_stack)
+        # one write and one index update: the date goes with the rest of the edit
+        new_software_stack = self.software_stack_db.update(
+            old_software_stack,
+            clear_expires_on=bool(new_software_stack.clear_expires_on),
+        )
 
         ss_projects = []
         for project in new_software_stack.projects:

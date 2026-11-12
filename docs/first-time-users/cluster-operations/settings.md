@@ -10,7 +10,7 @@ Choose **Edit** on one card, change its values, then choose **Save** or **Cancel
 | --- | --- |
 | General | Portal appearance, Regional defaults, Maintenance notice |
 | Desktops | Desktop placement, Desktop policy, Desktop schedule, Stopped desktop cleanup |
-| Jobs | Job limits and placement, Fair-share scheduling, Scratch storage |
+| Jobs | Job limits and placement, Fair-share scheduling, Scratch cleanup, Scratch storage |
 | AI access | Amazon Bedrock access, models, usage, and spending controls |
 | Notifications | Email delivery, Notifications, Email templates |
 | Users and sign-in | Account synchronization, Sign-in, Directory connection, Directory mapping, AD automation |

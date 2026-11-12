@@ -328,3 +328,17 @@ def test_account_lookup_failure_does_not_run_check_as_current_identity(
     _, _, error = service._check_license_availability('printf 7')
     assert isinstance(error, OSError)
     assert shell.invocations == []
+
+
+def test_not_enough_seats_says_how_many_are_free(context):
+    util = build_provisioning_util(
+        context,
+        LicenseAvailability(available_count=3, check_ok=True),
+        active_count=2,
+    )
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        util.check_licenses(reject_when_check_fails=False)
+    assert exc_info.value.message == (
+        f'Not enough {LICENSE_NAME} licenses: this job needs 2, 1 are free right now. '
+        'Try again when other jobs finish.'
+    )

@@ -7,13 +7,16 @@ EC2, the builder and the test launch are stubs; nothing here talks to AWS.
 """
 
 from datetime import datetime, timedelta, timezone
+import time
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+from botocore.exceptions import ClientError
 
 from ideadatamodel import (
     ImageBuildRecord,
+    ImageBuildTrigger,
     ImageCheck,
     ImageKind,
     ImageRefreshSchedule,
@@ -758,8 +761,17 @@ def test_a_resumed_row_terminates_its_builder_once_the_image_is_available():
     assert h.ec2.stopped == []
 
 
-def test_a_restart_before_the_snapshot_stops_the_builder_and_retries_once():
+def test_a_restart_before_the_snapshot_removes_the_builder_and_retries_once():
     h = Harness()
+    h.ec2.instances = [
+        {
+            'InstanceId': 'i-builder',
+            'Tags': [
+                {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
+                {'Key': 'idea:ModuleId', 'Value': 'vdc'},
+            ],
+        }
+    ]
     h.pipeline._start = lambda record, blocking: True
     for attempt, expected in ((None, 'queued'), (1, 'failed')):
         h.records.put(
@@ -772,11 +784,12 @@ def test_a_restart_before_the_snapshot_stops_the_builder_and_retries_once():
                 instance_id='i-builder',
                 attempts=attempt,
                 release=VERSION,
+                started_on=T0,
             )
         )
         h.pipeline.tick(now=T0)
         assert h.row().status == expected
-    assert h.ec2.stopped == ['i-builder', 'i-builder']
+    assert h.ec2.terminated == ['i-builder', 'i-builder']
 
 
 def test_a_row_taken_over_by_another_controller_stops_its_old_thread():
@@ -1008,6 +1021,46 @@ def test_cleanup_keeps_an_image_a_launch_template_or_setting_names():
     assert h.ec2.deleted_snapshots == ['snap-ami-old']
 
 
+def test_cleanup_goes_on_past_an_image_another_pass_already_removed():
+    """
+    two bakes promoting together each run cleanup: the second still listed the image the
+    first had just deregistered, failed on it and logged "image cleanup failed".
+    """
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    for image_id in ('ami-gone', 'ami-old'):
+        h.ec2.add_image(image_id, name=f'idea-dcv-host-rocky9-{image_id}')
+    deregister = h.ec2.deregister_image
+
+    def racing(ImageId):
+        if ImageId == 'ami-gone':
+            raise ClientError(
+                {'Error': {'Code': 'InvalidAMIID.Unavailable', 'Message': 'gone'}},
+                'DeregisterImage',
+            )
+        deregister(ImageId)
+
+    h.ec2.deregister_image = racing
+    h.pipeline._logger = Mock()
+    h.pipeline.cleanup()
+    assert h.ec2.deregistered == ['ami-old']
+    # the other pass owns the first image's snapshots
+    assert h.ec2.deleted_snapshots == ['snap-ami-old']
+    h.pipeline._logger.error.assert_not_called()
+
+
+def test_cleanup_still_reports_an_image_it_could_not_deregister():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    h.ec2.add_image('ami-old', name='idea-dcv-host-rocky9-ami-old')
+    h.ec2.deregister_image = Mock(
+        side_effect=ClientError(
+            {'Error': {'Code': 'UnauthorizedOperation', 'Message': 'no'}},
+            'DeregisterImage',
+        )
+    )
+    with pytest.raises(ClientError):
+        h.pipeline._deregister_unreferenced()
+
+
 def test_cleanup_deletes_nothing_when_a_reference_cannot_be_read():
     h = Harness([base_stack('rocky9', ami='ami-current')])
     h.ec2.add_image('ami-old', name='idea-dcv-host-rocky9-ami-old')
@@ -1141,29 +1194,70 @@ def monthly_harness(last_run):
     return h
 
 
-def test_the_monthly_check_rebakes_only_rows_whose_vendor_base_moved(monkeypatch):
+def test_the_monthly_check_rebakes_every_row_with_an_unchanged_base_and_release():
+    # repositories move between vendor images; only a new bake picks up their fixes
     tz = ZoneInfo('America/Chicago')
     h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=tz))
-    monkeypatch.setattr(
-        module,
-        'resolve_stock_image',
-        lambda ec2, base_os, arch, logger: {
-            'ImageId': 'ami-stock-rocky9'
-            if base_os == 'rocky9'
-            else 'ami-stock-rocky8-new'
-        },
-    )
     before = datetime(2026, 10, 4, 1, 59, tzinfo=tz)
     h.pipeline.tick(now=before.astimezone(timezone.utc))
     assert h.row('rocky8').status == 'current'  # not due yet (01:59 cluster time)
 
     due = datetime(2026, 10, 4, 2, 1, tzinfo=tz)
     h.pipeline.tick(now=due.astimezone(timezone.utc))
-    assert h.row('rocky8').status == 'queued' and h.row('rocky8').trigger == 'monthly'
-    assert h.row('rocky9').status == 'current'
+    for base_os in ('rocky8', 'rocky9'):
+        assert h.row(base_os).status == 'queued'
+        assert h.row(base_os).trigger == 'monthly'
     assert h.config.values['vdc.software_stacks.image_refresh_last_run_on'] == int(
         due.timestamp() * 1000
     )
+
+
+def test_the_monthly_check_waits_for_a_bake_in_flight_without_claiming_the_month():
+    tz = ZoneInfo('America/Chicago')
+    last = datetime(2026, 9, 6, 2, 5, tzinfo=tz)
+    h = monthly_harness(last)
+    baking = h.row('rocky9')
+    baking.status, baking.host = 'test_launching', h.pipeline.host
+    baking.started_on = baking.attempt_started_on = T0
+    h.records.put(baking)
+    due = datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc)
+    h.pipeline._monthly_trigger(due)
+    assert h.row('rocky8').status == 'current'
+    assert h.config.values['vdc.software_stacks.image_refresh_last_run_on'] == int(
+        last.timestamp() * 1000
+    )
+    baking = h.row('rocky9')
+    baking.status = 'current'
+    h.records.put(baking)
+    h.pipeline._monthly_trigger(due)
+    assert h.row('rocky8').status == 'queued'
+
+
+def test_a_monthly_row_waiting_for_a_slot_is_not_on_the_bake_clock():
+    # the time limit starts when a row leaves the queue, so baking every row cannot overrun it
+    tz = ZoneInfo('America/Chicago')
+    h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=tz))
+    due = datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc)
+    h.pipeline._monthly_trigger(due)
+    queued = h.row('rocky8')
+    assert queued.status == 'queued' and queued.attempt_started_on is None
+    assert not module.bake_overdue(
+        queued, due + timedelta(hours=24), timedelta(hours=2)
+    )
+
+
+def test_the_monthly_check_skips_pinned_and_held_rows():
+    tz = ZoneInfo('America/Chicago')
+    h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=tz))
+    pinned = h.row('rocky8')
+    pinned.pinned = True
+    h.records.put(pinned)
+    held = h.row('rocky9')
+    held.rollback_hold = True
+    h.records.put(held)
+    due = datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc)
+    h.pipeline._monthly_trigger(due)
+    assert {h.row(o).status for o in ('rocky8', 'rocky9')} == {'current'}
 
 
 def test_the_monthly_check_runs_once_when_the_settings_copy_lags(monkeypatch):
@@ -1180,23 +1274,18 @@ def test_the_monthly_check_runs_once_when_the_settings_copy_lags(monkeypatch):
     h.config.db.set_config_entry_if.side_effect = set_if
     h.config.put = lambda key, value: None  # this copy never sees the write
     checks = []
+    queue = h.pipeline.queue
     monkeypatch.setattr(
-        module,
-        'resolve_stock_image',
-        lambda ec2, base_os, arch, logger: checks.append(base_os)
-        or {'ImageId': f'ami-stock-{base_os}'},
+        h.pipeline,
+        'queue',
+        lambda record, trigger, *a, **k: (
+            checks.append(record.base_os) or queue(record, trigger, *a, **k)
+        ),
     )
     due = datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc)
     h.pipeline.tick(now=due)
     h.pipeline.tick(now=due + timedelta(seconds=15))
     assert sorted(checks) == ['rocky8', 'rocky9']
-
-
-def test_a_quiet_monthly_check_bakes_nothing():
-    tz = ZoneInfo('America/Chicago')
-    h = monthly_harness(datetime(2026, 9, 6, 2, 5, tzinfo=tz))
-    h.pipeline.tick(now=datetime(2026, 10, 4, 3, tzinfo=tz).astimezone(timezone.utc))
-    assert {h.row(o).status for o in ('rocky9', 'rocky8')} == {'current'}
 
 
 def test_the_first_tick_starts_the_schedule_clock_and_queues_missing_release_rows():
@@ -1273,7 +1362,7 @@ def test_a_held_row_validated_automatically_is_not_promoted_but_a_button_refresh
     held = h.row()
     held.status, held.trigger, held.image_id, held.host = (
         'promoting',
-        'monthly',
+        ImageBuildTrigger.MONTHLY,
         'ami-new',
         'leader',
     )
@@ -1880,3 +1969,440 @@ def test_settled_release_preserves_row_guards(guard):
     h.pipeline._release_trigger()
     assert h.row().release == 'older'
     assert h.row().status == 'current'
+
+
+# the bake time limit
+
+
+def overdue_row(h, **kwargs):
+    return h.records.put(
+        ImageBuildRecord(
+            kind='desktop',
+            base_os='rocky9',
+            architecture='x86_64',
+            status='test_launching',
+            image_id='ami-candidate',
+            current_image_id='ami-old',
+            release=VERSION,
+            host='a-dead-controller',
+            started_on=T0 - timedelta(hours=3),
+            attempt_started_on=T0 - timedelta(hours=3),
+            **kwargs,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    'status', ['resolving', 'building', 'checking', 'test_launching', 'promoting']
+)
+def test_a_row_past_the_limit_with_no_worker_fails_instead_of_resuming(status):
+    h = Harness()
+    record = overdue_row(h)
+    record.status = status
+    h.records.put(record)
+    h.pipeline.tick(now=T0, blocking=True)
+    row = h.row()
+    assert row.status == 'failed'
+    assert '120 minute limit' in row.error and status in row.error
+    assert row.finished_on == T0
+    assert row.checks[-1].name == 'time_limit' and row.checks[-1].ok is False
+    assert h.tester.launched == []
+
+
+def test_a_capacity_wait_is_not_on_the_bake_clock():
+    h = Harness()
+    record = overdue_row(h)
+    record.status = 'waiting_capacity'
+    record.error = 'waiting for EC2 capacity: none left'
+    record.retry_after = T0 + timedelta(hours=1)
+    h.records.put(record)
+    h.pipeline.tick(now=T0)
+    assert h.row().status == 'waiting_capacity'
+
+
+def test_the_clock_starts_again_when_a_wait_ends():
+    # a row waiting to test launch goes straight on, with a full limit to do it in
+    h = Harness()
+    record = overdue_row(h)
+    record.status = 'waiting_capacity'
+    record.retry_after = T0 - timedelta(minutes=1)
+    h.records.put(record)
+    h.pipeline._adopt(record, T0)
+    assert h.row().attempt_started_on == T0
+    assert not module.bake_overdue(h.row(), T0 + timedelta(hours=1), timedelta(hours=2))
+    # one with no image yet goes back through the queue, and starts its clock when it leaves
+    h = Harness()
+    record = overdue_row(h)
+    record.status = 'waiting_capacity'
+    record.image_id = None
+    record.retry_after = T0 - timedelta(minutes=1)
+    h.records.put(record)
+    h.pipeline._adopt(record, T0)
+    assert h.row().status == 'queued' and h.row().attempt_started_on is None
+
+
+def test_a_row_with_no_clock_gets_one_and_no_failure():
+    # in flight when the release that added the clock arrived, perhaps after hours in the queue
+    h = Harness()
+    record = overdue_row(h)
+    record.attempt_started_on = None
+    record.started_on = T0 - timedelta(hours=5)
+    h.records.put(record)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'test_launching'
+    assert h.row().attempt_started_on == T0
+    # and that clock still ends a bake that is really stuck
+    h.pipeline._enforce_time_limit(T0 + timedelta(hours=2, minutes=1))
+    assert h.row().status == 'failed'
+
+
+def test_a_live_worker_past_the_limit_is_fenced_out_and_its_slot_freed():
+    h = Harness()
+    overdue_row(h)
+    stale = h.row()
+    stale.host = 'leader'
+    hung = Mock(is_alive=lambda: True)
+    module._LIVE['rocky9/x86_64'] = hung
+    try:
+        h.pipeline.tick(now=T0, blocking=True)
+        assert h.row().status == 'failed'
+        assert module._LIVE.get('rocky9/x86_64') is not hung
+        # the worker wakes from its hung mount and tries to write
+        stale.status = 'promoting'
+        with pytest.raises(module.LostOwnership):
+            h.pipeline._save(stale)
+        assert h.row().status == 'failed'
+    finally:
+        module._LIVE.pop('rocky9/x86_64', None)
+
+
+def test_a_worker_of_an_earlier_attempt_cannot_write_over_a_new_one():
+    h = Harness()
+    record = overdue_row(h)
+    record.host = 'leader'
+    h.records.put(record)
+    newer = h.row()
+    newer.started_on = T0
+    h.records.put(newer)
+    with pytest.raises(module.LostOwnership):
+        h.pipeline._save(record)
+    assert h.row().started_on == T0
+
+
+def test_the_limit_leaves_a_healthy_bake_and_a_queued_row_alone():
+    h = Harness()
+    record = overdue_row(h)
+    # the longest real bake on any cluster took 55 minutes
+    record.started_on = record.attempt_started_on = T0 - timedelta(minutes=55)
+    record.host = 'leader'
+    h.records.put(record)
+    module._LIVE['rocky9/x86_64'] = Mock(is_alive=lambda: True)
+    try:
+        h.pipeline._enforce_time_limit(T0)
+    finally:
+        module._LIVE.pop('rocky9/x86_64', None)
+    assert h.row().status == 'test_launching'
+    # days in the queue cost nothing; the clock starts when a slot takes it
+    record.status = 'queued'
+    record.started_on = T0 - timedelta(days=3)
+    record.attempt_started_on = None
+    h.records.put(record)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'queued'
+
+
+def test_the_limit_counts_from_when_the_row_left_the_queue():
+    h = Harness()
+    record = overdue_row(h)
+    record.started_on = T0 - timedelta(hours=5)
+    record.attempt_started_on = T0 - timedelta(minutes=30)
+    h.records.put(record)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'test_launching'
+    record.attempt_started_on = T0 - timedelta(hours=2, minutes=1)
+    h.records.put(record)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'failed'
+
+
+def test_the_limit_is_a_setting():
+    h = Harness(settings={'bake_time_limit_minutes': 30})
+    record = overdue_row(h)
+    record.started_on = record.attempt_started_on = T0 - timedelta(minutes=31)
+    h.records.put(record)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'failed' and '30 minute limit' in h.row().error
+
+
+def test_a_row_stuck_from_an_earlier_release_fails_and_the_release_bakes_it_again():
+    h = Harness()
+    record = overdue_row(h)
+    record.release = '26.11.1'
+    record.started_on = T0 - timedelta(days=2)
+    record.attempt_started_on = None
+    h.records.put(record)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'test_launching'
+    h.pipeline._enforce_time_limit(T0 + timedelta(hours=2, minutes=1))
+    assert h.row().status == 'failed'
+    h.pipeline._release_trigger()
+    assert h.row().status == 'queued'
+    assert h.row().release == VERSION
+    assert h.row().attempt_started_on is None
+
+
+# failing disposes what the bake made
+
+
+def tagged_builder(instance_id='i-builder', module_id='vdc'):
+    return {
+        'InstanceId': instance_id,
+        'Tags': [
+            {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
+            {'Key': 'idea:ModuleId', 'Value': module_id},
+        ],
+    }
+
+
+def failing_row(h, **kwargs):
+    return h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='checking',
+            host='leader',
+            started_on=T0,
+            instance_id='i-builder',
+            **kwargs,
+        )
+    )
+
+
+def test_a_failed_bake_terminates_its_builder_now_and_brings_cleanup_forward():
+    h = Harness()
+    h.ec2.instances = [tagged_builder()]
+    record = failing_row(h)
+    h.pipeline._last_cleanup = time.monotonic()
+    h.pipeline._fail(record, 'in-bake check failed')
+    assert h.ec2.terminated == ['i-builder']
+    assert time.monotonic() - h.pipeline._last_cleanup > module.CLEANUP_EVERY_SECONDS
+
+
+@pytest.mark.parametrize(
+    'instance',
+    [
+        {'InstanceId': 'i-builder', 'Tags': []},
+        tagged_builder(module_id='another-module'),
+    ],
+)
+def test_a_failed_bake_leaves_an_instance_it_cannot_prove_is_its_builder(instance):
+    h = Harness()
+    h.ec2.instances = [instance]
+    h.pipeline._fail(failing_row(h), 'in-bake check failed')
+    assert h.ec2.terminated == []
+
+
+def test_a_worker_fenced_out_of_its_row_disposes_nothing():
+    h = Harness()
+    h.ec2.instances = [tagged_builder()]
+    record = failing_row(h)
+    newer = h.row()
+    newer.host = 'another-controller'
+    h.records.put(newer)
+    h.pipeline._fail(record, 'in-bake check failed')
+    assert h.ec2.terminated == []
+
+
+def test_the_time_limit_removes_the_test_launch_and_the_next_cleanup_the_candidate():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    for image_id in ('ami-candidate', 'ami-current', 'ami-previous'):
+        h.ec2.add_image(image_id)
+    h.ec2.instances = [tagged_builder()]
+    h.records.put(
+        ImageBuildRecord(
+            kind='desktop',
+            base_os='rocky9',
+            architecture='x86_64',
+            status='test_launching',
+            image_id='ami-candidate',
+            instance_id='i-builder',
+            current_image_id='ami-current',
+            previous_image_id='ami-previous',
+            release=VERSION,
+            host='a-dead-controller',
+            started_on=T0 - timedelta(hours=3),
+            attempt_started_on=T0 - timedelta(hours=3),
+        )
+    )
+    h.tester.discard = Mock()
+    h.pipeline._last_cleanup = time.monotonic()
+    h.pipeline.tick(now=T0)
+    h.tester.discard.assert_called_once()
+    assert h.ec2.terminated == ['i-builder']
+    assert h.ec2.deregistered == ['ami-candidate']
+    assert h.ec2.deleted_snapshots == ['snap-ami-candidate']
+
+
+def test_a_discard_that_fails_does_not_stop_the_row_failing():
+    h = Harness()
+    overdue_row(h)
+    h.tester.discard = Mock(side_effect=RuntimeError('no table'))
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().status == 'failed'
+
+
+# a failed bake reaches a person
+
+
+def alert_lines(h):
+    return [
+        call.args[0]
+        for call in h.pipeline._logger.error.call_args_list
+        if call.args[0].startswith('IDEA_IMAGE_BAKE_FAILED desktop ')
+    ]
+
+
+def test_a_bake_that_fails_logs_the_line_the_monitor_matches():
+    h = Harness()
+    h.pipeline._fail(failing_row(h, release=VERSION), 'in-bake check failed')
+    assert alert_lines(h) == [
+        f'IDEA_IMAGE_BAKE_FAILED desktop rocky9/x86_64 release {VERSION}: in-bake check failed'
+    ]
+
+
+def test_a_bake_past_the_limit_logs_the_line_the_monitor_matches():
+    h = Harness()
+    overdue_row(h)
+    h.pipeline._enforce_time_limit(T0)
+    assert len(alert_lines(h)) == 1 and '120 minute limit' in alert_lines(h)[0]
+
+
+def test_a_bake_lost_to_two_restarts_logs_the_line_the_monitor_matches():
+    h = Harness()
+    h.pipeline._start = lambda record, blocking: True
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='building',
+            host='dead-task',
+            ami_name='idea-dcv-host-rocky9-v1',
+            attempts=1,
+            release=VERSION,
+            started_on=T0,
+        )
+    )
+    h.pipeline.tick(now=T0)
+    assert h.row().status == 'failed'
+    assert len(alert_lines(h)) == 1
+
+
+def test_a_fenced_out_worker_raises_no_alert():
+    h = Harness()
+    record = failing_row(h)
+    newer = h.row()
+    newer.host = 'another-controller'
+    h.records.put(newer)
+    h.pipeline._fail(record, 'in-bake check failed')
+    assert alert_lines(h) == []
+
+
+# a failed bake explains itself
+
+
+PANIC = 'Likely cause: the operating system crashed while starting (kernel panic).'
+
+
+def test_a_failing_builder_is_read_before_it_goes_and_the_row_says_why(monkeypatch):
+    h = Harness()
+    h.ec2.instances = [tagged_builder()]
+    seen = []
+
+    def capture(context, logger, host):
+        seen.append((host, list(h.ec2.terminated)))
+        return PANIC
+
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    h.pipeline._fail(
+        failing_row(h, release=VERSION, source_ami='ami-stock'), 'in-bake check failed'
+    )
+    host, terminated_before = seen[0]
+    assert terminated_before == []
+    assert h.ec2.terminated == ['i-builder']
+    assert host.kind == 'desktop_bake' and host.instance_id == 'i-builder'
+    assert (host.os, host.arch, host.ami) == ('rocky9', 'x86_64', 'ami-stock')
+    assert host.release == VERSION
+    assert host.log_stream == 'bootstrap_i-builder'
+    assert h.row().error == f'in-bake check failed {PANIC}'
+
+
+def test_a_row_past_its_limit_while_building_is_read_too(monkeypatch):
+    h = Harness()
+    h.records.put(
+        ImageBuildRecord(
+            kind='desktop',
+            base_os='rocky9',
+            architecture='x86_64',
+            status='building',
+            instance_id='i-builder',
+            release=VERSION,
+            host='a-dead-controller',
+            started_on=T0 - timedelta(hours=3),
+            attempt_started_on=T0 - timedelta(hours=3),
+        )
+    )
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', lambda *a: PANIC)
+    h.pipeline._enforce_time_limit(T0)
+    assert h.row().error.endswith(PANIC)
+
+
+def test_a_fenced_out_worker_does_not_read_the_builder_again(monkeypatch):
+    """the time limit already captured this bake; a second read counted it twice"""
+    h = Harness()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    record = failing_row(h)
+    newer = h.row()
+    newer.status = 'failed'
+    newer.host = module.TIME_LIMIT_OWNER
+    h.records.put(newer)
+    h.pipeline._fail(record, 'builder i-builder did not report ready within 60 minutes')
+    capture.assert_not_called()
+    # nor one that a retry of the row has replaced
+    retry = h.row()
+    retry.status, retry.host, retry.started_on = 'building', 'leader', T0 + timedelta(1)
+    h.records.put(retry)
+    h.pipeline._fail(record, 'builder i-builder did not report ready within 60 minutes')
+    capture.assert_not_called()
+    assert h.row().status == 'building'
+
+
+def test_a_failed_test_launch_does_not_read_the_builder_again(monkeypatch):
+    h = Harness()
+    capture = Mock()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', capture)
+    record = failing_row(h)
+    record.status = 'test_launching'
+    h.pipeline._fail(record, 'ready_gate: never ready')
+    capture.assert_not_called()
+    assert h.row().error == 'ready_gate: never ready'
+
+
+def test_a_capture_that_finds_nothing_leaves_the_reason_alone(monkeypatch):
+    h = Harness()
+    monkeypatch.setattr('ideasdk.aws.image_builds.capture_failure', lambda *a: None)
+    h.pipeline._fail(failing_row(h), 'in-bake check failed')
+    assert h.row().error == 'in-bake check failed'
+
+
+def test_a_controller_host_started_seconds_ago_cleans_up_on_its_first_tick(monkeypatch):
+    # the monotonic clock counts from boot: five seconds up is not a cleanup five seconds ago
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 5.0)
+    # no stacks: nothing bakes or fails, so nothing else brings the cleanup forward
+    h = Harness(stacks=[])
+    h.pipeline.cleanup = Mock()
+    h.pipeline.tick(now=T0)
+    h.pipeline.cleanup.assert_called_once()
+    # control: the next tick is inside the half hour
+    h.pipeline.tick(now=T0)
+    h.pipeline.cleanup.assert_called_once()

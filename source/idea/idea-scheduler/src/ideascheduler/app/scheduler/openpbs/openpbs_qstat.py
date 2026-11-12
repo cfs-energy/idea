@@ -11,7 +11,8 @@
 
 import ideascheduler
 from ideadatamodel import exceptions, errorcodes
-from ideadatamodel.scheduler import SocaJob, SocaJobState
+from ideadatamodel.model_utils import ModelUtils
+from ideadatamodel.scheduler import SocaJob, SocaJobState, SocaJobSubjob
 from ideasdk.shell import ShellInvocationResult, ShellInvoker
 from ideasdk.utils import Utils
 
@@ -19,9 +20,45 @@ from ideascheduler.app.scheduler.openpbs import OpenPBSConverter, OpenPBSJob
 from ideascheduler.app.scheduler.openpbs import openpbs_constants
 from ideascheduler.app.scheduler.openpbs.openpbs_qselect import OpenPBSQSelect
 
-from typing import Optional, List, Generator
+from typing import Dict, Optional, List, Generator, Set, Tuple
 import logging
 import orjson
+import re
+
+
+_OUTCOME_FIELDS = (
+    'job_state',
+    'substate',
+    'Exit_status',
+    'stime',
+    'mtime',
+    'resources_used',
+    'array_indices_submitted',
+    # where it ran: a done subjob with neither never ran
+    'exec_host',
+    'exec_vnode',
+)
+
+
+# jobs already warned about, so a listing every few seconds says it once
+_NO_PROFILE_SEEN: Set[str] = set()
+
+
+def array_indices(submitted: Optional[str]) -> Optional[range]:
+    """
+    the indices of qsub -J X-Y[:Z][%N], as array_indices_submitted keeps them; None if
+    unreadable. %N limits how many run at once and names no index.
+    """
+    match = re.fullmatch(
+        r'([0-9]+)(?:-([0-9]+)(?::([0-9]+))?)?(?:%[0-9]+)?',
+        (submitted or '').strip(),
+        re.ASCII,
+    )
+    if match is None:
+        return None
+    first = int(match.group(1))
+    last = int(match.group(2) or first)
+    return range(first, last + 1, int(match.group(3) or 1) or 1)
 
 
 class OpenPBSQStat:
@@ -135,6 +172,114 @@ class OpenPBSQStat:
 
         return self._invoke_qstat()
 
+    @staticmethod
+    def _parse_qstat_json(qstat_result: str):
+        # single pass implementation to strip all Variable_List content since env variables are not used in any soca provisioning process.
+        # env variables are skipped for 1\ pbs sometimes returns invalid json content in these variables, 2\memory usage optimization.
+        # if any Env variables are required to be included as part of SocaJob, they need to be handled on a case-by-case basis.
+        content = []
+        variable_list = False
+        lines = qstat_result.splitlines()
+        for line in lines:
+            current_line = line.strip()
+            if current_line == '"Variable_List":{':
+                variable_list = True
+            if variable_list:
+                if current_line == '},':
+                    variable_list = False
+                    continue
+            if variable_list:
+                continue
+            content.append(line)
+
+        return Utils.from_json(''.join(content))
+
+    def _history(self, args: List[str]) -> Dict[str, OpenPBSJob]:
+        """
+        qstat -x for these arguments, as PBS wrote each entry. An id PBS no longer knows is
+        left out; any other failure raises, so no answer is never read as no jobs.
+        """
+        result = self._shell.invoke(
+            [self.qstat_bin, '-E', '-x', '-f', '-F', 'json'] + args,
+            skip_error_logging=True,
+        )
+        self._shell_result = result
+        if result.returncode not in (
+            0,
+            openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_JOB_ID,
+        ):
+            raise exceptions.SocaException(
+                error_code=errorcodes.SCHEDULER_ERROR, message=f'{result}'
+            )
+        if Utils.is_empty(result.stdout):
+            return {}
+        jobs = Utils.get_value_as_dict(
+            'Jobs', self._parse_qstat_json(str(result.stdout)), {}
+        )
+        # only what an outcome is made of: a field of another type elsewhere in an entry,
+        # as array_index once was, must not cost an array its subjobs' outcomes
+        return {
+            job_id.split('.')[0]: OpenPBSJob(
+                id=job_id, **{key: job[key] for key in _OUTCOME_FIELDS if key in job}
+            )
+            for job_id, job in jobs.items()
+        }
+
+    def get_history_state(self, job_id: str) -> Optional[SocaJobState]:
+        """
+        the state qstat -x gives this one job, live or finished, or None when PBS answers
+        that it does not know the id. Only that answer shows a job is gone: any other
+        failure, or an answer that does not name the job, raises.
+        """
+        pbs_job = self._history([job_id]).get(job_id)
+        state = pbs_job.soca_job_state if pbs_job is not None else None
+        if state is not None:
+            return state
+        if (
+            pbs_job is None
+            and self._shell_result.returncode
+            == openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_JOB_ID
+        ):
+            return None
+        raise exceptions.SocaException(
+            error_code=errorcodes.SCHEDULER_ERROR,
+            message=f'qstat gave no answer for job {job_id}: {self._shell_result}',
+        )
+
+    def get_array_subjobs(
+        self, job_id: str
+    ) -> Tuple[Optional[int], List[SocaJobSubjob]]:
+        """
+        how each subjob of an array ended, from PBS history, and how many indices the array
+        was submitted with (None when PBS does not say). -t expands an array to its subjobs.
+        Whatever that leaves out is asked for by id, which PBS answers for one subjob at a
+        time, so the result does not rest on -t alone.
+        """
+        try:
+            history = self._history(['-t', job_id])
+        except exceptions.SocaException:
+            history = self._history([job_id])
+        parent = history.pop(job_id, None)
+        prefix = job_id[:-1]
+        subjobs = {
+            subjob_id: pbs_job
+            for subjob_id, pbs_job in history.items()
+            if ModelUtils.array_parent_id(subjob_id) == job_id
+        }
+        indices = array_indices(parent.array_indices_submitted if parent else None)
+        if indices is not None:
+            missing = [
+                f'{prefix}{index}]'
+                for index in indices
+                if f'{prefix}{index}]' not in subjobs
+            ]
+            for start in range(0, len(missing), 100):
+                subjobs.update(self._history(missing[start : start + 100]))
+        return (
+            len(indices) if indices is not None else None,
+            [pbs_job.as_subjob() for pbs_job in subjobs.values()],
+        )
+
     def _handle_qstat_result(self, qstat_result: str = None) -> List[SocaJob]:
         try:
             response = []
@@ -145,25 +290,7 @@ class OpenPBSQStat:
             if Utils.is_empty(qstat_result):
                 return []
 
-            # single pass implementation to strip all Variable_List content since env variables are not used in any soca provisioning process.
-            # env variables are skipped for 1\ pbs sometimes returns invalid json content in these variables, 2\memory usage optimization.
-            # if any Env variables are required to be included as part of SocaJob, they need to be handled on a case-by-case basis.
-            content = []
-            variable_list = False
-            lines = qstat_result.splitlines()
-            for line in lines:
-                current_line = line.strip()
-                if current_line == '"Variable_List":{':
-                    variable_list = True
-                if variable_list:
-                    if current_line == '},':
-                        variable_list = False
-                        continue
-                if variable_list:
-                    continue
-                content.append(line)
-
-            json_response = Utils.from_json(''.join(content))
+            json_response = self._parse_qstat_json(qstat_result)
 
             jobs = Utils.get_value_as_dict('Jobs', json_response)
             if jobs is None or len(jobs) == 0:
@@ -172,11 +299,26 @@ class OpenPBSQStat:
             for job_id, job in jobs.items():
                 pbs_job = OpenPBSJob(id=job_id, **job)
 
-                queue_profile = self._context.queue_profiles.get_queue_profile(
-                    queue_name=pbs_job.queue
-                )
+                try:
+                    queue_profile = self._context.queue_profiles.get_queue_profile(
+                        queue_name=pbs_job.queue
+                    )
+                except exceptions.SocaException as e:
+                    if e.error_code != errorcodes.SCHEDULER_QUEUE_PROFILE_NOT_FOUND:
+                        raise
+                    queue_profile = None
 
                 if queue_profile is None:
+                    # a queue profile deleted under its job: one job that cannot be
+                    # read must not cost the listing every other job
+                    if job_id not in _NO_PROFILE_SEEN:
+                        if len(_NO_PROFILE_SEEN) >= 1000:
+                            _NO_PROFILE_SEEN.clear()
+                        _NO_PROFILE_SEEN.add(job_id)
+                        self._logger.warning(
+                            f'job {job_id} is left out of job listings: its queue '
+                            f'{pbs_job.queue} has no queue profile'
+                        )
                     continue
 
                 soca_job = pbs_job.as_soca_job(
@@ -231,6 +373,11 @@ class OpenPBSQStat:
             "timestamp":1634779109,
               ..
         """
+        # where PBS writes the jobs it did find, beside the errors, has not been pinned
+        # down: read stdout, and stderr with the error lines taken out when that is empty
+        if not Utils.is_empty(self._shell_result.stdout):
+            return self._handle_qstat_result()
+
         output = str(self._shell_result.stderr)
 
         lines = output.splitlines()
@@ -319,10 +466,8 @@ class OpenPBSQStat:
             return
 
         page_size = 100
-        start = 0
-        remaining = len(job_ids)
         result = None
-        while remaining > 0:
+        for start in range(0, len(job_ids), page_size):
             job_ids_to_get = job_ids[start : start + page_size]
 
             get_jobs_cmd = cmd + job_ids_to_get
@@ -334,9 +479,13 @@ class OpenPBSQStat:
                 jobs = self._handle_qstat_result()
                 for job in jobs:
                     yield job
-                start += page_size
-
-            remaining -= page_size
+            elif (
+                result.returncode == openpbs_constants.QSTAT_ERROR_CODE_UNKNOWN_JOB_ID
+                and start + page_size < len(job_ids)
+            ):
+                # one id PBS no longer knows must not cost the rest of its page
+                for job in self._handle_unknown_job_id_error():
+                    yield job
 
         if result.returncode == 0:
             return

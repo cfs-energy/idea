@@ -23,6 +23,9 @@ import {AppContext} from "./common";
 import Utils from "./common/utils";
 import * as serviceWorkerRegistration from './service-worker-registration'
 import AppLogger from "./common/app-logger";
+import {notifyPortalUpdate} from "./components/update-notice";
+import {installClientErrorReporting} from "./common/client-error-reporter";
+import IdeaErrorBoundary from "./components/error-boundary";
 
 declare global {
     interface Window {
@@ -133,6 +136,11 @@ const initializeApp = (props: InitializeAppProps) => {
         LOGGER.debug('AppContext already initialized');
     }
 
+    installClientErrorReporting(
+        (report) => window.idea.context.client().clientErrors().report(report),
+        Utils.asString(window.idea.app.version, IDEA_RELEASE_VERSION)
+    );
+
     LOGGER.debug('Getting root element for ReactDOM');
     const root = ReactDOM.createRoot(
         document.getElementById('app') as HTMLElement
@@ -142,7 +150,9 @@ const initializeApp = (props: InitializeAppProps) => {
     root.render(
         <HashRouter>
             <ToastContainer />
-            <IdeaWebPortal />
+            <IdeaErrorBoundary>
+                <IdeaWebPortal />
+            </IdeaErrorBoundary>
         </HashRouter>
     );
 
@@ -161,6 +171,7 @@ if (sessionManagement === 'local-storage') {
         },
         onUpdate: () => {
             LOGGER.info('⚠ service worker updates available')
+            notifyPortalUpdate()
         },
         onReady: (registration) => {
             LOGGER.info('✓ service worker ready')

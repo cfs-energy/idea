@@ -1,4 +1,5 @@
 import React, {useState} from 'react';
+import {saveFailure, savedNotice} from './catalog-settings-section';
 import {DesktopScheduleTable, NotificationsTable, SCHEDULE_DAYS} from './settings-tables';
 import {render, screen, within, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -94,7 +95,7 @@ it('saves a text editor and reports the effect returned by the server', async ()
     await userEvent.clear(field); await userEvent.type(field, 'New portal');
     await userEvent.click(screen.getByRole('button', {name: 'Save'}));
     expect(context.client().clusterSettings().updateModuleSettings).toHaveBeenCalledWith({module_id: 'cluster-manager', settings: {web_portal: {title: 'New portal'}}});
-    expect(await screen.findByText('Saved: cluster-manager.')).toBeVisible();
+    expect(await screen.findByText('Saved.')).toBeVisible();
     expect(screen.getByRole('button', {name: 'Edit'})).toBeEnabled();
 });
 
@@ -116,7 +117,7 @@ it('keeps deployment inputs editable and uses the upgrade effect on save', async
     await userEvent.click(screen.getByRole('button', {name: 'Edit'}));
     await userEvent.click(screen.getByRole('checkbox', {name: 'enabled'}));
     await userEvent.click(screen.getByRole('button', {name: 'Save'}));
-    expect(await screen.findByText('Saved: cluster. Applies on next upgrade.')).toBeVisible();
+    expect(await screen.findByText('Saved. Applies on next upgrade.')).toBeVisible();
     expect(context.client().clusterSettings().updateModuleSettings).toHaveBeenCalledWith({module_id: 'cluster', settings: {backups: {enabled: true}}});
 });
 
@@ -187,7 +188,7 @@ it('keeps module-only administrators out of cluster policy editors', async () =>
 it('defines unique groups and card destinations', () => {
     expect(SETTINGS_GROUPS).toHaveLength(12);
     expect(Object.keys(SETTINGS_CARDS)).toHaveLength(12);
-    expect(Object.values(SETTINGS_CARDS).flat()).toHaveLength(37);
+    expect(Object.values(SETTINGS_CARDS).flat()).toHaveLength(38);
     expect(new Set(Object.values(SETTINGS_CARDS).flat()).size).toBe(Object.values(SETTINGS_CARDS).flat().length);
 });
 
@@ -331,7 +332,7 @@ it('renders sixteen notification rows and one distinct cleanup reference, retain
     expect(toggles).toHaveLength(16);
     await userEvent.click(toggles[0]); await userEvent.click(toggles[1]);
     await userEvent.click(screen.getByRole('button', {name: 'Save'}));
-    expect(await screen.findByText(/Saved: cluster-manager. scheduler failed: Unavailable/)).toBeVisible();
+    expect(await screen.findByText(/Saved: Portal. Jobs failed: Unavailable/)).toBeVisible();
     expect(toggles[1]).not.toBeChecked();
     await userEvent.click(screen.getByRole('button', {name: 'Save'}));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(3));
@@ -339,7 +340,7 @@ it('renders sixteen notification rows and one distinct cleanup reference, retain
 });
 
 
-const fixtureSections = ["AD automation","Account synchronization","Amazon Bedrock","Analytics","Backup policy","Collection","Cost estimation","Desktop placement","Desktop policy","Desktop schedule","Directory connection","Directory mapping","Email delivery","Email templates","Encryption and access","Fair-share scheduling","File systems","Installed deployment","Job limits and placement","Load balancers and certificates","Logs","Maintenance notice","Metrics","Network and connectivity","Notifications","Portal","Regional defaults","Resource tags","Scratch storage","Sign-in","Stopped desktop cleanup","Storage measurement","Cost header","Dashboard link","GPU policy","Compute rate"];
+const fixtureSections = ["AD automation","Account synchronization","Amazon Bedrock","Analytics","Backup policy","Collection","Cost estimation","Desktop placement","Desktop policy","Desktop schedule","Directory connection","Directory mapping","Email delivery","Email templates","Encryption and access","Fair-share scheduling","File systems","Installed deployment","Job limits and placement","Load balancers and certificates","Logs","Maintenance notice","Metrics","Network and connectivity","Notifications","Portal","Regional defaults","Resource tags","Scratch storage","Sign-in","Stopped desktop cleanup","Storage measurement","Cost header","Dashboard link","GPU policy","Compute rate","Scratch cleanup"];
 const fieldManifest = `
 analytics.kinesis.kms_key_id|3|Kinesis KMS key ID|string|deployment|1|read_only|80
 analytics.kinesis.removal_policy|3|Removal policy|enum|deployment|1|read_only|80
@@ -787,6 +788,8 @@ scheduler.fair_share.score_type|15|Score type|enum|restart|0|hidden|69
 scheduler.fair_share.start_score|15|Start score|integer|restart|0|hidden|69
 scheduler.instance_ami|18|Instance AMI|string|deployment|1|read_only|137
 scheduler.instance_type|18|Instance type|string|deployment|1|read_only|137
+scheduler.job_cache.backup_interval_seconds|18|Backup interval (seconds)|integer|restart|1|editable|later
+scheduler.job_cache.finished_job_retention_days|18|Finished job retention (days)|integer|runtime|1|editable|later
 scheduler.job_provisioning.batch_provisioning_wait_interval_seconds|18|Batch provisioning wait interval (seconds)|integer|runtime|1|hidden|70
 scheduler.job_provisioning.dry_run_cache_ttl_seconds|18|Dry run cache TTL (seconds)|integer|runtime|1|hidden|70
 scheduler.job_provisioning.finished_job_processing_interval_seconds|18|Finished job processing interval (seconds)|integer|runtime|1|hidden|70
@@ -831,6 +834,16 @@ scheduler.provisioning_lifecycle_events.retention_days|20|Retention (days)|integ
 scheduler.public|18|Public scheduler access|boolean|deployment|1|read_only|137
 scheduler.retain_dns_record|18|Retain DNS record|boolean|deployment|0|hidden|64
 scheduler.scheduler_iam_policy_arns|18|Scheduler IAM policy ARNs|list|deployment|0|editable|137
+scheduler.scratch_cleanup.digest_weekday|36|Weekly digest day|integer|runtime|0|editable|later
+scheduler.scratch_cleanup.dry_run|36|Dry run only|boolean|runtime|0|editable|later
+scheduler.scratch_cleanup.enabled|36|Automatic cleanup|boolean|runtime|0|editable|later
+scheduler.scratch_cleanup.failed_retention_days|36|Failed jobs: remove after (days)|integer|runtime|0|editable|later
+scheduler.scratch_cleanup.file_systems|36|File systems to clean|list|runtime|0|editable|later
+scheduler.scratch_cleanup.kill_switch|36|Stop all removals|boolean|runtime|0|editable|later
+scheduler.scratch_cleanup.max_folders_per_run|36|Most folders per run|integer|runtime|0|editable|later
+scheduler.scratch_cleanup.max_run_bytes_percent|36|Most capacity per run (%)|integer|runtime|0|editable|later
+scheduler.scratch_cleanup.max_run_share_percent|36|Most job folders per run (%)|integer|runtime|0|editable|later
+scheduler.scratch_cleanup.success_retention_days|36|Successful jobs: remove after (days)|integer|runtime|0|editable|later
 scheduler.scratch_storage.ebs.mount_point|28|EBS scratch mount path|string|runtime|0|editable|75
 scheduler.scratch_storage.fsx_lustre.mount_point|28|Lustre scratch mount path|string|runtime|0|editable|76
 scheduler.scratch_storage.instance_store.mount_point|28|Instance store scratch mount path|string|runtime|0|editable|77
@@ -1312,4 +1325,10 @@ it('offers both GPU policies once in General without desktop deployment', async 
     expect(SETTINGS_CARDS.appearance).toContain('GPU policy');
     expect(Object.values(SETTINGS_CARDS).flat().filter(card => card === 'GPU policy')).toHaveLength(1);
     for (const policy of policies) expect(screen.getAllByText(policy.label)).toHaveLength(1);
+});
+
+it('uses plain names when saving several settings groups', () => {
+    expect(savedNotice(['cluster-manager', 'scheduler'])).toBe('Saved: Portal, Jobs.');
+    expect(savedNotice(['virtual-desktop-controller'])).toBe('Saved.');
+    expect(saveFailure([], 'virtual-desktop-controller', 'Unavailable.')).toBe('Nothing was saved. Desktops failed: Unavailable. Remaining drafts are retained.');
 });

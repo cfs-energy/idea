@@ -18,17 +18,38 @@ __all__ = (
     'GroupMembershipUpdatedTask',
 )
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from ideasdk.utils import Utils
-from ideadatamodel import exceptions, errorcodes
+from ideadatamodel import errorcodes, exceptions
 
 import ideaclustermanager
-from ideaclustermanager.app.tasks.base_task import BaseTask
+from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+    PasswordRefused,
+)
+from ideaclustermanager.app.tasks.base_task import (
+    NOTHING_DONE,
+    BaseTask,
+    TaskCannotSucceed,
+)
 from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirectory
 
 from typing import Dict
+import ldap
 import os
 import pathlib
 import shutil
+import time
+
+
+class PasswordSecretUnavailable(Exception):
+    """Secrets Manager failed a password task. Says so without the role or the secret."""
+
+
+def _error_code(error: Exception) -> str:
+    if isinstance(error, ClientError):
+        return error.response['Error']['Code']
+    return type(error).__name__
 
 
 class SyncGroupInDirectoryServiceTask(BaseTask):
@@ -89,10 +110,15 @@ class GroupMembershipUpdatedTask(BaseTask):
         ds_readonly = self.context.ldap_client.is_readonly()
 
         if group is None:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.AUTH_GROUP_NOT_FOUND,
-                message=f'group not found: {group_name}',
+            # no retry brings a deleted group back, and each one would hold up every
+            # later task of this user
+            if operation == 'add':
+                raise TaskCannotSucceed(f'group not found: {group_name}')
+            # sync-group removes the group, and its members with it, from the directory
+            self.context.projects.user_projects_dao.group_member_removed(
+                group_name=group_name, username=username
             )
+            return
         if group['enabled']:
             if operation == 'add':
                 if ds_readonly:
@@ -103,7 +129,7 @@ class GroupMembershipUpdatedTask(BaseTask):
                     self.logger.info(
                         f'add member: {username} to group: {group_name} in directory service ...'
                     )
-                    self.context.ldap_client.add_user_to_group([username], group_name)
+                    self._add_member(username, group_name)
 
                 # update membership in user projects (DynamoDB)
                 self.logger.info(
@@ -131,8 +157,51 @@ class GroupMembershipUpdatedTask(BaseTask):
                     group_name=group_name, username=username
                 )
 
+    def _add_member(self, username: str, group_name: str):
+        directory = self.context.ldap_client
+        user = self.context.accounts.user_dao.get_user(username) or {}
+        if user.get(SyncUserInDirectoryServiceTask.IN_DIRECTORY) is not True:
+            directory.add_user_to_group([username], group_name)
+            return
+        # sync-user added this account, perhaps seconds ago on another domain
+        # controller. The one asked here is waited on until it shows the account, where
+        # the add failed and was retried; one that never shows it fails as before.
+        with directory.one_server():
+            deadline = (
+                time.monotonic() + SyncUserInDirectoryServiceTask.CATCH_UP_SECONDS
+            )
+            while (
+                not directory.is_existing_user(username) and time.monotonic() < deadline
+            ):
+                time.sleep(SyncUserInDirectoryServiceTask.CATCH_UP_INTERVAL)
+            directory.add_user_to_group([username], group_name)
+
+
+def keeps_directory_account(context, user: Dict) -> bool:
+    # Reconciliation observes authoritative AD; mirror work must not mutate it.
+    return bool(user.get('preserve_directory')) and context.config().get_string(
+        'directoryservice.provider'
+    ) in ('activedirectory', 'aws_managed_activedirectory')
+
+
+def _remove_if_present(remove, name: str):
+    # Deleting a user runs this removal itself while the copy it queued can run too;
+    # whichever comes second finds the entry gone, which is the result it wanted.
+    try:
+        remove(name)
+    except ldap.NO_SUCH_OBJECT:
+        pass
+
 
 class SyncUserInDirectoryServiceTask(BaseTask):
+    # user attribute. True: set before this task first adds the account and its group
+    # to the directory, so an attempt that stops after its add leaves it set. False:
+    # the task has removed them. Absent: the task has not handled the account yet.
+    IN_DIRECTORY = 'directory_account'
+    # Active Directory tells its other domain controllers of a change after 15 s
+    CATCH_UP_SECONDS = 30
+    CATCH_UP_INTERVAL = 2
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -140,20 +209,70 @@ class SyncUserInDirectoryServiceTask(BaseTask):
     def get_name(self) -> str:
         return 'accounts.sync-user'
 
+    def _await_directory(self, user: Dict, group_too: bool):
+        # A read can be answered by a domain controller that this task's last change
+        # has not reached yet. Adding an account it does not show yet leaves two, one
+        # of which survives a disable; skipping its removal leaves one; and updating
+        # one it still shows after a removal leaves none. So the directory is waited
+        # on until it shows what was last done. An account removed or added by hand
+        # never does, and after the wait the task goes by what it reads.
+        recorded = user.get(self.IN_DIRECTORY)
+        if recorded is None:
+            return
+        directory = self.context.ldap_client
+        username, group_name = user['username'], user['group_name']
+
+        def caught_up():
+            if not recorded:
+                return not directory.is_existing_user(
+                    username
+                ) and not directory.is_existing_group(group_name)
+            # a removal that stopped part way has taken the group and left the account
+            return directory.is_existing_user(username) and (
+                not group_too or directory.is_existing_group(group_name)
+            )
+
+        deadline = time.monotonic() + self.CATCH_UP_SECONDS
+        while not caught_up():
+            if time.monotonic() >= deadline:
+                self.logger.warning(
+                    'the directory does not show an account that a task set out to '
+                    'create in it'
+                    if recorded
+                    else 'the directory still shows an account that was removed from it'
+                )
+                return
+            time.sleep(self.CATCH_UP_INTERVAL)
+            # deleting a user runs the removal itself beside the copy it queued: the
+            # one that comes second must not wait out an account the first removed
+            current = self.context.accounts.user_dao.get_user(username)
+            if not current or current.get(self.IN_DIRECTORY) is not recorded:
+                return
+
+    def _record_in_directory(self, user: Dict, present: bool):
+        if user.get(self.IN_DIRECTORY) is present:
+            return
+        try:
+            self.context.accounts.user_dao.table.update_item(
+                Key={'username': user['username']},
+                UpdateExpression='SET #flag = :present',
+                # a record deleted meanwhile is not brought back
+                ConditionExpression='attribute_exists(username)',
+                ExpressionAttributeNames={'#flag': self.IN_DIRECTORY},
+                ExpressionAttributeValues={':present': present},
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+
     def entity_ref(self, payload: Dict):
         return 'user', payload['username']
 
     def invoke(self, payload: Dict):
         username = payload['username']
         user = self.context.accounts.user_dao.get_user(username)
-        group_name = user['group_name']
-        enabled = user['enabled']
-        sudo = Utils.get_value_as_bool('sudo', user, False)
         readonly = self.context.ldap_client.is_readonly()
-        # Reconciliation observes authoritative AD; queued mirror tasks must not mutate it.
-        if user.get('preserve_directory') and self.context.config().get_string(
-            'directoryservice.provider'
-        ) in ('activedirectory', 'aws_managed_activedirectory'):
+        if keeps_directory_account(self.context, user):
             return
 
         if readonly:
@@ -162,7 +281,25 @@ class SyncUserInDirectoryServiceTask(BaseTask):
             )
             return
 
+        # the wait, each read and the write decided on it are answered by one domain
+        # controller: one that has the account cannot be followed by one that has not
+        with self.context.ldap_client.one_server():
+            self._sync(user)
+
+    def _sync(self, user: Dict):
+        username = user['username']
+        group_name = user['group_name']
+        enabled = user['enabled']
+        sudo = Utils.get_value_as_bool('sudo', user, False)
+        # A removal already recorded is not waited on before removing again: deleting a
+        # user runs the removal beside the copy it queued, and the second to run can ask
+        # a domain controller that shows the account for 15 s more. Whatever that one
+        # still shows is removed from it too, and what it no longer shows is left.
+        if enabled or user.get(self.IN_DIRECTORY) is not False:
+            self._await_directory(user, group_too=enabled)
         if enabled:
+            # before the add: the retry of an attempt that fails after it must wait too
+            self._record_in_directory(user, True)
             self.logger.info(f'sync user: {username} TO directory service ...')
             self.context.ldap_client.sync_group(
                 group_name=user['group_name'], gid=user['gid']
@@ -185,15 +322,24 @@ class SyncUserInDirectoryServiceTask(BaseTask):
 
         else:
             self.logger.info(f'deleting user: {username} from directory service ...')
-            if self.context.ldap_client.is_existing_group(group_name):
-                self.context.ldap_client.delete_group(group_name)
-            if self.context.ldap_client.is_existing_user(username):
-                self.context.ldap_client.delete_user(username)
-            if self.context.ldap_client.is_sudo_user(username):
-                self.context.ldap_client.remove_sudo_user(username)
+            directory = self.context.ldap_client
+            if directory.is_existing_group(group_name):
+                _remove_if_present(directory.delete_group, group_name)
+            if directory.is_existing_user(username):
+                _remove_if_present(directory.delete_user, username)
+            if directory.is_sudo_user(username):
+                _remove_if_present(directory.remove_sudo_user, username)
+            self._record_in_directory(user, False)
 
 
 class SyncPasswordInDirectoryServiceTask(BaseTask):
+    # Passwords stay ordered among themselves, and a failing one holds up none of the
+    # account's other tasks. One for an account not yet in the directory is sent
+    # behind the task that creates it, and joins this lane when that has finished.
+    lane = 'password'
+    # user attribute: sent_at of the newest password finished with, applied or given up
+    APPLIED = 'password_sync_sent_at'
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -206,16 +352,162 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
     def invoke(self, payload: Dict):
         username = payload['username']
-        password_file = payload['password_file']
 
-        self.logger.info(f'sync password for user: {username} in directory service')
+        # the task manager's line just before this names the user; these lines don't,
+        # so a scanner that follows the payload sees no user data in them
+        self.logger.info('sync password in directory service')
 
-        with open(password_file, 'r') as f:
-            password = f.read()
+        # The lane runs one password at a time, so this check cannot race another
+        # change. A message can still arrive behind a newer one: moved in from the
+        # group an earlier release used, or queued twice. It must not undo the newer.
+        sent_at = payload.get('sent_at')
+        user = self.context.accounts.user_dao.get_user(username) or {}
+        applied = user.get(self.APPLIED, 0)
+        if sent_at is not None and sent_at < applied:
+            self.logger.info('a newer password superseded this one')
+            self.on_terminal_failure(payload)
+            # the newer one's outcome stands, a recorded failure included
+            return NOTHING_DONE
 
-        self.context.ldap_client.change_password(username, password)
+        if 'password_secret' in payload:
+            password = self._read_password_secret(
+                payload['password_secret'],
+                finished=sent_at is not None and sent_at <= applied,
+            )
+        else:
+            # ponytail: messages 26.11.1 and the 26.11.2 release candidates queued
+            # carry a file on the apps file system. Remove this branch, the file
+            # half of _forget_password and remove_stranded_password_files in the
+            # release after 26.11.2: no queue holds a message that long.
+            password = self._read_password_file(payload['password_file'])
+        if password is None:
+            # A redelivery of a message that was finished with, which is when its
+            # password goes: nothing is left to do, and no retry finds it.
+            self.logger.warning('password is gone; done')
+            # it may have ended in a recorded failure, which this must not clear
+            return NOTHING_DONE
 
-        # clean up password file
+        try:
+            self._change_password(user, username, password)
+        except PasswordRefused:
+            # the same password is refused every time, and each retry would hold up any
+            # later password behind it
+            self._forget_password(payload)
+            raise TaskCannotSucceed(
+                'The directory refused this password, so it was not synced. '
+                'Desktop and SSH sign-in keep the old password until a new one is set.'
+            ) from None
+
+        if sent_at is not None:
+            self._record_applied(username, sent_at)
+        self._forget_password(payload)
+
+    def _read_password_secret(self, password_secret: str, finished: bool):
+        try:
+            return (
+                self.context.aws()
+                .secretsmanager()
+                .get_secret_value(SecretId=password_secret)['SecretString']
+            )
+        except (ClientError, BotoCoreError) as error:
+            code = _error_code(error)
+            gone = code == 'ResourceNotFoundException' or (
+                # the answer while a deleted secret is still being removed
+                code == 'InvalidRequestException' and 'deletion' in str(error)
+            )
+            # The role reads by the secret's name, so one that is gone answers
+            # ResourceNotFound. A denial is a fault in the role: it is retried and then
+            # recorded, and counts as nothing to do only for a finished message.
+            if finished and (gone or code == 'AccessDeniedException'):
+                return None
+            if gone:
+                # deleted before the password was applied: swept, or by hand
+                raise TaskCannotSucceed(
+                    'The new password was not synced to the directory; set it again.'
+                ) from None
+            # Unreachable or denied: the retry finds out. Not the error's own text,
+            # which names the role and the secret, and is kept on the user.
+            raise PasswordSecretUnavailable(
+                'The new password was not synced to the directory: Secrets Manager '
+                f'did not return it ({code}). Set it again if this does not clear.'
+            ) from None
+
+    @staticmethod
+    def _read_password_file(password_file: str):
+        try:
+            with open(password_file, 'r') as f:
+                return f.read()
+        except FileNotFoundError:
+            if not os.path.isdir(os.path.dirname(os.path.dirname(password_file))):
+                # the shared file system is away, not the file
+                raise
+            return None
+
+    def _change_password(self, user: Dict, username: str, password: str):
+        # The directory service chooses the domain controller it asks, and an account
+        # reaches the others some seconds after sync-user added it. One recorded as
+        # added is waited for here; the failure and its retry are left for an account
+        # that is really missing.
+        added = user.get(SyncUserInDirectoryServiceTask.IN_DIRECTORY) is True
+        deadline = time.monotonic() + SyncUserInDirectoryServiceTask.CATCH_UP_SECONDS
+        while True:
+            try:
+                return self.context.ldap_client.change_password(username, password)
+            except exceptions.SocaException as error:
+                if (
+                    not added
+                    or error.error_code != errorcodes.AUTH_USER_NOT_FOUND
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+            time.sleep(SyncUserInDirectoryServiceTask.CATCH_UP_INTERVAL)
+
+    def _record_applied(self, username: str, sent_at: int):
+        try:
+            self.context.accounts.user_dao.table.update_item(
+                Key={'username': username},
+                UpdateExpression='SET #applied = :sent_at',
+                ConditionExpression='attribute_exists(username) AND '
+                '(attribute_not_exists(#applied) OR #applied < :sent_at)',
+                ExpressionAttributeNames={'#applied': self.APPLIED},
+                ExpressionAttributeValues={':sent_at': sent_at},
+            )
+        except ClientError as error:
+            if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                raise
+
+    def on_terminal_failure(self, payload: Dict):
+        try:
+            self._forget_password(payload)
+        except FileNotFoundError:
+            pass
+        finally:
+            # An older password still queued behind this one must not become the
+            # directory's password once this one is given up on.
+            if payload.get('sent_at') is not None:
+                self._record_applied(payload['username'], payload['sent_at'])
+
+    def _forget_password(self, payload: Dict):
+        if 'password_secret' not in payload:
+            return self._remove_password_file(payload['password_file'])
+        try:
+            self.context.aws().secretsmanager().delete_secret(
+                SecretId=payload['password_secret'], ForceDeleteWithoutRecovery=True
+            )
+        except (ClientError, BotoCoreError) as error:
+            code = _error_code(error)
+            if code == 'ResourceNotFoundException':
+                return
+            if code != 'AccessDeniedException':
+                # unreachable: the retry deletes it
+                raise PasswordSecretUnavailable(
+                    f'The secret of a password could not be deleted ({code}).'
+                ) from None
+            # No retry changes a denial, and the password is applied already. The
+            # sweep removes what this leaves.
+            self.logger.warning('password secret not deleted: gone already, or denied')
+
+    def _remove_password_file(self, password_file: str):
         password_file_path = pathlib.Path(password_file)
         ds_automation_dir = self.context.config().get_string(
             'directoryservice.automation_dir', required=True
@@ -227,6 +519,9 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
 
 
 class CreateUserHomeDirectoryTask(BaseTask):
+    # Homes use the stored uid and gid, never the directory.
+    lane = 'home'
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
         self.logger = context.logger(self.get_name())
@@ -244,6 +539,8 @@ class CreateUserHomeDirectoryTask(BaseTask):
 
 
 class RepairHomeOwnershipTask(BaseTask):
+    lane = 'home'
+
     def __init__(self, context: ideaclustermanager.AppContext):
         self.context = context
 

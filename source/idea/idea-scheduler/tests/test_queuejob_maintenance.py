@@ -149,6 +149,7 @@ def test_queuejob_hook_returns_maintenance_message_to_qsub(context, monkeypatch)
             'pbs': Mock(),
             'is_applicable': lambda e: True,
             'PRE_EXECUTION_HOOKS': ['queuejob', 'modifyjob', 'movejob'],
+            'HOOK_EVENT_RUNJOB': 'runjob',
             'invoke_soca_scheduler': lambda e: {
                 'success': True,
                 'payload': result.model_dump(),

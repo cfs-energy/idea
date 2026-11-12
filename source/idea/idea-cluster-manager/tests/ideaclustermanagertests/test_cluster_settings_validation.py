@@ -711,12 +711,10 @@ def test_partial_group_edit_rejects_saved_privileged_collision(saved_key, update
     api = bedrock_settings_api()
     config = api.context.config()
     config.db = Mock()
-    config.db.cluster_settings_table.get_item.side_effect = (
-        lambda Key, ConsistentRead: (
-            {'Item': {'value': 'custom-readers'}}
-            if Key['key'] == f'identity-provider.cognito.{saved_key}'
-            else {}
-        )
+    config.db.cluster_settings_table.get_item.side_effect = lambda Key, ConsistentRead: (
+        {'Item': {'value': 'custom-readers'}}
+        if Key['key'] == f'identity-provider.cognito.{saved_key}'
+        else {}
     )
     api.context.get_cluster_modules = lambda: [{'module_id': 'compute'}]
     with pytest.raises(exceptions.SocaException, match='privileged group'):

@@ -15,7 +15,8 @@ function Mount-SharedStorage
   {% for name, storage in context.config.get_config('shared-storage').items() %}
   {% if context.eval_shared_storage_scope(shared_storage=storage) %}
   {% if storage['provider'] == 'fsx_netapp_ontap' and 'mount_drive' in storage and 'cifs_share_name' in storage['fsx_netapp_ontap']['volume'] %}
-  $shares.Add(@{MountDrive='{{ storage['mount_drive'] }}:'; Path='\\{{ storage['fsx_netapp_ontap']['svm']['smb_dns'] }}\{{ storage['fsx_netapp_ontap']['volume']['cifs_share_name'] }}'}) | Out-Null
+  {# one separator between parts: a share name stored with doubled backslashes is not a path net use is known to take #}
+  $shares.Add(@{MountDrive='{{ storage['mount_drive'] }}:'; Path='\\{{ storage['fsx_netapp_ontap']['svm']['smb_dns'] }}\{{ storage['fsx_netapp_ontap']['volume']['cifs_share_name'].split('\\') | reject('equalto', '') | join('\\') }}'}) | Out-Null
   {% endif %}
   {% if storage['provider'] == 'fsx_windows_file_server' and 'mount_drive' in storage %}
   $shares.Add(@{MountDrive='{{ storage['mount_drive'] }}:'; Path='\\{{ storage['fsx_windows_file_server']['dns'] }}\share'}) | Out-Null

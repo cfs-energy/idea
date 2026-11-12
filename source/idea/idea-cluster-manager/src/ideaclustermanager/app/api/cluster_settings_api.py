@@ -487,6 +487,34 @@ class ClusterSettingsAPI(BaseAPI):
             else:
                 config_entries.append({'key': path_prefix, 'value': value})
 
+    @staticmethod
+    def requires_administrator(module_name: str, settings: dict) -> bool:
+        """
+        Who is an administrator, what the nodes may do and how hosts join the directory (sudo
+        group, LDAP endpoint, root credentials) are decided by administrators only. So is
+        whether root may delete job data; stopping that is always safe, so whoever manages the
+        module can pull the kill switch, and only an administrator can release it.
+        """
+        admin_only = {
+            'identity-provider': ('cognito',),
+            'cluster': ('iam',),
+            'directoryservice': (),
+            'scheduler': ('scratch_cleanup',),
+        }
+        if module_name not in admin_only:
+            return False
+        if module_name == 'scheduler' and settings == {
+            'scratch_cleanup': {'kill_switch': True}
+        }:
+            return False
+        names = admin_only[module_name]
+        # the paths check reads a dotted key as a nested one, so this has to as well
+        return not names or any(
+            key == name or key.startswith(f'{name}.')
+            for key in settings
+            for name in names
+        )
+
     def update_module_settings(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(UpdateModuleSettingsRequest)
         if not context.is_authorized(
@@ -504,20 +532,9 @@ class ClusterSettingsAPI(BaseAPI):
         if not isinstance(request.settings, dict):
             raise exceptions.invalid_params('settings must be an object')
 
-        # Who is an administrator, what the nodes may do and how hosts join the directory
-        # (sudo group, LDAP endpoint, root credentials) are decided by administrators only.
-        admin_only = {
-            'identity-provider': ('cognito',),
-            'cluster': ('iam',),
-            'directoryservice': (),
-        }
         module_name = self.catalog_module_name(module_id)
         if (
-            module_name in admin_only
-            and (
-                not admin_only[module_name]
-                or any(name in request.settings for name in admin_only[module_name])
-            )
+            self.requires_administrator(module_name, request.settings)
             and not context.is_administrator()
         ):
             raise exceptions.unauthorized_access()

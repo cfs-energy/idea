@@ -199,10 +199,8 @@ class UserDAO:
             scan_request['ScanFilter'] = scan_filter
 
         _scan_start = Utils.current_time_ms()
-        scan_result = self.table.scan(**scan_request)
+        db_users = Utils.scan_all(self.table, scan_request)
         _scan_end = Utils.current_time_ms()
-
-        db_users = Utils.get_value_as_list('Items', scan_result, [])
 
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(
@@ -222,11 +220,4 @@ class UserDAO:
                 f'User status took {_idp_end - _idp_start}ms for {len(users)} users'
             )
 
-        response_cursor = None
-        last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', scan_result)
-        if last_evaluated_key is not None:
-            response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
-
-        return ListUsersResult(
-            listing=users, paginator=SocaPaginator(cursor=response_cursor)
-        )
+        return ListUsersResult(listing=users, paginator=SocaPaginator())

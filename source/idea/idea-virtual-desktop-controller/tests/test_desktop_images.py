@@ -303,11 +303,10 @@ def blocking_runner(service, monkeypatch):
     monkeypatch.setattr(
         service.runner,
         'start',
-        lambda record,
-        build,
-        on_success=None,
-        blocking=False: service.runner.__class__.start(
-            service.runner, record, build, on_success, blocking=True
+        lambda record, build, on_success=None, blocking=False: (
+            service.runner.__class__.start(
+                service.runner, record, build, on_success, blocking=True
+            )
         ),
     )
 

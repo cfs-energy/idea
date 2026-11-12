@@ -36,17 +36,17 @@ describe.each(['/soca/active-jobs', '/soca/settings'])('access loading at %s', p
         const {rerender} = render(route());
         const unsubscribe = auth.subscribeReporting(() => rerender(route()));
         try {
-            expect(screen.queryByText('Destination unavailable')).not.toBeInTheDocument();
+            expect(screen.queryByText('You do not have access to this page')).not.toBeInTheDocument();
             expect(screen.queryByText('Protected page')).not.toBeInTheDocument();
             expect(screen.getByTestId('access-loading')).toBeInTheDocument();
 
             await act(async () => { await auth.isLoggedIn(); });
-            expect(screen.getByText('Destination unavailable')).toBeInTheDocument();
+            expect(screen.getByText('You do not have access to this page')).toBeInTheDocument();
             expect(screen.queryByText('Protected page')).not.toBeInTheDocument();
 
             claims.groups = ['scheduler-administrators-module-group'];
             await act(async () => { await auth.isLoggedIn(); });
-            expect(screen.queryByText('Destination unavailable')).not.toBeInTheDocument();
+            expect(screen.queryByText('You do not have access to this page')).not.toBeInTheDocument();
             expect(screen.getByText('Protected page')).toBeInTheDocument();
             expect(screen.queryByTestId('access-loading')).not.toBeInTheDocument();
 
@@ -54,7 +54,7 @@ describe.each(['/soca/active-jobs', '/soca/settings'])('access loading at %s', p
             fireEvent.change(draft, {target: {value: 'unsaved edits'}});
             vi.mocked(client.isLoggedIn).mockRejectedValue(new Error('Renewal timed out'));
             await act(async () => { await expect(auth.isLoggedIn()).rejects.toThrow('Renewal timed out'); });
-            expect(screen.queryByText('Destination unavailable')).not.toBeInTheDocument();
+            expect(screen.queryByText('You do not have access to this page')).not.toBeInTheDocument();
             expect(screen.getByText('Protected page')).toBeInTheDocument();
             expect(draft).toBeInTheDocument();
             expect(draft).toHaveValue('unsaved edits');
@@ -62,7 +62,7 @@ describe.each(['/soca/active-jobs', '/soca/settings'])('access loading at %s', p
 
             vi.mocked(client.isLoggedIn).mockResolvedValue(true);
             await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-            expect(screen.queryByText('Destination unavailable')).not.toBeInTheDocument();
+            expect(screen.queryByText('You do not have access to this page')).not.toBeInTheDocument();
             expect(screen.getByText('Protected page')).toBeInTheDocument();
             expect(screen.getByRole('textbox', {name: 'Draft'})).toBe(draft);
             expect(draft).toHaveValue('unsaved edits');

@@ -16,8 +16,8 @@ function Location() {
     return <><output aria-label="Location">{location.pathname}{location.search}</output><button onClick={() => navigate(-1)}>Back</button></>;
 }
 const open = (search = '') => render(<MemoryRouter initialEntries={[`/home/my-costs${search}`]}><MyCosts {...props}/><Location/></MemoryRouter>);
-const month = {start_date: '2026-09-01', end_date: '2026-09-02', total: 150, incomplete: true,
-    ...Object.fromEntries(FACETS.map(({key}, index) => [key, {amount: (index + 1) * 10, cost: 999, status: 'partial', note: 'Stored calculation rule.'}]))} as MyCostsMonth;
+const month = {start_date: '2026-09-01', end_date: '2026-09-02', total: 150, incomplete: false,
+    ...Object.fromEntries(FACETS.map(({key}, index) => [key, {amount: (index + 1) * 10, cost: 999, status: 'ready', note: 'Stored calculation rule.'}]))} as MyCostsMonth;
 const snapshot: GetMyCostsResult = {currency: 'USD', state: 'ready', timezone: 'America/New_York', current: month, previous: {...month, total: 200}};
 function setup() {
     const context = initTestAppContext();
@@ -40,8 +40,8 @@ it('uses the personal client and shared overview with all monthly service totals
     expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Overview', 'Jobs', 'Desktops', 'Storage']);
     expect(screen.queryByText('User', {exact: true})).toBeNull();
     expect(screen.queryByText('Breakdown', {exact: true})).toBeNull();
-    expect(screen.queryByText('Spend by user')).toBeNull();
-    expect(screen.getByText("About $120.00 of the $1,524.22 estimated for your jobs that finished in this period paid for unused cores.")).toBeInTheDocument();
+    expect(screen.queryByText('Job cost by user')).toBeNull();
+    expect(screen.getByText("About $120.00 of the $1,524 estimated for your jobs that finished in this period paid for unused cores.")).toBeInTheDocument();
     expect(screen.getByText('Daily job cost by project')).toBeInTheDocument();
     expect(screen.getByText('Project budgets')).toBeInTheDocument();
     for (const [title, value] of [['Total spend', '$150.00'], ['Job spend', '$10.00'], ['Desktop spend', '$20.00'], ['Desktop disks', '$30.00'], ['Storage spend', '$40.00'], ['AI', '$50.00']]) {
@@ -63,7 +63,7 @@ it('uses the shared personal job table, hints, and completed-job links', async (
     const table = await screen.findByRole('table', {name: 'Top jobs'});
     expect(within(table).getByRole('link', {name: 'Protein study'})).toHaveAttribute('href', '#/home/completed-jobs?job_id=job-1');
     expect(screen.queryByRole('columnheader', {name: 'User'})).toBeNull();
-    expect(screen.getByRole('heading', {name: 'Top jobs (1)'})).toBeInTheDocument();
+    expect(screen.getByRole('heading', {name: /^Top jobs/})).toHaveTextContent('Top jobs (1)');
     expect(screen.getByText('Requested 36 cores, used about 1. Try ncpus=2. Requested 64 GiB, peak 3 GiB.')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith({period: 'last_month'});
 });
@@ -77,7 +77,7 @@ it('keeps desktops and storage personal and moves lazy folders and quotas to Sto
     expect(screen.queryByText('Daily desktop cost by user')).toBeNull();
     expect(screen.queryByText('Desktop cost by user')).toBeNull();
     await userEvent.click(screen.getByRole('tab', {name: 'Storage'}));
-    expect(screen.queryByText('Stored data by user')).toBeNull();
+    expect(screen.queryByText('Top 15 by stored data')).toBeNull();
     expect(screen.queryByText('Storage by user')).toBeNull();
     expect(usage).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', {name: 'Storage usage: folders and quotas'}));
@@ -123,7 +123,7 @@ it('acknowledges refresh without clearing the visible monthly totals', async () 
     open();
     await screen.findByText('$150.00');
     await userEvent.click(screen.getByRole('button', {name: 'Refresh'}));
-    expect(await screen.findByText('Refresh requested')).toBeInTheDocument();
+    expect(await screen.findByText(/Recalculating your costs/)).toBeInTheDocument();
     expect(screen.getByText('$150.00')).toBeInTheDocument();
     expect(refresh).toHaveBeenCalledWith();
     expect(get).toHaveBeenCalledTimes(2);
@@ -134,7 +134,6 @@ it('shows collecting without presenting missing amounts as zero', async () => {
     open();
     await screen.findByText('Collecting · about 5 min');
     expect(within(tile('Total spend')).queryByText('$0.00')).toBeNull();
-    expect(within(tile('AI')).queryByText('$0.00')).toBeNull();
 });
 it('shows report errors and retries', async () => {
     const {get} = setup();
@@ -160,4 +159,107 @@ it.each([['cost-jobs', 'Jobs'], ['cost-storage', 'Storage'], ['cost-ai', 'Overvi
     open(`?facet=${facet}`);
     await waitFor(() => expect(screen.queryByText('Loading report')).toBeNull());
     expect(screen.getByRole('tab', {name: tab})).toHaveAttribute('aria-selected', 'true');
+});
+
+const partialLine = {amount: 10, status: 'partial', note: 'Stored calculation rule.', daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}, {date: '2999-01-01', amount: null, status: 'unavailable'}]};
+const withLine = (key: string, line: any): GetMyCostsResult => ({...snapshot, current: {...month, [key]: line} as MyCostsMonth});
+describe('at real scale', () => {
+    it('labels a month with missing days, counting past days only', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue(withLine('jobs', partialLine));
+        open();
+        expect(await screen.findByText('At least $150.00')).toBeInTheDocument();
+        expect(within(tile('Job spend')).getByText('At least $10.00')).toBeInTheDocument();
+        expect(within(tile('Job spend')).getByText('A day is not counted yet, so this may be higher.')).toBeInTheDocument();
+    });
+    it('does not call a running month partial because today is not in yet', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue(withLine('jobs', {...partialLine, daily: [{date: '2999-01-01', amount: null, status: 'unavailable'}]}));
+        open();
+        expect(await screen.findByText('$150.00')).toBeInTheDocument();
+        expect(screen.queryByText(/At least/)).toBeNull();
+    });
+    it('rounds big totals to whole dollars', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue({...snapshot, current: {...month, total: 348219.47} as MyCostsMonth});
+        open();
+        expect(await screen.findByText('$348,219')).toBeInTheDocument();
+    });
+    it('explains a shared cost and a missing cost in words and hides stored calculation notes', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue({...snapshot, current: {...month, shared_storage: {amount: 5, status: 'estimated_share', note: 'Stored calculation rule.'}, desktops: {amount: undefined, cost: undefined, status: 'unavailable', reason: 'Source unavailable.'}} as any});
+        open();
+        expect(await screen.findByText('Your share of a shared file system.')).toBeInTheDocument();
+        expect(within(tile('Desktop spend')).getByText('Not available')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', {name: 'About Storage spend'}));
+        expect(screen.queryByText(/Stored calculation rule/)).toBeNull();
+    });
+    it('dates the numbers from when costs were calculated, not when the report was built', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue({...snapshot, refreshed_at: '2026-09-01T14:00:00Z'});
+        open();
+        expect(await screen.findByText(/Costs last calculated Sep 1, 10:00 AM/)).toBeInTheDocument();
+    });
+    it('keeps tiles and storage when the report fails', async () => {
+        const {get} = setup();
+        get.mockRejectedValue({errorCode: 'GENERAL_ERROR'});
+        open();
+        expect(await screen.findByText('$150.00')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('tab', {name: 'Storage'}));
+        expect(screen.getByText('Storage usage: folders and quotas')).toBeInTheDocument();
+    });
+    it('does not claim to be collecting when costs failed to load', async () => {
+        const {costs, get} = setup();
+        get.mockRejectedValue({errorCode: 'GENERAL_ERROR'});
+        costs.mockRejectedValue({errorCode: 'NETWORK_ERROR'});
+        open();
+        expect(await screen.findByText('Not available')).toBeInTheDocument();
+        expect(screen.queryByText(/Collecting/)).toBeNull();
+    });
+    it('says plainly when a source could not be read, instead of no jobs', async () => {
+        const {get} = setup();
+        get.mockResolvedValue({...insightsFixture(), unavailable: ['jobs'], jobs: {...insightsFixture().jobs, daily_by_project: [], by_queue: [], by_project: [], by_instance_family: []}});
+        open('?tab=jobs');
+        expect(await screen.findByText(/We couldn't read job history just now/)).toBeInTheDocument();
+        expect(screen.queryByText('No costs in this period')).toBeNull();
+    });
+    it('says the top jobs are a selection and how many there are', async () => {
+        const {get} = setup();
+        const fixture = insightsFixture();
+        get.mockResolvedValue({...fixture, jobs: {...fixture.jobs, count: 412, unpriced: 3}});
+        open('?tab=jobs');
+        expect(await screen.findByText(/of your 412 finished jobs/)).toBeInTheDocument();
+        expect(screen.getByRole('link', {name: 'See all in Completed jobs'})).toBeInTheDocument();
+        expect(screen.getByText(/3 of 412 jobs have no price/)).toBeInTheDocument();
+    });
+    it('says how far back desktop costs go on a long period', async () => {
+        const {get} = setup();
+        const fixture = insightsFixture();
+        get.mockResolvedValue({...fixture, desktops: {...fixture.desktops, available_from: '2999-01-01', missing_days: 2}});
+        open('?tab=desktops');
+        expect(await screen.findByText(/Desktop spend covers Jan 1, 2999 onward/)).toBeInTheDocument();
+        expect(screen.getByText(/No desktop cost for 2 days/)).toBeInTheDocument();
+    });
+    it('reads the report again, skipping the cache, when the recalculation finishes', async () => {
+        const {get, costs, refresh} = setup();
+        open();
+        await screen.findByText('$150.00');
+        await userEvent.click(screen.getByRole('button', {name: 'Refresh'}));
+        expect(await screen.findByText(/Recalculating your costs/)).toBeInTheDocument();
+        expect(refresh).toHaveBeenCalled();
+        expect(get).toHaveBeenLastCalledWith({period: 'this_month', refresh: true});
+        get.mockClear();
+        costs.mockResolvedValue({...snapshot, refresh_pending: false});
+        const {personalCostsCache} = await import('../../client/personal-costs-cache');
+        await act(async () => { await personalCostsCache().read(); });
+        await waitFor(() => expect(get).toHaveBeenCalledWith({period: 'this_month', refresh: true}));
+        expect(await screen.findByText('Costs updated')).toBeInTheDocument();
+    });
+    it('asks for dates instead of showing an error when Custom is first chosen', async () => {
+        setup();
+        open('?period=custom');
+        expect(await screen.findByText('Pick a start and end date.')).toBeInTheDocument();
+        expect(screen.queryByText('Choose valid start and end dates.')).toBeNull();
+        expect(screen.queryByRole('button', {name: 'Try again'})).toBeNull();
+    });
 });

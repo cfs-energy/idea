@@ -11,6 +11,8 @@
  * and limitations under the License.
  */
 
+import {IdeaFormValidate} from "../../components/form-field/form-field";
+import {GROUP_OR_PROJECT_NAME_PATTERN, PROJECT_TITLE_PATTERN} from "../../common/form-patterns";
 import React, {Component, RefObject} from "react";
 
 import {TableProps} from "@cloudscape-design/components/table";
@@ -61,7 +63,7 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
         header: 'Status',
         cell: project => project.last_task_failure ?
             <StatusIndicator type="error" iconAriaLabel="Error">
-                {project.last_task_failure.task}: {project.last_task_failure.message} ({new Date(project.last_task_failure.at).toLocaleString()})
+                Last change failed: {project.last_task_failure.message}
             </StatusIndicator> : (project.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
             <StatusIndicator type="stopped">Disabled</StatusIndicator>,
         sortingComparator: (a, b) => {
@@ -82,10 +84,12 @@ const PROJECT_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Project>[] =
                     }
                     const actualSpend = Utils.asNumber(project.budget.actual_spend?.amount, 0)
                     const limit = Utils.asNumber(project.budget.budget_limit?.amount, 0)
-                    const usage = (actualSpend / limit) * 100
+                    const usage = limit > 0 ? (actualSpend / limit) * 100 : 0
                     return (
                         <ProgressBar
-                            value={usage}
+                            value={Math.min(100, usage)}
+                            status={usage > 100 ? 'error' : 'in-progress'}
+                            resultText={usage > 100 ? 'Over budget' : undefined}
                             additionalInfo={`Limit: ${Utils.getFormattedAmount(project.budget.budget_limit)}, Forecasted: ${Utils.getFormattedAmount(project.budget.forecasted_spend)}`}
                             description={`Actual Spend: ${Utils.getFormattedAmount(project.budget.actual_spend)} for budget: ${project.budget.budget_name}`}
                         />
@@ -451,8 +455,9 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                             param_type: 'text',
                             validate: {
                                 required: true,
-                                regex: '^([A-Za-z0-9- ]+){3,32}$'
-                            }
+                                regex: PROJECT_TITLE_PATTERN,
+                                  message: 'Use at least 3 letters, digits, spaces or hyphens.'
+                            } as IdeaFormValidate
                           },
                           {
                               name: 'name',
@@ -464,8 +469,9 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                               readonly: isUpdate,
                               validate: {
                                   required: true,
-                                  regex: '^([a-z0-9-]+){3,18}$'
-                              }
+                                  regex: GROUP_OR_PROJECT_NAME_PATTERN,
+                                  message: 'Use at least 3 lowercase letters, digits or hyphens.'
+                              } as IdeaFormValidate
                           },
                           {
                               name: 'description',

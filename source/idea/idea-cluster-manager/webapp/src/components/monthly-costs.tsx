@@ -6,9 +6,17 @@ import './monthly-costs.scss';
 import {updated} from '../pages/reporting/reporting-format';
 
 export const collectingLabel = (costs: GetMyCostsResult | null) => {
-    const minutes = costs?.expected_ready_at ? Math.max(1, Math.ceil((Date.parse(costs.expected_ready_at) - Date.now()) / 60000)) : 20;
-    return `${costs?.collecting_delayed ? 'Collecting delayed' : 'Collecting'} · about ${minutes} min`;
+    if (costs == null) return 'Not available';
+    if (costs.collecting_delayed) return 'Taking longer than usual';
+    const minutes = costs.expected_ready_at ? Math.max(1, Math.ceil((Date.parse(costs.expected_ready_at) - Date.now()) / 60000)) : 20;
+    return `Collecting · about ${minutes} min`;
 };
+// Days before today with no figure or a partial one. Today is still being counted, so it isn't a gap.
+export function gapDays(line: MyCostsAmount | undefined, today: string): number {
+    if (line?.status !== 'partial') return 0;
+    const days = line.daily?.filter(day => day.date < today && (day.amount == null || day.status === 'partial')).length ?? 0;
+    return days || (line.daily?.length ? 0 : 1);
+}
 export function costBadge(line: MyCostsAmount | undefined, collecting: boolean) {
     if (collecting) return 'Collecting';
     if (facetAmount(line) == null) return 'No data';

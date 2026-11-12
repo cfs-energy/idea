@@ -43,6 +43,35 @@ export interface VirtualDesktopSettingsState {
     settingsErrors: string[]
 }
 
+const NOTIFICATION_LABELS: { [key: string]: string } = {
+    provisioning: 'Provisioning',
+    creating: 'Creating',
+    initializing: 'Initializing',
+    resuming: 'Starting',
+    ready: 'Ready',
+    stopping: 'Stopping',
+    stopped: 'Stopped',
+    deleting: 'Terminating',
+    deleted: 'Terminated',
+    error: 'Failed',
+    cleanup_warning: 'Cleanup warning',
+    'session-shared': 'Desktop shared',
+    'session-permission-updated': 'Sharing changed',
+    'session-permission-expired': 'Sharing ended'
+}
+
+/** A notification setting's key, in words. A key added later still reads as words. */
+export function notificationLabel(key: string): string {
+    const words = key.replace(/[-_]/g, ' ')
+    return NOTIFICATION_LABELS[key] ?? words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** The reason a save was refused, when the answer carries one. */
+export function settingNotSavedMessage(result: { effects?: { [k: string]: string } }): string {
+    const reasons = Object.values(result.effects ?? {}).filter(Boolean).join(' ')
+    return reasons ? `The setting was not saved: ${reasons}` : 'The setting was not saved. Try again.'
+}
+
 class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, VirtualDesktopSettingsState> {
 
     generalSettingsForm: RefObject<IdeaForm | null>
@@ -446,7 +475,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
                 this.props.onFlashbarChange({
                     items: [{
                         type: 'error',
-                        content: 'Failed to update setting',
+                        content: settingNotSavedMessage(result),
                         dismissible: true
                     }]
                 });
@@ -457,7 +486,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
             this.props.onFlashbarChange({
                 items: [{
                     type: 'error',
-                    content: `Error updating setting: ${error?.message || error}`,
+                    content: `The setting was not saved: ${error?.message || error}`,
                     dismissible: true
                 }]
             });
@@ -471,7 +500,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
         if (notifications) {
             Object.keys(notifications).forEach((settingName) => {
                 items.push({
-                    name: settingName,
+                    name: notificationLabel(settingName),
                     enabled: Utils.asBoolean(dot.pick(`dcv_session.notifications.${settingName}.enabled`, this.state.vdcSettings)),
                     email_template: dot.pick(`dcv_session.notifications.${settingName}.email_template`, this.state.vdcSettings)
                 })
@@ -479,7 +508,7 @@ class VirtualDesktopSettings extends Component<VirtualDesktopSettingsProps, Virt
         }
         return <Table items={items} columnDefinitions={[
             {
-                header: 'Session State',
+                header: 'Event',
                 cell: e => e.name
             },
             {

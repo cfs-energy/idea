@@ -58,6 +58,7 @@ class SchedulerAppContext(SocaContext):
         self.scheduler: Optional[SocaSchedulerProtocol] = None
         self.instance_cache: Optional[InstanceCacheProtocol] = None
         self.job_cache: Optional[JobCacheProtocol] = None
+        self.scratch_cleanup = None
         self.job_monitor: Optional[JobMonitorProtocol] = None
         self.node_monitor: Optional[NodeMonitorProtocol] = None
         self.job_submission_tracker: Optional[JobSubmissionTrackerProtocol] = None

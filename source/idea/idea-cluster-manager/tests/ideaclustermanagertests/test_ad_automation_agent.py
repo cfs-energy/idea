@@ -52,7 +52,7 @@ def directory(monkeypatch):
     )
     context._aws = Mock()
     context._lock = Mock()
-    state = SimpleNamespace(context=context, secrets=secrets, code='532')
+    state = SimpleNamespace(context=context, secrets=secrets, code='532', age_days=0)
     state.password = secrets['password-secret']
     state.reset = context.aws().ds().reset_user_password
     state.put_secret = context.aws().secretsmanager().put_secret_value
@@ -91,7 +91,8 @@ def directory(monkeypatch):
         if state.code:
             raise invalid_credentials(state.code)
         conn = Mock()
-        timestamp = (arrow.utcnow().int_timestamp + 11644473600) * 10_000_000
+        last_set = arrow.utcnow().shift(days=-state.age_days).int_timestamp
+        timestamp = (last_set + 11644473600) * 10_000_000
         conn.search_s.return_value = [
             ('cn=admin', {'pwdLastSet': [str(timestamp).encode()]})
         ]
@@ -179,8 +180,8 @@ def test_contending_callers_refresh_under_lock(directory):
         assert lock.acquire(timeout=5)
 
     directory.context.distributed_lock().acquire.side_effect = acquire
-    directory.context.distributed_lock().release.side_effect = (
-        lambda key: lock.release()
+    directory.context.distributed_lock().release.side_effect = lambda key: (
+        lock.release()
     )
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
@@ -216,6 +217,55 @@ def test_healthy_password_does_not_reset(directory):
     directory.reset.assert_not_called()
     directory.put_secret.assert_not_called()
     directory.context.distributed_lock().acquire.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'age_days, expired', [(39, False), (40.5, True), (41, True), (43, True)]
+)
+def test_the_password_counts_as_expired_two_days_before_its_max_age(
+    directory, age_days, expired
+):
+    # max age 42: reset with 2 days left, while the directory still accepts the bind
+    directory.code = None
+    directory.age_days = age_days
+    agent = directory.build()
+    assert agent.is_password_expired() is expired
+    assert agent.password_days_left == pytest.approx(42 - age_days, abs=0.01)
+
+
+@pytest.mark.parametrize('max_age', [0, 1, 2, 3])
+def test_a_password_just_reset_is_not_expired_whatever_the_max_age(directory, max_age):
+    # at 2 or less a fixed two-day lead reset the password on every loop
+    directory.code = None
+    directory.context.config().values['directoryservice.password_max_age'] = max_age
+    agent = directory.build()
+    assert agent.is_password_expired() is False
+    if max_age == 0:
+        assert agent.password_days_left is None
+
+
+def test_a_short_max_age_resets_at_half_of_it(directory):
+    directory.code = None
+    directory.context.config().values['directoryservice.password_max_age'] = 2
+    directory.age_days = 1.1
+    assert directory.build().is_password_expired() is True
+
+
+def test_a_candidate_bind_cannot_wait_for_ever_on_a_silent_directory(monkeypatch):
+    import ldap as ldap_module
+    from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+        AbstractLDAPClient,
+    )
+
+    connection = Mock()
+    monkeypatch.setattr(ldap_module, 'initialize', lambda uri: connection)
+    client = SimpleNamespace(ldap_uri='ldaps://x', ldap_root_bind='cn=root')
+    assert AbstractLDAPClient.root_password_binds(client, 'candidate') is True
+    options = dict(call.args for call in connection.set_option.call_args_list)
+    assert options[ldap_module.OPT_NETWORK_TIMEOUT] == 10
+    assert options[ldap_module.OPT_TIMEOUT] == 10
+    connection.set_option.assert_called()
+    assert connection.method_calls[0][0] == 'set_option'
 
 
 def test_stale_client_refreshes_after_another_task_reset(directory):

@@ -35,6 +35,7 @@ from ideadatamodel import (
 from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
 from ideasdk.bootstrap import BootstrapPackageBuilder, BootstrapUserDataBuilder
 from ideasdk.context import BootstrapContext
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils, GroupNameHelper
 from ideasdk.metrics.cloudwatch import CloudWatchAgentLogFileOptions
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
@@ -1166,6 +1167,12 @@ class VirtualDesktopControllerUtils:
                 self._logger.error(
                     f'EC2 RunInstances error: {_error_code} - {_error_message}'
                 )
+                if 'Capacity' in _error_code:
+                    HealthMetrics(self.context).add(
+                        'desktop.capacity_errors',
+                        code=_error_code,
+                        instance_family=str(session.server.instance_type).split('.')[0],
+                    )
 
                 if (
                     (
@@ -1185,7 +1192,7 @@ class VirtualDesktopControllerUtils:
 
                 # every remaining case is terminal for this request. the reason travels back to
                 # the requesting user instead of being dropped here.
-                raise exceptions.SocaException(
+                launch_failure = exceptions.SocaException(
                     error_code=errorcodes.CREATE_SESSION_FAILED,
                     message=build_launch_failure_message(
                         error_code=_error_code,
@@ -1193,6 +1200,8 @@ class VirtualDesktopControllerUtils:
                         project_instance_profile=_project_instance_profile,
                     ),
                 )
+                launch_failure.launch_error_code = f'launch_{_error_code}'
+                raise launch_failure
 
             except Exception as err:
                 self._logger.error(f'Encountered Deployment Exception: {err}')

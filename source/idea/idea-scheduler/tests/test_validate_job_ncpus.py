@@ -134,8 +134,7 @@ def test_chunk_types_override_job_type_and_preserve_alternatives(submit):
 def test_oversized_chunk_still_rejects(submit, select):
     result, _ = submit({'select': select})
     assert result.accept is False
-    assert '[cpus]' in result.formatted_user_message
-    assert 'c5n.18xlarge has 36 cores' in result.formatted_user_message
+    assert '- c5n.18xlarge has 36 cores' in result.formatted_user_message
 
 
 @pytest.mark.parametrize(

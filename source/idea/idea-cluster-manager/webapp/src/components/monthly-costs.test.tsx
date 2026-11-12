@@ -1,6 +1,7 @@
 import {render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {CostsBillboard, costBadge} from './monthly-costs';
+import {buildBudgetUsage} from './job-budget-usage';
 import {GetMyCostsResult, MyCostsMonth} from '../client/data-model';
 import {FACETS} from './cost-charts';
 
@@ -50,5 +51,21 @@ describe('personal costs card', () => {
         render(<><CostsBillboard costs={costs}/><section id="cost-jobs" tabIndex={-1}/></>);
         await userEvent.click(screen.getByRole('button', {name: 'Jobs'}));
         expect(document.getElementById('cost-jobs')).toHaveFocus();
+    });
+});
+
+describe('job budget panel', () => {
+    const usage = (limit: number, actual: number, forecast: number): any => ({budget_name: 'Research', budget_limit: {amount: limit, unit: 'USD'}, actual_spend: {amount: actual, unit: 'USD'}, forecasted_spend: {amount: forecast, unit: 'USD'}});
+    it('does not show the whole limit as left when there is spending and no forecast', () => {
+        render(buildBudgetUsage(usage(100000, 90000, 0)));
+        expect(screen.getByText('No forecast yet')).toBeInTheDocument();
+        expect(screen.getByText('$10,000.00')).toBeInTheDocument();
+        expect(screen.queryByText('Remaining Budget')).toBeNull();
+    });
+    it('says how far over budget a forecast is', () => {
+        render(buildBudgetUsage(usage(100, 50, 130), '2026-11-02T12:00:00Z'));
+        expect(screen.getByText('Over budget by')).toBeInTheDocument();
+        expect(screen.getByText('$30.00')).toBeInTheDocument();
+        expect(screen.getByText(/Project budget when this job finished/)).toBeInTheDocument();
     });
 });

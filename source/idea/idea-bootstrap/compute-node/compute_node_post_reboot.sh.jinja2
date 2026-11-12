@@ -49,6 +49,8 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot_after_cloud_init
   exit 0
 else
+  # no reboot now, but the next one boots whatever is the default
+  ensure_boot_kernel_bootable
   {% include 'compute-node/_templates/configure_hyperthreading.jinja2' %}
 
   if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh ]]; then

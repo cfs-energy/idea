@@ -138,6 +138,8 @@ describe('report views', () => {
         const result = summary();
         result.tiles.total = {...row('total'), spend_total: total, spend_by_facet: {jobs: '101', desktops: '202', desktop_disks: '3', shared_storage: '4', ai: '5'}};
         result.coverage.ai = {...coverage('partial'), missing_days: 2};
+        // a combined total keeps only the largest of its parts' counts, a floor
+        result.tiles.total.coverage.spend_total = {...coverage('partial'), missing_days: 3};
         open('/reporting', result);
         await screen.findByText(`$${total}`);
         for (const [title, value] of [['Job spend', '$101.00'], ['Desktop spend', '$202.00'], ['Desktop disk spend', '$3.00'], ['Storage spend', '$4.00'], ['AI spend', '$5.00']]) {
@@ -146,12 +148,13 @@ describe('report views', () => {
         }
         // the stored fixture still carries a reserved-instance 'savings' figure: never shown
         expect(screen.queryByText(/less than on-demand/)).toBeNull();
-        expect(screen.getByText('About $120.00 of the $1,524.22 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
+        expect(screen.getByText('About $120.00 of the $1,524 estimated for jobs that finished in this period paid for unused cores.')).toBeInTheDocument();
         expect(context.reporting().listRows).not.toHaveBeenCalled();
         await userEvent.click(screen.getByRole('button', {name: 'About Total spend'}));
         expect(screen.getByText(/All recorded costs for this period: jobs, desktops, desktop disks, storage and AI\./)).toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'About AI spend'}));
-        expect(screen.getByText(/Missing 2 days and 0 records\./)).toBeInTheDocument();
+        expect(screen.getByText(/Missing at least 2 days and 0 records\./)).toBeInTheDocument();
+        expect(screen.getByText('At least 3 days are missing, so this may be higher.')).toBeInTheDocument();
     });
     it('hides zero and missing spend facets, retains negative costs and keeps a zero total', async () => {
         const result = summary();
@@ -170,7 +173,7 @@ describe('report views', () => {
         open(`/reporting?table=${tab}`);
         expect((await screen.findAllByText(heading)).length).toBeGreaterThan(0);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month'});
-        if (tab === 'jobs') expect(screen.getByRole('heading', {name: 'Top jobs (1)'})).toBeInTheDocument();
+        if (tab === 'jobs') expect(screen.getByRole('heading', {name: /^Top jobs/})).toHaveTextContent('Top jobs (1)');
         expect(screen.getByRole('tab', {name: ({overview: 'Overview', jobs: 'Jobs', desktops: 'Desktops', storage: 'Storage', user: 'Breakdown', project: 'Breakdown'} as Record<string, string>)[tab]})).toHaveAttribute('aria-selected', 'true');
         expect(document.body.textContent).not.toMatch(/\b(facet|projection|index|coverage|eligible|freshness|spread|snapshot|provisional|allocation|v1|recorded label|unavailable)\b/i);
         expect(document.body.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -415,19 +418,19 @@ describe('Reporting user filter', () => {
         open('/reporting?user=user-b', result);
         vi.mocked(context.reporting().listRows).mockReturnValueOnce(pending.promise);
         await screen.findByText('Loading spend');
-        expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
+        expect(screen.queryByText('$9,876')).not.toBeInTheDocument();
         expect(screen.queryByRole('heading', {name: 'Total spend'})).not.toBeInTheDocument();
         await waitFor(() => expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', username: 'user-b', paginator: {page_size: 25}})));
         await act(async () => pending.resolve(rows([{...row('user-b'), spend_total: '15', spend_by_facet: {jobs: '1', desktops: '2', desktop_disks: '3', shared_storage: '4', ai: '5'}, coverage: {jobs: {...coverage('partial'), missing_records: 4}}}])));
         expect(screen.getByText('$15.00')).toBeInTheDocument();
         for (const value of ['$1.00', '$2.00', '$3.00', '$4.00', '$5.00']) expect(screen.getByText(value)).toBeInTheDocument();
         expect(screen.queryByText('Loading spend')).not.toBeInTheDocument();
-        expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
+        expect(screen.queryByText('$9,876')).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'About Job spend'}));
         expect(screen.getByText(/Recorded job costs for this period\./)).toBeInTheDocument();
         expect(screen.getByText(/Missing 0 days and 4 records\./)).toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
-        await screen.findByText('$9,876.00');
+        await screen.findByText('$9,876');
         expect(screen.queryByText('$15.00')).not.toBeInTheDocument();
     });
     it.each(['missing', 'failed'])('never substitutes the cluster total for a %s user row', async state => {
@@ -439,7 +442,7 @@ describe('Reporting user filter', () => {
         await screen.findByText('Loading spend');
         await waitFor(() => expect(context.reporting().listRows).toHaveBeenCalled());
         if (state === 'failed') await screen.findByText("Couldn't load the report. Check your connection and try again.");
-        expect(screen.queryByText('$9,876.00')).not.toBeInTheDocument();
+        expect(screen.queryByText('$9,876')).not.toBeInTheDocument();
         expect(screen.queryByRole('heading', {name: 'Total spend'})).not.toBeInTheDocument();
     });
     it('restores the URL user across tabs and reloads and clears to all users', async () => {
@@ -447,12 +450,12 @@ describe('Reporting user filter', () => {
         await screen.findByText(/estimated for jobs that finished/);
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'last_month', username: 'scientist-a'});
         expect(screen.getByText(/· scientist-a · Updated/)).toBeInTheDocument();
-        expect(screen.queryByText('Spend by user')).not.toBeInTheDocument();
+        expect(screen.queryByText('Job cost by user')).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('tab', {name: 'Desktops'}));
         expect(screen.getByTestId('query')).toHaveTextContent('/reporting/desktops?user=scientist-a&period=last_month&table=desktops');
         expect(screen.queryByText('Desktop cost by user')).not.toBeInTheDocument();
         await userEvent.click(screen.getByRole('tab', {name: 'Storage'}));
-        expect(screen.queryByText('Stored data by user')).not.toBeInTheDocument();
+        expect(screen.queryByText('Top 15 by stored data')).not.toBeInTheDocument();
         const path = screen.getByTestId('query').textContent!;
         view.unmount();
         open(path);
@@ -461,7 +464,7 @@ describe('Reporting user filter', () => {
         await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
         await waitFor(() => expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'last_month', username: 'scientist-a'}));
         await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
-        await screen.findByText('Stored data by user');
+        await screen.findByText('Top 15 by stored data');
         expect(screen.getByTestId('query')).not.toHaveTextContent('user=');
         expect(screen.getByRole('button', {name: /^User /})).toHaveTextContent('All users');
         expect(context.reporting().getInsights).toHaveBeenLastCalledWith({period: 'last_month'});
@@ -473,7 +476,7 @@ describe('Reporting user filter', () => {
         unfiltered.desktops.by_user = unfiltered.storage.by_user = [];
         const pending = deferred<ReturnType<typeof insightsFixture>>();
         vi.mocked(context.reporting().getInsights).mockImplementation(request => request.username ? pending.promise : Promise.resolve(unfiltered));
-        await screen.findByText('Spend by user');
+        await screen.findByText('Job cost by user');
         await userEvent.click(screen.getByRole('button', {name: 'Reload'}));
         await waitFor(() => expect(screen.queryByText('Loading report')).not.toBeInTheDocument());
         await userEvent.click(screen.getByRole('button', {name: /^User /}));
@@ -486,7 +489,7 @@ describe('Reporting user filter', () => {
         expect(screen.queryByText('Total spend')).not.toBeInTheDocument();
         expect(context.reporting().getInsights).toHaveBeenCalledWith({period: 'this_month', username: 'user-a'});
         await userEvent.click(screen.getByRole('button', {name: 'Clear filter'}));
-        await screen.findByText('Spend by user');
+        await screen.findByText('Job cost by user');
         const obsolete = insightsFixture(); obsolete.jobs.cost = '999999';
         await act(async () => pending.resolve(obsolete));
         expect(screen.getByTestId('query')).not.toHaveTextContent('user=');
@@ -501,7 +504,7 @@ describe('Reporting user filter', () => {
         expect(screen.queryByRole('cell', {name: 'user-a'})).not.toBeInTheDocument();
         expect(screen.queryByRole('button', {name: 'Project'})).not.toBeInTheDocument();
         expect(context.reporting().listRows).toHaveBeenLastCalledWith(expect.objectContaining({table: 'user', username: 'user-b', paginator: {page_size: 25}}));
-        await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+        await userEvent.click(screen.getByRole('button', {name: /^Export/}));
         await screen.findByText('Downloaded 1 rows across all pages.');
         expect(csv).toHaveBeenCalledWith(expect.objectContaining({table: 'user', username: 'user-b'}));
         expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('report-user-b.csv');
@@ -518,8 +521,8 @@ describe('Reporting user filter', () => {
     it('includes the filter in insights table CSV filenames', async () => {
         open('/reporting/jobs?user=scientist-a');
         const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-        await screen.findByRole('heading', {name: 'Top jobs (1)'});
-        await userEvent.click(screen.getByRole('button', {name: 'Export CSV'}));
+        expect(await screen.findByRole('heading', {name: /^Top jobs/})).toHaveTextContent('Top jobs (1)');
+        await userEvent.click(screen.getByRole('button', {name: /^Export/}));
         expect((click.mock.instances.at(-1) as HTMLAnchorElement).download).toBe('top-jobs-scientist-a.csv');
     });
 });

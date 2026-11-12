@@ -24,13 +24,16 @@ from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
 
 from typing import Optional, Dict, List, Tuple
 import ldap  # noqa
+from ldap.filter import escape_filter_chars  # noqa
 from ldap.ldapobject import LDAPObject  # noqa
 from ldap.controls import SimplePagedResultsControl  # noqa
 from ldap.controls.vlv import VLVRequestControl, VLVResponseControl  # noqa
 from ldap.controls.sss import SSSRequestControl, SSSResponseControl  # noqa
 from ldappool import ConnectionManager  # noqa
 from abc import abstractmethod
+from contextlib import contextmanager, nullcontext
 import base64
+import threading
 
 
 class LdapClientOptions(SocaBaseModel):
@@ -52,7 +55,8 @@ class LdapClientOptions(SocaBaseModel):
     password_max_age: Optional[float] = Field(default=None)
 
 
-DEFAULT_LDAP_CONNECTION_POOL_SIZE = 10
+# each task worker (10 at most) can hold one for the length of a task, see one_server
+DEFAULT_LDAP_CONNECTION_POOL_SIZE = 20
 DEFAULT_LDAP_CONNECTION_RETRY_MAX = 60
 DEFAULT_LDAP_CONNECTION_RETRY_DELAY = 10
 DEFAULT_LDAP_CONNECTION_TIMEOUT = 10
@@ -65,6 +69,9 @@ UID_MIN = 5000
 UID_MAX = 65533  # 65534 is for "nobody" and 65535 is reserved
 GID_MIN = 5000
 GID_MAX = 65533
+
+
+ROOT_BIND_TIMEOUT_SECONDS = 10
 
 
 class AbstractLDAPClient:
@@ -124,6 +131,7 @@ class AbstractLDAPClient:
                         f'Confirming configured option: {opt_d.get("name")}({opt_d.get("code")}) -> {ldap.get_option(opt_d.get("code"))}'
                     )
 
+        self._one_server = threading.local()
         self.logger.debug(f'Starting LDAP connection pool to {self.ldap_uri}')
         self.connection_manager = ConnectionManager(
             uri=self.ldap_uri,
@@ -471,6 +479,9 @@ class AbstractLDAPClient:
         """Try a bind as the root user with a candidate password, outside the connection pool."""
         try:
             conn = ldap.initialize(self.ldap_uri)
+            # a half-open connection to a directory otherwise waits for ever
+            conn.set_option(ldap.OPT_NETWORK_TIMEOUT, ROOT_BIND_TIMEOUT_SECONDS)
+            conn.set_option(ldap.OPT_TIMEOUT, ROOT_BIND_TIMEOUT_SECONDS)
             conn.bind_s(who=self.ldap_root_bind, cred=password, method=ldap.AUTH_SIMPLE)
             conn.unbind_ext_s()
             return True
@@ -493,6 +504,15 @@ class AbstractLDAPClient:
         """
         returns an LDAP connection object bound to ROOT user from the connection pool
         """
+        held = getattr(self._one_server, 'held', None)
+        if held is not None:
+            conn, reconnects = held
+            if getattr(conn, '_reconnects_done', 0) != reconnects:
+                raise exceptions.general_exception(
+                    'the directory connection was replaced part way through a task; '
+                    'what the task read may be from another server'
+                )
+            return nullcontext(conn)
         res = self.connection_manager.connection(
             bind=self.ldap_root_bind, passwd=self.ldap_root_password
         )
@@ -500,6 +520,29 @@ class AbstractLDAPClient:
         #    self.logger.debug(f"LDAP CM returning conn ({res})")
 
         return res
+
+    @contextmanager
+    def one_server(self):
+        """
+        every directory call this thread makes inside the block uses one connection.
+
+        The pool's connections can be to different domain controllers, and a change
+        takes seconds to pass from one to the next. A read on one and the write it
+        decides on another adds an entry twice, or skips removing one. A connection
+        that had to be re-opened may be to another server, so the next call fails and
+        the caller starts again.
+        """
+        if getattr(self._one_server, 'held', None) is not None:
+            yield
+            return
+        with self.connection_manager.connection(
+            bind=self.ldap_root_bind, passwd=self.ldap_root_password
+        ) as conn:
+            self._one_server.held = (conn, getattr(conn, '_reconnects_done', 0))
+            try:
+                yield
+            finally:
+                self._one_server.held = None
 
     @staticmethod
     def convert_ldap_group(ldap_group: Dict) -> Optional[Dict]:
@@ -562,7 +605,29 @@ class AbstractLDAPClient:
     def build_user_dn(self, username: str) -> str:
         return f'cn={username},{self.ldap_user_base}'
 
-    def build_user_filterstr(self, username: str) -> str:
+    @staticmethod
+    def filter_pattern(soca_filter: Optional[SocaFilter]) -> Optional[str]:
+        """
+        the value of a search filter, for the build_*_filterstr methods with escape=False.
+        what was typed is escaped, so it is matched as written: `*`, `(`, `)` and `\\` are
+        plain characters, never a wildcard or more filter. the only wildcards are the ones
+        the kind of match adds here.
+        """
+        if soca_filter is None:
+            return None
+        if Utils.is_not_empty(soca_filter.eq):
+            return escape_filter_chars(soca_filter.eq)
+        if Utils.is_not_empty(soca_filter.starts_with):
+            return f'{escape_filter_chars(soca_filter.starts_with)}*'
+        if Utils.is_not_empty(soca_filter.ends_with):
+            return f'*{escape_filter_chars(soca_filter.ends_with)}'
+        if Utils.is_not_empty(soca_filter.like):
+            return f'*{escape_filter_chars(soca_filter.like)}*'
+        return None
+
+    def build_user_filterstr(self, username: str, escape: bool = True) -> str:
+        if escape:
+            username = escape_filter_chars(username)
         return f'(&{self.ldap_user_filterstr}(cn={username}))'
 
     @property
@@ -577,16 +642,21 @@ class AbstractLDAPClient:
         return f'cn={group_name},{self.ldap_group_base}'
 
     def build_group_filterstr(
-        self, group_name: str = None, username: str = None
+        self, group_name: str = None, username: str = None, escape: bool = True
     ) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
             # Check if we have a fully qualified
-            if group_name.upper().startswith('CN='):
+            is_dn = group_name.upper().startswith('CN=')
+            if escape:
+                group_name = escape_filter_chars(group_name)
+            if is_dn:
                 filterstr = f'{filterstr}(distinguishedName={group_name})'
             else:
                 filterstr = f'{filterstr}(cn={group_name})'
         if username is not None:
+            if escape:
+                username = escape_filter_chars(username)
             filterstr = f'{filterstr}(memberUid={username})'
         return f'(&{filterstr})'
 
@@ -599,7 +669,7 @@ class AbstractLDAPClient:
     def ldap_sudoer_filterstr(self) -> str: ...
 
     def build_sudoer_filterstr(self, username: str) -> str:
-        return f'(&{self.ldap_sudoer_filterstr}(cn={username}))'
+        return f'(&{self.ldap_sudoer_filterstr}(cn={escape_filter_chars(username)}))'
 
     @property
     @abstractmethod
@@ -691,33 +761,14 @@ class AbstractLDAPClient:
     ) -> Tuple[List[Dict], SocaPaginator]:
         result = []
 
-        group_name_token = None
-        if group_name_filter is not None:
-            if Utils.is_not_empty(group_name_filter.eq):
-                group_name_token = group_name_filter.eq
-            elif Utils.is_not_empty(group_name_filter.starts_with):
-                group_name_token = f'{group_name_filter.starts_with}*'
-            elif Utils.is_not_empty(group_name_filter.ends_with):
-                group_name_token = f'*{group_name_filter.ends_with}'
-            elif Utils.is_not_empty(group_name_filter.like):
-                group_name_token = f'*{group_name_filter.like}*'
-
-        username_token = None
-        if username_filter is not None:
-            if Utils.is_not_empty(username_filter.eq):
-                username_token = username_filter.eq
-            elif Utils.is_not_empty(username_filter.starts_with):
-                username_token = f'{username_filter.starts_with}*'
-            elif Utils.is_not_empty(username_filter.ends_with):
-                username_token = f'*{username_filter.ends_with}'
-            elif Utils.is_not_empty(username_filter.like):
-                username_token = f'*{username_filter.like}*'
+        group_name_token = self.filter_pattern(group_name_filter)
+        username_token = self.filter_pattern(username_filter)
 
         if Utils.are_empty(group_name_token, username_token):
             filterstr = self.ldap_group_filterstr
         else:
             filterstr = self.build_group_filterstr(
-                group_name=group_name_token, username=username_token
+                group_name=group_name_token, username=username_token, escape=False
             )
 
         if self.is_activedirectory():
@@ -849,28 +900,17 @@ class AbstractLDAPClient:
         result = []
 
         filterstr = self.ldap_user_filterstr
-        if username_filter is not None:
-            if Utils.is_not_empty(username_filter.eq):
-                filterstr = self.build_user_filterstr(username=username_filter.eq)
-            elif Utils.is_not_empty(username_filter.starts_with):
-                filterstr = self.build_user_filterstr(
-                    username=f'{username_filter.starts_with}*'
-                )
-            elif Utils.is_not_empty(username_filter.ends_with):
-                filterstr = self.build_user_filterstr(
-                    username=f'*{username_filter.ends_with}'
-                )
-            elif Utils.is_not_empty(username_filter.like):
-                filterstr = self.build_user_filterstr(
-                    username=f'*{username_filter.like}*'
-                )
+        username_token = self.filter_pattern(username_filter)
+        if username_token is not None:
+            filterstr = self.build_user_filterstr(username_token, escape=False)
 
         if self.is_activedirectory():
             search_result = self.simple_paginated_search(
                 base=self.ldap_user_base, filterstr=filterstr
             )
 
-            ldap_result = Utils.get_value_as_list('result', search_result)
+            # no match reads as no list at all
+            ldap_result = Utils.get_value_as_list('result', search_result, default=[])
             total = len(ldap_result)
 
         else:

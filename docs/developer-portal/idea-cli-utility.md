@@ -28,7 +28,7 @@ On Windows, certificate generation still needs `openssl` on PATH and diagnostic 
 * Update your cluster configuration via `config` ( [update-idea-configuration.md](../first-time-users/cluster-operations/update-idea-cluster/update-idea-configuration.md "mention"))
 * Update an application module via `deploy --upgrade` ([patch-idea-module.md](../first-time-users/cluster-operations/update-idea-cluster/patch-idea-module.md "mention"))
 * Upgrade backend component via `deploy` ( [update-idea-backend-resource.md](../first-time-users/cluster-operations/update-idea-cluster/update-idea-backend-resource.md "mention"))
-* Manage additional FileSystems easily via `shared-storage` ([storage-management.md](../modules/storage/storage-management.md "mention"))
+* Manage additional FileSystems through `config set`; the `shared-storage` commands are not available in `ideactl` ([storage-management.md](../modules/storage/storage-management.md "mention"))
 
 ```text
 Usage: ideactl [options] [command]

@@ -1,7 +1,9 @@
 import multiprocessing
 import os
+import signal
+import sys
 
-from ideadatamodel import exceptions
+from ideadatamodel import errorcodes, exceptions
 
 
 class UserIdentity:
@@ -32,6 +34,8 @@ class UserIdentity:
             return operation(*args, **kwargs)
 
         def worker():
+            # so being stopped runs this operation's cleanup instead of whatever the server set
+            signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
             receiver.close()
             try:
                 # Only the child changes credentials, so concurrent requests retain isolation.
@@ -66,7 +70,11 @@ class UserIdentity:
             process.start()
             sender.close()
             if not receiver.poll(timeout):
-                raise exceptions.unauthorized_access('Identity worker timed out')
+                # slow is not forbidden: the person must not be told they lack access
+                raise exceptions.SocaException(
+                    error_code=errorcodes.FILE_OPERATION_TIMED_OUT,
+                    message='This took too long and was stopped.',
+                )
             try:
                 kind, result = receiver.recv()
             except EOFError:

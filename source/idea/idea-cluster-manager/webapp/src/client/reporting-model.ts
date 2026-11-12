@@ -104,6 +104,7 @@ export interface ReportingInsights {
         wasted_cost: string | null;
         efficiency_cost?: string | null;
         jobs_with_efficiency: number;
+        unpriced?: number;
         by_user?: Ranked[];
         by_project: Ranked[];
         by_queue: Ranked[];
@@ -119,6 +120,8 @@ export interface ReportingInsights {
         by_user?: Ranked[];
         by_project: Ranked[];
         daily_top_users: {date: string; user: string; cost: string}[];
+        available_from?: string | null;
+        missing_days?: number;
         desktops_with_activity: number;
         checked_hours: number | null;
         idle_hours: number | null;
@@ -135,6 +138,7 @@ export interface ReportingInsights {
     };
     budgets: ReportingBudget[];
     notes: string[];
+    unavailable?: string[];
 }
 export interface ReportingSummary {
     users: string[];

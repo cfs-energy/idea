@@ -83,19 +83,54 @@ def function_body(rendered: str, name: str) -> str:
 class Host:
     """update_within_target_series against stub dnf, grubby and uname"""
 
-    def __init__(self, tmp_path: Path, running: str, newest: str, install_ok=True):
+    def __init__(
+        self,
+        tmp_path: Path,
+        running: str,
+        newest: str,
+        install_ok=True,
+        initramfs=True,
+        dracut_ok=False,
+        grubby_ok=True,
+        package_default=False,
+        lustre_kernels=(),
+    ):
         self.boot = tmp_path / 'boot'
         self.bin = tmp_path / 'bin'
         self.calls = tmp_path / 'calls'
         self.boot.mkdir()
         self.bin.mkdir()
         self.calls.write_text('')
-        for name in ('cat', 'printf', 'sort', 'tail', 'touch', 'basename'):
+        for name in (
+            'cat',
+            'printf',
+            'sort',
+            'tail',
+            'touch',
+            'basename',
+            'timeout',
+            'mkdir',
+            'rm',
+        ):
             (self.bin / name).symlink_to(shutil.which(name))
         log = f'echo "$(basename "$0") $*" >> {self.calls}\n'
         self.stub('uname', f'echo {running}')
+        # modinfo -k <kernel> -n lustre: the kernels the Lustre client has a module for
+        self.stub(
+            'modinfo',
+            'case "$2" in '
+            + ''.join(f'{k}) exit 0 ;; ' for k in lustre_kernels)
+            + 'esac\nexit 1',
+        )
         self.stub('rpm', 'echo kernel6.12')
-        installed = f'touch {self.boot}/vmlinuz-{newest}' if install_ok else 'exit 1'
+        image = f'{self.boot}/initramfs-{newest}.img'
+        installed = (
+            f'touch {self.boot}/vmlinuz-{newest}'
+            + (f'; echo x > {image}' if initramfs else '')
+            if install_ok
+            else 'exit 1'
+        )
+        self.stub('dracut', log + (f'echo x > {image}' if dracut_ok else 'exit 1'))
         self.stub(
             'dnf',
             log + 'case "$1" in\n'
@@ -103,20 +138,49 @@ class Host:
             f'  install) {installed} ;;\n'
             'esac',
         )
-        self.stub('grubby', log)
+        default = tmp_path / 'default_kernel'
+        # the kernel package may have selected itself as the default already
+        default.write_text(
+            f'{self.boot}/vmlinuz-{newest if package_default else running}\n'
+        )
+        self.default = default
+        self.stub(
+            'grubby',
+            log + 'case "$1" in\n'
+            f'  --default-kernel) cat {default} ;;\n'
+            + (
+                f'  --set-default) echo "$2" > {default} ;;\n'
+                if grubby_ok
+                else '  --set-default) exit 1 ;;\n'
+            )
+            + 'esac',
+        )
 
     def stub(self, name, body):
         (self.bin / name).write_text('#!/bin/sh\n' + body + '\n')
         (self.bin / name).chmod(0o755)
 
-    def run(self, rendered: str):
-        function = function_body(rendered, 'update_within_target_series').replace(
-            '/boot/', f'{self.boot}/'
-        )
+    def run(self, rendered: str, exit_code=0):
+        common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+        function = (
+            ''.join(
+                re.search(rf'function {name} \(\) {{\n.*?\n}}\n', common, re.S)[0]
+                for name in (
+                    'kernel_initramfs_ready',
+                    'kernel_has_lustre_module',
+                    'boot_loader_default_kernel',
+                    'restore_default_kernel',
+                    'drop_rescue_images',
+                )
+            )
+            + function_body(rendered, 'keep_running_kernel_default')
+            + function_body(rendered, 'update_within_target_series')
+        ).replace('/boot/', f'{self.boot}/')
         script = (
             'log_warning() { echo "warning $*" >> "$CALLS"; }\n'
             'set_reboot_required() { echo "reboot $*" >> "$CALLS"; }\n'
             'package_transaction() { "$@"; }\n'
+            'fail_kernel_bootstrap() { echo "fail $1" >> "$CALLS"; exit 1; }\n'
             'TARGET_KERNEL_VERSION="5.14.0-687*"\n'
             + function
             + 'update_within_target_series\necho "release ${TARGET_KERNEL_RELEASE}" >> "$CALLS"\n'
@@ -126,9 +190,14 @@ class Host:
             input=script,
             text=True,
             capture_output=True,
-            env={'PATH': str(self.bin), 'CALLS': str(self.calls)},
+            env={
+                'PATH': str(self.bin),
+                'CALLS': str(self.calls),
+                'KERNEL_BOOT_DIR': str(self.boot),
+                'DRACUT_CONF_DIR': str(self.boot / 'dracut.conf.d'),
+            },
         )
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == exit_code, result.stdout + result.stderr
         return self.calls.read_text().splitlines()
 
 
@@ -168,6 +237,116 @@ def test_al2023_takes_the_newest_kernel_of_its_family_from_the_latest_release(
         in calls
     )
     assert f'reboot Kernel update to {fixed}' in calls
+
+
+def test_a_kernel_with_no_initramfs_gets_one_built_before_it_boots(context, tmp_path):
+    calls = Host(
+        tmp_path, running=OLD, newest=FIXED, initramfs=False, dracut_ok=True
+    ).run(render(context.config(), 'rocky9'))
+    assert any(c.startswith('dracut -f') and FIXED in c for c in calls)
+    assert any(c.startswith('grubby --set-default') for c in calls)
+    assert any(c.startswith('reboot') for c in calls)
+
+
+def test_a_kernel_that_cannot_get_an_initramfs_is_never_booted(context, tmp_path):
+    calls = Host(tmp_path, running=OLD, newest=FIXED, initramfs=False).run(
+        render(context.config(), 'amazonlinux2023')
+    )
+    assert not any(c.startswith('grubby --set-default') and FIXED in c for c in calls)
+    # the package may have made the new kernel the default: a later reboot must not boot it
+    assert any(c.startswith('grubby --set-default') and OLD in c for c in calls)
+    assert not any(c.startswith('reboot') for c in calls)
+    assert any('has no initramfs; keeping' in c for c in calls)
+
+
+def test_a_default_that_cannot_be_restored_fails_the_bootstrap(context, tmp_path):
+    host = Host(
+        tmp_path,
+        running=OLD,
+        newest=FIXED,
+        initramfs=False,
+        grubby_ok=False,
+        package_default=True,
+    )
+    calls = host.run(render(context.config(), 'rocky9'), exit_code=1)
+    assert 'fail kernel-boot-mismatch' in calls
+    assert not any(c.startswith('reboot') for c in calls)
+    assert 'release ' not in ' '.join(calls)
+
+
+def test_a_restore_that_leaves_the_new_kernel_selected_fails_the_bootstrap(
+    context, tmp_path
+):
+    # grubby exits 0 and the default is still the kernel with no initramfs
+    host = Host(
+        tmp_path, running=OLD, newest=FIXED, initramfs=False, package_default=True
+    )
+    host.stub(
+        'grubby',
+        f'echo "grubby $*" >> {host.calls}\n'
+        f'[ "$1" = --default-kernel ] && cat {host.default}\nexit 0',
+    )
+    calls = host.run(render(context.config(), 'rocky9'), exit_code=1)
+    assert 'fail kernel-boot-mismatch' in calls
+    assert any(c.startswith('grubby --default-kernel') for c in calls)
+    assert not any(c.startswith('reboot') for c in calls)
+
+
+def test_a_restored_default_is_read_back_and_bootstrap_continues(context, tmp_path):
+    host = Host(
+        tmp_path, running=OLD, newest=FIXED, initramfs=False, package_default=True
+    )
+    calls = host.run(render(context.config(), 'rocky9'))
+    assert host.default.read_text().strip().endswith(f'vmlinuz-{OLD}')
+    assert any(c.startswith('grubby --default-kernel') for c in calls)
+    assert not any(c.startswith(('fail', 'reboot')) for c in calls)
+
+
+def test_a_new_kernel_with_no_vmlinuz_does_not_stay_selected(context, tmp_path):
+    host = Host(tmp_path, running=OLD, newest=FIXED, package_default=True)
+    host.stub(
+        'dnf',
+        f'echo "dnf $*" >> {host.calls}\n'
+        'case "$1" in\n'
+        f'  repoquery) echo {FIXED} ;;\n'
+        f'  install) echo x > {host.boot}/initramfs-{FIXED}.img ;;\n'
+        'esac',
+    )
+    calls = host.run(render(context.config(), 'rocky9'))
+    assert host.default.read_text().strip().endswith(f'vmlinuz-{OLD}')
+    assert not any(c.startswith('reboot') for c in calls)
+
+
+@pytest.mark.parametrize('base_os', ['rocky9', 'amazonlinux2023'])
+def test_a_newer_kernel_the_lustre_client_has_no_module_for_is_not_booted(
+    context, tmp_path, base_os
+):
+    # the package made itself the default; the running kernel is the one that mounts Lustre
+    host = Host(
+        tmp_path,
+        running=OLD,
+        newest=FIXED,
+        package_default=True,
+        lustre_kernels=(OLD,),
+    )
+    calls = host.run(render(context.config(), base_os))
+    assert host.default.read_text().strip().endswith(f'vmlinuz-{OLD}')
+    assert any('has no FSx for Lustre module; keeping' in c for c in calls)
+    assert not any(c.startswith('reboot') for c in calls)
+    # the lock then follows the running kernel
+    assert 'release ' in calls
+
+
+@pytest.mark.parametrize('lustre_kernels', [(), (OLD, FIXED), (FIXED,)])
+def test_the_lustre_module_only_decides_when_the_newer_kernel_would_lose_it(
+    context, tmp_path, lustre_kernels
+):
+    # no client yet, a module for both kernels, or one only for the newer kernel
+    calls = Host(
+        tmp_path, running=OLD, newest=FIXED, lustre_kernels=lustre_kernels
+    ).run(render(context.config(), 'rocky9'))
+    assert f'reboot Kernel update to {FIXED}' in calls
+    assert f'release {FIXED}' in calls
 
 
 def test_the_newest_already_running_changes_nothing(context, tmp_path):

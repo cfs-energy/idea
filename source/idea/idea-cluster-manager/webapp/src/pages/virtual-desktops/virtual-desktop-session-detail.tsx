@@ -14,7 +14,7 @@
 import {Component} from "react";
 import {IdeaAppLayoutProps} from "../../components/app-layout";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
-import {ColumnLayout, Container, Grid, Header, SpaceBetween, Tabs, Box} from "@cloudscape-design/components";
+import {Alert, Button, ColumnLayout, Container, Grid, Header, SpaceBetween, StatusIndicator, Tabs} from "@cloudscape-design/components";
 import IdeaAppLayout from "../../components/app-layout/app-layout";
 import {KeyValue} from "../../components/key-value";
 import {AppContext} from "../../common";
@@ -23,6 +23,7 @@ import VirtualDesktopSessionStatusIndicator from "./components/virtual-desktop-s
 import Utils from "../../common/utils";
 import dot from "dot-object";
 import {withRouter} from "../../navigation/navigation-utils";
+import {DetailLoadState, DetailLoadStatus} from "./components/detail-load-state";
 
 export interface VirtualDesktopSessionDetailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -36,7 +37,10 @@ interface VirtualDesktopSessionDetailState {
         end: string,
     }
     sessionHealth: Record<string, any> | null
+    sessionHealthStatus: 'loading' | 'error' | 'not-found' | 'ready'
     showDecodedServerId: boolean
+    loadStatus: DetailLoadStatus
+    permissionsFailed: boolean
 }
 
 const DEFAULT_ACTIVE_TAB_ID = 'details'
@@ -54,7 +58,10 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                 end: ''
             },
             sessionHealth: null,
-            showDecodedServerId: false
+            sessionHealthStatus: 'loading',
+            showDecodedServerId: false,
+            loadStatus: 'loading',
+            permissionsFailed: false
         }
     }
 
@@ -82,6 +89,11 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
             })
         })
 
+        this.loadSession()
+    }
+
+    loadSession = () => {
+        this.setState({loadStatus: 'loading'})
         AppContext.get().client().virtualDesktopAdmin().getSessionInfo({
             session: {
                 idea_session_id: this.getIdeaSessionId(),
@@ -89,25 +101,35 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
             }
         }).then(result => {
             this.setState({
-                session: result.session!
+                session: result.session!,
+                loadStatus: 'ready'
             })
 
             // If the session is in READY state, fetch the session health information
             if (result.session?.state === 'READY' && result.session?.dcv_session_id) {
                 this.fetchSessionHealth(result.session);
             }
+        }).catch(() => {
+            this.setState({loadStatus: 'error'})
         })
 
         AppContext.get().client().virtualDesktopAdmin().listSessionPermissions({
-            idea_session_id: this.getIdeaSessionId()
+            idea_session_id: this.getIdeaSessionId(),
+            paginator: {
+                page_size: 100
+            }
         }).then((response) => {
             this.setState({
-                sessionPermissions: response.listing!
+                sessionPermissions: response.listing!,
+                permissionsFailed: false
             })
+        }).catch(() => {
+            this.setState({permissionsFailed: true})
         })
     }
 
-    fetchSessionHealth(session: VirtualDesktopSession) {
+    fetchSessionHealth = (session: VirtualDesktopSession) => {
+        this.setState({sessionHealthStatus: 'loading'})
         // Use VirtualDesktopDCVClient to fetch session health data
         AppContext.get().client().virtualDesktopDCV().describeSessions({
             sessions: [{
@@ -115,17 +137,14 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                 dcv_session_id: session.dcv_session_id
             }]
         }).then(response => {
-            const health = response.response;
-            if (health?.sessions && session.dcv_session_id) {
-                const sessionsData = health.sessions as Record<string, any>;
-                const sessionHealthData = sessionsData[session.dcv_session_id];
-                console.log('Session health data:', sessionHealthData);
-                this.setState({
-                    sessionHealth: sessionHealthData
-                });
-            }
-        }).catch(error => {
-            console.error('Error fetching session health:', error);
+            const sessionsData = (response.response?.sessions ?? {}) as Record<string, any>;
+            const sessionHealthData = session.dcv_session_id ? sessionsData[session.dcv_session_id] : undefined;
+            this.setState({
+                sessionHealth: sessionHealthData ?? null,
+                sessionHealthStatus: sessionHealthData ? 'ready' : 'not-found'
+            });
+        }).catch(() => {
+            this.setState({sessionHealthStatus: 'error'});
         });
     }
 
@@ -148,6 +167,9 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
     }
 
     buildPermissionTab() {
+        if (this.state.permissionsFailed) {
+            return <Alert type="error" action={<Button onClick={this.loadSession}>Try again</Button>}>Could not load who has access.</Alert>
+        }
         if (Utils.isEmpty(this.state.sessionPermissions)) {
             return (
                 <p> None </p>
@@ -161,6 +183,16 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                 </Grid>
             })
         }
+    }
+
+    buildSessionHealthStatus() {
+        switch (this.state.sessionHealthStatus) {
+            case 'error':
+                return <Alert type="error" action={<Button onClick={() => this.fetchSessionHealth(this.state.session)}>Try again</Button>}>Session health could not be loaded.</Alert>
+            case 'not-found':
+                return <p>The broker has no record of this session.</p>
+        }
+        return <StatusIndicator type="loading">Loading session health</StatusIndicator>
     }
 
     render() {
@@ -191,19 +223,21 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                         href: '#/virtual-desktop/sessions'
                     },
                     {
-                        text: this.getIdeaSessionId(),
+                        text: this.state.session.name ?? 'Session',
                         href: ''
                     }
                 ]}
-                header={<Header variant={"h1"}>Session: {this.state.session.name}</Header>}
+                header={<Header variant={"h1"}>{this.state.session.name ? `Session: ${this.state.session.name}` : 'Session'}</Header>}
                 contentType={"default"}
-                content={
-                    <SpaceBetween size={"l"}>
+                content={this.state.loadStatus !== 'ready'
+                    ? <DetailLoadState status={this.state.loadStatus} loadingText="Loading this session" errorText="This session could not be loaded." onRetry={this.loadSession}/>
+                    : <SpaceBetween size={"l"}>
                         <Container header={<Header variant={"h2"}>General Information</Header>}>
                             <ColumnLayout variant={"text-grid"} columns={3}>
                                 <KeyValue title="Session Name" value={this.state.session.name}/>
                                 <KeyValue title="Owner" value={this.state.session.owner}/>
-                                <KeyValue title="State" value={<VirtualDesktopSessionStatusIndicator state={this.state.session.state!} hibernation_enabled={this.state.session.hibernation_enabled!}/>} type="react-node"/>
+                                <KeyValue title="State" value={<VirtualDesktopSessionStatusIndicator state={this.state.session.state!} hibernation_enabled={this.state.session.hibernation_enabled!} recovering={this.state.session.recovering}/>} type="react-node"/>
+                                {Utils.isNotEmpty(this.state.session.failure_reason) && <KeyValue title="Failure reason" value={this.state.session.failure_reason}/>}
                             </ColumnLayout>
                         </Container>
                         <Tabs
@@ -308,23 +342,6 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                 <KeyValue title="Saturday" value={Utils.getScheduleDisplay(this.state.session.schedule?.saturday, this.state.workingHours.start, this.state.workingHours.end)}/>
                                                 <KeyValue title="Sunday" value={Utils.getScheduleDisplay(this.state.session.schedule?.sunday, this.state.workingHours.start, this.state.workingHours.end)}/>
                                             </ColumnLayout>
-                                        </Container>
-                                    )
-                                },
-                                {
-                                    label: 'Monitoring',
-                                    id: 'monitoring',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>Monitoring (Coming Soon)</Header>}>
-                                            <li>
-                                                eVDI Session detailed monitoring needs <Box variant="strong">Metrics and Monitoring</Box> module to be enabled.
-                                            </li>
-                                            <li>
-                                                If <Box variant="strong">Metrics and Monitoring</Box> is enabled, metrics collected via CloudWatch or Prometheus will be queried and rendered.
-                                            </li>
-                                            <li>
-                                                If <Box variant="strong">Metrics and Monitoring</Box> is not enabled, default EC2 Instance metrics available from CloudWatch will be rendered.
-                                            </li>
                                         </Container>
                                     )
                                 },
@@ -434,22 +451,7 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
                                                         </Container>
                                                     )}
                                                 </SpaceBetween>
-                                            ) : (
-                                                <SpaceBetween size="l">
-                                                    <p>Loading session health information...</p>
-                                                </SpaceBetween>
-                                            )}
-                                        </Container>
-                                    )
-                                },
-                                {
-                                    label: 'Cost Estimates',
-                                    id: 'cost-estimates',
-                                    content: (
-                                        <Container header={<Header variant={"h2"}>Cost Estimates (Coming Soon)</Header>}>
-                                            <li>
-                                                eVDI Session cost estimates based on EC2 Instance Type, Usage and Capacity Type will be provided.
-                                            </li>
+                                            ) : this.buildSessionHealthStatus()}
                                         </Container>
                                     )
                                 }

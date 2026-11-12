@@ -121,6 +121,11 @@ kms:
   # can be one of [customer-managed, aws-managed]
   key_type: {{ kms_key_type if kms_key_type else '~' }}
 
+# On a failed desktop or bake, ship the host's console and log tail through the module log, and
+# show a plain cause in the portal. Off stops the read and the shipping. Absent reads as true.
+failure_capture:
+  enabled: true
+
 # Configure cluster-wide AWS Secrets Manager settings below
 secretsmanager:
   kms_key_id: {{ kms_key_id if kms_key_id else '~' }} # Specify your own CMK to encrypt Secrets Manager secrets. If set to ~ encryption will be managed by the default AWS key

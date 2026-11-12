@@ -187,6 +187,42 @@ def test_api_auth_and_redaction():
 
 
 @pytest.mark.parametrize(
+    'missing',
+    [
+        'has_access_token',
+        'is_authenticated_user',
+        'is_authorized_user',
+        'not is_unix_domain_socket_invocation',
+        None,
+    ],
+)
+def test_a_ticket_needs_every_part_of_a_signed_in_session(missing):
+    # through the load balancer a caller with no token is refused before any API is
+    # chosen, so that answer says nothing about this API. each condition is refused here,
+    # by this API, and the same call with nothing missing gets its ticket
+    context = MagicMock()
+    invocation = MagicMock(
+        namespace='Terminal.CreateTicket',
+        request_payload={'target': 'bastion', 'client': 'a' * 64},
+    )
+    invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
+    invocation.get_username.return_value = 'alice'
+    if missing is None:
+        TerminalAPI(context).invoke(invocation)
+        context.terminal.create_ticket.assert_called_once_with(
+            'alice', 'bastion', 'a' * 64
+        )
+        return
+    name = missing.removeprefix('not ')
+    getattr(invocation, name).return_value = missing.startswith('not ')
+    with pytest.raises(exceptions.SocaException) as error:
+        TerminalAPI(context).invoke(invocation)
+    assert error.value.error_code == 'UNAUTHORIZED_ACCESS'
+    context.terminal.create_ticket.assert_not_called()
+
+
+@pytest.mark.parametrize(
     'namespace,payload',
     [
         ('Terminal.ListTargets', {}),

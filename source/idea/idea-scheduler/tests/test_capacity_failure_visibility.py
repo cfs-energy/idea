@@ -309,4 +309,6 @@ def test_capacity_wait_is_cleared_when_the_job_starts(context, job_cache):
     )
 
     assert job_cache.get_job(job_id=job.job_id).error_message is None
-    assert context.scheduler.job_attributes[job.job_id] == {'error_message': None}
+    # PBS is not asked to clear the resource: it refuses on a job that runs ("Cannot
+    # modify attribute while job running"), and a started job's is no longer read
+    assert job.job_id not in context.scheduler.job_attributes

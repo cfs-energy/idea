@@ -57,7 +57,8 @@ class VirtualDesktopProjectChart extends VirtualDesktopBaseChart<VirtualDesktopP
                         "aggs": {
                             "project": {
                                 "terms": {
-                                    "field": "project.name.raw"
+                                    "field": "project.name.raw",
+                                    "size": 100
                                 }
                             }
                         }

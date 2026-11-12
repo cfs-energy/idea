@@ -14,11 +14,12 @@
 import React, {Component, RefObject} from "react";
 
 import {AUTH_PARAM_USERNAME, AUTH_PARAM_PASSWORD, IdeaAuthProps, IdeaAuthState} from "./auth-interfaces";
-import {Box, Button, ColumnLayout, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
+import {Alert, Box, Button, ColumnLayout, SpaceBetween, StatusIndicator} from "@cloudscape-design/components";
 import AuthLayout from "./auth-layout";
 import IdeaAuthContext from "./auth-context";
 import {AppContext} from "../../common";
-import {AUTH_LOGIN_CHALLENGE, AUTH_PASSWORD_RESET_REQUIRED, NETWORK_ERROR, REQUEST_TIMEOUT} from "../../common/error-codes";
+import {AUTH_LOGIN_CHALLENGE, AUTH_PASSWORD_RESET_REQUIRED, NETWORK_ERROR, REQUEST_TIMEOUT, SERVER_ERROR} from "../../common/error-codes";
+import {takeSessionEnded} from "../../common/session-return";
 import IdeaForm from "../../components/form";
 import Utils from "../../common/utils";
 import {withRouter} from "../../navigation/navigation-utils";
@@ -26,6 +27,7 @@ import {withRouter} from "../../navigation/navigation-utils";
 class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
     static contextType = IdeaAuthContext
     form: RefObject<IdeaForm | null>
+    sessionEnded = takeSessionEnded()
 
     constructor(props: IdeaAuthProps) {
         super(props);
@@ -47,18 +49,18 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
             if (this.getForm().validate()) {
                 this.getForm().clearError()
                 const values = this.getForm().getValues()
-                AppContext.get().auth().login(values.username, values.password).then(_ => {
-                    this.props.navigate('/')
-                }).catch(error => {
+                // the route guard moves on once the session starts, back to where the person was
+                AppContext.get().auth().login(values.username, values.password).catch(error => {
                     if (error.errorCode === AUTH_LOGIN_CHALLENGE) {
                         this.props.navigate('/auth/challenge')
                     } else if (error.errorCode === AUTH_PASSWORD_RESET_REQUIRED) {
                         this.props.navigate('/auth/confirm-forgot-password')
                     } else {
-                        if(error.errorCode === NETWORK_ERROR || error.errorCode === REQUEST_TIMEOUT) {
-                            this.getForm().setError(error.errorCode, `Failed to communicate with backend service: ${error.message}`)
+                        if(error.errorCode === NETWORK_ERROR || error.errorCode === REQUEST_TIMEOUT || error.errorCode === SERVER_ERROR) {
+                            // says nothing about the password, so it stays in the form
+                            this.getForm().setError(error.errorCode, error.message)
                         } else {
-                            this.getForm().setError(error.errorCode, 'Error in authenticating given username/password combination')
+                            this.getForm().setError(error.errorCode, 'The username or password is not correct.')
                             this.getForm().setParamValue('password', '')
                         }
                     }
@@ -90,6 +92,8 @@ class IdeaAuthLogin extends Component<IdeaAuthProps, IdeaAuthState> {
                 <ColumnLayout columns={1} className="auth-content">
                     <h3 className="title">{AppContext.get().getTitle()}</h3>
                     {hasSubtitle() && <p className="subtitle">{getSubtitle()}</p>}
+                    {this.sessionEnded && <Alert type="info">Your session ended. Sign in to continue.</Alert>}
+                    {isSsoEnabled && AppContext.get().auth().ssoDidNotComplete() && <Alert type="error">Sign-in with your company account did not complete. Try again. If it keeps failing, contact your administrator.</Alert>}
                     {!isSsoEnabled && ([
                         <IdeaForm key="login-form" name="login-form"
                                   ref={this.form}

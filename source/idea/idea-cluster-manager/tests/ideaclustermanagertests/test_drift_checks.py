@@ -1,0 +1,847 @@
+"""Drift checks: a wrong setting reports drift, a failed read reports unknown and never ok."""
+
+import io
+import re
+import threading
+import time
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+from botocore.exceptions import ClientError
+
+from ideaclustermanager.app.metrics import drift_checks as module
+from ideaclustermanager.app.metrics.drift_checks import (
+    DRIFT,
+    MUST_MATCH,
+    OK,
+    UNKNOWN,
+    DriftChecks,
+    DriftCheckCollector,
+    analytics_value,
+    digest,
+)
+from ideaclustermanager.app.metrics import storage_metrics_service
+from ideaclustermanager.app.metrics.storage_metrics_service import (
+    OntapClient,
+    StorageTarget,
+)
+from ideasdk.metrics.health import CollectorRunner
+
+SOURCE = Path(__file__).parents[3]
+DC = ['10.0.0.10', '10.0.0.11']
+ENDPOINT = 'svm-1.fs-0abc.fsx.us-east-2.amazonaws.com'
+SMB_DNS = 'shared-storage.data.fsx_netapp_ontap.svm.smb_dns'
+
+
+def test_an_aws_refusal_reads_as_what_it_is():
+    denied = ClientError(
+        {'Error': {'Code': 'AccessDenied', 'Message': 'no'}}, 'GetObject'
+    )
+    assert module.read_reason(denied) == 'access_denied'
+    assert module.read_reason(RuntimeError('ONTAP returned 403')) == 'forbidden'
+    assert module.read_reason(OSError('no route')) == 'unreachable'
+
+
+def good_cifs(**security):
+    return [
+        {
+            'svm': {'name': 'svm1'},
+            'enabled': True,
+            'security': {
+                'session_security': 'sign',
+                'advertised_kdc_encryptions': ['aes-128', 'aes-256'],
+                **security,
+            },
+        }
+    ]
+
+
+GOOD_LDAP = [
+    {'session_security': 'sign', 'status': {'state': 'up'}, 'svm': {'name': 'svm1'}}
+]
+
+
+def good_dns(servers=None, **dynamic):
+    return [
+        {
+            'servers': DC if servers is None else servers,
+            'dynamic_dns': {'enabled': True, 'use_secure': True, **dynamic},
+        }
+    ]
+
+
+GOOD_VOLUMES = [
+    {'name': 'root', 'is_svm_root': True},
+    {'name': 'profiles', 'is_svm_root': False, 'analytics': {'state': 'on'}},
+]
+
+
+class FakeOntap:
+    answers = {}
+    calls = []
+
+    def __init__(self, endpoint, username, password, verify_tls=False, timeout=60):
+        self.timeout = timeout
+
+    def get(self, path):
+        FakeOntap.calls.append(path)
+        for prefix, answer in FakeOntap.answers.items():
+            if path.startswith(prefix):
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+        raise AssertionError(f'unexpected read {path}')
+
+
+class Config:
+    def __init__(self, **overrides):
+        self.values = {
+            'directoryservice.directory_id': 'd-1',
+            'cluster.cluster_s3_bucket': 'bucket',
+            module.SSH_CLIENT_IP_KEY: ['1.2.3.4/32'],
+            **{key: str(value) for key, value in MUST_MATCH.items()},
+            **overrides,
+        }
+
+    def get_string(self, key, default=None, required=False):
+        return self.values.get(key, default)
+
+    def get_bool(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_int(self, key, default=None):
+        value = self.values.get(key)
+        return default if value is None else int(value)
+
+    def get_list(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_secret(self, key):
+        return self.values.get('secret', 'the-metrics-password')
+
+    def get_config(self, key, default=None):
+        if key == 'shared-storage':
+            return self.values.get(
+                'shared-storage', {'data': {'provider': 'fsx_netapp_ontap'}}
+            )
+        return self.values.get(key, default)
+
+
+def harness(monkeypatch, config=None, values_yml=b'ssh_client_ip:\n- 1.2.3.4/32\n'):
+    monkeypatch.setattr(module, 'OntapClient', FakeOntap)
+    FakeOntap.answers = {
+        '/api/protocols/cifs/services': good_cifs(),
+        '/api/name-services/ldap': GOOD_LDAP,
+        '/api/name-services/dns': good_dns(),
+        '/api/storage/volumes': GOOD_VOLUMES,
+    }
+    FakeOntap.calls = []
+    context = Mock()
+    context.module_id.return_value = 'cluster-manager'
+    context.config.return_value = config or Config()
+    aws = context.aws.return_value
+    aws.ds.return_value.describe_directories.return_value = {
+        'DirectoryDescriptions': [{'DnsIpAddrs': DC}]
+    }
+    aws.fsx.return_value.describe_file_systems.return_value = {
+        'FileSystems': [
+            {
+                'StorageType': 'SSD',
+                'OntapConfiguration': {
+                    'DeploymentType': 'MULTI_AZ_2',
+                    'AutomaticBackupRetentionDays': 30,
+                    'DiskIopsConfiguration': {'Mode': 'AUTOMATIC'},
+                    'HAPairs': 1,
+                },
+            }
+        ]
+    }
+    aws.s3.return_value.get_object.return_value = {'Body': io.BytesIO(values_yml)}
+    context.ldap_client.fetch_root_password.return_value = 'the-ad-secret'
+    context.ldap_client.root_password_binds.return_value = True
+    storage = Mock()
+    storage.targets.return_value = [
+        StorageTarget('data', ENDPOINT, 'idea-metrics', 'password-key')
+    ]
+    checks = DriftChecks(context, storage)
+    published = {'state': [], 'value': []}
+    checks.metrics = Mock()
+    checks.metrics.level.side_effect = lambda name, value, **tags: published[
+        name.split('.')[1]
+    ].append((value, tags))
+    checks.logger = Mock()
+    checks.published = published
+    return checks
+
+
+def states(results):
+    return {result.check: result.state for result in results}
+
+
+def test_a_cluster_that_holds_everything_is_ok_everywhere(monkeypatch):
+    checks = harness(monkeypatch)
+    results = checks.run_once()
+    found = states(results)
+    assert set(found.values()) == {OK}
+    assert set(found) == {
+        'ontap_cifs_session_security',
+        'ontap_ldap_session_security',
+        'ontap_dns_domain_controllers',
+        'ontap_cifs_aes',
+        'ontap_secure_ddns',
+        'ontap_machine_account',
+        'ontap_analytics',
+        'fsx_parity',
+        'ad_agent_bind',
+        'ssh_client_ip',
+        'settings_must_match',
+        'values_owned_settings',
+    }
+
+
+def test_wrong_dns_reports_drift(monkeypatch):
+    checks = harness(monkeypatch)
+    FakeOntap.answers['/api/name-services/dns'] = good_dns(servers=['10.10.0.2'])
+    found = states(checks.run_once())
+    assert found['ontap_dns_domain_controllers'] == DRIFT
+    assert found['ontap_secure_ddns'] == OK
+
+
+@pytest.mark.parametrize(
+    'path, answer, check',
+    [
+        (
+            '/api/protocols/cifs/services',
+            good_cifs(session_security='none'),
+            'ontap_cifs_session_security',
+        ),
+        (
+            '/api/name-services/ldap',
+            [{'session_security': 'none', 'status': {'state': 'up'}}],
+            'ontap_ldap_session_security',
+        ),
+        (
+            '/api/protocols/cifs/services',
+            good_cifs(advertised_kdc_encryptions=['rc4']),
+            'ontap_cifs_aes',
+        ),
+        (
+            '/api/name-services/dns',
+            good_dns(use_secure=False),
+            'ontap_secure_ddns',
+        ),
+        (
+            '/api/name-services/ldap',
+            [{'session_security': 'sign', 'status': {'state': 'down'}}],
+            'ontap_machine_account',
+        ),
+    ],
+)
+def test_a_wrong_ontap_setting_reports_drift(monkeypatch, path, answer, check):
+    checks = harness(monkeypatch)
+    FakeOntap.answers[path] = answer
+    found = states(checks.run_once())
+    assert found[check] == DRIFT
+    # and that is what reaches datadog
+    assert any(
+        value == 2 and tags['check'] == check and tags['scope'] == 'data'
+        for value, tags in checks.published['state']
+    )
+
+
+def test_signing_none_on_cifs_is_what_failed_on_three_clusters(monkeypatch):
+    checks = harness(monkeypatch)
+    FakeOntap.answers['/api/protocols/cifs/services'] = good_cifs(
+        session_security='none'
+    )
+    assert states(checks.run_once())['ontap_cifs_session_security'] == DRIFT
+
+
+@pytest.mark.parametrize(
+    'path, affected',
+    [
+        (
+            '/api/protocols/cifs/services',
+            {'ontap_cifs_session_security', 'ontap_cifs_aes', 'ontap_machine_account'},
+        ),
+        (
+            '/api/name-services/ldap',
+            {'ontap_ldap_session_security', 'ontap_machine_account'},
+        ),
+        (
+            '/api/name-services/dns',
+            {'ontap_dns_domain_controllers', 'ontap_secure_ddns'},
+        ),
+        ('/api/storage/volumes', {'ontap_analytics'}),
+    ],
+)
+def test_a_failing_ontap_read_reports_unknown_not_ok(monkeypatch, path, affected):
+    checks = harness(monkeypatch)
+    FakeOntap.answers[path] = RuntimeError(f'GET {path}: 403: role lacks the path')
+    found = states(checks.run_once())
+    for check in affected:
+        assert found[check] == UNKNOWN
+    assert all(
+        result.detail == 'forbidden'
+        for result in checks.run_once()
+        if result.state == UNKNOWN and result.check != 'ontap_machine_account'
+    )
+    for check in set(module.ONTAP_CHECKS) - affected:
+        assert found[check] == OK
+    assert any(
+        value == 1 and tags['check'] in affected
+        for value, tags in checks.published['state']
+    )
+
+
+def test_a_field_missing_from_the_answer_is_unknown_not_ok(monkeypatch):
+    checks = harness(monkeypatch)
+    FakeOntap.answers['/api/protocols/cifs/services'] = [
+        {'enabled': True, 'security': {}}
+    ]
+    FakeOntap.answers['/api/name-services/ldap'] = [{'status': {}}]
+    FakeOntap.answers['/api/name-services/dns'] = [{'servers': DC}]
+    found = states(checks.run_once())
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_ldap_session_security',
+        'ontap_machine_account',
+        'ontap_secure_ddns',
+    ):
+        assert found[check] == UNKNOWN
+
+
+def test_no_cifs_record_is_unknown_not_drift(monkeypatch):
+    # a role without /api/svm/svms reads 200 and no records for a server that is joined
+    checks = harness(monkeypatch, config=Config(**{SMB_DNS: 'SVM1.CORP.EXAMPLE'}))
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    FakeOntap.answers['/api/svm/svms'] = RuntimeError('GET /api/svm/svms: 403: no')
+    found = states(checks.run_once())
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
+        assert found[check] == UNKNOWN
+    assert found['ontap_ldap_session_security'] == OK
+    assert not any(value == 2 for value, _ in checks.published['state'])
+
+
+@pytest.mark.parametrize(
+    'smb_dns, expected', [('SVM1.CORP.EXAMPLE', DRIFT), (None, OK), ('', OK)]
+)
+def test_no_cifs_server_on_a_visible_svm_is_drift_only_where_smb_is_mounted(
+    monkeypatch, smb_dns, expected
+):
+    # an NFS-only SVM has nothing to sign; one the cluster mounts over SMB has lost its server
+    checks = harness(monkeypatch, config=Config(**{SMB_DNS: smb_dns}))
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    FakeOntap.answers['/api/svm/svms'] = [{'name': 'svm1'}]
+    found = states(checks.run_once())
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
+        assert found[check] == expected
+    assert found['ontap_ldap_session_security'] == OK
+
+
+# What ONTAP 9 on FSx answers, field for field, with the names and ids replaced: the CIFS and
+# LDAP records of an SVM whose session security was none, taken while it was, and those of one
+# that signs. Every key ONTAP sent is kept, so a rule that reads the wrong one shows here.
+RECORDED_SVM = {'uuid': '00000000-0000-0000-0000-000000000001', 'name': 'svm1'}
+RECORDED_CIFS_SECURITY = {
+    'restrict_anonymous': 'no_enumeration',
+    'smb_signing': False,
+    'smb_encryption': False,
+    'kdc_encryption': True,
+    'lm_compatibility_level': 'lm_ntlm_ntlmv2_krb',
+    'aes_netlogon_enabled': False,
+    'try_ldap_channel_binding': True,
+    'ldap_referral_enabled': False,
+    'advertised_kdc_encryptions': ['aes_256', 'aes_128', 'rc4', 'des'],
+    'encrypt_dc_connection': False,
+    'use_start_tls': False,
+    'session_security': 'none',
+    'use_ldaps': False,
+}
+RECORDED_LDAP_STATUS = {
+    'state': 'up',
+    'message': 'Connected to LDAP server "10.0.0.10".',
+    'dn_message': ['All the configured DNs are available.'],
+    'code': 0,
+    'ipv4_state': 'down',
+    'ipv6_state': 'down',
+}
+
+
+def recorded_answers(cifs_enabled=True, ldap_state='up', ldap_security='sign', **cifs):
+    """the four reads and the SVM listing, as pages of ONTAP's own envelope."""
+
+    def page(*records):
+        return {'records': list(records), 'num_records': len(records), '_links': {}}
+
+    return {
+        '/api/protocols/cifs/services': page(
+            {
+                'svm': RECORDED_SVM,
+                'enabled': cifs_enabled,
+                'security': {
+                    **RECORDED_CIFS_SECURITY,
+                    'session_security': 'sign',
+                    **cifs,
+                },
+            }
+        ),
+        '/api/name-services/ldap': page(
+            {
+                'svm': RECORDED_SVM,
+                'session_security': ldap_security,
+                'status': {**RECORDED_LDAP_STATUS, 'state': ldap_state},
+            }
+        ),
+        '/api/name-services/dns': page(
+            {
+                'uuid': RECORDED_SVM['uuid'],
+                'servers': DC,
+                'dynamic_dns': {
+                    'enabled': True,
+                    'use_secure': True,
+                    'time_to_live': 'P1D',
+                    'fqdn': 'SVM1.corp.example',
+                },
+                'svm': {'name': 'svm1'},
+            }
+        ),
+        '/api/storage/volumes': page(*GOOD_VOLUMES),
+        '/api/svm/svms': page(RECORDED_SVM),
+    }
+
+
+def over_the_real_client(monkeypatch, answers):
+    """the drift checks through OntapClient itself, with only the HTTP call replaced."""
+    checks = harness(monkeypatch)
+    monkeypatch.setattr(module, 'OntapClient', OntapClient)
+
+    def get(url, **kwargs):
+        path = url.split('amazonaws.com', 1)[1]
+        body = next(v for k, v in answers.items() if path.startswith(k))
+        return Mock(status_code=200, json=lambda: body, text='')
+
+    monkeypatch.setattr(storage_metrics_service.requests, 'get', get)
+    return checks
+
+
+CIFS_FAMILY = {
+    'ontap_cifs_session_security',
+    'ontap_cifs_aes',
+    'ontap_machine_account',
+}
+
+
+@pytest.mark.parametrize(
+    'weak, drifted',
+    [
+        # the record as it was read on the SVM that failed: signing none, AES still on
+        (dict(session_security='none'), {'ontap_cifs_session_security'}),
+        (
+            dict(session_security='none', ldap_security='none'),
+            {'ontap_cifs_session_security', 'ontap_ldap_session_security'},
+        ),
+        (
+            dict(advertised_kdc_encryptions=['rc4', 'des'], kdc_encryption=False),
+            {'ontap_cifs_aes'},
+        ),
+        (dict(cifs_enabled=False), {'ontap_machine_account'}),
+        (dict(ldap_state='down'), {'ontap_machine_account'}),
+        (
+            dict(
+                session_security='none',
+                advertised_kdc_encryptions=['rc4', 'des'],
+                cifs_enabled=False,
+            ),
+            CIFS_FAMILY,
+        ),
+    ],
+)
+def test_a_weak_setting_on_an_svm_the_role_sees_is_drift_on_that_check_alone(
+    monkeypatch, weak, drifted
+):
+    # the three CIFS checks had been seen ok, unknown and falsely drift, never truly drift:
+    # each weak setting, in ONTAP's own answer, must read 2 on its check and 0 on the others
+    checks = over_the_real_client(monkeypatch, recorded_answers(**weak))
+    found = states(checks.run_once())
+    ontap = {check for check in found if check.startswith('ontap_')}
+    assert {check for check in ontap if found[check] == DRIFT} == drifted
+    assert {found[check] for check in ontap - drifted} == {OK}
+    published = {
+        tags['check']: value
+        for value, tags in checks.published['state']
+        if tags['scope'] == 'data'
+    }
+    assert {check for check, value in published.items() if value == 2} == drifted
+
+
+def test_the_same_svm_with_every_setting_right_is_ok_on_every_check(monkeypatch):
+    # the control: the recorded answer of an SVM that signs reads no drift at all
+    checks = over_the_real_client(monkeypatch, recorded_answers())
+    found = states(checks.run_once())
+    assert {found[check] for check in module.ONTAP_CHECKS} == {OK}
+
+
+def test_backup_retention_left_out_of_the_answer_reads_as_off(monkeypatch):
+    checks = harness(monkeypatch)
+    described = checks.context.aws().fsx().describe_file_systems.return_value
+    del described['FileSystems'][0]['OntapConfiguration'][
+        'AutomaticBackupRetentionDays'
+    ]
+    checks.run_once()
+    found = {
+        (t['check'], t['setting']): t['current'] for _, t in checks.published['value']
+    }
+    assert found['fsx_parity', 'backup_retention_days'] == '0'
+
+
+def test_domain_controllers_that_cannot_be_read_make_dns_unknown(monkeypatch):
+    checks = harness(monkeypatch)
+    checks.context.aws().ds().describe_directories.side_effect = RuntimeError('denied')
+    assert states(checks.run_once())['ontap_dns_domain_controllers'] == UNKNOWN
+
+
+def test_a_hung_read_is_left_behind_reported_and_not_started_twice(monkeypatch):
+    checks = harness(monkeypatch)
+    monkeypatch.setattr(module, 'GROUP_LIMIT_SECONDS', 0.05)
+    release = threading.Event()
+    started = []
+
+    class HangingOntap(FakeOntap):
+        def get(self, path):
+            started.append(path)
+            release.wait(10)
+            return []
+
+    monkeypatch.setattr(module, 'OntapClient', HangingOntap)
+    began = time.monotonic()
+    first = checks.run_once()
+    assert time.monotonic() - began < 2
+    assert states(first)['ontap_cifs_session_security'] == UNKNOWN
+    assert [r.detail for r in first if r.check == 'ontap_cifs_session_security'] == [
+        'timeout'
+    ]
+    second = checks.run_once()
+    assert [r.detail for r in second if r.check == 'ontap_cifs_session_security'] == [
+        'stuck'
+    ]
+    assert len(started) == 1
+    release.set()
+
+
+def test_only_metadata_paths_are_read_and_never_a_file(monkeypatch):
+    checks = harness(monkeypatch)
+    checks.run_once()
+    assert FakeOntap.calls
+    for path in FakeOntap.calls:
+        assert '/files' not in path and 'quota' not in path
+
+
+def test_ontap_with_no_login_is_unknown_and_efs_has_no_ontap_checks(monkeypatch):
+    checks = harness(monkeypatch)
+    checks.storage_metrics.targets.return_value = []
+    assert states(checks.run_once())['ontap_cifs_aes'] == UNKNOWN
+
+    efs = harness(
+        monkeypatch, Config(**{'shared-storage': {'data': {'provider': 'efs'}}})
+    )
+    efs.storage_metrics.targets.return_value = []
+    assert not [c for c in states(efs.run_once()) if c.startswith('ontap_')]
+
+
+def test_an_entry_with_no_login_on_an_svm_another_entry_reads_reports_nothing(
+    monkeypatch,
+):
+    # /data and /idea_apps on one SVM with one metrics login, as on the production clusters:
+    # the second entry read unknown on all eight checks and paged after two days, for ever
+    ontap = {'provider': 'fsx_netapp_ontap'}
+    dns = 'shared-storage.{}.fsx_netapp_ontap.svm.management_dns'
+    checks = harness(
+        monkeypatch,
+        Config(
+            **{
+                'shared-storage': {'data': ontap, 'ideaapps': ontap, 'other': ontap},
+                dns.format('data'): ENDPOINT,
+                dns.format('ideaapps'): f'https://{ENDPOINT.upper()}/',
+                dns.format('other'): 'svm-2.fs-0abc.fsx.us-east-2.amazonaws.com',
+            }
+        ),
+    )
+    results = checks.run_once()
+    by_scope = {scope: set() for scope in ('data', 'ideaapps', 'other')}
+    for result in results:
+        if result.scope in by_scope:
+            by_scope[result.scope].add((result.state, result.detail))
+    assert by_scope['ideaapps'] == set()
+    assert not [t for _, t in checks.published['state'] if t['scope'] == 'ideaapps']
+    # the SVM itself is still read, under the entry that has the login
+    assert {state for state, _ in by_scope['data']} == {OK}
+    # and an SVM no login reads is still unknown, never silent
+    assert by_scope['other'] == {(UNKNOWN, 'no_login')}
+    # an entry with no endpoint matches nothing
+    assert DriftChecks.svm_of(None) is None and DriftChecks.svm_of(' ') is None
+
+
+@pytest.mark.parametrize('endpoint', ['https://', '/', ' '])
+def test_a_login_whose_endpoint_names_no_svm_stands_in_for_no_entry(
+    monkeypatch, endpoint
+):
+    # both sides normalise to nothing, and nothing must not match nothing: the entry with no
+    # login and no endpoint was skipped as if that login read its SVM
+    ontap = {'provider': 'fsx_netapp_ontap'}
+    checks = harness(
+        monkeypatch, Config(**{'shared-storage': {'data': ontap, 'ideaapps': ontap}})
+    )
+    checks.storage_metrics.targets.return_value = [
+        StorageTarget('data', endpoint, 'idea-metrics', 'password-key')
+    ]
+    found = {
+        (result.state, result.detail)
+        for result in checks.run_once()
+        if result.scope == 'ideaapps'
+    }
+    assert found == {(UNKNOWN, 'no_login')}
+
+
+@pytest.mark.parametrize(
+    'smb_entry, same_svm, expected',
+    [
+        # the entry that mounts over SMB has no login: the one that reads the SVM answers for it
+        ('ideaapps', True, DRIFT),
+        ('data', True, DRIFT),
+        (None, True, OK),
+        # an SMB mount of another SVM says nothing about this one
+        ('ideaapps', False, OK),
+    ],
+)
+def test_no_cifs_server_is_drift_where_any_entry_on_the_svm_mounts_over_smb(
+    monkeypatch, smb_entry, same_svm, expected
+):
+    ontap = {'provider': 'fsx_netapp_ontap'}
+    key = 'shared-storage.{}.fsx_netapp_ontap.svm.{}'
+    config = {
+        'shared-storage': {'data': ontap, 'ideaapps': ontap},
+        key.format('data', 'management_dns'): ENDPOINT,
+        key.format('ideaapps', 'management_dns'): (
+            f'https://{ENDPOINT.upper()}/' if same_svm else f'other-{ENDPOINT}'
+        ),
+    }
+    if smb_entry:
+        config[key.format(smb_entry, 'smb_dns')] = 'SVM1.CORP.EXAMPLE'
+    checks = harness(monkeypatch, Config(**config))
+    FakeOntap.answers['/api/protocols/cifs/services'] = []
+    FakeOntap.answers['/api/svm/svms'] = [{'name': 'svm1'}]
+    found = {r.check: r.state for r in checks.run_once() if r.scope == 'data'}
+    for check in (
+        'ontap_cifs_session_security',
+        'ontap_cifs_aes',
+        'ontap_machine_account',
+    ):
+        assert found[check] == expected
+    assert found['ontap_ldap_session_security'] == OK
+
+
+def test_the_ad_secret_is_bound_and_never_logged(monkeypatch):
+    checks = harness(monkeypatch)
+    checks.context.ldap_client.root_password_binds.return_value = False
+    results = checks.run_once()
+    assert states(results)['ad_agent_bind'] == DRIFT
+    checks.context.ldap_client.root_password_binds.assert_called_with('the-ad-secret')
+    logged = str(checks.logger.mock_calls) + str(checks.metrics.mock_calls)
+    assert 'the-ad-secret' not in logged and 'the-metrics-password' not in logged
+
+
+def test_a_directory_that_cannot_be_reached_is_unknown_not_a_rejected_secret(
+    monkeypatch,
+):
+    checks = harness(monkeypatch)
+    checks.context.ldap_client.root_password_binds.side_effect = OSError('no route')
+    assert states(checks.run_once())['ad_agent_bind'] == UNKNOWN
+
+
+def test_empty_ssh_client_ip_is_the_default_not_drift_and_the_value_is_a_digest(
+    monkeypatch,
+):
+    # values.yml ships it empty, which keeps the cluster's own prefix lists
+    checks = harness(
+        monkeypatch,
+        Config(**{module.SSH_CLIENT_IP_KEY: []}),
+        values_yml=b'ssh_client_ip: []\n',
+    )
+    results = checks.run_once()
+    assert states(results)['ssh_client_ip'] == OK
+    assert states(results)['values_owned_settings'] == OK
+    counts = [
+        t['current']
+        for _, t in checks.published['value']
+        if t['check'] == 'ssh_client_ip' and t['setting'] == 'count'
+    ]
+    assert counts == ['0']
+    # emptied on the cluster while values.yml still lists one: the next upgrade changes it
+    checks = harness(monkeypatch, Config(**{module.SSH_CLIENT_IP_KEY: []}))
+    assert states(checks.run_once())['values_owned_settings'] == DRIFT
+
+    ok = harness(monkeypatch)
+    ok.run_once()
+    tags = [t for _, t in ok.published['value'] if t['check'] == 'ssh_client_ip']
+    assert {t['setting']: t['current'] for t in tags}['digest'] == digest(
+        ['1.2.3.4/32']
+    )
+    assert '1.2.3.4' not in str(tags)
+
+
+def test_digest_ignores_order_and_duplicates():
+    assert digest(['b', 'a', 'a']) == digest(['a', 'b'])
+    assert digest(['a']) != digest(['b'])
+
+
+def test_a_setting_values_yml_would_overwrite_is_stale(monkeypatch):
+    # the 26.11.1 closeout: an old values.yml without the VPN egress
+    checks = harness(monkeypatch, values_yml=b'ssh_client_ip: []\n')
+    assert states(checks.run_once())['values_owned_settings'] == DRIFT
+
+
+def test_a_values_file_that_cannot_be_read_is_unknown(monkeypatch):
+    checks = harness(monkeypatch)
+    checks.context.aws().s3().get_object.side_effect = RuntimeError('NoSuchKey')
+    assert states(checks.run_once())['values_owned_settings'] == UNKNOWN
+
+
+def test_a_must_match_key_off_the_release_value_is_drift(monkeypatch):
+    key = next(iter(MUST_MATCH))
+    checks = harness(monkeypatch, Config(**{key: '60'}))
+    results = checks.run_once()
+    assert states(results)['settings_must_match'] == DRIFT
+    assert key in [r.detail for r in results if r.check == 'settings_must_match'][0]
+
+
+def test_a_must_match_key_with_no_row_reads_as_the_default(monkeypatch):
+    # a cluster that never stored it runs on the code's default, the same value
+    key = next(iter(MUST_MATCH))
+    config = Config()
+    del config.values[key]
+    assert states(harness(monkeypatch, config).run_once())['settings_must_match'] == OK
+
+
+def test_fsx_and_bastion_are_values_for_datadog_to_compare(monkeypatch):
+    checks = harness(
+        monkeypatch,
+        Config(
+            **{
+                'bastion-host': {'public': True},
+                'bastion-host.public': 'True',
+                'bastion-host.cloudwatch_logs.enabled': 'True',
+                'ecs.tasks.bastion-host.desired': '2',
+            }
+        ),
+    )
+    results = checks.run_once()
+    assert states(results)['fsx_parity'] == OK
+    assert states(results)['bastion_settings'] == OK
+    found = {
+        (t['check'], t['setting']): t['current'] for _, t in checks.published['value']
+    }
+    assert found['fsx_parity', 'deployment_type'] == 'multi_az_2'
+    assert found['fsx_parity', 'backup_retention_days'] == '30'
+    assert found['bastion_settings', 'desired_count'] == '2'
+    assert found['ontap_analytics', 'state'] == 'on'
+
+
+def test_analytics_value():
+    on = {'analytics': {'state': 'on'}}
+    off = {'analytics': {'state': 'off'}}
+    assert analytics_value([on, on]) == 'on'
+    assert analytics_value([on, off]) == 'mixed'
+    assert (
+        analytics_value([{'is_svm_root': True, 'analytics': {'state': 'off'}}])
+        == 'none'
+    )
+
+
+def test_each_must_match_key_holds_the_templates_value():
+    templates = SOURCE / 'ideactl/resources/config/templates'
+    vdc = (templates / 'virtual-desktop-controller/settings.yml').read_text()
+    scheduler = (templates / 'scheduler/settings.yml').read_text()
+    assert (
+        f'provisioning_timeout_seconds: '
+        f'{MUST_MATCH["virtual-desktop-controller.dcv_session.provisioning_timeout_seconds"]}'
+        in vdc
+    )
+    assert (
+        f'stack_provisioning_timeout_seconds: '
+        f'{MUST_MATCH["scheduler.job_provisioning.stack_provisioning_timeout_seconds"]}'
+        in scheduler
+    )
+
+
+def test_the_bastion_keys_are_settings_the_cluster_has():
+    keys = (SOURCE / 'ideactl/test/stacks/runtime-keys.json').read_text()
+    assert '"bastion-host.public"' in keys
+    assert '"bastion-host.cloudwatch_logs.enabled"' in keys
+    ecs = (SOURCE / 'ideactl/resources/config/templates/ecs/settings.yml').read_text()
+    assert re.search(r'bastion-host:\n(\s+\w+: \d+\n)*\s+desired: \d+', ecs)
+    assert module.BASTION_VALUES['desired_count'] == 'ecs.tasks.bastion-host.desired'
+
+
+def test_values_owned_settings_and_the_file_match_ideactl():
+    drift = (SOURCE / 'ideactl/src/config/upgrade-drift.ts').read_text()
+    owned = re.search(r'VALUES_OWNED_KEYS.*?new Set\(\[(.*?)\]\)', drift).group(1)
+    assert re.findall(r'"([^"]+)"', owned) == list(module.VALUES_OWNED.values())
+    invoker = (SOURCE / 'ideactl/src/cli/cdk-invoker.ts').read_text()
+    assert f"VALUES_FILE_S3_KEY = '{module.VALUES_FILE_S3_KEY}'" in invoker
+
+
+def collector(monkeypatch, config=None):
+    checks = harness(monkeypatch, config)
+    result = DriftCheckCollector(checks.context, checks.storage_metrics)
+    result.checks = Mock()
+    return result
+
+
+def test_it_runs_once_a_day_however_often_it_wakes(monkeypatch):
+    item = collector(monkeypatch)
+    item.collect(None, now=1000.0)
+    item.collect(None, now=1000.0 + module.RUN_EVERY_SECONDS - 1)
+    assert item.checks.run_once.call_count == 1
+    item.collect(None, now=1000.0 + module.RUN_EVERY_SECONDS)
+    assert item.checks.run_once.call_count == 2
+
+
+def test_the_emitter_keeps_it_to_the_leader_and_gives_it_its_switch(monkeypatch):
+    item = collector(monkeypatch)
+    assert item.leader_only is True
+    assert item.interval_seconds < module.RUN_EVERY_SECONDS
+
+    def runner(**values):
+        return CollectorRunner(harness(monkeypatch, Config(**values)).context, [item])
+
+    assert runner().is_enabled(item) is True
+    off = {'metrics.health.drift_checks.enabled': False}
+    assert runner(**off).is_enabled(item) is False
+
+
+@pytest.mark.parametrize(
+    'value, expected', [('seal', OK), ('sign', OK), ('none', DRIFT)]
+)
+def test_session_security_accepts_sign_or_the_stronger_seal(
+    monkeypatch, value, expected
+):
+    checks = harness(monkeypatch)
+    FakeOntap.answers['/api/name-services/ldap'] = [
+        {'session_security': value, 'status': {'state': 'up'}}
+    ]
+    cifs = FakeOntap.answers['/api/protocols/cifs/services']
+    cifs[0]['security']['session_security'] = value
+    found = states(checks.run_once())
+    assert found['ontap_ldap_session_security'] == expected
+    assert found['ontap_cifs_session_security'] == expected

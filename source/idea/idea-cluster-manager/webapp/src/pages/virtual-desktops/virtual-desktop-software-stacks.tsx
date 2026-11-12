@@ -55,6 +55,27 @@ export interface VirtualDesktopSoftwareStacksState {
     showRefreshResultsModal: boolean
 }
 
+/** The date is a day, stored as midnight UTC: in the viewer's zone it would be the day before. */
+export function expiryDay(value: string): string {
+    return new Date(value).toLocaleDateString(undefined, {timeZone: 'UTC'})
+}
+
+/** A stack the monthly rebuild feeds, or whose image is exempt, has no date. */
+export function describeExpiry(stack: VirtualDesktopSoftwareStack) {
+    if (!stack.effective_expires_on) {
+        return 'Never'
+    }
+    const day = expiryDay(stack.effective_expires_on)
+    switch (stack.expiry_state) {
+        case 'expired':
+            return <StatusIndicator type="error">Expired {day}</StatusIndicator>
+        case 'expiring':
+            return <StatusIndicator type="warning">{day}</StatusIndicator>
+        default:
+            return day
+    }
+}
+
 const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSoftwareStack>[] = [
     {
         id: 'name',
@@ -80,6 +101,16 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
         header: 'Description',
         cell: e => e.description,
         sortingField: 'description'
+    },
+    {
+        id: 'owner',
+        header: 'Owner',
+        cell: e => e.owner || '-'
+    },
+    {
+        id: 'expires',
+        header: 'Expires',
+        cell: e => describeExpiry(e)
     },
     {
         id: 'ami_id',
@@ -610,6 +641,23 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
         )
     }
 
+    extendSoftwareStack = () => {
+        const stack = this.getSelectedSoftwareStack()
+        if (!stack) {
+            return
+        }
+        this.getVirtualDesktopAdminClient().extendSoftwareStack({
+            stack_id: stack.stack_id,
+            base_os: stack.base_os
+        }).then(response => {
+            const day = response.software_stack?.effective_expires_on
+            this.setFlashMessage(`${stack.name} now expires ${day ? expiryDay(day) : 'later'}.`, 'success')
+            this.getListing().fetchRecords()
+        }).catch(error => {
+            this.setFlashMessage(`Could not extend ${stack.name}: ${error.message}`, 'error')
+        })
+    }
+
     deleteSoftwareStack = () => {
         const selectedSoftwareStacks = this.getSelectedSoftwareStacks();
         if (selectedSoftwareStacks.length === 0) {
@@ -763,7 +811,9 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     allowed_instance_types?: string[],
                     ami_id?: string,
                     min_ram?: number,
-                    min_storage?: number
+                    min_storage?: number,
+                    owner?: string,
+                    expiry?: {expires_on?: string, clear_expires_on?: boolean}
                 ) => {
                     return this.getVirtualDesktopAdminClient().updateSoftwareStack({
                             software_stack: {
@@ -777,6 +827,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 launch_tenancy: launch_tenancy,
                                 allowed_instance_types: allowed_instance_types,
                                 ami_id: ami_id,
+                                owner: owner,
+                                ...expiry,
                                 min_ram: min_ram ? {
                                     value: min_ram,
                                     unit: 'gb'
@@ -866,6 +918,13 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         }
                     },
                     {
+                        id: 'extend-software-stack',
+                        text: 'Extend Expiry',
+                        disabled: this.getSelectedSoftwareStacks().length !== 1 || !this.getSelectedSoftwareStack()?.effective_expires_on,
+                        disabledReason: 'Select one stack that has an expiry date',
+                        onClick: this.extendSoftwareStack
+                    },
+                    {
                         id: 'clone-software-stack',
                         text: 'Clone Stack',
                         disabled: !this.isSelected() || this.getSelectedSoftwareStacks().length > 1,
@@ -888,8 +947,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                 showPaginator={true}
                 showFilters={true}
                 filterType="select"
-                defaultSortingColumn="name"
-                defaultSortingDescending={false}
+                serverSort={{columns: {created_on: 'created_on'}, defaultColumn: 'created_on', defaultDescending: true}}
                 selectFilters={[
                     {
                         name: '$all',
@@ -979,18 +1037,8 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     return this.getVirtualDesktopAdminClient().listSoftwareStacks({
                         disabled_also: true,
                         filters: this.getListing().getFilters(),
-                        paginator: this.getListing().getPaginator()
-                    }).catch(error => {
-                        this.props.onFlashbarChange({
-                            items: [
-                                {
-                                    content: error.message,
-                                    type: 'error',
-                                    dismissible: true
-                                }
-                            ]
-                        })
-                        throw error
+                        paginator: this.getListing().getPaginator(),
+                        sort_by: this.getListing().getSortBy()
                     })
                 }}
                 columnDefinitions={VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS}

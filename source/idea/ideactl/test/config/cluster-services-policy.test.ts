@@ -87,3 +87,29 @@ for (const enabled of [undefined, 'false', 'true']) {
     }
   });
 }
+
+it('can use a customer managed Secrets Manager key for a password secret', () => {
+  const kms = (extra: Record<string, string>) => policy(false, extra, true).filter(s => s.Action.includes('kms:GenerateDataKey'));
+  assert.deepEqual(kms({}), []);
+  const [statement, ...rest] = kms({'cluster.kms.key_type': 'customer-managed', 'cluster.secretsmanager.kms_key_id': 'secrets-key'});
+  assert.deepEqual(rest, []);
+  assert.deepEqual(statement!.Action, ['kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey']);
+  assert.deepEqual(statement!.Resource, [`arn:aws:kms:us-east-1:${'0'.repeat(12)}:key/secrets-key`]);
+});
+
+it('grants no read or write of a waiting password through the tags of the module\'s own secrets', () => {
+  // the task role's own statements for a password secret are in the stack: made with these two tags only
+  const password = {'idea:ClusterName': 'example', 'idea:Purpose': 'password-sync'};
+  const own = {'idea:ClusterName': 'example', 'idea:ModuleName': 'cluster-manager'};
+  const matches = (statement: {Condition?: unknown}, tags: Record<string, string>) =>
+    Object.entries((statement.Condition as {StringEquals: Record<string, string | string[]>}).StringEquals)
+      .every(([key, allowed]) => [allowed].flat().includes(tags[key.replace('secretsmanager:ResourceTag/', '')] as string));
+  const statements = policy(false, {}, true).filter(s => s.Action.some(action => action.startsWith('secretsmanager:')));
+  assert.deepEqual(statements.map(s => s.Action), [['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue'], ['secretsmanager:GetSecretValue']]);
+  for (const statement of statements) {
+    assert.deepEqual(Object.keys(statement.Condition as object), ['StringEquals']);
+    assert.equal(matches(statement, password), false, JSON.stringify(statement));
+  }
+  // the check can tell: the same statements do reach a secret the module owns
+  assert.equal(matches(statements[0]!, own), true);
+});

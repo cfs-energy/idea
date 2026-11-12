@@ -128,9 +128,19 @@ Statement:
           - '{{ vdc }}.software_stacks.base_stacks_seeded_release'
           - '{{ vdc }}.software_stacks.images_baked_release'
           - '{{ vdc }}.software_stacks.image_refresh_last_run_on'
+          - '{{ vdc }}.software_stacks.expiry_last_digest_on'
           - '{{ vdc }}.software_stacks.image_refresh_schedule.enabled'
           - '{{ vdc }}.software_stacks.image_refresh_schedule.day'
           - '{{ vdc }}.software_stacks.image_refresh_schedule.hour'
+    Effect: Allow
+
+  # A failed desktop or bake keeps what its host's console said; only this cluster's hosts.
+  - Action:
+      - ec2:GetConsoleOutput
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      StringEquals:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
     Effect: Allow
 
   # Image validation reads the bootstrap completion line from desktop and builder logs.

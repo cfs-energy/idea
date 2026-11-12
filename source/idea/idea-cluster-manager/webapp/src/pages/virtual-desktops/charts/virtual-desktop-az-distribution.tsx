@@ -57,7 +57,8 @@ class VirtualDesktopAZDistributionChart extends VirtualDesktopBaseChart<VirtualD
                         "aggs": {
                             "availability_zone": {
                                 "terms": {
-                                    "field": "server.availability_zone.raw"
+                                    "field": "server.availability_zone.raw",
+                                    "size": 100
                                 }
                             }
                         }

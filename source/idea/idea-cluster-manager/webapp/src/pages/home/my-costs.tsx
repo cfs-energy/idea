@@ -1,39 +1,46 @@
 import {useEffect, useRef, useState} from 'react';
 import {useSearchParams} from 'react-router-dom';
-import {Alert, Badge, Box, Button, ColumnLayout, ExpandableSection, Header, SpaceBetween, StatusIndicator, Tabs} from '@cloudscape-design/components';
+import {Alert, Box, Button, ColumnLayout, ExpandableSection, Header, SpaceBetween, StatusIndicator, Tabs} from '@cloudscape-design/components';
 import {GetMyCostsResult} from '../../client/data-model';
 import {ReportingInsights, ReportingSummaryRequest} from '../../client/reporting-model';
 import {IdeaSideNavigationProps} from '../../components/side-navigation';
 import IdeaAppLayout, {IdeaAppLayoutProps} from '../../components/app-layout';
 import {AppContext} from '../../common';
 import {withRouter} from '../../navigation/navigation-utils';
-import {collectingLabel, costBadge} from '../../components/monthly-costs';
+import {collectingLabel, gapDays} from '../../components/monthly-costs';
 import {FACETS, facetAmount} from '../../components/cost-charts';
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import {InfoTitle, InsightTab, MetricTile, TileRow} from '../reporting/insights-components';
-import ReportingPeriodPicker, {REPORTING_PERIODS, validateReportingPeriod} from '../reporting/reporting-period-picker';
-import {computeRateNote, costsDescription, jobRateNote, date, money, STORAGE_EXCLUSIONS, updated} from '../reporting/reporting-format';
+import ReportingPeriodPicker, {datesPicked, REPORTING_PERIODS, validateReportingPeriod} from '../reporting/reporting-period-picker';
+import {computeRateNote, costsDescription, jobRateNote, date, STORAGE_EXCLUSIONS, wholeMoney} from '../reporting/reporting-format';
 import StorageUsage from './storage-usage';
 
 export interface MyCostsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {}
 const tabs = [{id: 'overview', label: 'Overview'}, {id: 'jobs', label: 'Jobs'}, {id: 'desktops', label: 'Desktops'}, {id: 'storage', label: 'Storage'}];
 const facetTabs: Record<string, string> = {'cost-jobs': 'jobs', 'cost-desktops': 'desktops', 'cost-disks': 'overview', 'cost-storage': 'storage', 'cost-ai': 'overview'};
 const titles = {jobs: 'Job spend', desktops: 'Desktop spend', desktop_disks: 'Desktop disks', shared_storage: 'Storage spend', ai: 'AI'};
-function MonthTiles({costs, previous = false, computeRate = 1}: {costs: GetMyCostsResult | null; previous?: boolean; computeRate?: number}) {
+function MonthTiles({costs, previous = false, computeRate = 1, costError = false}: {costs: GetMyCostsResult | null; previous?: boolean; computeRate?: number; costError?: boolean}) {
     const month = previous ? costs?.previous : costs?.current;
     const currency = costs?.currency ?? 'USD';
     const currentTotal = costs?.current?.total, previousTotal = costs?.previous?.total;
+    if (!costs && !costError) return <StatusIndicator type="loading">Loading this month's costs</StatusIndicator>;
+    const today = new Intl.DateTimeFormat('en-CA', {timeZone: costs?.timezone ?? 'UTC'}).format(new Date());
+    const gaps = FACETS.map(({key}) => gapDays(month?.[key], today));
+    const totalValue = wholeMoney(month?.total, currency);
     return <TileRow>
-        <MetricTile title="Total spend" value={!costs?.current ? collectingLabel(costs) : money(month?.total, currency)} info="Adds the available job, desktop, desktop disk, shared storage and AI costs for the calendar month.">
-            <Box color="text-body-secondary">{previous ? `This month so far ${money(currentTotal, currency)}` : `Last month ${money(previousTotal, currency)}`}
-                {currentTotal != null && previousTotal != null && <> · {money(Math.abs(currentTotal - previousTotal), currency)} {currentTotal >= previousTotal ? 'more' : 'less'} (this month so far vs full last month)</>}
-            </Box>
+        <MetricTile title="Total spend" value={!costs?.current ? collectingLabel(costs) : gaps.some(Boolean) ? `At least ${totalValue}` : totalValue} info="Adds the available job, desktop, desktop disk, shared storage and AI costs for the calendar month.">
+            {costs?.current && <Box color="text-body-secondary">{previous ? `This month so far ${wholeMoney(currentTotal, currency)}` : `Last month ${wholeMoney(previousTotal, currency)}`}
+                {currentTotal != null && previousTotal != null && <> · {wholeMoney(Math.abs(currentTotal - previousTotal), currency)} {currentTotal >= previousTotal ? 'more' : 'less'} (this month so far vs full last month)</>}
+            </Box>}
         </MetricTile>
-        {FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}) => {
+        {costs?.current && FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}, index) => {
             const line = month?.[key];
-            const badge = costBadge(line, !costs?.current);
-            return <MetricTile key={key} title={titles[key]} value={money(facetAmount(line), currency)} info={`${key === 'jobs' ? `Recorded job costs for this calendar month. ${jobRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'} ${line?.reason || line?.note || ''}`}>
-                {badge && badge !== 'Partial' && <Badge>{badge}</Badge>}
+            const missing = gapDays(line, today);
+            const amount = wholeMoney(facetAmount(line), currency);
+            return <MetricTile key={key} title={titles[key]} value={facetAmount(line) == null ? 'Not available' : missing ? `At least ${amount}` : amount} info={key === 'jobs' ? `Recorded job costs for this calendar month. ${jobRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'}>
+                {facetAmount(line) == null ? <Box color="text-body-secondary">Not calculated yet. Check back after the next update.</Box>
+                    : missing > 0 ? <Box color="text-body-secondary">{missing === 1 ? 'A day is' : `${missing} days are`} not counted yet, so this may be higher.</Box>
+                    : line?.status === 'estimated_share' ? <Box color="text-body-secondary">Your share of a shared file system.</Box> : null}
             </MetricTile>;
         })}
     </TileRow>;
@@ -54,8 +61,10 @@ function MyCosts(props: MyCostsProps) {
     const [error, setError] = useState('');
     const [costError, setCostError] = useState('');
     const [refreshing, setRefreshing] = useState(false);
-    const [acknowledged, setAcknowledged] = useState(false);
+    const [refreshState, setRefreshState] = useState<'idle' | 'running' | 'slow' | 'done'>('idle');
     const [reload, setReload] = useState(0);
+    // the next report read skips the short server cache: someone just asked for new numbers
+    const fresh = useRef(false);
     const [storageOpen, setStorageOpen] = useState(false);
     const mounted = useRef(true);
     useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
@@ -69,26 +78,48 @@ function MyCosts(props: MyCostsProps) {
         if (validation) {setBusy(false); return;}
         let current = true;
         setBusy(true); setError('');
-        client.getInsights(JSON.parse(periodKey)).then(data => {if (current) setSnapshot({key: periodKey, data});})
-            .catch(() => {if (current) setError("Couldn't load the report. Check your connection and try again.");})
+        const request = {...JSON.parse(periodKey), ...(fresh.current ? {refresh: true} : {})};
+        fresh.current = false;
+        client.getInsights(request).then(data => {if (current) setSnapshot({key: periodKey, data});})
+            .catch((failure: {errorCode?: string}) => {if (current) setError(failure?.errorCode === 'REPORT_TIMEOUT' ? 'The report took too long to load. Choose a shorter period and try again.' : failure?.errorCode === 'REPORT_TOO_LARGE' ? 'The report is too large to load. Choose a shorter period and try again.' : "Couldn't load the report. Check your connection and try again.");})
             .finally(() => {if (current) setBusy(false);});
         return () => {current = false;};
     }, [client, periodKey, reload, validation]);
     const refresh = async () => {
-        setRefreshing(true); setAcknowledged(false); setReload(value => value + 1);
+        setRefreshing(true); setRefreshState('idle'); fresh.current = true; setReload(value => value + 1);
         try {
             const result = await personalCostsCache().refresh();
-            if (mounted.current) setAcknowledged(result.refresh_acknowledged === true);
+            if (mounted.current) setRefreshState(result.refresh_acknowledged === true ? 'running' : 'idle');
         } catch {
             if (mounted.current) setCostError('Could not refresh costs. Try Refresh again.');
         } finally {
             if (mounted.current) setRefreshing(false);
         }
     };
+    // The collector works in the background: when it finishes, the numbers on screen are out of date.
+    const pending = costs?.refresh_pending === true;
+    useEffect(() => {
+        if (refreshState === 'running' || refreshState === 'slow') {
+            if (!pending) {
+                setRefreshState('done');
+                fresh.current = true;
+                setReload(value => value + 1);
+            } else if (refreshState === 'running') {
+                const timer = setTimeout(() => setRefreshState('slow'), 300000);
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [pending, refreshState]);
+    const refreshText = {idle: '', running: 'Recalculating your costs, usually a minute or two', slow: 'Taking longer than usual. Your earlier numbers are still shown.', done: 'Costs updated'}[refreshState];
     const calendarMonth = period.period === 'this_month' || period.period === 'last_month';
+    // Neither of these needs the report, so a slow or failed report does not hold them back.
+    const monthTiles = <MonthTiles costs={costs} previous={period.period === 'last_month'} computeRate={computeRate} costError={!!costError}/>;
+    const storagePane = <ExpandableSection headerText="Storage usage: folders and quotas" expanded={storageOpen} onChange={({detail}) => setStorageOpen(detail.expanded)}>
+        {storageOpen && <StorageUsage compact refreshSignal={reload}/>}
+    </ExpandableSection>;
     return <IdeaAppLayout {...props} breadcrumbItems={[{text: 'IDEA', href: '#/'}, {text: 'My costs', href: ''}]}
         header={<Header variant="h1" description={costsDescription(computeRate)} actions={<SpaceBetween direction="horizontal" size="s">
-            <span role="status">{acknowledged ? 'Refresh requested' : ''}</span>
+            <span role="status">{refreshText}</span>
             <Button loading={refreshing} onClick={refresh}>Refresh</Button>
         </SpaceBetween>}>My costs</Header>}
         contentType="default" content={<SpaceBetween size="m">
@@ -99,18 +130,17 @@ function MyCosts(props: MyCostsProps) {
                 if (value.end_date) next.set('end_date', value.end_date);
                 setQuery(next);
             }}/>
-            {insights && <Box>{date(insights.period.start, timezone)} – {date(insights.period.end, timezone)} · {updated(insights.updated_at, timezone)} {insights.notes.length > 0 && <InfoTitle title="Report details">{insights.notes.slice(0, 3).join(' ')}</InfoTitle>}</Box>}
+            {insights && <Box>{date(insights.period.start, timezone)} – {date(insights.period.end, timezone)}{costs?.refreshed_at && <> · Costs last calculated {date(costs.refreshed_at, timezone, true)}</>} {insights.notes.length > 0 && <InfoTitle title="Report details">{insights.notes.slice(0, 3).join(' ')}</InfoTitle>}</Box>}
             <SpaceBetween size="l">
                 {busy && <StatusIndicator type="loading">Loading report</StatusIndicator>}
-                {(validation || error) && <Alert type="error" action={<Button onClick={() => setReload(value => value + 1)}>Try again</Button>}>{validation || error}</Alert>}
+                {datesPicked(period) && validation ? <Alert type="error">{validation}</Alert> : error ? <Alert type="error" action={<Button onClick={() => setReload(value => value + 1)}>Try again</Button>}>{error}</Alert> : null}
                 {costError && <Alert type="error">{costError}</Alert>}
                 <Tabs activeTabId={tab} onChange={({detail}) => {const next = new URLSearchParams(query); next.set('tab', detail.activeTabId); setQuery(next);}} tabs={tabs}/>
-                {insights && <InsightTab personal loading={busy} tab={tab} insights={insights} timezone={timezone} computeRate={computeRate}
-                    overviewTiles={calendarMonth ? <MonthTiles costs={costs} previous={period.period === 'last_month'} computeRate={computeRate}/> : undefined}
-                    overviewExtra={!calendarMonth && <SpaceBetween size="m"><Header variant="h2">This month</Header><MonthTiles costs={costs} computeRate={computeRate}/></SpaceBetween>}
-                    storageExtra={<ExpandableSection headerText="Storage usage: folders and quotas" expanded={storageOpen} onChange={({detail}) => setStorageOpen(detail.expanded)}>
-                        {storageOpen && <StorageUsage compact/>}
-                    </ExpandableSection>}/>}
+                {insights ? <InsightTab personal loading={busy} tab={tab} insights={insights} timezone={timezone} computeRate={computeRate} desktopEmpty={!costs?.current ? 'We are still collecting your desktop costs. Check back within the hour.' : undefined}
+                    overviewTiles={calendarMonth ? monthTiles : undefined}
+                    overviewExtra={!calendarMonth && <SpaceBetween size="m"><Header variant="h2">This month</Header><MonthTiles costs={costs} computeRate={computeRate} costError={!!costError}/></SpaceBetween>}
+                    storageExtra={storagePane}/>
+                    : tab === 'overview' ? monthTiles : tab === 'storage' ? storagePane : null}
             </SpaceBetween>
         </SpaceBetween>}/>;
 }

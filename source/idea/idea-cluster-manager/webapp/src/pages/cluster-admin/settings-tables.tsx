@@ -2,7 +2,7 @@ import React, {useEffect, useRef, useState} from 'react';
 import {Alert, Button, Container, FormField, Header, Link, Select, SpaceBetween, Table, TimeInput, Toggle} from '@cloudscape-design/components';
 import {AppContext} from '../../common';
 import {SettingDefinition} from '../../client/data-model';
-import {settingAnchor, settingValue} from './catalog-settings-section';
+import {saveFailure, savedNotice, settingAnchor, settingValue} from './catalog-settings-section';
 
 export const SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 export const SCHEDULE_LABELS: Record<string, string> = {NO_SCHEDULE: 'No schedule', WORKING_HOURS: 'Working hours', STOP_ON_IDLE: 'Stop on idle', START_ALL_DAY: 'Run all day', CUSTOM_SCHEDULE: 'Custom hours'};
@@ -151,10 +151,10 @@ export function NotificationsTable({settings, values, moduleId, editing, editDis
                 saved.push(module); onSaved(module, flat);
                 setDraft(current => Object.fromEntries(Object.entries(current).filter(([key]) => !settings.some(setting => setting.module === module && setting.key === key))));
             } catch (reason: any) {
-                setError(`${saved.length ? `Saved: ${saved.join(', ')}. ` : 'No modules saved. '}${module} failed: ${reason.message}. Remaining drafts are retained.`); setBusy(false); return;
+                setError(saveFailure(saved, module, `${reason.message}.`)); setBusy(false); return;
             }
         }
-        setBusy(false); setNotice(`Saved: ${saved.join(', ')}.`); onEditingEnd();
+        setBusy(false); setNotice(savedNotice(saved)); onEditingEnd();
     };
     return <Container header={<Header variant="h2" actions={editing ? <SpaceBetween direction="horizontal" size="xs"><Button disabled={busy} onClick={() => {setDraft({}); setError(''); onEditingEnd();}}>Cancel</Button>
         <Button variant="primary" loading={busy} disabled={busy || !loaded || !Object.keys(draft).length} onClick={save}>Save</Button></SpaceBetween> : <Button disabled={editDisabled} onClick={onEdit}>Edit</Button>}>Notifications</Header>}><SpaceBetween size="m">

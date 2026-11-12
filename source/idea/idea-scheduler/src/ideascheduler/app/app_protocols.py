@@ -15,6 +15,7 @@ from ideadatamodel.scheduler import (
     SocaJobState,
     SocaJobExecutionHost,
     SocaJob,
+    SocaJobSubjob,
     LimitCheckResult,
     SocaComputeNodeState,
     SocaComputeNode,
@@ -52,7 +53,17 @@ from ideadatamodel.scheduler import (
 )
 
 from abc import abstractmethod, ABC
-from typing import List, Optional, Dict, Any, NamedTuple, TypeVar, Union, Generator
+from typing import (
+    List,
+    Optional,
+    Dict,
+    Any,
+    NamedTuple,
+    Tuple,
+    TypeVar,
+    Union,
+    Generator,
+)
 import arrow
 import dataset
 
@@ -139,6 +150,9 @@ class JobCacheProtocol(SocaBaseProtocol):
     def add_active_licenses(self, jobs: List[SocaJob]): ...
 
     @abstractmethod
+    def release_active_licenses(self, job_id: str): ...
+
+    @abstractmethod
     def convert_db_entry_to_job(
         self, entry: Dict, fetch_errors: bool = False
     ) -> Optional[SocaJob]: ...
@@ -149,7 +163,7 @@ class JobCacheProtocol(SocaBaseProtocol):
     ): ...
 
     @abstractmethod
-    def clear_job_provisioning_error(self, job_id: str): ...
+    def clear_job_provisioning_error(self, job_id: str, job_started: bool = False): ...
 
     @abstractmethod
     def increment_job_provisioning_retry(
@@ -315,6 +329,17 @@ class SocaSchedulerProtocol(SocaBaseProtocol):
 
     @abstractmethod
     def get_job(self, job_id: str) -> Optional[SocaJob]: ...
+
+    @abstractmethod
+    def get_job_history_state(self, job_id: str) -> Optional[SocaJobState]: ...
+
+    @abstractmethod
+    def get_array_subjobs(
+        self, job_id: str
+    ) -> Tuple[Optional[int], List[SocaJobSubjob]]: ...
+
+    @abstractmethod
+    def get_job_deleted_by(self, job_id: str) -> Optional[str]: ...
 
     @abstractmethod
     def delete_job(self, job_id: str): ...

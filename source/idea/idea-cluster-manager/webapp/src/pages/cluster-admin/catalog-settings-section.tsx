@@ -7,6 +7,15 @@ export const EFFECT_LABELS: Record<string, string> = {
     restart: 'Applies after restart',
     deployment: 'Applies on next upgrade',
 };
+const MODULE_TITLES: Record<string, string> = {
+    'global-settings': 'Global', cluster: 'Cluster', 'cluster-manager': 'Portal', 'virtual-desktop-controller': 'Desktops', scheduler: 'Jobs',
+    'shared-storage': 'Storage', 'identity-provider': 'Sign-in', 'directory-service': 'Directory', analytics: 'Analytics', metrics: 'Metrics', 'bastion-host': 'Bastion',
+};
+export const moduleTitle = (module: string) => MODULE_TITLES[module] ?? module;
+const savedList = (saved: string[]) => saved.map(moduleTitle).join(', ');
+export const savedNotice = (saved: string[]) => saved.length > 1 ? `Saved: ${savedList(saved)}.` : 'Saved.';
+export const saveFailure = (saved: string[], module: string, reason: string) =>
+    `${saved.length ? `Saved: ${savedList(saved)}. ` : 'Nothing was saved. '}${moduleTitle(module)} failed: ${reason} Remaining drafts are retained.`;
 export const settingAnchor = (key: string) => `setting-${key}`;
 export const settingValue = (values: any, path: string): any => path.split('.').reduce((value, part) => value?.[part], values);
 
@@ -100,11 +109,11 @@ export default function CatalogSettingsSection({settings, values, moduleId, titl
                 saved.push(module); onSaved(module, flat);
                 setChanges(current => Object.fromEntries(Object.entries(current).filter(([key]) => !settings.some(setting => setting.module === module && setting.key === key))));
             } catch (reason: any) {
-                setError(`${saved.length ? `Saved: ${saved.join(', ')}. ` : 'No modules saved. '}${module} failed: ${reason.message ?? 'Settings could not be saved.'} Remaining drafts are retained.`);
+                setError(saveFailure(saved, module, reason.message ?? 'Settings could not be saved.'));
                 setNotice(Array.from(effects).map(value => EFFECT_LABELS[value] ?? value).join('. ')); setSaving(false); return;
             }
         }
-        setNotice(`Saved: ${saved.join(', ')}.${effects.size ? ` ${Array.from(effects).map(value => EFFECT_LABELS[value] ?? value).join('. ')}.` : ''}`);
+        setNotice(`${savedNotice(saved)}${effects.size ? ` ${Array.from(effects).map(value => EFFECT_LABELS[value] ?? value).join('. ')}.` : ''}`);
         setSaving(false); setChanges({}); onEditingEnd();
     };
     const actions = editing ? <SpaceBetween direction="horizontal" size="xs">

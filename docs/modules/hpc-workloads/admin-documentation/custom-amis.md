@@ -57,7 +57,7 @@ Rows that are in progress, pinned or unsupported cannot be selected or rebuilt.
 A row is rebuilt when one of these happens:
 
 1. **Upgrade.** After an upgrade to a new release, every row is rebuilt and validated. The upgrade does not wait for this; check the Images page afterwards.
-2. **Monthly vendor check.** On the first Sunday of each month at 02:00 cluster time, IDEA looks for newer vendor images. Only rows whose vendor published a newer base image are rebuilt. Each month's check runs once, even if the controller restarts.
+2. **Monthly rebuild.** On the first Sunday of each month at 02:00 cluster time, IDEA rebuilds every row, whether or not its vendor image changed, so images pick up package fixes. It waits for any bake in flight, and pinned and held rows are skipped. Each month's rebuild runs once, even if the controller restarts.
 3. **Refresh and validate.** Use the buttons above the table:
    * **Refresh and validate all** queues every row. With a filter set, it reads **Refresh and validate shown (***n***)** and queues only the rows shown.
    * **Refresh and validate selected** queues the selected rows.
@@ -177,7 +177,7 @@ Hooks are plain bash scripts on the cluster's shared `/apps` file system and app
 
 ### Queues follow the managed image
 
-A queue profile or the cluster default compute image moves to each new compute image only when it already points at a managed image or a stock vendor image. A queue on an image IDEA didn't build in the pipeline, such as an older hand-built image, stays where it is. Point it at the row's current image once (edit the queue profile), and it follows from then on. To keep a queue on a fixed image on purpose, pin it (see [Roll back and pin](#roll-back-and-pin)).
+A queue profile or the cluster default compute image moves to each new compute image only when it already points at a managed image or a stock vendor image. A queue on an image IDEA didn't build in the pipeline, such as an older hand-built image, stays where it is. Point it at the row's current image once (edit the queue profile), and it follows from then on. Until then every row can read current while that queue launches the older image: `idea.health.bake.targets_off_current` counts such queues and the scheduler log names them. To keep a queue on a fixed image on purpose, pin it (see [Roll back and pin](#roll-back-and-pin)).
 
 ## Custom images tab
 
@@ -217,7 +217,7 @@ ideactl build-desktop-image --base-os rocky9 --base-ami <vendor ami> --force
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `virtual-desktop-controller.software_stacks.image_refresh_schedule.enabled` | `true` | Run the monthly vendor check. Applies to desktop and compute rows. |
+| `virtual-desktop-controller.software_stacks.image_refresh_schedule.enabled` | `true` | Run the monthly rebuild. Applies to desktop and compute rows. |
 | `virtual-desktop-controller.software_stacks.image_refresh_schedule.day` | `first sunday` | `first`, `second`, `third`, `fourth` or `last`, then a weekday. |
 | `virtual-desktop-controller.software_stacks.image_refresh_schedule.hour` | `2` | Hour in cluster time. |
 | `virtual-desktop-controller.software_stacks.image_pipeline.ready_gate_seconds_linux` | `600` | Linux test launch limit from request to Ready. Also limits the compute test job. |

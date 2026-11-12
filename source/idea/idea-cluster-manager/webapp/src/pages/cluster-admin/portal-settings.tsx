@@ -12,7 +12,7 @@ import EmailTemplates from './email-templates';
 import {DesktopScheduleTable, NotificationsTable} from './settings-tables';
 import {EMPTY_SETTINGS, SettingsSource} from './settings-sections';
 import {SettingDefinition} from '../../client/data-model';
-import CatalogSettingsSection, {isHidden, settingAnchor} from './catalog-settings-section';
+import CatalogSettingsSection, {isHidden, moduleTitle, settingAnchor} from './catalog-settings-section';
 import CostEstimationSettings from './cost-estimation-settings';
 import StorageMeasurementSettings from './storage-measurement-settings';
 import {MetricsHistorySettings} from './metrics-history-settings';
@@ -35,7 +35,7 @@ export const SETTINGS_GROUPS = [
 export const SETTINGS_CARDS: Record<string, string[]> = {
     appearance: ['Portal', 'Cost header', 'Dashboard link', 'Regional defaults', 'Maintenance notice', 'GPU policy'],
     'desktop-lifecycle': ['Desktop placement', 'Desktop policy', 'Desktop schedule', 'Stopped desktop cleanup'],
-    'job-placement': ['Job limits and placement', 'Fair-share scheduling', 'Scratch storage'],
+    'job-placement': ['Job limits and placement', 'Fair-share scheduling', 'Scratch cleanup', 'Scratch storage'],
     'ai-access': ['Amazon Bedrock'],
     email: ['Email delivery', 'Notifications', 'Email templates'],
     'sign-in': ['Account synchronization', 'Sign-in', 'Directory connection', 'Directory mapping', 'AD automation'],
@@ -103,7 +103,7 @@ export function SettingsGroups({cluster = EMPTY_SETTINGS, desktop = EMPTY_SETTIN
                         const result = await context.client().clusterSettings().getModuleSettings({module_id: moduleId(module)!});
                         if (!cancelled) setValues(current => ({...current, [module]: result.settings ?? {}}));
                     } catch (reason: any) {
-                        if (!cancelled) setErrors(current => [...current, `${module}: ${reason.message ?? 'could not load settings'}`]);
+                        if (!cancelled) setErrors(current => [...current, `${moduleTitle(module)}: ${reason.message ?? 'could not load settings'}`]);
                     }
                 }));
             } catch (reason: any) {

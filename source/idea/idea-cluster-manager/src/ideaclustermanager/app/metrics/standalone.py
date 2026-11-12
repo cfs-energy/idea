@@ -6,7 +6,11 @@ import threading
 import boto3
 
 from ideasdk.metrics.dogstatsd.dogstatsd_metrics import DogStatsdMetrics
+from ideaclustermanager.app.metrics.cost_metrics_backfill import CostMetricsBackfill
 from ideaclustermanager.app.metrics.cost_metrics_service import CostMetricsService
+
+BACKFILL_DAYS = 'IDEA_COST_METRICS_BACKFILL_DAYS'
+BACKFILL_APPLY = 'IDEA_COST_METRICS_BACKFILL_APPLY'
 
 
 class EnvironmentConfig:
@@ -81,6 +85,9 @@ class NoopLock:
     def release(self, key):
         pass
 
+    def assert_held(self, key):
+        pass
+
 
 class MetricsService:
     def __init__(self, provider):
@@ -136,9 +143,29 @@ class StandaloneContext:
         return self._registry
 
 
+def run_backfill(context, environ):
+    # The billing account has no portal API to call, so a one-off task of the same image runs this.
+    # Dry unless asked: the service in the same cluster keeps running and is not touched.
+    try:
+        days = int(environ[BACKFILL_DAYS])
+    except ValueError:
+        raise ValueError(f'{BACKFILL_DAYS} must be a whole number of days')
+    backfill = CostMetricsBackfill(context)
+    backfill.start_request(
+        dict(days=days, dry_run=environ.get(BACKFILL_APPLY, '').lower() != 'true')
+    )
+    backfill.thread.join()
+    status = backfill.status()
+    context.logger().info(f'cost metrics backfill finished: {status}')
+    return 0 if status['state'] == 'completed' else 1
+
+
 def main():
     logging.basicConfig(level=logging.INFO)
-    service = CostMetricsService(StandaloneContext())
+    context = StandaloneContext()
+    if os.environ.get(BACKFILL_DAYS):
+        return run_backfill(context, os.environ)
+    service = CostMetricsService(context)
     stopped = threading.Event()
     previous = signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     try:
@@ -150,4 +177,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

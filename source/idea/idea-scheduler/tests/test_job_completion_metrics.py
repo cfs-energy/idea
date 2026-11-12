@@ -298,12 +298,17 @@ def test_finished_job_processor_publishes_one_counter_per_second(context, monkey
     monkeypatch.setattr(
         JobCompletionMetrics, 'metrics_provider', property(lambda _: 'dogstatsd')
     )
-    jobs = [_job(job_uid='first'), _job(job_uid='second')]
+    jobs = [
+        _job(job_uid='first', state=SocaJobState.FINISHED),
+        _job(job_uid='second', state=SocaJobState.FINISHED),
+    ]
     jobs[1].job_id = '43'
     scheduler = Mock()
     monkeypatch.setattr(context, 'scheduler', scheduler)
     scheduler.list_jobs.return_value = jobs
-    monkeypatch.setattr(context, 'document_store', Mock())
+    monkeypatch.setattr(
+        context, 'document_store', Mock(**{'get_job.return_value': None})
+    )
     monkeypatch.setattr(
         context, 'job_cache', Mock(get_completed_job_by_uid=Mock(return_value=None))
     )
@@ -374,7 +379,7 @@ def test_never_started_job_explicitly_has_no_duration(context, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    'cpu_time, expected', [(None, None), (0, 0), (10800, 0.75), (5000000, None)]
+    'cpu_time, expected', [(None, None), (10800, 0.75), (5000000, None)]
 )
 def test_both_cpu_series_preserve_measurement_rules(
     context, monkeypatch, cpu_time, expected
@@ -395,3 +400,81 @@ def test_both_cpu_series_preserve_measurement_rules(
         assert legacy['Dimensions'] == measured['Dimensions']
         assert legacy['Timestamp'] == measured['Timestamp']
         assert legacy['MetricType'] == measured['MetricType'] == 'Summary'
+
+
+def test_zero_cpu_job_stays_out_of_the_measured_series(context, monkeypatch):
+    entries = _published(context, monkeypatch, 'dogstatsd', _job(cpu_time_secs=0))
+    series = {
+        e['MetricName']: e['Value']
+        for e in entries
+        if 'cpu_efficiency' in e['MetricName']
+    }
+    assert series == {'job.cpu_efficiency': 0}
+
+
+def _priced_job(wall_secs, total_time_secs, cpu_time_secs=3600):
+    return _job(
+        wall_secs=wall_secs,
+        cpu_time_secs=cpu_time_secs,
+        job_uid='42-r1',
+        total_time_secs=total_time_secs,
+        estimated_bom_cost=SocaJobEstimatedBOMCost(
+            total=SocaAmount(amount=8.0),
+            line_items_total=SocaAmount(amount=10.0),
+            savings_total=SocaAmount(amount=2.0),
+        ),
+    )
+
+
+def test_replayed_job_priced_with_days_dropped_is_rescaled(context, monkeypatch):
+    # a 50 hour job the old pricing billed as 2 hours
+    job = _priced_job(wall_secs=50 * 3600, total_time_secs=2 * 3600)
+    entries = _published(context, monkeypatch, 'dogstatsd', job)
+    values = {e['MetricName']: e['Value'] for e in entries}
+    scale = (50 * 3600 + 300) / (2 * 3600 + 300)
+    assert values['job.cost'] == pytest.approx(8.0 * scale)
+    assert values['job.detail.cost'] == pytest.approx(8.0 * scale)
+    assert values['job.cost_ondemand'] == pytest.approx(10.0 * scale)
+    assert values['job.savings'] == pytest.approx(2.0 * scale)
+
+
+@pytest.mark.parametrize(
+    'wall_secs, total_time_secs, cpu_time_secs',
+    [
+        # priced correctly: the recorded runtime is the wall clock
+        (50 * 3600, 50 * 3600, 3600),
+        (50 * 3600 + 0.5, 50 * 3600, 3600),
+        # under a day, the bug cannot show
+        (2 * 3600, 3600, 3600),
+        # a runtime that is not the wall clock modulo a day is left as recorded
+        (50 * 3600, 5 * 3600, 3600),
+        # held at its limit: days apart, no runtime, nothing ran
+        (2 * 86400, 0, None),
+        (2 * 86400, 0, 0),
+        # nothing recorded to scale from
+        (50 * 3600, None, 3600),
+    ],
+)
+def test_cost_is_left_as_recorded(wall_secs, total_time_secs, cpu_time_secs):
+    job = _priced_job(wall_secs, total_time_secs, cpu_time_secs)
+    assert JobCompletionMetrics.cost_scale(job) == 1
+
+
+def test_sub_minute_runtime_scales_only_with_cpu_accounting():
+    # 24h00m14s records 14 seconds under the bug; the CPU time shows it ran
+    job = _priced_job(wall_secs=86414, total_time_secs=14, cpu_time_secs=7200)
+    assert JobCompletionMetrics.cost_scale(job) == pytest.approx(
+        (86414 + 300) / (14 + 300)
+    )
+
+
+def test_the_scale_uses_the_boot_penalty_the_job_was_priced_with(context, monkeypatch):
+    # a cluster with no penalty billed a 50 hour job as 2 hours: exactly 25 times too little
+    context.config().put('scheduler.cost_estimation.ec2_boot_penalty_seconds', 0)
+    job = _priced_job(wall_secs=50 * 3600, total_time_secs=2 * 3600, cpu_time_secs=3600)
+    metrics = JobCompletionMetrics(context=context, job=job)
+    assert metrics.boot_penalty_seconds() == 0
+    assert JobCompletionMetrics.cost_scale(job, 0) == pytest.approx(25)
+    assert JobCompletionMetrics.cost_scale(job) == pytest.approx(
+        (50 * 3600 + 300) / (2 * 3600 + 300)
+    )

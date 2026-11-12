@@ -246,6 +246,43 @@ def test_overdue_eta_is_explicit(setup, monkeypatch):
     )
 
 
+def test_a_run_that_outlasts_the_one_before_is_not_overdue(setup, monkeypatch):
+    # idea-dev: a run took 27 s, the next, with seven more people, 37 s. Seconds 27 to 37 read
+    # as overdue to everyone with no costs yet, which is who the seven were.
+    _, store, _ = setup
+    now = arrow.get('2026-11-09T22:33:33Z')
+    monkeypatch.setattr(arrow, 'utcnow', lambda: now)
+    store.put(SYSTEM, 'heartbeat', {'as_of': now.isoformat()})
+
+    def collecting(**state):
+        store.put(SYSTEM, 'state', dict(state, last_duration=27))
+        return store.collecting()
+
+    result = collecting(run_started=now.shift(seconds=-33).isoformat())
+    assert not result.collecting_delayed and result.collecting_reason is None
+    assert arrow.get(result.expected_ready_at) > now
+    # due, and the collector looks once a minute: not started yet is not overdue either
+    assert not collecting(
+        next_run=now.shift(seconds=-50).isoformat()
+    ).collecting_delayed
+    # control: a minute past the estimate, and past twice the last run, it is
+    assert collecting(
+        run_started=now.shift(seconds=-(27 + 61)).isoformat()
+    ).collecting_delayed
+    store.put(
+        SYSTEM,
+        'state',
+        {'run_started': now.shift(minutes=-39).isoformat(), 'last_duration': 1200},
+    )
+    assert not store.collecting().collecting_delayed, 'a long run gets as long again'
+    store.put(
+        SYSTEM,
+        'state',
+        {'run_started': now.shift(minutes=-41).isoformat(), 'last_duration': 1200},
+    )
+    assert store.collecting().collecting_delayed
+
+
 def test_refresh_deduplicates_and_retains_values(setup):
     context, store, _ = setup
     publish(store)
@@ -810,8 +847,8 @@ def test_storage_day_tolerates_entries_without_a_costs_block(setup, monkeypatch)
     tree = ConfigFactory.parse_string(
         'data { provider = fsx_netapp_ontap, mount_dir = /data, fsx_netapp_ontap { file_system_id = fs-1 } }'
     )
-    context.config().get_config = (
-        lambda key, default=None: tree if key == 'shared-storage' else default
+    context.config().get_config = lambda key, default=None: (
+        tree if key == 'shared-storage' else default
     )
     calc = DailyCostsCalculator(context, store)
     seen = []
@@ -1462,3 +1499,346 @@ def test_fifty_users_mid_month_dynamodb_requests_per_run(setup, monkeypatch, cap
     assert counts['user-projects'] == 50 and counts['projects'] == 100
     assert counts['bedrock.usage'] == 2 * open_days
     worker.calculator._workers.shutdown()
+
+
+# Inventory change records and sweeps
+
+
+def legacy_write(store, username, as_of, value):
+    # what 26.11.1 wrote for every user on every run
+    instances, volumes = value
+    store.put_source(
+        username,
+        f'inventory:{as_of.format("YYYY-MM-DD")}:{as_of.int_timestamp}',
+        {
+            'as_of': as_of.isoformat(),
+            'instances': {
+                key: {'State': item.get('State', {}), 'Tags': item.get('Tags', [])}
+                for key, item in instances.items()
+            },
+            'volumes': volumes,
+        },
+    )
+
+
+def volume(volume_id, kind='gp3', size=100, created='2026-08-01T00:00:00+00:00'):
+    return {
+        'VolumeId': volume_id,
+        'VolumeType': kind,
+        'Size': size,
+        'CreateTime': created,
+        'Attachments': [],
+        'Tags': [],
+    }
+
+
+def inventory_at(username, moment):
+    """user-a changes disks and desktop state; user-b never has anything; user-c has an
+    unpriced disk; user-d is only seen by its own refreshes."""
+    if username == 'user-a':
+        volumes = []
+        if moment < arrow.get('2026-09-02T14:00:00Z'):
+            volumes.append(volume('vol-1'))
+        if moment >= arrow.get('2026-09-02T08:00:00Z'):
+            volumes.append(volume('vol-2', size=250))
+        state = 'running' if moment < arrow.get('2026-09-02T16:00:00Z') else 'stopped'
+        return {'i-1': {'State': {'Name': state}, 'Tags': []}}, volumes
+    if username == 'user-b':
+        return {}, []
+    if username == 'user-c':
+        return {}, [volume('vol-3', kind='io9')]
+    return {}, [volume('vol-4', size=10)]
+
+
+def inventory_runs():
+    """(when, users observed): 15 minute runs, an outage, a slow stretch where runs are
+    20 minutes apart, a user arriving mid-day and one leaving, and a lone refresh run."""
+    moment = arrow.get('2026-09-01T22:00:07Z')
+    runs = []
+    while moment < arrow.get('2026-09-03T02:00:00Z'):
+        if not (
+            arrow.get('2026-09-02T05:00:00Z')
+            <= moment
+            < arrow.get('2026-09-02T06:30:00Z')
+        ):
+            users = ['user-a']
+            if moment >= arrow.get('2026-09-02T09:00:00Z'):
+                users.append('user-b')
+            if moment < arrow.get('2026-09-02T12:00:00Z'):
+                users.append('user-c')
+            runs.append((moment, users))
+        slow = (
+            arrow.get('2026-09-02T10:00:00Z')
+            <= moment
+            < arrow.get('2026-09-02T12:00:00Z')
+        )
+        moment = moment.shift(minutes=20 if slow else 15)
+    runs.append((arrow.get('2026-09-02T13:03:21Z'), ['user-d']))
+    runs.append((arrow.get('2026-09-02T13:04:50Z'), ['user-d']))
+    return sorted(runs, key=lambda run: run[0])
+
+
+def priced(calc, monkeypatch):
+    monkeypatch.setattr(
+        calc,
+        '_volume_price',
+        lambda kind: None if kind == 'io9' else 0.08,
+    )
+    return calc
+
+
+def capture_run(calc, moment, users):
+    calc.begin()
+    calc._user_inventory = lambda username: inventory_at(username, moment)
+    calc._inventory_as_of = moment
+    for username in users:
+        calc.capture_inventory(username, moment)
+    calc.flush_sweeps()
+
+
+def inventory_store(setup):
+    context, _, _ = setup
+    store = PersonalCostsStore(context)
+    store.table = Table()
+    return store
+
+
+DISK_WINDOWS = [
+    ('2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z'),
+    ('2026-09-02T00:00:00Z', '2026-09-03T00:00:00Z'),
+    ('2026-09-03T00:00:00Z', '2026-09-04T00:00:00Z'),
+    ('2026-09-02T13:00:00Z', '2026-09-02T13:10:00Z'),
+]
+
+
+def disk_lines(calc):
+    return {
+        (username, start): calc.disk_day(
+            username, arrow.get(start), arrow.get(end)
+        ).model_dump()
+        for username in ('user-a', 'user-b', 'user-c', 'user-d', 'user-e')
+        for start, end in DISK_WINDOWS
+    }
+
+
+def legacy_lines(setup, monkeypatch):
+    context, _, _ = setup
+    store = inventory_store(setup)
+    for moment, users in inventory_runs():
+        for username in users:
+            legacy_write(store, username, moment, inventory_at(username, moment))
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    lines = disk_lines(calc)
+    calc._workers.shutdown()
+    return lines, store
+
+
+def test_change_records_cost_exactly_what_a_sample_every_run_cost(setup, monkeypatch):
+    context, _, _ = setup
+    expected, legacy = legacy_lines(setup, monkeypatch)
+    # the fixture is not vacuous: real cost, gaps, unpriced disks, evidence of nothing
+    day = '2026-09-02T00:00:00Z'
+    assert expected[('user-a', day)]['cost'] > 0
+    assert expected[('user-c', day)]['coverage']['missing_prices'] > 0
+    assert expected[('user-b', day)]['cost'] == 0
+    assert expected[('user-e', day)]['cost'] is None
+    full = 350 * 0.08 / 30
+    assert expected[('user-a', day)]['cost'] < full
+
+    store = inventory_store(setup)
+    writer = priced(DailyCostsCalculator(context, store), monkeypatch)
+    for moment, users in inventory_runs():
+        capture_run(writer, moment, users)
+    writer._workers.shutdown()
+    # read back by a calculator that holds nothing in memory
+    reader = priced(DailyCostsCalculator(context, store), monkeypatch)
+    assert disk_lines(reader) == expected
+    reader._workers.shutdown()
+
+    def rows(table, prefix):
+        return [key for key in table.rows if key[1].startswith(prefix)]
+
+    # three calendar days and user-a's three disk changes (its state change included)
+    assert len(rows(store.table, 'inventory:')) <= 3 + 4 + 2 + 2 + 2
+    assert len(rows(legacy.table, 'inventory:')) > 200
+
+
+def test_an_upgrade_mid_day_reads_old_samples_without_counting_any_twice(
+    setup, monkeypatch
+):
+    context, _, _ = setup
+    expected, _ = legacy_lines(setup, monkeypatch)
+    upgraded = arrow.get('2026-09-02T09:30:00Z')
+    store = inventory_store(setup)
+    writer = priced(DailyCostsCalculator(context, store), monkeypatch)
+    for moment, users in inventory_runs():
+        if moment < upgraded:
+            for username in users:
+                legacy_write(store, username, moment, inventory_at(username, moment))
+        else:
+            capture_run(writer, moment, users)
+    writer._workers.shutdown()
+    reader = priced(DailyCostsCalculator(context, store), monkeypatch)
+    assert disk_lines(reader) == expected
+    reader._workers.shutdown()
+
+
+def test_a_run_reads_its_own_sweep_before_it_is_written(setup, monkeypatch):
+    context, store, _ = setup
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    start = arrow.get('2026-09-02T00:00:00Z')
+    first, second = start.shift(hours=1), start.shift(hours=1, minutes=15)
+    capture_run(calc, first, ['user-a'])
+    calc.begin()
+    calc._user_inventory = lambda username: inventory_at(username, second)
+    calc._inventory_as_of = second
+    calc._sweeps_flushed = 1e18  # not yet due
+    calc.capture_inventory('user-a', second)
+    assert [k[1] for k in store.table.rows if k[1].startswith('inventory-sweep')] == [
+        f'inventory-sweep:2026-09-02:{first.int_timestamp}'
+    ]
+    assert calc.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
+        round(100 * 0.08 / 30 / 24 / 2, 4)
+    )
+    calc._workers.shutdown()
+
+
+def test_a_sweep_not_written_leaves_a_gap_and_is_retried(setup, monkeypatch):
+    context, store, _ = setup
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    start = arrow.get('2026-09-02T00:00:00Z')
+    first, second = start.shift(hours=1), start.shift(hours=1, minutes=15)
+    capture_run(calc, first, ['user-a'])
+
+    def refuse(item):
+        if item['record'].startswith('inventory-sweep'):
+            raise RuntimeError('throttled')
+
+    store.table.before_put = refuse
+    capture_run(calc, second, ['user-a'])
+    # a task killed here: what is durable never claims the unwritten sample
+    lost = priced(DailyCostsCalculator(context, store), monkeypatch)
+    one = round(100 * 0.08 / 30 / 24 / 4, 4)
+    assert lost.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
+        one
+    )
+    lost._workers.shutdown()
+    store.table.before_put = lambda item: None
+    calc.begin()
+    calc.flush_sweeps()
+    kept = priced(DailyCostsCalculator(context, store), monkeypatch)
+    assert kept.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
+        round(100 * 0.08 / 30 / 24 / 2, 4)
+    )
+    kept._workers.shutdown()
+    calc._workers.shutdown()
+
+
+def test_a_failed_sweep_read_does_not_settle_the_day(setup, monkeypatch):
+    context, store, _ = setup
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    start = arrow.get('2026-09-02T00:00:00Z')
+    capture_run(calc, start.shift(hours=1), ['user-a'])
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    records = store.records
+
+    def failing(subject, prefix, last=None):
+        if prefix.startswith('inventory-sweep'):
+            raise RuntimeError('throttled')
+        return records(subject, prefix, last)
+
+    store.records = failing
+    calc.faulted = False
+    line = calc.day('user-a', start, start.shift(days=1))['desktop_disks']
+    assert line.cost is None and calc.faulted
+    calc._workers.shutdown()
+
+
+def test_inventory_order_alone_writes_nothing_new(setup, monkeypatch):
+    context, store, _ = setup
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    moment = arrow.get('2026-09-02T10:00:00Z')
+    volumes = [volume('vol-1'), volume('vol-2')]
+    calc.begin()
+    calc._user_inventory = lambda username: ({}, volumes)
+    calc._inventory_as_of = moment
+    calc.capture_inventory('user-a', moment)
+    calc.begin()
+    calc._user_inventory = lambda username: ({}, list(reversed(volumes)))
+    calc._inventory_as_of = moment.shift(minutes=15)
+    calc.capture_inventory('user-a', moment.shift(minutes=15))
+    assert len(list(store.records('user-a', 'inventory:'))) == 1
+    calc._workers.shutdown()
+
+
+def test_fifty_users_one_day_inventory_requests(setup, monkeypatch, capsys):
+    import json as _json
+    import math
+
+    context, _, _ = setup
+    names = [f'user-{index:02d}' for index in range(50)]
+    start = arrow.get('2026-09-02T00:00:00Z')
+    value = {}, [volume('vol-1')]
+
+    def wcu(table):
+        return sum(
+            math.ceil(len(_json.dumps(row)) / 1024) for row in table.rows.values()
+        )
+
+    legacy, store = inventory_store(setup), inventory_store(setup)
+    calc = priced(DailyCostsCalculator(context, store), monkeypatch)
+    puts = {'n': 0}
+    store.table.before_put = lambda item: puts.update(n=puts['n'] + 1)
+    for index in range(96):
+        moment = start.shift(minutes=15 * index)
+        calc.begin()
+        calc._user_inventory = lambda username: value
+        calc._inventory_as_of = moment
+        for name in names:
+            legacy_write(legacy, name, moment, value)
+            calc.capture_inventory(name, moment)
+        calc.flush_sweeps()
+    before_puts = 50 * 96
+    assert puts['n'] == 50 + 96
+    assert len(legacy.table.rows) == before_puts
+
+    def read(table_store):
+        reader = priced(DailyCostsCalculator(context, table_store), monkeypatch)
+        reader.begin()
+        counted = {'queries': 0, 'bytes': 0}
+        query = table_store.table.query
+
+        def counting(**kwargs):
+            page = query(**kwargs)
+            counted['queries'] += 1
+            counted['bytes'] += sum(len(_json.dumps(i)) for i in page['Items'])
+            return page
+
+        table_store.table.query = counting
+        lines = [
+            reader.disk_day(
+                name,
+                start.shift(days=1),
+                start.shift(days=1, minutes=1),
+            ).model_dump()
+            for name in names
+        ]
+        table_store.table.query = query
+        reader._workers.shutdown()
+        counted['rcu'] = math.ceil(counted['bytes'] / 4096)
+        return lines, counted
+
+    before_lines, before = read(legacy)
+    after_lines, after = read(store)
+    assert before_lines == after_lines
+    assert wcu(store.table) * 5 < wcu(legacy.table)
+    assert after['rcu'] * 5 < before['rcu']
+    with capsys.disabled():
+        print(
+            f'\ninventory, 50 users, one day: PutItem {before_puts} -> {puts["n"]}, '
+            f'WCU {wcu(legacy.table)} -> {wcu(store.table)}, '
+            f'items {len(legacy.table.rows)} -> {len(store.table.rows)}; '
+            f'reads for one user-day each: Query {before["queries"]} -> {after["queries"]}, '
+            f'RCU {before["rcu"]} -> {after["rcu"]}'
+        )
+    calc._workers.shutdown()

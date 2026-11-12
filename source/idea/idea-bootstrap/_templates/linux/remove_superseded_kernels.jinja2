@@ -1,0 +1,22 @@
+# Begin: Remove superseded kernels
+{# The bake rebooted into the newest kernel of its series. The one the image came with has no
+   further use, and the drivers below rebuild initramfs images in the space it holds. #}
+{% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+SUPERSEDED_KERNELS=$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra kernel-devel | grep -v 'is not installed' | grep -vF "$(uname -r)" || true)
+if [[ -n "${SUPERSEDED_KERNELS}" ]]; then
+  # shellcheck disable=SC2086
+  package_transaction dnf remove -y --noautoremove ${SUPERSEDED_KERNELS} || log_warning "Unable to remove superseded kernels: ${SUPERSEDED_KERNELS}"
+fi
+# Three kernels do not fit the 1 GB /boot: a desktop kernel takes about 320 MB of it (a 260 MB
+# initramfs, the kdump initrd and the kernel), and dnf keeps three. Kept at two, dnf removes the
+# oldest one that is not running in the same transaction, before the new initramfs is built.
+DNF_CONF="${DNF_CONF:-/etc/dnf/dnf.conf}"
+if grep -q '^installonly_limit' "${DNF_CONF}"; then
+  sed -i 's/^installonly_limit.*/installonly_limit=2/' "${DNF_CONF}"
+else
+  sed -i '/^\[main\]/a installonly_limit=2' "${DNF_CONF}"
+fi
+grep -q '^installonly_limit=2$' "${DNF_CONF}" || log_warning "Unable to keep two kernels: ${DNF_CONF} has no [main] section"
+df -h /boot
+{% endif %}
+# End: Remove superseded kernels

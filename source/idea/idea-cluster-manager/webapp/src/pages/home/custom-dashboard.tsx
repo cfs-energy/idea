@@ -30,8 +30,7 @@ class CustomDashboard extends Component<CustomDashboardProps, CustomDashboardSta
                     <Container variant="default">
                         <Box textAlign="center" padding="xxl">
                             <StatusIndicator type="info">
-                                No dashboard is configured. Set cluster-manager.web_portal.custom_dashboard.enabled
-                                and cluster-manager.web_portal.custom_dashboard.url (http or https) to enable it.
+                                No reports dashboard has been set up. Ask your administrator.
                             </StatusIndicator>
                         </Box>
                     </Container>

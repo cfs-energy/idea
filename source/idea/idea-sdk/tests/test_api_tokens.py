@@ -1,7 +1,7 @@
 import hashlib
 import re
 import secrets
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -346,3 +346,19 @@ def test_new_token_recovers_from_index_delay_after_five_seconds(env):
     env.table.query.side_effect = query
     with patch('ideasdk.auth.token_service.time.monotonic', return_value=105):
         assert env.service.decode_token(env.created.token)['username'] == 'user-a'
+
+
+def test_a_client_error_report_logs_no_user_or_token(env):
+    logger = Mock()
+    invocation = api_token_invocation(env, 'Portal.ReportClientError')
+    invocation._logger = logger
+    invocation.response = {'success': True}
+    invocation.log_request()
+    invocation.log_response()
+    lines = ' '.join(str(call) for call in logger.info.call_args_list)
+    assert 'Portal.ReportClientError' in lines
+    assert 'actor:user|' in lines
+    assert 'user-a' not in lines
+    assert env.created.token_id not in lines
+    # every other namespace still names its caller
+    assert 'actor:user-a|' in api_token_invocation(env, 'Auth.GetUser').get_log_tag()

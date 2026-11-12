@@ -1,11 +1,16 @@
-import React, {useEffect, useState} from 'react';
-import {Alert, Button, Checkbox, ColumnLayout, Container, ExpandableSection, FormField, Header, Input, Link, Modal, SpaceBetween, Table, Toggle} from '@cloudscape-design/components';
+import React, {useEffect, useRef, useState} from 'react';
+import {Alert, Button, Checkbox, ColumnLayout, Container, ExpandableSection, FormField, Header, Input, Link, Modal, SpaceBetween, StatusIndicator, Table, Toggle} from '@cloudscape-design/components';
 import {AppContext} from '../../common';
 import {Constants} from '../../common/constants';
 import {ReconcileReport} from '../../client/accounts-client';
 
 const defaults = {enabled: false, interval_minutes: 60, dry_run: true, reenable: true, max_disable_fraction: 0.25, check_cognito: false, okta: {org_url: '', api_token_secret_arn: ''}};
 const flags = {dry_run: 'Periodic dry run', reenable: 'Re-enable restored users', check_cognito: 'Check Cognito'};
+const REFUSAL_REASONS: Record<string, string> = {
+    'max_disable_fraction exceeded': 'This would disable more accounts than the limit allows',
+    'upstream error fraction exceeded': 'Too many account checks failed',
+    'account inventory or configuration read failed': 'Accounts or settings could not be read',
+};
 const timestamp = (value: number) => new Date(Number(value) * 1000).toLocaleString();
 
 export default function AccountReconcileSettings({active, identityProvider, mode = 'all', editDisabled = false, onEditingChange, highlightedKey}: {highlightedKey?: string | null; editDisabled?: boolean; onEditingChange?: (editing: boolean) => void; active: boolean; identityProvider: any; mode?: 'policy' | 'runs' | 'all'}) {
@@ -22,6 +27,10 @@ export default function AccountReconcileSettings({active, identityProvider, mode
     const [saved, setSaved] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const [applyModalVisible, setApplyModalVisible] = useState(false);
+    const [overrideModalVisible, setOverrideModalVisible] = useState(false);
+    const [running, setRunning] = useState(false);
+    // a later poll may clear its own failure, never a validation message
+    const pollError = useRef('');
     const [freshIdentityProvider, setFreshIdentityProvider] = useState<any>(null);
     const provider = freshIdentityProvider ?? identityProvider;
     const providerIsOkta = [provider?.provider, provider?.cognito?.sso_idp_provider_name]
@@ -68,11 +77,16 @@ export default function AccountReconcileSettings({active, identityProvider, mode
             fetchSettings().then(settings => {
                 if (cancelled) return;
                 setStored(settings);
+                setError(current => current && current === pollError.current ? '' : current);
                 if (settings.last_run && settings.last_run.at !== stored.last_run?.at) {
                     setReport(settings.last_run.report);
                     setReportDryRun(settings.last_run.report.dry_run);
                 }
-            }).catch(e => {if (!cancelled) setError(e?.message ?? String(e));});
+            }).catch(e => {
+                if (cancelled) return;
+                pollError.current = e?.message ?? String(e);
+                setError(pollError.current);
+            });
         }, 10000);
         return () => {cancelled = true; window.clearInterval(timer);};
     }, [active, loading, busy, stored]);
@@ -116,13 +130,13 @@ export default function AccountReconcileSettings({active, identityProvider, mode
             okta: (providerIsOkta || alsoOkta) ? values.okta : {org_url: '', api_token_secret_arn: ''}});
     };
     const run = async (mode: boolean, override = false) => {
-        setBusy(true); setError('');
+        setBusy(true); setRunning(true); setError('');
         try {
             const result = await AppContext.get().client().accounts().reconcileUsers({dry_run: mode, override_max_disable_fraction: override});
             setReport(result); setReportDryRun(mode);
             setStored(await fetchSettings());
         } catch (e: any) {setError(e?.message ?? String(e));}
-        finally {setBusy(false);}
+        finally {setBusy(false); setRunning(false);}
     };
     const nextRun = !stored?.enabled ? 'Off' : stored.last_completed
         ? timestamp(Number(stored.last_completed) + Number(stored.interval_minutes) * 60) : 'Due now';
@@ -134,7 +148,7 @@ export default function AccountReconcileSettings({active, identityProvider, mode
         || values.okta.org_url !== (stored.okta?.org_url ?? '') || values.okta.api_token_secret_arn !== (stored.okta?.api_token_secret_arn ?? '')
         || (!alsoOkta && !providerIsOkta && Boolean(stored.okta?.org_url || stored.okta?.api_token_secret_arn)));
     const manualActions = <SpaceBetween direction="horizontal" size="s">
-        <Button disabled={busy || editDisabled} onClick={() => run(true)}>Preview changes</Button>
+        <Button disabled={busy || editDisabled} loading={running} onClick={() => run(true)}>Preview changes</Button>
         <Button disabled={busy || editDisabled} variant="primary" onClick={() => setApplyModalVisible(true)}>Run reconciliation</Button>
     </SpaceBetween>;
     return <>
@@ -153,6 +167,18 @@ export default function AccountReconcileSettings({active, identityProvider, mode
             {dirty && <div>Pending changes are not included. This run uses the saved policy.</div>}
         </SpaceBetween>
     </Modal>}
+    {overrideModalVisible && report && <Modal
+        visible
+        onDismiss={() => setOverrideModalVisible(false)}
+        header="Go past the limit?"
+        footer={<SpaceBetween direction="horizontal" size="xs">
+            <Button onClick={() => setOverrideModalVisible(false)}>Cancel</Button>
+            <Button variant="primary" disabled={busy || editDisabled} onClick={() => {setOverrideModalVisible(false); run(reportDryRun, true);}}>{reportDryRun ? 'Preview past the limit' : 'Disable accounts'}</Button>
+        </SpaceBetween>}>
+        {reportDryRun
+            ? <div>This previews past the limit. Nothing changes.</div>
+            : <div>This disables {report.would_disable ?? 0} of {report.eligible_enabled ?? 0} accounts, more than the limit allows, and those people lose access.</div>}
+    </Modal>}
     <Container header={<Header
         variant="h2"
         description="Keep IDEA user state aligned with the directory. Protected accounts are excluded."
@@ -161,6 +187,7 @@ export default function AccountReconcileSettings({active, identityProvider, mode
     </Header>}>
         <SpaceBetween size="l">
             {error && <Alert type="error">{error}</Alert>}
+            {running && <StatusIndicator type="loading">Checking accounts…</StatusIndicator>}
             {loading && <div>Loading saved reconciliation settings…</div>}
             {!loading && !stored && <Button onClick={() => window.location.reload()}>Reload settings</Button>}
             {!loading && stored && <SpaceBetween size="l">
@@ -198,8 +225,8 @@ export default function AccountReconcileSettings({active, identityProvider, mode
             </SpaceBetween>}
             {mode === 'policy' && <Link href="#/cluster/reconciliation-runs">View reconciliation history</Link>}
             {mode !== 'policy' && report && <SpaceBetween size="m">
-                {Boolean(report.refused) && <Alert type="warning" header="Reconciliation refused">{report.reason}. Proposed disables: {report.would_disable ?? 0} of {report.eligible_enabled ?? 0} eligible enabled users; cap: {report.max_disable_fraction ?? 0}.
-                    {report.reason === 'max_disable_fraction exceeded' && <Button disabled={busy || editDisabled} onClick={() => run(reportDryRun, true)}>Proceed anyway</Button>}
+                {Boolean(report.refused) && <Alert type="warning" header="Reconciliation refused">{REFUSAL_REASONS[report.reason ?? ''] ?? report.reason}. Proposed disables: {report.would_disable ?? 0} of {report.eligible_enabled ?? 0} eligible enabled users; cap: {report.max_disable_fraction ?? 0}.
+                    {report.reason === 'max_disable_fraction exceeded' && <Button disabled={busy || editDisabled} onClick={() => setOverrideModalVisible(true)}>Proceed anyway</Button>}
                 </Alert>}
                 <Table header={<Header variant="h3">{reportDryRun ? 'Dry-run report' : 'Applied-run report'}</Header>} items={[
                     {label: 'Checked', count: report.checked}, {label: 'Would disable', count: report.would_disable ?? 0},

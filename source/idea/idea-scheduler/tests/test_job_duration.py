@@ -511,7 +511,7 @@ def test_zero_stime_is_not_a_started_job(context):
 
 
 @pytest.mark.parametrize('history', ['missing', 'complete', 'start_only'])
-@pytest.mark.parametrize('job_id', ['14906', '14906[1]'])
+@pytest.mark.parametrize('job_id', ['14906'])
 @pytest.mark.parametrize('attempt', ['single', 'rerun', 'node_failure'])
 @pytest.mark.parametrize('cached_times', ['missing', 'start_only', 'old_pair'])
 @pytest.mark.parametrize(
@@ -571,6 +571,7 @@ def test_serialized_hooks_recover_duration_without_pbs_history(
     context.metrics = Mock()
     context.job_notifications = Mock()
     context.document_store = Mock()
+    context.document_store.get_job.return_value = None
     context.lifecycle_events = None
 
     def deliver(phase, count, when, host):
@@ -623,10 +624,11 @@ def test_serialized_hooks_recover_duration_without_pbs_history(
         assert cached.start_time == (
             previous_start.datetime if cached_times != 'missing' else None
         )
-        # Use the real history adapter, including array state X and missing walltime.
+        # Use the real history adapter, including missing walltime. An array is finished
+        # under its own id from its subjobs' history: test_array_jobs.py.
         fresh = build_pbs_job(
             id=job_id + '.scheduler',
-            job_state='X' if '[' in job_id else 'F',
+            job_state='F',
             stime=str(start.shift(seconds=1).int_timestamp),
             resources_used={'walltime': '00:01:59'} if history == 'complete' else None,
             run_count=count,
@@ -674,3 +676,58 @@ def test_serialized_hooks_recover_duration_without_pbs_history(
             assert PricingSpy.calls == []
     finally:
         cache.stop()
+
+
+@pytest.mark.parametrize(
+    'substate, exit_status, terminated',
+    [
+        # read from PBS history on a dev cluster: a running job qdel'd with no trap exits 0
+        (91, 0, True),
+        (91, 265, True),
+        (92, 0, False),
+        (93, 3, False),
+    ],
+)
+def test_pbs_history_says_whether_qdel_ended_the_job(
+    context, substate, exit_status, terminated
+):
+    pbs_job = build_pbs_job(
+        substate=substate,
+        Exit_status=exit_status,
+        comment='an error message can stand in for the PBS comment',
+    )
+
+    job = pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+
+    assert job.terminated is terminated
+
+
+def test_a_job_pbs_has_not_finished_says_nothing_about_qdel(context):
+    pbs_job = build_pbs_job(job_state='R', substate=42)
+
+    assert (
+        pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE).terminated
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    'depend, dependents',
+    [
+        # read from PBS history on a dev cluster, after 348 had dropped 342 from its depend
+        ('beforeany:348.scheduler@scheduler', ['348']),
+        (
+            'beforeok:348.scheduler@scheduler:349.scheduler,afterok:12.scheduler,'
+            'beforenotok:350[].scheduler',
+            ['348', '349', '350[]'],
+        ),
+        ('afterany:347.scheduler@scheduler', None),
+        (None, None),
+    ],
+)
+def test_pbs_depend_says_which_jobs_wait_on_this_one(context, depend, dependents):
+    pbs_job = build_pbs_job(depend=depend)
+
+    job = pbs_job.as_soca_job(context=context, queue_profile=QUEUE_PROFILE)
+
+    assert job.dependent_job_ids == dependents

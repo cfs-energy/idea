@@ -1,0 +1,149 @@
+# Cluster health metrics
+
+The cluster reports its own health as `idea.health.*` metrics over DogStatsD, so what happened stays on record for Datadog's 15 months when logs have long gone. Every point carries `idea_cluster` and `idea_module`, the module that read it. The agent also adds tags for the task that sent it, such as `service`, `ecs_service`, `task_version` and `host`, so group by IDEA's own tags rather than those. They flow only when `metrics.provider` is `dogstatsd`.
+
+Each concern is a collector with its own thread, its own time limit and its own off switch. One raising an error reports it as a gauge; one that hangs is left behind and reported, and no second copy starts behind it. Collectors other than the bastion run on the leader of their module. A task that becomes leader, at start or when leadership moves, reads within 30 seconds, then once an interval.
+
+## Off switches
+
+`metrics.health.enabled` stops all of them. `metrics.health.<name>.enabled` stops one: `certificates`, `ecs`, `directory`, `home_probe`, `ad_automation`, `secrets`, `storage_mounts`, `drift_checks`, `stack_expiry`, `image_bakes`, `gateway_certificate`, `pbs`, `bastion`. A key that is absent reads as true. All take effect at the collector's next cycle except `bastion`, which is read when its stack deploys.
+
+## Is the collector itself alive?
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.collector.ok` | `collector`, `reason` | 1 when the last run finished. Otherwise 0 and why: `access_denied`, `throttled`, `unreachable`, `aws_error`, `error`, `timeout` (past its limit), `stuck` (an earlier run has not come back). No points at all means the module is not running it. |
+| `idea.health.collector.duration_seconds` | `collector` | How long the last run took. |
+
+## Certificates
+
+Every hour on the cluster manager; every hour on the virtual desktop controller for the gateway.
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.cert.days_to_expiry` | `source`, `lb`, `cert`, `type` | Days left, negative once expired. `source:acm` is every certificate on the external and internal load balancer listeners, SNI included, with `lb` and the domain as `cert`. `source:idea` is what IDEA reads itself: `cert:dcv_gateway` (the certificate secret, never the private key), `cert:module_tls` (`idea.crt` on the shared mount), `cert:directory_ldap` (OpenLDAP only). |
+| `idea.health.cert.unread` | `lb`, `source`, `reason` | A certificate that could not be dated, such as a listener's held in IAM rather than ACM. `source:module_tls` is the module's own certificate file on the shared mount, read in a child process so a hung mount cannot hold up the collector, with `reason` `timeout`, `stuck` or `failed`. |
+
+The OpenSSH user CA of the browser terminal has no expiry: its key is a secret, so its age is `idea.health.secret.age_days`.
+
+Compared to Datadog's `aws.certificatemanager.days_to_expiry`: that arrives about every 12 hours, only from accounts on the AWS integration, and never from GovCloud. Monitor it over a day or more, grouped by its real tag `certificatearn`.
+
+## ECS tasks and rollouts
+
+Every five minutes, from the module's existing ECS read.
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.ecs.task_stops` | `ecs_service_name`, `reason` | Stopped tasks in a five minute bucket. `reason`: `health_check`, `deployment`, `oom`, `container_exit`, `failed_to_start`, `maintenance`, `user_stop`, `scheduler`, `spot`, `other`. Use `.as_count()`. |
+| `idea.health.ecs.tasks_running`, `tasks_desired`, `tasks_pending` | `ecs_service_name` | The service's own counts. |
+| `idea.health.ecs.rollout_in_progress`, `rollout_failed` | `ecs_service_name` | 1 while a deployment rolls out, or has failed. |
+| `idea.health.ecs.rollouts` | `ecs_service_name`, `deployment` | One point of 1 for each deployment, at the five minute bucket it started in, tagged with its ECS deployment id. Sum across series: `sum:idea.health.ecs.rollouts{*} by {ecs_service_name}.as_count()`. |
+
+ECS lists stopped tasks for at least an hour. Each read sends the whole total for every bucket under 50 minutes old, and Datadog keeps the last value per metric, tags and time, so a repeat read or a new leader's read rewrites a point rather than adding to it. For that, a stop or rollout point carries nothing of the task that sent it: no `host`, and none of the tags the agent adds for the sending container, such as `image_tag` and `task_version`, which differ between the old and the new leader on every upgrade. The points opt out of those with the `dd.internal.card:none` tag, which the agent honours unless its `dogstatsd_origin_optout_enabled` is set to false. On such an agent, and for the first hour after an upgrade from a 26.11.2 release candidate, an old and a new leader send two series for one bucket. Reading stops with `max` across series and then summing over time is right either way, for example `sum(last_1h):max:idea.health.ecs.task_stops{reason:health_check} by {idea_cluster,ecs_service_name}.as_count()`. Stops are lost only if every cluster manager task is gone for over 50 minutes.
+
+ECS drops a finished deployment from a service once the next one finishes, so a count of the deployments a read still lists could be rewritten smaller, by a later read or by a new leader. Each deployment is its own series instead: every read that still sees it sends the same 1, and a deployment ECS has dropped keeps the point it already has. Read `rollouts` with `sum` across series, not `max`. Where the agent's container tags are still on the points, as above, a deployment that both the old and the new leader listed counts twice.
+
+## File server and directory
+
+Every five minutes, one read per file system in `shared-storage` that has metrics credentials, plus `ds:DescribeDirectories` for the domain controller addresses. These are the conditions a file server needs to keep authenticating, so wrong settings show before the failure does. Reads settings only: never a file or a user.
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.directory.ldap_up` | `svm`, `filesystem` | ONTAP's LDAP client status. |
+| `idea.health.directory.ldap_session_signed` | `svm`, `filesystem` | 1 when `session-security-for-ad-ldap` is `sign` or `seal`. 0 will fail binds on a domain controller requiring signing. |
+| `idea.health.directory.dns_on_domain_controllers` | `svm`, `filesystem` | 1 when the SVM's DNS servers are all the directory's domain controllers. On the VPC resolver the reverse lookup gives no SPN that Kerberos can use. Managed AD only. Not sent while the domain controllers cannot be read: `check:dns` then reads 0 with `reason:no_controllers`. |
+| `idea.health.directory.check_ok` | `check`, `reason`, `filesystem` | Whether each read worked: `ldap`, `cifs_security` and `dns` per file system, `login` (1 when the file system's metrics login has a password, 0 with `reason:no_password`) and `dc_addresses` (the `ds:DescribeDirectories` read, on `filesystem:none`, sent only when `directoryservice.directory_id` is set; `reason:not_found` when the directory is not in the answer). `filesystem` is the FSx file system id from the management endpoint, or the shared-storage name when the endpoint is not an FSx name. Shared-storage entries on one file system report on the same `filesystem`, each under its own `reason`, so read it with `min` across `reason`: `max` lets one entry that works hide one that does not. `reason:unauthorized` and `reason:forbidden` are ONTAP's own 401 and 403, `reason:unreachable` a connection that failed or timed out, `reason:error` anything else. `reason:forbidden` is a path the login's role lacks. `reason:no_records` is a CIFS read that answered with no server from a role that cannot see its SVM, as one without `/api/svm/svms` does. `reason:no_cifs_server` (value 1) is an SVM the role can see with no CIFS server: NFS only, nothing to sign. |
+| `idea.health.directory.home_stat_ok` | `reason` | A `stat` of `/data/home` and a lookup of a name that does not exist, from a separate process killed at 15 seconds. Exercises name mapping; reads no one's folder. `reason`: `ok`, `timeout`, `stuck` (still in the kernel, no new one started), `denied`, `error`. |
+| `idea.health.directory.home_stat_seconds` | | How long that took, including about 30 ms of process start. |
+
+The ONTAP login used by storage metrics needs these paths added once per SVM, from `fsxadmin` on the cluster shell. Until then those checks read `forbidden` and everything else carries on. Without `/api/svm/svms` the CIFS read answers with no server at all, so `cifs_security` reads `no_records` and `ldap_session_signed` is never sent. With it, an NFS-only SVM reads `no_cifs_server`:
+
+```bash
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/ldap -access readonly
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/name-services/dns -access readonly
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/protocols/cifs/services -access readonly
+security login rest-role create -vserver <SVM> -role idea-metrics -api /api/svm/svms -access readonly
+```
+
+ONTAP's `secd` events are not counted. ONTAP keeps its event log at cluster level and will not add it to an SVM role at any access level: `readonly`, `all` and every level between are refused with `A SVM admin cannot use command directory "/api/support/ems/events" with access level ...`, and the SVM's own `vsadmin` is refused the read. A check on it could only ever read refused, so there is none. What `secd` failures break shows in `ldap_up` and `home_stat_ok`; the events themselves are in `event log show` as `fsxadmin`.
+
+## Directory automation
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.ad.bind_rejected` | `code` | Each rejected bind by the admin account when the agent checks its password, with the AD sub-code (`52e` wrong password, `532` expired, `775` locked out). As it happens, per task. The agent only binds for that check with `directoryservice.ad_automation.enable_root_password_reset` on: the default on AWS Managed AD, off on a self-managed directory, where nothing is counted until it is turned on. |
+| `idea.health.ad.requests` | `namespace`, `outcome` | Requests handled: `success`, `dropped`, `retry`. |
+| `idea.health.ad.errors` | `kind` | `loop`, `message`, `delete_message`. |
+| `idea.health.ad.queue_depth`, `queue_in_flight` | | The queue, every minute. |
+| `idea.health.ad.seconds_since_queue_read` | | Rises when the agent stopped consuming: a rejected bind raises before it reaches the queue. Stays under about 30 when healthy. |
+| `idea.health.ad.admin_password_days_to_expiry` | | The admin account's `pwdLastSet` from the directory plus `directoryservice.password_max_age` (42, the AWS Managed Microsoft AD default). With `directoryservice.ad_automation.enable_root_password_reset` on, the agent resets the password once 2 days are left, so the value sits under 2 for the few minutes the reset takes. Under 2 for 15 minutes means the reset failed. With a `password_max_age` under 4 the reset comes at half the age, so the value is under 2 for longer than that; with 0 the password never expires and the metric is not sent. |
+
+## Image bakes
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.bake.row_state` | `kind`, `os`, `arch`, `variant`, `status` | 1 for the state each row is in, every five minutes and at once on a failure. A state it left reads 0 once, and `status:failed` reads 0 on every run for a row that is not failed, so a failure retried between two runs does not stay at 1. |
+| `idea.health.bake.row_on_release` | `kind`, `os`, `arch`, `variant` | 1 when the row is `current` on the running release. Pinned and unsupported rows are left out. |
+| `idea.health.bake.rows_behind_release` | `kind` | How many rows are not. Rows in flight count, so it stays above 0 for the length of the bakes after an upgrade. |
+| `idea.health.bake.targets_off_current` | `kind` | Compute only. Queue profiles, and the scheduler default image, that are not pinned and launch an image that is no row's current one. A promotion moves a queue only off the image its row had before, and only off an image the pipeline built or the vendor's, so nothing moves these and the two metrics above say nothing about them. The scheduler log names each one when the list changes. Pin it, or set it to its row's current image: a queue kept on its own image on purpose counts until it is pinned. A target is counted once it has stayed off for a minute, so a promotion caught half way is never counted; a run that finds a new one sends no point, and the count follows on the next run, 5 minutes later, also after a scheduler restart. |
+| `idea.health.bake.failures` | `kind`, `os`, `arch`, `variant`, `reason` | Each failure that logs `IDEA_IMAGE_BAKE_FAILED`, sent as it happens: in Datadog within a minute or two. `reason`: `time_limit`, `step_timeout` (one step's own wait ran out first, such as a builder that never reported ready within 60 minutes), `capacity`, `lustre_kernel` (the kernel the builder runs, or was about to boot, has no FSx for Lustre module: the FSx repository has no client for that kernel yet), `check_<name>`, `checks_unreadable`, `ready_gate`, `canary` (any failure of the compute test launch, its timeout included), `release_mismatch`, `no_source_image`, `no_base_stack`, `image_unavailable`, `other`. |
+| `idea.health.bake.last_duration_seconds` | `kind`, `os`, `arch`, `variant` | The row's last attempt. |
+| `idea.health.bake.image_age_days` | `kind`, `os`, `arch`, `variant` | Age of the image the row launches. |
+
+## Desktops
+
+`idea.session.count` already gives the count by `state`, `base_os` and `project`. `stack_kind` is `built` for a base stack the image pipeline feeds and `custom` for a hand-built one.
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.desktop.ready_seconds` | `base_os`, `stack_kind` | Create to first READY (a distribution). Resumes and reboots do not count. A desktop whose host reboots itself after READY during bootstrap can count twice. |
+| `idea.health.desktop.provisioning_failures` | `reason`, `base_os`, `stack_kind` | `timeout`, a bootstrap status such as `kernel-install-failed`, `launch_<EC2 error>`, `dcv_session_deleted`, `dcv_session_unstable`, `create_failed`, `no_host`, `internal`. |
+| `idea.health.desktop.capacity_errors` | `code`, `instance_family` | Each launch attempt refused for capacity, including those a retry in another subnet then won. |
+
+## Scheduler and PBS
+
+Queue to start, node provisioning and job outcomes already exist: `idea.jobs_pending_duration`, `idea.jobs_provisioning_duration`, `idea.jobs_total_duration` and `idea.job.count` by `job_outcome`.
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.scheduler.pbs_up` | `reason` | `qstat` answered and the server is Active or Scheduling, every minute, killed at 20 seconds. 1 always carries `reason:ok`; 0 carries why: `failed`, `timeout`, `stuck`, `unreadable` (no server in the answer), `no_state` (a server with no state in the answer), or the server state in lower case (for example `hot_start`). `idle` is a server with scheduling turned off (`qmgr -c "set server scheduling=False"`): it answers, and the metric still reads 0, so mute a `pbs_up` monitor for that maintenance. A scheduler restart leaves no points for its length, so alert on no data as well as on 0. |
+| `idea.health.scheduler.pbs_check_seconds` | | How long `qstat` took. |
+| `idea.health.scheduler.jobs` | `state` | Jobs the server holds by state. |
+| `idea.health.scheduler.capacity_errors` | `reason`, `instance_family` | Each failed scaling activity of a compute stack, once: `insufficient_capacity`, `quota`, `other`. Seen when a stack has waited long enough for the scheduler to ask. |
+| `idea.health.scheduler.provisioning_failures` | `reason_class`, `instance_family` | Jobs that could not be provisioned, by the lifecycle event's class. |
+| `idea.health.orphan_sweep` | `kind` | What a sweep found left behind: `job`, `instance_without_queue`, `compute_image_builder`, `desktop_image_builder`. |
+
+## Bastion
+
+A separate process in each task, once a minute, using only what the task can see. It reports counts, and holds no name or address. One series per host, so sum by `idea_cluster`.
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback: 0 when nothing answers or sshd refuses the connection, as it would a user's. |
+| `idea.health.bastion.sshd_check_seconds` | `host` | How long that took. |
+| `idea.health.bastion.sessions` | `host` | Logged-in connections. |
+| `idea.health.bastion.tcp_established` | `host` | Established on port 22, including those not logged in yet. |
+| `idea.health.bastion.connection_drops` | `reason`, `source` | `maxstartups`, `auth_timeout`, `client_timeout`. `source` is `loopback` (the task's own checks, which sshd refused; a refusal still counts as healthy, so the task is not replaced) or `remote` (every other connection refused). MaxStartups drops are counted from sshd's own totals, so every drop of an episode counts, not only those sshd names in its log. `remote` arrives when sshd reports it, not as it happens: OpenSSH 9.9 names the first drop of an episode and logs the total when the episode ends, so `remote` reads 1 when a flood starts and the rest in the minute it ends, and a flood that has not ended shows only that 1 (OpenSSH 10 reports every five minutes as well). `loopback` is counted as it happens, about 13 checks a minute for each task, so it is the live sign that sshd is refusing connections, and the share of those checks refused is about the share of new connections refused: alert on `remote` or `loopback` at 1 or more, and read the size of a flood from `remote` only once it is over. `tcp_established` less `sessions` is the connections holding a startup slot now. |
+
+## Storage levels and scratch
+
+| Metric | Tags | Meaning |
+| --- | --- | --- |
+| `idea.health.storage.mount_ok` | `mount` | The shared-storage mount answered, from a separate process killed at 15 seconds. |
+| `idea.health.storage.mount_used_percent`, `mount_inodes_used_percent`, `mount_free_bytes`, `mount_read_seconds` | `mount` | Levels of each mount the cluster manager or scheduler has, every five minutes. On GovCloud this is the only record of EFS and Lustre levels. |
+| `idea.health.secret.age_days`, `secret.days_to_rotation` | `secret` | Secrets tagged for this cluster, every six hours, from their metadata. No value is read. A password waiting for its directory sync is not listed here. |
+| `idea.health.secret.password_sync_waiting` | | How many passwords have waited more than an hour for their directory sync, counted every six hours from the secrets that hold them. The sync deletes its secret within seconds, so above 0 means a password is stuck or its task was lost. A lost one is deleted at 9 days, by this collector on the read after its count: switching the collector off leaves that to the next password anyone sets. |
+| `idea.scratch_cleanup.folders_by_reason` | `file_system`, `reason` | Each run's folders by the reason on the page. With the existing `used_percent`, `scheduled_folders`, `kept_folders`, `removed_folders`, `removed_bytes` and `run_failed`. |
+| `idea.scratch_cleanup.folder_skipped` | `file_system` | A scheduled folder a run declined on its last check. |
+
+## What each cluster reads
+
+The same on every cluster, GovCloud included: no call here is commercial-only. ACM `DescribeCertificate`; load balancer `DescribeListenerCertificates`; ECS service and stopped-task descriptions; SQS queue attributes for the directory automation queue; Directory Service `DescribeDirectories`; Secrets Manager `ListSecrets` (metadata), the gateway certificate secret, and the OpenLDAP certificate secret where that is the provider; the ONTAP paths above; `stat` of `/data/home` and `statvfs` of each mount; the `idea.crt` file; `qstat`.
+
+## Permissions and upgrade
+
+Nothing here is part of an upgrade: the collectors run inside the modules once they have started, and `ideactl` neither waits for them nor reads them.
+
+The cluster manager policy gains `elasticloadbalancing:DescribeListenerCertificates`, `acm:DescribeCertificate`, `secretsmanager:ListSecrets` and `ds:DescribeDirectories`, all read-only. They arrive with the cluster manager stack in the upgrade. Until that stack is deployed those collectors report `access_denied` and nothing else changes. No settings need writing: absent keys read as on.
+
+Datadog's AWS integration metrics do not reach GovCloud. There, load balancer, DynamoDB, OpenSearch, FSx and Lambda metrics have no record in Datadog beyond the ones here.

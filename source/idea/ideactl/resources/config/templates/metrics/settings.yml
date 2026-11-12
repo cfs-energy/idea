@@ -9,6 +9,38 @@
 # provider can be one of [cloudwatch, amazon_managed_prometheus, prometheus, dogstatsd]
 provider: "{{metrics_provider}}"
 
+# Cluster health collectors (DogStatsD only): idea.health.* metrics. Each polls on a fixed cadence;
+# set one false to stop it, or enabled false for all. A key that is absent reads as true.
+health:
+  enabled: true
+  certificates:
+    enabled: true
+  ecs:
+    enabled: true
+  directory:
+    enabled: true
+  home_probe:
+    enabled: true
+  ad_automation:
+    enabled: true
+  secrets:
+    enabled: true
+  storage_mounts:
+    enabled: true
+  image_bakes:
+    enabled: true
+  gateway_certificate:
+    enabled: true
+  pbs:
+    enabled: true
+  drift_checks:
+    enabled: true
+  stack_expiry:
+    enabled: true
+  # read when the stack deploys: this one takes a bastion deployment
+  bastion:
+    enabled: true
+
 {% if metrics_provider == 'cloudwatch' %}
 cloudwatch:
   # `dashboard_name` can only contain alphanumerics, dash (-) and underscore (_).

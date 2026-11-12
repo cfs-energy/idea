@@ -10,6 +10,7 @@ from ideadatamodel import SocaFilter
 from ideadatamodel.scheduler import ListJobsRequest
 from ideasdk.utils import Utils
 from ideascheduler.app.documents.document_store import (
+    JOB_SEARCH_FIELDS,
     DocumentStore,
     find_keyword_subfield_paths,
 )
@@ -111,13 +112,78 @@ def test_search_resolves_list_values(context):
 
 
 def test_search_all_filter_is_not_a_term_filter(context):
-    """$all renders a query_string and is unaffected by key resolution"""
+    """$all renders a simple_query_string and is unaffected by key resolution"""
     term_filters = _run_search(
         context,
         filters=[SocaFilter(key='$all', value='jane-doe')],
         keyword_subfields={'owner'},
     )
-    assert term_filters == [{'query_string': {'query': 'jane-doe', 'fields': []}}]
+    # every word: with the default, 'jane-doe' listed everything holding jane or doe
+    assert term_filters == [
+        {
+            'simple_query_string': {
+                'query': 'jane-doe',
+                'lenient': True,
+                'default_operator': 'and',
+            }
+        }
+    ]
+
+
+def _job_search(context, monkeypatch, text):
+    store = _store_for_get_job(context, monkeypatch)
+    store._jobs_keyword_subfields = {'name', 'owner', 'queue', 'project'}
+    store.search_jobs(
+        ListJobsRequest(filters=[SocaFilter(key='$all', value=text)], page_size=10)
+    )
+    (search,) = store.opensearch_client.os_client.body['query']['bool']['must']
+    return search['bool']
+
+
+def test_a_completed_job_search_is_the_text_itself_not_any_word_of_it(
+    context, monkeypatch
+):
+    """
+    dev: 'comsol-run-ec41db' returned 5,100 of 5,255 completed jobs, since the name is
+    indexed as words and any one word in any field matched. the active list finds the
+    text inside six fields; the completed list now asks the index for the same thing.
+    """
+    from ideascheduler.app.api import active_jobs
+
+    search = _job_search(context, monkeypatch, 'comsol-run-ec41db')
+    assert search['minimum_should_match'] == 1
+    wanted = {'value': '*comsol-run-ec41db*', 'case_insensitive': True}
+    assert search['should'] == [
+        {'wildcard': {field: wanted}}
+        for field in (
+            'job_id',
+            'name.raw',
+            'owner.raw',
+            'queue.raw',
+            'project.raw',
+            'state',
+        )
+    ]
+    # one list of fields for both job lists
+    assert active_jobs.JOB_SEARCH_FIELDS is JOB_SEARCH_FIELDS
+    assert [field.removesuffix('.raw') for field in _fields(search)] == list(
+        JOB_SEARCH_FIELDS
+    )
+
+
+def _fields(search):
+    return [next(iter(item['wildcard'])) for item in search['should']]
+
+
+@pytest.mark.parametrize(
+    'text, pattern',
+    [('a*b', r'*a\*b*'), ('what?', r'*what\?*'), ('back\\slash', r'*back\\slash*')],
+)
+def test_a_search_for_a_wildcard_character_finds_that_character(
+    context, monkeypatch, text, pattern
+):
+    search = _job_search(context, monkeypatch, text)
+    assert search['should'][0]['wildcard']['job_id']['value'] == pattern
 
 
 def test_search_without_keyword_subfields_is_unchanged(context):
@@ -338,3 +404,52 @@ def test_verify_keyword_subfields_survives_an_unreadable_mapping(context):
     store = _store_with_mappings(context, {}, raises=True)
 
     assert store._verify_keyword_subfields(alias='jobs', expected={'owner'}) == {}
+
+
+# --- search box and sort ---
+
+
+def test_free_text_search_cannot_fail_on_special_characters(context):
+    must = _run_search(
+        context,
+        [SocaFilter(key='$all', value='run:1 (test/2')],
+        keyword_subfields=set(),
+    )
+    assert must == [
+        {
+            'simple_query_string': {
+                'query': 'run:1 (test/2',
+                'lenient': True,
+                'default_operator': 'and',
+            }
+        }
+    ]
+
+
+def _sort_sent(context, sort_by, keyword_subfields):
+    store = DocumentStore(context=context)
+    store.opensearch_client = _FakeOpenSearchClient()
+    options = ListJobsRequest(paginator={'page_size': 10, 'start': 0}, sort_by=sort_by)
+    store._search(
+        index='jobs',
+        options=options,
+        default_sort_by='queue_time:desc',
+        keyword_subfields=keyword_subfields,
+    )
+    return store.opensearch_client.os_client
+
+
+def test_sort_names_the_order_opensearch_understands(context):
+    client = _sort_sent(context, {'key': 'queue_time', 'order': 'asc'}, set())
+    assert client.sort == 'queue_time:asc'
+
+
+def test_sort_on_an_analysed_field_uses_its_keyword_subfield(context):
+    client = _sort_sent(context, {'key': 'name', 'order': 'desc'}, {'name', 'owner'})
+    assert client.sort == 'name.raw:desc'
+
+
+def test_search_counts_every_hit(context):
+    client = _sort_sent(context, None, set())
+    assert client.body['track_total_hits'] is True
+    assert client.sort == 'queue_time:desc'

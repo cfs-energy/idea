@@ -14,6 +14,7 @@
 import LocalStorageService from "./local-storage-service";
 import {User} from "../client/data-model";
 import IdeaException from "../common/exceptions";
+import {clearSignedOut, markSignedOut} from "../common/session-return";
 import {AUTH_LOGIN_CHALLENGE, AUTH_PASSWORD_RESET_REQUIRED, UNAUTHORIZED_ACCESS} from "../common/error-codes";
 import Utils from "../common/utils";
 import {JwtTokenClaims} from "../common/token-utils";
@@ -42,6 +43,7 @@ class AuthService {
     private sessionVersion = 0
     private reportingVersion = 0
     private reportingAllowed = false
+    private reportingCheckFailed = false
     private reportingResolved = false
     private reportingIdentity = ''
     private reportingPending?: Promise<void>
@@ -49,6 +51,11 @@ class AuthService {
 
     canReadReporting(): boolean {
         return this.reportingResolved && this.reportingAllowed
+    }
+
+    /** The access check itself failed, which says nothing about whether this person has access. */
+    isReportingCheckFailed(): boolean {
+        return this.reportingCheckFailed
     }
 
     isReportingResolved(): boolean {
@@ -94,12 +101,16 @@ class AuthService {
         this.clearReporting()
         this.reportingIdentity = identity
         const version = this.reportingVersion
+        this.reportingCheckFailed = false
         this.reportingPending = this.props.reporting.getCapabilities().then(result => {
             if (session === this.sessionVersion && version === this.reportingVersion) {
                 this.reportingAllowed = result.can_read_reporting === true
             }
         }).catch(() => {
-            if (session === this.sessionVersion && version === this.reportingVersion) this.reportingAllowed = false
+            if (session === this.sessionVersion && version === this.reportingVersion) {
+                this.reportingAllowed = false
+                this.reportingCheckFailed = true
+            }
         }).finally(() => {
             if (session === this.sessionVersion && version === this.reportingVersion) {
                 this.reportingResolved = true
@@ -144,6 +155,7 @@ class AuthService {
      * @param password
      */
     login(username: string, password: string): Promise<boolean> {
+        clearSignedOut()
         this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         this.clearReporting()
         this.claims = null
@@ -186,6 +198,7 @@ class AuthService {
      * @param authorization_code
      */
     login_using_sso_auth_code(authorization_code: string): Promise<boolean> {
+        clearSignedOut()
         if (authorization_code) this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         this.clearSession()
         const session = this.sessionVersion
@@ -440,6 +453,13 @@ class AuthService {
         return this.activeIsLoggedInPromise
     }
 
+    /** The identity provider sent the person back without a session, or the automatic retry gave up. */
+    ssoDidNotComplete(): boolean {
+        const status = window.idea.app.sso_auth_status
+        if (status && status !== 'SUCCESS') return true
+        return this.withStorage('sessionStorage', storage => storage.getItem(KEY_SSO_LAST_REDIRECT)) === 'blocked'
+    }
+
     initiateSso(explicit = true): Promise<boolean> {
         if (explicit) this.withStorage('localStorage', storage => storage.removeItem(KEY_SSO_LOGGED_OUT))
         const guardSaved = this.withStorage('sessionStorage', storage => {
@@ -461,6 +481,7 @@ class AuthService {
     }
 
     logout(explicit = true) {
+        if (explicit) markSignedOut()
         if (explicit && Utils.isSsoEnabled()) {
             this.withStorage('localStorage', storage => storage.setItem(KEY_SSO_LOGGED_OUT, 'true'))
             window.idea.app.sso_auth_code = null

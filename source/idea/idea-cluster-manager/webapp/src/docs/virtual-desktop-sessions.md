@@ -4,17 +4,17 @@
 
 Manage all Virtual Desktops running on your IDEA cluster
 
-### Delete a virtual desktop
+### Terminate a virtual desktop
 
-Select the virtual desktop session and click **Actions** > **Delete Session** to delete an inactive virtual desktop. Choose **Force Delete Session** if you want to delete a virtual desktop with active connections.
+Select the virtual desktop session and click **Actions** > **Terminate Session(s)** to terminate an inactive virtual desktop. Choose **Force Terminate Session(s)** if you want to terminate a virtual desktop with active connections.
 
 ### Stop a virtual desktop
 
-Select the virtual desktop session and click **Actions** > **Stop Session** to stop an inactive virtual desktop. Choose **Force Stop Session** if you want to stop a virtual desktop with active connections.
+Select the virtual desktop session and click **Actions** > **Stop/Hibernate Session(s)** to stop an inactive virtual desktop. Choose **Force Stop/Hibernate Session(s)** if you want to stop a virtual desktop with active connections.
 
 ### Check session health
 
-To retrieve the DCV information associated to a virtual desktop, click **Actions** > **Session Health**.
+To retrieve the DCV information associated to a virtual desktop, click **Actions** > **Session(s) Health**.
 
 ### Create Software Stack
 

@@ -153,31 +153,6 @@ class VirtualDesktopClient extends IdeaBaseClient<VirtualDesktopClientProps> {
             req
         )
     }
-
-    joinSession(idea_session_id: string, idea_session_owner: string, username?: string): Promise<boolean> {
-        return new Promise<boolean>(() => {
-            let connection_info: VirtualDesktopSessionConnectionInfo = {
-                idea_session_id: idea_session_id,
-                idea_session_owner: idea_session_owner
-            }
-
-            if (username) {
-                connection_info.username = username
-            }
-
-            this.getSessionConnectionInfo({
-                connection_info: connection_info
-            }).then(result => {
-                return `${result.connection_info?.endpoint}${result.connection_info?.web_url_path}?authToken=${result.connection_info?.access_token}#${result.connection_info?.dcv_session_id}`
-            }).then(url => {
-                window.open(url);
-                return true
-            }).catch(error => {
-                console.error(error)
-                return false
-            })
-        })
-    }
 }
 
 export default VirtualDesktopClient

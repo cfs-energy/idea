@@ -185,6 +185,7 @@ def test_wire_contract_money_nulls_dates_and_strict_request():
         'storage',
         'budgets',
         'notes',
+        'unavailable',
     }
     assert set(wire['period']) == {'start', 'end', 'label'}
     assert wire['jobs']['cost'] == '12.3400'

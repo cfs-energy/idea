@@ -236,6 +236,26 @@ Resources:
             Status: Enabled
             NoncurrentVersionExpiration:
               NoncurrentDays: 365
+          {% if scheduler_log_archives %}
+          # [6] The scheduler uploads its logs to logs/<module id>/ once a day and nothing
+          # else removes them. Only that prefix expires: the load balancer access logs sit
+          # beside it under logs/ with their own module ids. Noncurrent versions of what
+          # expires are dropped after a day instead of the year above, or nothing is freed.
+          {% for archive in scheduler_log_archives %}
+          - Id: ExpireSchedulerLogArchive{{ loop.index }}
+            Status: Enabled
+            Prefix: logs/{{ archive.module_id }}/
+            ExpirationInDays: {{ archive.retention_days }}
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+          - Id: ExpireSchedulerLogDeleteMarkers{{ loop.index }}
+            Status: Enabled
+            Prefix: logs/{{ archive.module_id }}/
+            ExpiredObjectDeleteMarker: true
+          {% endfor %}
+          {% endif %}
       # [5] Tags to enable AWS Backup for Cluster S3 Bucket
       Tags:
         - Key: "idea:ClusterName"

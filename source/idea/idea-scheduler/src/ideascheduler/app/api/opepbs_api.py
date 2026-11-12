@@ -11,6 +11,7 @@
 
 from ideascheduler.app.accounts_guard import require_enabled
 from ideascheduler.app.api.scheduler_api import maintenance_message, maintenance_exempt
+from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
 import ideascheduler
 
 from ideadatamodel import exceptions, errorcodes, constants
@@ -77,18 +78,12 @@ class OpenPBSAPI(BaseAPI):
                 )
 
             if not pbs_context.is_valid():
-                formatted_user_message = f'Job submission failed and cannot be queued: {os.linesep}{os.linesep}'
+                formatted_user_message = f"This job can't be queued:{os.linesep}"
 
                 if not pbs_context.job_validation_result:
-                    formatted_user_message += f'* Below parameters failed to be validated: {os.linesep}{os.linesep}'
                     formatted_user_message += f'{pbs_context.job_validation_result}'
-                    formatted_user_message += f'{os.linesep}'
 
                 if not pbs_context.incidentals_validation_result:
-                    formatted_user_message += (
-                        f'* Job will not be provisioned due to below errors: {os.linesep}'
-                        f'{os.linesep}'
-                    )
                     formatted_user_message += (
                         f'{pbs_context.incidentals_validation_result}'
                     )
@@ -174,11 +169,7 @@ class OpenPBSAPI(BaseAPI):
                 message = e.message
             else:
                 self.logger.exception(f'job validation failed: {e}')
-                message = str(
-                    f'Something went wrong while validating the job. Please contact '
-                    f'administrator to investigate the problem. {os.linesep}'
-                    f'Error: {e}'
-                )
+                message = JOB_INTERNAL_ERROR_MESSAGE
             pbs_context.api_context.success(
                 OpenPBSHookResult(accept=False, formatted_user_message=message)
             )

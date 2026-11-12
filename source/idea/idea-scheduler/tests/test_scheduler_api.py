@@ -7,7 +7,13 @@ read from the token - the comparison must be by value.
 """
 
 from ideadatamodel import constants, errorcodes, exceptions
-from ideadatamodel.scheduler import GetJobResult, SocaJob, SubmitJobRequest
+from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
+from ideadatamodel.scheduler import (
+    GetJobResult,
+    ListJobsResult,
+    SocaJob,
+    SubmitJobRequest,
+)
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
 from ideascheduler.app.api import scheduler_api as scheduler_api_module
@@ -209,8 +215,8 @@ def _jobs_dir(context):
 
 def _record_script_writes(monkeypatch) -> list:
     """
-    the script is removed once the submission finishes, so record where each write went
-    (the bare filename and the stat of the directory it was opened relative to).
+    record where each write went (the bare filename and the stat of the directory it was
+    opened relative to).
     """
     written = []
     original = scheduler_api_module.open_new_job_script
@@ -259,8 +265,9 @@ def test_submit_job_writes_only_inside_jobs_dir(context, monkeypatch, malicious_
     assert '/' not in name
     assert '..' not in name
     assert _same_directory(dir_stat, jobs_dir)
-    # nothing root-created is left behind once the submission finished
-    assert os.listdir(jobs_dir) == []
+    # the kept script is that one file and the result names it
+    assert os.listdir(jobs_dir) == [name]
+    assert result.job_script_path == os.path.join(jobs_dir, name)
 
 
 def test_submit_job_does_not_escape_to_external_dir(context, monkeypatch, tmp_path):
@@ -348,6 +355,171 @@ def test_submit_job_rejected_leaves_no_script_behind(context, monkeypatch):
     assert os.listdir(_jobs_dir(context)) == []
 
 
+def _pbs_request(script: str = '#PBS -N myjob\necho hi\n', **kwargs):
+    return SubmitJobRequest(
+        job_owner=CONTEXT_USER,
+        job_script=Utils.base64_encode(script),
+        job_script_interpreter='pbs',
+        **kwargs,
+    )
+
+
+def _dry_run_report(findings: int = 0):
+    """what the submit hook records for a dry run: never accepted, findings say why not"""
+    from ideadatamodel.scheduler import (
+        JobValidationResult,
+        JobValidationResultEntry,
+        SubmitJobResult,
+    )
+
+    return SubmitJobResult(
+        accepted=False,
+        job=SocaJob(job_uid='uid'),
+        validations=JobValidationResult(
+            results=[JobValidationResultEntry(message='no')] * findings
+        ),
+        incidentals=JobValidationResult(results=[]),
+    )
+
+
+def test_submit_job_accepted_keeps_the_script_for_its_owner(context, monkeypatch):
+    """
+    the owner and an administrator read the submitted script in the jobs dir to work out
+    why a job failed. it stays, private to the owner it was handed to through its fd.
+    """
+    from ideadatamodel.scheduler import SubmitJobResult
+
+    api = _prepare_submit(context, monkeypatch)
+    context.job_submission_tracker = _FakeTracker(
+        SubmitJobResult(accepted=True, job=SocaJob(job_uid='uid'))
+    )
+    handed_over = []
+    monkeypatch.setattr(
+        scheduler_api_module,
+        'chown_fd',
+        lambda fd, user, group: handed_over.append((os.fstat(fd).st_ino, user, group)),
+    )
+    script = '#PBS -N myjob\necho hi\n'
+
+    result = api._submit_job(
+        request=_pbs_request(script), job_owner=CONTEXT_USER, dry_run=None
+    )
+
+    jobs_dir = _jobs_dir(context)
+    (name,) = os.listdir(jobs_dir)
+    kept = os.path.join(jobs_dir, name)
+    assert name.startswith('myjob_') and name.endswith('.que')
+    assert result.job_script_path == kept
+    with open(kept) as f:
+        assert f.read() == script + '\n'
+    stat = os.lstat(kept)
+    assert stat.st_mode & 0o7777 == 0o600
+    assert handed_over == [(stat.st_ino, CONTEXT_USER, 'grp')]
+
+
+@pytest.mark.parametrize(
+    'script, pattern',
+    [
+        ('#PBS -N my job/../r&d run\necho hi\n', r'r_d_run_[^_/]+\.que'),
+        ('echo hi\n', r'[^_/]+\.que'),
+    ],
+)
+def test_submit_job_result_names_the_script_on_disk(
+    context, monkeypatch, script, pattern
+):
+    """the portal opens the path it is given, so it is the sanitized name that was written"""
+    import re
+    from ideadatamodel.scheduler import SubmitJobResult
+
+    api = _prepare_submit(context, monkeypatch)
+    context.job_submission_tracker = _FakeTracker(
+        SubmitJobResult(accepted=True, job=SocaJob(job_uid='uid'))
+    )
+
+    result = api._submit_job(
+        request=_pbs_request(script), job_owner=CONTEXT_USER, dry_run=None
+    )
+
+    jobs_dir = _jobs_dir(context)
+    (name,) = os.listdir(jobs_dir)
+    assert re.fullmatch(pattern, name)
+    assert result.job_script_path == os.path.join(jobs_dir, name)
+
+
+def test_submit_job_passed_dry_run_keeps_the_script(context, monkeypatch):
+    """a dry run with no findings keeps its script: the portal opens it in the workbench"""
+    from ideadatamodel.scheduler import DryRunOption
+
+    api = _prepare_submit(context, monkeypatch, returncode=1, stderr='dry run')
+    context.job_submission_tracker = _FakeTracker(_dry_run_report())
+
+    result = api._submit_job(
+        request=_pbs_request(dry_run=True),
+        job_owner=CONTEXT_USER,
+        dry_run=DryRunOption.DEFAULT,
+    )
+
+    jobs_dir = _jobs_dir(context)
+    (name,) = os.listdir(jobs_dir)
+    assert result.job_script_path == os.path.join(jobs_dir, name)
+
+
+def test_submit_job_failed_dry_run_leaves_no_script_behind(context, monkeypatch):
+    from ideadatamodel.scheduler import DryRunOption
+
+    api = _prepare_submit(context, monkeypatch, returncode=1, stderr='dry run')
+    context.job_submission_tracker = _FakeTracker(_dry_run_report(findings=1))
+
+    result = api._submit_job(
+        request=_pbs_request(dry_run=True),
+        job_owner=CONTEXT_USER,
+        dry_run=DryRunOption.DEFAULT,
+    )
+
+    assert result.job_script_path is None
+    assert os.listdir(_jobs_dir(context)) == []
+
+
+@pytest.mark.parametrize('interpreter', ['pbs', 'bash'])
+def test_submit_job_exception_leaves_no_script_behind(
+    context, monkeypatch, interpreter
+):
+    api = _prepare_submit(context, monkeypatch)
+
+    def fail(command, **_):
+        raise RuntimeError('shell is gone')
+
+    context.shell.invoke = fail
+    request = _pbs_request()
+    request.job_script_interpreter = interpreter
+
+    with pytest.raises(RuntimeError):
+        api._submit_job(request=request, job_owner=CONTEXT_USER, dry_run=None)
+
+    assert os.listdir(_jobs_dir(context)) == []
+
+
+def test_submit_job_bash_keeps_a_script_that_ran_and_removes_one_that_failed(
+    context, monkeypatch
+):
+    api = _prepare_submit(context, monkeypatch)
+    request = _pbs_request('echo hi\n')
+    request.job_script_interpreter = 'bash'
+    jobs_dir = _jobs_dir(context)
+
+    result = api._submit_job(request=request, job_owner=CONTEXT_USER, dry_run=None)
+
+    (name,) = os.listdir(jobs_dir)
+    assert name.endswith('.sh')
+    assert result.job_script_path == os.path.join(jobs_dir, name)
+    assert os.lstat(result.job_script_path).st_mode & 0o7777 == 0o600
+
+    context.shell.returncode = 1
+    with pytest.raises(exceptions.SocaException):
+        api._submit_job(request=request, job_owner=CONTEXT_USER, dry_run=None)
+    assert os.listdir(jobs_dir) == [name]
+
+
 def test_submit_job_creates_the_script_relative_to_the_jobs_dir(context, monkeypatch):
     """the script is created through a directory fd, not by an absolute path open"""
     opened = []
@@ -401,8 +573,8 @@ def test_submit_job_dry_run_returns_the_refusal_instead_of_raising(
 
 def test_submit_job_raises_only_when_tracker_empty(context, monkeypatch):
     """
-    when qsub fails and the tracker has nothing, the raw failure is surfaced as a
-    last resort (no structured result exists to return).
+    when qsub fails and the tracker has nothing, there is no structured result to
+    return: the raw failure goes to the log and the submitter reads a fixed message.
     """
     api = _prepare_submit(context, monkeypatch, returncode=1)
     context.job_submission_tracker = _FakeTracker(None)
@@ -415,7 +587,48 @@ def test_submit_job_raises_only_when_tracker_empty(context, monkeypatch):
 
     with pytest.raises(exceptions.SocaException) as exc_info:
         api._submit_job(request=request, job_owner=CONTEXT_USER, dry_run=None)
-    assert 'Failed to submit job' in exc_info.value.message
+    assert exc_info.value.message == JOB_INTERNAL_ERROR_MESSAGE
+
+
+@pytest.mark.parametrize('dry_run', [None, 'true'], ids=['submit', 'dry-run'])
+def test_submit_job_reports_a_line_qsub_refuses_as_the_scripts_fault(
+    context, monkeypatch, dry_run
+):
+    """
+    "#PBS -N js proof/rc8": qsub stops at the line ("qsub: directive error: -N js
+    proof/rc8") before the submit hook runs, so the tracker has nothing, and the owner was
+    told "The scheduler hit an internal error", on a dry run too.
+    """
+    api = _prepare_submit(
+        context,
+        monkeypatch,
+        returncode=1,
+        stderr='qsub: directive error: -N js proof/rc8',
+    )
+    context.job_submission_tracker = _FakeTracker(None)
+
+    request = SubmitJobRequest(
+        job_owner=CONTEXT_USER,
+        job_script=Utils.base64_encode('#PBS -N js proof/rc8\necho hi\n'),
+        job_script_interpreter='pbs',
+    )
+
+    from ideadatamodel.scheduler import DryRunOption
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        api._submit_job(
+            request=request,
+            job_owner=CONTEXT_USER,
+            dry_run=DryRunOption(dry_run) if dry_run else None,
+        )
+
+    assert exc_info.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
+    assert exc_info.value.message == (
+        "This job can't be queued: qsub refused a line of the script (directive error: "
+        '-N js proof/rc8). Correct the line that reads #PBS -N js proof/rc8 and submit '
+        'again.'
+    )
+    assert os.listdir(_jobs_dir(context)) == []
 
 
 # --- job read scoping: Scheduler.GetActiveJob / Scheduler.GetCompletedJob ---
@@ -840,6 +1053,43 @@ def test_list_active_jobs_always_filters_on_the_token_username(context, monkeypa
 
     assert job_cache.list_kwargs['owner'] == 'jane-doe'
     assert job_cache.count_kwargs['owner'] == 'jane-doe'
+
+
+def test_active_jobs_search_is_honoured_and_echoed(context, monkeypatch):
+    jobs = [
+        SocaJob(job_id='2345', name='Plasma scan', owner='jane-doe'),
+        SocaJob(job_id='2346', name='Protein study', owner='jane-doe'),
+    ]
+
+    class _JobCache:
+        def list_jobs(self, **kwargs):
+            return list(jobs)
+
+        def get_count(self, **kwargs):
+            return len(jobs)
+
+        def get_job_provisioning_retry_count(self, job_id):
+            return 0
+
+    monkeypatch.setattr(
+        ApiInvocationContext, 'get_username', lambda _: 'jane-doe', raising=False
+    )
+    context.job_cache = _JobCache()
+    monkeypatch.setattr(
+        'ideascheduler.app.api.scheduler_api.apply_waiting_signals',
+        lambda **_kwargs: None,
+    )
+    invocation = build_invocation_context(
+        context,
+        {'filters': [{'key': 'job_id', 'value': '2346'}]},
+        'Scheduler.ListActiveJobs',
+    )
+    SchedulerAPI(context=context).list_active_jobs(invocation)
+
+    result = invocation.get_response_payload_as(ListJobsResult)
+    assert [job.job_id for job in result.listing] == ['2346']
+    assert result.paginator.total == 1
+    assert result.filters[0].key == 'job_id'
 
 
 def test_owner_delete_records_owner_reason(scheduler_api, context, monkeypatch):
