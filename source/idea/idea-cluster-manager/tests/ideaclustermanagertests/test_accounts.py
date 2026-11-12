@@ -1204,6 +1204,75 @@ def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
     assert len(secrets.list_calls) == 1
 
 
+def test_a_cluster_where_nobody_sets_a_password_still_sweeps(
+    context: AppContext, secrets
+):
+    """the secrets health collector, on its own thread, sweeps with the list it made"""
+    from ideaclustermanager.app.metrics.health_collectors import SecretsCollector
+
+    prefix = 'idea-mock-password-sync-'
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=9.1)
+    kept = [
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=8.9),
+        # the collector's tag filter matches by prefix: another cluster's
+        secrets.add(
+            'idea-mock2-password-sync-old',
+            tags={**PASSWORD_TAGS, 'idea:ClusterName': 'idea-mock2'},
+            age_days=9.1,
+        ),
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=9.1),
+    ]
+    metrics = Mock()
+
+    SecretsCollector(context).collect(metrics)
+
+    assert secrets.deleted == [old]
+    assert set(kept) <= set(secrets.secrets)
+    # one list served the gauges and the sweep
+    assert secrets.list_calls == [
+        {
+            'Filters': [
+                {'Key': 'tag-key', 'Values': ['idea:ClusterName']},
+                {'Key': 'tag-value', 'Values': ['idea-mock']},
+            ]
+        }
+    ]
+    # counted as it was listed, before the sweep
+    metrics.level.assert_any_call('secret.password_sync_waiting', 3)
+    # a password set within the hour does not look again
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+
+
+def test_the_collectors_sweep_does_not_wait_for_the_hour_a_password_set_started(
+    context: AppContext, secrets
+):
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+    old = secrets.add(
+        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
+    )
+    listed = [dict(secret) for secret in secrets.secrets.values()]
+
+    context.accounts.remove_stray_password_secrets(listed=listed)
+
+    assert secrets.deleted == [old]
+    assert len(secrets.list_calls) == 1
+
+
+def test_a_sweep_while_another_is_looking_is_skipped(context: AppContext, secrets):
+    old = secrets.add(
+        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
+    )
+    listed = [dict(secret) for secret in secrets.secrets.values()]
+    with context.accounts._password_secret_sweep:
+        context.accounts.remove_stray_password_secrets(listed=listed)
+        context.accounts.remove_stray_password_secrets()
+    assert (secrets.deleted, secrets.list_calls) == ([], [])
+    context.accounts.remove_stray_password_secrets(listed=listed)
+    assert secrets.deleted == [old]
+
+
 def test_a_stray_secret_that_cannot_be_deleted_does_not_keep_the_others(
     context: AppContext, monkeypatch, secrets
 ):
