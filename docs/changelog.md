@@ -6,7 +6,7 @@ Each release starts with **Highlights for users**: what changed for people using
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning](https://calver.org/).
 
-## [26.11.2] - unreleased
+## [26.11.2] - 2026-11-13
 
 > **Upgrade behaviour to check.** Report CSV exports have new column names, so a script that reads an export by column name has to change: `period`, `start_date`, `end_date`, `currency`, `source_as_of` and `coverage` became `Period`, `Start date`, `End date`, `Currency`, `Costs as of` and `Complete`, and the other columns use the titles shown on the page. The first `ideactl bootstrap` deletes scheduler log archives older than 400 days; `upgrade-cluster` and `ideactl deploy` do not. Going back to 26.11.1 undercounts desktop disk costs: return within 3 days, or the days stored meanwhile stay low until the next month close. A kernel with no initramfs or initrd now fails a bootstrap on a kernel series change and on an Ubuntu bake, with `kernel-boot-mismatch`, where the host used to reboot and not come back. `idea.health.bastion.connection_drops` and the bastion gauges no longer carry `task`, so a board or monitor grouping by it has to change. The personal costs head index seeds over several collector runs on a large table, and readers keep scanning until it finishes. A cluster-manager account task that keeps failing is no longer moved to the tasks dead-letter queue: an alarm on that queue's depth has to watch `last_task_failure` or the task-manager log. A password set while 26.11.1 and 26.11.2 cluster-manager tasks overlap for more than about 25 minutes can fail visibly and must be set again.
 
