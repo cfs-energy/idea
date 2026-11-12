@@ -455,6 +455,37 @@ def test_passwords_waiting_for_their_sync_are_counted_and_never_named():
     assert metrics.value('secret.password_sync_waiting') == [2]
 
 
+def test_the_sweep_gets_the_listed_password_secrets_after_the_gauges_are_out():
+    waiting = {
+        'Name': 'idea-com-password-sync-stray',
+        'CreatedDate': NOW - timedelta(days=10),
+        'Tags': [
+            {'Key': 'idea:ClusterName', 'Value': 'idea-com'},
+            {'Key': 'idea:Purpose', 'Value': 'password-sync'},
+        ],
+    }
+    client = Mock()
+    client.get_paginator.return_value = SimpleNamespace(
+        paginate=lambda Filters: [
+            {'SecretList': [waiting, {'Name': 'idea-com-ad-admin', 'CreatedDate': NOW}]}
+        ]
+    )
+    context = context_with(secretsmanager=client)
+    context.accounts.remove_stray_password_secrets.side_effect = RuntimeError('sweep')
+    metrics = Recorder()
+
+    with pytest.raises(RuntimeError):
+        SecretsCollector(context).collect(metrics, NOW.timestamp())
+
+    context.accounts.remove_stray_password_secrets.assert_called_once_with(
+        listed=[waiting]
+    )
+    assert metrics.value('secret.password_sync_waiting') == [1]
+    assert metrics.value('secret.age_days', secret='ad-admin') == [0]
+    client.get_paginator.assert_called_once_with('list_secrets')
+    client.delete_secret.assert_not_called()
+
+
 def test_ad_queue_and_a_loop_that_stopped_reaching_it():
     sqs = Mock()
     sqs.get_queue_attributes.return_value = {

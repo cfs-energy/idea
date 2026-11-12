@@ -410,6 +410,12 @@ class SecretsCollector(HealthCollector):
                     (next_rotation.timestamp() - now) / SECONDS_PER_DAY,
                     secret=name,
                 )
+        # The same list serves the sweep of password secrets no task is left to delete,
+        # so a cluster where nobody sets a password still sweeps, on this thread and
+        # never the task listener's. Last: no gauge above waits on a delete.
+        accounts = getattr(self.context, 'accounts', None)
+        if accounts is not None:
+            accounts.remove_stray_password_secrets(listed=passwords)
 
 
 class AdAutomationCollector(HealthCollector):

@@ -24,6 +24,7 @@ from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
 
 from typing import Optional, Dict, List, Tuple
 import ldap  # noqa
+from ldap.filter import escape_filter_chars  # noqa
 from ldap.ldapobject import LDAPObject  # noqa
 from ldap.controls import SimplePagedResultsControl  # noqa
 from ldap.controls.vlv import VLVRequestControl, VLVResponseControl  # noqa
@@ -604,7 +605,29 @@ class AbstractLDAPClient:
     def build_user_dn(self, username: str) -> str:
         return f'cn={username},{self.ldap_user_base}'
 
-    def build_user_filterstr(self, username: str) -> str:
+    @staticmethod
+    def filter_pattern(soca_filter: Optional[SocaFilter]) -> Optional[str]:
+        """
+        the value of a search filter, for the build_*_filterstr methods with escape=False.
+        what was typed is escaped, so it is matched as written: `*`, `(`, `)` and `\\` are
+        plain characters, never a wildcard or more filter. the only wildcards are the ones
+        the kind of match adds here.
+        """
+        if soca_filter is None:
+            return None
+        if Utils.is_not_empty(soca_filter.eq):
+            return escape_filter_chars(soca_filter.eq)
+        if Utils.is_not_empty(soca_filter.starts_with):
+            return f'{escape_filter_chars(soca_filter.starts_with)}*'
+        if Utils.is_not_empty(soca_filter.ends_with):
+            return f'*{escape_filter_chars(soca_filter.ends_with)}'
+        if Utils.is_not_empty(soca_filter.like):
+            return f'*{escape_filter_chars(soca_filter.like)}*'
+        return None
+
+    def build_user_filterstr(self, username: str, escape: bool = True) -> str:
+        if escape:
+            username = escape_filter_chars(username)
         return f'(&{self.ldap_user_filterstr}(cn={username}))'
 
     @property
@@ -619,16 +642,21 @@ class AbstractLDAPClient:
         return f'cn={group_name},{self.ldap_group_base}'
 
     def build_group_filterstr(
-        self, group_name: str = None, username: str = None
+        self, group_name: str = None, username: str = None, escape: bool = True
     ) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
             # Check if we have a fully qualified
-            if group_name.upper().startswith('CN='):
+            is_dn = group_name.upper().startswith('CN=')
+            if escape:
+                group_name = escape_filter_chars(group_name)
+            if is_dn:
                 filterstr = f'{filterstr}(distinguishedName={group_name})'
             else:
                 filterstr = f'{filterstr}(cn={group_name})'
         if username is not None:
+            if escape:
+                username = escape_filter_chars(username)
             filterstr = f'{filterstr}(memberUid={username})'
         return f'(&{filterstr})'
 
@@ -641,7 +669,7 @@ class AbstractLDAPClient:
     def ldap_sudoer_filterstr(self) -> str: ...
 
     def build_sudoer_filterstr(self, username: str) -> str:
-        return f'(&{self.ldap_sudoer_filterstr}(cn={username}))'
+        return f'(&{self.ldap_sudoer_filterstr}(cn={escape_filter_chars(username)}))'
 
     @property
     @abstractmethod
@@ -733,33 +761,14 @@ class AbstractLDAPClient:
     ) -> Tuple[List[Dict], SocaPaginator]:
         result = []
 
-        group_name_token = None
-        if group_name_filter is not None:
-            if Utils.is_not_empty(group_name_filter.eq):
-                group_name_token = group_name_filter.eq
-            elif Utils.is_not_empty(group_name_filter.starts_with):
-                group_name_token = f'{group_name_filter.starts_with}*'
-            elif Utils.is_not_empty(group_name_filter.ends_with):
-                group_name_token = f'*{group_name_filter.ends_with}'
-            elif Utils.is_not_empty(group_name_filter.like):
-                group_name_token = f'*{group_name_filter.like}*'
-
-        username_token = None
-        if username_filter is not None:
-            if Utils.is_not_empty(username_filter.eq):
-                username_token = username_filter.eq
-            elif Utils.is_not_empty(username_filter.starts_with):
-                username_token = f'{username_filter.starts_with}*'
-            elif Utils.is_not_empty(username_filter.ends_with):
-                username_token = f'*{username_filter.ends_with}'
-            elif Utils.is_not_empty(username_filter.like):
-                username_token = f'*{username_filter.like}*'
+        group_name_token = self.filter_pattern(group_name_filter)
+        username_token = self.filter_pattern(username_filter)
 
         if Utils.are_empty(group_name_token, username_token):
             filterstr = self.ldap_group_filterstr
         else:
             filterstr = self.build_group_filterstr(
-                group_name=group_name_token, username=username_token
+                group_name=group_name_token, username=username_token, escape=False
             )
 
         if self.is_activedirectory():
@@ -891,21 +900,9 @@ class AbstractLDAPClient:
         result = []
 
         filterstr = self.ldap_user_filterstr
-        if username_filter is not None:
-            if Utils.is_not_empty(username_filter.eq):
-                filterstr = self.build_user_filterstr(username=username_filter.eq)
-            elif Utils.is_not_empty(username_filter.starts_with):
-                filterstr = self.build_user_filterstr(
-                    username=f'{username_filter.starts_with}*'
-                )
-            elif Utils.is_not_empty(username_filter.ends_with):
-                filterstr = self.build_user_filterstr(
-                    username=f'*{username_filter.ends_with}'
-                )
-            elif Utils.is_not_empty(username_filter.like):
-                filterstr = self.build_user_filterstr(
-                    username=f'*{username_filter.like}*'
-                )
+        username_token = self.filter_pattern(username_filter)
+        if username_token is not None:
+            filterstr = self.build_user_filterstr(username_token, escape=False)
 
         if self.is_activedirectory():
             search_result = self.simple_paginated_search(

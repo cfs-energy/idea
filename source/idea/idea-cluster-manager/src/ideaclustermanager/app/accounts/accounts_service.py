@@ -50,6 +50,7 @@ import ldap
 import os
 import re
 import stat
+import threading
 import time
 
 
@@ -104,6 +105,7 @@ class AccountsService:
             'directoryservice.automation_dir', required=True
         )
         self._next_password_secret_sweep = 0.0
+        self._password_secret_sweep = threading.Lock()
 
     def is_cluster_administrator(self, username: str) -> bool:
         cluster_administrator = self.context.config().get_string(
@@ -1349,51 +1351,69 @@ class AccountsService:
     # swept while its message is still queued is a password that is never applied.
     STRAY_PASSWORD_SECRET_SECONDS = 9 * 24 * 3600
 
-    def remove_stray_password_secrets(self):
+    def remove_stray_password_secrets(self, listed: Optional[List[dict]] = None):
         """
         a password secret outlives its task when the task is lost: a queue purged by
-        hand, or a delete Secrets Manager did not take. Looks at most once an hour,
-        the first time on the first password set after a start, removes only secrets
-        with this cluster's password name and tags, and never fails the caller.
+        hand, or a delete Secrets Manager did not take. Removes only secrets with this
+        cluster's password name and tags, and never fails the caller.
+
+        The secrets health collector calls this on the leader, every six hours and soon
+        after a start, with the secrets it has just listed for its own count (`listed`),
+        so a cluster where nobody sets a password still sweeps and no second list is
+        made. A password set looks too, with a list of its own, at most once an hour
+        and not within an hour of any other look: the only look where the health
+        collectors do not run (metrics provider not DogStatsD, or switched off).
         """
-        now = time.monotonic()
-        if now < self._next_password_secret_sweep:
+        # one look at a time: a second would be told its secrets are already gone
+        if not self._password_secret_sweep.acquire(blocking=False):
             return
-        self._next_password_secret_sweep = now + self.PASSWORD_SECRET_SWEEP_SECONDS
+        try:
+            now = time.monotonic()
+            if listed is None and now < self._next_password_secret_sweep:
+                return
+            self._next_password_secret_sweep = now + self.PASSWORD_SECRET_SWEEP_SECONDS
+            self._remove_stray_password_secrets(listed)
+        finally:
+            self._password_secret_sweep.release()
+
+    def _remove_stray_password_secrets(self, listed: Optional[List[dict]]):
         cutoff = time.time() - self.STRAY_PASSWORD_SECRET_SECONDS
         wanted = self.password_secret_tags
         try:
             secrets = self.context.aws().secretsmanager()
-            pages = secrets.get_paginator('list_secrets').paginate(
-                Filters=[
-                    {'Key': 'name', 'Values': [self.password_secret_prefix]},
-                    {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+            if listed is None:
+                pages = secrets.get_paginator('list_secrets').paginate(
+                    Filters=[
+                        {'Key': 'name', 'Values': [self.password_secret_prefix]},
+                        {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+                    ]
+                )
+                listed = [
+                    secret for page in pages for secret in page.get('SecretList', [])
                 ]
-            )
-            for page in pages:
-                for secret in page.get('SecretList', []):
-                    # the filters match by prefix, and on any tag
-                    tags = {tag['Key']: tag['Value'] for tag in secret.get('Tags', [])}
-                    if not secret['Name'].startswith(self.password_secret_prefix):
-                        continue
-                    if any(tags.get(key) != value for key, value in wanted.items()):
-                        continue
-                    if secret['CreatedDate'].timestamp() > cutoff:
-                        continue
-                    try:
-                        secrets.delete_secret(
-                            SecretId=secret['ARN'], ForceDeleteWithoutRecovery=True
-                        )
-                        self.logger.info('removed a stray password secret')
-                    except (
-                        botocore.exceptions.ClientError,
-                        botocore.exceptions.BotoCoreError,
-                    ) as error:
-                        # the others are still looked at
-                        self.logger.warning(
-                            'could not delete a stray password secret: '
-                            f'{self._error_code(error)}'
-                        )
+            for secret in listed:
+                # the filters match by prefix, and on any tag
+                tags = {tag['Key']: tag['Value'] for tag in secret.get('Tags', [])}
+                if not secret['Name'].startswith(self.password_secret_prefix):
+                    continue
+                if any(tags.get(key) != value for key, value in wanted.items()):
+                    continue
+                if secret['CreatedDate'].timestamp() > cutoff:
+                    continue
+                try:
+                    secrets.delete_secret(
+                        SecretId=secret['ARN'], ForceDeleteWithoutRecovery=True
+                    )
+                    self.logger.info('removed a stray password secret')
+                except (
+                    botocore.exceptions.ClientError,
+                    botocore.exceptions.BotoCoreError,
+                ) as error:
+                    # the others are still looked at
+                    self.logger.warning(
+                        'could not delete a stray password secret: '
+                        f'{self._error_code(error)}'
+                    )
         except (
             botocore.exceptions.ClientError,
             botocore.exceptions.BotoCoreError,

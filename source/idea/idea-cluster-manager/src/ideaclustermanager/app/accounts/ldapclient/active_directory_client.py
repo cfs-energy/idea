@@ -127,23 +127,25 @@ class ActiveDirectoryClient(AbstractLDAPClient):
         return f'(&(objectClass=user)(memberOf={self.ldap_sudoers_group_dn}))'
 
     def build_sudoer_filterstr(self, username: str) -> str:
-        return f'(&{self.ldap_sudoer_filterstr[2:-1]}(cn={username}))'
+        return (
+            f'(&{self.ldap_sudoer_filterstr[2:-1]}(cn={escape_filter_chars(username)}))'
+        )
 
     def build_samaccountname_filterstr(self, username: str) -> str:
-        return f'(&{self.ldap_user_filterstr}(sAMAccountName={username}))'
+        return f'(&{self.ldap_user_filterstr}(sAMAccountName={escape_filter_chars(username)}))'
 
     def build_nestedgroup_membership_filterstr(
         self, username: str, groupname: str
     ) -> str:
-        return f'(&(memberOf:1.2.840.113556.1.4.1941:={self.build_group_dn(group_name=groupname)})(objectCategory=person)(objectClass=user)(sAMAccountName={username}))'
+        return f'(&(memberOf:1.2.840.113556.1.4.1941:={escape_filter_chars(self.build_group_dn(group_name=groupname))})(objectCategory=person)(objectClass=user)(sAMAccountName={escape_filter_chars(username)}))'
 
     def build_email_filterstr(self, email: str) -> str:
-        return f'(&{self.ldap_user_filterstr}(mail={email}))'
+        return f'(&{self.ldap_user_filterstr}(mail={escape_filter_chars(email)}))'
 
     def build_nestedgroup_email_membership_filterstr(
         self, email: str, groupname: str
     ) -> str:
-        return f'(&(memberOf:1.2.840.113556.1.4.1941:={self.build_group_dn(group_name=groupname)})(objectCategory=person)(objectClass=user)(mail={email}))'
+        return f'(&(memberOf:1.2.840.113556.1.4.1941:={escape_filter_chars(self.build_group_dn(group_name=groupname))})(objectCategory=person)(objectClass=user)(mail={escape_filter_chars(email)}))'
 
     def get_user(
         self, username: str, required_group=None, trace=True
@@ -533,7 +535,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
             # Check if the computer exists first
             results = self.search_s(
                 base=self.ldap_computers_base,
-                filterstr=f'(cn={computer_name})',
+                filterstr=f'(cn={escape_filter_chars(computer_name)})',
                 trace=True,
             )
 
