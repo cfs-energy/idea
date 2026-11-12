@@ -640,6 +640,110 @@ def test_an_array_reads_begun_from_its_first_subjobs_run_event(world, monitor):
     assert world.cache.get_job('7[]').state == SocaJobState.SUBJOB_BEGUN
 
 
+WAIT_COMMENT = 'Can Never Run: Insufficient amount of resource: ncpus (R: 1 A: 0 T: 0)'
+
+
+def test_a_begun_array_does_not_show_why_it_waited(world, monitor):
+    """
+    437 read subjob_begun with "Can Never Run: Insufficient amount of resource: ncpus" for
+    five minutes, and three more arrays with "Not Running: ..." for two to three: PBS
+    leaves its last wait comment on an array until the next subjob starts.
+    """
+    world.cache.sync([array_job('7[]')])
+    world.pbs.jobs['7[]'] = array_job('7[]', SocaJobState.QUEUED, comment=WAIT_COMMENT)
+
+    monitor.job_running(run_event(1))
+    sync_running(monitor)
+
+    begun = world.cache.get_job('7[]')
+    assert begun.state == SocaJobState.SUBJOB_BEGUN
+    assert begun.comment is None
+
+
+@pytest.mark.parametrize(
+    'state, resources, comment, expected',
+    [
+        # PBS already lists the array as begun, with the comment of its last wait
+        ('B', {}, WAIT_COMMENT, None),
+        ('B', {}, 'Not Running: Not enough free nodes available', None),
+        # a provisioning error PBS would not let be cleared once the job ran
+        ('R', {'error_message': 'CAPACITY_UNAVAILABLE:_no_capacity'}, None, None),
+        (
+            'R',
+            {'error_message': 'CAPACITY_UNAVAILABLE:_no_capacity'},
+            'Job run at Thu Nov 12 at 15:56 on (10.0.0.1:ncpus=1)',
+            'Job run at Thu Nov 12 at 15:56 on (10.0.0.1:ncpus=1)',
+        ),
+        # a job that waits still says why
+        ('Q', {}, WAIT_COMMENT, WAIT_COMMENT),
+        (
+            'Q',
+            {'error_message': 'CAPACITY_UNAVAILABLE:_no_capacity'},
+            WAIT_COMMENT,
+            'CAPACITY_UNAVAILABLE:_no_capacity',
+        ),
+    ],
+    ids=[
+        'begun-can-never-run',
+        'begun-not-running',
+        'running-error-left',
+        'running-error-left-run-comment',
+        'queued-wait',
+        'queued-error',
+    ],
+)
+def test_a_job_read_from_pbs_shows_a_wait_comment_only_while_it_waits(
+    context, state, resources, comment, expected
+):
+    from ideadatamodel import HpcQueueProfile
+
+    job = OpenPBSJob(
+        id='437[].scheduler' if state == 'B' else '437.scheduler',
+        Job_Owner='alice@scheduler',
+        queue='test',
+        job_state=state,
+        comment=comment,
+        Resource_List={
+            'select': '1:ncpus=1',
+            'nodect': 1,
+            'ncpus': 1,
+            'instance_type': 'c5.large',
+            **resources,
+        },
+    ).as_soca_job(context=context, queue_profile=HpcQueueProfile(name='test'))
+
+    assert job.comment == expected
+
+
+def test_a_started_jobs_recorded_error_is_cleared_without_asking_pbs(world, monitor):
+    """
+    "qalter -l error_message= 445 ... Cannot modify attribute while job running", logged
+    as an error each time a job that had waited on something started.
+    """
+    asked = []
+    world.cache._context.scheduler = SimpleNamespace(
+        set_job_attributes=lambda job_id, attributes: asked.append(attributes)
+    )
+    world.cache.sync([array_job('8')])
+    world.cache.set_job_provisioning_error('8', 'CAPACITY_UNAVAILABLE', 'no capacity')
+    assert asked == [{'error_message': 'CAPACITY_UNAVAILABLE: no_capacity'}]
+    world.pbs.jobs['8'] = array_job('8', SocaJobState.RUNNING)
+
+    monitor.job_running(
+        SocaJob(job_id='8', queue='test', queue_type='test', owner='alice')
+    )
+    sync_running(monitor)
+
+    running = world.cache.get_job('8')
+    assert running.state == SocaJobState.RUNNING
+    assert running.error_message is None and running.reason_class is None
+    assert len(asked) == 1
+    # a job that has not started is still told through PBS
+    world.cache.set_job_provisioning_error('9', 'CAPACITY_UNAVAILABLE', 'no capacity')
+    world.cache.clear_job_provisioning_error('9')
+    assert asked[-1] == {'error_message': None}
+
+
 def test_a_plain_job_pbs_still_lists_as_queued_is_not_rewritten_by_its_run_event(
     world, monitor
 ):

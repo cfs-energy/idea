@@ -33,17 +33,24 @@ def get_max_provisioning_attempts(
 
 
 def get_provisioning_attempt(
-    failed_attempts: int, max_attempts: Optional[int]
+    failed_attempts: int, max_attempts: Optional[int], held: bool = False
 ) -> Optional[int]:
     """
     the attempt the job is on, 1-based.
 
     the persistent per-job counter records attempts that failed, so the job is on the
-    next one. at the cap the job is held and the last attempt is the one reported.
+    next one. at the cap the job is held and the last attempt is the one reported. a held
+    job is on no attempt: it reports the ones it made, which is none for a job held
+    before its first.
     """
     if failed_attempts < 0:
         return None
-    attempt = failed_attempts + 1
+    if held:
+        attempt = failed_attempts or None
+    else:
+        attempt = failed_attempts + 1
+    if attempt is None:
+        return None
     if max_attempts is not None and attempt > max_attempts:
         return max_attempts
     return attempt
@@ -94,7 +101,9 @@ def apply_waiting_signals(
             job_id=job.job_id
         )
         job.provisioning_attempt = get_provisioning_attempt(
-            failed_attempts=failed_attempts, max_attempts=max_attempts
+            failed_attempts=failed_attempts,
+            max_attempts=max_attempts,
+            held=job.state == SocaJobState.HELD,
         )
         job.max_provisioning_attempts = max_attempts
 

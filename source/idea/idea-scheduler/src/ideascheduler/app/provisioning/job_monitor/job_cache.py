@@ -730,6 +730,10 @@ class JobsDB:
             return
         with self._db_lock:
             with self.db as tx:
+                if job.is_provisioned() and job.params is not None:
+                    self._keep_what_it_was_provisioned_with(
+                        job, tx[JOBS_TABLE].find_one(job_id=job.job_id)
+                    )
                 tx[JOBS_TABLE].upsert(
                     row={
                         'job_id': job.job_id,
@@ -746,6 +750,29 @@ class JobsDB:
                     },
                     keys=['job_id'],
                 )
+
+    @staticmethod
+    def _keep_what_it_was_provisioned_with(job: SocaJob, entry: Optional[Dict]):
+        """
+        A job read from PBS takes the image and instance types it did not name from its
+        queue profile as the profile is at that moment. Once the job holds a stack, the
+        row written when it was provisioned says what was launched, and a later read must
+        not replace that with what the profile says now: for as long as the job is on the
+        same stack, the row keeps them.
+        """
+        if entry is None or not entry.get('provisioned'):
+            return
+        job_data = entry.get('job_data')
+        if not job_data or job_data == 'NULL':
+            return
+        known = (Utils.from_json(job_data) or {}).get('params') or {}
+        stack_id = job.params.stack_id
+        if not stack_id or stack_id == 'tbd' or known.get('stack_id') != stack_id:
+            return
+        if known.get('instance_ami'):
+            job.params.instance_ami = known['instance_ami']
+        if known.get('instance_types'):
+            job.params.instance_types = known['instance_types']
 
     def add_finished_job(self, job: SocaJob):
         # keyed on job_uid, not job_id: ids are reused once the scheduler host is replaced,
@@ -954,6 +981,13 @@ class JobsDB:
                     job.reason_class = ProvisioningLifecycleEvents.get_reason_class(
                         error_code
                     )
+                    # read back from PBS, the comment is this error as qalter takes
+                    # it: its code, and an underscore for every space and bracket
+                    published = build_job_error_message(
+                        error_code=error_code, message=error_message
+                    )
+                    if job.comment in (published, published.replace(' ', '_')):
+                        job.comment = error_message
                     if error_code in (
                         SYSTEM_DELETION,
                         OWNER_CANCELLATION,
@@ -1227,8 +1261,11 @@ class JobCache(JobCacheProtocol):
                 ),
             )
 
-    def clear_job_provisioning_error(self, job_id: str):
-        if self._jobs_db.clear_job_provisioning_error(job_id):
+    def clear_job_provisioning_error(self, job_id: str, job_started: bool = False):
+        # PBS refuses to change a resource of a job that runs ("Cannot modify attribute
+        # while job running"). The record is cleared; the resource stays on the job in
+        # PBS, where a started job's error_message is no longer read.
+        if self._jobs_db.clear_job_provisioning_error(job_id) and not job_started:
             self._publish_error_message(job_id=job_id, error_message=None)
 
     def increment_job_provisioning_retry(

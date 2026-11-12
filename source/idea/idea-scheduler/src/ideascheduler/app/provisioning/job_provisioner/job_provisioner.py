@@ -159,6 +159,12 @@ class ProvisionJobs:
         job.params.stack_id = stack_id
         job.params.compute_stack = job.get_compute_stack()
         job.provisioning_time = arrow.get(provisioning_time).datetime
+        # the job was read from the cache with its last provisioning error on it. That
+        # error is cleared below; written back with the row it stays the job's reason
+        # class and comment for as long as the job waits, and goes on its record.
+        job.error_message = None
+        job.reason_class = None
+        job.comment = None
         self._context.job_cache.sync([job])
         self._context.job_cache.add_active_licenses([job])
         self._context.job_cache.clear_job_provisioning_error(job.job_id)

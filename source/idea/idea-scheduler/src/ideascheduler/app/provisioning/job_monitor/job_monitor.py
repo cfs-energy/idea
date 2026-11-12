@@ -341,6 +341,8 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                                     and job.state == SocaJobState.QUEUED
                                 ):
                                     job.state = SocaJobState.SUBJOB_BEGUN
+                                    # read as queued, so its comment is why it waited
+                                    job.comment = None
 
                         self._context.job_cache.sync(jobs=jobs)
 
@@ -352,7 +354,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             # job runs; left in place it gets re-attached to the finished record as a failure.
                             for job in jobs:
                                 self._context.job_cache.clear_job_provisioning_error(
-                                    job_id=job.job_id
+                                    job_id=job.job_id, job_started=True
                                 )
 
                         self._logger.info(

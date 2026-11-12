@@ -44,6 +44,19 @@ DEFAULT_QUEUE_NAME = 'normal'
 _DEPEND_JOB_ID = re.compile(r':([0-9]{1,18}(?:\[[0-9]*\])?)', re.ASCII)
 
 
+STARTED_JOB_STATES = (
+    SocaJobState.RUNNING,
+    SocaJobState.SUBJOB_BEGUN,
+    SocaJobState.EXIT,
+)
+# how the PBS scheduler begins the comment of a job it did not run in a cycle
+WAIT_COMMENT_PREFIXES = ('Not Running', 'Can Never Run')
+
+
+def is_wait_comment(comment: Optional[str]) -> bool:
+    return bool(comment) and comment.startswith(WAIT_COMMENT_PREFIXES)
+
+
 class OpenPBSJob(SocaBaseModel):
     dry_run: Optional[str] = Field(default=None)
     id: Optional[str] = Field(default=None)
@@ -647,9 +660,17 @@ class OpenPBSJob(SocaBaseModel):
 
         job_group = self.get_job_group()
 
-        comment = self.get_error_message()
+        # a job that has started is past whatever kept it waiting. PBS leaves its last
+        # wait comment on a begun array until the next subjob starts, and refuses to
+        # clear a provisioning error from a job that runs: neither is shown for one.
+        started = state in STARTED_JOB_STATES or (
+            state == SocaJobState.FINISHED and start_time is not None
+        )
+        comment = None if started else self.get_error_message()
         if comment is None:
             comment = self.comment
+            if started and is_wait_comment(comment):
+                comment = None
 
         notifications = self.get_notifications()
 
