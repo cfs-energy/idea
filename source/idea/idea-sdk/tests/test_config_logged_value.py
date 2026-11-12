@@ -20,14 +20,14 @@ SNAPSHOT = json.dumps(
     {
         'fs-one': dict(
             filesystem_id='fs-one',
-            users={'anya.forger': 100, 'loid': 20},
+            users={'user.one': 100, 'user-two': 20},
             total_bytes=120,
         ),
-        'fs-two': dict(filesystem_id='fs-two', users={'anya.forger': 3}, total_bytes=3),
+        'fs-two': dict(filesystem_id='fs-two', users={'user.one': 3}, total_bytes=3),
     }
 )
 SHOWN = '<2 file systems, 3 users, 123 bytes>'
-NAMES = ('anya', 'forger', 'loid')
+NAMES = ('user.one', 'user-two')
 
 
 def logged_value(key, value):
@@ -138,7 +138,9 @@ def test_the_settings_a_module_prints_at_start_name_no_one():
         config=ConfigFactory.from_dict(
             {
                 'cluster-manager': {
-                    'metrics': {'storage': {'usage_snapshot': SNAPSHOT, 'enabled': True}}
+                    'metrics': {
+                        'storage': {'usage_snapshot': SNAPSHOT, 'enabled': True}
+                    }
                 },
                 'cluster': {'cluster_name': 'idea-test'},
             }

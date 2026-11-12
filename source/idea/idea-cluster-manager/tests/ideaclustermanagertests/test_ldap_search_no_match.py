@@ -28,9 +28,7 @@ def active_directory(entries):
         ldap_group_filterstr='(objectClass=group)',
         filter_pattern=AbstractLDAPClient.filter_pattern,
         build_user_filterstr=lambda username, escape: f'(sAMAccountName={username})',
-        build_group_filterstr=lambda group_name, username, escape: (
-            f'(cn={group_name})'
-        ),
+        build_group_filterstr=lambda group_name, username, escape: f'(cn={group_name})',
         is_activedirectory=lambda: True,
         simple_paginated_search=lambda **_: {
             'result': entries,

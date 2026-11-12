@@ -1249,9 +1249,7 @@ def test_the_collectors_sweep_does_not_wait_for_the_hour_a_password_set_started(
 ):
     context.accounts.change_ldap_password('user', 'secret-value')
     assert len(secrets.list_calls) == 1
-    old = secrets.add(
-        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
-    )
+    old = secrets.add('idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1)
     listed = [dict(secret) for secret in secrets.secrets.values()]
 
     context.accounts.remove_stray_password_secrets(listed=listed)
@@ -1261,9 +1259,7 @@ def test_the_collectors_sweep_does_not_wait_for_the_hour_a_password_set_started(
 
 
 def test_a_sweep_while_another_is_looking_is_skipped(context: AppContext, secrets):
-    old = secrets.add(
-        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
-    )
+    old = secrets.add('idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1)
     listed = [dict(secret) for secret in secrets.secrets.values()]
     with context.accounts._password_secret_sweep:
         context.accounts.remove_stray_password_secrets(listed=listed)
