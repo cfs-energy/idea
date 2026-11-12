@@ -12,7 +12,7 @@
 from ideadatamodel import exceptions, constants
 from ideasdk.utils import Utils
 from ideasdk.config.cluster_config_db import ClusterConfigDB
-from ideasdk.config.soca_config import SocaConfig
+from ideasdk.config.soca_config import SocaConfig, logged_value
 from ideasdk.dynamodb.dynamodb_stream_subscriber import DynamoDBStreamSubscriber
 
 from typing import Optional, List, Dict, Any
@@ -167,8 +167,14 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
         # Replace only after every page succeeds, including removal of deleted keys.
         self._config = self.db.build_config_from_db(consistent_read=True).raw()
 
+    @staticmethod
+    def logged_entry(entry: Dict) -> Dict:
+        if 'value' not in entry:
+            return entry
+        return {**entry, 'value': logged_value(entry.get('key'), entry['value'])}
+
     def on_create(self, entry: Dict):
-        log_message = f'config created: {Utils.to_json(entry)}'
+        log_message = f'config created: {Utils.to_json(self.logged_entry(entry))}'
         if self.logger is not None:
             self.logger.info(log_message)
         else:
@@ -179,7 +185,8 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
 
     def on_update(self, old_entry: Dict, new_entry: Dict):
         log_message = (
-            f'config updated: old - {Utils.to_json(old_entry)}, new - {new_entry}'
+            f'config updated: old - {Utils.to_json(self.logged_entry(old_entry))}, '
+            f'new - {self.logged_entry(new_entry)}'
         )
         if self.logger is not None:
             self.logger.info(log_message)
@@ -190,7 +197,7 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
         super().put(key, value)
 
     def on_delete(self, entry: Dict):
-        log_message = f'config deleted: {Utils.to_json(entry)}'
+        log_message = f'config deleted: {Utils.to_json(self.logged_entry(entry))}'
         if self.logger is not None:
             self.logger.info(log_message)
         else:

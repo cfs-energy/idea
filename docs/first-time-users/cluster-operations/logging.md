@@ -16,6 +16,10 @@ The existing `cluster-manager.web_portal.default_log_level` takes precedence for
 
 For a temporary controller investigation, set `vdc.logging.default_log_level` to `DEBUG`, restart the controller, and remove the override afterward to inherit the cluster level again. Deleted sessions' stale schedules are removed when their next scheduled event runs, after a strongly consistent read confirms absence and the schedule is at least 10 minutes old. A failed session read skips that schedule and allows the remaining hourly work to continue. Missing permissions and normal SSM `InProgress` notifications are logged at debug.
 
+## Settings in logs
+
+A module logs a setting's value when it writes one (`updating config:`), when it sees one change (`config created:`, `config updated:`, `config deleted:`) and, for all of them, when it starts. The hourly storage usage snapshot (`<module_id>.metrics.storage.usage_snapshot`) holds every user's bytes, so those lines show it as `<2 file systems, 41 users, 123456 bytes>`; the stored value is unchanged. Other settings are logged as they are. One of them names users: the last account reconciliation report (`<module_id>.accounts.reconcile.last_run`), up to 100 rows of it.
+
 ## Datadog container logs
 
 When `ecs.datadog.enabled` is true, log collection is enabled by default. Set `ecs.datadog.logs_enabled` to `false` to keep the agent's metrics collection while disabling the new log configuration. Deploy the ECS stack and the application service stacks after changing this setting, since the agent environment and container labels are part of their task definitions.
