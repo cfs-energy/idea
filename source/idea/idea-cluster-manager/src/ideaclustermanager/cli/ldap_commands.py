@@ -36,7 +36,7 @@ def ldap_commands():
 
 
 @ldap_commands.command('search-users', context_settings=constants.CLICK_SETTINGS)
-@click.option('-q', '--query', help='search query (substring of username)')
+@click.option('-q', '--query', help='part of a username, matched as written (* is not a wildcard)')
 @click.option(
     '-p',
     '--page-size',
@@ -90,7 +90,7 @@ def search_users(query: str, page_size: int):
 
 
 @ldap_commands.command('search-groups', context_settings=constants.CLICK_SETTINGS)
-@click.option('-q', '--query', help='search query (substring of group name)')
+@click.option('-q', '--query', help='part of a group name, matched as written (* is not a wildcard)')
 @click.option(
     '-p',
     '--page-size',
