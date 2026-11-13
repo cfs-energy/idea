@@ -17,7 +17,8 @@ import {IdeaAuthenticationContext} from "../common/authentication-context";
 import {JwtTokenClaims} from "../common/token-utils";
 import {Constants} from "../common/constants";
 import AppLogger from "../common/app-logger";
-import {AUTH_TOKEN_EXPIRED, REQUEST_TIMEOUT} from "../common/error-codes";
+import {AUTH_TOKEN_EXPIRED, REQUEST_TIMEOUT, REQUEST_TIMEOUT_MESSAGE} from "../common/error-codes";
+import {reportApiFailure} from "../common/client-error-reporter";
 
 // the service worker owns the network timeout, so this only bounds the case where it never
 // replies at all. it stays above that timeout so it cannot pre-empt a real answer.
@@ -42,6 +43,8 @@ export interface IdeaApiInvokerProps {
     name: string
     url: string
     timeout?: number;
+    // network wait for every call this client makes, when its calls can outlast the default
+    requestTimeout?: number;
     serviceWorkerRegistration?: ServiceWorkerRegistration
     authContext?: IdeaAuthenticationContext
 }
@@ -84,7 +87,7 @@ export class IdeaApiInvoker {
                     response: {
                         success: false,
                         error_code: REQUEST_TIMEOUT,
-                        message: 'Request timed-out'
+                        message: REQUEST_TIMEOUT_MESSAGE
                     }
                 })
             }, this.props.timeout ?? SERVICE_WORKER_REPLY_TIMEOUT)
@@ -100,7 +103,7 @@ export class IdeaApiInvoker {
         })
     }
 
-    async invoke<REQ = any, RES = any>(request: IdeaEnvelope<REQ>, isPublic: boolean = false): Promise<IdeaEnvelope<RES>> {
+    async invoke<REQ = any, RES = any>(request: IdeaEnvelope<REQ>, isPublic: boolean = false, quiet: boolean = false, requestTimeout: number | undefined = this.props.requestTimeout): Promise<IdeaEnvelope<RES>> {
 
         let url = `${this.props.url}/${request.header!.namespace}`
 
@@ -115,7 +118,8 @@ export class IdeaApiInvoker {
                 options: {
                     url: url,
                     request: request,
-                    isPublic: isPublic
+                    isPublic: isPublic,
+                    timeout: requestTimeout
                 }
             })
             response = result.response
@@ -123,7 +127,7 @@ export class IdeaApiInvoker {
             if(request.header?.namespace === 'Auth.InitiateAuth') {
                 response = await this.props.authContext?.initiateAuth(request)
             } else {
-                response = await this.props.authContext?.invoke(url, request, isPublic)
+                response = await this.props.authContext?.invoke(url, request, isPublic, requestTimeout)
             }
         }
 
@@ -131,7 +135,7 @@ export class IdeaApiInvoker {
             this.logger.trace(`(res) ${JSON.stringify(response, null, 2)}`)
         }
 
-        if(typeof response.success !== 'undefined' && !response.success && response.error_code === AUTH_TOKEN_EXPIRED) {
+        if(!quiet && typeof response.success !== 'undefined' && !response.success && response.error_code === AUTH_TOKEN_EXPIRED) {
             this.logout().then(() => {
                 if(this.onLogoutHook) {
                     this.onLogoutHook()
@@ -142,18 +146,22 @@ export class IdeaApiInvoker {
         return response
     }
 
-    async invoke_alt<REQ = any | null, RES = any>(namespace: string, payload?: REQ, isPublic: boolean = false): Promise<RES> {
-        const result = await this.invoke<REQ, RES>({
+    async invoke_alt<REQ = any | null, RES = any>(namespace: string, payload?: REQ, isPublic: boolean = false, requestTimeout?: number): Promise<RES> {
+        const envelope = {
             header: {
                 namespace: namespace,
                 request_id: uuid()
             },
             payload: (payload) ? payload : this.empty()
-        }, isPublic)
+        }
+        const result = await (requestTimeout == null
+            ? this.invoke<REQ, RES>(envelope, isPublic)
+            : this.invoke<REQ, RES>(envelope, isPublic, false, requestTimeout))
         if (result.success) {
             return result.payload!
         } else {
             console.error(result)
+            reportApiFailure(namespace, result.error_code!)
             throw new IdeaException({
                 errorCode: result.error_code!,
                 message: result.message,
@@ -162,6 +170,17 @@ export class IdeaApiInvoker {
         }
     }
 
+
+    /** For error reporting: the result is ignored, it is not reported on failure, and it cannot end the session. */
+    async invoke_quiet<REQ = any>(namespace: string, payload: REQ): Promise<void> {
+        await this.invoke<REQ, unknown>({
+            header: {
+                namespace: namespace,
+                request_id: uuid()
+            },
+            payload: payload
+        }, false, true)
+    }
 
     async isLoggedIn(): Promise<boolean> {
         if(this.props.serviceWorkerRegistration) {

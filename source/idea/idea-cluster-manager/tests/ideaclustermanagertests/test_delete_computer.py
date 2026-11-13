@@ -74,8 +74,8 @@ def agent(monkeypatch):
     agent.context = context
     agent.logger = context.logger()
     agent.ldap_client = Mock()
-    agent.ldap_client.search_s.side_effect = (
-        lambda base, filterstr, **_: [(DN, {})]
+    agent.ldap_client.search_s.side_effect = lambda base, filterstr, **_: (
+        [(DN, {})]
         if base == OU and filterstr == f'(&(objectClass=computer)(cn={TARGET}))'
         else []
     )
@@ -150,8 +150,8 @@ def test_task_deletes_payload_computer(agent, legacy, field):
 def test_task_cannot_delete_outside_cluster_ou(agent):
     # The requested computer exists, but only outside the configured computer OU.
     outside_dn = f'CN={TARGET},OU=Other,DC=example,DC=com'
-    agent.ldap_client.search_s.side_effect = (
-        lambda base, **_: [(outside_dn, {})] if base != OU else []
+    agent.ldap_client.search_s.side_effect = lambda base, **_: (
+        [(outside_dn, {})] if base != OU else []
     )
     assert run_message(
         agent, computer_name=TARGET, instance_id='i-target', task_arn=TASK_ARN
@@ -261,8 +261,8 @@ def test_ec2_delete_is_scoped_to_own_computer(agent, node_type, module, own_name
         SimpleNamespace(soca_node_type=node_type, idea_module_id=module)
     ]
     name = generated_name('i-sender') if own_name == 'generated' else 'OLD-WINDOWS'
-    agent.ad_automation_dao.list_entries_by_instance_id.side_effect = (
-        lambda instance: [{'nonce': 'own', 'hostname': name, 'status': 'success'}]
+    agent.ad_automation_dao.list_entries_by_instance_id.side_effect = lambda instance: (
+        [{'nonce': 'own', 'hostname': name, 'status': 'success'}]
         if instance == 'i-sender'
         else []
     )

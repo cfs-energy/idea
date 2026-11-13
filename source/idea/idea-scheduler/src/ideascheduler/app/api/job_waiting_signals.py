@@ -2,6 +2,7 @@ from typing import List, Optional
 
 import ideascheduler
 from ideadatamodel import SocaJob, SocaJobState
+from ideascheduler.app.job_messages import HELD_JOB_NEXT_STEP
 
 MAX_PROVISIONING_RETRIES_KEY = 'scheduler.job_provisioning.max_provisioning_retries'
 MAX_PROVISIONING_RETRIES_DEFAULT = 3
@@ -32,17 +33,24 @@ def get_max_provisioning_attempts(
 
 
 def get_provisioning_attempt(
-    failed_attempts: int, max_attempts: Optional[int]
+    failed_attempts: int, max_attempts: Optional[int], held: bool = False
 ) -> Optional[int]:
     """
     the attempt the job is on, 1-based.
 
     the persistent per-job counter records attempts that failed, so the job is on the
-    next one. at the cap the job is held and the last attempt is the one reported.
+    next one. at the cap the job is held and the last attempt is the one reported. a held
+    job is on no attempt: it reports the ones it made, which is none for a job held
+    before its first.
     """
     if failed_attempts < 0:
         return None
-    attempt = failed_attempts + 1
+    if held:
+        attempt = failed_attempts or None
+    else:
+        attempt = failed_attempts + 1
+    if attempt is None:
+        return None
     if max_attempts is not None and attempt > max_attempts:
         return max_attempts
     return attempt
@@ -93,7 +101,9 @@ def apply_waiting_signals(
             job_id=job.job_id
         )
         job.provisioning_attempt = get_provisioning_attempt(
-            failed_attempts=failed_attempts, max_attempts=max_attempts
+            failed_attempts=failed_attempts,
+            max_attempts=max_attempts,
+            held=job.state == SocaJobState.HELD,
         )
         job.max_provisioning_attempts = max_attempts
 
@@ -126,8 +136,11 @@ def build_status_reason(
             f'Held after attempt {attempt} of {cap}' if attempt and cap else 'Job held'
         )
         error = (job.error_message or 'provisioning stopped').split('Last error: ')[-1]
-        error = error.split(' Use qdel')[0].rstrip('. ')
-        return f'{prefix}: {error}.'
+        # jobs held before this wording carry the older next step
+        error = (
+            error.split(' Use qdel')[0].split(f' {HELD_JOB_NEXT_STEP}')[0].rstrip('. ')
+        )
+        return f'{prefix}: {error}. {HELD_JOB_NEXT_STEP}'
     if limit_info is not None:
         types = (
             ', '.join(job.params.instance_types or [])

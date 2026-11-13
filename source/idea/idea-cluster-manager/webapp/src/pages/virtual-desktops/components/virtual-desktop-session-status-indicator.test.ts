@@ -1,6 +1,16 @@
-import { waitedFor } from './virtual-desktop-session-status-indicator'
+import { desktopStateLabel, waitedFor } from './virtual-desktop-session-status-indicator'
 
 const minutesAgo = (minutes: number): string => new Date(Date.now() - minutes * 60000).toISOString()
+
+describe('desktop state words', () => {
+    it('uses one word per state', () => {
+        expect(desktopStateLabel('PROVISIONING')).toBe('Setting up');
+        expect(desktopStateLabel('RESUMING')).toBe('Starting');
+        expect(desktopStateLabel('STOPPING', true)).toBe('Hibernating');
+        expect(desktopStateLabel('DELETED')).toBe('Terminating');
+        expect(desktopStateLabel('ERROR')).toBe('Failed');
+    });
+});
 
 describe('virtual desktop waiting time', () => {
     it('tells the user how long a desktop has been waiting', () => {

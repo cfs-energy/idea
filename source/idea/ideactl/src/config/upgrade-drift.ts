@@ -36,6 +36,11 @@ export function isOperatorSource(source: unknown): boolean {
   return source === "api" || source === "cli";
 }
 
+/** Keys whose Phase 3 write moves a row from an old template default to the new one. */
+export function isTemplateDefaultKey(key: string): boolean {
+  return key.endsWith(".metrics.cost.interval_hours") || key.endsWith(".metrics.cost.lookback_days") || key.startsWith("global-settings.package_config.dcv.");
+}
+
 /** One current table row, including the metadata the preview is allowed to print. */
 export interface CurrentConfigRow extends ConfigEntry {
   source?: string;
@@ -325,11 +330,12 @@ export function compareUpgradeDrift(input: UpgradeDriftInput): UpgradeDriftRepor
           true,
         ),
         // Only the release repository planner adds an image write to Phase 3. The cost interval
-        // planner writes only a row still holding the old template default that no operator set,
-        // and the DCV pin planner only a pair still holding the exact old template default.
+        // and lookback planners write only a row still holding the old template default that no
+        // operator set, and the DCV pin planner only a pair still holding the exact old template
+        // default.
         routineUpdate: key === "ecs.image" || key === "ecs.release_image" || key === "ecs.previous_release_image"
           ? "release image"
-          : key.endsWith(".metrics.cost.interval_hours") || key.startsWith("global-settings.package_config.dcv.")
+          : isTemplateDefaultKey(key)
             ? "template default"
             : undefined,
       },

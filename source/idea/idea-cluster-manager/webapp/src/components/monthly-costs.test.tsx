@@ -1,6 +1,7 @@
 import {render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {CostsBillboard, costBadge} from './monthly-costs';
+import {buildBudgetUsage} from './job-budget-usage';
 import {GetMyCostsResult, MyCostsMonth} from '../client/data-model';
 import {FACETS} from './cost-charts';
 
@@ -23,12 +24,16 @@ describe('personal costs card', () => {
     it.each([
         [{cost: 1, status: 'ready'}, false, null],
         [{cost: 1, status: 'partial'}, false, 'Partial'],
+        // a real desktop disk line before 26.11.2 stored it as counted: an amount on every day, none missing
+        [{cost: 0.6245, status: 'partial', coverage: {missing_days: 0}}, false, null],
+        [{cost: 1, status: 'ready', daily: [{date: '2020-01-01', day: 1, amount: null, status: 'unavailable'}]}, false, 'Partial'],
+        [{cost: 1, status: 'partial', daily: [{date: '2020-01-01', day: 1, amount: 1, status: 'partial'}]}, false, 'Partial'],
         [{status: 'unavailable'}, false, 'No data'],
         [{cost: 0, status: 'ready'}, false, null],
         [{cost: 1, status: 'estimated_share'}, false, 'Shared cost'],
         [undefined, true, 'Collecting']
     ])('uses a badge only for affected coverage', (value, collecting, expected) => {
-        expect(costBadge(value, collecting)).toBe(expected);
+        expect(costBadge(value as any, collecting)).toBe(expected);
     });
     it('keeps known values during refresh and offers a keyboard coverage explanation', async () => {
         render(<CostsBillboard costs={{...costs, state: 'refreshing', current: {...month, incomplete: true, shared_storage: {status: 'unavailable', reason: 'Missing dated usage.'}}}}/>);
@@ -50,5 +55,21 @@ describe('personal costs card', () => {
         render(<><CostsBillboard costs={costs}/><section id="cost-jobs" tabIndex={-1}/></>);
         await userEvent.click(screen.getByRole('button', {name: 'Jobs'}));
         expect(document.getElementById('cost-jobs')).toHaveFocus();
+    });
+});
+
+describe('job budget panel', () => {
+    const usage = (limit: number, actual: number, forecast: number): any => ({budget_name: 'Research', budget_limit: {amount: limit, unit: 'USD'}, actual_spend: {amount: actual, unit: 'USD'}, forecasted_spend: {amount: forecast, unit: 'USD'}});
+    it('does not show the whole limit as left when there is spending and no forecast', () => {
+        render(buildBudgetUsage(usage(100000, 90000, 0)));
+        expect(screen.getByText('No forecast yet')).toBeInTheDocument();
+        expect(screen.getByText('$10,000.00')).toBeInTheDocument();
+        expect(screen.queryByText('Remaining Budget')).toBeNull();
+    });
+    it('says how far over budget a forecast is', () => {
+        render(buildBudgetUsage(usage(100, 50, 130), '2026-11-02T12:00:00Z'));
+        expect(screen.getByText('Over budget by')).toBeInTheDocument();
+        expect(screen.getByText('$30.00')).toBeInTheDocument();
+        expect(screen.getByText(/Project budget when this job finished/)).toBeInTheDocument();
     });
 });

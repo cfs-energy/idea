@@ -181,7 +181,8 @@ function boot_kernel_with_headers () {
     return 1
   fi
 
-  local FAMILY
+  {% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}drop_rescue_images
+  {% endif %}local FAMILY
   for FAMILY in $(kernel_package_families "${KERNEL}"); do
     # set_kernel.jinja2 versionlocks the running kernel, and that pin is part of what strands it
     # without headers, so this install has to bypass the lock.
@@ -193,19 +194,22 @@ function boot_kernel_with_headers () {
   for CANDIDATE in $(ls -1 "${KERNEL_SRC_DIR}" 2>/dev/null | sort -V -r); do
     # same series only: a series change swaps out every other kernel module on the host
     [[ "${CANDIDATE}" == "${SERIES}".* && -f "${KERNEL_BOOT_DIR}/vmlinuz-${CANDIDATE}" ]] || continue
+    kernel_initramfs_ready "${CANDIDATE}" || continue
     TARGET_KERNEL="${CANDIDATE}"
     break
   done
 
   if [[ -z "${TARGET_KERNEL}" || "${TARGET_KERNEL}" == "${KERNEL}" ]]; then
-    log_error "No installed ${SERIES} kernel has a matching header tree in ${KERNEL_SRC_DIR}."
+    log_error "No installed ${SERIES} kernel that can boot has a matching header tree in ${KERNEL_SRC_DIR}."
     return 1
   fi
 
   log_warning "Booting ${TARGET_KERNEL} to build the NVIDIA driver: no repo carries headers for ${KERNEL}."
   echo "${TARGET_KERNEL}" > "${KERNEL_ALIGNMENT_MARKER}"
-  if command -v grubby > /dev/null 2>&1; then
-    grubby --set-default "${KERNEL_BOOT_DIR}/vmlinuz-${TARGET_KERNEL}" || log_warning "unable to make ${TARGET_KERNEL} the default boot kernel"
+  if command -v grubby > /dev/null 2>&1 && ! grubby --set-default "${KERNEL_BOOT_DIR}/vmlinuz-${TARGET_KERNEL}"; then
+    log_error "Unable to make ${TARGET_KERNEL} the default boot kernel."
+    rm -f "${KERNEL_ALIGNMENT_MARKER}"
+    return 1
   fi
   set_reboot_required "Kernel ${TARGET_KERNEL} carries the headers the NVIDIA driver builds against"
   mkdir -p "${BOOTSTRAP_DIR}/logs"

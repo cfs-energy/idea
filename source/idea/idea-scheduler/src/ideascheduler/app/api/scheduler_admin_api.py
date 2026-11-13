@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from ideascheduler.app.api.active_jobs import list_active_job_page
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideadatamodel import (
     exceptions,
@@ -61,6 +62,21 @@ from ideadatamodel.scheduler import (
     SocaJob,
     SocaScalingMode,
 )
+from ideadatamodel.scheduler import (
+    GetScratchCleanupStatusRequest,
+    GetScratchCleanupStatusResult,
+    ListScratchCleanupAuditRequest,
+    ListScratchCleanupAuditResult,
+    ListScratchCleanupPreviewRequest,
+    ListScratchCleanupPreviewResult,
+    PreviewScratchCleanupRequest,
+    PreviewScratchCleanupResult,
+    BackfillScratchCleanupRequest,
+    BackfillScratchCleanupResult,
+    ListScratchCleanupUpcomingRequest,
+    ListScratchCleanupUpcomingResult,
+    ScratchCleanupRow,
+)
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils
 from ideascheduler.app.metrics.job_metrics_backfill import JobMetricsBackfill
@@ -99,6 +115,31 @@ class SchedulerAdminAPI(BaseAPI):
             'SchedulerAdmin.GetJobMetricsBackfill': {
                 'scope': None,
                 'method': self.get_job_metrics_backfill,
+            },
+            # scope None: elevated users only, never an application token
+            'SchedulerAdmin.GetScratchCleanupStatus': {
+                'scope': None,
+                'method': self.get_scratch_cleanup_status,
+            },
+            'SchedulerAdmin.PreviewScratchCleanup': {
+                'scope': None,
+                'method': self.preview_scratch_cleanup,
+            },
+            'SchedulerAdmin.ListScratchCleanupPreview': {
+                'scope': None,
+                'method': self.list_scratch_cleanup_preview,
+            },
+            'SchedulerAdmin.BackfillScratchCleanup': {
+                'scope': None,
+                'method': self.backfill_scratch_cleanup,
+            },
+            'SchedulerAdmin.ListScratchCleanupUpcoming': {
+                'scope': None,
+                'method': self.list_scratch_cleanup_upcoming,
+            },
+            'SchedulerAdmin.ListScratchCleanupAudit': {
+                'scope': None,
+                'method': self.list_scratch_cleanup_audit,
             },
             'SchedulerAdmin.ListActiveJobs': {
                 'scope': self.SCOPE_READ,
@@ -239,18 +280,15 @@ class SchedulerAdminAPI(BaseAPI):
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
-        page_size = payload.page_size
-        page_start = payload.page_start
-
-        entries = self.context.job_cache.list_jobs(_limit=page_size, _offset=page_start)
+        entries, total = list_active_job_page(self.context, payload)
         apply_waiting_signals(context=self.context, jobs=entries)
-        total = self.context.job_cache.get_count()
 
         context.success(
             ListJobsResult(
                 paginator=SocaPaginator(
                     total=total, page_size=payload.page_size, start=payload.page_start
                 ),
+                filters=payload.filters,
                 listing=entries,
             )
         )
@@ -695,6 +733,81 @@ class SchedulerAdminAPI(BaseAPI):
                 schedule=schedule,
                 last_run_on=Utils.to_datetime(last_run_ms) if last_run_ms else None,
                 next_run_on=schedule.next_run_after(now),
+            )
+        )
+
+    # scratch cleanup
+    def _scratch_cleanup(self):
+        service = getattr(self.context, 'scratch_cleanup', None)
+        if service is None:
+            raise exceptions.invalid_params('Scratch cleanup is not available.')
+        return service
+
+    def get_scratch_cleanup_status(self, context: ApiInvocationContext):
+        context.get_request_payload_as(GetScratchCleanupStatusRequest)
+        service = getattr(self.context, 'scratch_cleanup', None)
+        status = service.status() if service is not None else {'available': False}
+        context.success(GetScratchCleanupStatusResult(**status))
+
+    @staticmethod
+    def _require_cluster_administrator(context: ApiInvocationContext):
+        # these walk every owner's job folders and put them on the record, as the settings do
+        if not context.is_administrator():
+            raise exceptions.unauthorized_access()
+
+    def preview_scratch_cleanup(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
+        request = context.get_request_payload_as(PreviewScratchCleanupRequest)
+        self._scratch_cleanup().start_preview(
+            request.file_system,
+            requested_by=context.get_username(),
+        )
+        context.success(PreviewScratchCleanupResult(started=True))
+
+    def list_scratch_cleanup_preview(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
+        request = context.get_request_payload_as(ListScratchCleanupPreviewRequest)
+        listing, total = self._scratch_cleanup().list_preview(
+            request.preview_id, request.action, request.page_start, request.page_size
+        )
+        context.success(
+            ListScratchCleanupPreviewResult(
+                listing=[ScratchCleanupRow(**row) for row in listing],
+                paginator=SocaPaginator(
+                    total=total, page_size=request.page_size, start=request.page_start
+                ),
+            )
+        )
+
+    def backfill_scratch_cleanup(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
+        request = context.get_request_payload_as(BackfillScratchCleanupRequest)
+        run_id = self._scratch_cleanup().start_backfill(
+            request.preview_id, request.confirm_phrase, context.get_username()
+        )
+        context.success(BackfillScratchCleanupResult(run_id=run_id))
+
+    def list_scratch_cleanup_upcoming(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ListScratchCleanupUpcomingRequest)
+        listing, token = self._scratch_cleanup().list_upcoming(
+            request.page_size, request.cursor
+        )
+        context.success(
+            ListScratchCleanupUpcomingResult(
+                listing=[ScratchCleanupRow(**row) for row in listing],
+                next_token=token,
+            )
+        )
+
+    def list_scratch_cleanup_audit(self, context: ApiInvocationContext):
+        request = context.get_request_payload_as(ListScratchCleanupAuditRequest)
+        listing, token = self._scratch_cleanup().list_audit(
+            request.page_size, request.cursor
+        )
+        context.success(
+            ListScratchCleanupAuditResult(
+                listing=[ScratchCleanupRow(**row) for row in listing],
+                next_token=token,
             )
         )
 

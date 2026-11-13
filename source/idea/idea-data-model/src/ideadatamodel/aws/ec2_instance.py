@@ -596,7 +596,7 @@ class EC2Instance:
 
     @property
     def soca_job_id(self) -> Optional[str]:
-        return self.get_tag(constants.IDEA_TAG_JOB_ID)
+        return ModelUtils.pbs_job_id(self.get_tag(constants.IDEA_TAG_JOB_ID))
 
     @property
     def soca_job_group(self) -> Optional[str]:

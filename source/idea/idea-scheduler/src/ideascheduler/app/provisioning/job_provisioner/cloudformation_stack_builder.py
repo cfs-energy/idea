@@ -18,6 +18,7 @@ from ideadatamodel import (
     GetProjectRequest,
     GetUserRequest,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
 from ideasdk.utils import Utils
 from ideasdk.context import BootstrapContext
@@ -179,7 +180,7 @@ class CloudFormationStackBuilder:
 
         tags = {
             constants.IDEA_TAG_NAME: self.job.get_compute_stack(),
-            constants.IDEA_TAG_JOB_ID: self.job.job_id,
+            constants.IDEA_TAG_JOB_ID: ModelUtils.aws_job_id(self.job.job_id),
             constants.IDEA_TAG_JOB_QUEUE: self.job.queue,
             constants.IDEA_TAG_QUEUE_TYPE: self.job.queue_type,
             constants.IDEA_TAG_JOB_OWNER: self.job.owner,
@@ -264,8 +265,9 @@ class CloudFormationStackBuilder:
             bootstrap_package_suffix = f'{self.job.get_job_group()}-{self.job.job_uid}'
             metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.get_job_group()}'
         else:
-            bootstrap_package_suffix = f'{self.job.job_id}-{self.job.job_uid}'
-            metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}-{self.job.job_uid}'
+            aws_job_id = ModelUtils.aws_job_id(self.job.job_id)
+            bootstrap_package_suffix = f'{aws_job_id}-{self.job.job_uid}'
+            metrics_namespace = f'{self.context.cluster_name()}/{self.context.module_id()}/job-{aws_job_id}-{self.job.job_uid}'
 
         # Configure CloudWatch logging and metrics for compute nodes
         cloudwatch_logs_enabled = self.context.config().get_bool(
@@ -281,7 +283,7 @@ class CloudFormationStackBuilder:
             if self.job.is_shared_capacity():
                 log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.get_job_group()}'
             else:
-                log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{self.job.job_id}-{self.job.job_uid}'
+                log_group_name = f'/{self.context.cluster_name()}/{self.context.module_id()}/job-{ModelUtils.aws_job_id(self.job.job_id)}-{self.job.job_uid}'
 
             log_files = [
                 CloudWatchAgentLogFileOptions(

@@ -9,7 +9,7 @@ Manage your Windows & Linux virtual desktops, powered by [Amazon DCV](https://aw
     <summary markdown="span"><b>Create a new desktop</b></summary>
 
 
-Click **"Launch New Virtual Desktop"** and follow the instructions to create your virtual desktop.
+Click **"Launch desktop"** and follow the instructions to create your virtual desktop.
 
 </details>
 
@@ -19,14 +19,14 @@ Click **"Launch New Virtual Desktop"** and follow the instructions to create you
 You can access your virtual desktop directly within your browser by clicking **"Connect"** button.
 
 >
-**Note:** For best performance, we recommend using DCV native application. Click **"?"** button to learn more.
+**Note:** For best performance, we recommend using DCV native application. Click **"Info"** next to **"DCV client file"** to learn more.
 
 </details>
 
 <details>
     <summary markdown="span"><b>Desktop Lifecycle</b></summary>
 
-Click **"Actions"** > **"Virtual Desktop State"** to manage your virtual desktop session:
+Click **"Actions"** > **"Desktop state"** to manage your virtual desktop session:
 
 - **Start:** Start a stopped session
 - **Stop:** Stop a running session (EBS storage is preserved)
@@ -43,7 +43,7 @@ You can change the EC2 instance associated to your virtual desktop at any moment
 
 - Stop your Virtual Desktop
 - Click **"Actions"**
-- Click **"Update Session Settings"**
+- Click **"Rename or resize"**
 
 From there, choose your new EC2 instance type and restart your Virtual Desktop.
 

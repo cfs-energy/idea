@@ -20,6 +20,7 @@ export interface IdeaBaseClientProps {
     apiContextPath: string
     authContext?: IdeaAuthenticationContext
     serviceWorkerRegistration?: ServiceWorkerRegistration
+    requestTimeout?: number
 }
 
 class IdeaBaseClient<P extends IdeaBaseClientProps> {
@@ -36,7 +37,8 @@ class IdeaBaseClient<P extends IdeaBaseClientProps> {
             name: props.name,
             url: this.getEndpointUrl(),
             authContext: this.props.authContext,
-            serviceWorkerRegistration: this.props.serviceWorkerRegistration
+            serviceWorkerRegistration: this.props.serviceWorkerRegistration,
+            requestTimeout: this.props.requestTimeout
         })
 
         this.onLoginHook = null

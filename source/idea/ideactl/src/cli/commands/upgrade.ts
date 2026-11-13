@@ -25,6 +25,7 @@ import { loadRegionAmiConfig, resolveRegionAmi, type RegionsConfig } from "../..
 import {
   compareUpgradeDrift,
   isOperatorSource,
+  isTemplateDefaultKey,
   VALUES_OWNED_KEYS,
   renderUpgradeDrift,
   type CurrentConfigRow,
@@ -161,6 +162,9 @@ const OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD = "m5.large.search";
 // 26.11.1 collects Cost Explorer spend once a day; earlier releases installed six hours.
 const COST_INTERVAL_HOURS = 24;
 const COST_INTERVAL_HOURS_OLD = 6;
+// Cost Explorer posted the first of the month's tax after a three-day window had moved past it.
+const COST_LOOKBACK_DAYS = 7;
+const COST_LOOKBACK_DAYS_OLD = 3;
 const COMPUTE_IMAGE_PREFIX = ["idea", "compute", "node", ""].join("-");
 
 const AMI_UPDATE_KEYS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
@@ -869,13 +873,34 @@ async function planOpenSearchDataNodeInstanceType(
  * The cost collector's interval moves from the old default to the new one only when the row still
  * holds the old default and the operator did not write it. Any other value, a row the operator
  * set, or no row at all is left alone; a second upgrade finds 24 and plans nothing.
+ *
+ * `config update` at install stamps every row it writes `cli` at version 1, so such a row holding
+ * the old default is the template's, not a choice. Every later write raises the version, so a row
+ * an operator set with `config set` or the portal, even back to the old default, stays.
  */
 export function planCostIntervalDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return planCostSettingDefault(modules, settings, "interval_hours", COST_INTERVAL_HOURS_OLD, COST_INTERVAL_HOURS);
+}
+
+/** The cost lookback moves under the same rule as the interval. */
+export function planCostLookbackDefault(modules: ModuleInfo[], settings: readonly CurrentConfigRow[]): ConfigEntry[] {
+  return planCostSettingDefault(modules, settings, "lookback_days", COST_LOOKBACK_DAYS_OLD, COST_LOOKBACK_DAYS);
+}
+
+function planCostSettingDefault(
+  modules: ModuleInfo[],
+  settings: readonly CurrentConfigRow[],
+  name: string,
+  oldDefault: number,
+  newDefault: number,
+): ConfigEntry[] {
   return modules.filter((module) => module.name === "cluster-manager").flatMap((module) => {
-    const key = `${module.module_id}.metrics.cost.interval_hours`;
+    const key = `${module.module_id}.metrics.cost.${name}`;
     const row = settings.find((entry) => entry.key === key);
-    if (row === undefined || row.value !== COST_INTERVAL_HOURS_OLD || isOperatorSource(row.source)) return [];
-    return [{ key, value: COST_INTERVAL_HOURS }];
+    if (row === undefined || row.value !== oldDefault) return [];
+    const installed = row.source === "cli" && row.version === 1;
+    if (isOperatorSource(row.source) && !installed) return [];
+    return [{ key, value: newDefault }];
   });
 }
 
@@ -951,6 +976,7 @@ export async function planUpgradePhase3Entries(
     ...await planModuleHostInstanceTypes(deps, options, modules, settings),
     ...await planOpenSearchDataNodeInstanceType(deps, options, modules, settings),
     ...planCostIntervalDefault(modules, settings),
+    ...planCostLookbackDefault(modules, settings),
     ...planDcvUbuntuPins(settings, deps.out),
     ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
   ];
@@ -1172,7 +1198,9 @@ async function applyPhase3Entries(
 ): Promise<void> {
   const previous = new Map(current.map((entry) => [entry.key, entry.value]));
   for (const entry of entries) {
-    await writer.setConfigEntry(entry.key, entry.value);
+    // A move to the new template default is the template's value: stamped cli, the row would read
+    // as an operator's from then on, and the template refresh and later default moves would skip it.
+    await writer.setConfigEntry(entry.key, entry.value, isTemplateDefaultKey(entry.key) ? "template" : "cli");
     if (entry.key === "ecs.image") {
       out(`${entry.key} moves from ${String(previous.get(entry.key) ?? "(unset)")} to ${String(entry.value)}; every task rolls to the release image`);
     } else if (entry.key === "metrics.provider") {
@@ -1186,6 +1214,8 @@ async function applyPhase3Entries(
       out(`analytics data nodes move from ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE_OLD} to ${OPENSEARCH_DATA_NODE_INSTANCE_TYPE}. OpenSearch Service applies this as a blue/green deployment.`);
     } else if (entry.key.endsWith(".metrics.cost.interval_hours")) {
       out(`${entry.key} moves from the old default ${COST_INTERVAL_HOURS_OLD} to ${COST_INTERVAL_HOURS}; cost collection runs once a day from the next cycle`);
+    } else if (entry.key.endsWith(".metrics.cost.lookback_days")) {
+      out(`${entry.key} moves from the old default ${COST_LOOKBACK_DAYS_OLD} to ${COST_LOOKBACK_DAYS}; each collection re-reads a week of Cost Explorer days from the next cycle`);
     } else if (entry.key.startsWith("global-settings.package_config.dcv.")) {
       out(`${entry.key} moves from the old default ${String(previous.get(entry.key))} to the pinned ${String(entry.value)}`);
     }
@@ -1529,12 +1559,14 @@ async function verifyUpgradeCompletion(
   const published = new Set(drift.current.filter((row) => row.source === "stack").map((row) => row.key));
   const checkpoints = new Set([
     ...modules.filter((module) => module.name === "cluster-manager").flatMap((module) =>
-      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed"].map((key) => `${module.module_id}.${key}`)),
+      // accounts.reconcile.last_run is rewritten by every reconcile, periodic or manual; metrics.backfill.* is the heartbeat of a running backfill.
+      ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "accounts.reconcile.last_run", "metrics.backfill.cost"].map((key) => `${module.module_id}.${key}`)),
     ...modules.filter((module) => module.name === "scheduler").flatMap((module) =>
-      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on"].map((key) => `${module.module_id}.${key}`)),
+      ["images.refresh_requested_release", "images.refreshed_release", "images.image_refresh_last_run_on", "metrics.backfill.jobs"].map((key) => `${module.module_id}.${key}`)),
     // The image pipelines advance their release and monthly checkpoints as soon as the new modules run.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").flatMap((module) =>
-      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release"].map((key) => `${module.module_id}.${key}`)),
+      // The stack expiry digest claims its weekly row on the first tick after the controller starts.
+      ["software_stacks.image_refresh_last_run_on", "software_stacks.images_baked_release", "software_stacks.expiry_last_digest_on"].map((key) => `${module.module_id}.${key}`)),
     // The desktop controller records the release it seeded base stacks for when it starts on a new version.
     ...modules.filter((module) => module.name === "virtual-desktop-controller").map((module) => `${module.module_id}.software_stacks.base_stacks_seeded_release`),
   ]);
@@ -1632,7 +1664,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
           for (const entry of entries) if (overwrite || !expected.has(entry.key)) expected.set(entry.key, entry.value);
           await writer.syncClusterSettingsInDb(entries, overwrite, source);
         },
-        async setConfigEntry(key, value) { expected.set(key, value); await writer.setConfigEntry(key, value); },
+        async setConfigEntry(key, value, source) { expected.set(key, value); await writer.setConfigEntry(key, value, source); },
         async deleteConfigEntries(prefix) {
           for (const key of expected.keys()) if (key.startsWith(prefix)) expected.delete(key);
           await writer.deleteConfigEntries(prefix);

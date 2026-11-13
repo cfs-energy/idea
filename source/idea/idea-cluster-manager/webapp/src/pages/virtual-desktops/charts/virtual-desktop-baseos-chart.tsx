@@ -58,7 +58,8 @@ class VirtualDesktopBaseOSChart extends VirtualDesktopBaseChart<VirtualDesktopBa
                         "aggs": {
                             "base_os": {
                                 "terms": {
-                                    "field": "base_os.raw"
+                                    "field": "base_os.raw",
+                                    "size": 100
                                 }
                             }
                         }

@@ -3,7 +3,7 @@ Image row contract: legacy records migrate onto the row model, the table range k
 round-trips the variant, filters and the monthly schedule behave as documented.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -183,6 +183,11 @@ def test_defaults_and_pins():
     assert (s.max_concurrent_bakes, s.keep_generations) == (32, 2)
     assert (s.ready_gate_seconds_linux, s.ready_gate_seconds_windows) == (600, 900)
     assert s.validation_user == 'idea-validate'
+    assert s.bake_time_limit() == timedelta(hours=2)
+    # zero or a negative value must not turn the limit into an instant failure
+    assert ImagePipelineSettings(bake_time_limit_minutes=0).bake_time_limit() == (
+        timedelta(hours=2)
+    )
     assert VirtualDesktopSoftwareStack().image_pinned is None
     assert HpcQueueProfile(image_pinned=True).image_pinned is True
     assert (
@@ -200,7 +205,11 @@ def test_settings_template_carries_the_model_gates():
         / 'ideactl/resources/config/templates/virtual-desktop-controller/settings.yml'
     ).read_text()
     s = ImagePipelineSettings()
-    for key in ('ready_gate_seconds_linux', 'ready_gate_seconds_windows'):
+    for key in (
+        'ready_gate_seconds_linux',
+        'ready_gate_seconds_windows',
+        'bake_time_limit_minutes',
+    ):
         assert re.search(rf'^\s+{key}: (\d+)$', template, re.M).group(1) == str(
             getattr(s, key)
         )

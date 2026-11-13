@@ -8,10 +8,14 @@ to prove all raw SQL statements use parameter binding.
 
 import glob
 import logging
+import os
 import sqlite3
+import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
+import arrow
 import pytest
 from ideasdk.config.soca_config import SocaConfig
 
@@ -24,6 +28,7 @@ from ideadatamodel import (
     SocaJobExecutionHost,
     SocaJobExecutionRun,
 )
+from ideascheduler.app.provisioning.job_monitor import job_cache as job_cache_module
 from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
 
 
@@ -109,7 +114,7 @@ def test_container_job_cache_lives_on_local_disk_and_is_copied_to_pbs_home(
     db = cache._jobs_db
     assert Path(db._db_file) == tmp_path / 'db/job-cache-v3.db'
     assert Path(db._backup_file) == tmp_path / 'pbs/idea/db/job-cache-v3.db'
-    assert db._backup_interval == 300
+    assert db._backup_interval == 3600
     assert db._backup_thread.is_alive()
     assert (
         list(cache.get_connection().query('PRAGMA journal_mode'))[0]['journal_mode']
@@ -150,6 +155,67 @@ def test_stop_flushes_a_final_copy_without_waiting_out_the_default_interval(
             ).fetchone()[0]
             == 1
         )
+
+
+def test_stop_does_not_repeat_a_copy_that_is_already_current(tmp_path, monkeypatch):
+    """
+    stop() waits for a copy in flight. a second whole-file copy of the same data only
+    spends the task's stop allowance, and a copy killed part way leaves its temporary
+    file behind.
+    """
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    db = cache._jobs_db
+    add_finished_job_aged(cache, 'before', 1)
+    assert db.backup() is True
+    copies = []
+    publish_copy = db._publish_copy
+    monkeypatch.setattr(
+        db,
+        '_publish_copy',
+        lambda source, destination: (
+            copies.append(destination),
+            publish_copy(source, destination),
+        ),
+    )
+    cache.stop()
+    assert copies == []
+
+
+def test_copies_left_by_a_killed_task_are_removed(tmp_path, monkeypatch):
+    """
+    a task killed during a copy leaves a temporary file as large as the cache on the
+    shared volume, and its journal. a fresh one may be another task's copy in flight.
+    """
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    backup_dir = tmp_path / 'pbs/idea/db'
+    backup_dir.mkdir(parents=True)
+    two_hours_ago = time.time() - 7200
+    for name in ('.job-cache-killed1', '.job-cache-killed1-journal'):
+        (backup_dir / name).write_bytes(b'partial')
+        os.utime(backup_dir / name, (two_hours_ago, two_hours_ago))
+    (backup_dir / '.job-cache-inflight').write_bytes(b'partial')
+    (backup_dir / 'unrelated').write_bytes(b'kept')
+
+    cache = JobCache(
+        context=FakeSchedulerContext(
+            str(tmp_path), ecs_enabled=True, backup_interval=0.05
+        )
+    )
+    assert sorted(p.name for p in backup_dir.iterdir()) == [
+        '.job-cache-inflight',
+        'unrelated',
+    ]
+    # the copy loop sweeps too: a task that outlives the leftover's age removes it
+    os.utime(backup_dir / '.job-cache-inflight', (two_hours_ago, two_hours_ago))
+    deadline = time.monotonic() + 5
+    while (backup_dir / '.job-cache-inflight').exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    cache.stop()
+    assert sorted(p.name for p in backup_dir.iterdir()) == [
+        'job-cache-v3.db',
+        'unrelated',
+    ]
 
 
 def test_host_job_cache_has_no_backup(tmp_path):
@@ -266,7 +332,7 @@ def test_an_existing_local_cache_is_not_replaced_by_the_copy(tmp_path, monkeypat
     local = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
     local.add_finished_job(build_job('42', job_uid='local'))
     local.get_connection().close()
-    local._jobs_db._backup_stop.set()
+    local._jobs_db._stop.set()
 
     reopened = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
     assert reopened.get_completed_job_by_uid('local') is not None
@@ -404,12 +470,12 @@ def test_unique_job_id_index_from_an_earlier_schema_is_dropped(tmp_path):
     finished_jobs.job_id, which rejects the second job to be given a reused id.
     """
     cache = JobCache(context=FakeSchedulerContext(deploy_dir=str(tmp_path)))
-    # the row creates the columns the index needs
     cache.add_finished_job(build_job(job_id='41', job_uid='uid-first'))
 
     db_file = glob.glob(f'{tmp_path}/db/*.db')[0]
     connection = sqlite3.connect(db_file)
     try:
+        connection.execute('DROP INDEX ix_finished_jobs_job_id')
         connection.execute(
             'CREATE UNIQUE INDEX ix_finished_jobs_job_id ON finished_jobs (job_id)'
         )
@@ -446,6 +512,48 @@ def test_get_active_license_count_binds_license_name(job_cache):
 
     assert job_cache.get_active_license_count(license_name=license_name) == 7
     assert job_cache.get_active_license_count(license_name="x' or '1'='1") == 0
+
+
+def test_a_new_cache_answers_every_raw_query_before_its_first_write(job_cache):
+    """
+    a cluster that never ran a licensed job had an active_job_licenses table with no
+    count column, so the license check failed every licensed submission.
+    """
+    assert job_cache.get_active_license_count(license_name='app_license') == 0
+    assert job_cache.get_desired_capacity(job_group='group-1') == 0
+    assert job_cache.get_active_jobs(queue_profile='compute') == 0
+
+
+def test_columns_missing_from_an_earlier_cache_are_added_at_start(tmp_path):
+    db_dir = tmp_path / 'db'
+    db_dir.mkdir()
+    with closing(sqlite3.connect(db_dir / 'job-cache-v3.db')) as connection:
+        for table in job_cache_module.TABLE_COLUMNS:
+            connection.execute(
+                f'CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT)'
+            )
+        connection.commit()
+
+    cache = JobCache(context=FakeSchedulerContext(deploy_dir=str(tmp_path)))
+    assert cache.get_active_license_count(license_name='app_license') == 0
+    cache.add_active_licenses(
+        [
+            build_job(
+                job_id='10.host',
+                licenses=[SocaJobLicenseAsk(name='app_license', count=2)],
+            )
+        ]
+    )
+    assert cache.get_active_license_count(license_name='app_license') == 2
+    with closing(sqlite3.connect(db_dir / 'job-cache-v3.db')) as connection:
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+    # indexes on the added columns are built at the same start, not one restart later
+    assert 'ix_active_job_licenses_job_id_license_name' in indexes
 
 
 def test_admin_deletion_reason_survives_cached_scheduler_refresh(job_cache):
@@ -581,3 +689,257 @@ def test_same_host_requeue_preserves_real_pbs_run_history(job_cache, reverse_hoo
         for run in runs:
             assert (run.end - run.start).total_seconds() == 10
             assert run.resources_used.cpu_time_secs == 5
+
+
+def add_finished_job_aged(cache, job_id: str, days: int, padding: str = None):
+    job = build_job(
+        job_id, job_uid=f'uid-{job_id}', state=SocaJobState.FINISHED, name=padding
+    )
+    job.end_time = arrow.utcnow().shift(days=-days).datetime
+    cache.add_finished_job(job)
+
+
+def finished_job_ids(cache):
+    return {job.job_id for job in cache.list_completed_jobs()}
+
+
+def test_prune_deletes_only_finished_jobs_past_the_retention(job_cache):
+    add_finished_job_aged(job_cache, 'old', 401)
+    add_finished_job_aged(job_cache, 'kept', 399)
+    job_cache.sync([build_job('active')])
+
+    assert job_cache._jobs_db.prune_finished_jobs() == 1
+
+    assert finished_job_ids(job_cache) == {'kept'}
+    assert job_cache.get_completed_jobs_count() == 1
+    assert job_cache.get_job('active') is not None
+    # what get_completed_job turns into JOB_NOT_FOUND
+    assert job_cache.get_completed_job('old') is None
+    assert job_cache.get_completed_job_by_uid('uid-old') is None
+
+
+def test_each_prune_pass_says_what_it_did(job_cache, monkeypatch):
+    add_finished_job_aged(job_cache, 'kept', 1)
+    db = job_cache._jobs_db
+    lines = []
+    monkeypatch.setattr(db._logger, 'info', lines.append)
+    assert db.prune_finished_jobs() == 0
+    assert lines == ['finished job prune: nothing older than 400 days']
+
+
+def test_prune_before_the_first_finished_job_is_not_an_error(job_cache):
+    # an empty table, which once lacked the job_data column and failed every hour
+    assert job_cache._jobs_db.prune_finished_jobs() == 0
+
+
+def test_prune_falls_back_to_queue_time_and_keeps_a_job_with_no_time(job_cache):
+    never_ran = build_job('never-ran', state=SocaJobState.FINISHED)
+    never_ran.queue_time = arrow.utcnow().shift(days=-500).datetime
+    job_cache.add_finished_job(never_ran)
+    job_cache.add_finished_job(build_job('undated', state=SocaJobState.FINISHED))
+    add_finished_job_aged(job_cache, 'old', 500)
+
+    assert job_cache._jobs_db.prune_finished_jobs() == 2
+
+    assert finished_job_ids(job_cache) == {'undated'}
+
+
+def test_prune_retention_is_configurable_and_zero_keeps_everything(tmp_path):
+    context = FakeSchedulerContext(deploy_dir=str(tmp_path))
+    cache = JobCache(context=context)
+    add_finished_job_aged(cache, 'a', 40)
+    add_finished_job_aged(cache, 'b', 20)
+
+    context.config().put('scheduler.job_cache.finished_job_retention_days', 0)
+    assert cache._jobs_db.prune_finished_jobs() == 0
+    assert finished_job_ids(cache) == {'a', 'b'}
+
+    # read on each pass: the setting is a runtime one
+    context.config().put('scheduler.job_cache.finished_job_retention_days', 30)
+    assert cache._jobs_db.prune_finished_jobs() == 1
+    assert finished_job_ids(cache) == {'b'}
+
+
+def test_a_large_backlog_is_pruned_over_several_bounded_passes(job_cache, monkeypatch):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 2)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    for index in range(5):
+        add_finished_job_aged(job_cache, f'old-{index}', 500)
+    add_finished_job_aged(job_cache, 'kept', 1)
+
+    assert [db.prune_finished_jobs() for _ in range(4)] == [4, 1, 0, 0]
+
+    assert finished_job_ids(job_cache) == {'kept'}
+
+
+def add_finished_job_undated(job_cache, job_id):
+    add_finished_job_aged(job_cache, job_id, 1)
+    db = job_cache._jobs_db
+    conn = db.db.engine.raw_connection()
+    try:
+        conn.execute(
+            f"UPDATE {job_cache_module.FINISHED_JOBS_TABLE} SET job_data = '{{}}' "
+            'WHERE id = (SELECT MAX(id) FROM '
+            f'{job_cache_module.FINISHED_JOBS_TABLE})'
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_undated_rows_at_the_front_cannot_stop_the_prune(job_cache, monkeypatch):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 2)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    # four rows, two batches, one pass: the expired row is out of reach of the first
+    for _ in range(4):
+        add_finished_job_undated(job_cache, f'undated-{_}')
+    add_finished_job_aged(job_cache, 'old', 500)
+    assert db.prune_finished_jobs() == 0
+    assert db.prune_finished_jobs() == 1
+    assert 'old' not in finished_job_ids(job_cache)
+
+
+def test_the_walk_wraps_at_the_end_and_finds_what_expired_behind_it(
+    job_cache, monkeypatch
+):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 2)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 3)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    add_finished_job_aged(job_cache, 'first', 1)
+    assert db.prune_finished_jobs() == 0
+    assert db._prune_cursor == 0
+    add_finished_job_aged(job_cache, 'second', 500)
+    assert db.prune_finished_jobs() == 1
+
+
+def test_one_pass_stays_inside_its_budget(job_cache, monkeypatch):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 1)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    for index in range(5):
+        add_finished_job_aged(job_cache, f'recent-{index}', 1)
+    db.prune_finished_jobs()
+    assert db._prune_cursor == 2
+    db.prune_finished_jobs()
+    assert db._prune_cursor == 4
+
+
+def test_prune_does_not_hold_the_database_lock_between_batches(job_cache, monkeypatch):
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 1)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    add_finished_job_aged(job_cache, 'first', 500)
+    add_finished_job_aged(job_cache, 'second', 500)
+    lock_free_between_batches = []
+    real_wait = db._stop.wait
+
+    def wait(timeout=None):
+        acquired = []
+
+        def try_lock():
+            acquired.append(db._db_lock.acquire(timeout=5))
+            db._db_lock.release()
+
+        thread = threading.Thread(target=try_lock)
+        thread.start()
+        thread.join()
+        lock_free_between_batches.append(acquired == [True])
+        return real_wait(0)
+
+    monkeypatch.setattr(db._stop, 'wait', wait)
+
+    assert db.prune_finished_jobs() == 2
+    assert lock_free_between_batches == [True, True]
+
+
+def test_a_pass_with_nothing_to_prune_does_not_trigger_a_backup(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    add_finished_job_aged(cache, 'kept', 1)
+    db = cache._jobs_db
+    assert db.backup() is True
+
+    assert db.prune_finished_jobs() == 0
+
+    assert db.backup() is False
+    cache.stop()
+
+
+def test_the_copy_shrinks_after_a_prune_and_restores_without_the_pruned_jobs(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-1'), ecs_enabled=True)
+    )
+    db = cache._jobs_db
+    for index in range(200):
+        add_finished_job_aged(cache, f'old-{index}', 500, padding='x' * 2000)
+    add_finished_job_aged(cache, 'kept', 1)
+    assert db.backup() is True
+    before = Path(db._backup_file).stat().st_size
+
+    assert db.prune_finished_jobs() == 200
+    assert db.backup() is True
+
+    assert Path(db._backup_file).stat().st_size < before / 4
+    cache.stop()
+    with closing(sqlite3.connect(db._backup_file)) as copy:
+        assert copy.execute('PRAGMA freelist_count').fetchone()[0] == 0
+        assert copy.execute('PRAGMA journal_mode').fetchone()[0] == 'delete'
+        assert copy.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+
+    replacement = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-2'), ecs_enabled=True)
+    )
+    assert finished_job_ids(replacement) == {'kept'}
+    replacement.stop()
+
+
+def test_backup_does_not_block_a_writer_or_lose_its_commit(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(context=FakeSchedulerContext(str(tmp_path), ecs_enabled=True))
+    db = cache._jobs_db
+    for index in range(100):
+        add_finished_job_aged(cache, f'job-{index}', 1, padding='x' * 2000)
+    writes = []
+
+    def writer():
+        for index in range(50):
+            add_finished_job_aged(cache, f'new-{index}', 1)
+            writes.append(index)
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    assert db.backup(force=True) is True
+    thread.join()
+    assert len(writes) == 50
+    assert db.backup() is True
+    cache.stop()
+
+    with closing(sqlite3.connect(db._backup_file)) as copy:
+        assert copy.execute('SELECT count(*) FROM finished_jobs').fetchone()[0] == 150
+
+
+def test_stop_saves_what_the_hourly_copy_had_not_reached(tmp_path, monkeypatch):
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    cache = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-1'), ecs_enabled=True)
+    )
+    assert cache._jobs_db._backup_interval == 3600
+    add_finished_job_aged(cache, 'before', 1)
+    assert cache._jobs_db.backup() is True
+    add_finished_job_aged(cache, 'after', 1)
+    cache.stop()
+
+    replacement = JobCache(
+        context=FakeSchedulerContext(str(tmp_path / 'task-2'), ecs_enabled=True)
+    )
+    assert finished_job_ids(replacement) == {'before', 'after'}
+    replacement.stop()

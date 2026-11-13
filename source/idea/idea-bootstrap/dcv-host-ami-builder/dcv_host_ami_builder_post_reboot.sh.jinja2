@@ -18,6 +18,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 BAKE_STAGE=dcv
 source "${SCRIPT_DIR}/image_bake_stage.sh"
 
+{% include '_templates/linux/remove_superseded_kernels.jinja2' %}
+
 {% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
 {% set ubuntu_desktop_bake = true %}
 {# this host mounts Lustre, so a failed client install stops it #}
@@ -74,6 +76,9 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot_after_cloud_init
   exit 0
 else
+  # no reboot now, but every clone boots whatever is the default
+  ensure_boot_kernel_bootable
+
   # user data customizations
   if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
     /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1 || exit 1

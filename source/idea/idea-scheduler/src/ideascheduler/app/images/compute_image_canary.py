@@ -19,9 +19,15 @@ from ideadatamodel import (
     errorcodes,
     exceptions,
 )
-from ideasdk.aws.image_builds import default_builder_instance_type
+from ideasdk.aws.failure_capture import (
+    FailedHost,
+    capture_failure,
+    find_job_instance,
+)
+from ideasdk.aws.image_builds import default_builder_instance_type, with_cause
 from ideasdk.aws.validation_identity import (
     ensure_validation_identity,
+    path_answers,
     wait_for_local_user,
 )
 
@@ -108,20 +114,36 @@ class ComputeImageCanary:
     def __init__(self, context):
         self.context = context
 
-    def reap(self, profile) -> list:
-        """remove a hidden validation queue and whatever jobs are left in it"""
+    def reap(self, profile, patience=CLEANUP_SECONDS) -> list:
+        """
+        remove a hidden validation queue and whatever jobs are left in it. patience is how
+        long to wait for PBS to let them go: the leader's tick passes 0 and asks again later
+        """
         errors = []
         for job in self.context.scheduler.list_jobs(queue=profile.name):
-            errors += self._release(job.job_id, None)
-        return errors + self._release(None, profile)
+            errors += self._release(job.job_id, None, patience)
+        return errors + self._release(None, profile, patience)
 
-    def _release(self, job_id, created) -> list:
+    def _has_node(self, queue) -> bool:
+        """
+        PBS answers "busy" for a queue a node still belongs to, and a canary's node stays a
+        minute or two after its job, until its stack is deleted
+        """
+        try:
+            return bool(queue) and any(
+                node.queue == queue for node in self.context.scheduler.list_nodes()
+            )
+        except Exception:
+            return False  # unknown: the delete itself says what PBS thinks
+
+    def _release(self, job_id, created, patience=CLEANUP_SECONDS) -> list:
         """
         wait for the job to leave PBS, delete it only if it is still queued or running after
-        the exiting window, then delete the hidden queue, retrying while PBS reports it busy
+        the exiting window, then delete the hidden queue once its node has left, retrying
+        while PBS reports it busy
         """
         scheduler = self.context.scheduler
-        deadline = time.monotonic() + CLEANUP_SECONDS
+        deadline = time.monotonic() + patience
         errors = []
 
         def gone(seconds) -> bool:
@@ -144,6 +166,17 @@ class ComputeImageCanary:
         except Exception as error:
             errors.append(str(error))
         while created:
+            # asked only once PBS can say yes: every refused delete logs two errors, and
+            # each successful canary logged 24 to 50 of them waiting for its node to go
+            name = getattr(created, 'name', None)
+            if self._has_node(name):
+                if time.monotonic() >= deadline:
+                    errors.append(
+                        f'The validation queue {name} still has a node in PBS.'
+                    )
+                    break
+                time.sleep(5)
+                continue
             try:
                 self.context.queue_profiles.delete_queue_profile(
                     queue_profile_id=created.queue_profile_id
@@ -207,6 +240,23 @@ class ComputeImageCanary:
         raise exceptions.invalid_params(
             f'No compute queue profile has a subnet in an availability zone that offers '
             f'{size}, the validation instance type.'
+        )
+
+    def _capture_failed_node(self, record, job_id, node, error):
+        return capture_failure(
+            self.context,
+            self.context.logger('compute-image-canary'),
+            FailedHost(
+                kind='compute_bake',
+                identifier=record.ami_name or f'{record.base_os}/{record.architecture}',
+                instance_id=getattr(node, 'instance_id', None)
+                or find_job_instance(self.context, job_id),
+                failure=getattr(error, 'message', None) or str(error),
+                os=record.base_os,
+                arch=record.architecture,
+                ami=record.image_id,
+                release=record.release,
+            ),
         )
 
     def validate(self, record, progress):
@@ -299,6 +349,13 @@ class ComputeImageCanary:
             'shared-storage.data.mount_dir', required=True
         )
         output = Path(data) / 'home' / user / 'jobs' / (name + '.json')
+        # the submit below stats this path with no timeout: on a hung mount it never returns
+        home = output.parents[1]
+        if not path_answers(str(home)):
+            raise exceptions.general_exception(
+                f'The shared home {home} did not answer within 60 seconds, so the '
+                'validation job cannot be written. Check the file system that serves it.'
+            )
         # PBS directive values cannot contain line breaks or whitespace.
         if any(ch.isspace() for ch in str(output)):
             raise exceptions.invalid_params(
@@ -309,6 +366,7 @@ class ComputeImageCanary:
         deadline = started + settings.ready_gate_seconds_linux
         job_id = None
         created = None
+        observed_node = None
 
         def check(check_name, ok, detail, fatal=True):
             checks.append(
@@ -457,6 +515,12 @@ class ComputeImageCanary:
                     )
                 )
                 progress({'checks': checks})
+            # before the release below takes the node. a node that panicked never registered
+            cause = self._capture_failed_node(record, job_id, observed_node, error)
+            if cause:
+                raise exceptions.general_exception(
+                    with_cause(getattr(error, 'message', None) or str(error), cause)
+                ) from error
             raise
         finally:
             cleanup_errors = self._release(job_id, created)

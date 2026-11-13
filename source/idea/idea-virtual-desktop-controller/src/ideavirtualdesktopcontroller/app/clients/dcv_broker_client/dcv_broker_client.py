@@ -343,8 +343,10 @@ class DCVBrokerClient(DCVClientProtocol):
 
         for session in sessions_with_count:
             if session.connection_count > 0:
-                session.failure_reason = f'There exists {session.connection_count} active connection(s) for idea_session_id: {session.idea_session_id}:{session.name}. Please terminate.'
-                self._logger.error(session.failure_reason)
+                session.failure_reason = f'{session.connection_count} connection(s) are open on this desktop.'
+                self._logger.error(
+                    f'{session.connection_count} active connection(s) on {session.idea_session_id}:{session.name}'
+                )
                 delete_fail_session_ids.append(session.dcv_session_id)
                 unsuccessful_list.append(session)
             else:

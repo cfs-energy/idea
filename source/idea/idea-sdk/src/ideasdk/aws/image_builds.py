@@ -29,6 +29,7 @@ from ideadatamodel import (
     constants,
     exceptions,
 )
+from ideasdk.aws.failure_capture import FailedHost, capture_failure
 from ideasdk.utils import Utils
 
 BUILD_STATUS_BUILDING = 'building'
@@ -64,6 +65,7 @@ THROTTLE_CODES = ('Throttling', 'ThrottlingException', 'RequestLimitExceeded')
 
 # tags the sweep uses to find builder instances it may terminate
 IMAGE_BUILD_TAG = 'idea:ImageBuild'
+BAKE_FAILED_MARKER = 'IDEA_IMAGE_BAKE_FAILED'
 STOPPED_AT_TAG = 'idea:ImageBuilderStoppedAt'
 
 
@@ -126,6 +128,7 @@ _RECORD_TIMESTAMPS = (
     'validated_on',
     'promoted_on',
     'retry_after',
+    'attempt_started_on',
 )
 
 # custom (ad hoc) builds share the table with the pipeline rows under their own range
@@ -205,6 +208,254 @@ def validated_image_ids(records: List[ImageBuildRecord]) -> set:
     return found
 
 
+# nothing runs and nothing bills: a row waiting here is bounded by how many tries it gets
+OFF_THE_BAKE_CLOCK = (
+    ImageRowStatus.QUEUED.value,
+    ImageRowStatus.WAITING_CAPACITY.value,
+)
+
+
+def bake_overdue(record: ImageBuildRecord, now: datetime, limit: timedelta) -> bool:
+    """
+    in flight past the limit, by the stored clock alone, so a row no worker is advancing
+    is caught by whichever process leads next. the clock runs from the attempt's first real
+    work: the queue and a wait for EC2 capacity are not on it. a row with no clock yet is not
+    judged: needs_attempt_clock says to start one
+    """
+    if not record.is_in_flight() or record.status in OFF_THE_BAKE_CLOCK:
+        return False
+    started = record.attempt_started_on
+    if started is None:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return now - started > limit
+
+
+def needs_attempt_clock(record: ImageBuildRecord) -> bool:
+    """
+    working with no clock: in flight when the release that added it arrived. its started_on is
+    when it was queued, which says nothing about how long it has worked, so it gets a full limit
+    from here rather than a false failure on upgrade day.
+    """
+    return (
+        record.is_in_flight()
+        and record.status not in OFF_THE_BAKE_CLOCK
+        and record.attempt_started_on is None
+    )
+
+
+# what bake_time_limit_reason says, so the count and the capture can name it
+BAKE_TIME_LIMIT_TEXT = re.compile(r'ran past its \d+ minute limit')
+
+
+def bake_time_limit_reason(record: ImageBuildRecord, limit: timedelta) -> str:
+    minutes = int(limit.total_seconds() / 60)
+    waiting = f' ({record.error})' if record.error else ''
+    return (
+        f'The bake ran past its {minutes} minute limit while {record.status}{waiting} '
+        'and was stopped. Refresh the row to bake it again.'
+    )[:300]
+
+
+def report_bake_failure(
+    logger,
+    kind: ImageKind,
+    record: ImageBuildRecord,
+    reason: Optional[str],
+    context=None,
+    step: Optional[str] = None,
+) -> None:
+    """
+    the one line every failed pipeline bake logs. step names the pipeline step that failed when
+    the caller knows it (the compute test launch): its sentences come from the node and the
+    job, so the text alone does not say. the log monitor matches BAKE_FAILED_MARKER,
+    since shipped service logs arrive without a level a monitor could use. the same failure is
+    counted as a metric, since the log only lasts as long as its index
+    """
+    logger.error(
+        f'{BAKE_FAILED_MARKER} {kind.value} '
+        f'{record.base_os}/{record.row_key().range_key()} '
+        f'release {record.release}: {reason}'
+    )
+    if context is not None:
+        from ideasdk.metrics.health import HealthMetrics
+
+        # both at once: the collector only reads the row table every few minutes
+        metrics = HealthMetrics(context)
+        row = dict(
+            kind=kind.value,
+            os=record.base_os,
+            arch=record.architecture,
+            variant=getattr(record.variant, 'value', record.variant) or 'cpu',
+        )
+        tag = classify_bake_failure(reason)
+        metrics.add(
+            'bake.failures', reason=step if step and tag == 'other' else tag, **row
+        )
+        metrics.level('bake.row_state', 1, status='failed', **row)
+
+
+# what a bake failure's text says, as a tag. each row's error is a sentence built from these.
+_BAKE_REASONS = (
+    (BAKE_TIME_LIMIT_TEXT, 'time_limit'),
+    # one step's own wait ran out before the bake's limit: a hung builder, with the defaults
+    (
+        re.compile(
+            r'did not report ready within|was not available within'
+            r'|did not stop (?:after sysprep )?within|in-bake checks timed out'
+        ),
+        'step_timeout',
+    ),
+    (re.compile(r'capacity', re.I), 'capacity'),
+    # the kernel the builder runs, or would boot, has no FSx for Lustre module: the bootstrap's
+    # own reason code, or what the lustre check's modprobe prints. before the check names, as
+    # it arrives inside the bootstrap or the lustre check
+    (
+        re.compile(r'reason code: lustre-module-missing|Module lustre not found'),
+        'lustre_kernel',
+    ),
+    (re.compile(r'in-bake check results unreadable'), 'checks_unreadable'),
+    (re.compile(r'in-bake check (\w+)'), None),
+    (re.compile(r'^ready_gate\b'), 'ready_gate'),
+    # the compute test launch says "validation job" or "validation node", not its own name
+    (re.compile(r'canary|validation (?:job|node)|filesystem probe', re.I), 'canary'),
+    (re.compile(r'the builder ran'), 'release_mismatch'),
+    (re.compile(r'from the vendor'), 'no_source_image'),
+    (re.compile(r'no ss-base stack'), 'no_base_stack'),
+    (re.compile(r'candidate image'), 'image_unavailable'),
+)
+
+
+# the host's console may say nothing of these: the capture then carries the bake's own reason
+CAPTURE_REASONS = ('time_limit', 'step_timeout', 'lustre_kernel')
+
+
+def classify_bake_failure(reason: Optional[str]) -> str:
+    for pattern, name in _BAKE_REASONS:
+        match = pattern.search(reason or '')
+        if match is not None:
+            return name or f'check_{match.group(1).lower()[:32]}'
+    return 'other'
+
+
+class ImageRowsCollector:
+    """state, last duration and image age of every row, for one module's table of them."""
+
+    name = 'image_bakes'
+    interval_seconds = 300
+    time_limit_seconds = 60
+    leader_only = True
+
+    def __init__(
+        self,
+        kind: ImageKind,
+        list_rows: Callable[[], List[ImageBuildRecord]],
+        release: Optional[str] = None,
+        off_current: Optional[Callable[[], Optional[List[str]]]] = None,
+    ):
+        self.kind = kind
+        self.list_rows = list_rows
+        self.release = release
+        # the unpinned things that launch an image no row calls current, by name
+        self.off_current = off_current
+        self.previous: Dict[Tuple[str, str, str, str], None] = {}
+
+    def collect(self, metrics, now: Optional[datetime] = None) -> None:
+        now = now or datetime.now(timezone.utc)
+        current: Dict[Tuple[str, str, str, str], None] = {}
+        behind = 0
+        for record in self.list_rows():
+            row = dict(
+                kind=self.kind.value,
+                os=record.base_os,
+                arch=record.architecture,
+                variant=getattr(record.variant, 'value', record.variant) or 'cpu',
+            )
+            status = str(getattr(record.status, 'value', record.status) or 'unknown')
+            current[(row['os'], row['arch'], row['variant'], status)] = None
+            if status != 'failed':
+                # a failure is sent at once by whoever failed the row. retried before this
+                # collector's next run, it was never seen here and stayed at 1
+                metrics.level('bake.row_state', 0, status='failed', **row)
+            metrics.level('bake.row_state', 1, status=status, **row)
+            # a pinned row keeps its image on purpose, an unsupported one never had one
+            if self.release and status not in ('pinned', 'unsupported'):
+                on_release = status == 'current' and record.release == self.release
+                behind += 0 if on_release else 1
+                metrics.level('bake.row_on_release', 1 if on_release else 0, **row)
+            started = record.attempt_started_on or record.started_on
+            if record.finished_on and started and record.finished_on >= started:
+                metrics.level(
+                    'bake.last_duration_seconds',
+                    (record.finished_on - started).total_seconds(),
+                    **row,
+                )
+            image_on = record.promoted_on or build_stamp(record.ami_name)
+            if image_on is not None and record.current_image_id:
+                metrics.level(
+                    'bake.image_age_days',
+                    (now - image_on).total_seconds() / 86400,
+                    **row,
+                )
+        if self.release:
+            metrics.level('bake.rows_behind_release', behind, kind=self.kind.value)
+        # every row can be current while a queue still launches an older image. None is a
+        # target seen off too recently to tell from a promotion in flight: no point this run
+        off_current = self.off_current() if self.off_current is not None else None
+        if off_current is not None:
+            metrics.level(
+                'bake.targets_off_current', len(off_current), kind=self.kind.value
+            )
+        # a row that left a state reads zero once, rather than stopping at one
+        for os_, arch, variant, status in self.previous.keys() - current.keys():
+            metrics.level(
+                'bake.row_state',
+                0,
+                kind=self.kind.value,
+                os=os_,
+                arch=arch,
+                variant=variant,
+                status=status,
+            )
+        self.previous = current
+
+
+def capture_builder_failure(context, logger, kind, record, reason) -> Optional[str]:
+    """
+    what a failing builder said, read while it still exists. call before the row is marked failed:
+    past the build phases the builder is gone and the test launch has already been read. returns
+    the sentence to add to the row's error, or None.
+    """
+    if record.status not in (
+        ImageRowStatus.BUILDING.value,
+        ImageRowStatus.CHECKING.value,
+    ):
+        return None
+    bake_reason = classify_bake_failure(reason)
+    return capture_failure(
+        context,
+        logger,
+        FailedHost(
+            kind=f'{getattr(kind, "value", kind) or "image"}_bake',
+            identifier=record.ami_name or f'{record.base_os}/{record.architecture}',
+            instance_id=record.instance_id,
+            failure=reason,
+            os=record.base_os,
+            arch=record.architecture,
+            ami=record.source_ami or record.base_ami,
+            release=record.release,
+            log_group=f'/{context.cluster_name()}/{context.module_id()}/ami-builder',
+            log_stream=f'bootstrap_{record.instance_id}',
+            fallback_reason=bake_reason if bake_reason in CAPTURE_REASONS else None,
+        ),
+    )
+
+
+def with_cause(reason: Optional[str], cause: Optional[str]) -> Optional[str]:
+    return f'{reason} {cause}' if cause else reason
+
+
 def build_stamp(image_name: Optional[str]) -> Optional[datetime]:
     """the build time encoded in an IDEA image name (-vMMDDYYYY-HHmmss), or None"""
     if not image_name:
@@ -275,6 +526,34 @@ def terminate_builder(context, instance_id: Optional[str], logger) -> None:
         return
     try:
         context.aws().ec2().terminate_instances(InstanceIds=[instance_id])
+    except Exception as e:
+        logger.warning(f'could not terminate builder {instance_id}: {e}')
+
+
+def dispose_builder(context, instance_id: Optional[str], logger) -> None:
+    """
+    terminate a failed bake's builder. the id comes from a stored row, so the instance
+    must still carry this module's build tag: nothing else is ever terminated here
+    """
+    if not instance_id:
+        return
+    try:
+        ec2 = context.aws().ec2()
+        result = ec2.describe_instances(InstanceIds=[instance_id])
+        tags = {
+            tag['Key']: tag['Value']
+            for reservation in result.get('Reservations', [])
+            for instance in reservation.get('Instances', [])
+            if instance.get('InstanceId') == instance_id
+            for tag in instance.get('Tags', [])
+        }
+        if (
+            IMAGE_BUILD_TAG not in tags
+            or tags.get(constants.IDEA_TAG_MODULE_ID) != context.module_id()
+        ):
+            logger.warning(f'{instance_id} is not a builder of this module; left alone')
+            return
+        ec2.terminate_instances(InstanceIds=[instance_id])
     except Exception as e:
         logger.warning(f'could not terminate builder {instance_id}: {e}')
 
@@ -352,7 +631,19 @@ def deregister_unreferenced_images(
     for image in candidates:
         if image['ImageId'] in in_use:
             continue
-        ec2.deregister_image(ImageId=image['ImageId'])
+        try:
+            ec2.deregister_image(ImageId=image['ImageId'])
+        except ClientError as e:
+            # two bakes promoting together each run this, and the listing still shows an
+            # image for a moment after the other pass removed it: that pass has its
+            # snapshots, and this one goes on to the rest
+            if (
+                not e.response.get('Error', {})
+                .get('Code', '')
+                .startswith('InvalidAMIID')
+            ):
+                raise
+            continue
         removed.append(image['ImageId'])
         delete_unshared_snapshots(ec2, image)
     if removed:
@@ -777,8 +1068,9 @@ def resume_record(
     """
     pick a pipeline row back up after the thread that ran its build died with its
     process. the candidate image exists (the builder snapshots only after its checks
-    passed): go on to the test launch, which waits for a pending image. otherwise stop
-    the builder and queue the row once more; a second loss fails it.
+    passed): go on to the test launch, which waits for a pending image. otherwise the
+    builder goes, since nothing can pick it up, and the row is queued once more; a second
+    loss fails it.
     """
     image = None
     try:
@@ -800,12 +1092,15 @@ def resume_record(
         record.image_id = image['ImageId']
         record.status = ImageRowStatus.TEST_LAUNCHING.value
         record.error = None
+        record.attempt_started_on = record.attempt_started_on or datetime.now(
+            tz=timezone.utc
+        )
     else:
-        if record.instance_id:
-            stop_builder(context, record.instance_id, logger)
+        dispose_builder(context, record.instance_id, logger)
         record.attempts = (record.attempts or 0) + 1
         if record.attempts < MAX_RESUME_ATTEMPTS:
             record.status = ImageRowStatus.QUEUED.value
+            record.attempt_started_on = None  # a new attempt, once it leaves the queue
             record.error = (
                 'the controller restarted during the bake; it is being retried'
             )
@@ -1281,8 +1576,13 @@ class ImageBuildRunner:
             raise
         except BaseException as e:
             self._logger.error(f'{record.ami_name}: build failed: {e}')
+            cause = None
+            if isinstance(e, Exception):
+                cause = capture_builder_failure(
+                    self.context, self._logger, self.records.kind, record, str(e)
+                )
             record.status = BUILD_STATUS_FAILED
-            record.error = self._short_error(e, 'build failed')
+            record.error = with_cause(self._short_error(e, 'build failed'), cause)
             record.finished_on = datetime.now(tz=timezone.utc)
             self.records.put(record)
             if not isinstance(e, Exception):

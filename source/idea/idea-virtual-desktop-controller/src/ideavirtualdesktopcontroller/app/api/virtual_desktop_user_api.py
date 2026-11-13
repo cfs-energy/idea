@@ -43,6 +43,7 @@ from ideadatamodel import (
 from ideadatamodel import errorcodes, exceptions
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import StackExpiry
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
 from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     SOFTWARE_STACK_DB_FILTER_PROJECT_ID_KEY,
@@ -533,6 +534,18 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
             )
 
         result = self._list_software_stacks(request)
+        # what a person may pick for a new desktop: their existing desktops never read this
+        # ponytail: removed from the page read, so a page may come back short; the form reads one
+        # page large enough for every stack. move this into the query if that ever changes.
+        try:
+            offered = StackExpiry(self.context).offered_for_new_desktops(
+                result.listing or []
+            )
+            if result.paginator is not None and result.paginator.total is not None:
+                result.paginator.total -= len(result.listing or []) - len(offered)
+            result.listing = offered
+        except Exception as e:
+            self._logger.warning(f'could not check stack expiry: {type(e).__name__}')
         context.success(result)
 
     def list_shared_permissions(self, context: ApiInvocationContext):

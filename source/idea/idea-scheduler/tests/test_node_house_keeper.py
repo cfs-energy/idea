@@ -157,8 +157,16 @@ def test_node_that_never_reported_is_reclaimed_after_timeout_from_launch(context
     context.config().pop(
         'scheduler.job_provisioning.node_unavailable_timeout_seconds', default=None
     )
+    from types import SimpleNamespace
+
+    from ideadatamodel import SocaJob, SocaJobState
+
     node = build_node(last_used_time=None)
     node.states = [SocaComputeNodeState.DOWN, SocaComputeNodeState.UNKNOWN]
+    # its job still exists: one that is gone gives its node up at once
+    context.job_cache = SimpleNamespace(
+        get_job=lambda job_id: SocaJob(job_id=job_id, state=SocaJobState.HELD)
+    )
     session = NodeHouseKeepingSession(
         context=context, logger=logging.getLogger(LOG_TAG)
     )
@@ -253,3 +261,30 @@ def test_keep_forever_node_without_idle_termination_is_retained(context):
         session._can_terminate(instance=build_instance(0, keep_forever=True), node=node)
         is False
     )
+
+
+def test_a_stack_timeout_hold_is_on_record_as_the_platforms(context, monkeypatch):
+    """the record is what later tells a qdel of this job from a qdel of the owner's hold"""
+    from types import SimpleNamespace
+
+    from ideadatamodel import SocaJob, errorcodes
+
+    calls = []
+    monkeypatch.setattr(
+        context,
+        'scheduler',
+        SimpleNamespace(hold_job=lambda job_id: True, set_job_comment=lambda **_: True),
+    )
+    monkeypatch.setattr(
+        context,
+        'job_cache',
+        SimpleNamespace(set_job_provisioning_error=lambda **kw: calls.append(kw)),
+    )
+    session = NodeHouseKeepingSession(
+        context=context, logger=logging.getLogger(LOG_TAG)
+    )
+    session._hold_after_stack_timeout(job=SocaJob(job_id='77'), timeout_secs=1800)
+    assert [(c['job_id'], c['error_code']) for c in calls] == [
+        ('77', errorcodes.JOB_HELD_STACK_TIMEOUT)
+    ]
+    assert ',' not in calls[0]['message'], 'qalter splits on commas'

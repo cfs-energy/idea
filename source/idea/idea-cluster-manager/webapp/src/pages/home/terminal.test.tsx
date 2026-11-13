@@ -45,8 +45,10 @@ beforeEach(() => {
     const computed = window.getComputedStyle;
     vi.spyOn(window, 'getComputedStyle').mockImplementation(element => {
         const style = computed(element);
-        if (element.classList.contains('terminal-surface')) {style.backgroundColor = 'rgb(255, 255, 255)'; style.color = 'rgb(15, 20, 25)';}
-        return style;
+        if (!element.classList.contains('terminal-surface')) return style;
+        // a computed declaration is read-only, so answer the resolved theme colours over it
+        const colors: Record<string | symbol, string> = {backgroundColor: 'rgb(255, 255, 255)', color: 'rgb(15, 20, 25)'};
+        return new Proxy(style, {get: (target, property) => colors[property] ?? Reflect.get(target, property)});
     });
 });
 afterEach(() => {vi.unstubAllGlobals(); vi.restoreAllMocks();});
@@ -287,23 +289,37 @@ it('accepts output while animation frames are suspended, including after rendere
 });
 
 it.each([
-    ['ended', 'idle-timeout', 'Closed after the input-idle limit.'],
-    ['ended', 'max-duration', 'Closed after the maximum connection duration.'],
-    ['ended', 'shell-exited', 'Your shell exited. Close this tab and open it again for a new one.'],
-    ['ended', 'target-stopped', 'This desktop is stopped. Start it from My desktops, then close this tab and open it again.'],
-    ['ended', 'target-error', 'This desktop is in an error or deleting state. Check it in My desktops.'],
-    ['reconnecting', 'trust-not-ready', 'The target is refreshing terminal access.'],
-    ['denied', 'target-misconfigured', 'The target needs administrator attention.'],
-    ['ended', 'ack-timeout', 'Terminal stopped accepting output.'],
+    ['ended', 'idle-timeout', 'Closed because nothing was typed for a while.'],
+    ['ended', 'max-duration', 'Closed because it reached the time limit for one connection.'],
+    ['ended', 'shell-exited', 'Your shell exited.'],
+    ['ended', 'target-stopped', 'This desktop is stopped. Start it from My desktops, then reconnect.'],
+    ['ended', 'target-error', 'This desktop has failed or is being terminated. Check it in My desktops.'],
+    ['reconnecting', 'trust-not-ready', 'Terminal access is being refreshed.'],
+    ['denied', 'target-misconfigured', 'This terminal needs an administrator.'],
+    ['ended', 'ack-timeout', 'The terminal stopped accepting output.'],
     ['ended', 'retry-exhausted', 'Unable to connect after 8 attempts.'],
-    ['reconnecting', 'unavailable', 'the terminal limit has been reached. Close any extra terminals.'],
-    ['denied', 'access-denied', 'Terminal access was denied.'],
+    ['reconnecting', 'unavailable', 'Close any extra terminals.'],
+    ['denied', 'access-denied', "You don't have access to this terminal."],
 ])('explains %s %s', async (state, reason, message) => {
     await view();
     act(() => mocks.options.state(state, reason));
     expect(screen.getByRole('status')).toHaveTextContent(message);
-    expect(screen.getByRole('status')).not.toHaveTextContent(/select connect/i);
-    expect(screen.queryByRole('button', {name: /connect/i})).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).not.toHaveTextContent(/close this tab/i);
+    expect(screen.getByRole('status')).not.toHaveTextContent(/target/i);
+});
+
+it('offers Reconnect only once a connection has ended, and it starts a new one', async () => {
+    await view();
+    expect(screen.queryByRole('button', {name: 'Reconnect'})).not.toBeInTheDocument();
+    act(() => mocks.options.state('reconnecting', 'unavailable'));
+    expect(screen.queryByRole('button', {name: 'Reconnect'})).not.toBeInTheDocument();
+    act(() => mocks.options.state('denied', 'access-denied'));
+    expect(screen.queryByRole('button', {name: 'Reconnect'})).not.toBeInTheDocument();
+
+    act(() => mocks.options.state('ended', 'idle-timeout'));
+    mocks.start.mockClear();
+    fireEvent.click(screen.getByRole('button', {name: 'Reconnect'}));
+    expect(mocks.start).toHaveBeenCalledOnce();
 });
 
 function Pages() {
@@ -377,6 +393,25 @@ it('redirects the old Terminal page to the dock', async () => {
     </Routes></MemoryRouter>);
     expect(await screen.findByText('Home')).toBeInTheDocument();
     await waitFor(() => expect(shellStore.get().tabs).toEqual([{target: 'bastion', label: 'Bastion'}]));
+});
+
+it('says so, and does not open the bastion, for a bookmark to a desktop that has gone', async () => {
+    render(<MemoryRouter initialEntries={['/home/terminal?target=desktop:gone']}><Routes>
+        <Route path="/home/terminal" element={<TerminalRedirect client={client as any}/>}/>
+        <Route path="/home/virtual-desktops" element={<p>Desktops</p>}/>
+    </Routes></MemoryRouter>);
+    expect(await screen.findByText(/That desktop is not available/)).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: 'My desktops'})).toHaveAttribute('href', '/home/virtual-desktops');
+    expect(shellStore.get().tabs).toEqual([]);
+});
+
+it('goes on to My desktops for a bookmark to a desktop that is there', async () => {
+    render(<MemoryRouter initialEntries={['/home/terminal?target=desktop:one']}><Routes>
+        <Route path="/home/terminal" element={<TerminalRedirect client={client as any}/>}/>
+        <Route path="/home/virtual-desktops" element={<p>Desktops</p>}/>
+    </Routes></MemoryRouter>);
+    expect(await screen.findByText('Desktops')).toBeInTheDocument();
+    await waitFor(() => expect(shellStore.get().tabs).toEqual([{target: 'desktop:one', label: 'Work'}]));
 });
 
 it('ending the session closes every socket, frees every renderer and opens nothing on the next sign-in', async () => {

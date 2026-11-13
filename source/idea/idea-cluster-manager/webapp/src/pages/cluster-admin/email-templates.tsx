@@ -11,6 +11,8 @@
  * and limitations under the License.
  */
 
+import {IdeaFormValidate} from "../../components/form-field/form-field";
+import {EMAIL_TEMPLATE_NAME_PATTERN} from "../../common/form-patterns";
 import React, {Component, RefObject} from "react";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
@@ -155,7 +157,7 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                           } else {
                               createOrUpdate = (request: any) => this.emailTemplates().createEmailTemplate(request)
                           }
-                          createOrUpdate({
+                          return createOrUpdate({
                               template: {...values, template_type: 'jinja2'}
                           }).then(() => {
                               this.setState({
@@ -192,8 +194,9 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                               readonly: isUpdate,
                               validate: {
                                   required: true,
-                                  regex: '^([a-z0-9-._]+){3,32}$'
-                              }
+                                  regex: EMAIL_TEMPLATE_NAME_PATTERN,
+                                  message: 'Use at least 3 lowercase letters, digits, dots, underscores or hyphens.'
+                              } as IdeaFormValidate
                           },
                           {
                               name: 'template_type',
@@ -297,6 +300,9 @@ class EmailTemplates extends Component<EmailTemplatesProps, EmailTemplatesState>
                         emailTemplateSelected: true
                     }, () => {
                     })
+                }}
+                onRecordsFetched={() => {
+                    this.setState({emailTemplateSelected: false})
                 }}
                 onFetchRecords={() => {
                     return this.emailTemplates().listEmailTemplates({

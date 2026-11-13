@@ -34,8 +34,13 @@ if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION
 
   {% include '_templates/linux/disable_se_linux.jinja2' %}
 
+  {% with lustre_scratch = context.vars.job.params.fsx_lustre.enabled %}
+  {% include '_templates/linux/compute_kernel_hold.jinja2' %}
+  {% endwith %}
+
   {% include '_templates/linux/system_packages.jinja2' %}
 
+  {% include '_templates/linux/openssh_update.jinja2' %}
 
 else
    log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping package installation"

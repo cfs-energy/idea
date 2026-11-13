@@ -25,16 +25,20 @@ from ideascheduler.app.provisioning.lifecycle_events import (
     OWNER_CANCELLATION,
     ADMINISTRATOR_DELETION,
 )
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.utils import Utils
 from ideasdk.utils.error_redaction import AWS_IDENTIFIERS
 
 from typing import List, Optional, Dict
+import arrow
 import dataset
+import json
 import os
 import logging
 import re
 import sqlite3
 import tempfile
+import time
 from contextlib import closing
 from pathlib import Path
 from threading import Event, RLock, Thread
@@ -46,6 +50,58 @@ EXECUTION_HOSTS_TABLE = 'execution_hosts'
 ACTIVE_JOB_LICENSES_TABLE = 'active_job_licenses'
 JOB_PROVISIONING_ERRORS = 'job_provisioning_errors'
 JOB_PROVISIONING_RETRIES = 'job_provisioning_retries'
+
+# every column the cache writes or queries. tables are created with all of them, and a
+# column missing from a cache written by an earlier release is added at start: a column
+# left for the first write to add breaks every raw query that runs before that write.
+TABLE_COLUMNS = {
+    JOBS_TABLE: {
+        'job_id': 'TEXT',
+        'job_group': 'TEXT',
+        'job_uid': 'TEXT',
+        'desired_capacity': 'INTEGER',
+        'state': 'TEXT',
+        'owner': 'TEXT',
+        'queue': 'TEXT',
+        'queue_profile': 'TEXT',
+        'project': 'TEXT',
+        'provisioned': 'BOOLEAN',
+        'job_data': 'TEXT',
+    },
+    FINISHED_JOBS_TABLE: {
+        'job_id': 'TEXT',
+        'job_group': 'TEXT',
+        'job_uid': 'TEXT',
+        'desired_capacity': 'INTEGER',
+        'state': 'TEXT',
+        'owner': 'TEXT',
+        'queue': 'TEXT',
+        'queue_profile': 'TEXT',
+        'project': 'TEXT',
+        'job_data': 'TEXT',
+        'indexed': 'BOOLEAN NOT NULL DEFAULT 0',
+    },
+    EXECUTION_HOSTS_TABLE: {
+        'job_id': 'TEXT',
+        'host': 'TEXT',
+        'execution_host_data': 'TEXT',
+    },
+    ACTIVE_JOB_LICENSES_TABLE: {
+        'job_id': 'TEXT',
+        'license_name': 'TEXT',
+        'count': 'INTEGER',
+    },
+    JOB_PROVISIONING_ERRORS: {
+        'job_id': 'TEXT',
+        'error_code': 'TEXT',
+        'message': 'TEXT',
+    },
+    JOB_PROVISIONING_RETRIES: {
+        'job_id': 'TEXT',
+        'retry_count': 'INTEGER',
+        'stack_id': 'TEXT',
+    },
+}
 
 ERROR_MESSAGE_MAX_LENGTH = 256
 ERROR_MESSAGE_REDACTED = 'redacted'
@@ -86,14 +142,34 @@ class JobsDB:
     """
     The live cache is a SQLite file on local disk, where it is fast. A container's local
     disk goes with every task replacement, so there a copy is kept under PBS_HOME (the
-    scheduler-pbs volume, which outlives the task): refreshed by SQLite's online backup
-    every five minutes when something changed, and on an orderly stop, and restored on a
-    start that finds no local file. At most the last five minutes of cache are lost when a
-    task dies without an orderly stop, and no network filesystem locking sits in the hot
-    path. Each refresh copies the whole file, so the interval sets the EFS write volume.
+    scheduler-pbs volume, which outlives the task): refreshed hourly when something changed,
+    and on an orderly stop, and restored on a start that finds no local file. No network
+    filesystem locking sits in the hot path. Each refresh copies the whole file, so the
+    interval sets the EFS write volume; a job or hook event in most hours means nearly
+    every refresh runs, and only the interval lowers the volume.
+
+    At most the last hour is lost when a task dies without an orderly stop, and most of
+    that comes back: PBS re-supplies active jobs and their licenses, the document store
+    answers for jobs it already holds (see FinishedJobProcessor._recorded_job), and SQS
+    keeps undelivered hook events.
+
+    Finished jobs older than the retention are deleted in small batches. The live file
+    keeps the freed pages for new rows and is never vacuumed in place, because that would
+    hold the write lock for the whole rebuild. The copy is written compacted instead, so
+    it shrinks at its next refresh, and a replacement task starts from that smaller file.
     """
 
-    DEFAULT_BACKUP_INTERVAL_SECONDS = 300
+    # ponytail: whole-file copy, so bytes grow with retained rows: about 8 GB/day at 64k rows.
+    # Copy finished-job deltas instead if the EFS burst balance trends toward empty.
+    DEFAULT_BACKUP_INTERVAL_SECONDS = 3600
+    DEFAULT_FINISHED_JOB_RETENTION_DAYS = 400
+    PRUNE_INTERVAL_SECONDS = 3600
+    PRUNE_BATCH_SIZE = 500
+    PRUNE_MAX_BATCHES = 20
+    PRUNE_BATCH_PAUSE_SECONDS = 1
+    # a copy in flight keeps writing its temporary file, so one untouched this long was
+    # left by a killed task. the age also spares a stopping task's last copy.
+    STALE_COPY_SECONDS = 3600
 
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
@@ -119,7 +195,9 @@ class JobsDB:
             'scheduler.job_cache.backup_interval_seconds',
             default=self.DEFAULT_BACKUP_INTERVAL_SECONDS,
         )
-        self._backup_stop = Event()
+        self._stop = Event()
+        self._prune_thread: Optional[Thread] = None
+        self._prune_cursor = 0
         self._backup_thread: Optional[Thread] = None
         self._backup_connection: Optional[sqlite3.Connection] = None
         self._backed_up_version = None
@@ -157,10 +235,15 @@ class JobsDB:
         self._db_lock = RLock()  # Keep the RLock for database operations
         self.init_db()
         if self._backup_file:
+            self._remove_stale_copies()
             self._backup_thread = Thread(
                 target=self._backup_loop, name='job-cache-backup', daemon=True
             )
             self._backup_thread.start()
+        self._prune_thread = Thread(
+            target=self._prune_loop, name='job-cache-prune', daemon=True
+        )
+        self._prune_thread.start()
 
     @staticmethod
     def _copy_database(source_file: str, destination_file: str):
@@ -178,8 +261,9 @@ class JobsDB:
         )
         os.close(fd)
         try:
+            # a read snapshot of the source, so writers carry on, written without free pages
+            source.execute('VACUUM INTO ?', (temporary_file,))
             with closing(sqlite3.connect(temporary_file)) as destination:
-                source.backup(destination)
                 # one plain file: the copy is opened without -wal/-shm sidecars, which matters
                 # on a network filesystem; the live file goes back to WAL when connected
                 destination.execute('PRAGMA journal_mode=DELETE')
@@ -187,6 +271,21 @@ class JobsDB:
         finally:
             if os.path.exists(temporary_file):
                 os.remove(temporary_file)
+
+    def _remove_stale_copies(self):
+        """
+        A task killed during a copy leaves its temporary file, as large as the cache, on
+        storage that outlives the task. Nothing else ever removes it.
+        """
+        try:
+            backup_dir = Path(self._backup_file).parent
+            cutoff = time.time() - self.STALE_COPY_SECONDS
+            for leftover in backup_dir.glob('.job-cache-*'):
+                if leftover.stat().st_mtime < cutoff:
+                    leftover.unlink()
+                    self._logger.info(f'removed unfinished job cache copy {leftover}')
+        except OSError as e:
+            self._logger.warning(f'could not remove unfinished job cache copies: {e}')
 
     def backup(self, force: bool = False) -> bool:
         """
@@ -216,15 +315,101 @@ class JobsDB:
             return False
 
     def _backup_loop(self):
-        while not self._backup_stop.wait(self._backup_interval):
+        while not self._stop.wait(self._backup_interval):
+            self._remove_stale_copies()
             self.backup()
 
+    @staticmethod
+    def _finished_job_time(job_data: Optional[str]) -> Optional[arrow.Arrow]:
+        """when the job ended, or the latest time it has if it never ran"""
+        try:
+            job = json.loads(job_data)
+            for field in ('end_time', 'start_time', 'queue_time'):
+                if job.get(field):
+                    return arrow.get(job[field])
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return None
+
+    def prune_finished_jobs(self) -> int:
+        """
+        Delete finished jobs older than the retention, within a fixed budget per pass. The age
+        lives in job_data, so rows are walked by id, and each pass goes on from where the last
+        stopped, wrapping at the end: a stretch with nothing to delete, such as rows with no
+        readable time, which are kept, cannot hide what lies behind it. The cursor is only this
+        process's: a restart walks from the start. The database lock is held only for each delete, and
+        a pass that deletes nothing writes nothing, so it does not trigger a backup.
+        :return: the number of rows deleted
+        """
+        retention_days = self._context.config().get_int(
+            'scheduler.job_cache.finished_job_retention_days',
+            default=self.DEFAULT_FINISHED_JOB_RETENTION_DAYS,
+        )
+        if retention_days <= 0:
+            return 0
+        cutoff = arrow.utcnow().shift(days=-retention_days)
+        deleted = 0
+        conn = self.db.engine.raw_connection()
+        try:
+            for batch in range(self.PRUNE_MAX_BATCHES):
+                if batch > 0 and self._stop.wait(self.PRUNE_BATCH_PAUSE_SECONDS):
+                    break
+                # table names are module-level constants; identifiers cannot be bound
+                rows = conn.execute(
+                    f'SELECT id, job_data FROM {FINISHED_JOBS_TABLE} '
+                    'WHERE id > ? ORDER BY id LIMIT ?',
+                    (self._prune_cursor, self.PRUNE_BATCH_SIZE),
+                ).fetchall()
+                if not rows:
+                    self._prune_cursor = 0
+                    break
+                self._prune_cursor = rows[-1][0]
+                expired = []
+                for row_id, job_data in rows:
+                    finished = self._finished_job_time(job_data)
+                    if finished is not None and finished < cutoff:
+                        expired.append((row_id,))
+                if not expired:
+                    continue
+                with self._db_lock:
+                    conn.executemany(
+                        f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
+                    )
+                    conn.commit()
+                deleted += len(expired)
+        finally:
+            conn.close()
+        if deleted > 0:
+            self._logger.info(
+                f'pruned {deleted} finished jobs older than {retention_days} days'
+            )
+        else:
+            # one line an hour, so a running prune is visible when there is nothing to delete
+            self._logger.info(
+                f'finished job prune: nothing older than {retention_days} days'
+            )
+        return deleted
+
+    def _prune_loop(self):
+        while not self._stop.wait(self.PRUNE_INTERVAL_SECONDS):
+            try:
+                self.prune_finished_jobs()
+            except Exception as e:
+                self._logger.error(f'finished job prune failed: {e}')
+
     def stop(self):
-        """an orderly stop leaves a current copy behind"""
-        self._backup_stop.set()
+        """
+        An orderly stop leaves a current copy behind, when the copy fits in what is left of
+        the task's stop allowance. A copy in flight is waited for and, if nothing was
+        committed since it began, is the final one: a second whole-file copy could run past
+        the allowance and be killed half written.
+        """
+        self._stop.set()
+        if self._prune_thread is not None:
+            self._prune_thread.join(timeout=30)
         if self._backup_thread is not None:
             self._backup_thread.join(timeout=30)
-        self.backup(force=True)
+        self.backup()
         if self._backup_connection is not None:
             self._backup_connection.close()
             self._backup_connection = None
@@ -269,6 +454,8 @@ class JobsDB:
             # finished jobs table, which cannot hold two jobs given the same id.
             self.drop_unique_index(FINISHED_JOBS_TABLE, 'ix_finished_jobs_job_id')
 
+            self.drop_subjob_execution_hosts()
+
             # Create indices after tables are confirmed to exist
             self.init_indices()
 
@@ -278,14 +465,7 @@ class JobsDB:
 
     def create_all_tables(self):
         """Create all required tables in a single transaction"""
-        required_tables = [
-            JOBS_TABLE,
-            FINISHED_JOBS_TABLE,
-            EXECUTION_HOSTS_TABLE,
-            ACTIVE_JOB_LICENSES_TABLE,
-            JOB_PROVISIONING_ERRORS,
-            JOB_PROVISIONING_RETRIES,
-        ]
+        required_tables = list(TABLE_COLUMNS)
 
         with self._db_lock:
             # Use a more explicit transaction approach
@@ -293,23 +473,33 @@ class JobsDB:
             try:
                 cursor = conn.cursor()
 
-                for table in required_tables:
+                for table, columns in TABLE_COLUMNS.items():
+                    # table and column names are module-level constants; identifiers cannot be bound
                     if table not in self.db:
                         self._logger.info(f'Creating table: {table}')
-                        # table names are module-level constants; identifiers cannot be bound as parameters
-                        cursor.execute(
-                            f'CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT)'
+                        definition = ', '.join(
+                            f'"{name}" {kind}' for name, kind in columns.items()
                         )
-
-                cursor.execute(f'PRAGMA table_info({FINISHED_JOBS_TABLE})')
-                if 'indexed' not in {column[1] for column in cursor.fetchall()}:
-                    # records written before the marker existed were indexed as they were
-                    # recorded; only records written from now on wait for the index.
-                    cursor.execute(
-                        f'ALTER TABLE {FINISHED_JOBS_TABLE} '
-                        'ADD COLUMN indexed BOOLEAN NOT NULL DEFAULT 0'
-                    )
-                    cursor.execute(f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1')
+                        cursor.execute(
+                            f'CREATE TABLE IF NOT EXISTS {table} '
+                            f'(id INTEGER PRIMARY KEY AUTOINCREMENT, {definition})'
+                        )
+                        continue
+                    cursor.execute(f'PRAGMA table_info({table})')
+                    present = {column[1] for column in cursor.fetchall()}
+                    for name, kind in columns.items():
+                        if name in present:
+                            continue
+                        self._logger.info(f'adding column {name} to {table}')
+                        cursor.execute(
+                            f'ALTER TABLE {table} ADD COLUMN "{name}" {kind}'
+                        )
+                        if table == FINISHED_JOBS_TABLE and name == 'indexed':
+                            # records written before the marker existed were indexed as they were
+                            # recorded; only records written from now on wait for the index.
+                            cursor.execute(
+                                f'UPDATE {FINISHED_JOBS_TABLE} SET indexed = 1'
+                            )
 
                 conn.commit()
                 self._logger.info('All tables created successfully')
@@ -374,22 +564,33 @@ class JobsDB:
             # Refresh database object after raw connection usage
             self.db = self._connect()
 
+    def drop_subjob_execution_hosts(self):
+        """
+        an array's execution hosts are kept under its own id (123[]). a 26.11.2 release
+        candidate kept them under each subjob's (123[4]), where nothing reads or removes
+        them. best effort: a row left behind costs a few hundred bytes.
+        """
+        with self._db_lock:
+            conn = self.db.engine.raw_connection()
+            try:
+                # the table name is a module-level constant; identifiers cannot be bound
+                conn.execute(
+                    f'DELETE FROM {EXECUTION_HOSTS_TABLE} '
+                    "WHERE job_id LIKE '%[%]' AND job_id NOT LIKE '%[]'"
+                )
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                self._logger.error(f'failed to drop subjob execution hosts: {e}')
+            finally:
+                conn.close()
+
     def init_indices(self):
         """Initialize all indices outside of any transaction"""
         try:
             with self._db_lock:
                 # First verify all tables exist
-                if not all(
-                    table in self.db.tables
-                    for table in [
-                        JOBS_TABLE,
-                        FINISHED_JOBS_TABLE,
-                        EXECUTION_HOSTS_TABLE,
-                        ACTIVE_JOB_LICENSES_TABLE,
-                        JOB_PROVISIONING_ERRORS,
-                        JOB_PROVISIONING_RETRIES,
-                    ]
-                ):
+                if not all(table in self.db.tables for table in TABLE_COLUMNS):
                     raise Exception(
                         'Cannot create indices - one or more required tables are missing'
                     )
@@ -522,8 +723,17 @@ class JobsDB:
             return self.convert_db_entry_to_job(entry, fetch_errors=True)
 
     def add(self, job: SocaJob):
+        if ModelUtils.array_parent_id(job.job_id) is not None:
+            # an array is tracked under its parent id alone. a subjob shares its array's
+            # job_uid and stack, and plain qselect never lists it, so a row for one would
+            # be finished in the array's place while it runs.
+            return
         with self._db_lock:
             with self.db as tx:
+                if job.is_provisioned() and job.params is not None:
+                    self._keep_what_it_was_provisioned_with(
+                        job, tx[JOBS_TABLE].find_one(job_id=job.job_id)
+                    )
                 tx[JOBS_TABLE].upsert(
                     row={
                         'job_id': job.job_id,
@@ -540,6 +750,29 @@ class JobsDB:
                     },
                     keys=['job_id'],
                 )
+
+    @staticmethod
+    def _keep_what_it_was_provisioned_with(job: SocaJob, entry: Optional[Dict]):
+        """
+        A job read from PBS takes the image and instance types it did not name from its
+        queue profile as the profile is at that moment. Once the job holds a stack, the
+        row written when it was provisioned says what was launched, and a later read must
+        not replace that with what the profile says now: for as long as the job is on the
+        same stack, the row keeps them.
+        """
+        if entry is None or not entry.get('provisioned'):
+            return
+        job_data = entry.get('job_data')
+        if not job_data or job_data == 'NULL':
+            return
+        known = (Utils.from_json(job_data) or {}).get('params') or {}
+        stack_id = job.params.stack_id
+        if not stack_id or stack_id == 'tbd' or known.get('stack_id') != stack_id:
+            return
+        if known.get('instance_ami'):
+            job.params.instance_ami = known['instance_ami']
+        if known.get('instance_types'):
+            job.params.instance_types = known['instance_types']
 
     def add_finished_job(self, job: SocaJob):
         # keyed on job_uid, not job_id: ids are reused once the scheduler host is replaced,
@@ -635,6 +868,10 @@ class JobsDB:
                 tx[ACTIVE_JOB_LICENSES_TABLE].delete(job_id=job_id)
                 tx[JOB_PROVISIONING_ERRORS].delete(job_id=job_id)
                 tx[JOB_PROVISIONING_RETRIES].delete(job_id=job_id)
+
+    def delete_license_ask(self, job_id: str):
+        with self._db_lock:
+            self.db[ACTIVE_JOB_LICENSES_TABLE].delete(job_id=job_id)
 
     def delete_many(self, job_ids: List[str]):
         with self._db_lock:
@@ -744,6 +981,13 @@ class JobsDB:
                     job.reason_class = ProvisioningLifecycleEvents.get_reason_class(
                         error_code
                     )
+                    # read back from PBS, the comment is this error as qalter takes
+                    # it: its code, and an underscore for every space and bracket
+                    published = build_job_error_message(
+                        error_code=error_code, message=error_message
+                    )
+                    if job.comment in (published, published.replace(' ', '_')):
+                        job.comment = error_message
                     if error_code in (
                         SYSTEM_DELETION,
                         OWNER_CANCELLATION,
@@ -953,7 +1197,8 @@ class JobCache(JobCacheProtocol):
         result = self._jobs_db.db.query(
             'select count(*) as active_jobs from jobs where '
             'queue_profile = :queue_profile '
-            "and state in ('queued', 'running') "
+            # an array with a subjob begun is running, and PBS calls it neither
+            "and state in ('queued', 'running', 'subjob_begun') "
             'and provisioned = 1',
             queue_profile=queue_profile,
         )
@@ -982,6 +1227,9 @@ class JobCache(JobCacheProtocol):
 
     def add_active_licenses(self, jobs: List[SocaJob]):
         self._jobs_db.add_license_ask(jobs)
+
+    def release_active_licenses(self, job_id: str):
+        self._jobs_db.delete_license_ask(job_id)
 
     def convert_db_entry_to_job(
         self, entry: Dict, fetch_errors: bool = False
@@ -1013,8 +1261,11 @@ class JobCache(JobCacheProtocol):
                 ),
             )
 
-    def clear_job_provisioning_error(self, job_id: str):
-        if self._jobs_db.clear_job_provisioning_error(job_id):
+    def clear_job_provisioning_error(self, job_id: str, job_started: bool = False):
+        # PBS refuses to change a resource of a job that runs ("Cannot modify attribute
+        # while job running"). The record is cleared; the resource stays on the job in
+        # PBS, where a started job's error_message is no longer read.
+        if self._jobs_db.clear_job_provisioning_error(job_id) and not job_started:
             self._publish_error_message(job_id=job_id, error_message=None)
 
     def increment_job_provisioning_retry(

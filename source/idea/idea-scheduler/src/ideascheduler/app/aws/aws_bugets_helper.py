@@ -124,10 +124,19 @@ class AwsBudgetsHelper:
             return
 
         if budget.actual_spend > budget.budget_limit:
-            message = (
-                f'Project: ({self._job.project}) has exceeded the allocated budget limit. '
-                f'Please update the limit on AWS Budgets Console or try again later.'
-            )
+            if budget.is_missing:
+                # a missing budget carries made-up amounts so that it reads as exhausted
+                message = (
+                    f"Project {self._job.project}'s budget can't be found. Jobs can't start "
+                    f'until an administrator restores it.'
+                )
+            else:
+                message = (
+                    f'Project {self._job.project} has used its budget '
+                    f'(${budget.actual_spend.amount:,.2f} of ${budget.budget_limit.amount:,.2f}). '
+                    f"Jobs can't start until your project lead or an administrator raises the "
+                    f'budget or the next budget period starts.'
+                )
             bedrock_spend_percent = self.get_bedrock_spend_percent()
             if bedrock_spend_percent is not None:
                 message += (

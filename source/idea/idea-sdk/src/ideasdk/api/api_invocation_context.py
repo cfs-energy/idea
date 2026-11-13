@@ -33,6 +33,8 @@ T = TypeVar('T')
 
 PATTERN_NAMESPACE = r'^[A-Za-z0-9]+.{1}[A-Za-z0-9]+$'
 PATTERN_REQUEST_ID = r'^[0-9a-zA-Z-_]+$'
+# audit lines for these name no user or token: the API promises it does not record who called
+UNATTRIBUTED_NAMESPACES = frozenset({'Portal.ReportClientError'})
 
 
 class ApiInvocationContext(ApiInvocationContextProtocol):
@@ -493,6 +495,10 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             authorization_type = authorization.type
             if authorization_type == ApiAuthorizationType.APP:
                 actor = 'app'
+            elif self.namespace in UNATTRIBUTED_NAMESPACES:
+                # the session only limits the rate; who called is not logged
+                actor = 'user'
+                token_id = None
             else:
                 actor = self.get_username()
         except exceptions.SocaException as e:

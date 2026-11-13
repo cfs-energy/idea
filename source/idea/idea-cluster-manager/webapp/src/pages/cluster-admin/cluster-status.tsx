@@ -14,7 +14,7 @@
 import {hasContainerControlPlane} from './cluster-services';
 import React, {Component} from "react";
 
-import {Box, Button, ColumnLayout, Container, Header, Link, Popover, SpaceBetween, StatusIndicator, Table} from "@cloudscape-design/components";
+import {Alert, Box, Button, ColumnLayout, Container, Header, Link, Popover, SpaceBetween, StatusIndicator, Table} from "@cloudscape-design/components";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {AppContext} from "../../common";
 import Utils from "../../common/utils";
@@ -37,6 +37,8 @@ export interface ClusterStatusState {
     containerControlPlane: boolean
     modules: any
     modules_loading: boolean
+    modulesFailed: boolean
+    hostsFailed: boolean
 
     // Sorting state for modules table
     modulesSortingColumn: string
@@ -142,6 +144,8 @@ class ModuleVersion extends Component<ModuleVersionProps, ModuleVersionState> {
             this.setState({
                 version: result.module?.module_version!
             })
+        }).catch(_ => {
+            this.setState({version: 'Unknown'})
         })
     }
 
@@ -226,6 +230,8 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
             instances_loading: true,
             modules: [],
             modules_loading: true,
+            modulesFailed: false,
+            hostsFailed: false,
             modulesSortingColumn: 'type',
             modulesSortingDescending: false,
             instancesSortingColumn: 'instance_name',
@@ -245,7 +251,8 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
 
     loadClusterModules() {
         this.setState({
-            modules_loading: true
+            modules_loading: true,
+            modulesFailed: false
         }, () => {
             let modules: any = []
             this.getClusterSettingsClient().listClusterModules({}).then(result => {
@@ -260,6 +267,9 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                     this.state.modulesSortingColumn,
                     this.state.modulesSortingDescending
                 );
+            }).catch(error => {
+                console.error("Error loading cluster modules:", error);
+                this.setState({modulesFailed: true})
             }).finally(() => {
                 this.setState({
                     modules: modules,
@@ -271,7 +281,8 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
 
     loadClusterHosts() {
         this.setState({
-            instances_loading: true
+            instances_loading: true,
+            hostsFailed: false
         }, () => {
             const awsRegion = AppContext.get().auth().getAwsRegion()
             const instances: any = []
@@ -334,6 +345,7 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
             }).catch(error => {
                 this.setState({
                     hostsLoaded: false,
+                    hostsFailed: true,
                     instances_loading: false
                 });
                 console.error("Error loading cluster hosts:", error);
@@ -362,6 +374,7 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                 >
                     Modules
                 </Header>
+                {this.state.modulesFailed && <Alert type="error">Modules could not be loaded. Use refresh to try again.</Alert>}
                 <Table
                     items={this.state.modules}
                     loading={this.state.modules_loading}
@@ -483,6 +496,7 @@ class ClusterStatus extends Component<ClusterStatusProps, ClusterStatusState> {
                 >
                     Infrastructure Hosts
                 </Header>
+{this.state.hostsFailed && <Alert type="error">Hosts could not be loaded. Use refresh to try again.</Alert>}
                 <Table
                     items={this.state.instances}
                     loading={this.state.instances_loading}

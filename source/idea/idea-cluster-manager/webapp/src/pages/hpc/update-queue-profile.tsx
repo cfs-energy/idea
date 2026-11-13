@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import {IdeaFormValidate} from "../../components/form-field/form-field";
 import React, {Component, RefObject} from "react";
 
 import IdeaWizard from '../../components/wizard'
@@ -24,6 +25,7 @@ import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import IdeaAppLayout, {IdeaAppLayoutProps} from "../../components/app-layout";
 import {withRouter} from "../../navigation/navigation-utils";
 import {Box} from "@cloudscape-design/components";
+import {listAllProjects} from "./hpc-utils";
 
 export interface HpcUpdateQueueProfileProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -139,13 +141,9 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                         values={this.getValues()}
                         onFetchOptions={(request) => {
                             if (request.param === 'project_ids') {
-                                return AppContext.get().client().projects().listProjects({
-                                    paginator: {
-                                        page_size: 100
-                                    }
-                                }).then(result => {
+                                return listAllProjects(AppContext.get().client().projects()).then(projects => {
                                     let choices: any = []
-                                    result.listing?.forEach(project => {
+                                    projects.forEach(project => {
                                         choices.push({
                                             title: project.title,
                                             value: project.project_id,
@@ -182,8 +180,9 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                                     data_type: 'str',
                                                     validate: {
                                                         required: true,
-                                                        regex: '^([a-z0-9-]+){3,18}$'
-                                                    }
+                                                        regex: '^[a-z0-9-]{3,}$',
+                                                        message: 'Use at least 3 lowercase letters, digits or hyphens.'
+                                                    } as IdeaFormValidate
                                                 },
                                                 {
                                                     name: 'title',
@@ -1008,7 +1007,7 @@ class HpcUpdateQueueProfile extends Component<HpcUpdateQueueProfileProps, HpcUpd
                                         <div>
                                             <div><Box variant="strong">{error.message}</Box></div>
                                             {error.payload.validation_errors.results.map((entry: any) => {
-                                                return <li>({entry.error_code}) {entry.message}</li>
+                                                return <li>{entry.message}</li>
                                             })}
                                         </div>
                                     )

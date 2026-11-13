@@ -474,6 +474,64 @@ def test_cleanup_deletes_a_stuck_job_and_reports_what_stayed(monkeypatch):
     assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
 
 
+def test_cleanup_asks_for_the_queue_only_once_its_node_has_left_pbs(monkeypatch):
+    """
+    PBS answers busy while a node belongs to the queue, a minute or two after the job. each
+    refused delete is two error lines: 24 to 50 for every canary that passed.
+    """
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = False
+    node = SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')
+    other = SocaComputeNode(host='ip-10-0-0-2', queue='normal')
+    context.scheduler.list_nodes.side_effect = [[node, other]] * 20 + [[other]]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    )
+    assert errors == []
+    context.queue_profiles.delete_queue_profile.assert_called_once_with(
+        queue_profile_id='q'
+    )
+    assert module.time.monotonic() == 100
+
+
+def test_cleanup_names_a_node_that_never_left(monkeypatch):
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.is_job_active.return_value = False
+    context.scheduler.list_nodes.return_value = [
+        SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')
+    ]
+    errors = ComputeImageCanary(context)._release(
+        '11', SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    )
+    assert errors == ['The validation queue iv-abc still has a node in PBS.']
+    context.queue_profiles.delete_queue_profile.assert_not_called()
+    assert module.time.monotonic() <= module.CLEANUP_SECONDS + 5
+
+
+@pytest.mark.parametrize('node', [True, False])
+def test_the_sweeps_reap_never_waits(monkeypatch, node):
+    """the leader's tick runs it, and the same thread enforces the bake time limit"""
+    _clock(monkeypatch)
+    context = Mock()
+    context.scheduler.list_jobs.return_value = [SimpleNamespace(job_id='12')]
+    context.scheduler.is_job_active.return_value = True
+    context.scheduler.list_nodes.return_value = (
+        [SocaComputeNode(host='ip-10-0-0-1', queue='iv-abc')] if node else []
+    )
+    busy = exceptions.soca_exception(module.errorcodes.SCHEDULER_QUEUE_BUSY, 'busy')
+    context.queue_profiles.delete_queue_profile.side_effect = busy
+    profile = SimpleNamespace(queue_profile_id='q', name='iv-abc')
+    errors = ComputeImageCanary(context).reap(profile, patience=0)
+    assert module.time.monotonic() == 0
+    context.scheduler.delete_job.assert_called_once_with('12')
+    assert any('did not leave PBS' in e for e in errors)
+    # one try at most, and none while PBS is sure to refuse
+    assert context.queue_profiles.delete_queue_profile.call_count == (0 if node else 1)
+    assert len(errors) == 2
+
+
 def _resolver(monkeypatch, lookups, uid=5062):
     """this host's passwd and group as the user sync leaves them, one answer per poll"""
     from ideasdk.aws import validation_identity
@@ -565,3 +623,62 @@ def test_a_stale_project_description_is_brought_up_to_date(monkeypatch):
     # only the description: an update with other fields would rewrite them
     assert update.ldap_groups is None and update.enable_budgets is None
     assert project.description == VALIDATION_PROJECT_DESCRIPTION
+
+
+def test_a_hung_shared_home_fails_the_canary_before_it_creates_anything(monkeypatch):
+    svc = service()
+    context = svc.context
+    context.config().values.update(
+        {
+            module.PIPELINE_SETTINGS: {},
+            'shared-storage.data.mount_dir': '/data',
+            'shared-storage': {'data': {'mount_dir': '/data', 'scope': ['cluster']}},
+        }
+    )
+    monkeypatch.setattr(
+        module, 'ensure_validation_identity', lambda *a: Mock(project_id='p')
+    )
+    monkeypatch.setattr(module, 'wait_for_local_user', lambda *a: None)
+    monkeypatch.setattr(module, 'path_answers', lambda path: False)
+    source = Mock(default_job_params=None)
+    source.name = 'compute'
+    context.queue_profiles.list_queue_profiles.return_value = [source]
+    context.queue_profiles.create_queue_profile = Mock()
+    monkeypatch.setattr(module.ComputeImageCanary, '_source_profile', lambda *a: source)
+    canary = module.ComputeImageCanary(context)
+    record = row(status='test_launching', image_id='ami-candidate')
+    with pytest.raises(exceptions.SocaException) as raised:
+        canary.validate(record, Mock())
+    assert '/data/home/idea-validate did not answer' in raised.value.message
+    context.queue_profiles.create_queue_profile.assert_not_called()
+
+
+def test_a_node_that_never_registered_is_found_by_its_job_tag_and_read(monkeypatch):
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {
+        'Reservations': [{'Instances': [{'InstanceId': 'i-node'}]}]
+    }
+    context = Mock()
+    context.aws.return_value.ec2.return_value = ec2
+    context.cluster_name.return_value = 'c'
+    seen = []
+    monkeypatch.setattr(
+        module,
+        'capture_failure',
+        lambda ctx, logger, host: seen.append(host) or 'Likely cause: x.',
+    )
+    canary = ComputeImageCanary(svc.context)
+    canary.context = context
+    cause = canary._capture_failed_node(
+        row(image_id='ami-candidate', release='26.11.2'),
+        'job-7',
+        None,
+        exceptions.general_exception('The validation job timed out before completion.'),
+    )
+    assert cause == 'Likely cause: x.'
+    assert seen[0].instance_id == 'i-node' and seen[0].ami == 'ami-candidate'
+    assert seen[0].kind == 'compute_bake' and seen[0].log_group is None
+    filters = ec2.describe_instances.call_args.kwargs['Filters']
+    assert {'Name': 'tag:idea:JobId', 'Values': ['job-7']} in filters
+    assert {'Name': 'tag:idea:ClusterName', 'Values': ['c']} in filters

@@ -31,11 +31,11 @@ describe('operations metrics history', () => {
         await userEvent.type(screen.getByRole('textbox', {name: 'Start date (UTC)'}), '2026-09-01');
         await userEvent.click(screen.getByRole('button', {name: 'Advanced'}));
         expect(screen.getByRole('textbox', {name: 'Cost days'})).toHaveValue('400');
-        await userEvent.click(screen.getByRole('button', {name: 'Run jobs'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Backfill job history'}));
         await waitFor(() => expect(runJobs).toHaveBeenCalledWith({start_date: '2026-09-01', end_date: new Date().toISOString().slice(0, 10), dry_run: true}));
-        await userEvent.click(screen.getByRole('button', {name: 'Run cost'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Backfill cost history'}));
         expect(runCost).toHaveBeenCalledWith({days: 400, dry_run: true});
-        expect(screen.getByRole('button', {name: 'Run jobs'})).toBeDisabled();
+        expect(screen.getByRole('button', {name: 'Backfill job history'})).toBeDisabled();
     });
 
     it('refreshes on reopening and shows a partial start failure', async () => {
@@ -50,8 +50,8 @@ describe('operations metrics history', () => {
         await userEvent.click(screen.getByRole('button', {name: 'Advanced'}));
         await userEvent.clear(screen.getByRole('textbox', {name: 'Cost days'}));
         await userEvent.type(screen.getByRole('textbox', {name: 'Cost days'}), '30');
-        await userEvent.click(screen.getByRole('button', {name: 'Run jobs'}));
-        await userEvent.click(screen.getByRole('button', {name: 'Run cost'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Backfill job history'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Backfill cost history'}));
         expect(runCost).toHaveBeenCalledWith({days: 30, dry_run: false});
         expect(runJobs).toHaveBeenCalledWith(expect.objectContaining({dry_run: false}));
         expect(await screen.findByText('Cost: Cost unavailable')).toBeInTheDocument();
@@ -66,9 +66,9 @@ describe('operations metrics history', () => {
         setupResult.rerender(<MetricsHistorySettings active/>);
         await screen.findByText(`${kind === 'jobs' ? 'Jobs' : 'Cost'}: Status unavailable`);
         await userEvent.type(screen.getByRole('textbox', {name: 'Start date (UTC)'}), '2026-09-01');
-        expect(screen.getByRole('button', {name: `Run ${kind}`})).toBeDisabled();
+        expect(screen.getByRole('button', {name: `Backfill ${kind === 'jobs' ? 'job' : kind} history`})).toBeDisabled();
         const other = kind === 'jobs' ? 'cost' : 'jobs';
-        await userEvent.click(screen.getByRole('button', {name: `Run ${other}`}));
+        await userEvent.click(screen.getByRole('button', {name: `Backfill ${other === 'jobs' ? 'job' : other} history`}));
         expect(kind === 'jobs' ? setupResult.runCost : setupResult.runJobs).toHaveBeenCalledOnce();
         expect(kind === 'jobs' ? setupResult.runJobs : setupResult.runCost).not.toHaveBeenCalled();
     });
@@ -81,11 +81,11 @@ describe('operations metrics history', () => {
         else vi.mocked(context.auth().isModuleAdmin).mockImplementation(module => module === 'cluster-manager');
         rerender(<MetricsHistorySettings active={false}/>);
         rerender(<MetricsHistorySettings active/>);
-        await waitFor(() => expect(screen.getByRole('button', {name: 'Run cost'})).toBeEnabled());
-        expect(screen.queryByRole('button', {name: 'Run jobs'})).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByRole('button', {name: 'Backfill cost history'})).toBeEnabled());
+        expect(screen.queryByRole('button', {name: 'Backfill job history'})).not.toBeInTheDocument();
         expect(screen.queryByText(/Jobs:/)).not.toBeInTheDocument();
         expect(screen.queryByRole('textbox', {name: 'Start date (UTC)'})).not.toBeInTheDocument();
-        await userEvent.click(screen.getByRole('button', {name: 'Run cost'}));
+        await userEvent.click(screen.getByRole('button', {name: 'Backfill cost history'}));
         expect(runCost).toHaveBeenCalledOnce();
         expect(jobs).not.toHaveBeenCalled();
     });
@@ -97,7 +97,7 @@ describe('operations metrics history', () => {
         rerender(<MetricsHistorySettings active={false}/>);
         rerender(<MetricsHistorySettings active/>);
         await screen.findByText(/Cost rows: interrupted/);
-        expect(screen.getByRole('button', {name: 'Run cost'})).toBeEnabled();
+        expect(screen.getByRole('button', {name: 'Backfill cost history'})).toBeEnabled();
     });
 });
 
@@ -123,7 +123,7 @@ it('shows only job history to a deployed jobs administrator', async () => {
     rerender(<MetricsHistorySettings active={false}/>);
     rerender(<MetricsHistorySettings active/>);
     await screen.findByText(/Jobs: completed/);
-    expect(screen.queryByRole('button', {name: 'Run cost'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Backfill cost history'})).not.toBeInTheDocument();
     expect(screen.queryByRole('button', {name: 'Advanced'})).not.toBeInTheDocument();
     expect(screen.queryByText(/Cost rows:/)).not.toBeInTheDocument();
     expect(cost).not.toHaveBeenCalled();
@@ -166,14 +166,14 @@ it.each(['read', 'run'])('ignores stale %s responses after deactivation', async 
         rerender(<MetricsHistorySettings active/>);
     } else {
         runCost.mockReturnValueOnce(pending);
-        fireEvent.click(screen.getByRole('button', {name: 'Run cost'}));
+        fireEvent.click(screen.getByRole('button', {name: 'Backfill cost history'}));
     }
     rerender(<MetricsHistorySettings active={false}/>);
     rerender(<MetricsHistorySettings active/>);
     await screen.findByText(/Cost rows: completed/);
     await act(async () => { resolve({...status, state: 'running'}); });
     expect(screen.getByText(/Cost rows: completed/)).toBeVisible();
-    expect(screen.getByRole('button', {name: 'Run cost'})).toBeEnabled();
+    expect(screen.getByRole('button', {name: 'Backfill cost history'})).toBeEnabled();
     vi.restoreAllMocks();
 });
 
@@ -186,7 +186,21 @@ it('disables both operations while their jobs are running', async () => {
     rerender(<MetricsHistorySettings active/>);
     await screen.findByText(/Cost rows: running/);
     await userEvent.type(screen.getByRole('textbox', {name: 'Start date (UTC)'}), '2026-09-01');
-    expect(screen.getByRole('button', {name: 'Run jobs'})).toBeDisabled();
-    expect(screen.getByRole('button', {name: 'Run cost'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Backfill job history'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Backfill cost history'})).toBeDisabled();
     vi.restoreAllMocks();
+});
+
+it('names the backfill plainly and states its status in words', async () => {
+    const context = initTestAppContext();
+    const idle = {...status, state: 'idle' as const, dry_run: false};
+    vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(true);
+    vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+    vi.spyOn(context.getClusterSettingsService(), 'isSchedulerDeployed').mockReturnValue(true);
+    vi.spyOn(context.client().schedulerAdmin(), 'getJobMetricsBackfill').mockResolvedValue(idle);
+    vi.spyOn(context.client().clusterSettings(), 'getCostMetricsBackfill').mockResolvedValue(idle);
+    render(<MetricsHistorySettings active/>);
+    expect(await screen.findByText(/Jobs: not run yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Run jobs'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Backfill job history'})).toBeInTheDocument();
 });

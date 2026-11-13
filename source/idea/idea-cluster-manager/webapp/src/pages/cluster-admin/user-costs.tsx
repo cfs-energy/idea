@@ -22,6 +22,7 @@ export interface UserCostsState {
     summary: GetMyCostsSummaryResult | null
     costs: GetMyCostsResult | null
     summaryLoading: boolean
+    summaryError?: string | null
     splitPanelOpen: boolean
     error: string | null
 }
@@ -41,7 +42,7 @@ const USER_COLUMNS: TableProps.ColumnDefinition<UserCosts>[] = [
         id: 'storage_cost',
         header: 'Storage',
         sortingField: 'storage_cost',
-        cell: (item) => item.storage_cost == null ? '-' : `${money(item.storage_cost)}${item.storage_cost_period ? ` (${item.storage_cost_period})` : ''}`
+        cell: (item) => item.storage_cost == null ? '-' : money(item.storage_cost)
     },
     {id: 'storage_gb', header: 'Storage GB', sortingField: 'storage_gb', cell: (item) => item.storage_gb == null ? '-' : `${item.storage_gb.toFixed(2)} GB`},
     {
@@ -71,7 +72,7 @@ const USER_COLUMNS: TableProps.ColumnDefinition<UserCosts>[] = [
         id: 'total_cost',
         header: 'Total',
         sortingField: 'total_cost',
-        cell: (item) => `${money(item.total_cost)}${item.total_cost_excludes_storage ? ' (excludes storage)' : ''}`
+        cell: (item) => `${money(item.total_cost)}${item.total_cost_excludes_storage ? ' (excludes storage)' : item.job_cost_unavailable || item.ai_cost_unavailable ? ' (partial)' : ''}`
     }
 ]
 
@@ -106,13 +107,15 @@ interface UsersTableProps {
     onSelect: (selected: UserCosts[]) => void
     note: React.ReactNode
     storageDisabled: boolean
+    error?: string | null
+    onRetry?: () => void
 }
 
 /**
  * The users table, filtered, sorted and paged in the browser. The listing is one small
  * row per user and arrives in a single read, so narrowing it needs no round trip.
  */
-const UsersTable: React.FC<UsersTableProps> = ({listing, loading, selected, onSelect, note, storageDisabled}) => {
+const UsersTable: React.FC<UsersTableProps> = ({listing, loading, selected, onSelect, note, storageDisabled, error, onRetry}) => {
 
     const columns = storageDisabled
         ? USER_COLUMNS.filter((column) => column.id !== 'storage_cost' && column.id !== 'storage_gb')
@@ -123,7 +126,7 @@ const UsersTable: React.FC<UsersTableProps> = ({listing, loading, selected, onSe
         filtering: {
             filteringFunction: (item, filteringText) =>
                 (item.username ?? '').toLowerCase().includes(filteringText.trim().toLowerCase()),
-            empty: EMPTY_STATE,
+            empty: error ? <Box textAlign="center" color="inherit"><Box variant="strong">Could not load user costs</Box><Box variant="p" color="inherit">{error}</Box><Button onClick={onRetry}>Try again</Button></Box> : EMPTY_STATE,
             noMatch: NO_MATCH_STATE
         },
         // Biggest spender first.
@@ -216,14 +219,14 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
 
     onSelect(selected: UserCosts[]) {
         const username = selected[0]?.username
-        this.setState({selected: selected, summary: null, costs: null, summaryLoading: username != null, splitPanelOpen: username != null})
+        this.setState({selected: selected, summary: null, costs: null, summaryLoading: username != null, summaryError: null, splitPanelOpen: username != null})
         if (username == null) {
             return
         }
         Promise.all([this.client().getUserSummary({username: username}), this.client().getUserCosts({username: username})]).then(([summary, costs]) => {
             this.setState({summary: costs.current?.details ?? summary, costs: costs, summaryLoading: false})
         }).catch((e) => {
-            this.setState({summary: {} as GetMyCostsSummaryResult, summaryLoading: false})
+            this.setState({summary: {} as GetMyCostsSummaryResult, summaryLoading: false, summaryError: e?.message ?? `${e}`})
             this.props.onFlashbarChange({
                 items: [{
                     type: 'error',
@@ -243,6 +246,8 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
                 <CostSections
                     summary={this.state.summary}
                     loading={this.state.summaryLoading}
+                    error={this.state.summaryError}
+                    onRetry={() => this.onSelect(this.state.selected)}
                     subject="user"
                     computeRate={AppContext.get().getClusterSettingsService().getComputeRate()}
                     historicalStorageNotice={Boolean(this.state.listing?.storage_disabled || this.state.listing?.storage_unavailable)}/>
@@ -344,6 +349,8 @@ class UserCostsPage extends Component<UserCostsProps, UserCostsState> {
                 onSelect={(selected) => this.onSelect(selected)}
                 note={<SpaceBetween size="s">{this.renderStorageStatus()}{this.renderUnavailableNote()}</SpaceBetween>}
                 storageDisabled={Boolean(this.state.listing?.storage_disabled)}
+                error={this.state.error}
+                onRetry={() => this.fetchListing()}
             />
         )
     }

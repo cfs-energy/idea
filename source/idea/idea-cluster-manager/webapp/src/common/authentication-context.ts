@@ -12,7 +12,7 @@
  */
 
 import {JwtTokenClaims, JwtTokenClaimsProvider, JwtTokenUtils} from "./token-utils";
-import {AUTH_TOKEN_EXPIRED, NETWORK_ERROR, REQUEST_TIMEOUT, SERVER_ERROR} from "./error-codes";
+import {AUTH_TOKEN_EXPIRED, NETWORK_ERROR, REQUEST_TIMEOUT, SERVER_ERROR, SERVER_ERROR_MESSAGE, NETWORK_ERROR_MESSAGE, REQUEST_TIMEOUT_MESSAGE} from "./error-codes";
 import {LocalStorageService} from "../service";
 import IdeaException from "./exceptions";
 import Utils from "./utils";
@@ -34,7 +34,11 @@ const KEY_ID_TOKEN = 'id-token'
 const KEY_SSO_AUTH = 'sso-auth'
 
 const HEADER_CONTENT_TYPE_JSON = 'application/json;charset=UTF-8'
-const NETWORK_TIMEOUT = 600000  // 10 minutes for large file downloads
+// Wait on an ordinary API call. Well above any list or form call, so only a dead connection reaches it.
+// A call that can legitimately run longer asks for LONG_REQUEST_TIMEOUT.
+export const NETWORK_TIMEOUT = 180000
+// the load balancer's idle timeout: nothing can answer later than this
+export const LONG_REQUEST_TIMEOUT = 600000
 
 /**
  * IDEA Authentication Context
@@ -278,9 +282,9 @@ export class IdeaAuthenticationContext {
      * @param url
      * @param options
      */
-    private _fetch = (url: string, options: any): Promise<any> => {
+    private _fetch = (url: string, options: any, timeoutMs: number = NETWORK_TIMEOUT): Promise<any> => {
         const abortController = new AbortController()
-        const timeout = setTimeout(() => abortController.abort(), NETWORK_TIMEOUT)
+        const timeout = setTimeout(() => abortController.abort(), timeoutMs)
         options = {
             ...options,
             signal: abortController.signal
@@ -293,7 +297,7 @@ export class IdeaAuthenticationContext {
                 return {
                     success: false,
                     error_code: SERVER_ERROR,
-                    message: 'Server error'
+                    message: SERVER_ERROR_MESSAGE
                 }
             }
         }).catch(error => {
@@ -302,13 +306,13 @@ export class IdeaAuthenticationContext {
                 return {
                     success: false,
                     error_code: REQUEST_TIMEOUT,
-                    message: 'Request timed-out'
+                    message: REQUEST_TIMEOUT_MESSAGE
                 }
             } else {
                 return {
                     success: false,
                     error_code: NETWORK_ERROR,
-                    message: 'Network error'
+                    message: NETWORK_ERROR_MESSAGE
                 }
             }
         }).finally(() => {
@@ -437,7 +441,7 @@ export class IdeaAuthenticationContext {
     }
 
 
-    invoke(url: string, request: any, isPublic: boolean = false): Promise<any> {
+    invoke(url: string, request: any, isPublic: boolean = false, timeoutMs?: number): Promise<any> {
 
         const invokeApi = () => {
             let headers: any = {
@@ -451,7 +455,7 @@ export class IdeaAuthenticationContext {
             if (!isPublic) {
                 headers['Authorization'] = `Bearer ${this.accessToken}`
             }
-            return this._fetch(url, fetchOptions)
+            return this._fetch(url, fetchOptions, timeoutMs)
         }
 
         if (isPublic) {

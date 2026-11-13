@@ -163,7 +163,7 @@ class SocaApp(SocaBaseProtocol):
 
     def initialize(self):
         self.logger.info(
-            f'Initializing {self.app_name} with configuration: {os.linesep}{self.context.config().as_yaml()}'
+            f'Initializing {self.app_name} with configuration: {os.linesep}{self.context.config().as_logged_yaml()}'
         )
 
         # warm up dependencies

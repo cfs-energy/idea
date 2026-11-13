@@ -40,6 +40,8 @@ from ideadatamodel.scheduler import (
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
+from ideascheduler.app.api.active_jobs import list_active_job_page
+from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
 from ideascheduler.app.scheduler.job_param_builder import (
     JobParamsBuilderContext,
@@ -58,6 +60,26 @@ import os
 import pwd
 import re
 import shutil
+
+QSUB_DIRECTIVE_ERROR = 'qsub: directive error:'
+
+
+def qsub_directive_refusal(stderr: Optional[str]) -> Optional[str]:
+    """
+    what to tell the owner of a script with a #PBS line qsub cannot read, or None. qsub
+    reads those lines itself, before it asks the server: nothing reaches the submit hook,
+    so no result is recorded, and it is the script that is wrong, not the scheduler.
+    """
+    for line in Utils.get_as_string(stderr, '').splitlines():
+        if line.startswith(QSUB_DIRECTIVE_ERROR):
+            directive = line.removeprefix(QSUB_DIRECTIVE_ERROR).strip()
+            return (
+                f"This job can't be queued: qsub refused a line of the script "
+                f'(directive error: {directive}). Correct the line that reads '
+                f'#PBS {directive} and submit again.'
+            )
+    return None
+
 
 # how long a completed submission can be replayed for: must be at least
 # SERVICE_WORKER_REPLY_TIMEOUT (660s), the delay before the webapp shows a client timeout.
@@ -333,10 +355,8 @@ class SchedulerAPI(BaseAPI):
 
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
-        page_size = payload.page_size
-        page_start = payload.page_start
-        entries = self.context.job_cache.list_jobs(
-            owner=context.get_username(), _limit=page_size, _offset=page_start
+        entries, total = list_active_job_page(
+            self.context, payload, owner=context.get_username()
         )
         # enriched here rather than in the job cache: the signals are per-request and
         # must not be written back into the cached job_data by an internal sync.
@@ -345,13 +365,13 @@ class SchedulerAPI(BaseAPI):
             jobs=entries,
             is_administrator=self._caller_is_administrator(context),
         )
-        total = self.context.job_cache.get_count(owner=context.get_username())
 
         context.success(
             ListJobsResult(
                 paginator=SocaPaginator(
                     total=total, page_size=payload.page_size, start=payload.page_start
                 ),
+                filters=payload.filters,
                 listing=entries,
             )
         )
@@ -579,8 +599,10 @@ class SchedulerAPI(BaseAPI):
         finally:
             os.close(dir_fd)
 
-        # the script stays in the owner's jobs dir only when the submit command succeeded;
-        # a refusal, a dry run or an exception before then leaves no file behind.
+        # the script stays in the owner's jobs dir, where the owner and an administrator read
+        # it afterwards, when the job was queued or a dry run passed; the result then names it.
+        # a refusal, a failed dry run or an exception leaves no file behind.
+        keep_script = False
         try:
             if job_script_interpreter == 'pbs':
                 job_submit_command = ['cd', job_submission_dir, '&&', 'qsub']
@@ -612,14 +634,15 @@ class SchedulerAPI(BaseAPI):
                         self.logger.error(f'Failed to submit job: {result}')
                         raise exceptions.soca_exception(
                             errorcodes.JOB_SUBMISSION_FAILED,
-                            f'Failed to submit job: {result}',
+                            qsub_directive_refusal(result.stderr)
+                            or JOB_INTERNAL_ERROR_MESSAGE,
                         )
                     # rc == 0 but the tracker has no record for this job_uid (tracker TTL
                     # miss): avoid the opaque AttributeError and report clearly instead.
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        'Job was submitted but the submission result could not be retrieved. '
-                        'Check job status with qstat before resubmitting.',
+                        'Your job was submitted, but the result could not be read. '
+                        'Check Active Jobs before submitting it again.',
                     )
 
                 if job_id is not None:
@@ -636,9 +659,24 @@ class SchedulerAPI(BaseAPI):
                     )
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        f'Failed to submit job: {reason}',
+                        reason.removeprefix('qsub: ').strip()
+                        if Utils.is_not_empty(reason)
+                        else JOB_INTERNAL_ERROR_MESSAGE,
                     )
 
+                # a dry run is never 'accepted', so a passed one is a report with no findings
+                findings = [
+                    entry
+                    for report in (
+                        submission_result.validations,
+                        submission_result.incidentals,
+                    )
+                    if report is not None
+                    for entry in report.results or []
+                ]
+                keep_script = dry_run is None or not findings
+                if keep_script:
+                    submission_result.job_script_path = job_submit_script
                 return submission_result
 
             elif job_script_interpreter == 'bash':
@@ -657,19 +695,22 @@ class SchedulerAPI(BaseAPI):
                 result = self.context.shell.invoke(command)
 
                 if result.returncode == 0:
-                    return SubmitJobResult(accepted=True)
+                    keep_script = True
+                    return SubmitJobResult(
+                        accepted=True, job_script_path=job_submit_script
+                    )
                 else:
+                    self.logger.error(f'Failed to submit job: {result}')
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        f'Failed to submit job: {result}',
+                        JOB_INTERNAL_ERROR_MESSAGE,
                     )
         finally:
-            # qsub copies the script into the PBS spool, so the file has no reader after
-            # submission; removing it on every outcome leaves nothing root-created behind.
-            try:
-                os.remove(job_submit_script)
-            except OSError:
-                pass
+            if not keep_script:
+                try:
+                    os.remove(job_submit_script)
+                except OSError:
+                    pass
 
     def list_queues(self, context: ApiInvocationContext):
         """

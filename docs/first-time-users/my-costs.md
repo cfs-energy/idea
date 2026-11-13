@@ -52,7 +52,7 @@ The monthly costs, summary, and ticker read stored results without waiting for b
 
 My costs and the month-to-date ticker share saved monthly results in the browser. The browser checks every 15 seconds while collection is pending. After two minutes, checks slow to once a minute. It ordinarily checks every five minutes while visible. Billing source reads are cached for six hours. Disk rates are cached for a day. Requesting refresh cannot make upstream billing arrive sooner.
 
-A user without saved monthly results sees **Collecting · about N min**. The estimate uses the next scheduled collection and the last measured run duration. The initial assumed duration is 20 minutes. An overdue collector shows **Collecting delayed** with an updated estimate. Missing sources leave service costs unavailable.
+A user without saved monthly results sees **Collecting · about N min**. The estimate uses the next scheduled collection and the last measured run duration. The initial assumed duration is 20 minutes. A collector more than a minute past that estimate, or by as long as its last run took when that is longer, shows **Taking longer than usual** instead. Missing sources leave service costs unavailable.
 
 ## Storage evidence
 

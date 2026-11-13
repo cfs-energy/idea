@@ -6,7 +6,9 @@ two still validates, and a second caller (or a race between both) finds them in 
 """
 
 import grp
+import os
 import pwd
+import threading
 import time
 from typing import Callable, Optional
 
@@ -157,6 +159,26 @@ def wait_for_local_user(
                 f'{timeout_seconds} seconds of being created. Check the user sync.'
             )
         time.sleep(interval_seconds)
+
+
+def path_answers(path: str, timeout_seconds: int = 60) -> bool:
+    """
+    whether the filesystem holding path answers at all. a hard NFS mount that stops
+    answering blocks a stat forever without an error, and no timeout can interrupt it, so
+    the stat runs on a thread of its own. a missing path is an answer.
+    ponytail: one blocked thread per call stays until the mount recovers or the task ends.
+    """
+    answered = threading.Event()
+
+    def probe():
+        try:
+            os.lstat(path)
+        except OSError:
+            pass
+        answered.set()
+
+    threading.Thread(target=probe, daemon=True, name='path-answers').start()
+    return answered.wait(timeout_seconds)
 
 
 def invoke_cluster_manager(context, namespace: str, payload: SocaBaseModel) -> None:

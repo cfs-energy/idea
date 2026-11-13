@@ -21,6 +21,16 @@ import ideaclustermanager
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
 from ideaclustermanager.app.projects.bedrock_usage_service import BedrockUsageService
 from ideaclustermanager.app.metrics import CostMetricsService, StorageMetricsService
+from ideaclustermanager.app.metrics.drift_checks import DriftCheckCollector
+from ideaclustermanager.app.metrics.health_collectors import (
+    AdAutomationCollector,
+    CertificatesCollector,
+    DirectoryCollector,
+    EcsTasksCollector,
+    HomeDirectoryCollector,
+    SecretsCollector,
+)
+from ideasdk.metrics.health import CollectorRunner, StorageMountsCollector
 from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
@@ -102,6 +112,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.account_reconciler: Optional[AccountReconciler] = None
         self.cost_metrics: Optional[CostMetricsService] = None
         self.storage_metrics: Optional[StorageMetricsService] = None
+        self.health_collectors: Optional[CollectorRunner] = None
 
     def app_initialize(self):
         # group name helper
@@ -213,6 +224,19 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.cost_metrics = CostMetricsService(context=self.context)
         self.storage_metrics = StorageMetricsService(context=self.context)
         self.context.storage_metrics = self.storage_metrics
+        self.health_collectors = CollectorRunner(
+            self.context,
+            [
+                CertificatesCollector(self.context),
+                EcsTasksCollector(self.context),
+                DirectoryCollector(self.context, self.storage_metrics),
+                HomeDirectoryCollector(self.context),
+                AdAutomationCollector(self.context),
+                SecretsCollector(self.context),
+                StorageMountsCollector(self.context),
+                DriftCheckCollector(self.context, self.storage_metrics),
+            ],
+        )
 
         self.context.token_service.initialize_api_tokens()
 
@@ -255,6 +279,8 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.account_reconciler.start()
         if self.storage_metrics is not None:
             self.storage_metrics.start()
+        if self.health_collectors is not None:
+            self.health_collectors.start()
 
         try:
             self.context.distributed_lock().acquire(key='initialize-defaults')
@@ -287,3 +313,5 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.cost_metrics.stop()
         if self.storage_metrics is not None:
             self.storage_metrics.stop()
+        if self.health_collectors is not None:
+            self.health_collectors.stop()

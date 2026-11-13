@@ -65,6 +65,11 @@ import { renderPolicy } from '../policy.ts';
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
 /** `constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS` / `SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS`. */
 const SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS = 16;
+// The SQS default, set so it cannot move unseen: cluster-manager deletes a password secret whose
+// task was lost once the secret is 9 days old (STRAY_PASSWORD_SECRET_SECONDS in accounts_service.py):
+// twice this, since a message moved into the password lane is sent again, plus a day. That is safe
+// only while no message outlives it. Raise that bound before raising this.
+const CLUSTER_TASKS_RETENTION_DAYS = 4;
 const SQS_MAX_RECEIVE_COUNT_NOTIFICATIONS = 3;
 /** `constants.SQS_VISIBILITY_TASKS` / `SQS_VISIBILITY_NOTIFICATIONS`. */
 const SQS_VISIBILITY_SECONDS = 30;
@@ -230,6 +235,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       contentBasedDeduplication: true,
       encryptionMasterKey: kmsKeyId,
       visibilityTimeout: Duration.seconds(SQS_VISIBILITY_SECONDS),
+      retentionPeriod: Duration.days(CLUSTER_TASKS_RETENTION_DAYS),
       deadLetterQueue: { maxReceiveCount: SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS, queue: clusterTasksDlq },
     });
     // Both queues use the module name for their `Name` tag.
@@ -423,6 +429,47 @@ export class ClusterManagerStack extends IdeaBaseStack {
   }
 
   /**
+   * A new password waits for its directory sync task in a secret the application makes and the
+   * task deletes: `<cluster>-password-sync-<random>`. The task role may make a secret of that name
+   * only with its two tags, and may set no other tag on one: with `idea:ModuleName` the policy
+   * template's statement for the module's own secrets would let the role overwrite a waiting
+   * password.
+   *
+   * The read and the delete are scoped by that name alone, with no tag condition. A condition on
+   * the secret's tags cannot match a secret that is gone, so the role was told AccessDenied where
+   * the task needs ResourceNotFound to tell a password that is gone from one it may not read.
+   * The name is scope enough: the application only ever reads the secret its own tagged create
+   * returned, and no other cluster's secrets fall under this prefix. `idea-dev-password-sync-` is
+   * not a prefix of `idea-dev2-password-sync-`, and a cluster cannot be named
+   * `<other>-password-sync-...`, a cluster name being at most 11 characters (cluster-config-db.ts).
+   * What the name does not exclude is a secret someone else in the account makes under this prefix.
+   *
+   * The sweep of strays lists secrets with the health collectors' ListSecrets. Out of the policy
+   * template for the same reason as theirs.
+   */
+  private passwordSecretStatements(): iam.PolicyStatement[] {
+    const resources = [this.stack.formatArn({ service: 'secretsmanager', resource: `secret:${this.clusterName}-password-sync-*` })];
+    const tagged = (key: string) => ({
+      [`${key}/idea:ClusterName`]: this.clusterName,
+      [`${key}/idea:Purpose`]: 'password-sync',
+    });
+    return [
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'],
+        resources,
+        conditions: {
+          StringEquals: tagged('aws:RequestTag'),
+          'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:ClusterName', 'idea:Purpose'] },
+        },
+      }),
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'],
+        resources,
+      }),
+    ];
+  }
+
+  /**
    * The cluster-manager task on the container stack's capacity.
    *
    * It starts after the three endpoints, because a service may not name a target group that has no
@@ -450,7 +497,22 @@ export class ClusterManagerStack extends IdeaBaseStack {
       vars: { role_arn: taskRole.roleArn },
     });
     // Preserve every statement; separate the large table and project grants to stay below 6 KiB.
-    const groups: Record<string, iam.PolicyStatement[]> = { application: [], tables: [], projects: [] };
+    const groups: Record<string, iam.PolicyStatement[]> = {
+      // The health collectors: metadata only, none of it takes a resource. Kept out of the policy
+      // template, which is at its size limit, and inside a group that always exists: a role takes
+      // 10 managed policies, and one more of ours is one fewer cluster.iam.ec2_managed_policy_arns.
+      application: [new iam.PolicyStatement({
+        actions: [
+          'elasticloadbalancing:DescribeListenerCertificates',
+          'acm:DescribeCertificate',
+          'secretsmanager:ListSecrets',
+          'ds:DescribeDirectories',
+        ],
+        resources: ['*'],
+      }), ...this.passwordSecretStatements()],
+      tables: [],
+      projects: [],
+    };
     for (const statement of (document as { Statement: Record<string, any>[] }).Statement) {
       const actions = [statement.Action].flat() as string[];
       const group = actions.some((action) => action.startsWith('dynamodb:')) ? 'tables'

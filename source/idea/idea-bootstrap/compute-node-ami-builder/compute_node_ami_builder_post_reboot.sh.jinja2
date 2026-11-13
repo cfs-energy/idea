@@ -18,6 +18,11 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 {% include 'compute-node/_templates/scheduler_stop.jinja2' %}
 
+{# on every pass: the GPU driver stage below can install a kernel and reboot into it #}
+{% with lustre_kernel = '$(uname -r)' %}
+{% include 'compute-node-ami-builder/_templates/lustre_kernel_check.jinja2' %}
+{% endwith %}
+
 {% with node_type = 'compute' %}
   {% include '_templates/linux/gpu_drivers.jinja2' %}
 {% endwith %}
@@ -28,6 +33,8 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot_after_cloud_init
   exit 0
 else
+  # no reboot now, but every clone boots whatever is the default
+  ensure_boot_kernel_bootable
 
   # user data customizations
   if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
@@ -47,7 +54,17 @@ else
   remove_from_fstab "/scratch"
 
   # clean-up
-  rm -rf /var/tmp/* /tmp/* /var/crash/*
+  # kdump builds its initrd under /var/tmp after boot. Deleting that underneath it failed the
+  # service and left every clone rebuilding the initrd on its own first boot; start waits for it.
+  if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
+    systemctl start kdump.service || log_warning "kdump did not start; a clone builds its own initrd"
+  fi
+  # A running service with PrivateTmp (kdump on EL9) has its /tmp and /var/tmp here, under
+  # systemd-private-*. With those deleted its stop cannot run: the scrub's kdump restart left
+  # the crash kernel loaded, start answered "already running", and the initrd stayed older
+  # than fstab, so every EL9 clone rebuilt it. systemd removes each one when its service stops.
+  find /var/tmp /tmp -mindepth 1 -maxdepth 1 ! -name 'systemd-private-*' ! -name '.*' -exec rm -rf {} +
+  rm -rf /var/crash/*
   rm -f /etc/udev/rules.d/70-persistent-net.rules
   grep -l "Created by cloud-init on instance boot automatically" /etc/sysconfig/network-scripts/ifcfg-* | xargs rm -f
   {% if context.config.get_string('scheduler.provider') == 'openpbs' %}

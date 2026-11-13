@@ -45,9 +45,12 @@ from ideaclustermanager.app.accounts.db.single_sign_on_state_dao import (
 from ideaclustermanager.app.tasks.task_manager import TaskManager
 
 from typing import Optional, List
+import botocore.exceptions
+import ldap
 import os
 import re
-import tempfile
+import stat
+import threading
 import time
 
 
@@ -101,6 +104,8 @@ class AccountsService:
         self.ds_automation_dir = self.context.config().get_string(
             'directoryservice.automation_dir', required=True
         )
+        self._next_password_secret_sweep = 0.0
+        self._password_secret_sweep = threading.Lock()
 
     def is_cluster_administrator(self, username: str) -> bool:
         cluster_administrator = self.context.config().get_string(
@@ -218,11 +223,14 @@ class AccountsService:
 
         return self.group_dao.convert_from_db(updated_group)
 
-    def delete_group(self, group_name: str, force: bool = False):
+    def delete_group(
+        self, group_name: str, force: bool = False, *, keep_directory: bool = False
+    ):
         """
         delete a group
         :param group_name:
         :param force: force delete a group even if group has existing members
+        :param keep_directory: leave the directory's group alone
         :return:
         """
 
@@ -253,6 +261,8 @@ class AccountsService:
 
         self.group_dao.delete_group(group_name=group_name)
 
+        if keep_directory:
+            return
         self.task_manager.send(
             task_name='accounts.sync-group',
             payload={'group_name': group_name},
@@ -384,6 +394,8 @@ class AccountsService:
                 'operation': operation,
             },
             message_group_id=username,
+            # the queue drops a repeat of the same content for five minutes
+            message_dedupe_id=f'{username}.{group_name}.{operation}.{nonce()}',
         )
 
     def remove_user_from_groups(self, username: str, group_names: List[str]):
@@ -448,15 +460,7 @@ class AccountsService:
                     username=username, group_name=group_name
                 )
 
-            self.task_manager.send(
-                task_name='accounts.group-membership-updated',
-                payload={
-                    'group_name': group_name,
-                    'username': username,
-                    'operation': 'remove',
-                },
-                message_group_id=username,
-            )
+            self.send_group_membership_updated(group_name, username, 'remove')
 
         self.user_dao.update_user(
             {'username': username, 'additional_groups': additional_groups}
@@ -527,15 +531,7 @@ class AccountsService:
                     username=username, group_name=group_name
                 )
 
-            self.task_manager.send(
-                task_name='accounts.group-membership-updated',
-                payload={
-                    'group_name': group_name,
-                    'username': username,
-                    'operation': 'remove',
-                },
-                message_group_id=username,
-            )
+            self.send_group_membership_updated(group_name, username, 'remove')
 
     # sudo user management methods
 
@@ -802,6 +798,15 @@ class AccountsService:
                     f'No need to create group for username: {username}:   Group ({group_name}) already exists.'
                 )
 
+            # A release before 26.11.2 left a deleted user's group and project rows
+            # behind when the user was disabled first. A new user must not inherit them.
+            user_projects = self.context.projects.user_projects_dao
+            for project_id in user_projects.get_projects_by_username(username):
+                user_projects.delete_user_project(
+                    project_id=project_id, username=username
+                )
+            self.group_members_dao.delete_memberships_of(username)
+
             created_user = self.user_dao.create_user(
                 {
                     'username': username,
@@ -835,23 +840,28 @@ class AccountsService:
                 self.add_users_to_group([username], additional_group, notify=False)
                 joined_groups.append(additional_group)
 
+            account_sync_queued = False
             if Utils.is_not_empty(password):
-                self.change_ldap_password(username, password)
+                account_sync_queued = self.change_ldap_password(username, password)
 
             # queued only after the last step that can fail, so directory work never
-            # races a rollback of the account it targets.
-            self.task_manager.send(
-                task_name='accounts.sync-user',
-                payload={'username': username},
-                message_group_id=username,
-                message_dedupe_id=f'{username}.create-user.{nonce()}',
-            )
+            # races a rollback of the account it targets. Queued once: a second copy
+            # can ask a domain controller the first one's account has not reached,
+            # and add the account again.
+            if not account_sync_queued:
+                self.task_manager.send(
+                    task_name='accounts.sync-user',
+                    payload={'username': username},
+                    message_group_id=username,
+                    message_dedupe_id=f'{username}.create-user.{nonce()}',
+                )
             for joined_group in joined_groups:
                 self.send_group_membership_updated(joined_group, username, 'add')
             self.task_manager.send(
                 task_name='accounts.create-home-directory',
                 payload={'username': username},
                 message_group_id=username,
+                message_dedupe_id=f'{username}.create-home.{nonce()}',
             )
 
             return self.user_dao.convert_from_db(created_user)
@@ -1003,6 +1013,13 @@ class AccountsService:
         if is_enabled:
             return
 
+        if self.group_dao.get_group(existing_user['group_name']) is None:
+            # only a delete removes it, and one that stopped there has already
+            # removed the account from the directory and the user pool
+            raise AuthUtils.invalid_operation(
+                f'User: {username} is part way through being deleted. Delete it again.'
+            )
+
         if existing_user.get('disable_pending'):
             self.disable_user(
                 username, reconcile_sources=existing_user.get('reconcile_sources', [])
@@ -1089,25 +1106,20 @@ class AccountsService:
             self.logger.info(f'{log_tag} user not found. skip.')
             return
 
-        # remove user from all group memberships
         group_name = Utils.get_value_as_string('group_name', user)
 
+        # The record keeps each of these until that membership is removed, so a delete
+        # that stopped part way finds the rest when it is run again.
         groups = Utils.get_value_as_list('additional_groups', user, [])
         if group_name in groups:
             groups.remove(group_name)
-        if Utils.is_not_empty(groups):
-            self.logger.info(f'{log_tag} clean-up group memberships')
-            try:
-                self.remove_user_from_groups(username=username, group_names=groups)
-            except exceptions.SocaException as e:
-                if e.error_code == errorcodes.AUTH_USER_IS_DISABLED:
-                    pass
-                else:
-                    raise e
 
         # disable user from db, user pool and delete from directory service
         self.logger.info(f'{log_tag} disabling user')
         self.disable_user(username=username)
+
+        self.logger.info(f'{log_tag} removing memberships and directory account')
+        keep_directory = self._remove_deleted_user_now(username, groups)
 
         # delete user in user pool
         self.logger.info(f'{log_tag} delete user from user pool')
@@ -1115,13 +1127,85 @@ class AccountsService:
 
         # delete user's group from db
         self.logger.info(f'{log_tag} deleting group: {group_name}')
-        self.delete_group(group_name=group_name, force=True)
+        try:
+            # the task this queues cannot ask a deleted user whether its directory
+            # account is kept, and with the account stays the group it belongs to
+            self.delete_group(
+                group_name=group_name, force=True, keep_directory=keep_directory
+            )
+        except exceptions.SocaException as e:
+            # a delete that stopped after this step finds the group gone when run again
+            if e.error_code != errorcodes.AUTH_GROUP_NOT_FOUND:
+                raise
 
         self.revoke_user_api_tokens(username)
 
         # delete user from db
         self.logger.info(f'{log_tag} delete user in ddb')
         self.user_dao.delete_user(username=username)
+
+    def _remove_deleted_user_now(self, username: str, group_names: List[str]) -> bool:
+        # The queue drops a user's tasks once the account record is gone, so the
+        # work they would do runs here, before the record goes. A failure stops the
+        # delete with the user disabled, and deleting again resumes it.
+        # imported here: the tasks module needs this package fully loaded
+        from ideaclustermanager.app.accounts.account_tasks import (
+            SyncUserInDirectoryServiceTask,
+            keeps_directory_account,
+        )
+
+        user = self.user_dao.get_user(username)
+        # the directory keeps its memberships wherever it keeps the account
+        keep_account = keeps_directory_account(self.context, user)
+        keep_directory = keep_account or self.ldap_client.is_readonly()
+        remaining = Utils.get_value_as_list('additional_groups', user, [])
+        # the record and the member list drop a group last, together, so a delete
+        # that stops inside a group leaves both still showing it
+        for group_name in group_names:
+            if not keep_directory:
+                try:
+                    self.ldap_client.remove_user_from_group([username], group_name)
+                except (
+                    ldap.NO_SUCH_ATTRIBUTE,
+                    ldap.NO_SUCH_OBJECT,
+                    # Active Directory's answer for a member it does not have; there
+                    # the memberships go with the user in any case
+                    ldap.UNWILLING_TO_PERFORM,
+                ):
+                    pass
+            group = self.group_dao.get_group(group_name)
+            if group is None or group['group_type'] not in (
+                constants.GROUP_TYPE_USER,
+                constants.GROUP_TYPE_PROJECT,
+            ):
+                # sign-in takes administrator and manager rights from the user
+                # pool's groups, not from the record
+                self._remove_from_user_pool_group(username, group_name)
+            self.context.projects.user_projects_dao.group_member_removed(
+                group_name=group_name, username=username
+            )
+            self.group_members_dao.delete_membership(group_name, username)
+            # the record lists what is still to remove, and no more: a delete that
+            # stops here resumes from it, and enabling the user instead shows the truth
+            remaining = [name for name in remaining if name != group_name]
+            self.user_dao.update_user(
+                {'username': username, 'additional_groups': remaining}
+            )
+        SyncUserInDirectoryServiceTask(self.context).invoke({'username': username})
+        return keep_account
+
+    def _remove_from_user_pool_group(self, username: str, group_name: str):
+        try:
+            self.user_pool.admin_remove_user_from_group(
+                username=username, group_name=group_name
+            )
+        except botocore.exceptions.ClientError as e:
+            # no such user or no such group: there is no membership left to remove
+            if e.response['Error']['Code'] not in (
+                'UserNotFoundException',
+                'ResourceNotFoundException',
+            ):
+                raise
 
     def revoke_user_api_tokens(self, username):
         if self.token_service is not None:
@@ -1140,37 +1224,244 @@ class AccountsService:
     def list_users(self, request: ListUsersRequest) -> ListUsersResult:
         return self.user_dao.list_users(request)
 
-    def change_ldap_password(self, username: str, password: str):
+    def change_ldap_password(self, username: str, password: str) -> bool:
         """
-        Change password for given username in ldap or ad
+        Change password for given username in ldap or ad. The password waits for its
+        task in a Secrets Manager secret that the task deletes, never in a file.
         :param username:
         :param password:
-        :return:
+        :return: True when the task that creates the account was queued too
         """
-        if not Utils.is_dir(self.ds_automation_dir):
-            os.makedirs(self.ds_automation_dir)
-            # noinspection OsChmod
-            os.chmod(self.ds_automation_dir, 0o700)
+        return self._queue_password_sync(username, self._hold_password(password))
 
-        temp_dir = tempfile.mkdtemp(dir=self.ds_automation_dir)
-        password_file = os.path.join(temp_dir, 'password.txt')
-        with open(password_file, 'w') as f:
-            f.write(password)
+    def _set_password(self, username: str, password: str, change_in_user_pool):
+        """
+        The secret is made before the user pool takes the password: were Secrets
+        Manager to fail after it, sign-in to the portal would have a password the
+        directory never gets. Made first, a failure leaves nothing changed.
+        :return: what change_in_user_pool returned
+        """
+        password_secret = self._hold_password(password)
+        try:
+            result = change_in_user_pool()
+        except Exception:
+            self._drop_password_secret(password_secret)
+            raise
+        if result is False:
+            # the user pool has not taken the password
+            self._drop_password_secret(password_secret)
+        else:
+            self._queue_password_sync(username, password_secret)
+        return result
 
-        is_user_synced = self.ldap_client.is_existing_user(username)
-        if not is_user_synced:
+    def _hold_password(self, password: str) -> str:
+        # ponytail: the file sweep goes with the password_file branch of
+        # accounts.sync-password, in the release after 26.11.2
+        self.remove_stranded_password_files()
+        self.remove_stray_password_secrets()
+
+        request = {
+            'Name': f'{self.password_secret_prefix}{Utils.uuid()}',
+            'SecretString': password,
+            'Tags': [
+                {'Key': key, 'Value': value}
+                for key, value in self.password_secret_tags.items()
+            ],
+        }
+        kms_key_id = self.context.config().get_string(
+            'cluster.secretsmanager.kms_key_id'
+        )
+        if kms_key_id:
+            request['KmsKeyId'] = kms_key_id
+        try:
+            return self.context.aws().secretsmanager().create_secret(**request)['ARN']
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as error:
+            # the caller may be anyone at the sign-in page, and the AWS message names
+            # the role and the account
+            self.logger.error(
+                f'a password secret could not be made: {self._error_code(error)}'
+            )
+            raise exceptions.general_exception(
+                'The password could not be set right now. Try again.'
+            ) from None
+
+    def _queue_password_sync(self, username: str, password_secret: str) -> bool:
+        try:
+            is_user_synced = self.ldap_client.is_existing_user(username)
+            if not is_user_synced:
+                self.task_manager.send(
+                    task_name='accounts.sync-user',
+                    payload={'username': username},
+                    message_group_id=username,
+                    message_dedupe_id=f'{username}.change-password.{nonce()}',
+                )
+
             self.task_manager.send(
-                task_name='accounts.sync-user',
-                payload={'username': username},
+                task_name='accounts.sync-password',
+                payload={'username': username, 'password_secret': password_secret},
                 message_group_id=username,
-                message_dedupe_id=f'{username}.change-password.{nonce()}',
+                # the directory has no account to give the password to until the
+                # task queued above has run
+                behind_entity_tasks=not is_user_synced,
+            )
+            return not is_user_synced
+        except Exception:
+            # only the queued task deletes the secret, and none was queued
+            self._drop_password_secret(password_secret)
+            raise
+
+    def _drop_password_secret(self, password_secret: str):
+        try:
+            self.context.aws().secretsmanager().delete_secret(
+                SecretId=password_secret, ForceDeleteWithoutRecovery=True
+            )
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as error:
+            # the sweep removes it; the caller is told why the change failed
+            self.logger.warning(
+                'a password secret that was not queued could not be deleted: '
+                f'{self._error_code(error)}'
             )
 
-        self.task_manager.send(
-            task_name='accounts.sync-password',
-            payload={'username': username, 'password_file': password_file},
-            message_group_id=username,
-        )
+    @property
+    def password_secret_prefix(self) -> str:
+        # the task role may create, read and delete secrets of this name only, with
+        # the tags below
+        return f'{self.context.cluster_name()}-password-sync-'
+
+    @property
+    def password_secret_tags(self) -> dict:
+        return {
+            # No idea:ModuleName: the role may read and write the value of every
+            # secret of this cluster that carries it, and must not overwrite these.
+            constants.IDEA_TAG_CLUSTER_NAME: self.context.cluster_name(),
+            'idea:Purpose': 'password-sync',
+        }
+
+    PASSWORD_SECRET_SWEEP_SECONDS = 3600
+    # The tasks queue keeps a message 4 days (the stack sets its retention), and a
+    # password can wait there that long behind a stopped cluster-manager or other
+    # passwords. One moved into the password lane is sent again, which starts the 4
+    # days over: two retention periods, plus a day. This must stay above that. A secret
+    # swept while its message is still queued is a password that is never applied.
+    STRAY_PASSWORD_SECRET_SECONDS = 9 * 24 * 3600
+
+    def remove_stray_password_secrets(self, listed: Optional[List[dict]] = None):
+        """
+        a password secret outlives its task when the task is lost: a queue purged by
+        hand, or a delete Secrets Manager did not take. Removes only secrets with this
+        cluster's password name and tags, and never fails the caller.
+
+        The secrets health collector calls this on the leader, every six hours and soon
+        after a start, with the secrets it has just listed for its own count (`listed`),
+        so a cluster where nobody sets a password still sweeps and no second list is
+        made. A password set looks too, with a list of its own, at most once an hour
+        and not within an hour of any other look: the only look where the health
+        collectors do not run (metrics provider not DogStatsD, or switched off).
+        """
+        # one look at a time: a second would be told its secrets are already gone
+        if not self._password_secret_sweep.acquire(blocking=False):
+            return
+        try:
+            now = time.monotonic()
+            if listed is None and now < self._next_password_secret_sweep:
+                return
+            self._next_password_secret_sweep = now + self.PASSWORD_SECRET_SWEEP_SECONDS
+            self._remove_stray_password_secrets(listed)
+        finally:
+            self._password_secret_sweep.release()
+
+    def _remove_stray_password_secrets(self, listed: Optional[List[dict]]):
+        cutoff = time.time() - self.STRAY_PASSWORD_SECRET_SECONDS
+        wanted = self.password_secret_tags
+        try:
+            secrets = self.context.aws().secretsmanager()
+            if listed is None:
+                pages = secrets.get_paginator('list_secrets').paginate(
+                    Filters=[
+                        {'Key': 'name', 'Values': [self.password_secret_prefix]},
+                        {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+                    ]
+                )
+                listed = [
+                    secret for page in pages for secret in page.get('SecretList', [])
+                ]
+            for secret in listed:
+                # the filters match by prefix, and on any tag
+                tags = {tag['Key']: tag['Value'] for tag in secret.get('Tags', [])}
+                if not secret['Name'].startswith(self.password_secret_prefix):
+                    continue
+                if any(tags.get(key) != value for key, value in wanted.items()):
+                    continue
+                if secret['CreatedDate'].timestamp() > cutoff:
+                    continue
+                try:
+                    secrets.delete_secret(
+                        SecretId=secret['ARN'], ForceDeleteWithoutRecovery=True
+                    )
+                    self.logger.info('removed a stray password secret')
+                except (
+                    botocore.exceptions.ClientError,
+                    botocore.exceptions.BotoCoreError,
+                ) as error:
+                    # the others are still looked at
+                    self.logger.warning(
+                        'could not delete a stray password secret: '
+                        f'{self._error_code(error)}'
+                    )
+        except (
+            botocore.exceptions.ClientError,
+            botocore.exceptions.BotoCoreError,
+        ) as error:
+            self.logger.warning(
+                f'could not look for stray password secrets: {self._error_code(error)}'
+            )
+
+    @staticmethod
+    def _error_code(error: Exception) -> str:
+        # the message of an AWS error names the role and the secret
+        if isinstance(error, botocore.exceptions.ClientError):
+            return error.response['Error']['Code']
+        return type(error).__name__
+
+    # No queue keeps a message longer than this, so no task is left to read the file.
+    STRANDED_PASSWORD_FILE_SECONDS = 14 * 24 * 3600
+
+    def remove_stranded_password_files(self):
+        """
+        a password file outlives its task when the task is lost: a release that did
+        not clean up after a task it gave up on, or a queue purged by hand. Removes
+        only what change_ldap_password made up to 26.11.1, a folder holding password.txt and
+        nothing else, and never fails the caller.
+        """
+        cutoff = time.time() - self.STRANDED_PASSWORD_FILE_SECONDS
+        try:
+            with os.scandir(self.ds_automation_dir) as entries:
+                folders = [e.path for e in entries if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            return
+        for folder in folders:
+            password_file = os.path.join(folder, 'password.txt')
+            try:
+                if os.listdir(folder) != ['password.txt']:
+                    continue
+                file = os.lstat(password_file)
+                if not stat.S_ISREG(file.st_mode):
+                    continue
+                if max(file.st_mtime, os.lstat(folder).st_mtime) > cutoff:
+                    continue
+                os.remove(password_file)
+                # not rmtree: anything that appeared meanwhile stays
+                os.rmdir(folder)
+                self.logger.info(f'removed a stranded password file: {folder}')
+            except OSError:
+                # another task removed it first, or the file system is away
+                continue
 
     def change_password(
         self, access_token: str, username: str, old_password: str, new_password: str
@@ -1182,15 +1473,16 @@ class AccountsService:
         """
 
         # change password in user pool before changing in ldap
-        self.user_pool.change_password(
-            username=username,
-            access_token=access_token,
-            old_password=old_password,
-            new_password=new_password,
+        self._set_password(
+            username,
+            new_password,
+            lambda: self.user_pool.change_password(
+                username=username,
+                access_token=access_token,
+                old_password=old_password,
+                new_password=new_password,
+            ),
         )
-
-        # sync password change in ldap
-        self.change_ldap_password(username=username, password=new_password)
 
     # public API methods for user onboarding, login, forgot password flows.
 
@@ -1277,11 +1569,15 @@ class AccountsService:
 
         self.logger.debug(f'respond_to_auth_challenge() - Request: {request}')
 
-        result = self.user_pool.respond_to_auth_challenge(request)
+        result = None
 
-        if result.auth is not None:
-            self.change_ldap_password(request.username, request.new_password)
+        def respond():
+            nonlocal result
+            result = self.user_pool.respond_to_auth_challenge(request)
+            # another challenge follows: no password is set yet
+            return result.auth is not None
 
+        self._set_password(request.username, request.new_password, respond)
         return result
 
     def forgot_password(self, username: str):
@@ -1311,11 +1607,14 @@ class AccountsService:
         if Utils.is_empty(confirmation_code):
             raise exceptions.invalid_params('confirmation_code is required')
 
-        # update user-pool first to verify confirmation code.
-        self.user_pool.confirm_forgot_password(username, password, confirmation_code)
-
-        # sync with LDAP/AD
-        self.change_ldap_password(username, password)
+        # the user pool verifies the confirmation code; then sync with LDAP/AD
+        self._set_password(
+            username,
+            password,
+            lambda: self.user_pool.confirm_forgot_password(
+                username, password, confirmation_code
+            ),
+        )
 
     def sign_out(self, refresh_token: str, sso_auth: bool):
         """

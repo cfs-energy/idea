@@ -14,6 +14,9 @@ Test Cases for CloudFormationStackBuilder
 """
 
 import logging
+import re
+
+import pytest
 
 import ideascheduler
 from ideascheduler import AppContext
@@ -26,7 +29,11 @@ from ideadatamodel import (
     SocaJobParams,
     SocaBaseModel,
 )
-from ideadatamodel.aws import EC2InstanceType
+from ideadatamodel.aws import EC2InstanceType, EC2Instance
+from ideadatamodel.model_utils import ModelUtils
+from ideascheduler.app.provisioning.job_provisioner import (
+    cloudformation_stack_builder as stack_builder_module,
+)
 from ideascheduler.app.scheduler import SocaJobBuilder
 from ideasdk.aws import AWSUtil
 from ideasdk.utils import Utils
@@ -689,3 +696,100 @@ def test_a_10_gb_queue_with_a_12_gb_image_launches_at_12(context, caplog):
 
 def test_the_launch_guard_never_lowers_a_queue_root(context):
     assert _queue_launch(context, 100, 12) == 100
+
+
+# CreateStack's stack name pattern and the tag value characters CloudFormation accepts
+_STACK_NAME = re.compile(r'[a-zA-Z][-a-zA-Z0-9]{0,127}')
+_TAG_VALUE = re.compile(r'[\w\s.:/=+\-@]*')
+# a CloudWatch log group name, and the characters a metrics namespace may hold
+_LOG_GROUP = re.compile(r'[.\-_/#A-Za-z0-9]{1,512}')
+_NAMESPACE = re.compile(r'[.\-_/#:A-Za-z0-9 ]{1,255}')
+
+
+@pytest.mark.parametrize(
+    'scaling_mode, terminate_when_idle',
+    [(SocaScalingMode.SINGLE_JOB, 0), (SocaScalingMode.BATCH, 3)],
+)
+def test_an_array_job_builds_a_stack_aws_accepts(
+    context, monkeypatch, scaling_mode, terminate_when_idle
+):
+    # the two queue shapes dev refused an array job in: its own stack, and a shared batch one
+    queue_profile = HpcQueueProfile(
+        name='test',
+        queues=['test'],
+        scaling_mode=scaling_mode,
+        terminate_when_idle=terminate_when_idle,
+        default_job_params=SocaJobParams(instance_types=['c5.large']),
+    )
+    result = build_template(
+        context=context,
+        job_name='array',
+        job_id='311[]',
+        params={'nodes': 1, 'cpus': 1},
+        queue_profile=queue_profile,
+    )
+    tags = result.template.get('Resources.AutoScalingComputeGroup.Properties.Tags')
+    for tag in tags:
+        assert _TAG_VALUE.fullmatch(str(tag['Value'])), tag
+    # the tag reads back as the job PBS knows
+    assert (
+        EC2Instance(
+            data={
+                'Tags': [
+                    {'Key': 'idea:JobId', 'Value': get_tag_value('idea:JobId', tags)}
+                ]
+            }
+        ).soca_job_id
+        == '311[]'
+    )
+
+    builder = SocaJobBuilder(
+        context=context, params={'nodes': 1, 'cpus': 1}, queue_profile=queue_profile
+    )
+    job_params, provisioning_options = builder.build()
+    job = SocaJob(
+        name='array',
+        job_id='311[]',
+        job_uid='array-311',
+        owner='mockuser',
+        project='default',
+        cluster_name='idea-mock',
+        params=job_params,
+        queue='test',
+        queue_type='test',
+        scaling_mode=scaling_mode,
+        provisioning_options=provisioning_options,
+    )
+    job.job_group = job.get_job_group()
+    stack_builder = CloudFormationStackBuilder(context=context, job=job)
+    assert _STACK_NAME.fullmatch(job.get_compute_stack()), job.get_compute_stack()
+    for tag in stack_builder.build_cfn_stack_tags():
+        assert _TAG_VALUE.fullmatch(str(tag['Value'])), tag
+
+    context.config().put('cluster.cloudwatch_logs.enabled', True)
+    context.config().put('scheduler.cloudwatch_logs.enabled', True)
+    captured = {}
+
+    class Captured(Exception):
+        pass
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        raise Captured
+
+    monkeypatch.setattr(
+        stack_builder_module.BootstrapUtils,
+        'check_and_attach_cloudwatch_logging_and_metrics',
+        capture,
+    )
+    with pytest.raises(Captured):
+        stack_builder.build_user_data()
+    assert _NAMESPACE.fullmatch(captured['metrics_namespace'])
+    assert _LOG_GROUP.fullmatch(captured['log_files'][0].log_group_name)
+
+
+def test_a_plain_job_id_is_its_own_aws_job_id():
+    assert ModelUtils.aws_job_id('42') == '42'
+    assert ModelUtils.pbs_job_id('42') == '42'
+    assert ModelUtils.pbs_job_id(ModelUtils.aws_job_id('311[]')) == '311[]'
+    assert ModelUtils.pbs_job_id(None) is None

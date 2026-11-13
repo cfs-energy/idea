@@ -12,6 +12,7 @@
 
 from ideasdk.service import SocaService
 from ideasdk.context import SocaContext
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 from ideadatamodel import constants, exceptions, errorcodes
 
@@ -64,6 +65,10 @@ class ADAutomationAgent(SocaService):
             'directoryservice.ad_automation.sqs_queue_url', required=True
         )
 
+        # read by the collector: a rejected bind raises before the queue is ever reached
+        self.last_queue_read = time.time()
+        self.password_days_left = None
+
         self.ad_automation_dao = ADAutomationDAO(context=self.context)
         self.ad_automation_dao.initialize()
 
@@ -108,9 +113,11 @@ class ADAutomationAgent(SocaService):
                 user = self.ldap_client.get_user(root_username, trace=False)
                 break
             except ldap.INVALID_CREDENTIALS as e:
+                # counted on every provider; only AWS Managed AD has a password to recover
+                code = self._bind_error_code(e)
+                self._health.add('ad.bind_rejected', code=code or 'unknown')
                 if not managed_ad:
                     raise
-                code = self._bind_error_code(e)
                 if code in {'532', '773'}:
                     self.logger.warning(
                         f'AD admin password expired or requires reset (data {code}).'
@@ -135,16 +142,21 @@ class ADAutomationAgent(SocaService):
 
         password_expiry_date = None
         if password_last_set != 0:
+            if password_max_age <= 0:
+                # the directory's convention for a password that never expires
+                self.password_days_left = None
+                return False
             password_last_set_date = arrow.get(password_last_set)
             password_expiry_date = password_last_set_date.shift(days=password_max_age)
+            self.password_days_left = (
+                password_expiry_date - arrow.utcnow()
+            ).total_seconds() / 86400
 
+        # reset once 2 days are left, before the directory starts rejecting binds; a
+        # shorter max age takes half of itself, or a new password is expired at once
         if password_expiry_date is not None:
-            now = arrow.utcnow()
-
-            # check for expiration 2 days before expiration
-            now_minus_2days = now.shift(days=-2)
-
-            if now_minus_2days < password_expiry_date:
+            lead_days = min(2, password_max_age / 2)
+            if arrow.utcnow().shift(days=lead_days) < password_expiry_date:
                 return False
 
         return True
@@ -238,6 +250,15 @@ class ADAutomationAgent(SocaService):
                 self.context.distributed_lock().release(key=AD_RESET_PASSWORD_LOCK_KEY)
                 self.logger.info('reset ds credentials lock released.')
 
+    @property
+    def _health(self) -> HealthMetrics:
+        return HealthMetrics(self.context)
+
+    def _request_handled(self, namespace: str, outcome: str):
+        self._health.add(
+            'ad.requests', namespace=namespace.rsplit('.', 1)[-1], outcome=outcome
+        )
+
     def automation_loop(self):
         while not self._stop_event.is_set():
             admin_user_ok = False
@@ -262,6 +283,7 @@ class ADAutomationAgent(SocaService):
                     )
                 )
 
+                self.last_queue_read = time.time()
                 sqs_messages = Utils.get_value_as_list('Messages', result, default=[])
 
                 delete_messages = []
@@ -335,6 +357,7 @@ class ADAutomationAgent(SocaService):
 
                             # no exception, AD automation succeeded. delete from queue.
                             add_to_delete(sqs_message)
+                            self._request_handled(namespace, 'success')
 
                         except exceptions.SocaException as e:
                             if (
@@ -345,6 +368,7 @@ class ADAutomationAgent(SocaService):
                                     f'Dropping {namespace} request from {sender_id}: {e}'
                                 )
                                 add_to_delete(sqs_message)
+                                self._request_handled(namespace, 'dropped')
                             elif (
                                 e.error_code
                                 == errorcodes.AD_AUTOMATION_PRESET_COMPUTER_RETRY
@@ -353,6 +377,7 @@ class ADAutomationAgent(SocaService):
                                 self.logger.warning(
                                     f'{e} - request will be retried in {visibility_timeout} seconds'
                                 )
+                                self._request_handled(namespace, 'retry')
                             else:
                                 # retry on any unhandled exception.
                                 raise e
@@ -362,6 +387,7 @@ class ADAutomationAgent(SocaService):
                         )
 
                     except Exception as e:
+                        self._health.add('ad.errors', kind='message')
                         self.logger.exception(
                             f'failed to process sqs message: {e}. payload: {Utils.to_json(sqs_message)}. processing will be retried in {visibility_timeout} seconds ...'
                         )
@@ -382,6 +408,9 @@ class ADAutomationAgent(SocaService):
                         'Failed', delete_message_result, default=[]
                     )
                     if len(failed) > 0:
+                        self._health.add(
+                            'ad.errors', len(failed), kind='delete_message'
+                        )
                         self.logger.error(
                             f'Failed to delete AD automation entries. This could result in an infinite loop. Consider increasing the directoryservice.ad_automation.sqs_visibility_timeout_seconds. failed messages: {failed}'
                         )
@@ -389,6 +418,7 @@ class ADAutomationAgent(SocaService):
             except KeyboardInterrupt:
                 pass
             except Exception as e:
+                self._health.add('ad.errors', kind='loop')
                 self.logger.exception(f'ad automation failure: {e}')
             finally:
                 # wait only if admin user is not OK and keep retrying.

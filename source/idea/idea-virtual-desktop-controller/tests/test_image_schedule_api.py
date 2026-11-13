@@ -152,7 +152,7 @@ def test_hand_set_base_stack_image_pins_the_stack(
     api._logger = Mock()
     api.software_stack_db = Mock()
     api.software_stack_db.get.return_value = old
-    api.software_stack_db.update.side_effect = lambda stack: stack
+    api.software_stack_db.update.side_effect = lambda stack, **_: stack
     api.controller_utils = Mock()
     api.controller_utils.describe_image_id.return_value = {'ImageId': ami}
     monkeypatch.setattr(

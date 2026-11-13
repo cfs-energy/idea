@@ -45,8 +45,8 @@ def test_saved_status_has_no_floats_for_the_settings_table():
 
     context = Mock()
     saved = {}
-    context.config.return_value.db.set_config_entry.side_effect = (
-        lambda key, value: saved.update({key: value})
+    context.config.return_value.db.set_config_entry.side_effect = lambda key, value: (
+        saved.update({key: value})
     )
     backfill = MetricsHistoryBackfill(context, 'jobs')
     backfill.collect = lambda *args, **kwargs: None

@@ -1,10 +1,16 @@
 # Begin: Kernel Version Management
 
-# rhel10, rocky10, ubuntu2604 are absent: only the eVDI setup includes this template, none has eVDI support.
+# Desktops and their bakes include this template. Compute includes it through
+# compute_kernel_hold.jinja2, on EL when the cluster uses FSx for Lustre.
 function fail_kernel_bootstrap() {
   local bootstrap_status="${1}"
   log_error "${2}"
   echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+{% if compute_image_bake | default(false) %}
+  # compute bakes have no ERR trap: record the reason and tag the builder failed now
+  echo "${bootstrap_status}: ${2}" >> /var/lib/idea/bake-failed
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh"
+{% else %}
   local AWS
   local AWS_INSTANCE_ID
   AWS=$(command -v aws)
@@ -13,6 +19,7 @@ function fail_kernel_bootstrap() {
       --resources "${AWS_INSTANCE_ID}" \
       --region "{{ context.aws_region }}" \
       --tags "Key=idea:BootstrapStatus,Value=${bootstrap_status}" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=${bootstrap_status}"
+{% endif %}
   exit 1
 }
 
@@ -110,14 +117,16 @@ if ! rpm -q --provides -f "/boot/vmlinuz-${TARGET_KERNEL_ABI}" 2>/dev/null | gre
   fail_kernel_bootstrap lustre-module-missing "The running kernel ${TARGET_KERNEL_ABI} does not provide kmod-lustre-client, the FSx for Lustre module."
 fi
 TARGET_KERNEL_VERSION="$(echo "${TARGET_KERNEL_ABI}" | cut -d. -f1-2)*"
-{% elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('rhel8', 'rocky8') and not (keep_kernel_series | default(false)) %}
 TARGET_KERNEL_VERSION="4.18.0-553*"
-{% elif context.base_os in ('rhel9', 'rocky9') %}
+{% elif context.base_os in ('rhel9', 'rocky9') and not (keep_kernel_series | default(false)) %}
 {# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm #}
 TARGET_KERNEL_VERSION="5.14.0-687*"
-{% elif context.base_os in ('rhel10', 'rocky10') %}
+{% elif context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
 {# the series the image boots: fsx_lustre_client.jinja2 has a client for the 10.1 and 10.2 series,
-   and pinning it keeps a package upgrade from moving the host to a kernel without one #}
+   and pinning it keeps a package upgrade from moving the host to a kernel without one. Compute
+   (keep_kernel_series) does the same on every EL release: its client is installed for the kernel
+   the image boots, and the FSx repository has none for a series Red Hat has only just shipped. #}
 TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
 {% endif %}
 
@@ -249,6 +258,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel8', 'rocky8') %}
   # RHEL8/Rocky8 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
+  drop_rescue_images
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
@@ -259,6 +269,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel9', 'rhel10', 'rocky9', 'rocky10') %}
   # RHEL9/Rocky9 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
+  drop_rescue_images
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
@@ -269,6 +280,13 @@ function install_target_kernel() {
 }
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+# Installing a kernel package can already have made it the default. When that kernel must not boot,
+# the running one has to be the default again, and a host that cannot say so must not carry on to a
+# reboot it may not come back from.
+function keep_running_kernel_default() {
+  restore_default_kernel "${1}" || fail_kernel_bootstrap kernel-boot-mismatch "The default boot kernel could not be set back to ${1}."
+}
+
 # The host already runs the target series, which is not the newest kernel of it: install the
 # newest (a security fix ships as a new release in the series, CVE-2026-98432 among them) and
 # boot it. The host's existing reboot activates it, so this adds none.
@@ -291,13 +309,28 @@ function update_within_target_series() {
   newest=$(dnf repoquery -q --latest-limit 1 --qf '%{version}-%{release}.%{arch}' "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | tail -1)
   [[ -n "${newest}" && "${newest}" != "${current_kernel}" ]] || return 0
   [[ "$(printf '%s\n%s\n' "${current_kernel}" "${newest}" | sort -V | tail -1)" == "${newest}" ]] || return 0
+  drop_rescue_images
   if ! package_transaction dnf install -y "kernel-${newest}" "kernel-core-${newest}" "kernel-devel-${newest}"; then
 {% endif %}
     log_warning "Unable to install kernel ${newest}; keeping ${current_kernel}"
     return 0
   fi
+  # Installing the package can already have made it the default, so keeping the running kernel
+  # means saying so.
+  if ! kernel_initramfs_ready "${newest}"; then
+    log_warning "Kernel ${newest} has no initramfs; keeping ${current_kernel}"
+    keep_running_kernel_default "${current_kernel}"
+    return 0
+  fi
+  # The Lustre client's module is linked into a new kernel only when their symbols still match.
+  if kernel_has_lustre_module "${current_kernel}" && ! kernel_has_lustre_module "${newest}"; then
+    log_warning "Kernel ${newest} has no FSx for Lustre module; keeping ${current_kernel}, which has one"
+    keep_running_kernel_default "${current_kernel}"
+    return 0
+  fi
   if [[ ! -f "/boot/vmlinuz-${newest}" ]] || ! grubby --set-default "/boot/vmlinuz-${newest}"; then
     log_warning "Kernel ${newest} is installed but not the default boot kernel; keeping ${current_kernel}"
+    keep_running_kernel_default "${current_kernel}"
     return 0
   fi
   TARGET_KERNEL_RELEASE="${newest}"
@@ -369,6 +402,12 @@ function set_kernel_version() {
   if [[ -f /etc/default/grub ]]; then
     # Select by title because a positional entry changes as kernels are added or removed.
     # The exact ABI keeps the boot choice aligned with the installed Lustre module.
+    # update-grub writes an entry for a kernel with no initrd, and that entry panics on boot.
+    if [[ ! -s "/boot/initrd.img-${TARGET_KERNEL_ABI}" ]]; then
+      log_warning "Kernel ${TARGET_KERNEL_ABI} has no initrd; building it"
+      timeout 300 update-initramfs -c -k "${TARGET_KERNEL_ABI}" || true
+    fi
+    [[ -s "/boot/initrd.img-${TARGET_KERNEL_ABI}" ]] || fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${TARGET_KERNEL_ABI} has no initrd, so it cannot be selected."
     sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}\"/" /etc/default/grub
     update-grub || fail_kernel_bootstrap kernel-boot-mismatch "Unable to update GRUB for ${TARGET_KERNEL_ABI}."
     log_info "Updated GRUB to boot kernel ${target_version} by default"
@@ -379,7 +418,12 @@ function set_kernel_version() {
   local target_kernel
   target_kernel=$(find /boot -maxdepth 1 -type f -name "vmlinuz-*${target_base}.*" -print | sort -V | tail -1)
   if [[ -n "${target_kernel}" ]]; then
-    grubby --set-default "${target_kernel}" || log_warning "Unable to make ${target_kernel} the default boot kernel"
+    # the package may have selected it already: a host that cannot boot the target stays on what
+    # it runs, and stops, since it cannot reach the kernel this image needs
+    if ! kernel_initramfs_ready "${target_kernel#/boot/vmlinuz-}" || ! grubby --set-default "${target_kernel}"; then
+      keep_running_kernel_default "${current_kernel}"
+      fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${target_kernel#/boot/vmlinuz-} cannot be made the default boot kernel."
+    fi
     log_info "Updated GRUB to boot ${target_kernel} by default"
   fi
 {% endif %}

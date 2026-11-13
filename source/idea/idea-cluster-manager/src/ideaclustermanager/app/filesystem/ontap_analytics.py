@@ -1,0 +1,427 @@
+"""
+Folder sizes from ONTAP File System Analytics, read through the SVM management endpoint.
+
+ONTAP keeps the rollups per directory, so a request costs one REST call rather than a walk, whoever
+asks and however many files sit below. It totals every owner together: which folder holds one
+person's bytes is not something it can say. The login is the storage metrics one, so it needs read
+access to /api/storage/volumes/*/files as well as quota reports and volumes, and it can see the
+whole SVM: callers check the person's own access before showing anything it returns.
+"""
+
+import re
+import threading
+import time
+from collections import OrderedDict
+from datetime import date, datetime, timezone
+from urllib.parse import quote
+
+from ideaclustermanager.app.metrics.storage_metrics_service import (
+    FileContentsRefused,
+    OntapClient,
+)
+
+VOLUMES = (
+    '/api/storage/volumes?return_records=true&max_records=1000'
+    '&fields=name,uuid,nas.path,files.used,analytics'
+)
+ANALYTICS_FIELDS = (
+    'name,type,is_junction,analytics.bytes_used,analytics.file_count,'
+    'analytics.subdir_count,analytics.incomplete_data,'
+    'analytics.by_modified_time.bytes_used.values,'
+    'analytics.by_modified_time.bytes_used.newest_label,'
+    'analytics.by_modified_time.bytes_used.oldest_label'
+)
+LABELS_FIELD = 'analytics.by_modified_time.bytes_used.labels'
+LABELS_SECONDS = 3600
+MONTH = re.compile(r'^\d{4}-\d{2}$')
+# The first scan is finished once the rollup holds the first fraction of the volume's inodes.
+# A rollup that falls behind after that is behind on new files, not on a first measurement,
+# while all of these hold: it still holds that fraction of what it held when last seen
+# finished (a scan started again counts up from nothing), it holds the second fraction of the
+# volume, and it has been behind for less than the time below (ONTAP took 81 and 94 seconds
+# to count new files where measured). Otherwise the volume is held to the first fraction again.
+# A process that never saw the volume finished has only the first fraction to go on, so two
+# tasks can differ over a burst of new files, for no longer than that time.
+SCAN_COMPLETE_FRACTION = 0.9
+SCAN_RESTARTED_FRACTION = 0.5
+CATCHING_UP_SECONDS = 600
+# files.used also counts what ONTAP keeps on the volume for itself, about a hundred inodes on
+# the volumes measured. On a nearly empty volume those outnumber what people wrote.
+VOLUME_OWN_INODES = 500
+MAX_ROWS = 1000
+# a folder's listing is read to its end: what is left out would count as files directly in it.
+# these bound one read, and a folder past them says so.
+MAX_PAGES = 5
+MAX_READ_SECONDS = 30
+FOLDER_SECONDS = 900
+REFRESHED_SECONDS = 60
+VOLUME_SECONDS = 300
+RETRY_SECONDS = 60
+READ_TIMEOUT_SECONDS = 10
+MAX_CONCURRENT_READS = 4
+MAX_CACHED_FOLDERS = 5000
+# what ONTAP answers about the filer itself: a bad login, a timeout, too many requests
+FILER_ERRORS = {401, 408, 429}
+
+
+def refused_this_path(error):
+    """ONTAP refused this one path (a file, not a folder, or a volume the role cannot read), or
+    the guard did before sending it. Anyone can ask for any path, so that says nothing about the
+    filer, and must not turn analytics off for everyone else."""
+    if isinstance(error, (FileNotFoundError, FileContentsRefused)):
+        return True
+    status = getattr(error, 'status_code', None)
+    return (
+        isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
+    )
+
+
+def bucket_end(label):
+    """the last day a histogram bucket covers: 2026-W44, 2026-10, 2026-Q3, 2026, --2015."""
+    try:
+        text = label.removeprefix('--')
+        if '-W' in text:
+            year, week = text.split('-W')
+            return datetime.strptime(f'{year}-{week}-0', '%G-%V-%w').date()
+        if '-Q' in text:
+            year, quarter = text.split('-Q')
+            month = int(quarter) * 3
+            return date(int(year) + month // 12, month % 12 + 1, 1)
+        if '-' in text:
+            year, month = (int(part) for part in text.split('-'))
+            return date(year + month // 12, month % 12 + 1, 1)
+        return date(int(text), 12, 31)
+    except (ValueError, AttributeError):
+        return None
+
+
+def bucket_start(label):
+    """the first day a histogram bucket covers, or None for one with no start: --2015."""
+    try:
+        if label.startswith('--'):
+            return None
+        if '-W' in label:
+            year, week = label.split('-W')
+            return datetime.strptime(f'{year}-{week}-1', '%G-%V-%u').date()
+        if '-Q' in label:
+            year, quarter = label.split('-Q')
+            return date(int(year), int(quarter) * 3 - 2, 1)
+        if '-' in label:
+            year, month = (int(part) for part in label.split('-'))
+            return date(year, month, 1)
+        return date(int(label), 1, 1)
+    except (ValueError, AttributeError):
+        return None
+
+
+def ages(analytics, labels, now):
+    """(bytes unchanged since before the last three calendar months, newest, oldest). The histogram
+    repeats the same bytes as weeks, months, quarters and years, and its only recent buckets are
+    months, so that is the closest it comes to 90 days: 61 to 92 days, depending on the date."""
+    histogram = (analytics.get('by_modified_time') or {}).get('bytes_used') or {}
+    buckets = dict(zip(labels or [], histogram.get('values') or []))
+    recent = sum(used for label, used in buckets.items() if MONTH.match(label))
+    unchanged = max(
+        0, analytics.get('bytes_used', 0) - recent - buckets.get('unknown', 0)
+    )
+
+    def stamp(day):
+        if day is None:
+            return None
+        moment = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        return min(now, moment.timestamp())
+
+    # A bucket only says the week, month, quarter or year, and the newest and oldest are named
+    # at different widths. The newest is no later than its bucket's end and the oldest no
+    # earlier than its bucket's start: by the end of both, a month could put the oldest after
+    # a week inside it.
+    newest, oldest = histogram.get('newest_label'), histogram.get('oldest_label')
+    return (
+        unchanged,
+        stamp(bucket_end(newest)),
+        stamp(bucket_start(oldest) or bucket_end(oldest)),
+    )
+
+
+def to_row(path, name, record, labels, now):
+    analytics = record.get('analytics')
+    if not analytics:
+        # state=on is reported at once; a folder the first scan has not reached has no analytics.
+        return dict(
+            path=path,
+            name=name,
+            bytes=0,
+            files=0,
+            newest_mtime=None,
+            oldest_mtime=None,
+            unchanged_90_days_bytes=0,
+            partial=True,
+            measured=False,
+        )
+    unchanged, newest, oldest = ages(analytics, labels, now)
+    return dict(
+        path=path,
+        name=name,
+        bytes=analytics.get('bytes_used', 0),
+        files=analytics.get('file_count', 0),
+        subfolders=analytics.get('subdir_count', 0),
+        newest_mtime=newest,
+        oldest_mtime=oldest,
+        unchanged_90_days_bytes=unchanged,
+        partial=bool(analytics.get('incomplete_data')),
+    )
+
+
+class FolderAnalytics:
+    def __init__(self, context, collector):
+        self.context = context
+        self.collector = collector
+        self.logger = context.logger('storage-usage')
+        self._lock = threading.Lock()
+        self._reads = threading.BoundedSemaphore(MAX_CONCURRENT_READS)
+        self._folders = OrderedDict()
+        self._folder_locks = {}
+        self._volumes = {}
+        self._labels = {}
+        # never: the monotonic clock can read less than the back-off on a host just started
+        self._failed_at = float('-inf')
+        self._refused_at = {}
+        # per volume: the inodes its rollup held when last seen finished, and since when it
+        # has been behind on new files
+        self._scanned = {}
+
+    def _client(self, target):
+        config = self.context.config()
+        return OntapClient(
+            target.endpoint,
+            target.username,
+            config.get_secret(target.password_key),
+            verify_tls=config.get_bool(self.collector._config_key('verify_tls'), False),
+            timeout=READ_TIMEOUT_SECONDS,
+        )
+
+    def _attachment(self, path):
+        """the attachment whose mount holds this path, and the path from the SVM's namespace root."""
+        config = self.context.config()
+        for target in self.collector.targets():
+            prefix = f'shared-storage.{target.name}'
+            mount = (config.get_string(f'{prefix}.mount_dir') or '').rstrip('/')
+            export = config.get_string(f'{prefix}.fsx_netapp_ontap.volume.volume_path')
+            if mount and export and (path == mount or path.startswith(f'{mount}/')):
+                return target, f'{export.rstrip("/")}{path[len(mount) :]}'
+        return None, None
+
+    def _volume_list(self, target):
+        now = time.monotonic()
+        with self._lock:
+            cached = self._volumes.get(target.name)
+            if cached and now - cached[0] < VOLUME_SECONDS:
+                return cached[1]
+        volumes = self._client(target).get(VOLUMES)
+        with self._lock:
+            self._volumes[target.name] = (now, volumes)
+        return volumes
+
+    def status(self, path):
+        """on, off, initializing, failed (the filer did not answer, or refused this volume;
+        backing off) or unavailable (no analytics volume holds this path), with the volume and its
+        relative path when on."""
+        if time.monotonic() - self._failed_at < RETRY_SECONDS:
+            return dict(state='failed')
+        target, namespace = self._attachment(path)
+        if target is None:
+            return dict(state='unavailable')
+        try:
+            volumes = self._volume_list(target)
+        except Exception as e:
+            return self._failed(e)
+        best = None
+        for volume in volumes:
+            junction = (volume.get('nas') or {}).get('path')
+            if not junction:
+                continue
+            root = junction.rstrip('/')
+            if namespace == root or namespace.startswith(f'{root}/'):
+                if best is None or len(root) > len(best[0]):
+                    best = (root, volume)
+        if best is None:
+            return dict(state='unavailable')
+        root, volume = best
+        analytics = volume.get('analytics') or {}
+        state = analytics.get('state')
+        uuid = volume['uuid']
+        if state not in ('on', 'initializing'):
+            self._scanned.pop(uuid, None)
+            return dict(state='off')
+        # ONTAP says on within seconds of enabling and reports no scan progress, so the first
+        # scan shows only as the volume's rollup catching up with its inodes. files.used counts
+        # every inode and the rollup counts files and folders apart, so both are needed: by
+        # files alone a volume with one folder to nine files never finishes.
+        used = (volume.get('files') or {}).get('used') or 0
+        counted = analytics.get('file_count', 0) + analytics.get('subdir_count', 0)
+        behind = used - counted
+        now = time.monotonic()
+        finished, since = self._scanned.get(uuid, (None, None))
+        if state == 'on' and behind <= max(
+            VOLUME_OWN_INODES, used * (1 - SCAN_COMPLETE_FRACTION)
+        ):
+            self._scanned[uuid] = (counted, None)
+        elif (
+            state == 'on'
+            and finished is not None
+            and counted >= finished * SCAN_COMPLETE_FRACTION
+            and behind <= max(VOLUME_OWN_INODES, used * (1 - SCAN_RESTARTED_FRACTION))
+            and now - (since or now) < CATCHING_UP_SECONDS
+        ):
+            self._scanned[uuid] = (finished, since or now)
+        else:
+            self._scanned.pop(uuid, None)
+            return dict(
+                state='initializing',
+                progress=min(99, counted * 100 // used) if used else 0,
+            )
+        if time.monotonic() - self._refused_at.get(uuid, float('-inf')) < RETRY_SECONDS:
+            return dict(state='failed')
+        return dict(
+            state='on',
+            target=target,
+            volume=volume.get('name'),
+            uuid=uuid,
+            relative=namespace[len(root) :].lstrip('/'),
+        )
+
+    def _failed(self, error):
+        # Names and paths stay out of the log: only the kind of failure is recorded.
+        self.logger.warning(f'storage analytics read failed: {type(error).__name__}')
+        self._failed_at = time.monotonic()
+        return dict(state='failed')
+
+    def folder(self, path, fresh=False):
+        """{'self': row, 'children': [rows, largest first], 'measured_at': time} or None. One ONTAP
+        call per folder per cache period, however many people ask at once."""
+        status = self.status(path)
+        if status['state'] != 'on':
+            return None
+        key = (status['uuid'], status['relative'])
+        max_age = REFRESHED_SECONDS if fresh else FOLDER_SECONDS
+        with self._lock:
+            flight = self._folder_locks.setdefault(key, threading.Lock())
+        with flight:
+            with self._lock:
+                cached = self._folders.get(key)
+                if cached and time.monotonic() - cached[0] < max_age:
+                    self._folders.move_to_end(key)
+                    return cached[1]
+            result = self._read(status, path)
+            with self._lock:
+                self._folder_locks.pop(key, None)
+                if result is not None:
+                    self._folders[key] = (time.monotonic(), result)
+                    self._folders.move_to_end(key)
+                    while len(self._folders) > MAX_CACHED_FOLDERS:
+                        self._folders.popitem(last=False)
+            return result
+
+    def _bucket_labels(self, client, uuid):
+        # A listing leaves the labels out of its rows. They only change with the calendar.
+        cached = self._labels.get(uuid)
+        if cached and time.monotonic() - cached[0] < LABELS_SECONDS:
+            return cached[1]
+        page = client.first_page(
+            f'/api/storage/volumes/{uuid}/files/%2F?return_metadata=true&fields={LABELS_FIELD}'
+        )
+        records = page.get('records') or [{}]
+        labels = (
+            (records[0].get('analytics') or {})
+            .get('by_modified_time', {})
+            .get('bytes_used', {})
+            .get('labels')
+        )
+        self._labels[uuid] = (time.monotonic(), labels)
+        return labels
+
+    def _listing(self, client, request, deadline):
+        """every record in directory order, or None when any are left out. A page that fails
+        leaves the folder partial rather than unavailable."""
+        records = []
+        following = request
+        for _ in range(MAX_PAGES):
+            if time.monotonic() >= deadline:
+                return None
+            try:
+                page = client.first_page(following)
+            except Exception as e:
+                self.logger.warning(
+                    f'storage analytics page read failed: {type(e).__name__}'
+                )
+                return None
+            records.extend(page.get('records', []))
+            following = ((page.get('_links') or {}).get('next') or {}).get('href')
+            if not following:
+                return records
+        return None
+
+    def _records(self, client, request):
+        """(records, whether any are left out). One page in size order is a single answer, so a
+        folder that fits on it is complete and one too big to list still shows its largest, with
+        nothing larger left out. Past one page it is read again in directory order: ONTAP resumes a
+        next page from the last row's place in that order, so under a size order a folder that
+        grows between pages can be skipped. Both reads share one deadline."""
+        deadline = time.monotonic() + MAX_READ_SECONDS
+        largest = client.first_page(f'{request}&order_by=analytics.bytes_used%20desc')
+        if not ((largest.get('_links') or {}).get('next') or {}).get('href'):
+            return largest.get('records', []), False
+        records = self._listing(client, request, deadline)
+        if records is None:
+            return largest.get('records', []), True
+        return records, False
+
+    def _read(self, status, path):
+        now = time.time()
+        relative = quote(status['relative'] or '/', safe='')
+        request = (
+            f'/api/storage/volumes/{status["uuid"]}/files/{relative}?type=directory'
+            f'&fields={ANALYTICS_FIELDS}&max_records={MAX_ROWS}&return_timeout=10'
+        )
+        with self._reads:
+            try:
+                client = self._client(status['target'])
+                # about the volume root, not this path: a refusal here is the role's, for everyone
+                # on this volume. The documented role refuses every volume but home, so it says
+                # nothing about the others.
+                labels = self._bucket_labels(client, status['uuid'])
+            except Exception as e:
+                if refused_this_path(e):
+                    code = getattr(e, 'status_code', type(e).__name__)
+                    self.logger.warning(f'storage analytics refused one volume: {code}')
+                    self._refused_at[status['uuid']] = time.monotonic()
+                else:
+                    self._failed(e)
+                return None
+            try:
+                records, truncated = self._records(client, request)
+            except Exception as e:
+                if refused_this_path(e):
+                    # Names and paths stay out of the log here too.
+                    code = getattr(e, 'status_code', type(e).__name__)
+                    self.logger.info(f'storage analytics refused one folder: {code}')
+                else:
+                    self._failed(e)
+                return None
+        own = None
+        children = []
+        for record in records:
+            name = record.get('name')
+            if name == '.':
+                own = to_row(path, path.rsplit('/', 1)[-1], record, labels, now)
+            elif name != '..' and not record.get('is_junction'):
+                children.append(to_row(f'{path}/{name}', name, record, labels, now))
+        if own is None:
+            return None
+        children.sort(key=lambda row: (-row['bytes'], row['name']))
+        return dict(
+            self=own,
+            children=children,
+            truncated=truncated,
+            measured_at=now,
+        )

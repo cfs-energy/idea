@@ -29,11 +29,15 @@ from ideadatamodel import (
     AutoScalingGroup,
     CheckServiceQuotaResult,
 )
+from collections import OrderedDict
+from threading import Lock
+from ideasdk.metrics.health import HealthMetrics, instance_family_of
 from ideasdk.utils import Utils
 from ideasdk.aws.ec2_instance_types_db import TRANSIENT_EC2_ERROR_CODES
 from ideasdk.utils.error_redaction import redact_aws_identifiers
 
 from ideascheduler.app.aws import EC2ServiceQuotaHelper, AwsBudgetsHelper
+from ideascheduler.app.job_messages import HELD_JOB_NEXT_STEP
 from ideascheduler.app.bedrock_job_access import (
     BedrockJobAccessResolver,
     BedrockJobAccessState,
@@ -78,6 +82,12 @@ def _is_transient_ec2_error(exc: BaseException = None) -> bool:
 
 # auto-scaling activity status codes that mean the group could not launch the node.
 ASG_FAILED_ACTIVITY_STATUS_CODES = ('Failed', 'Cancelled')
+
+
+# ponytail: scheduler runs one task; a restart can recount activities still in the group's history.
+COUNTED_ACTIVITIES: OrderedDict = OrderedDict()
+COUNTED_ACTIVITIES_LOCK = Lock()
+COUNTED_ACTIVITIES_MAX = 5000
 
 
 class NotEnoughReservedInstances(SocaBaseModel):
@@ -199,8 +209,7 @@ class JobProvisioningUtil:
         reason = (
             f'Job held: provisioning failed {retry_count} times. '
             f'Last error: {message} '
-            f'Use qdel to delete the job and resubmit with corrected parameters, '
-            f'or contact your administrator.'
+            f'{HELD_JOB_NEXT_STEP}'
         )
         # set_job_provisioning_error publishes the reason via the gated path; no direct qalter
         # here (a raw message with commas breaks qalter's resource-list parsing).
@@ -405,6 +414,28 @@ class JobProvisioningUtil:
             return True
         return False
 
+    def _count_capacity_failure(self, activity: dict, reason: str):
+        """once per scaling activity, however many times its stack is looked at."""
+        activity_id = Utils.get_value_as_string('ActivityId', activity)
+        with COUNTED_ACTIVITIES_LOCK:
+            if activity_id in COUNTED_ACTIVITIES:
+                return
+            COUNTED_ACTIVITIES[activity_id] = None
+            while len(COUNTED_ACTIVITIES) > COUNTED_ACTIVITIES_MAX:
+                COUNTED_ACTIVITIES.popitem(last=False)
+        lowered = reason.lower()
+        if 'capacity' in lowered:
+            kind = 'insufficient_capacity'
+        elif 'limit' in lowered or 'quota' in lowered:
+            kind = 'quota'
+        else:
+            kind = 'other'
+        HealthMetrics(self.context).add(
+            'scheduler.capacity_errors',
+            reason=kind,
+            instance_family=instance_family_of(self.job),
+        )
+
     def get_capacity_failure_reason(self) -> Optional[str]:
         """
         why the compute stack has no node yet, taken from the most recent failed
@@ -424,6 +455,7 @@ class JobProvisioningUtil:
             activities = self.aws_util.autoscaling_describe_scaling_activities(
                 auto_scaling_group_name=auto_scaling_group_name
             )
+            newest = None
             for activity in activities:
                 status_code = Utils.get_value_as_string('StatusCode', activity)
                 if status_code not in ASG_FAILED_ACTIVITY_STATUS_CODES:
@@ -433,8 +465,13 @@ class JobProvisioningUtil:
                     reason = Utils.get_value_as_string('Description', activity)
                 if Utils.is_empty(reason):
                     continue
-                return reason
-            return None
+                try:
+                    self._count_capacity_failure(activity, reason)
+                except Exception as e:  # counting never costs the job its reason
+                    self._logger.debug(f'capacity failure not counted: {e}')
+                if newest is None:
+                    newest = reason
+            return newest
         except Exception as e:
             self._logger.warning(
                 f'{self.job.log_tag} failed to read scaling activities for '
@@ -559,10 +596,14 @@ class JobProvisioningUtil:
                 if e.response['Error'].get('Code') == 'DryRunOperation':
                     pass
                 else:
+                    self._logger.warning(
+                        f'{self.job.log_tag} - EC2 dry run failed for {instance_type}: '
+                        f'{redact_aws_identifiers(e)}'
+                    )
                     raise exceptions.SocaException(
                         error_code=errorcodes.EC2_DRY_RUN_FAILED,
-                        message=f'EC2 dry run failed for instance_type: {instance_type}, '
-                        f'Err: {redact_aws_identifiers(e)}',
+                        message=f"AWS refused a test launch of {instance_type}, so this job can't "
+                        f'start. Try another instance type, or ask an administrator.',
                         ref=e,
                     )
 
@@ -911,10 +952,9 @@ class JobProvisioningUtil:
                 if available < total_required:
                     raise exceptions.SocaException(
                         error_code=errorcodes.NOT_ENOUGH_LICENSES,
-                        message=f'Not enough licenses available for: {license_ask.name}. '
-                        f'licenses available: {available}, '
-                        f'total required: {total_required}, '
-                        f'job required: {license_ask.count}',
+                        message=f'Not enough {license_ask.name} licenses: this job needs '
+                        f'{license_ask.count}, {max(available - active_license_usage_count, 0)} '
+                        f'are free right now. Try again when other jobs finish.',
                     )
                 else:
                     self._logger.info(
@@ -946,10 +986,19 @@ class JobProvisioningUtil:
                 )
             except exceptions.SocaException:
                 allowed = []
-            allowed_text = ', '.join(allowed) if len(allowed) > 0 else 'none'
+            if len(allowed) == 0:
+                message = (
+                    f"You aren't in a project allowed on queue {self.job.queue}. "
+                    f'Ask an administrator to add you to one.'
+                )
+            else:
+                message = (
+                    f"You can't use project {project_name} on queue {self.job.queue}. "
+                    f'Choose one of these projects (#PBS -P in a script): {", ".join(allowed)}.'
+                )
             raise exceptions.soca_exception(
                 error_code=errorcodes.UNAUTHORIZED_ACCESS,
-                message=f'User: {self.job.owner} is not authorized to submit jobs for project: {project_name} on queue: {self.job.queue}. You can use: {allowed_text}',
+                message=message,
             )
 
         return True

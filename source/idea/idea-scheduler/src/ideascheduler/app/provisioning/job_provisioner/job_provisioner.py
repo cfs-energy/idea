@@ -23,7 +23,9 @@ from ideadatamodel import (
     SocaQueueMode,
     ProvisioningStatus,
 )
+from ideasdk.metrics.health import HealthMetrics, instance_family_of
 from ideasdk.utils import Utils
+from ideascheduler.app.provisioning.lifecycle_events import ProvisioningLifecycleEvents
 
 from ideascheduler.app.provisioning import (
     JobProvisioningQueue,
@@ -157,6 +159,12 @@ class ProvisionJobs:
         job.params.stack_id = stack_id
         job.params.compute_stack = job.get_compute_stack()
         job.provisioning_time = arrow.get(provisioning_time).datetime
+        # the job was read from the cache with its last provisioning error on it. That
+        # error is cleared below; written back with the row it stays the job's reason
+        # class and comment for as long as the job waits, and goes on its record.
+        job.error_message = None
+        job.reason_class = None
+        job.comment = None
         self._context.job_cache.sync([job])
         self._context.job_cache.add_active_licenses([job])
         self._context.job_cache.clear_job_provisioning_error(job.job_id)
@@ -533,6 +541,13 @@ class ProvisionJobs:
                 self._context.metrics.job_provisioning_failed(
                     queue_type=self.job.queue_type, error_code=e.error_code
                 )
+                HealthMetrics(self._context).add(
+                    'scheduler.provisioning_failures',
+                    reason_class=ProvisioningLifecycleEvents.get_reason_class(
+                        e.error_code
+                    ),
+                    instance_family=instance_family_of(self.job),
+                )
                 if self._lifecycle_events is not None:
                     # designed wait states (licenses, quota headroom, stale shared
                     # stacks) are waits in the event stream, not stack failures.
@@ -563,6 +578,11 @@ class ProvisionJobs:
             )
             self._context.metrics.job_provisioning_failed(
                 queue_type=self.job.queue_type, error_code=errorcodes.GENERAL_ERROR
+            )
+            HealthMetrics(self._context).add(
+                'scheduler.provisioning_failures',
+                reason_class='internal',
+                instance_family=instance_family_of(self.job),
             )
             if self._lifecycle_events is not None:
                 self._lifecycle_events.stack_failed(

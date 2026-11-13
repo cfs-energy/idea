@@ -36,7 +36,9 @@ def ldap_commands():
 
 
 @ldap_commands.command('search-users', context_settings=constants.CLICK_SETTINGS)
-@click.option('-q', '--query', help='search query (substring of username)')
+@click.option(
+    '-q', '--query', help='part of a username, matched as written (* is not a wildcard)'
+)
 @click.option(
     '-p',
     '--page-size',
@@ -83,11 +85,18 @@ def search_users(query: str, page_size: int):
 
     _loop_end = Utils.current_time_ms()
     context.debug(f'# Total LDAP query time: {_loop_end - _loop_start}ms')
+    if not user_result:
+        context.print('no matching users')
+        return
     context.print_json(user_result)
 
 
 @ldap_commands.command('search-groups', context_settings=constants.CLICK_SETTINGS)
-@click.option('-q', '--query', help='search query (substring of group name)')
+@click.option(
+    '-q',
+    '--query',
+    help='part of a group name, matched as written (* is not a wildcard)',
+)
 @click.option(
     '-p',
     '--page-size',
@@ -135,6 +144,9 @@ def search_groups(query: str, page_size: int):
 
     _loop_end = Utils.current_time_ms()
     context.debug(f'# Total LDAP query time: {_loop_end - _loop_start}ms')
+    if not group_result:
+        context.print('no matching groups')
+        return
     context.print_json(group_result)
 
 

@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 __all__ = (
+    'VirtualDesktopOrphanInstance',
     'VirtualDesktopSessionState',
     'VirtualDesktopSessionType',
     'VirtualDesktopServer',
@@ -171,6 +172,23 @@ class VirtualDesktopSoftwareStack(SocaBaseModel):
     allowed_instance_types: Optional[List[str]] = Field(default=None)
     # the image pipeline never repoints a pinned stack (false when absent)
     image_pinned: Optional[bool] = Field(default=None)
+    # who answers for a stack nothing rebuilds, and the date it stops being offered
+    owner: Optional[str] = Field(default=None)
+    expires_on: Optional[datetime] = Field(default=None)
+    # an update asking to remove expires_on, which absent cannot say; never stored
+    clear_expires_on: Optional[bool] = Field(default=None)
+    # worked out for a listing, never stored
+    effective_expires_on: Optional[datetime] = Field(default=None)
+    expiry_state: Optional[str] = Field(default=None)
+    expiry_warning: Optional[str] = Field(default=None)
+
+
+class VirtualDesktopOrphanInstance(SocaBaseModel):
+    instance_id: Optional[str] = Field(default=None)
+    name: Optional[str] = Field(default=None)
+    instance_type: Optional[str] = Field(default=None)
+    state: Optional[str] = Field(default=None)
+    launched_on: Optional[datetime] = Field(default=None)
 
 
 class VirtualDesktopServer(SocaBaseModel):

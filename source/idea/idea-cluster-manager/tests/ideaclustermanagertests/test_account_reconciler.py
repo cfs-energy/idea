@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import ldap
 import pytest
@@ -46,8 +46,8 @@ def build(values=None, records=None, users=None):
         )
 
     accounts.ldap_client.get_reconcile_user.side_effect = directory_record
-    accounts.is_cluster_administrator.side_effect = (
-        lambda username: username == 'cluster-admin'
+    accounts.is_cluster_administrator.side_effect = lambda username: (
+        username == 'cluster-admin'
     )
     accounts.list_users.return_value = ListUsersResult(listing=users)
     context.accounts = accounts
@@ -371,18 +371,17 @@ def use_real_account_transitions(context):
             UserDAO.convert_from_db(accounts.user_dao, row) for row in stored.values()
         ]
     )
-    accounts.disable_user.side_effect = (
-        lambda *args, **kwargs: AccountsService.disable_user(accounts, *args, **kwargs)
+    accounts.disable_user.side_effect = lambda *args, **kwargs: (
+        AccountsService.disable_user(accounts, *args, **kwargs)
     )
-    accounts.enable_user.side_effect = (
-        lambda *args, **kwargs: AccountsService.enable_user(accounts, *args, **kwargs)
+    accounts.enable_user.side_effect = lambda *args, **kwargs: (
+        AccountsService.enable_user(accounts, *args, **kwargs)
     )
     context.ldap_client = accounts.ldap_client
     context.ldap_client.is_readonly.return_value = False
-    accounts.task_manager.send.side_effect = (
-        lambda **kwargs: SyncUserInDirectoryServiceTask(context).invoke(
-            kwargs['payload']
-        )
+    context.ldap_client.one_server = MagicMock()
+    accounts.task_manager.send.side_effect = lambda **kwargs: (
+        SyncUserInDirectoryServiceTask(context).invoke(kwargs['payload'])
     )
     return stored
 
@@ -407,8 +406,8 @@ def test_cognito_revocation_is_not_reversed_on_next_run():
     service, context = build({PREFIX + 'check_cognito': True}, records={})
     stored = use_real_account_transitions(context)
     context.accounts.task_manager.send.side_effect = None
-    context.accounts.user_pool.admin_get_user.side_effect = (
-        lambda username, **kwargs: CognitoUser(Enabled=username != 'user0')
+    context.accounts.user_pool.admin_get_user.side_effect = lambda username, **kwargs: (
+        CognitoUser(Enabled=username != 'user0')
     )
     assert service.run_once(dry_run=False)['disabled'] == 1
     assert service.run_once(dry_run=False)['reenabled'] == 0
@@ -422,8 +421,8 @@ def test_only_external_disable_is_restored_by_default():
     stored = use_real_account_transitions(context)
     context.accounts.user_pool.admin_get_user.return_value = CognitoUser(Enabled=True)
     assert service.run_once(dry_run=False)['disabled'] == 1
-    context.accounts.user_pool.admin_get_user.side_effect = (
-        lambda username, **kwargs: CognitoUser(Enabled=username != 'user0')
+    context.accounts.user_pool.admin_get_user.side_effect = lambda username, **kwargs: (
+        CognitoUser(Enabled=username != 'user0')
     )
     assert service.run_once(dry_run=False)['reenabled'] == 0
     records['user0'] = {'user_account_control': 512}
@@ -455,8 +454,8 @@ def real_directory_reader(context, results):
     client.convert_ldap_user.side_effect = lambda attrs: (
         ActiveDirectoryClient.convert_ldap_user(client, attrs)
     )
-    context.accounts.ldap_client.get_reconcile_user.side_effect = (
-        lambda *args: ActiveDirectoryClient.get_reconcile_user(client, *args)
+    context.accounts.ldap_client.get_reconcile_user.side_effect = lambda *args: (
+        ActiveDirectoryClient.get_reconcile_user(client, *args)
     )
     return client
 

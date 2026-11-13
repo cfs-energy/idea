@@ -17,6 +17,9 @@ from ideasdk.client import (
     SocaClientOptions,
     AccountsClient,
 )
+from ideadatamodel import ImageKind
+from ideasdk.aws.image_builds import ImageRowsCollector
+from ideasdk.metrics.health import CollectorRunner
 from ideasdk.utils import Utils, GroupNameHelper
 from ideasdk.auth import TokenService, TokenServiceOptions
 from ideasdk.server import SocaServerOptions
@@ -55,6 +58,13 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_
     VirtualDesktopSessionCounterDB,
 )
 from ideavirtualdesktopcontroller.app.sessions.desktop_launches import DesktopLaunches
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import (
+    StackExpiryService,
+)
+from ideavirtualdesktopcontroller.app.sessions.session_metrics import (
+    GatewayCertificateCollector,
+    SessionCountPublisher,
+)
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
@@ -76,6 +86,9 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 import os
 import yaml
+
+
+SESSION_COUNTS_SECONDS = 300
 
 
 class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
@@ -337,6 +350,8 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self._image_pipeline = None
         self._runs_reconciled = False
         self._history_backfilled = False
+        self._session_counts = None
+        self._stack_expiry = None
         self._desktop_launches = None
         self.context.event_queue_monitor_service = EventsQueueMonitoringService(
             context=self.context
@@ -345,10 +360,19 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             context=self.context
         )
 
+    def _stack_expiry_service(self) -> StackExpiryService:
+        if self._stack_expiry is None:
+            self._stack_expiry = StackExpiryService(
+                self.context, self._software_stack_db, self._session_db
+            )
+        return self._stack_expiry
+
     def _refresh_bootstrap_loop(self):
         # Leadership may settle after startup, and replicas must not multiply the
         # command limit. Waiting here leaves desktop provisioning off this path.
         next_refresh = 0
+        next_session_counts = 0
+        next_index_sweep = 0
         while not self._bootstrap_exit.is_set():
             # Reuse the minute loop so a later election or failover still rebuilds once.
             self._reindex_software_stacks()
@@ -366,6 +390,20 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             except Exception as e:
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Bootstrap refresh sweep failed: {" ".join(str(e).splitlines())}'
+                )
+            # a desktop with no table row leaves the admin listing within 6 hours, and at
+            # startup. its own timer and guard: a failed bootstrap refresh must not stop it
+            try:
+                if (
+                    self._bootstrap_session_utils is not None
+                    and time.monotonic() >= next_index_sweep
+                    and self.context.is_leader()
+                ):
+                    next_index_sweep = time.monotonic() + 6 * 60 * 60
+                    self._bootstrap_session_utils.drop_index_entries_without_a_row()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Desktop index sweep failed: {" ".join(str(e).splitlines())}'
                 )
             # a host that aborted its bootstrap never reports back: fail its desktop within
             # a minute instead of at the provisioning timeout.
@@ -408,6 +446,26 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
                 self.context.logger('virtual-desktop-controller-app').warning(
                     f'Desktop history backfill failed: {" ".join(str(e).splitlines())}'
                 )
+            # one publisher, or the replicas' gauges would add up
+            try:
+                if time.monotonic() >= next_session_counts and self.context.is_leader():
+                    next_session_counts = time.monotonic() + SESSION_COUNTS_SECONDS
+                    if self._session_counts is None:
+                        self._session_counts = SessionCountPublisher(
+                            self.context, self._session_db
+                        )
+                    self._session_counts.publish()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Session counts failed: {" ".join(str(e).splitlines())}'
+                )
+            try:
+                if self.context.is_leader():
+                    self._stack_expiry_service().tick()
+            except Exception as e:
+                self.context.logger('virtual-desktop-controller-app').warning(
+                    f'Stack expiry failed: {type(e).__name__}'
+                )
             # desktop image pipeline: resume, triggers (release, monthly), start queued
             # rows, cleanup. bakes run in their own threads; this never waits on one
             try:
@@ -447,8 +505,23 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
         self.context.event_queue_monitor_service.start()
         self.context.controller_queue_monitor_service.start()
         self._bootstrap_thread.start()
+        self._health_collectors = CollectorRunner(
+            self.context,
+            [
+                ImageRowsCollector(
+                    ImageKind.DESKTOP,
+                    lambda: self._desktop_image_pipeline().managed(),
+                    release=ideavirtualdesktopcontroller.__version__,
+                ),
+                GatewayCertificateCollector(self.context),
+                self._stack_expiry_service(),
+            ],
+        )
+        self._health_collectors.start()
 
     def app_stop(self):
+        if getattr(self, '_health_collectors', None) is not None:
+            self._health_collectors.stop()
         self._bootstrap_exit.set()
         self._bootstrap_thread.join()
         if Utils.is_not_empty(self.context.event_queue_monitor_service):

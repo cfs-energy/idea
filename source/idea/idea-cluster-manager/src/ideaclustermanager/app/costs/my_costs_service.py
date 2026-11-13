@@ -140,6 +140,11 @@ class MyCostsService:
     def __init__(self, context):
         self.context = context
         self.logger = context.logger('my-costs')
+        # whether the last _desktops read found any record of the user's desktops
+        self.desktop_records = None
+        # False unless the last summary read every document it could have: the cap is on
+        # documents, and a desktop can have several, so its session count cannot show this
+        self.desktops_complete = False
 
     # opensearch
 
@@ -477,20 +482,28 @@ class MyCostsService:
         end_ms: int,
         size: int = None,
         all_users: bool = False,
+        owners: Optional[List[str]] = None,
     ):
         """
         raw session documents overlapping the window. the admin listing asks for every
-        user by saying so; a missing username is a bug, never a wildcard. no state is
-        filtered: a desktop deleted after running in the window still cost what it cost.
+        user, or a list of them, by saying so; a missing username is a bug, never a
+        wildcard. no state is filtered: a desktop deleted after running in the window
+        still cost what it cost.
         """
-        if not all_users and Utils.is_empty(username):
+        if not all_users and not owners and Utils.is_empty(username):
             raise exceptions.unauthorized_access()
         index = self.context.config().get_string(
             'virtual-desktop-controller.opensearch.dcv_session.alias'
         )
         if Utils.is_empty(index):
             return None
-        owner = [] if all_users else [{'term': {'owner.raw': username}}]
+        owner = (
+            []
+            if all_users
+            else [{'terms': {'owner.raw': owners}}]
+            if owners
+            else [{'term': {'owner.raw': username}}]
+        )
         response = self._search(
             index,
             {
@@ -556,7 +569,20 @@ class MyCostsService:
         if hits is None:
             return MyCostsDesktops(is_unavailable=True)
 
-        hits = list(hits) + self._history_hits(username, start_ms, end_ms)
+        try:
+            history = self._history_hits(username, start_ms, end_ms, strict=True)
+        except Exception as e:
+            # what is known still shows, marked: without the deleted desktops it is not a figure
+            # to store or to read as complete
+            self.logger.warning(f'failed to read desktop session history: {e}')
+            totals = self._desktop_totals(
+                self._sessions_from(list(hits), start_ms, end_ms)
+            )
+            totals.is_unavailable = True
+            return totals
+        self.desktops_complete = len(hits) < MAX_SESSIONS
+        hits = list(hits) + history
+        self.desktop_records = bool(hits)
         return self._desktop_totals(self._sessions_from(hits, start_ms, end_ms))
 
     def _history_table(self):
@@ -577,10 +603,12 @@ class MyCostsService:
         start_ms: int,
         end_ms: int,
         all_users: bool = False,
+        strict: bool = False,
     ) -> List[Dict]:
         """
         desktops that ran in the window and have since been deleted; this record is the
         only evidence left of them. shaped like a search hit so one builder serves both.
+        strict raises when it cannot be read: a total without it must not pass for complete.
         """
         if not all_users and Utils.is_empty(username):
             raise exceptions.unauthorized_access()
@@ -593,6 +621,10 @@ class MyCostsService:
             else:
                 rows = self._history_rows(table, username)
         except Exception as e:
+            if source_not_created(e):
+                return []
+            if strict:
+                raise
             # additive: a history read that fails leaves the live sessions intact
             self.logger.warning(f'failed to read desktop session history: {e}')
             return []
@@ -675,6 +707,28 @@ class MyCostsService:
             if last_key is None:
                 break
         return rows
+
+    def history_owners(self) -> set:
+        """every owner in the history table. raises if it cannot be read in full."""
+        table = self._history_table()
+        if table is None:
+            return set()
+        request = {
+            'ProjectionExpression': '#owner',
+            'ExpressionAttributeNames': {'#owner': 'owner'},
+        }
+        owners = set()
+        try:
+            while True:
+                page = table.scan(**request)
+                owners.update(row['owner'] for row in page.get('Items', []))
+                if not page.get('LastEvaluatedKey'):
+                    return owners
+                request['ExclusiveStartKey'] = page['LastEvaluatedKey']
+        except Exception as e:
+            if source_not_created(e):
+                return set()
+            raise
 
     @staticmethod
     def _newest_per_session(hits) -> List[Dict]:
@@ -1018,11 +1072,12 @@ class MyCostsService:
 
     # admin listing
 
-    def list_user_costs(self) -> ListUserCostsResult:
+    def list_user_costs(self, heads: Optional[Dict] = None) -> ListUserCostsResult:
         """
         one row per user with any measured cost in the window, across the same three
         sources the per user summary reads. an unreadable source is reported as
-        unavailable rather than leaving rows silently short.
+        unavailable rather than leaving rows silently short. with the users' stored
+        heads, desktops are only measured again for users whose stored figure can have moved.
         """
         window_start, window_end = self.usage_window()
         start_ms = window_start.int_timestamp * 1000
@@ -1051,7 +1106,10 @@ class MyCostsService:
 
         ai_unavailable = self._ai_by_user(row_for)
         jobs_unavailable = self._jobs_by_user(row_for, window_start, window_end)
-        desktops_unavailable = self._desktops_by_user(row_for, start_ms, end_ms)
+        desktops_unavailable = (
+            heads is None
+            or not self._desktops_from_heads(row_for, heads, window_start, window_end)
+        ) and self._desktops_by_user(row_for, start_ms, end_ms)
 
         listing = list(rows.values())
         for row in listing:
@@ -1199,7 +1257,14 @@ class MyCostsService:
         if hits is None:
             return True
 
-        hits = list(hits) + self._history_hits(None, start_ms, end_ms, all_users=True)
+        try:
+            history = self._history_hits(
+                None, start_ms, end_ms, all_users=True, strict=True
+            )
+        except Exception as e:
+            self.logger.warning(f'failed to read desktop session history: {e}')
+            return True
+        hits = list(hits) + history
 
         self._prefetch_running_hours(
             self._newest_per_session(hits),
@@ -1228,6 +1293,162 @@ class MyCostsService:
                 totals.unpriced_sessions, 0
             )
         return False
+
+    def _desktop_changes(self, start_ms: int, end_ms: int) -> Optional[Dict[str, int]]:
+        """owner -> last write among the documents the listing's search would return"""
+        index = self.context.config().get_string(
+            'virtual-desktop-controller.opensearch.dcv_session.alias'
+        )
+        if Utils.is_empty(index):
+            return None
+        composite = dict(
+            size=USER_BUCKETS,
+            sources=[{'owner': {'terms': {'field': 'owner.raw'}}}],
+        )
+        latest: Dict[str, int] = {}
+        while True:
+            response = self._search(
+                index,
+                {
+                    'size': 0,
+                    'query': {
+                        'bool': {
+                            'filter': [
+                                {'range': {'created_on': {'lte': end_ms}}},
+                                {'range': {'updated_on': {'gte': start_ms}}},
+                            ]
+                        }
+                    },
+                    'aggs': {
+                        'owners': {
+                            'composite': composite,
+                            'aggs': {'latest': {'max': {'field': 'updated_on'}}},
+                        }
+                    },
+                },
+            )
+            if response is None:
+                return None
+            owners = response.get('aggregations', {}).get('owners', {})
+            for bucket in owners.get('buckets', []):
+                latest[bucket['key']['owner']] = int(bucket['latest']['value'] or 0)
+            if not owners.get('after_key') or not owners.get('buckets'):
+                return latest
+            composite['after'] = owners['after_key']
+
+    def _desktops_from_heads(self, row_for, heads, window_start, window_end) -> bool:
+        """
+        each user's desktops from the figure the collector stored for this same window.
+        it still holds unless a desktop is live or a document changed since; those users
+        are measured now, the same way. False: too many of them to be worth it, or the
+        search cannot say which: the caller reads everything.
+
+        ponytail: a head with no listing for this window (a deleted account, a history-only
+        owner) is measured on every view. Past half the heads this path gives way to the full
+        read, with the same numbers. Add a stored marker for them if that read becomes slow.
+        """
+        start_ms = window_start.int_timestamp * 1000
+        end_ms = window_end.int_timestamp * 1000
+        start_date = window_start.format('YYYY-MM-DD')
+        end_date = window_end.format('YYYY-MM-DD')
+        try:
+            changes = self._desktop_changes(start_ms, end_ms)
+        except Exception as e:
+            if not source_not_created(e):
+                self.logger.warning(f'failed to read desktop session changes: {e}')
+            return False
+        if changes is None:
+            return False
+
+        stored: Dict[str, Dict] = {}
+        measure = set()
+        for owner, head in heads.items():
+            entry = (head or {}).get('listing')
+            if (
+                entry
+                and entry.get('start_date') == start_date
+                and entry.get('end_date') == end_date
+            ):
+                stored[owner] = entry
+            elif not entry or entry.get('has_records'):
+                # a deleted account's head stays behind, for a window long gone
+                measure.add(owner)
+        for owner, entry in stored.items():
+            # a figure stored before 26.11.2 does not say, so it is not trusted either
+            if entry.get('live') or not entry.get('complete'):
+                measure.add(owner)
+        for owner, latest in changes.items():
+            entry = stored.get(owner)
+            if not entry or latest >= arrow.get(entry['as_of']).int_timestamp * 1000:
+                measure.add(owner)
+        if len(measure) * 2 > len(heads):
+            # the first run after an upgrade or midnight: one read beats one per user
+            return False
+
+        for owner in measure:
+            stored.pop(owner, None)
+        try:
+            found = (
+                self._desktop_hits(
+                    None,
+                    start_ms,
+                    end_ms,
+                    size=MAX_ADMIN_SESSIONS,
+                    owners=sorted(measure),
+                )
+                if measure
+                else []
+            )
+        except Exception as e:
+            if not source_not_created(e):
+                self.logger.warning(f'failed to read desktop sessions: {e}')
+            return False
+        if found is None or len(found) >= MAX_ADMIN_SESSIONS:
+            return False
+        by_owner: Dict[str, List] = {owner: [] for owner in measure}
+        for hit in found:
+            owner = Utils.get_value_as_string(
+                'owner', Utils.get_value_as_dict('_source', hit, {}), ''
+            )
+            if owner in by_owner:
+                by_owner[owner].append(hit)
+        try:
+            for owner, hits in by_owner.items():
+                hits.extend(self._history_hits(owner, start_ms, end_ms, strict=True))
+        except Exception as e:
+            self.logger.warning(f'failed to read desktop session history: {e}')
+            return False
+        # one bounded read for all of them, or this view waits a deadline per user
+        every_hit = [hit for hits in by_owner.values() for hit in hits]
+        self._prefetch_running_hours(
+            self._newest_per_session(every_hit),
+            self._runs_by_session(every_hit),
+            start_ms,
+            end_ms,
+            time.monotonic() + CPU_PREFETCH_SECONDS,
+        )
+        for owner, hits in by_owner.items():
+            if hits:
+                totals = self._desktop_totals(
+                    self._sessions_from(hits, start_ms, end_ms, prefetch=False)
+                )
+                stored[owner] = dict(
+                    session_count=totals.session_count,
+                    hours=totals.hours,
+                    cost=totals.cost,
+                    unpriced_sessions=totals.unpriced_sessions,
+                    has_records=True,
+                )
+        for owner, entry in stored.items():
+            if entry.get('has_records'):
+                row = row_for(owner)
+                row.desktop_session_count += Utils.get_as_int(entry['session_count'], 0)
+                row.desktop_hours += Utils.get_as_float(entry['hours'], 0.0)
+                row.desktop_cost += Utils.get_as_float(entry['cost'], 0.0)
+                row.desktop_unpriced_sessions += Utils.get_as_int(
+                    entry['unpriced_sessions'], 0
+                )
+        return True
 
     @staticmethod
     def _stop_time(source: Dict, state: str, updated_on: int, end_ms: int):

@@ -16,10 +16,16 @@ Test Cases for AccountsService
 from ideaclustermanager import AppContext
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
+from ideaclustermanagertests.fake_secrets_manager import client_error
 
 import botocore.exceptions
+import ldap
+import os
 import pytest
+import re
+import time
 from typing import Optional
+from unittest.mock import Mock
 
 
 class AccountsTestContext:
@@ -771,3 +777,686 @@ def test_repair_home_ownership_request_defaults_and_validation():
         RepairHomeOwnershipRequest(username='user', dry_run='false')
     with pytest.raises(ValueError):
         RepairHomeOwnershipRequest(username='')
+
+
+def test_a_repeated_membership_change_is_not_dropped_as_a_duplicate(
+    context: AppContext, monkeypatch
+):
+    # the queue drops a repeated dedupe id for five minutes: remove, add, remove
+    sent = []
+    monkeypatch.setattr(
+        context.accounts.task_manager,
+        'send',
+        lambda **kwargs: sent.append(kwargs),
+    )
+    for operation in ('remove', 'add', 'remove'):
+        context.accounts.send_group_membership_updated('group', 'user', operation)
+    dedupe_ids = [message['message_dedupe_id'] for message in sent]
+    assert all(dedupe_ids)
+    assert len(set(dedupe_ids)) == 3
+
+
+def deletable_user(context, monkeypatch, username):
+    context.accounts.create_user(
+        user=User(
+            username=username,
+            email=f'{username}@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
+    directory = Mock(wraps=context.ldap_client)
+    directory.is_readonly.return_value = False
+    directory.is_existing_user.return_value = True
+    directory.is_existing_group.return_value = True
+    directory.is_sudo_user.return_value = False
+    monkeypatch.setattr(context, 'ldap_client', directory)
+    monkeypatch.setattr(context.accounts, 'ldap_client', directory)
+    return directory
+
+
+def test_deleting_a_user_removes_the_directory_account_without_the_queue(
+    context: AppContext, monkeypatch
+):
+    # the queue drops a deleted user's tasks, so nothing queued can be relied on
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted1')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    context.accounts.delete_user('accounts_deleted1')
+    directory.delete_user.assert_called_once_with('accounts_deleted1')
+    directory.remove_user_from_group.assert_called_once_with(
+        ['accounts_deleted1'], 'default-project-group'
+    )
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted1'
+    )
+    assert context.accounts.user_dao.get_user('accounts_deleted1') is None
+
+
+def test_deleting_a_user_stops_while_the_directory_refuses(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted2')
+    directory.delete_user.side_effect = RuntimeError('directory down')
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user('accounts_deleted2')
+    left = context.accounts.user_dao.get_user('accounts_deleted2')
+    assert left['enabled'] is False
+    # the memberships did go, and the record says so should the user be enabled again
+    assert 'default-project-group' not in left['additional_groups']
+    # a member the directory does not have is no reason to stop
+    directory.delete_user.side_effect = None
+    directory.remove_user_from_group.side_effect = ldap.NO_SUCH_ATTRIBUTE()
+    context.accounts.delete_user('accounts_deleted2')
+    assert context.accounts.user_dao.get_user('accounts_deleted2') is None
+
+
+def test_deleting_a_disabled_user_leaves_no_group_membership(
+    context: AppContext, monkeypatch
+):
+    # removal from groups is refused for a disabled user, so delete does it itself
+    deletable_user(context, monkeypatch, 'accounts_deleted3')
+    context.accounts.disable_user('accounts_deleted3')
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert 'accounts_deleted3' in members('default-project-group')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    context.accounts.delete_user('accounts_deleted3')
+    assert 'accounts_deleted3' not in members('default-project-group')
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted3'
+    )
+
+
+def test_deleting_a_user_survives_its_queued_copy_removing_the_account_first(
+    context: AppContext, monkeypatch
+):
+    # disabling queues the same removal; the consumer can win between check and delete
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted4')
+    directory.is_sudo_user.return_value = True
+    for removal in ('delete_group', 'delete_user', 'remove_sudo_user'):
+        getattr(directory, removal).side_effect = ldap.NO_SUCH_OBJECT()
+    context.accounts.delete_user('accounts_deleted4')
+    directory.delete_user.assert_called_once_with('accounts_deleted4')
+    assert context.accounts.user_dao.get_user('accounts_deleted4') is None
+
+
+def test_deleting_a_user_again_resumes_the_group_removal(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted5')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    directory.remove_user_from_group.side_effect = ldap.SERVER_DOWN()
+    with pytest.raises(ldap.SERVER_DOWN):
+        context.accounts.delete_user('accounts_deleted5')
+    removed_from_projects.assert_not_called()
+    left = context.accounts.user_dao.get_user('accounts_deleted5')
+    assert 'default-project-group' in left['additional_groups']
+
+    directory.remove_user_from_group.reset_mock(side_effect=True)
+    context.accounts.delete_user('accounts_deleted5')
+    directory.remove_user_from_group.assert_called_once_with(
+        ['accounts_deleted5'], 'default-project-group'
+    )
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted5'
+    )
+    assert context.accounts.user_dao.get_user('accounts_deleted5') is None
+
+
+@pytest.mark.parametrize(
+    'provider, kept', [('aws_managed_activedirectory', True), ('openldap', False)]
+)
+def test_deleting_a_user_whose_directory_account_is_kept_leaves_its_memberships(
+    context: AppContext, monkeypatch, provider, kept
+):
+    username = 'accounts_kept_ad' if kept else 'accounts_kept_ldap'
+    directory = deletable_user(context, monkeypatch, username)
+    config = context.config()
+    get_string = config.get_string
+    monkeypatch.setattr(
+        config,
+        'get_string',
+        lambda key, *args, **kwargs: (
+            provider
+            if key == 'directoryservice.provider'
+            else get_string(key, *args, **kwargs)
+        ),
+    )
+    # as the reconciler disables a user it found disabled in the directory
+    context.accounts.disable_user(username, preserve_directory=True)
+    send = Mock(wraps=context.accounts.task_manager.send)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    context.accounts.delete_user(username)
+    assert directory.remove_user_from_group.called is not kept
+    assert directory.delete_user.called is not kept
+    # the account's own directory group stays or goes with the account
+    queued_groups = [
+        call.kwargs['payload']['group_name']
+        for call in send.call_args_list
+        if call.kwargs['task_name'] == 'accounts.sync-group'
+    ]
+    assert (f'{username}-user-group' in queued_groups) is not kept
+    # the cluster's own records go either way
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert username not in members('default-project-group')
+    assert context.accounts.group_dao.get_group(f'{username}-user-group') is None
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def in_cluster_group(context, monkeypatch, username, group_name):
+    # administrators and managers are user pool groups; sign-in reads them there
+    from ideadatamodel import constants
+
+    context.accounts.group_dao.create_group(
+        {
+            'group_name': group_name,
+            'title': group_name,
+            'gid': 5990,
+            'group_type': constants.GROUP_TYPE_CLUSTER,
+            'enabled': True,
+        }
+    )
+    context.accounts.add_users_to_group([username], group_name)
+    remove = Mock()
+    monkeypatch.setattr(
+        context.aws().cognito_idp(),
+        'admin_remove_user_from_group',
+        remove,
+        raising=False,
+    )
+    return remove
+
+
+def test_a_stopped_delete_does_not_leave_user_pool_rights_the_record_no_longer_lists(
+    context: AppContext, monkeypatch
+):
+    username, group_name = 'accounts_deleted6', 'accounts-deleted6-cluster-group'
+    directory = deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    directory.delete_user.side_effect = RuntimeError('directory down')
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user(username)
+    assert (
+        group_name
+        not in context.accounts.user_dao.get_user(username)['additional_groups']
+    )
+    removed_from_pool.assert_called_once()
+    assert removed_from_pool.call_args.kwargs['Username'] == username
+    assert removed_from_pool.call_args.kwargs['GroupName'] == group_name
+
+
+@pytest.mark.parametrize('gone', ['UserNotFoundException', 'ResourceNotFoundException'])
+def test_deleting_a_user_the_user_pool_no_longer_has_still_finishes(
+    context: AppContext, monkeypatch, gone
+):
+    username = f'accounts_deleted7{gone[0].lower()}'
+    group_name = f'{username}-cluster-group'
+    deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    removed_from_pool.side_effect = botocore.exceptions.ClientError(
+        {'Error': {'Code': gone}}, 'AdminRemoveUserFromGroup'
+    )
+    context.accounts.delete_user(username)
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def test_a_user_pool_that_refuses_the_group_removal_stops_the_delete_with_the_group_listed(
+    context: AppContext, monkeypatch
+):
+    username, group_name = 'accounts_deleted8', 'accounts-deleted8-cluster-group'
+    deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    removed_from_pool.side_effect = botocore.exceptions.ClientError(
+        {'Error': {'Code': 'TooManyRequestsException'}}, 'AdminRemoveUserFromGroup'
+    )
+    with pytest.raises(botocore.exceptions.ClientError):
+        context.accounts.delete_user(username)
+    # record and member list agree on what is left
+    left = context.accounts.user_dao.get_user(username)
+    assert group_name in left['additional_groups']
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert username in members(group_name)
+
+    removed_from_pool.side_effect = None
+    context.accounts.delete_user(username)
+    assert username not in members(group_name)
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def test_a_directory_that_refuses_a_group_removal_leaves_the_member_list_showing_it(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted9')
+    directory.remove_user_from_group.side_effect = ldap.SERVER_DOWN()
+    with pytest.raises(ldap.SERVER_DOWN):
+        context.accounts.delete_user('accounts_deleted9')
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert 'accounts_deleted9' in members('default-project-group')
+
+
+def stopped_after_the_user_group_went(context, monkeypatch, username):
+    deletable_user(context, monkeypatch, username)
+    delete_record = context.accounts.user_dao.delete_user
+    monkeypatch.setattr(
+        context.accounts.user_dao,
+        'delete_user',
+        Mock(side_effect=RuntimeError('table throttled')),
+    )
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user(username)
+    monkeypatch.setattr(context.accounts.user_dao, 'delete_user', delete_record)
+    assert context.accounts.group_dao.get_group(f'{username}-user-group') is None
+
+
+def test_a_delete_that_stopped_after_the_user_group_went_can_be_run_again(
+    context: AppContext, monkeypatch
+):
+    stopped_after_the_user_group_went(context, monkeypatch, 'accounts_deleted10')
+    context.accounts.delete_user('accounts_deleted10')
+    assert context.accounts.user_dao.get_user('accounts_deleted10') is None
+
+
+def test_a_user_whose_delete_stopped_after_its_accounts_went_cannot_be_enabled(
+    context: AppContext, monkeypatch
+):
+    stopped_after_the_user_group_went(context, monkeypatch, 'accounts_deleted11')
+    with pytest.raises(exceptions.SocaException) as refused:
+        context.accounts.enable_user('accounts_deleted11')
+    assert refused.value.error_code == errorcodes.AUTH_INVALID_OPERATION
+    assert context.accounts.user_dao.get_user('accounts_deleted11')['enabled'] is False
+
+
+@pytest.fixture
+def secrets(context: AppContext, monkeypatch, tmp_path):
+    # no file is ever written for a password set by this release
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    monkeypatch.setattr(context.accounts, '_next_password_secret_sweep', 0.0)
+    fake = context.aws().secretsmanager()
+    monkeypatch.setattr(fake, 'secrets', {})
+    monkeypatch.setattr(fake, 'created', [])
+    monkeypatch.setattr(fake, 'deleted', [])
+    monkeypatch.setattr(fake, 'list_calls', [])
+    monkeypatch.setattr(fake, 'failing', {})
+    monkeypatch.setattr(fake, 'undeletable', set())
+    return fake
+
+
+PASSWORD_TAGS = {
+    # not idea:ModuleName: the role may overwrite any secret of the cluster that has it
+    'idea:ClusterName': 'idea-mock',
+    'idea:Purpose': 'password-sync',
+}
+
+
+@pytest.mark.parametrize('kms_key_id', [None, 'customer-key-id'])
+def test_a_password_waits_for_its_task_in_a_secret_and_never_in_a_file(
+    context: AppContext, monkeypatch, tmp_path, secrets, kms_key_id
+):
+    send = Mock()
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    if kms_key_id:
+        context.config().put('cluster.secretsmanager.kms_key_id', kms_key_id)
+    try:
+        context.accounts.change_ldap_password('user', 'secret-value')
+    finally:
+        context.config().put('cluster.secretsmanager.kms_key_id', None)
+
+    (request,) = secrets.created
+    assert re.fullmatch(r'idea-mock-password-sync-[0-9a-f-]{36}', request['Name'])
+    assert request['SecretString'] == 'secret-value'
+    assert {tag['Key']: tag['Value'] for tag in request['Tags']} == PASSWORD_TAGS
+    # the cluster's key when it has one, else the account's default key
+    assert request.get('KmsKeyId') == kms_key_id
+    assert set(request) == {'Name', 'SecretString', 'Tags'} | (
+        {'KmsKeyId'} if kms_key_id else set()
+    )
+    (arn,) = secrets.secrets
+    queued = send.call_args_list[-1].kwargs
+    assert queued['task_name'] == 'accounts.sync-password'
+    assert queued['payload'] == {'username': 'user', 'password_secret': arn}
+    assert 'secret-value' not in str(send.call_args_list)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('failing', ['directory', 'queue'])
+def test_a_password_that_could_not_be_queued_leaves_no_secret(
+    context: AppContext, monkeypatch, tmp_path, secrets, failing
+):
+    if failing == 'directory':
+        monkeypatch.setattr(
+            context.accounts.ldap_client,
+            'is_existing_user',
+            Mock(side_effect=RuntimeError('directory down')),
+        )
+    else:
+        monkeypatch.setattr(
+            context.accounts.task_manager,
+            'send',
+            Mock(side_effect=RuntimeError('queue unavailable')),
+        )
+    with pytest.raises(RuntimeError):
+        context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_secret_that_cannot_be_deleted_does_not_hide_why_the_queue_failed(
+    context: AppContext, monkeypatch, secrets
+):
+    monkeypatch.setattr(
+        context.accounts.task_manager,
+        'send',
+        Mock(side_effect=RuntimeError('queue unavailable')),
+    )
+    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
+    with pytest.raises(RuntimeError, match='queue unavailable'):
+        context.accounts.change_ldap_password('user', 'secret-value')
+
+
+def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
+    context: AppContext, secrets
+):
+    prefix = 'idea-mock-password-sync-'
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=9.1)
+    kept = [
+        # a task moved into the password lane can be queued for twice the 4 days
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=8.9),
+        # each of the name and the two tags is required
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=9.1),
+        secrets.add(f'{prefix}untagged', age_days=9.1),
+        *(
+            secrets.add(
+                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=9.1
+            )
+            for n, key in enumerate(PASSWORD_TAGS)
+        ),
+    ]
+
+    context.accounts.change_ldap_password('user', 'secret-value')
+
+    assert secrets.deleted == [old]
+    assert set(kept) < set(secrets.secrets)
+    assert secrets.list_calls == [
+        {
+            'Filters': [
+                {'Key': 'name', 'Values': [prefix]},
+                {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+            ]
+        }
+    ]
+    # not on every password: the next look is an hour away
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+
+
+def test_a_cluster_where_nobody_sets_a_password_still_sweeps(
+    context: AppContext, secrets
+):
+    """the secrets health collector, on its own thread, sweeps with the list it made"""
+    from ideaclustermanager.app.metrics.health_collectors import SecretsCollector
+
+    prefix = 'idea-mock-password-sync-'
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=9.1)
+    kept = [
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=8.9),
+        # the collector's tag filter matches by prefix: another cluster's
+        secrets.add(
+            'idea-mock2-password-sync-old',
+            tags={**PASSWORD_TAGS, 'idea:ClusterName': 'idea-mock2'},
+            age_days=9.1,
+        ),
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=9.1),
+    ]
+    metrics = Mock()
+
+    SecretsCollector(context).collect(metrics)
+
+    assert secrets.deleted == [old]
+    assert set(kept) <= set(secrets.secrets)
+    # one list served the gauges and the sweep
+    assert secrets.list_calls == [
+        {
+            'Filters': [
+                {'Key': 'tag-key', 'Values': ['idea:ClusterName']},
+                {'Key': 'tag-value', 'Values': ['idea-mock']},
+            ]
+        }
+    ]
+    # counted as it was listed, before the sweep
+    metrics.level.assert_any_call('secret.password_sync_waiting', 3)
+    # a password set within the hour does not look again
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+
+
+def test_the_collectors_sweep_does_not_wait_for_the_hour_a_password_set_started(
+    context: AppContext, secrets
+):
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+    old = secrets.add('idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1)
+    listed = [dict(secret) for secret in secrets.secrets.values()]
+
+    context.accounts.remove_stray_password_secrets(listed=listed)
+
+    assert secrets.deleted == [old]
+    assert len(secrets.list_calls) == 1
+
+
+def test_a_sweep_while_another_is_looking_is_skipped(context: AppContext, secrets):
+    old = secrets.add('idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1)
+    listed = [dict(secret) for secret in secrets.secrets.values()]
+    with context.accounts._password_secret_sweep:
+        context.accounts.remove_stray_password_secrets(listed=listed)
+        context.accounts.remove_stray_password_secrets()
+    assert (secrets.deleted, secrets.list_calls) == ([], [])
+    context.accounts.remove_stray_password_secrets(listed=listed)
+    assert secrets.deleted == [old]
+
+
+def test_a_stray_secret_that_cannot_be_deleted_does_not_keep_the_others(
+    context: AppContext, monkeypatch, secrets
+):
+    prefix = 'idea-mock-password-sync-'
+    stuck, old = (
+        secrets.add(f'{prefix}{name}', tags=PASSWORD_TAGS, age_days=10)
+        for name in ('a-stuck', 'b-old')
+    )
+    secrets.undeletable.add(stuck)
+    warning = Mock()
+    monkeypatch.setattr(context.accounts.logger, 'warning', warning)
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert secrets.deleted == [old]
+    warning.assert_called_once_with(
+        'could not delete a stray password secret: AccessDeniedException'
+    )
+
+
+def user_pool_password_changes(context, user_pool):
+    from ideadatamodel.auth import RespondToAuthChallengeRequest
+
+    accounts = context.accounts
+    return {
+        'change': (
+            user_pool.change_password,
+            lambda: accounts.change_password('token', 'user', 'old', 'secret-value'),
+        ),
+        'forgot': (
+            user_pool.confirm_forgot_password,
+            lambda: accounts.confirm_forgot_password('user', 'secret-value', '123456'),
+        ),
+        'challenge': (
+            user_pool.respond_to_auth_challenge,
+            lambda: accounts.respond_to_auth_challenge(
+                RespondToAuthChallengeRequest(
+                    username='user',
+                    challenge_name='NEW_PASSWORD_REQUIRED',
+                    session='session',
+                    new_password='secret-value',
+                )
+            ),
+        ),
+    }
+
+
+@pytest.fixture
+def password_change(context: AppContext, monkeypatch, secrets, request):
+    user_pool, send = Mock(), Mock()
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    in_user_pool, change = user_pool_password_changes(context, user_pool)[request.param]
+    return secrets, in_user_pool, change, send
+
+
+every_password_change = pytest.mark.parametrize(
+    'password_change', ['change', 'forgot', 'challenge'], indirect=True
+)
+
+
+@every_password_change
+def test_a_password_the_secret_cannot_hold_is_not_given_to_the_user_pool(
+    password_change,
+):
+    secrets, in_user_pool, change, send = password_change
+    secrets.failing['CreateSecret'] = client_error(
+        'AccessDeniedException', 'CreateSecret', 'arn:aws:iam::123456789012:role/r'
+    )
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    # the sign-in page calls two of these: nothing of the AWS error reaches it
+    assert (
+        refused.value.message == 'The password could not be set right now. Try again.'
+    )
+    assert 'arn:' not in str(refused.value) and 'Access' not in str(refused.value)
+    assert refused.value.__suppress_context__
+    # nothing changed: sign-in and the directory still agree on the old password
+    in_user_pool.assert_not_called()
+    send.assert_not_called()
+
+
+@every_password_change
+def test_a_password_the_user_pool_refuses_leaves_no_secret(password_change):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = RuntimeError('wrong old password')
+    with pytest.raises(RuntimeError):
+        change()
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    send.assert_not_called()
+
+
+@every_password_change
+def test_a_password_the_user_pool_took_is_queued_with_the_secret_made_before(
+    password_change,
+):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = lambda *_, **__: Mock(held=list(secrets.secrets))
+    result = change()
+    (arn,) = secrets.secrets
+    if result is not None:
+        # the secret was there when the user pool was asked
+        assert result.held == [arn]
+    assert send.call_args_list[-1].kwargs['payload'] == {
+        'username': 'user',
+        'password_secret': arn,
+    }
+
+
+@pytest.mark.parametrize('password_change', ['challenge'], indirect=True)
+def test_a_challenge_that_sets_no_password_leaves_no_secret(password_change):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.return_value = Mock(auth=None)
+    assert change().auth is None
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    send.assert_not_called()
+
+
+def test_a_sweep_that_cannot_list_secrets_does_not_stop_a_password_change(
+    context: AppContext, secrets
+):
+    secrets.failing['ListSecrets'] = client_error('AccessDeniedException', 'List')
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.secrets) == 1
+
+
+def stranded(folder, age_days, names=('password.txt',)):
+    folder.mkdir()
+    for name in names:
+        (folder / name).write_text('secret-value')
+    then = time.time() - age_days * 24 * 3600
+    for path in (*folder.iterdir(), folder):
+        os.utime(path, (then, then))
+    return folder
+
+
+def test_a_password_file_no_task_is_left_to_read_is_removed(
+    context: AppContext, tmp_path, secrets
+):
+    # a release that gave up on a task without cleaning up after it left the file
+    old = stranded(tmp_path / 'tmpold', 15)
+    # the queue can still hold the task of anything younger than its longest retention
+    waiting = stranded(tmp_path / 'tmpwaiting', 13)
+    # only what a password change makes is removed
+    other = stranded(tmp_path / 'tmpother', 15, names=('password.txt', 'notes'))
+    not_a_password = stranded(tmp_path / 'tmpnotes', 15, names=('notes',))
+    (tmp_path / 'elsewhere').mkdir()
+    target = stranded(tmp_path / 'elsewhere' / 'kept', 15)
+    (tmp_path / 'tmplink').symlink_to(target, target_is_directory=True)
+    linked = tmp_path / 'tmplinked'
+    linked.mkdir()
+    (linked / 'password.txt').symlink_to(target / 'password.txt')
+
+    context.accounts.change_ldap_password('user', 'secret-value')
+
+    assert not old.exists()
+    for kept in (waiting, other, not_a_password, target, linked):
+        assert kept.exists(), kept
+    assert (target / 'password.txt').read_text() == 'secret-value'
+    assert len(list(tmp_path.glob('*/password.txt'))) == 4
+
+
+def test_a_sweep_that_cannot_read_the_folder_does_not_stop_a_password_change(
+    context: AppContext, monkeypatch, secrets
+):
+    monkeypatch.setattr(os, 'scandir', Mock(side_effect=OSError('stale file handle')))
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.secrets) == 1
+
+
+def test_a_new_user_does_not_inherit_rows_an_earlier_user_of_the_name_left(
+    context: AppContext,
+):
+    # before 26.11.2 deleting a disabled user left its group and project rows
+    username = 'accounts_reused1'
+    members = context.accounts.group_members_dao
+    projects = context.projects.user_projects_dao
+    members.create_membership('leftover-group', username)
+    members.create_membership('leftover-group', 'accounts_someone_else')
+    projects.create_user_project(project_id='leftover-project', username=username)
+    context.accounts.create_user(
+        user=User(
+            username=username,
+            email=f'{username}@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
+    assert members.get_usernames_in_group('leftover-group') == ['accounts_someone_else']
+    assert not projects.is_user_in_project(username, 'leftover-project')
+    assert username in members.get_usernames_in_group('default-project-group')

@@ -13,6 +13,7 @@
 
 import React, {Component} from "react";
 import {
+    Alert,
     Box,
     Button,
     ButtonDropdown,
@@ -27,13 +28,17 @@ import {
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
 import IdeaTable, {IdeaTableRef} from "../table";
 import {TableProps} from "@cloudscape-design/components/table";
-import {SocaDateRange, SocaFilter, SocaListingPayload, SocaPaginator, SocaUserInputParamMetadata} from "../../client/data-model";
+import {SocaDateRange, SocaFilter, SocaListingPayload, SocaPaginator, SocaSortBy, SocaUserInputParamMetadata} from "../../client/data-model";
 import Utils from "../../common/utils";
+import {AppContext} from "../../common";
+import {reportClientError} from "../../common/client-error-reporter";
 import {CollectionPreferencesProps} from "@cloudscape-design/components/collection-preferences";
 
 // the backing list calls contend with server-side locks, so a poll can never be
 // faster than this no matter what a caller asks for
 export const MIN_AUTO_REFRESH_INTERVAL_SECONDS = 30
+const DEFAULT_PAGE_SIZE = 30
+const MAX_REACHABLE_ROWS = 10000
 
 export interface IdeaListViewAction {
     id: string
@@ -43,9 +48,14 @@ export interface IdeaListViewAction {
     disabledReason?: string
 }
 
+/** exportValue is what a CSV export writes for a cell that is not plain text. */
+export type IdeaListViewColumn<T = any> = TableProps.ColumnDefinition<T> & {exportValue?: (item: T) => string}
+
 export interface IdeaListViewProps<T = any> {
     title?: string
     empty?: React.ReactNode
+    // shown instead of empty when a search found nothing
+    emptySearch?: React.ReactNode
     description?: string
     primaryActionDisabled?: boolean
     primaryAction?: IdeaListViewAction
@@ -64,6 +74,7 @@ export interface IdeaListViewProps<T = any> {
     onPreferenceChange?: (detail: CollectionPreferencesProps.Preferences<T>) => void
     preferencesKey?: string
     showFilters?: boolean
+    filteringPlaceholder?: string
     filterType?: 'text' | 'property' | 'select'
     filters?: SocaFilter[]
     selectFilters?: SocaUserInputParamMetadata[]
@@ -88,6 +99,10 @@ export interface IdeaListViewProps<T = any> {
     stickyHeader?: boolean
     defaultSortingColumn?: string;
     defaultSortingDescending?: boolean;
+    // The columns the backend can order across every row: column id to the sort_by key. The
+    // only sortable columns then; the page sends getSortBy() on its request. Without this
+    // prop, sorting happens in the browser, so it is offered only when one page holds every row.
+    serverSort?: {columns: {[columnId: string]: string}, defaultColumn: string, defaultDescending?: boolean}
     enableExportToCsv?: boolean;
     csvFilename?: string | (() => string);
     onExportAllRecords?: () => Promise<any[]>;
@@ -104,7 +119,11 @@ export interface IdeaListViewState<T = any> {
     totalPages: number
     dateRangePickerValue?: DateRangePickerProps.Value
     lastRefreshedAt?: Date
+    fetchError?: string
     autoRefresh: boolean
+    exporting: boolean
+    sortBy?: SocaSortBy
+    searching: boolean
 
     listingRequest: IdeaListingRequestType
 }
@@ -121,6 +140,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
     table: React.RefObject<IdeaTableRef | null>
     private autoRefreshTimer?: ReturnType<typeof setInterval>
+    private latestFetchId = 0
 
     constructor(props: IdeaListViewProps) {
         super(props);
@@ -134,6 +154,9 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             currentPage: 1,
             totalPages: 1,
             autoRefresh: false,
+            exporting: false,
+            searching: false,
+            sortBy: this.defaultSortBy(),
             dateRangePickerValue: this.props.dateRange,
             listingRequest: {
                 filters: this.defaultFilters(),
@@ -143,18 +166,31 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         }
     }
 
+    private defaultSortBy = (): SocaSortBy | undefined => {
+        const serverSort = this.props.serverSort
+        if (!serverSort) {
+            return undefined
+        }
+        return {key: serverSort.columns[serverSort.defaultColumn], order: serverSort.defaultDescending ? 'desc' : 'asc'}
+    }
+
     private defaultFilters = () => {
         return []
     }
 
     private defaultPaginator = () => {
-        if (this.props.paginator) {
-            return this.props.paginator
+        const paginator = this.props.paginator ?? {start: 0, page_size: DEFAULT_PAGE_SIZE}
+        const saved = this.savedPageSize()
+        return saved == null ? paginator : {...paginator, page_size: saved}
+    }
+
+    // Only a page that offers the preference has one to honour.
+    private savedPageSize(): number | null {
+        if (!this.props.showPreferences || !this.props.preferencesKey) {
+            return null
         }
-        return {
-            start: 0,
-            page_size: 30
-        }
+        const saved = Number(AppContext.get().localStorage().getItem(`${this.props.preferencesKey}-table-pageSize`))
+        return Number.isInteger(saved) && saved > 0 ? saved : null
     }
 
     private defaultDateRange = () => {
@@ -269,7 +305,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
     getLastRefreshedLabel(): string {
         if (this.state.lastRefreshedAt == null) {
-            return 'Loading...'
+            return this.state.fetchError ? 'Not loaded' : 'Loading...'
         }
         return `Last updated ${this.state.lastRefreshedAt.toLocaleTimeString()}`
     }
@@ -277,23 +313,29 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
     fetchRecords() {
         if (this.props.onFetchRecords) {
             const onFetchRecords = this.props.onFetchRecords!
+            const fetchId = ++this.latestFetchId
             this.setState({
                 loading: true
             }, () => {
                 onFetchRecords().then(result => {
+                    // paging or filtering again before this answer arrived: this one is out of date
+                    if (fetchId !== this.latestFetchId) {
+                        return
+                    }
                     const listing = (result.listing) ? result.listing : []
                     delete result.listing
                     this.table.current?.clearSelectedItems()
                     this.setState({
                         selectedItems: [],
                         listing: listing,
+                        fetchError: undefined,
                         // stamped on success only: a failed refresh must not make
                         // the data on screen look newer than it is
                         lastRefreshedAt: new Date(),
                         listingRequest: {
                             ...this.state.listingRequest,
                             ...result,
-                            filters: (result.filters) ? result.filters : this.defaultFilters(),
+                            filters: result.filters ?? this.state.listingRequest.filters,
                             paginator: (result.paginator) ? result.paginator : this.defaultPaginator(),
                             dateRange: (result.date_range) ? result.date_range : this.defaultDateRange()
                         }
@@ -305,10 +347,17 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                 }).catch((error) => {
                     // leaves the previous listing and its last-updated time in place
                     console.error('Failed to fetch records:', error)
+                    if (fetchId !== this.latestFetchId) {
+                        return
+                    }
+                    this.setState({fetchError: error?.message || 'The request did not complete.'})
+                    reportClientError('list_load_failed', {error})
                 }).finally(() => {
-                    this.setState({
-                        loading: false
-                    })
+                    if (fetchId === this.latestFetchId) {
+                        this.setState({
+                            loading: false
+                        })
+                    }
                 })
             })
         }
@@ -321,12 +370,21 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         return 50
     }
 
+    // the search index stops at 10,000 rows however many it counts: a page past that fails
+    private reachablePages(): number {
+        return Math.floor(MAX_REACHABLE_ROWS / this.getPageSize())
+    }
+
+    isPastReach(): boolean {
+        return (this.state.listingRequest.paginator.total ?? 0) > MAX_REACHABLE_ROWS
+    }
+
     getTotalPages(): number {
         if (this.isOpenEndedPaging()) {
             return this.state.totalPages
         }
         if (this.state.listingRequest.paginator.total != null) {
-            return Math.ceil(this.state.listingRequest.paginator.total / this.getPageSize())
+            return Math.min(Math.ceil(this.state.listingRequest.paginator.total / this.getPageSize()), this.reachablePages())
         }
         return 1
     }
@@ -339,11 +397,79 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         return this.state.listingRequest.paginator
     }
 
+    // onDateRange names the field the range applies to: without it the backend filters on
+    // no field at all and a page shows no rows.
     getDateRange(): SocaDateRange | undefined {
-        if (this.state.dateRangePickerValue) {
-            return Utils.convertToDateRange(this.state.dateRangePickerValue)!
+        const dateRange = Utils.convertToDateRange(this.state.dateRangePickerValue)
+        if (dateRange == null) {
+            return undefined
         }
-        return undefined
+        return this.props.onDateRange ? this.props.onDateRange(dateRange) : dateRange
+    }
+
+    /** The chosen range in words, for messages about it. */
+    getDateRangeLabel(): string {
+        const value = this.state.dateRangePickerValue
+        if (value == null) {
+            return 'all dates'
+        }
+        if (value.type === 'absolute') {
+            return `${value.startDate.slice(0, 10)} to ${value.endDate.slice(0, 10)}`
+        }
+        return value.amount === 1 ? `the last ${value.unit}` : `the last ${value.amount} ${value.unit}s`
+    }
+
+    // A new search, range or page size is a new list: an offset or cursor from the old one
+    // would land past its end and show no rows while the pager says page 1.
+    private firstPage(paginator: SocaPaginator = this.state.listingRequest.paginator): SocaPaginator {
+        return {...paginator, start: 0, cursor: undefined}
+    }
+
+    getSortBy(): SocaSortBy | undefined {
+        return this.state.sortBy
+    }
+
+    private holdsEveryRow(): boolean {
+        return this.state.currentPage === 1 && this.getTotalPages() <= 1 && !this.hasMorePages()
+    }
+
+    private usesClientSort(): boolean {
+        return !this.props.serverSort && this.holdsEveryRow()
+    }
+
+    // A column that cannot order every row offers no sort at all: an arrow over one page reads as the whole list.
+    private sortableColumns(): IdeaListViewProps['columnDefinitions'] {
+        const serverColumns = this.props.serverSort?.columns
+        return this.props.columnDefinitions?.map(column => {
+            const serverKey = serverColumns?.[column.id!]
+            if (serverKey) {
+                return {...column, sortingField: serverKey, sortingComparator: undefined}
+            }
+            return this.usesClientSort() ? column : {...column, sortingField: undefined, sortingComparator: undefined}
+        })
+    }
+
+    private buildServerSorting() {
+        if (!this.props.serverSort) {
+            return undefined
+        }
+        return {
+            sortingColumn: {sortingField: this.state.sortBy?.key},
+            sortingDescending: this.state.sortBy?.order === 'desc',
+            onSortingChange: (event: {detail: TableProps.SortingState<any>}) => {
+                this.setState({
+                    sortBy: {key: event.detail.sortingColumn.sortingField, order: event.detail.isDescending ? 'desc' : 'asc'},
+                    currentPage: 1,
+                    totalPages: 1,
+                    listingRequest: {
+                        ...this.state.listingRequest,
+                        paginator: this.firstPage()
+                    }
+                }, () => {
+                    this.fetchRecords()
+                })
+            }
+        }
     }
 
     getListingRequest(): IdeaListingRequestType {
@@ -393,6 +519,18 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     amount: 1,
                     unit: "month",
                     type: "relative"
+                },
+                {
+                    key: "previous-3-months",
+                    amount: 3,
+                    unit: "month",
+                    type: "relative"
+                },
+                {
+                    key: "previous-1-year",
+                    amount: 1,
+                    unit: "year",
+                    type: "relative"
                 }
             ]}
             isValidRange={(value) => {
@@ -411,8 +549,11 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     const dateRange = Utils.convertToDateRange(value)
                     if (dateRange == null) {
                         this.setState({
+                            currentPage: 1,
+                            totalPages: 1,
                             listingRequest: {
                                 ...this.state.listingRequest,
+                                paginator: this.firstPage(),
                                 dateRange: undefined
                             }
                         }, () => {
@@ -420,8 +561,11 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                         })
                     } else {
                         this.setState({
+                            currentPage: 1,
+                            totalPages: 1,
                             listingRequest: {
                                 ...this.state.listingRequest,
+                                paginator: this.firstPage(),
                                 dateRange: this.props.onDateRange(dateRange)
                             }
                         }, () => {
@@ -447,8 +591,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     return `Last ${e.amount} ${t}`;
                 },
                 formatUnit: (e, t) => (1 === t ? e : `${e}s`),
-                dateTimeConstraintText:
-                    "Range must be between 6 - 30 days. Use 24 hour format.",
+                dateTimeConstraintText: "Use 24 hour format.",
                 relativeModeTitle: "Relative range",
                 absoluteModeTitle: "Absolute range",
                 relativeRangeSelectionHeading: "Choose a range",
@@ -513,6 +656,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     <Button
                         variant="normal"
                         iconName="download"
+                        loading={this.state.exporting}
                         disabled={(!this.props.onFetchRecords && !this.props.onExportAllRecords) || this.state.loading}
                         onClick={() => this.exportToCsv()}>
                         CSV Export
@@ -543,12 +687,18 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                 return `(${this.state.listingRequest.paginator.total})`
             }
         }
+        // a cursor-paged API sends no total: the first page is the whole list when there is no next one
+        if (this.state.lastRefreshedAt != null && this.state.currentPage === 1 && !this.hasMorePages()
+            && Utils.isEmpty(this.state.listingRequest?.paginator?.cursor)) {
+            return `(${this.state.listing.length})`
+        }
     }
 
     buildTable() {
         return <IdeaTable
             ref={this.table}
-            empty={this.props.empty}
+            empty={this.state.fetchError ? <Box textAlign="center" color="inherit">This list could not be loaded.</Box>
+                : this.state.searching && this.props.emptySearch ? this.props.emptySearch : this.props.empty}
             header={
                 <Header
                     variant="awsui-h1-sticky"
@@ -559,6 +709,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             variant={this.props.variant}
             stickyHeader={this.props.stickyHeader}
             loading={this.state.loading}
+            loadingText="Loading"
             listing={this.state.listing}
             selectedItems={this.props.selectedItems}
             selectionType={this.props.selectionType}
@@ -570,6 +721,8 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             filteringOptions={this.props.filteringOptions}
             defaultSortingColumn={this.props.defaultSortingColumn}
             defaultSortingDescending={this.props.defaultSortingDescending}
+            serverSorting={this.buildServerSorting()}
+            clientSortingDisabled={!this.usesClientSort()}
             onFilter={(filters) => {
                 let applicableFilters
                 if (this.props.onFilter) {
@@ -582,8 +735,10 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     selectedItems: [],
                     currentPage: 1,
                     totalPages: 1,
+                    searching: applicableFilters.some(filter => Utils.isNotEmpty(filter.value)),
                     listingRequest: {
                         ...this.state.listingRequest,
+                        paginator: this.firstPage(),
                         filters: applicableFilters
                     }
                 }, () => {
@@ -595,7 +750,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     const request = this.props.onFilterPropertyChange(query)
                     this.setState({
                         listing: [],
-                        listingRequest: request,
+                        listingRequest: {...request, paginator: this.firstPage(request.paginator)},
                         selectedItems: [],
                         currentPage: 1,
                         totalPages: 1
@@ -606,13 +761,17 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
             }}
             showPreferences={this.props.showPreferences}
             preferencesKey={this.props.preferencesKey}
+            defaultPageSize={this.props.paginator?.page_size ?? DEFAULT_PAGE_SIZE}
+            filteringPlaceholder={this.props.filteringPlaceholder}
             onPreferenceChange={(detail) => {
                 let shouldReload = detail.pageSize !== this.state?.listingRequest?.paginator?.page_size
                 this.setState({
+                    currentPage: shouldReload ? 1 : this.state.currentPage,
+                    totalPages: shouldReload ? 1 : this.state.totalPages,
                     listingRequest: {
                         ...this.state.listingRequest,
                         paginator: {
-                            ...this.state.listingRequest.paginator,
+                            ...(shouldReload ? this.firstPage() : this.state.listingRequest.paginator),
                             page_size: detail.pageSize
                         }
                     }
@@ -635,7 +794,7 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     }
                 })
             }}
-            columnDefinitions={this.props.columnDefinitions}
+            columnDefinitions={this.sortableColumns()}
             showPaginator={this.props.showPaginator}
             currentPage={this.state.currentPage}
             totalPages={this.getTotalPages()}
@@ -682,6 +841,16 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         />
     }
 
+    // A failed fetch must not read as "no records": say so, keep what was on screen, and offer the retry.
+    buildFetchError() {
+        const shownAt = this.state.listing.length > 0 ? this.state.lastRefreshedAt : undefined
+        return <Alert type="error"
+                      header="This list could not be loaded"
+                      action={<Button onClick={() => this.fetchRecords()}>Try again</Button>}>
+            {this.state.fetchError}{shownAt && ` The rows below are from ${shownAt.toLocaleTimeString()}.`}
+        </Alert>
+    }
+
     buildFlashBar() {
         return <Flashbar items={this.state.flashBarItems}
         />
@@ -712,9 +881,10 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
      * Export all records to CSV (fetches all data regardless of current pagination)
      */
     private async exportToCsv() {
-        if (!this.props.columnDefinitions) {
+        if (!this.props.columnDefinitions || this.state.exporting) {
             return;
         }
+        this.setState({exporting: true});
 
         const columnDefinitions = this.props.columnDefinitions;
 
@@ -779,9 +949,12 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                     // Get raw cell value
                     let cellValue = '';
 
-                    // First, check if there's a sortingField - this represents the raw data value
-                    if ((col as any).sortingField && (item as any)[(col as any).sortingField] !== undefined) {
-                        cellValue = String((item as any)[(col as any).sortingField] || '');
+                    // A column whose cell is not plain text says what to export. Otherwise a
+                    // sortingField is the raw data value.
+                    if ((col as IdeaListViewColumn).exportValue) {
+                        cellValue = (col as IdeaListViewColumn).exportValue!(item);
+                    } else if ((col as any).sortingField && (item as any)[(col as any).sortingField] !== undefined) {
+                        cellValue = String((item as any)[(col as any).sortingField] ?? '');
                     } else if (typeof col.cell === 'function') {
                         // If cell is a React component, try to extract text
                         const cellContent = col.cell(item);
@@ -789,10 +962,10 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                             // For React elements, use a simplified text extraction
                             cellValue = this.extractTextFromReactElement(cellContent);
                         } else {
-                            cellValue = String(cellContent || '');
+                            cellValue = String(cellContent ?? '');
                         }
                     } else if (col.id && (item as any)[col.id] !== undefined) {
-                        cellValue = String((item as any)[col.id] || '');
+                        cellValue = String((item as any)[col.id] ?? '');
                     }
 
                     // Escape CSV value: wrap in quotes and escape existing quotes
@@ -822,7 +995,9 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
         } catch (error) {
             console.error('CSV Export failed:', error);
-            // Don't show flash messages here as they can interfere with parent component's flash system
+            this.setFlashMessage(`CSV export failed: ${(error as any)?.message || 'the request did not complete.'} Try again.`, 'error');
+        } finally {
+            this.setState({exporting: false});
         }
     }
 
@@ -863,7 +1038,9 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
         return (
             <div>
                 {this.state.flashBarItems.length > 0 && this.buildFlashBar()}
+                {this.state.fetchError && this.buildFetchError()}
                 {this.buildTable()}
+                {this.isPastReach() && <Box variant="small" color="text-body-secondary" padding={{top: 'xs'}}>Pages stop at the first 10,000 rows. Search or narrow the date range to see the rest.</Box>}
                 {this.props.children}
             </div>
         )

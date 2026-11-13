@@ -17,6 +17,7 @@ import IdeaListView from "../../components/list-view";
 import {SchedulerAdminClient} from "../../client";
 import {AppContext} from "../../common";
 import {HpcQueueProfile} from '../../client/data-model'
+import {queueLimitLabel} from "./hpc-utils";
 import IdeaSplitPanel from "../../components/split-panel";
 import {TableProps} from "@cloudscape-design/components/table";
 import Utils from "../../common/utils";
@@ -74,9 +75,9 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
     },
     {
         id: 'is-enabled',
-        header: 'Is Enabled?',
+        header: 'Enabled',
         cell: queue => {
-            return (queue.enabled) ? <StatusIndicator type="success">Active</StatusIndicator> :
+            return (queue.enabled) ? <StatusIndicator type="success">Enabled</StatusIndicator> :
                 <StatusIndicator type="stopped">Disabled</StatusIndicator>
         },
         sortingComparator: (a, b) => {
@@ -87,7 +88,7 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
     },
     {
         id: 'status',
-        header: 'Provisioning Status',
+        header: 'Status',
         cell: queue => {
             if (!queue.enabled) {
                 return '-'
@@ -98,9 +99,9 @@ export const HPC_QUEUE_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<Hpc
             return <SpaceBetween size="xxs">
                 <StatusIndicator type="error">Blocked</StatusIndicator>
                 <Box>Queued jobs: {queue.queue_size ?? '-'}</Box>
-                <Box>Limit: {queue.limit_info?.limit_type ?? '-'}</Box>
-                <Box>Queue threshold / current: {queue.limit_info?.queue_threshold ?? '-'} / {queue.limit_info?.queue_current ?? '-'}</Box>
-                {queue.limit_info?.group_threshold != null && <Box>Group threshold / current: {queue.limit_info.group_threshold} / {queue.limit_info.group_current ?? '-'}</Box>}
+                <Box>At its limit for: {queueLimitLabel(queue.limit_info?.limit_type) ?? '-'}</Box>
+                <Box>Queue limit / in use: {queue.limit_info?.queue_threshold ?? '-'} / {queue.limit_info?.queue_current ?? '-'}</Box>
+                {queue.limit_info?.group_threshold != null && <Box>Group limit / in use: {queue.limit_info.group_threshold} / {queue.limit_info.group_current ?? '-'}</Box>}
             </SpaceBetween>
         },
         sortingComparator: (a, b) => {

@@ -154,6 +154,7 @@ def test_an_installed_client_still_reboots_once(tmp_path, template):
 
 
 def test_an_unsupported_kernel_reboots_only_into_a_new_kernel(tmp_path):
+    (tmp_path / 'initramfs-5.14.0-687.el9.x86_64.img').write_text('x')
     template = 'compute-node/setup.sh.jinja2'
     # the image boots a kernel the FSx repository has no client for: terminal
     code, out, calls, _ = run_install(
@@ -168,6 +169,7 @@ def test_an_unsupported_kernel_reboots_only_into_a_new_kernel(tmp_path):
         'rhel9',
         '5.14.0-284.el9.x86_64',
         DEFAULT_KERNEL='5.14.0-687.el9.x86_64',
+        KERNEL_BOOT_DIR=str(tmp_path),
     )
     assert code == 0 and calls.splitlines()[-1] == 'reboot'
     assert 'Kernel installed for FSx for Lustre client' in history

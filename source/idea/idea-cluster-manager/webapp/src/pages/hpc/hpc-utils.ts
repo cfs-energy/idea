@@ -12,7 +12,7 @@
  */
 
 import {
-    HpcQueueProfile, SocaJobParams, SocaJob, SocaCapacityType, SocaInstanceTypeOptions
+    HpcQueueProfile, ListProjectsRequest, ListProjectsResult, Project, SocaJobParams, SocaJob, SocaCapacityType, SocaInstanceTypeOptions
 } from "../../client/data-model";
 import Utils from "../../common/utils";
 
@@ -468,13 +468,36 @@ export function formatProvisioningAttempt(attempt?: number | null, maxAttempts?:
     return (held) ? `held after ${attempt} of ${maxAttempts} attempts` : `attempt ${attempt} of ${maxAttempts}`
 }
 
-/** The queue limit holding the job. The type only: the threshold and the current usage describe the
- * whole queue, not this owner. */
-export function formatBlockingLimit(limitType?: string | null): string | null {
+const QUEUE_LIMIT_LABELS: {[limitType: string]: string} = {
+    max_provisioned_instances: 'machines',
+    max_running_jobs: 'running jobs'
+}
+
+/** What a queue limit limits, in words. */
+export function queueLimitLabel(limitType?: string | null): string | null {
     if (Utils.isEmpty(limitType)) {
         return null
     }
-    return `queue limit: ${limitType}`
+    return QUEUE_LIMIT_LABELS[limitType!] ?? 'its size'
+}
+
+/** The queue limit holding the job. The type only: the threshold and the current usage describe the
+ * whole queue, not this owner. */
+export function formatBlockingLimit(limitType?: string | null): string | null {
+    const label = queueLimitLabel(limitType)
+    return label == null ? null : `The queue is at its limit for ${label}. Your job starts when others finish. Nothing to do.`
+}
+
+/** The next step for a job that failed with an exit code. PBS reports a job killed by signal N as 256 + N. */
+export function jobFailureNextStep(job: SocaJob): string | null {
+    const code = job.exit_status
+    if (code == null || code <= 0) {
+        return null
+    }
+    if (code > 256) {
+        return 'Stopped by a signal, often the walltime limit.'
+    }
+    return `Exit code ${code} came from your script. Check the job's output files (${job.name}.o${job.job_id} and ${job.name}.e${job.job_id} in the folder it was submitted from).`
 }
 
 /** What is true about a job that has not started: how long it has waited, which provisioning attempt
@@ -501,4 +524,16 @@ export function getJobWaitingSignals(job: SocaJob, now: Date = new Date()): stri
     }
 
     return signals
+}
+
+/** Every project, however many pages the server splits them into. */
+export async function listAllProjects(client: {listProjects: (req: ListProjectsRequest) => Promise<ListProjectsResult>}): Promise<Project[]> {
+    const projects: Project[] = []
+    let cursor: string | undefined = undefined
+    do {
+        const result: ListProjectsResult = await client.listProjects({paginator: {page_size: 100, cursor}})
+        projects.push(...(result.listing ?? []))
+        cursor = result.paginator?.cursor
+    } while (cursor)
+    return projects
 }

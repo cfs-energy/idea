@@ -21,6 +21,7 @@ from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
 
 from typing import Dict
 import ldap  # noqa
+from ldap.filter import escape_filter_chars  # noqa
 
 
 class OpenLDAPClient(AbstractLDAPClient):
@@ -50,12 +51,16 @@ class OpenLDAPClient(AbstractLDAPClient):
         return '(objectClass=posixGroup)'
 
     def build_group_filterstr(
-        self, group_name: str = None, username: str = None
+        self, group_name: str = None, username: str = None, escape: bool = True
     ) -> str:
         filterstr = self.ldap_group_filterstr
         if group_name is not None:
+            if escape:
+                group_name = escape_filter_chars(group_name)
             filterstr = f'{filterstr}(cn={group_name})'
         if username is not None:
+            if escape:
+                username = escape_filter_chars(username)
             filterstr = f'{filterstr}(memberUid={username})'
         return f'(&{filterstr})'
 

@@ -4,6 +4,8 @@ set -e
 # the failed check names the command that stopped the scrub
 trap 'rc=$?; echo "scrub: ${BASH_COMMAND} (exit ${rc})" >> /var/lib/idea/bake-failed' ERR
 source /etc/environment
+# Traced like the script that runs it: the builder log is the only record of what scrub did.
+set -x
 # Shared by the compute builder (image_kind = 'compute'), which has no DCV.
 {% set compute = image_kind is defined and image_kind == 'compute' %}
 
@@ -62,11 +64,52 @@ sed -i '\|^[^#[:space:]][^[:space:]]*[[:space:]]\{1,\}{{ storage.mount_dir.rstri
 {% endif %}
 {% endfor %}
 grep -Eq '^[^#[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab
+# kdump rebuilds its initrd (30 s or more) on any boot that finds /etc/fstab newer than it, and
+# sed -i above rewrites fstab even when nothing matched. Restarted after the last fstab write,
+# kdump leaves an initrd that every clone boots on; kdump still rebuilds on a clone whose kernel,
+# kdump config or dump target differs. A clone's own mount edits land after kdump has started.
+if systemctl is-enabled --quiet kdump.service 2>/dev/null; then
+  systemctl restart kdump.service || echo "kdump did not restart; each clone rebuilds its initrd"
+  # A restart can return 0 without rebuilding: when the stop cannot run, the crash kernel stays
+  # loaded and the start answers "already running". The journal goes below, so the builder log
+  # says what the restart left, and an initrd still older than fstab is rebuilt directly.
+  kdump_initrd="/boot/initramfs-$(uname -r)kdump.img"
+  journalctl -u kdump.service -b --no-pager -o short-iso -n 12 2>&1 | sed 's/^/kdump: /' || true
+  stat -c 'kdump: %y %n' "${kdump_initrd}" /etc/fstab 2>&1 || true
+  if [[ ! -f "${kdump_initrd}" || "$(stat -c %Y "${kdump_initrd}")" -lt "$(stat -c %Y /etc/fstab)" ]]; then
+    echo "kdump: ${kdump_initrd} is missing or older than /etc/fstab after the restart; rebuilding it"
+    kdumpctl rebuild || echo "kdump did not rebuild; each clone rebuilds its initrd"
+    stat -c 'kdump: %y %n' "${kdump_initrd}" 2>&1 || true
+  fi
+fi
 (crontab -l 2>/dev/null | grep -v '_ami_builder_post_reboot.sh' || true) | crontab -
 # Checks have captured the evidence; retain JSON, remove host-specific bootstrap logs.
 rm -rf /root/bootstrap/logs
 # The agent keeps a read offset per log path: a clone resumed its new bootstrap log at the
 # builder's offset, so the stream started minutes into the host's bootstrap.
 systemctl stop amazon-cloudwatch-agent 2>/dev/null || true
+# Left enabled, it started on every clone's first boot with the builder's settings, only to be
+# stopped half a minute later when the host's bootstrap wrote its own: on an AL2023 desktop
+# that stop hung until systemd killed it at 90 s. The host's bootstrap enables it when it
+# starts it (amazon-cloudwatch-agent-ctl -s), and it reads each log from the start.
+systemctl disable amazon-cloudwatch-agent 2>/dev/null || true
 rm -rf /opt/aws/amazon-cloudwatch-agent/logs/state
+# That agent ships the system log from its start on a clone, and rsyslog with no saved
+# position replays the journal: both held the builder's lines, so every node's log stream
+# opened with them. Stopped first, so nothing more lands in the image before it is captured.
+# Ubuntu's rsyslog is socket activated: with syslog.socket left listening, the next line logged
+# starts it again and it writes a new /var/log/syslog.
+systemctl stop syslog.socket 2>/dev/null || true
+systemctl stop rsyslog 2>/dev/null || true
+{% if context.base_os == 'amazonlinux2023' %}
+# rsyslog writes every line under the host name it read when it started. On AL2023, where IDEA
+# adds it, it starts at boot before cloud-init has named the clone: a compute node logged its
+# whole life under its builder's name, a desktop until its first reboot. Left disabled here, it
+# is enabled and started by the host's bootstrap (rsyslog.jinja2), which runs once the host
+# has its own name, and with no saved position it reads the journal from the start of the boot.
+systemctl disable rsyslog 2>/dev/null || true
+{% endif %}
+rm -f /var/lib/rsyslog/imjournal.state
+rm -f /var/log/messages* /var/log/syslog*
+rm -rf /var/log/journal/*
 /bin/sync

@@ -19,7 +19,11 @@ from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
 from ideasdk.utils import Utils
 from ideadatamodel import constants
-from ideaclustermanager.app.tasks.base_task import BaseTask
+from ideaclustermanager.app.tasks.base_task import (
+    NOTHING_DONE,
+    BaseTask,
+    TaskCannotSucceed,
+)
 
 from typing import Dict, List
 import threading
@@ -37,6 +41,17 @@ MAX_WAIT_TIME = 20  # The absolute maximum
 # Max Visibility from SQS in one API call
 DEFAULT_VISIBILITY = constants.SQS_VISIBILITY_TASKS
 MAX_VISIBILITY = 12 * 60 * 60  # The absolute maximum (12 hours, SQS limit)
+
+# A failed task keeps its FIFO group waiting, so retries back off and then stop.
+# Kept below the queue's redrive count so this process, not the dead-letter move,
+# ends the task: only here can it record the failure and clean up after it.
+TASK_MAX_ATTEMPTS = 10
+RETRY_BASE_SECONDS = 10
+RETRY_MAX_SECONDS = 15 * 60
+
+
+def retry_delay(attempt: int) -> int:
+    return min(RETRY_BASE_SECONDS * 2 ** (max(attempt, 1) - 1), RETRY_MAX_SECONDS)
 
 
 class TaskManager(SocaService):
@@ -133,22 +148,27 @@ class TaskManager(SocaService):
             max_workers=self._max_workers, thread_name_prefix='task-executor'
         )
 
-    def _task_expired(self, task, payload, receive_count):
+    def _task_expired(self, task, payload, receive_count, message_id=None):
         # Python cannot safely cancel a running thread. The supervisor must replace the
         # process; leaving the receipt unacknowledged preserves FIFO retry ordering.
         try:
+            name = task.get_name() if task is not None else None
             os.write(
-                2, b'Task deadline exceeded; terminating worker process for restart\n'
+                2,
+                f'Task {name} (message {message_id}) deadline exceeded; '
+                'terminating worker process for restart\n'.encode(),
             )
             faulthandler.dump_traceback(all_threads=True)
-            if (
-                task is not None
-                and receive_count >= constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
-            ):
+            if task is not None and receive_count >= TASK_MAX_ATTEMPTS:
                 # Bound the write even if credentials or the database client hang.
                 writer = threading.Thread(
                     target=self._update_task_failure,
-                    args=(task, payload, TimeoutError('Task deadline exceeded')),
+                    args=(
+                        task,
+                        payload,
+                        TimeoutError('Task deadline exceeded'),
+                        message_id,
+                    ),
                     daemon=True,
                 )
                 writer.start()
@@ -164,10 +184,13 @@ class TaskManager(SocaService):
             receive_count = int(
                 message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
             )
+            message_id = message.get('MessageId')
         except (ValueError, TypeError, AttributeError):
-            task, payload, receive_count = None, None, 1
+            task, payload, receive_count, message_id = None, None, 1, None
         timer = threading.Timer(
-            self._task_timeout, self._task_expired, args=(task, payload, receive_count)
+            self._task_timeout,
+            self._task_expired,
+            args=(task, payload, receive_count, message_id),
         )
         timer.daemon = True
         timer.start()
@@ -192,7 +215,49 @@ class TaskManager(SocaService):
             self._full_warned = True
         return False
 
-    def _discard_deleted_user(self, task_name, payload, receipt_handle):
+    def _delete(self, receipt_handle):
+        self.context.aws().sqs().delete_message(
+            QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
+        )
+
+    def _cleanup(self, task, payload, message_id):
+        try:
+            task.on_terminal_failure(payload)
+        except Exception:
+            self.logger.exception(
+                f'cleanup failed for task: {task.get_name()} (message {message_id})'
+            )
+
+    def _give_up(self, task, payload, receipt_handle, error, message_id):
+        if task is not None:
+            self._update_task_failure(task, payload, error, message_id)
+            self._cleanup(task, payload, message_id)
+        self._delete(receipt_handle)
+
+    def _retry_later(self, task_name, message_id, receipt_handle, receive_count):
+        delay = retry_delay(receive_count)
+        try:
+            self.context.aws().sqs().change_message_visibility(
+                QueueUrl=self.get_task_queue_url(),
+                ReceiptHandle=receipt_handle,
+                VisibilityTimeout=delay,
+            )
+        except Exception:
+            # The receive visibility still bounds the wait.
+            self.logger.exception(
+                f'failed to schedule retry of task {task_name} (message {message_id})'
+            )
+            return
+        # the message id is on every line of this message's attempts, so retries of
+        # several tasks at once can be told apart
+        self.logger.info(
+            f'task {task_name} (message {message_id}) retry {receive_count + 1} '
+            f'of {TASK_MAX_ATTEMPTS} in {delay}s'
+        )
+
+    def _discard_deleted_user(
+        self, task_name, payload, receipt_handle, message_id, failed=False
+    ):
         if task_name not in {
             'accounts.sync-user',
             'accounts.sync-password',
@@ -210,10 +275,49 @@ class TaskManager(SocaService):
             return False
         # LDAP absence alone can mean replication lag; only the authoritative
         # account record establishes that retrying this work is obsolete.
-        self.logger.warning(f'failed task for deleted user; discarding: {task_name}')
-        self.context.aws().sqs().delete_message(
-            QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
+        if failed:
+            self.logger.warning(
+                f'task {task_name} (message {message_id}) failed and is dropped: '
+                'its user is deleted'
+            )
+        else:
+            # every delete leaves the user's queued tasks to end here
+            self.logger.info(
+                f'task {task_name} (message {message_id}) dropped before it ran: '
+                'its user is deleted'
+            )
+        task = self.tasks.get(task_name)
+        if task is not None:
+            self._cleanup(task, payload, message_id)
+        self._delete(receipt_handle)
+        return True
+
+    def _move_into_lane(self, task, payload, sqs_message):
+        # A lane's task is in its entity's own group when it was sent to wait there for
+        # the tasks queued before it (send's behind_entity_tasks), or by a release
+        # before lanes. That group is received alongside the lane, so run there it could
+        # finish after a newer message of the lane: it joins the lane and runs in turn;
+        # sent_at keeps its age.
+        lane = getattr(task, 'lane', None)
+        group = sqs_message.get('Attributes', {}).get('MessageGroupId')
+        entity = task.entity_ref(payload) if isinstance(lane, str) else None
+        # that release's group was the entity's bare id; a name's ending proves nothing
+        if not entity or group != entity[1]:
+            return False
+        message_id = sqs_message.get('MessageId')
+        moved_as = self.send(
+            task.get_name(),
+            payload,
+            message_group_id=group,
+            # a redelivery of this message must not queue it twice
+            message_dedupe_id=f'{message_id}.{lane}',
         )
+        # the lane's copy is a new message: this line is what joins its id to the old one
+        self.logger.info(
+            f'moved task {task.get_name()} (message {message_id}) into its lane: '
+            f'{lane}, as message {moved_as}'
+        )
+        self._delete(sqs_message['ReceiptHandle'])
         return True
 
     def get_task_queue_url(self) -> str:
@@ -221,7 +325,7 @@ class TaskManager(SocaService):
             'cluster-manager.task_queue_url', required=True
         )
 
-    def _update_task_failure(self, task, payload, error=None):
+    def _update_task_failure(self, task, payload, error=None, message_id=None):
         try:
             entity = task.entity_ref(payload)
             if entity is None:
@@ -265,9 +369,15 @@ class TaskManager(SocaService):
                 )
         except ClientError as error:
             if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
-                self.logger.exception('failed to update task failure marker')
+                self.logger.exception(
+                    'failed to update task failure marker of task '
+                    f'{task.get_name()} (message {message_id})'
+                )
         except Exception:
-            self.logger.exception('failed to update task failure marker')
+            self.logger.exception(
+                'failed to update task failure marker of task '
+                f'{task.get_name()} (message {message_id})'
+            )
 
     def execute_task(self, sqs_message: Dict):
         task_name = None
@@ -275,6 +385,10 @@ class TaskManager(SocaService):
         receipt_handle = None
         task = None
         task_succeeded = False
+        message_id = sqs_message.get('MessageId')
+        receive_count = int(
+            sqs_message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
+        )
         try:
             _task_start = Utils.current_time_ms()
             message_body = Utils.get_value_as_string('Body', sqs_message)
@@ -286,60 +400,99 @@ class TaskManager(SocaService):
 
             if Utils.is_any_empty(task_name, task_payload):
                 self.logger.error(
-                    f'Invalid task - Body: {message_body} Handle: {receipt_handle} - {Utils.to_json(task_message)}'
+                    f'Invalid task (message {message_id}) - Body: {message_body} Handle: {receipt_handle} - {Utils.to_json(task_message)}'
                 )
                 return
 
             self.logger.info(
-                f'executing task: {task_name} ({receipt_handle}), payload: {Utils.to_json(task_payload)}'
+                f'executing task: {task_name} (message {message_id}, {receipt_handle}), payload: {Utils.to_json(task_payload)}'
             )
 
             if task_name not in self.tasks:
-                self.logger.warning(f'no task registered for task name: {task_name}')
+                self.logger.warning(
+                    f'no task registered for task name: {task_name} '
+                    f'(message {message_id})'
+                )
                 return
 
             task = self.tasks[task_name]
+            attributes = sqs_message.get('Attributes', {})
+            sent_at = attributes.get('SentTimestamp')
+            if isinstance(task_payload, dict) and sent_at:
+                # the queue's own clock orders every message, whichever release sent it
+                task_payload.setdefault('sent_at', int(sent_at))
 
-            if self._discard_deleted_user(task_name, task_payload, receipt_handle):
+            if self._discard_deleted_user(
+                task_name, task_payload, receipt_handle, message_id
+            ):
                 return
-            task.invoke(task_payload)
+            if receive_count > TASK_MAX_ATTEMPTS:
+                # The last attempt stopped without a result (deadline exit), or the
+                # message predates the attempt limit.
+                self.logger.error(
+                    f'task {task_name} (message {message_id}) gave up after '
+                    f'{TASK_MAX_ATTEMPTS} attempts'
+                )
+                self._give_up(
+                    task,
+                    task_payload,
+                    receipt_handle,
+                    RuntimeError(f'gave up after {TASK_MAX_ATTEMPTS} attempts'),
+                    message_id,
+                )
+                return
+            if self._move_into_lane(task, task_payload, sqs_message):
+                return
+            result = task.invoke(task_payload)
             task_succeeded = True
-            self._update_task_failure(task, task_payload)
+            if result is not NOTHING_DONE:
+                self._update_task_failure(task, task_payload, message_id=message_id)
             _task_end = Utils.current_time_ms()
             _task_duration = int(_task_end - _task_start)
             self.logger.info(
-                f'completed task: {task_name} ({receipt_handle}), duration: {_task_duration}ms'
+                f'completed task: {task_name} (message {message_id}, {receipt_handle}), duration: {_task_duration}ms'
             )
 
-            self.logger.debug(f'Attempting to delete task handle ({receipt_handle})')
+            self.logger.debug(
+                f'Attempting to delete task handle ({receipt_handle}) of task '
+                f'{task_name} (message {message_id})'
+            )
             self.context.aws().sqs().delete_message(
                 QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
             )
 
         except ldap.ALREADY_EXISTS as e:
             self.logger.warning(
-                f'failed to execute task due to LDAP exists error: {task_name} - {task_payload} - {e}'
+                f'failed to execute task due to LDAP exists error: {task_name} '
+                f'(message {message_id}) - {task_payload} - {e}'
             )
-            if task is not None:
-                self._update_task_failure(task, task_payload, e)
-            # Still remove the task from the queue in this case
-            self.context.aws().sqs().delete_message(
-                QueueUrl=self.get_task_queue_url(), ReceiptHandle=receipt_handle
+            self._give_up(task, task_payload, receipt_handle, e, message_id)
+
+        except TaskCannotSucceed as e:
+            self.logger.error(
+                f'task {task_name} (message {message_id}) cannot succeed: {e}'
             )
+            self._give_up(task, task_payload, receipt_handle, e, message_id)
 
         except Exception as e:
-            if self._discard_deleted_user(task_name, task_payload, receipt_handle):
-                return
-            self.logger.exception(f'failed to execute task: {task_name} - {e}')
-            receive_count = int(
-                sqs_message.get('Attributes', {}).get('ApproximateReceiveCount', '1')
-            )
-            if (
-                task is not None
-                and not task_succeeded
-                and receive_count >= constants.SQS_MAX_RECEIVE_COUNT_CLUSTER_TASKS
+            if self._discard_deleted_user(
+                task_name, task_payload, receipt_handle, message_id, failed=True
             ):
-                self._update_task_failure(task, task_payload, e)
+                return
+            self.logger.exception(
+                f'failed to execute task: {task_name} (message {message_id}) - {e}'
+            )
+            if task is None or task_succeeded:
+                # Redelivery repeats an idempotent task; nothing failed to record.
+                return
+            if receive_count >= TASK_MAX_ATTEMPTS:
+                self.logger.error(
+                    f'task {task_name} (message {message_id}) gave up after '
+                    f'{TASK_MAX_ATTEMPTS} attempts'
+                )
+                self._give_up(task, task_payload, receipt_handle, e, message_id)
+            else:
+                self._retry_later(task_name, message_id, receipt_handle, receive_count)
 
     def task_queue_listener(self):
         while not self.exit.is_set():
@@ -380,23 +533,39 @@ class TaskManager(SocaService):
         payload: Dict,
         message_group_id: str = None,
         message_dedupe_id: str = None,
+        behind_entity_tasks: bool = False,
     ):
+        """
+        :param behind_entity_tasks: for a lane's task that needs what the entity's
+            queued tasks are still doing (a password needs its account created). It
+            waits its turn in their group, and only then joins its lane.
+        """
         task_message = {'name': task_name, 'payload': payload}
 
         if Utils.is_empty(message_group_id):
             message_group_id = task_name
+        # Tasks in different lanes of one entity do not wait on each other's retries.
+        lane = getattr(self.tasks.get(task_name), 'lane', None)
+        if lane and not behind_entity_tasks:
+            message_group_id = f'{message_group_id}.{lane}'
         if Utils.is_empty(message_dedupe_id):
             message_dedupe_id = Utils.sha256(Utils.to_json(task_message))
 
         self.logger.debug(
             f'send task: {task_name}, message group id: {message_group_id}, DedupeId: {message_dedupe_id}'
         )
-        self.context.aws().sqs().send_message(
-            QueueUrl=self.get_task_queue_url(),
-            MessageBody=Utils.to_json(task_message),
-            MessageDeduplicationId=message_dedupe_id,
-            MessageGroupId=message_group_id,
+        sent = (
+            self.context.aws()
+            .sqs()
+            .send_message(
+                QueueUrl=self.get_task_queue_url(),
+                MessageBody=Utils.to_json(task_message),
+                MessageDeduplicationId=message_dedupe_id,
+                MessageGroupId=message_group_id,
+            )
         )
+        # the id the queue gave it, which every line about its attempts will carry
+        return sent.get('MessageId') if isinstance(sent, dict) else None
 
     def start(self):
         self.task_monitor_thread.start()

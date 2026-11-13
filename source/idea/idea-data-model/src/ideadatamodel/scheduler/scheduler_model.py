@@ -29,6 +29,7 @@ __all__ = (
     'SocaJobExecution',
     'SocaJobExecutionHost',
     'SocaJobNotifications',
+    'SocaJobSubjob',
     'SocaJob',
     'SocaComputeNodeState',
     'SocaSchedulerInfo',
@@ -679,6 +680,21 @@ class SocaJobEstimatedBudgetUsage(SocaBaseModel):
     job_usage_percent_with_savings: Optional[float] = Field(default=None)
 
 
+class SocaJobSubjob(SocaBaseModel):
+    """
+    how one subjob of an array ended, read from PBS history when the array finished. An array
+    is one job with one record; this is the only place a subjob's own outcome is kept.
+    """
+
+    job_id: Optional[str] = Field(default=None)
+    state: Optional[SocaJobState] = Field(default=None)
+    exit_status: Optional[int] = Field(default=None, strict=False)
+    # PBS ended it with qdel (history substate 91); None when PBS has not said
+    terminated: Optional[bool] = Field(default=None)
+    start_time: Optional[datetime] = Field(default=None)
+    end_time: Optional[datetime] = Field(default=None)
+
+
 class SocaJob(SocaBaseModel):
     cluster_name: Optional[str] = Field(default=None)
     cluster_version: Optional[str] = Field(default=None)
@@ -694,6 +710,15 @@ class SocaJob(SocaBaseModel):
     owner_email: Optional[str] = Field(default=None)
     state: Optional[SocaJobState] = Field(default=None)
     exit_status: Optional[int] = Field(default=None, strict=False)
+    # PBS ended it with qdel (history substate 91); None when PBS has not said
+    terminated: Optional[bool] = Field(default=None)
+    # an array's subjobs as PBS history gave them when the array finished. exit_status above
+    # is then 0 only if every one of them exited 0, and the first failure's status otherwise;
+    # None when their history could not be read, which is never taken as success.
+    subjobs: Optional[List[SocaJobSubjob]] = Field(default=None)
+    # jobs that wait on this one (PBS before* dependencies). PBS drops a satisfied dependency
+    # from the waiting job, and keeps it here on the finished record
+    dependent_job_ids: Optional[List[str]] = Field(default=None)
     provisioned: Optional[bool] = Field(default=None)
     error_message: Optional[str] = Field(default=None)
     status_reason: Optional[str] = Field(default=None)
@@ -718,6 +743,10 @@ class SocaJob(SocaBaseModel):
     estimated_bom_cost: Optional[SocaJobEstimatedBOMCost] = Field(default=None)
     execution_hosts: Optional[List[SocaJobExecutionHost]] = Field(default=None)
     notifications: Optional[SocaJobNotifications] = Field(default=None)
+    # when scratch cleanup removed this job's scratch folder
+    scratch_removed_at: Optional[datetime] = Field(default=None)
+    # when a removal stopped part way, leaving the folder incomplete
+    scratch_partly_removed_at: Optional[datetime] = Field(default=None)
 
     def get_total_time_seconds(self) -> Optional[int]:
         if self.total_time_secs is not None:
@@ -849,7 +878,7 @@ class SocaJob(SocaBaseModel):
         elif self.is_shared_capacity():
             identifier = self.get_job_group()
         else:
-            identifier = self.job_id
+            identifier = ModelUtils.aws_job_id(self.job_id)
 
         if self.is_persistent_capacity():
             return f'{cluster_name}-{identifier}'
@@ -1654,7 +1683,7 @@ class JobValidationResult(SocaBaseModel):
             if entry.error_code is None and entry.message is None:
                 s += f'{os.linesep}'
                 continue
-            s += f'[{entry.error_code}] {entry.message}{os.linesep}'
+            s += f'- {entry.message}{os.linesep}'
         return s
 
     def as_string(self, pad_left: int = 0):

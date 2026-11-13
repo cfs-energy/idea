@@ -616,6 +616,31 @@ async function deleteClusterDeps(
       const { sdk, client } = await lazyLogs();
       await client.send(new sdk.DeleteLogGroupCommand({ logGroupName: name }));
     },
+    async listSecrets(namePrefix) {
+      const sdk = await import("@aws-sdk/client-secrets-manager");
+      const client = new sdk.SecretsManagerClient(await clientOptions(options));
+      const secrets: Array<{ arn: string; name: string; tags: Record<string, string> }> = [];
+      let nextToken: string | undefined;
+      do {
+        const result = await client.send(new sdk.ListSecretsCommand({ Filters: [{ Key: "name", Values: [namePrefix] }], NextToken: nextToken }));
+        nextToken = result.NextToken;
+        for (const secret of result.SecretList ?? []) {
+          if (secret.ARN === undefined || secret.Name === undefined) continue;
+          secrets.push({
+            arn: secret.ARN,
+            name: secret.Name,
+            tags: Object.fromEntries((secret.Tags ?? []).map((tag) => [tag.Key ?? "", tag.Value ?? ""])),
+          });
+        }
+      } while (nextToken !== undefined && nextToken !== "");
+      return secrets;
+    },
+    async deleteSecret(arn) {
+      const sdk = await import("@aws-sdk/client-secrets-manager");
+      await new sdk.SecretsManagerClient(await clientOptions(options)).send(
+        new sdk.DeleteSecretCommand({ SecretId: arn, ForceDeleteWithoutRecovery: true }),
+      );
+    },
     accountId: deps.accountId,
     async bucketExists(name) {
       const { sdk, client } = await lazyS3();
@@ -798,7 +823,8 @@ export function createLiveRemainingOperatorDeps(deps: Deps): RemainingOperatorCo
     }),
     sharedStorage: async () => {
       throw new GeneralException(
-        "shared-storage requires the EFS and FSx client adapters, which are not ported",
+        "shared-storage add-file-system and attach-file-system are not available in ideactl. " +
+          "Write the shared-storage.<NAME>.* settings with config set; see docs/modules/storage/storage-management.md",
       );
     },
     utils: async (options) => {

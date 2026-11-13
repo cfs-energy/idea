@@ -190,6 +190,46 @@ describe('script workbench', () => {
         );
     });
 
+    it('names the saved script by the file the scheduler kept', async () => {
+        await submitRejectedJob({...accepted(), job: {job_id: '101', job_uid: 'uid1', name: 'r&d run'}, job_script_path: '/shared/home/alice/jobs/r_d_run_uid1.que'});
+        expect(await screen.findByText('~/jobs/r_d_run_uid1.que')).toBeInTheDocument();
+    });
+
+    it('does not claim a saved script when the scheduler kept none', async () => {
+        await submitRejectedJob(accepted());
+        expect(await screen.findByText('Job 101 submitted')).toBeInTheDocument();
+        expect(screen.queryByText(/The script is saved as/)).toBeNull();
+    });
+
+    async function checkWithEstimate(estimate: Partial<SubmitJobResult>) {
+        const context = initTestAppContext();
+        vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue({...DRY_RUN_ACCEPTED, ...estimate});
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+        await user.click(await screen.findByRole('button', {name: /Insert sample script/i}));
+        await user.click(await screen.findByRole('button', {name: /Check script/i}));
+        await screen.findByText('Script passed the check');
+    }
+
+    it('shows an unknown price as not available, never as $0', async () => {
+        await checkWithEstimate({estimated_bom_cost: {
+            price_unavailable: true,
+            line_items: [{title: 'c5.large', quantity: 1, unit: 'per hour', unit_price: {amount: 0, unit: 'USD'}, total_price: {amount: 0, unit: 'USD'}}],
+            line_items_total: {amount: 0, unit: 'USD'}
+        }});
+        expect(screen.getByText('Price not available')).toBeInTheDocument();
+        expect(screen.queryByText(/\$0/)).toBeNull();
+    });
+
+    it('says a budget is missing instead of showing $0.00 of $0.00', async () => {
+        await checkWithEstimate({
+            estimated_bom_cost: {line_items: [], line_items_total: {amount: 5, unit: 'USD'}},
+            budget_usage: {budget_name: 'fusion', is_missing: true} as any
+        });
+        expect(screen.getByText(/Budget not found/)).toBeInTheDocument();
+        expect(screen.queryByText(/spent of/)).toBeNull();
+    });
+
     it('lists the directives without marking optional ones as errors', async () => {
         initTestAppContext();
         renderScriptWorkbench();

@@ -29,6 +29,7 @@ import {TableProps} from "@cloudscape-design/components/table";
 import IdeaListView from "../../components/list-view";
 import VirtualDesktopSessionStatusIndicator from "./components/virtual-desktop-session-status-indicator";
 import {withRouter} from "../../navigation/navigation-utils";
+import {downloadDcvFile, getConnectionInfo, openInNewTab, POPUP_BLOCKED_MESSAGE} from "./desktop-connection";
 
 export interface MySharedVirtualDesktopProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -48,13 +49,13 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
         },
         {
             id: 'owner',
-            header: 'Session Owner',
+            header: 'Owner',
             cell: e => e.idea_session_owner,
             sortingField: 'idea_session_owner'
         },
         {
             id: 'base_os',
-            header: 'Base OS',
+            header: 'Operating system',
             cell: e => Utils.getOsTitle(e.idea_session_base_os),
             sortingComparator: (a, b) => {
                 const valueA = a.idea_session_base_os || '';
@@ -64,7 +65,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
         },
         {
             id: 'instance_type',
-            header: 'Instance Type',
+            header: 'Size',
             cell: e => e.idea_session_instance_type,
             sortingField: 'idea_session_instance_type'
         },
@@ -76,7 +77,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
         },
         {
             id: 'expiry',
-            header: 'Permission Expiry',
+            header: 'Access ends',
             cell: e => new Date(e.expiry_date!).toLocaleString(),
             sortingComparator: (a, b) => {
                 const dateA = a.expiry_date ? new Date(a.expiry_date).getTime() : 0;
@@ -85,27 +86,19 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
             }
         },
         {
-            id: 'download-dcv-file',
-            header: 'Download DCV File',
+            id: 'connect-session',
+            header: 'Connect',
             cell: e => {
-                return <Link>
-                <span onClick={() => {
-                    this.onDownloadDcvSessionFile(`Shared_Desktop_${e.idea_session_name!}`, e.idea_session_id!, e.idea_session_owner!, AppContext.get().auth().getUsername()).finally()
-                }}>Download</span>
-                </Link>
+                if (e.idea_session_state !== 'READY') {
+                    return `Not running. Ask ${e.idea_session_owner} to start it.`
+                }
+                return <Link external onFollow={() => this.onConnect(e)}>Connect</Link>
             }
         },
         {
-            id: 'connect-session',
-            header: 'Join Session',
-            cell: e => {
-                return e.idea_session_state === 'READY' &&
-                    <Link external>
-                <span onClick={() => {
-                    AppContext.get().client().virtualDesktop().joinSession(e.idea_session_id!, e.idea_session_owner!, AppContext.get().auth().getUsername()).finally()
-                }}>Connect</span>
-                    </Link>
-            }
+            id: 'download-dcv-file',
+            header: 'DCV client file',
+            cell: e => e.idea_session_state === 'READY' && <Link onFollow={() => this.onDownloadDcvSessionFile(e)}>Download</Link>
         }
     ]
     listing: RefObject<IdeaListView | null>
@@ -115,39 +108,35 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
         this.listing = React.createRef()
     }
 
-    onDownloadDcvSessionFile = (idea_session_name: string, idea_session_id: string, idea_session_owner: string, username: string): Promise<boolean> => {
-        return AppContext.get().client().virtualDesktop().getSessionConnectionInfo({
-            connection_info: {
-                idea_session_id: idea_session_id,
-                idea_session_owner: idea_session_owner,
-                username: username
-            }
-        }).then(result => {
-            let endpoint = result.connection_info?.endpoint
-            if (endpoint === undefined) {
-                endpoint = AppContext.get().getAlbEndpoint()
-            }
-            const url = new URL(endpoint)
-            let sessionFileContent = '[version]\n'
-            sessionFileContent += 'format=1.0\n'
-            sessionFileContent += '[connect]\n'
-            sessionFileContent += `user=${AppContext.get().auth().getUsername()}\n`
-            sessionFileContent += `sessionid=${result.connection_info?.dcv_session_id}\n`
-            sessionFileContent += `host=${url.host}\n`
-            sessionFileContent += `port=443\n`
-            sessionFileContent += `webport=443\n`
-            sessionFileContent += `quicport=443\n`
-            sessionFileContent += `certificatevalidationpolicy=accept-untrusted\n`
-            sessionFileContent += `authtoken=${result.connection_info?.access_token}\n`
+    private getInfo(permission: VirtualDesktopSessionPermission) {
+        return getConnectionInfo(this.getVirtualDesktopClient(), {
+            idea_session_id: permission.idea_session_id,
+            idea_session_owner: permission.idea_session_owner,
+            username: AppContext.get().auth().getUsername()
+        })
+    }
 
-            const element = document.createElement('a')
-            element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(sessionFileContent))
-            element.setAttribute('download', `${idea_session_name}.dcv`)
-            element.style.display = 'none'
-            document.body.appendChild(element)
-            element.click()
-            document.body.removeChild(element)
-            return true
+    private showError(content: string) {
+        this.props.onFlashbarChange({
+            items: [{content, type: 'error', dismissible: true}]
+        })
+    }
+
+    onConnect = (permission: VirtualDesktopSessionPermission) => {
+        this.getInfo(permission).then(info => {
+            if (!openInNewTab(info)) {
+                this.showError(POPUP_BLOCKED_MESSAGE)
+            }
+        }).catch(error => {
+            this.showError(`Could not connect to ${permission.idea_session_name}: ${error?.message ?? 'Try again, or ask the owner.'}`)
+        })
+    }
+
+    onDownloadDcvSessionFile = (permission: VirtualDesktopSessionPermission) => {
+        this.getInfo(permission).then(info => {
+            downloadDcvFile(info, `Shared_Desktop_${permission.idea_session_name}`)
+        }).catch(error => {
+            this.showError(`Could not download the DCV client file for ${permission.idea_session_name}: ${error?.message ?? 'Try again, or ask the owner.'}`)
         })
     }
 
@@ -166,23 +155,10 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                 title="My desktops"
                 showPreferences={true}
                 preferencesKey={'shared-desktops'}
-                description="List of Virtual Desktops shared with you"
+                description="Desktops shared with you"
                 showPaginator={true}
                 onRefresh={() => {
                     this.getListing().fetchRecords()
-                }}
-                showDateRange={true}
-                dateRange={{
-                    type: 'relative',
-                    amount: 1,
-                    unit: "month"
-                }}
-                onDateRange={(dateRange) => {
-                    return {
-                        key: 'idea_session_created_on',
-                        start: dateRange.start,
-                        end: dateRange.end
-                    }
                 }}
                 showFilters={true}
                 filterType="select"
@@ -202,35 +178,35 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                                 value: 'READY'
                             },
                             {
-                                title: 'Provisioning',
+                                title: 'Setting up: provisioning',
                                 value: 'PROVISIONING'
                             },
                             {
-                                title: 'Stopped',
-                                value: 'STOPPED'
+                                title: 'Setting up: creating',
+                                value: 'CREATING'
+                            },
+                            {
+                                title: 'Setting up: initializing',
+                                value: 'INITIALIZING'
+                            },
+                            {
+                                title: 'Starting',
+                                value: 'RESUMING'
                             },
                             {
                                 title: 'Stopping',
                                 value: 'STOPPING'
                             },
                             {
-                                title: 'Initializing',
-                                value: 'INITIALIZING'
+                                title: 'Stopped',
+                                value: 'STOPPED'
                             },
                             {
-                                title: 'Creating',
-                                value: 'CREATING'
-                            },
-                            {
-                                title: 'Resuming',
-                                value: 'RESUMING'
-                            },
-                            {
-                                title: 'Deleting',
+                                title: 'Terminating',
                                 value: 'DELETING'
                             },
                             {
-                                title: 'Error',
+                                title: 'Failed',
                                 value: 'ERROR'
                             }
                         ]
@@ -308,20 +284,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
                     return this.getVirtualDesktopClient()
                         .listSharedPermissions({
                             filters: this.getListing().getFilters(),
-                            paginator: this.getListing().getPaginator(),
-                            date_range: this.getListing().getDateRange()
-                        })
-                        .catch(error => {
-                            this.props.onFlashbarChange({
-                                items: [
-                                    {
-                                        content: error.message,
-                                        type: 'error',
-                                        dismissible: true
-                                    }
-                                ]
-                            })
-                            throw error
+                            paginator: this.getListing().getPaginator()
                         })
                 }}
                 columnDefinitions={this.VIRTUAL_DESKTOP_SHARED_SESSIONS_TABLE_COLUMN_DEFINITIONS}

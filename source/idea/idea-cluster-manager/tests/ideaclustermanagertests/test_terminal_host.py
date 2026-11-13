@@ -65,6 +65,8 @@ def test_bastion_starts_ssh_before_optional_trust(tmp_path):
     prefix = r"""set -euo pipefail
 sshd() { if [[ $1 == -t ]]; then return; fi; touch "$SSH_STARTED"; sleep 1; }
 sssd() { sleep 1; }
+# sshd_stderr.py, which starts the sshd it is given: python3.13 -I -S <script> sshd ...
+python3.13() { shift 3; "$@"; }
 kill() { :; }
 timeout() {
   for ((i=0; i<20; i++)); do

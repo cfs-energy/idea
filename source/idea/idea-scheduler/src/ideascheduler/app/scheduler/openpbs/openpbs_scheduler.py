@@ -15,6 +15,7 @@ from ideascheduler.app.scheduler.pbs_select import select_compute_node
 from ideadatamodel import exceptions, errorcodes
 from ideadatamodel.scheduler import (
     SocaJob,
+    SocaJobSubjob,
     SocaQueue,
     SocaComputeNodeState,
     SocaComputeNode,
@@ -27,7 +28,8 @@ from ideascheduler.app.scheduler.openpbs import openpbs_constants
 
 from ideascheduler.app.app_protocols import SocaSchedulerProtocol
 
-from typing import Dict, Any, List, Optional, Generator
+from typing import Dict, Any, List, Optional, Generator, Tuple
+from threading import Lock
 import re
 import os
 import arrow
@@ -47,6 +49,64 @@ def sanitize_job_comment(comment: Optional[str]) -> str:
     return comment[:JOB_COMMENT_MAX_LENGTH].strip()
 
 
+class DeletionLog:
+    """
+    who asked PBS to delete a job, from the server log. A job's history names who ended it
+    only if it ran ("terminated by"); the server log has a line for every qdel:
+
+        11/09/2026 22:46:30;0008;Server@scheduler;Job;391.scheduler;Job to be deleted at
+        request of root@scheduler.cluster.local
+
+    The two newest daily logs are followed from where the last read stopped, so a burst of
+    deleted jobs costs one pass over the log and not one each.
+    """
+
+    REQUEST = b';Job to be deleted at request of '
+
+    def __init__(self, log_dir: Optional[str] = None):
+        self._log_dir = log_dir or os.path.join(
+            os.environ.get('PBS_HOME', '/var/spool/pbs'), 'server_logs'
+        )
+        self._lock = Lock()
+        # per log file: how far it has been read, and the deletions found in it
+        self._offsets: Dict[str, int] = {}
+        self._found: Dict[str, Dict[str, str]] = {}
+
+    def deleted_by(self, job_id: str) -> Optional[str]:
+        """the user PBS deleted this job for, or None when the log does not say"""
+        with self._lock:
+            names = sorted(os.listdir(self._log_dir))[-2:]
+            for name in list(self._offsets):
+                if name not in names:
+                    del self._offsets[name], self._found[name]
+            for name in names:
+                self._read(name)
+            for name in reversed(names):
+                if job_id in self._found[name]:
+                    return self._found[name][job_id]
+        return None
+
+    def _read(self, name: str):
+        found = self._found.setdefault(name, {})
+        offset = self._offsets.get(name, 0)
+        with open(os.path.join(self._log_dir, name), 'rb') as log:
+            log.seek(offset)
+            for line in log:
+                if not line.endswith(b'\n'):
+                    # PBS is part way through writing it: read it whole next time
+                    break
+                offset += len(line)
+                if self.REQUEST not in line:
+                    continue
+                fields = line.split(b';', 5)
+                if len(fields) == 6 and fields[3] == b'Job':
+                    user = fields[5].rpartition(self.REQUEST[1:])[2].split(b'@')[0]
+                    found[fields[4].split(b'.')[0].decode(errors='replace')] = (
+                        user.decode(errors='replace').strip()
+                    )
+        self._offsets[name] = offset
+
+
 class OpenPBSScheduler(SocaSchedulerProtocol):
     """
     OpenPBS integration for SOCA Cluster
@@ -57,6 +117,7 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
         self._logger = context.logger('openpbs')
         self._shell = ShellInvoker(logger=self._logger)
         self._converter = OpenPBSConverter(context=self._context, logger=self._logger)
+        self._deletion_log = DeletionLog()
 
     def is_ready(self) -> bool:
         # Ask the server rather than the init system. systemd reports the pbs unit active
@@ -439,8 +500,13 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
                 return None
             return queues[0]
         except exceptions.SocaException as e:
+            if e.error_code == errorcodes.SCHEDULER_QUEUE_NOT_FOUND:
+                return None
             if e.error_code == errorcodes.SCHEDULER_ERROR:
                 if f'Unknown queue {queue}' in e.message:
+                    return None
+                # a name PBS cannot parse as a queue (too long for one) names no queue
+                if "illegal 'destination' value" in e.message:
                     return None
             raise e
 
@@ -506,6 +572,27 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
             converter=self._converter,
             job_ids=[job_id],
         ).get_job()
+
+    def get_job_history_state(self, job_id: str) -> Optional[SocaJobState]:
+        return OpenPBSQStat(
+            context=self._context,
+            logger=self._logger,
+            shell=self._shell,
+            converter=self._converter,
+        ).get_history_state(job_id)
+
+    def get_array_subjobs(
+        self, job_id: str
+    ) -> Tuple[Optional[int], List[SocaJobSubjob]]:
+        return OpenPBSQStat(
+            context=self._context,
+            logger=self._logger,
+            shell=self._shell,
+            converter=self._converter,
+        ).get_array_subjobs(job_id)
+
+    def get_job_deleted_by(self, job_id: str) -> Optional[str]:
+        return self._deletion_log.deleted_by(job_id)
 
     def delete_job(self, job_id: str):
         result = self._shell.invoke(

@@ -388,6 +388,7 @@ fi
 if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
   : # The upgrade include can be empty when first-boot updates are disabled.
   {% include '_templates/linux/system_upgrade.jinja2' %}
+  {% include '_templates/linux/openssh_update.jinja2' %}
 else
   log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping system upgrade"
 fi

@@ -299,6 +299,55 @@ def test_resume_waits_for_live_broker_session(recovery, state):
     assert recovery.store[0].state != 'READY'
 
 
+def test_reboot_event_leaves_a_ready_session_the_broker_still_has(recovery):
+    """
+    a windows desktop's configuration restart reported a reboot after READY, and recovery took
+    the desktop back to INITIALIZING without asking the broker whether its session was gone
+    """
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': 'READY'}}
+    }
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'READY'
+    assert not recovery.store[0].recovering
+    recovery.broker.create_session.assert_not_called()
+    # the session is intact: the next scan's READY read ends the matter
+    recovery.check()
+    assert recovery.store[0].state == 'READY'
+    assert not recovery.store[0].recovery_unready_observed
+
+
+def test_reboot_event_answered_by_a_stale_ready_counts_as_one_unready_read(recovery):
+    """
+    a linux desktop rebooted from inside reports its reboot before the broker has noticed the
+    session is gone. the event is kept as the first of the two reads, so the next scan that
+    finds the session gone starts recovery instead of waiting for one more
+    """
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': 'READY'}}
+    }
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'READY'
+    recovery.broker.describe_sessions.return_value = {'sessions': {}}
+    recovery.check()
+    assert recovery.store[0].state == 'INITIALIZING'
+    assert recovery.store[0].recovering
+
+
+@pytest.mark.parametrize('state', [None, 'DELETED', 'UNKNOWN', 'CREATING'])
+def test_reboot_event_recovers_a_ready_session_the_broker_lost_at_once(recovery, state):
+    """the reboot itself is the evidence, so one unready answer starts recovery"""
+    recovery.broker.describe_sessions.return_value = {
+        'sessions': {'old-dcv': {'state': state}}
+    }
+    recovery.check(resume=True)
+    assert recovery.store[0].state == 'INITIALIZING'
+    assert recovery.store[0].recovering
+    recovery.now[0] += 60000
+    recovery.check()
+    recovery.broker.create_session.assert_called_once()
+
+
 @pytest.mark.parametrize('validation', [False, True])
 def test_planned_reboot_does_not_start_recovery(recovery, validation):
     from ideavirtualdesktopcontroller.app.sessions.image_validation import (

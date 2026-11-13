@@ -9,18 +9,17 @@ it('lists each queue with its architecture and operating system', async () => {
         {name: 'normal', architecture: 'x86_64', base_os: 'rhel9', instance_types: ['c6i.large', 'c6i.xlarge']},
     ]});
     render(<QueueReference/>);
-    expect(await screen.findByText('Queues you can use (2)')).toBeInTheDocument();
+    expect(await screen.findByText('Queues on this cluster (2)')).toBeInTheDocument();
     expect(screen.getByText('arm64')).toBeInTheDocument();
     expect(screen.getByText('RHEL 9')).toBeInTheDocument();
     expect(screen.getByText('c6i.large, c6i.xlarge')).toBeInTheDocument();
 });
 
-it('renders nothing when the queues cannot be read', async () => {
+it('says so when the queues cannot be read, and how to carry on', async () => {
     const context = initTestAppContext();
     vi.spyOn(context.client().scheduler(), 'listQueues').mockRejectedValue(new Error('denied'));
-    const {container} = render(<QueueReference/>);
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(container).toBeEmptyDOMElement();
+    render(<QueueReference/>);
+    expect(await screen.findByText('Could not load the queue list. You can still set #PBS -q.')).toBeInTheDocument();
 });
 
 it('starts collapsed and opens when the user expands it', async () => {
@@ -30,7 +29,7 @@ it('starts collapsed and opens when the user expands it', async () => {
         {name: 'normal', architecture: 'x86_64', base_os: 'rhel9', instance_types: ['c6i.large']},
     ]});
     render(<QueueReference/>);
-    const toggle = await screen.findByRole('button', {name: /Queues you can use \(1\)/});
+    const toggle = await screen.findByRole('button', {name: /Queues on this cluster \(1\)/});
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await userEvent.setup().click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');

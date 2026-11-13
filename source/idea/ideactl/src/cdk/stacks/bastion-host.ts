@@ -152,6 +152,12 @@ export class BastionHostStack extends IdeaBaseStack {
       ...[...this.cluster.publicSubnets, ...this.cluster.privateSubnets].map((subnet) => subnet.ipv4CidrBlock)])].join(',');
     // and the SSH allowlist the bastion prefix list holds (cluster.ts), read the same way; the
     // script keeps penalizing any entry wider than /8
+    // Read at deploy: this process has no settings client, so the switch takes a task replacement.
+    environment['IDEA_BASTION_METRICS'] = String(
+      config.getString('metrics.provider', '') === 'dogstatsd'
+      && config.getBool('metrics.health.enabled', true)
+      && config.getBool('metrics.health.bastion.enabled', true),
+    );
     environment['IDEA_SSH_CLIENT_CIDRS'] = [...new Set(config.getList<string>('cluster.network.ssh_client_ip', [])
       .filter((ip) => !isEmpty(ip)).map((ip) => (ip.includes('/') ? ip : `${ip}/32`)))].join(',');
     environment['IDEA_DATA_DIR'] = config.getString('shared-storage.data.mount_dir', undefined, { required: true }) as string;

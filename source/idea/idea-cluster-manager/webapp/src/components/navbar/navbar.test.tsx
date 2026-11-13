@@ -32,17 +32,19 @@ describe('cost ticker', () => {
         setup({...ready, period});
         await act(async () => {});
         const link = screen.getByRole('link', {name: new RegExp(`${period} cost as of`)});
-        expect(link).toHaveTextContent(`$12.50 · ${period}`);
+        expect(link).toHaveTextContent(`$12.50 this ${{MTD: 'month', WTD: 'week', QTD: 'quarter', YTD: 'year'}[period]}`);
         expect(link).toHaveAttribute('href', '#/home/my-costs');
         expect(link).toHaveAccessibleName(expect.stringContaining(`cost as of ${new Date(ready.as_of!).toLocaleString()}`));
         expect(screen.queryByText(/Known costs|Estimated costs/)).not.toBeInTheDocument();
     });
 
-    it.each([true, undefined])('names the estimate state on the cost link for incomplete=%s', async incomplete => {
+    it.each([true, undefined])('names the missing days on the cost link for incomplete=%s', async incomplete => {
         setup({...ready, incomplete});
         await act(async () => {});
         const link = screen.getByRole('link', {name: /MTD cost as of/});
-        expect(link).toHaveAccessibleName(expect.stringContaining('Some costs are still estimates'));
+        expect(link).toHaveAccessibleName(expect.stringContaining('Some days are not fully counted yet'));
+        // the amount stays the headline: a plus marks a floor, and only when the costs say so
+        expect(link).toHaveTextContent(incomplete ? '$12.50+ this month' : '$12.50 this month');
         expect(screen.queryByRole('button', {name: 'Cost information'})).not.toBeInTheDocument();
     });
 
@@ -50,8 +52,8 @@ describe('cost ticker', () => {
         setup({...ready, incomplete: false});
         await act(async () => {});
         const link = screen.getByRole('link', {name: /MTD cost as of/});
-        expect(link).not.toHaveAccessibleName(expect.stringContaining('estimates'));
-        expect(link).toHaveTextContent('$12.50 · MTD');
+        expect(link).not.toHaveAccessibleName(expect.stringContaining('not counted'));
+        expect(link).toHaveTextContent('$12.50 this month');
     });
 
     it('places the cost link between notifications and the user menu', async () => {
@@ -68,7 +70,7 @@ describe('cost ticker', () => {
     it.each([['USD', 0], ['EUR', 48.87], ['JPY', 1200], ['GBP', 9.25]] as const)('preserves %s currency and amount %s', async (currency, total) => {
         setup({...ready, currency, total});
         await act(async () => {});
-        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveTextContent(`${new Intl.NumberFormat(undefined, {style: 'currency', currency}).format(total)} · MTD`);
+        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveTextContent(`${new Intl.NumberFormat(undefined, {style: 'currency', currency}).format(total)} this month`);
     });
 
     it('reserves no cost control when disabled', async () => {
@@ -112,12 +114,12 @@ describe('cost ticker', () => {
         expect(subscribe).toHaveBeenCalledOnce();
         await act(async () => { update({current: {total: 0, incomplete: false}, currency: 'EUR', refreshed_at: '2026-09-22T12:00:00Z'} as GetMyCostsResult); });
         const link = screen.getByRole('link', {name: /MTD cost as of/});
-        expect(link).toHaveTextContent(`${new Intl.NumberFormat(undefined, {style: 'currency', currency: 'EUR'}).format(0)} · MTD`);
+        expect(link).toHaveTextContent(`${new Intl.NumberFormat(undefined, {style: 'currency', currency: 'EUR'}).format(0)} this month`);
         expect(link).toHaveAccessibleName(expect.stringContaining(`cost as of ${new Date('2026-09-22T12:00:00Z').toLocaleString()}`));
-        expect(link).not.toHaveAccessibleName(expect.stringContaining('estimates'));
+        expect(link).not.toHaveAccessibleName(expect.stringContaining('not counted'));
         await act(async () => { update({current: {total: 48.87, incomplete: true}, currency: 'USD'} as GetMyCostsResult); });
-        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveTextContent('$48.87 · MTD');
-        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveAccessibleName(expect.stringContaining('Some costs are still estimates'));
+        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveTextContent('$48.87+ this month');
+        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveAccessibleName(expect.stringContaining('Some days are not fully counted yet'));
         unmount();
         expect(unsubscribe).toHaveBeenCalledOnce();
     });
@@ -129,7 +131,7 @@ describe('cost ticker', () => {
         await act(async () => { vi.advanceTimersByTime(300000); });
         expect(unsubscribe).toHaveBeenCalledOnce();
         await act(async () => { update({current: {total: 1, incomplete: true}, currency: 'USD'} as GetMyCostsResult); });
-        expect(screen.getByRole('link', {name: /QTD cost as of/})).toHaveTextContent('$99.00 · QTD');
+        expect(screen.getByRole('link', {name: /QTD cost as of/})).toHaveTextContent('$99.00 this quarter');
         read.mockResolvedValue(ready);
         await act(async () => { vi.advanceTimersByTime(300000); });
         expect(subscribe).toHaveBeenCalledTimes(2);
@@ -161,6 +163,24 @@ describe('shell button', () => {
         await act(async () => {});
     };
     afterEach(() => {vi.restoreAllMocks(); delete (window as any).idea?.app?.web_terminal_enabled; shellStore.reset();});
+
+    it('says when terminal access could not be checked, and clicking tries again', async () => {
+        shellStore.reset();
+        const context = initTestAppContext();
+        vi.spyOn(context.auth(), 'hasModuleAccess').mockReturnValue(true);
+        vi.spyOn(context.client().myCosts(), 'getCostTicker').mockResolvedValue({enabled: false} as any);
+        const listTargets = vi.spyOn(context.client().terminal(), 'listTargets').mockRejectedValueOnce(new Error('down'));
+        render(<IdeaNavbar/>);
+        await act(async () => {});
+
+        const unavailable = screen.getByRole('button', {name: /Terminal access could not be checked/});
+        expect(unavailable).toHaveTextContent('Shell unavailable');
+
+        listTargets.mockResolvedValue({targets: [{id: 'bastion', label: 'Bastion'}]});
+        fireEvent.click(unavailable);
+        await act(async () => {});
+        expect(screen.getByRole('button', {name: 'Open a shell on the bastion'})).toBeInTheDocument();
+    });
 
     it('opens a bastion terminal from the top bar when the bastion is a target', async () => {
         await shell([{id: 'bastion', label: 'Bastion'}]);

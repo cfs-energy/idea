@@ -59,7 +59,9 @@ class VirtualDesktopDashboard extends Component<VirtualDesktopDashboardProps, Vi
             this.instanceTypesChart,
             this.stateChart,
             this.baseOsChart,
-            this.azDistributionChart
+            this.azDistributionChart,
+            this.projectChart,
+            this.softwareStackChart
         ]
         this.state = {
             moduleInfo: {},
@@ -112,7 +114,7 @@ class VirtualDesktopDashboard extends Component<VirtualDesktopDashboardProps, Vi
                 }
             ]}
             header={<Header variant={"h1"} actions={<SpaceBetween size={"xs"} direction={"horizontal"}>
-                <Button variant="normal" iconName="refresh" onClick={() => {
+                <Button variant="normal" iconName="refresh" ariaLabel="Refresh charts" onClick={() => {
                     this.reloadAllCharts()
                 }}/>
                 <Button variant={"primary"} onClick={() => {

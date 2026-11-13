@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import SubmitJob from './submit-job';
+import SubmitJob, {NoApplications} from './submit-job';
 import { HpcApplication } from '../../client/data-model';
 import IdeaException from '../../common/exceptions';
 import { initTestAppContext } from '../../test-support';
@@ -202,6 +202,81 @@ describe('submit job page', () => {
         await user.click(submit);
         expect(await screen.findByText('Requested instances run arm64, but the image is x86_64.')).toBeInTheDocument();
         expect(screen.queryByText('Job Submitted Successfully')).toBeNull();
+    });
+
+    async function submitWithResult(result: any) {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({ applications: [APPLICATION] } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        vi.spyOn(scheduler, 'submitJob').mockResolvedValue(result);
+        const user = userEvent.setup();
+        renderSubmitJob();
+        await screen.findByText('Job Name');
+        const dryRun = await screen.findByRole('button', { name: /Dry Run/i });
+        await waitFor(() => expect(dryRun).not.toBeDisabled());
+        await user.click(dryRun);
+        return user;
+    }
+
+    const PRICED = {line_items: [{title: 'c5.large', quantity: 1, unit: 'per hour', unit_price: {amount: 0.1, unit: 'USD'}, total_price: {amount: 0.1, unit: 'USD'}}], line_items_total: {amount: 0.1, unit: 'USD'}};
+    const UNPRICED = {price_unavailable: true, line_items: [{title: 'c5.large', quantity: 1, unit: 'per hour', unit_price: {amount: 0, unit: 'USD'}, total_price: {amount: 0, unit: 'USD'}}], line_items_total: {amount: 0, unit: 'USD'}};
+    const BUDGET = {budget_name: 'fusion', budget_limit: {amount: 1000, unit: 'USD'}, actual_spend: {amount: 200, unit: 'USD'}, forecasted_spend: {amount: 300, unit: 'USD'}, job_usage_dollars: {amount: 0, unit: 'USD'}, job_usage_percent: 0, job_usage_percent_with_savings: 0};
+
+    it('labels the estimate as the whole job, not an hourly rate', async () => {
+        const user = await submitWithResult({accepted: true, job: {job_id: '101'}, estimated_bom_cost: PRICED});
+        await user.click(await screen.findByRole('tab', {name: /Cost/}));
+        expect(await screen.findByText('Estimated total for the requested walltime (1 hour if none set)')).toBeInTheDocument();
+        expect(screen.queryByText(/Per Hour/)).toBeNull();
+    });
+
+    it('shows an unknown price as not available, never as $0', async () => {
+        const user = await submitWithResult({accepted: true, job: {job_id: '101'}, estimated_bom_cost: UNPRICED, budget_usage: BUDGET});
+        await user.click(await screen.findByRole('tab', {name: /Cost/}));
+        expect(await screen.findByText('Price not available')).toBeInTheDocument();
+        expect(screen.queryByText(/\$0/)).toBeNull();
+        await user.click(await screen.findByRole('tab', {name: /Budget/}));
+        expect(await screen.findByText("Budget impact can't be calculated without a price.")).toBeInTheDocument();
+    });
+
+    it('lists a refusal in words, without error codes', async () => {
+        const user = await submitWithResult({
+            accepted: false,
+            validations: {results: [{error_code: 'instance_ami', message: 'Remove instance_ami to use the queue default.'}]},
+            incidentals: {results: [{error_code: 'Licenses.NotFound', message: 'License comsol is not set up on this cluster.'}]}
+        });
+        void user;
+        expect(await screen.findByText("This job can't be queued:")).toBeInTheDocument();
+        expect(screen.getByText('Remove instance_ami to use the queue default.')).toBeInTheDocument();
+        expect(screen.getByText('License comsol is not set up on this cluster.')).toBeInTheDocument();
+        expect(screen.queryByText('Licenses.NotFound')).toBeNull();
+        expect(screen.queryByText('Error Code')).toBeNull();
+    });
+
+    // the scheduler sanitizes the job name and picks the mount and extension, so the page opens
+    // the path it was given and never one rebuilt from the job.
+    it('opens the script the scheduler kept in the script workbench', async () => {
+        const path = '/shared/home/alice/jobs/r_d_run_uid1.que';
+        const user = await submitWithResult({dry_run: 'true', accepted: false, job: {name: 'r&d run', job_uid: 'uid1', owner: 'alice'}, job_script_path: path});
+        await user.click(await screen.findByRole('tab', {name: 'Job Script'}));
+        expect(await screen.findByRole('link', {name: 'Open in Script Workbench'}))
+            .toHaveAttribute('href', `#/home/script-workbench?file=${encodeURIComponent(path)}`);
+    });
+
+    it('offers no script to open when the scheduler kept none', async () => {
+        const user = await submitWithResult({dry_run: 'true', accepted: false, job: {name: 'test-job', job_uid: 'uid1', owner: 'alice'}});
+        await user.click(await screen.findByRole('tab', {name: 'Job Script'}));
+        expect(await screen.findByText('PBS Job Script')).toBeInTheDocument();
+        expect(screen.queryByText('Open in Script Workbench')).toBeNull();
+        expect(screen.queryByText(/opening it in the Script Workbench/)).toBeNull();
+    });
+
+    it('offers a way forward when no application is available', async () => {
+        const navigate = vi.fn();
+        render(<NoApplications navigate={navigate}/>);
+        expect(screen.getByText('No applications are available for your projects. Ask an administrator to add you to a project, or write your own job script.')).toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', {name: 'Write script'}));
+        expect(navigate).toHaveBeenCalledWith('/home/script-workbench');
     });
 
     // a hung scheduler api answers with a timeout rather than an application listing. reported

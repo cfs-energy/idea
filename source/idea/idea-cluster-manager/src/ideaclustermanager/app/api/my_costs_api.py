@@ -57,12 +57,14 @@ class MyCostsAPI(BaseAPI):
                 raise exceptions.invalid_params(
                     'Reporting identity comes from authentication'
                 )
+            payload = dict(context.request_payload or {})
+            fresh = payload.pop('refresh', False) is True
             try:
-                request = ReportingPeriodRequest.model_validate(context.request_payload)
+                request = ReportingPeriodRequest.model_validate(payload)
             except ValidationError:
                 raise exceptions.invalid_params('Invalid reporting request') from None
             result = self.insights.get_insights(
-                request, authorize, username=context.get_username()
+                request, authorize, username=context.get_username(), fresh=fresh
             )
             payload = result.model_dump(mode='json', exclude_none=False)
             for section in ('jobs', 'desktops', 'storage'):

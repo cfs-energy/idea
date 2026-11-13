@@ -13,6 +13,8 @@ export function clusterDate(timezone: string, date = new Date()): string {
     return ['year', 'month', 'day'].map(type => parts.find(part => part.type === type)!.value).join('-');
 }
 
+// Choosing Custom isn't a mistake: nothing is wrong until a date has been picked.
+export const datesPicked = (period: ReportingSummaryRequest) => period.period !== 'custom' || !!period.start_date || !!period.end_date;
 export function validateReportingPeriod(period: ReportingSummaryRequest, timezone?: string): string | undefined {
     if (period.period !== 'custom') return;
     const start = period.start_date ?? '';
@@ -35,7 +37,7 @@ export default function ReportingPeriodPicker({value, timezone, onChange}: {
             <div style={{width: '18ch'}}><Select selectedOption={REPORTING_PERIODS.find(option => option.value === value.period)!} options={REPORTING_PERIODS}
                 onChange={({detail}) => onChange({period: detail.selectedOption.value as ReportingPeriod})}/></div>
         </FormField>
-        {value.period === 'custom' && <FormField label="Custom dates" errorText={validateReportingPeriod(value, timezone)}>
+        {value.period === 'custom' && <FormField label="Custom dates" constraintText={datesPicked(value) ? undefined : 'Pick a start and end date.'} errorText={datesPicked(value) ? validateReportingPeriod(value, timezone) : undefined}>
             <DateRangePicker dateOnly rangeSelectorMode="absolute-only" relativeOptions={[]} value={range} ariaLabel="Custom reporting dates"
                 placeholder="Start date — end date" showClearButton={false}
                 isDateEnabled={date => !timezone || `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` <= clusterDate(timezone)}

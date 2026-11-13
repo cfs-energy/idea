@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {Box, Header, Input, Pagination, Table} from "@cloudscape-design/components";
+import {Box, Button, Header, Input, Pagination, Table} from "@cloudscape-design/components";
 import {TableProps} from "@cloudscape-design/components/table";
 import {useCollection} from "@cloudscape-design/collection-hooks";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
@@ -59,6 +59,14 @@ export interface FileBrowserTableProps {
     path?: React.ReactNode
     loading?: boolean
     showHiddenFiles?: boolean
+    /** Replaces the empty message when the listing failed, so a failure never reads as an empty folder. */
+    emptyText?: string
+    /** What an empty list is called. */
+    emptyLabel?: string
+    filterLabel?: string
+    /** The folder on show. Search text belongs to one folder and is dropped when this changes. */
+    filterScope?: string
+    onShowHiddenFiles?: () => void
 }
 
 const ICONS_BY_EXTENSION: {[extension: string]: IconDefinition} = {
@@ -136,10 +144,16 @@ export function entryKey(entry: FileBrowserEntry): string {
     return entry.path ?? entry.id
 }
 
+// One collator: localeCompare with options builds its own on every call, in a folder of 100k names.
+const NAME_COLLATOR = new Intl.Collator(undefined, {sensitivity: 'base'})
+
 /** Case-insensitive, as the previous component was. */
 function compareNames(a: FileBrowserEntry, b: FileBrowserEntry): number {
-    return a.name.localeCompare(b.name, undefined, {sensitivity: 'base'})
+    return NAME_COLLATOR.compare(a.name, b.name)
 }
+
+/** Long enough to skip filtering a huge folder on every keystroke, short enough not to feel slow. */
+const FILTER_DELAY_MS = 150
 
 const COLUMN_DEFINITIONS: TableProps.ColumnDefinition<FileBrowserEntry>[] = [
     {
@@ -168,12 +182,6 @@ const COLUMN_DEFINITIONS: TableProps.ColumnDefinition<FileBrowserEntry>[] = [
         cell: (entry) => <Box textAlign="right">{entry.isDir ? NO_SIZE : formatFileSize(entry.size)}</Box>
     }
 ]
-
-const EMPTY_STATE = (
-    <Box textAlign="center" color="inherit">
-        Nothing to show
-    </Box>
-)
 
 /** Directories first, then files, and inside each group whichever column the user chose. The grouping
  * is applied before the column comparator and is not reversed by a descending sort, so folders stay
@@ -234,12 +242,45 @@ function FileBrowserTable(props: FileBrowserTableProps) {
     const {items, allPageItems, collectionProps, filterProps, paginationProps, filteredItemsCount, actions} = useCollection(sortedEntries, {
         filtering: {
             filteringFunction: (entry, filteringText) =>
-                entry.name.toLowerCase().includes(filteringText.trim().toLowerCase()),
-            empty: EMPTY_STATE,
-            noMatch: EMPTY_STATE
+                entry.name.toLowerCase().includes(filteringText.trim().toLowerCase())
         },
         pagination: {pageSize: FILE_BROWSER_PAGE_SIZE}
     })
+
+    const [filterInput, setFilterInput] = useState('')
+    const clearFilter = () => {
+        setFilterInput('')
+        actions.setFiltering('')
+    }
+    useEffect(clearFilter, [props.filterScope]) // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        const timer = setTimeout(() => actions.setFiltering(filterInput), FILTER_DELAY_MS)
+        return () => clearTimeout(timer)
+    }, [filterInput]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const emptyContent = () => {
+        const filterText = filterProps.filteringText.trim()
+        if (props.emptyText != null) {
+            return <Box textAlign="center" color="inherit">{props.emptyText}</Box>
+        }
+        if (filterText.length > 0) {
+            return (
+                <Box textAlign="center" color="inherit">
+                    <Box padding={{bottom: 'xs'}} color="inherit">No names here match "{filterText}".</Box>
+                    <Button onClick={clearFilter}>Clear</Button>
+                </Box>
+            )
+        }
+        if (props.entries.length > 0 && props.onShowHiddenFiles != null) {
+            return (
+                <Box textAlign="center" color="inherit">
+                    <Box padding={{bottom: 'xs'}} color="inherit">Only hidden files here.</Box>
+                    <Button onClick={props.onShowHiddenFiles}>Show hidden files</Button>
+                </Box>
+            )
+        }
+        return <Box textAlign="center" color="inherit">{props.emptyLabel ?? 'This folder is empty.'}</Box>
+    }
 
     const closeMenu = useCallback(() => setMenuPosition(null), [])
 
@@ -299,6 +340,9 @@ function FileBrowserTable(props: FileBrowserTableProps) {
         }
         props.onSelectionChange([item])
     }
+
+    // the header checkbox reaches every page, which is easy to miss from the one on screen
+    const allPagesSelected = paginationProps.pagesCount > 1 && props.selectedEntries.length === allPageItems.length
 
     const summary = () => {
         // Counts the whole filtered directory, matching what the header checkbox and Ctrl+A
@@ -365,6 +409,7 @@ function FileBrowserTable(props: FileBrowserTableProps) {
                 variant="container"
                 loading={props.loading}
                 loadingText="Loading files"
+                empty={emptyContent()}
                 trackBy={entryKey}
                 items={items}
                 columnDefinitions={COLUMN_DEFINITIONS}
@@ -393,18 +438,22 @@ function FileBrowserTable(props: FileBrowserTableProps) {
                     tableLabel: props.title
                 }}
                 header={
-                    <Header counter={summary()} actions={props.actions}>
+                    <Header
+                        counter={summary()}
+                        actions={props.actions}
+                        description={allPagesSelected ? `All ${allPageItems.length.toLocaleString()} in this view are selected, not just this page.` : undefined}
+                    >
                         {props.title}
                     </Header>
                 }
                 filter={
                     <div className="soca-file-browser-filter">
                         <Input
-                            value={filterProps.filteringText}
-                            placeholder="Search"
+                            value={filterInput}
+                            placeholder={props.filterLabel ?? 'Filter this folder by name'}
                             type="text"
-                            ariaLabel="Search this directory"
-                            onChange={(event) => actions.setFiltering(event.detail.value)}
+                            ariaLabel={props.filterLabel ?? 'Filter this folder by name'}
+                            onChange={(event) => setFilterInput(event.detail.value)}
                         />
                         <span className="soca-file-browser-filter-count">
                             {filterProps.filteringText.trim().length > 0 ? `${filteredItemsCount ?? 0} matches` : ''}

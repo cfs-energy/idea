@@ -381,7 +381,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                 // Get cursor for next page
                 cursor = response.paginator?.cursor
             } catch (error) {
-                console.error('Error fetching users in group:', error)
+                this.accessLoadFailed()
                 break
             }
         } while (cursor) // Continue while there are more pages
@@ -404,7 +404,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
             project_id: this.props.session.project?.project_id
         }).then(response => {
             this.fetchAllUsersInGroup(response.project?.ldap_groups!)
-        })
+        }).catch(this.accessLoadFailed)
 
         this.getVirtualDesktopUtilsClient().listPermissionProfiles({})
             .then(response => {
@@ -414,10 +414,13 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                 }, () => {
                     this.createInitRows()
                 })
-            })
+            }).catch(this.accessLoadFailed)
 
         this.getVirtualDesktopClient().listSessionPermissions({
-            idea_session_id: this.props.session?.idea_session_id
+            idea_session_id: this.props.session?.idea_session_id,
+            paginator: {
+                page_size: 100
+            }
         }).then(response => {
             this.setState({
                 existingPermissions: response.listing!,
@@ -425,7 +428,12 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
             }, () => {
                 this.createInitRows()
             })
-        })
+        }).catch(this.accessLoadFailed)
+    }
+
+    // Without the full list a save could not account for who already has access, so say so instead of showing a partial one.
+    accessLoadFailed = () => {
+        this.setError('', 'Could not load who has access. Close this and try again.')
     }
 
     getProjectsClient(): ProjectsClient {

@@ -251,6 +251,9 @@ enumerate = true
 
 sudo_provider = none
 
+# These hosts carry EC2 names, outside any zone the directory serves, so an update can only fail
+dyndns_update = false
+
 # Use our AD-created IDEA hostname
 ldap_sasl_authid = ${IDEA_HOSTNAME}\$
 
@@ -269,6 +272,8 @@ homedir_substring = ${IDEA_CLUSTER_DATA_DIR}/home
 chmod 600 /etc/sssd/sssd.conf
 
 systemctl enable sssd
+# the responders named in `services` above
+disable_sssd_responder_sockets nss pam
 systemctl restart sssd
 
 # note: sss is removed for nsswitch to compared to openldap, to avoid mail spams.

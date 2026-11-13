@@ -347,7 +347,7 @@ test("bastion keeps both healthy tasks while both SSH replacements start", () =>
   assert.deepEqual({ ...service.DeploymentConfiguration, Alarms: undefined }, {
     Alarms: undefined,
     // Both replacements start at once and neither old task stops until a new one answers
-    // ssh-keyscan, so the login node never drops below two.
+    // its health check, so the login node never drops below two.
     MinimumHealthyPercent: 100, MaximumPercent: 200,
     DeploymentCircuitBreaker: { Enable: true, Rollback: true },
   });
@@ -360,7 +360,7 @@ test("bastion keeps both healthy tasks while both SSH replacements start", () =>
     { Type: "binpack", Field: "MEMORY" },
   ]);
   const container = byType(resources, "AWS::ECS::TaskDefinition")[0]![1].Properties.ContainerDefinitions[0];
-  assert.match(container.HealthCheck.Command.join(" "), /ssh-keyscan/);
+  assert.match(container.HealthCheck.Command.join(" "), /\/opt\/idea\/roles\/bastion_health\.sh/);
   assert.equal(container.StopTimeout, 30);
   const group = byType(resources, "AWS::ElasticLoadBalancingV2::TargetGroup")[0]![1].Properties;
   assert.equal(group.HealthCheckProtocol, "TCP");
@@ -377,7 +377,7 @@ test("readiness checks use the application endpoints on every role", () => {
     assert.equal(settings.healthCheck?.interval?.toSeconds(), 5);
     assert.equal(settings.stopTimeout?.toSeconds(), role === "cluster-manager" ? 60 : 30);
     const command = settings.healthCheck!.command.join(" ");
-    assert.match(command, role === "dcv-broker" ? /8444\/health.*8445\/health.*8446\/health/ : role === "dcv-gateway" ? /8989/ : role === "bastion-host" ? /ssh-keyscan/ : /https:\/\/localhost:8443\/healthcheck/);
+    assert.match(command, role === "dcv-broker" ? /8444\/health.*8445\/health.*8446\/health/ : role === "dcv-gateway" ? /8989/ : role === "bastion-host" ? /\/opt\/idea\/roles\/bastion_health\.sh/ : /https:\/\/localhost:8443\/healthcheck/);
   }
 });
 

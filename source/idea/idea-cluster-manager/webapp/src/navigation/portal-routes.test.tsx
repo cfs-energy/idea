@@ -1,10 +1,11 @@
-import {render, screen, waitFor} from '@testing-library/react';
+import {act, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {MemoryRouter, useLocation, useNavigate} from 'react-router-dom';
 import {beforeEach, vi} from 'vitest';
 import App from '../App';
 import IdeaAppLayout from '../components/app-layout';
 import {initTestAppContext} from '../test-support';
+import {clearSignedOut, markSignedOut} from '../common/session-return';
 
 vi.mock('../components/navbar', () => ({default: () => null}));
 vi.mock('../pages/user-management/users', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Users content</p>}/>}));
@@ -26,6 +27,7 @@ vi.mock('../pages/home/ssh-access', () => ({default: (props: any) => <IdeaAppLay
 vi.mock('../pages/home/my-costs', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>MyCosts content</p>}/>}));
 vi.mock('../pages/home/custom-dashboard', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>CustomDashboard content</p>}/>}));
 vi.mock('../pages/hpc/hpc-nodes', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>HpcNodes content</p>}/>}));
+vi.mock('../pages/hpc/scratch-cleanup', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>ScratchCleanup content</p>}/>}));
 vi.mock('../pages/cluster-admin/reconciliation-runs', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>ReconciliationRuns content</p>}/>}));
 vi.mock('../pages/cluster-admin/cluster-status', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>ClusterStatus content</p>}/>}));
 vi.mock('../pages/cluster-admin/projects', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Projects content</p>}/>}));
@@ -176,13 +178,13 @@ it('allows a desktop-only administrator to open the shared image view', async ()
     expect(await screen.findByText('HpcCustomAmis content')).toBeInTheDocument();
     expect(screen.getByRole('tab', {name: 'Images'})).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByLabelText('Breadcrumbs')).toHaveTextContent('Images');
-    expect(screen.queryByText('Destination unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText('You do not have access to this page')).not.toBeInTheDocument();
 });
 
 it('denies an admin route before its page mounts for a plain user', async () => {
     vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(false);
     open('/soca/active-jobs');
-    expect(await screen.findByText('Destination unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('You do not have access to this page')).toBeInTheDocument();
     expect(screen.queryByText('All active jobs')).not.toBeInTheDocument();
 });
 
@@ -241,14 +243,15 @@ it('replaces backfill bookmarks with the jobs-authorized Settings base', async (
     expect(screen.getByTestId('url')).toHaveTextContent('/soca/settings/cost-collection?operation=backfill-history&project=sample');
 });
 
-it.each(['/cluster/services', '/cluster/reconciliation-runs', '/cluster/status?operation=backfill-history', '/virtual-desktop/settings?view=services', '/soca/settings/cost-collection'])('denies %s to plain users before mounting privileged content', async path => {
+it.each(['/soca/scratch-cleanup', '/cluster/services', '/cluster/reconciliation-runs', '/cluster/status?operation=backfill-history', '/virtual-desktop/settings?view=services', '/soca/settings/cost-collection'])('denies %s to plain users before mounting privileged content', async path => {
     vi.mocked(context.auth().isModuleAdmin).mockReturnValue(false);
     const catalog = vi.spyOn(context.client().clusterSettings(), 'describeSettingsCatalog');
     const services = vi.spyOn(context.client().clusterSettings(), 'listClusterServices');
     const backfill = vi.spyOn(context.client().clusterSettings(), 'getCostMetricsBackfill');
     open(path);
-    expect(await screen.findByText('Destination unavailable')).toBeVisible();
+    expect(await screen.findByText('You do not have access to this page')).toBeVisible();
     expect(screen.queryByText('Service content')).toBeNull();
+    expect(screen.queryByText('ScratchCleanup content')).toBeNull();
     expect(screen.queryByText('Settings content')).toBeNull();
     expect(catalog).not.toHaveBeenCalled(); expect(services).not.toHaveBeenCalled(); expect(backfill).not.toHaveBeenCalled();
 });
@@ -273,6 +276,83 @@ it('focuses the service group retained by a legacy bookmark', async () => {
 it('denies Costs to desktop-only administrators before mounting its content', async () => {
     vi.mocked(context.auth().isModuleAdmin).mockImplementation(module => module === 'virtual-desktop-controller');
     open('/cluster/status?operation=backfill-history');
-    expect(await screen.findByText('Destination unavailable')).toBeVisible();
+    expect(await screen.findByText('You do not have access to this page')).toBeVisible();
     expect(screen.queryByText('Settings content')).toBeNull();
+});
+
+describe('startup failure and unknown pages', () => {
+    const spinner = () => {
+        const loading = document.getElementById('app-loading')!;
+        loading.style.display = '';
+        return loading;
+    };
+
+    it('says the portal could not load when the module list is missing, not that access is denied', async () => {
+        const loading = spinner();
+        vi.mocked(context.getClusterSettingsService().initialize).mockResolvedValue(false);
+        context.getClusterSettingsService().clusterModules = [];
+        open('/soca/active-jobs');
+        expect(await screen.findByText('The portal could not load')).toBeInTheDocument();
+        expect(screen.getByRole('button', {name: 'Reload page'})).toBeInTheDocument();
+        expect(screen.queryByText('You do not have access to this page')).not.toBeInTheDocument();
+        expect(loading.style.display).toBe('none');
+    });
+
+    it('keeps the portal usable when only a later settings read failed', async () => {
+        vi.mocked(context.getClusterSettingsService().initialize).mockResolvedValue(false);
+        context.getClusterSettingsService().clusterModules = [{name: 'scheduler', status: 'deployed'}];
+        open('/nothing/here');
+        expect(await screen.findByText('This page does not exist')).toBeInTheDocument();
+    });
+
+    it('answers an unknown address with a way home and clears the startup spinner', async () => {
+        const loading = spinner();
+        open('/no/such/page');
+        expect(await screen.findByText('This page does not exist')).toBeInTheDocument();
+        expect(screen.getByRole('link', {name: 'Go to Home'})).toHaveAttribute('href', '#/');
+        expect(loading.style.display).toBe('none');
+    });
+
+    it('clears the startup spinner and offers a way home when access is denied', async () => {
+        const loading = spinner();
+        vi.spyOn(context.auth(), 'isModuleAdmin').mockReturnValue(false);
+        open('/soca/active-jobs');
+        expect(await screen.findByText('You do not have access to this page')).toBeInTheDocument();
+        expect(screen.getByRole('link', {name: 'Go to Home'})).toBeInTheDocument();
+        expect(loading.style.display).toBe('none');
+    });
+});
+
+describe('returning after the session ends', () => {
+    beforeEach(() => sessionStorage.clear());
+    const mount = async (path: string) => {
+        const hooks = vi.spyOn(context, 'setHooks');
+        open(path);
+        await waitFor(() => expect(hooks).toHaveBeenCalled());
+        return hooks.mock.calls[0];
+    };
+
+    it('explains an ended session and goes back to the same page after signing in', async () => {
+        const [onLogin, onLogout] = await mount('/cluster/users');
+        expect(await screen.findByText('Users content')).toBeInTheDocument();
+        act(() => {void onLogout();});
+        expect(await screen.findByText('Your session ended. Sign in to continue.')).toBeInTheDocument();
+        act(() => {void onLogin();});
+        await waitFor(() => expect(screen.getByTestId('url')).toHaveTextContent('/cluster/users'));
+        expect(await screen.findByText('Users content')).toBeInTheDocument();
+        expect(sessionStorage.getItem('idea.return-path')).toBeNull();
+    });
+
+    it('stays quiet and goes Home after signing out on purpose', async () => {
+        const [onLogin, onLogout] = await mount('/cluster/users');
+        await screen.findByText('Users content');
+        markSignedOut();
+        act(() => {void onLogout();});
+        await screen.findByRole('button', {name: 'Sign In'});
+        expect(screen.queryByText('Your session ended. Sign in to continue.')).not.toBeInTheDocument();
+        expect(sessionStorage.getItem('idea.return-path')).toBeNull();
+        clearSignedOut();
+        act(() => {void onLogin();});
+        await waitFor(() => expect(screen.getByTestId('url')).not.toHaveTextContent('/cluster/users'));
+    });
 });

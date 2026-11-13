@@ -688,9 +688,11 @@ class BedrockProvisioner:
             if not Utils.get_value_as_bool('IsDefaultVersion', version, False)
         ]
         removable.sort(
-            key=lambda version: Utils.get_value_as_string('VersionId', version, 'v0')
-            .lstrip('v')
-            .rjust(12, '0')
+            key=lambda version: (
+                Utils.get_value_as_string('VersionId', version, 'v0')
+                .lstrip('v')
+                .rjust(12, '0')
+            )
         )
         remaining = len(versions)
         while remaining >= MAX_POLICY_VERSIONS and len(removable) > 0:

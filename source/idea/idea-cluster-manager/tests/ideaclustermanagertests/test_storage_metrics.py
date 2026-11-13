@@ -3,7 +3,13 @@ Test Cases for the storage metrics collector
 ONTAP answers are recorded shapes of the two REST collections; nothing reaches a file system.
 """
 
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
 from ideaclustermanager.app.metrics.storage_metrics_service import (
+    FileContentsRefused,
     OntapClient,
     StorageMetrics,
     StorageMetricsService,
@@ -203,6 +209,36 @@ def test_configuration_status_distinguishes_setup_states():
         assert (status['status'], status['reason']) == expected
 
 
+def test_attachments_on_one_svm_are_set_up_by_one_login():
+    # idea-dev: /data carries the login, /idea_apps is another volume of the same SVM and is
+    # read through it. The admin cost page said "missing_credentials" with storage costs whole.
+    def status(apps_endpoint):
+        prefix = 'shared-storage.{}.fsx_netapp_ontap.'
+        values = {
+            'metrics.provider': 'dogstatsd',
+            'cluster-manager.metrics.storage.enabled': True,
+            'shared-storage': {
+                'data': {'provider': 'fsx_netapp_ontap'},
+                'ideaapps': {'provider': 'fsx_netapp_ontap'},
+            },
+            prefix.format('data') + 'metrics.username': 'reader',
+            prefix.format('data') + 'metrics.password_secret_arn': 'secret-reference',
+            prefix.format('data') + 'svm.management_dns': ENDPOINT,
+            prefix.format('ideaapps') + 'svm.management_dns': apps_endpoint,
+        }
+        service = StorageMetricsService(FakeContext(values))
+        assert [target.name for target in service.targets()] == ['data']
+        found = service.configuration_status()
+        return found['status'], found['reason']
+
+    assert status(ENDPOINT) == ('enabled', 'configured')
+    assert status(f'https://{ENDPOINT.upper()}/') == ('enabled', 'configured')
+    # control: an SVM no login reads, and an attachment that does not say which SVM it is on
+    other = ENDPOINT.replace('svm-064990494a2dbd4c2', 'svm-0aaaaaaaaaaaaaaaa')
+    assert status(other) == ('not_configured', 'missing_credentials')
+    assert status(None) == ('not_configured', 'missing_credentials')
+
+
 def test_targets_require_username_secret_reference_and_endpoint():
     base = {
         'metrics.provider': 'cloudwatch',
@@ -244,7 +280,7 @@ def test_client_follows_pages_and_refuses_a_failure(monkeypatch):
         '/api/bad': Response(401, {'error': 'no'}),
     }
 
-    def fake_get(url, auth=None, verify=None, timeout=None):
+    def fake_get(url, auth=None, verify=None, timeout=None, headers=None):
         calls.append((url, auth, verify))
         return pages[url.split('https://' + ENDPOINT, 1)[1]]
 
@@ -329,7 +365,7 @@ def test_latest_reports_are_retained_per_target_and_joined_by_user(monkeypatch):
         [quota('*', 'data', 0, 0, kind='group')],
         [quota('user-a', 'data', 1, 1)],
     ):
-        service._quota_reports['data'] = (snapshot['measured_at'], records)
+        service._collected_reports['data'] = (snapshot['measured_at'], records)
         assert (
             service.usage_by_filesystem()[fs_id_from_host(ENDPOINT)]['zero_when_absent']
             is False
@@ -350,6 +386,189 @@ def test_latest_reports_are_retained_per_target_and_joined_by_user(monkeypatch):
     assert rows[0]['limit_bytes'] is None
 
 
+@pytest.mark.parametrize(
+    'path',
+    [
+        # the content read as ONTAP documents it, and the ways around a plain check
+        '/api/storage/volumes/u/files/a%2Fb?byte_offset=0&length=100',
+        '/api/storage/volumes/u/files/a?type=directory&byte_offset=0',
+        '/api/storage/volumes/u/files/a?type=directory&LENGTH=100',
+        '/api/storage/volumes/u/files/a?type=directory&stream_name=x',
+        '/api/storage/volumes/u/files/a?type=directory&byte%5Foffset=0',
+        '/api/storage/volumes/u/files/a?type=directory;length=1',
+        # a file's own read with none of those: not a listing, so no
+        '/api/storage/volumes/u/files/a%2Fb',
+        '/api/storage/volumes/u/files/a%2Fb?fields=size',
+        '/API/storage/volumes/u/FILES/a',
+        '/api/storage/volumes/u/%66iles/a',
+    ],
+)
+@pytest.mark.parametrize('method', ['get', 'first_page'])
+def test_no_call_can_read_file_contents(monkeypatch, path, method):
+    sent = []
+    monkeypatch.setattr(
+        'ideaclustermanager.app.metrics.storage_metrics_service.requests.get',
+        lambda url, **kwargs: sent.append(url),
+    )
+    with pytest.raises(FileContentsRefused):
+        getattr(OntapClient('host', 'user', 'password'), method)(path)
+    assert sent == []
+
+
+def test_a_next_link_cannot_lead_to_file_contents(monkeypatch):
+    sent = []
+
+    def fake_get(url, **kwargs):
+        sent.append(url)
+        next_path = '/api/storage/volumes/u/files/a?byte_offset=0&length=1'
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {'records': [], '_links': {'next': {'href': next_path}}},
+        )
+
+    monkeypatch.setattr(
+        'ideaclustermanager.app.metrics.storage_metrics_service.requests.get', fake_get
+    )
+    with pytest.raises(FileContentsRefused):
+        OntapClient('host', 'user', 'password').get('/api/storage/volumes')
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize(
+    'path',
+    [
+        '/api/storage/volumes?fields=name',
+        '/api/storage/quota/reports',
+        '/api/storage/volumes/u/files/%2F?return_metadata=true&fields=analytics',
+        '/api/storage/volumes/u/files/a%2Fb?type=directory&fields=analytics.bytes_used'
+        '&order_by=analytics.bytes_used%20desc&max_records=1000&return_timeout=10',
+        '/api/storage/volumes/u/files/a?start.iter_key=abc&max_records=1000',
+    ],
+)
+def test_what_the_collectors_ask_for_still_goes_and_only_as_json(monkeypatch, path):
+    sent = []
+
+    def fake_get(url, **kwargs):
+        sent.append(kwargs['headers'])
+        return SimpleNamespace(status_code=200, json=lambda: {'records': []})
+
+    monkeypatch.setattr(
+        'ideaclustermanager.app.metrics.storage_metrics_service.requests.get', fake_get
+    )
+    client = OntapClient('host', 'user', 'password')
+    client.get(path)
+    client.first_page(path)
+    assert [h['Accept'] for h in sent] == ['application/json'] * 2
+
+
+def test_nothing_reaches_ontap_except_through_the_guard():
+    from ideaclustermanager.app.metrics import storage_metrics_service as module
+
+    source = Path(module.__file__).read_text()
+    assert source.count('requests.get(') == 1
+    assert 'requests.post(' not in source and 'requests.request(' not in source
+
+
+def test_the_same_volume_name_on_two_file_systems_is_two_quotas():
+    service = StorageMetricsService(FakeContext({}))
+    service.targets = lambda: [
+        SimpleNamespace(name='data', endpoint='svm.fs-1.example'),
+        SimpleNamespace(name='apps', endpoint='svm.fs-2.example'),
+    ]
+    service._quota_reports = {
+        'data': (10, [quota('alice', 'vol1', 100, 1)]),
+        'apps': (20, [quota('alice', 'vol1', 7, 1)]),
+    }
+    found = sorted(service.get_user_quotas('alice'), key=lambda row: row['used_bytes'])
+    assert [row['used_bytes'] for row in found] == [7, 100]
+    assert [row['endpoint'] for row in found] == [
+        'svm.fs-2.example',
+        'svm.fs-1.example',
+    ]
+
+
+def test_user_quota_sums_nfs_and_smb_rows_and_ignores_duplicate_targets():
+    service = StorageMetricsService(FakeContext({}))
+    rows = [
+        quota('alice', 'profiles', 100, 3),
+        quota('DOMAIN\\Alice', 'profiles', 20, 2),
+        quota('bob', 'profiles', 999, 9),
+    ]
+    service._quota_reports = {'apps': (10, rows), 'data': (20, rows)}
+    found = service.get_user_quotas('alice')
+    assert len(found) == 1
+    assert found[0]['target'] == 'data'
+    assert found[0]['used_bytes'] == 120
+    assert found[0]['files'] == 5
+
+
+def test_unattributed_bytes_come_from_the_file_system_asked_about():
+    service = StorageMetricsService(FakeContext({}))
+    service.targets = lambda: [
+        SimpleNamespace(name='home', endpoint='svm.fs-1'),
+        SimpleNamespace(name='other', endpoint='svm.fs-2'),
+    ]
+    service._quota_reports = {
+        'home': (5, [quota('S-1-5-21-9', 'vol1', 10, 1)]),
+        'other': (9, [quota('S-1-5-21-9', 'vol1', 999, 9)]),
+    }
+    assert service.unattributed_quota('vol1', 'svm.fs-1') == dict(bytes=10, files=1)
+    assert service.unattributed_quota('vol1', 'svm.fs-2') == dict(bytes=999, files=9)
+
+
+def test_owners_known_only_as_a_sid_are_counted_as_unattributed():
+    service = StorageMetricsService(FakeContext({}))
+    service._quota_reports = {
+        'data': (
+            5,
+            [
+                quota('S-1-5-21-9', 'profiles', 70, 2),
+                quota('alice', 'profiles', 10, 1),
+                quota('S-1-5-21-9', 'apps', 500, 5),
+            ],
+        )
+    }
+    assert service.unattributed_quota('profiles') == dict(bytes=70, files=2)
+    assert service.get_user_quotas('s-1-5-21-9')[0]['used_bytes'] == 70
+
+
+def test_any_task_can_read_quotas_and_failure_is_soft(monkeypatch):
+    context = FakeContext(
+        {
+            'cluster-manager.metrics.storage.enabled': True,
+            'metrics.provider': 'cloudwatch',
+            'shared-storage': {
+                'data': {'provider': 'fsx_netapp_ontap'},
+            },
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.metrics.password_secret_arn': 'secret',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+        }
+    )
+    service = StorageMetricsService(context)
+    calls = []
+
+    def read(_):
+        calls.append(1)
+        return [quota('alice', 'profiles', 7, 1)]
+
+    monkeypatch.setattr(OntapClient, 'quota_reports', read)
+    monkeypatch.setattr(context.config(), 'get_secret', lambda _: 'pw', raising=False)
+    service.refresh_quota_reports()
+    service.refresh_quota_reports()
+    assert len(calls) == 1
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 7
+
+    def fail(_):
+        raise RuntimeError('unreachable')
+
+    monkeypatch.setattr(OntapClient, 'quota_reports', fail)
+    service._quota_reports = {}
+    service._quota_attempted = 0
+    service.refresh_quota_reports()
+    assert service.get_user_quotas('alice') == []
+
+
 def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
     service = StorageMetricsService(FakeContext({}))
     targets = [
@@ -357,7 +576,7 @@ def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
         StorageTarget('home', 'svm-b.fs-test.fsx.example.invalid', 'reader', ''),
     ]
     monkeypatch.setattr(service, 'targets', lambda: targets)
-    service._quota_reports = {
+    service._collected_reports = {
         'data': (100, [quota('user-a', 'data', 10, 1), quota('*', 'data', 0, 0)]),
         'home': (
             200,
@@ -380,10 +599,10 @@ def test_filesystem_merges_targets_and_requires_every_report(monkeypatch):
     assert snapshot['measured_at'] == 100
     assert snapshot['complete'] and snapshot['zero_when_absent']
 
-    service._quota_reports['home'][1].pop()
+    service._collected_reports['home'][1].pop()
     snapshot = service.usage_by_filesystem()['fs-test']
     assert snapshot['complete'] and not snapshot['zero_when_absent']
-    del service._quota_reports['home']
+    del service._collected_reports['home']
     snapshot = service.usage_by_filesystem()['fs-test']
     assert not snapshot['complete'] and not snapshot['zero_when_absent']
     assert snapshot['users'] == {'user-a': 10}
@@ -397,7 +616,7 @@ def test_filesystem_deduplicates_targets_with_the_same_endpoint(monkeypatch):
     ]
     monkeypatch.setattr(service, 'targets', lambda: targets)
     for target in targets:
-        service._quota_reports[target.name] = (
+        service._collected_reports[target.name] = (
             100,
             [quota('user-a', 'data', 10, 1), quota('*', 'data', 0, 0)],
         )
@@ -407,7 +626,7 @@ def test_filesystem_deduplicates_targets_with_the_same_endpoint(monkeypatch):
     assert snapshot['total_bytes'] == 10
     assert snapshot['capacity_pool_bytes'] == 20
     assert snapshot['ssd_bytes'] == 30
-    del service._quota_reports['data']
+    del service._collected_reports['data']
     assert service.usage_by_filesystem()['fs-test'] == snapshot
 
 
@@ -438,16 +657,68 @@ def test_saved_snapshot_stands_until_this_process_has_every_report(monkeypatch):
     ]
     monkeypatch.setattr(service, 'targets', lambda: targets)
     assert service.usage_by_filesystem() == saved
-    service._quota_reports = {
+    service._collected_reports = {
         'data': (200, [quota('user-a', 'data', 10, 1), quota('*', 'data', 0, 0)])
     }
     assert service.usage_by_filesystem() == saved
-    service._quota_reports['home'] = (
+    service._collected_reports['home'] = (
         200,
         [quota('user-b', 'home', 5, 1), quota('*', 'home', 0, 0)],
     )
     snapshot = service.usage_by_filesystem()['fs-test']
     assert snapshot['complete'] and snapshot['users'] == {'user-a': 10, 'user-b': 5}
+
+
+def test_a_pane_quota_read_leaves_the_cost_snapshot_alone(monkeypatch):
+    import json
+
+    saved = {
+        'fs-09753a84872d3209b': dict(
+            filesystem_id='fs-09753a84872d3209b',
+            measured_at=100,
+            users={'alice': 30},
+            total_bytes=30,
+            complete=True,
+            zero_when_absent=True,
+            capacity_pool_bytes=5 * 2**40,
+            ssd_bytes=2**40,
+            allocation_pool='Quota bytes; unattributed rows remain unassigned',
+        )
+    }
+    context = FakeContext(
+        {
+            'cluster-manager.metrics.storage.enabled': True,
+            'cluster-manager.metrics.storage.usage_snapshot': json.dumps(saved),
+            'metrics.provider': 'cloudwatch',
+            'shared-storage': {'data': {'provider': 'fsx_netapp_ontap'}},
+            'shared-storage.data.fsx_netapp_ontap.metrics.username': 'reader',
+            'shared-storage.data.fsx_netapp_ontap.metrics.password_secret_arn': 'secret',
+            'shared-storage.data.fsx_netapp_ontap.svm.management_dns': ENDPOINT,
+        },
+        secrets={'secret': 'pw'},
+    )
+    reports = [quota('alice', 'data', 7, 1), quota('*', 'data', 0, 0)]
+    monkeypatch.setattr(OntapClient, 'quota_reports', lambda _: reports)
+    service = StorageMetricsService(context)
+    # a task that has not collected: the pane reads quotas, never volumes
+    service.refresh_quota_reports()
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 7
+    assert service.usage_by_filesystem() == saved
+
+    # one that has: the pane's later quota read does not move the snapshot's users or its time
+    monkeypatch.setattr(
+        OntapClient, 'volumes', lambda _: [volume('data', 100, 50, ssd=30, pool=20)]
+    )
+    service.run_once()
+    collected = service.usage_by_filesystem()
+    assert collected['fs-09753a84872d3209b']['capacity_pool_bytes'] == 20
+    assert collected['fs-09753a84872d3209b']['users'] == {'alice': 7}
+    later = [quota('alice', 'data', 9, 1), quota('*', 'data', 0, 0)]
+    monkeypatch.setattr(OntapClient, 'quota_reports', lambda _: later)
+    service._quota_attempted = 0
+    service.refresh_quota_reports(max_age=0)
+    assert service.get_user_quotas('alice')[0]['used_bytes'] == 9
+    assert service.usage_by_filesystem() == collected
 
 
 def test_volume_quota_excludes_only_matching_user_qtrees():

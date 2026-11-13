@@ -227,6 +227,13 @@ systemctl() {
   [[ "$FAIL" != dcv-launcher || "$*" != 'is-active --quiet dcvsessionlauncher.service' ]]
 }
 modprobe() { [[ "$FAIL" != lustre ]]; }
+dnf() {
+  printf 'dnf %s\n' "$*" >> "$CALLS"
+  case "$FAIL" in
+    openssh) echo 'openssh-server.x86_64 9.9p1-16 baseos'; return 100 ;;
+    openssh-repo) echo 'repository unreachable'; return 1 ;;
+  esac
+}
 nvidia-smi() { [[ "$FAIL" != gpu ]]; }
 # like the real ldd: a script is not a dynamic executable, and libdcv.so resolves only
 # through the pkglibdir the dcvserver wrapper puts on LD_LIBRARY_PATH
@@ -627,11 +634,11 @@ submenu 'Advanced options' --id advanced-id {
     command = tmp_path / 'grub-editenv'
     command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
     command.chmod(0o755)
-    function = function.replace('/boot/grub', str(tmp_path))
     result = subprocess.run(
         [
             'bash',
             '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
             'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
             + function
             + '\nkernel_ok',
@@ -642,6 +649,7 @@ submenu 'Advanced options' --id advanced-id {
             **os.environ,
             'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
             'GRUB_SELECTION': selection,
+            'GRUB_DIR': str(tmp_path),
             'RUNNING': running,
         },
     )
@@ -658,11 +666,11 @@ def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
     command = tmp_path / 'grub-editenv'
     command.write_text('#!/bin/sh\nprintf "saved_entry=%s\\n" "$GRUB_SELECTION"\n')
     command.chmod(0o755)
-    function = function.replace('/boot/grub', str(tmp_path))
     result = subprocess.run(
         [
             'bash',
             '-c',
+            f'source "{IDEA_BOOTSTRAP_DIR}/common/bootstrap_common.sh"\n'
             'BAKE_PYTHON=$(command -v python3)\nuname() { echo "$RUNNING"; }\n'
             + function
             + '\nkernel_ok',
@@ -673,6 +681,7 @@ def run_kernel_check(tmp_path, grub_cfg, running, saved_entry=''):
             **os.environ,
             'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
             'GRUB_SELECTION': saved_entry,
+            'GRUB_DIR': str(tmp_path),
             'RUNNING': running,
         },
     )
@@ -885,6 +894,263 @@ def test_scrub_machine_id_works_with_and_without_var_lib_dbus(tmp_path, has_dbus
     assert (root / 'etc/machine-id').read_text() == ''
     link = root / 'var/lib/dbus/machine-id'
     assert link.is_symlink() == has_dbus_dir
+
+
+def _stub_systemctl(tmp_path, enabled, restart_rc=0):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    calls = tmp_path / 'systemctl.log'
+    stub = bin_dir / 'systemctl'
+    stub.write_text(
+        '#!/bin/bash\n'
+        f'echo "$*" >> {calls}\n'
+        f'[[ "$1" != is-enabled ]] || exit {0 if enabled else 1}\n'
+        f'[[ "$1" != restart ]] || exit {restart_rc}\n'
+    )
+    stub.chmod(0o755)
+    return {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}, calls
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('enabled,restart_rc', [(True, 0), (True, 1), (False, 0)])
+def test_scrub_restarts_kdump_after_its_last_fstab_write(
+    tmp_path, builder, enabled, restart_rc
+):
+    """
+    kdump rebuilds its initrd on any boot that finds /etc/fstab newer than it. The scrub's
+    sed -i rewrote fstab after kdump had built, so every clone rebuilt on its first boot.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    restart = scrub.index('systemctl restart kdump.service')
+    last_fstab_write = max(
+        i
+        for i, line in enumerate(scrub.splitlines())
+        if '/etc/fstab' in line and line.startswith('sed -i')
+    )
+    assert scrub.count('\n', 0, restart) > last_fstab_write
+    start = scrub.rindex('\nif ', 0, restart)
+    block = scrub[start : scrub.index('\nfi\n', restart) + 4]
+    env, calls = _stub_systemctl(tmp_path, enabled, restart_rc)
+    # a kdump that will not start costs each clone a rebuild, not the bake
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert ('restart kdump.service' in calls.read_text()) == enabled
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('rebuilt_by_restart', [True, False])
+def test_scrub_rebuilds_a_kdump_initrd_the_restart_left_older_than_fstab(
+    tmp_path, builder, rebuilt_by_restart
+):
+    """
+    EL9 compute clones still rebuilt: the restart returned 0 with the crash kernel still
+    loaded ("already running"), so the initrd stayed older than fstab and nothing said so.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    restart = scrub.index('systemctl restart kdump.service')
+    start = scrub.rindex('\nif ', 0, restart)
+    block = scrub[start : scrub.index('\nfi\n', restart) + 4]
+    root = tmp_path / 'root'
+    (root / 'boot').mkdir(parents=True)
+    (root / 'etc').mkdir()
+    initrd = root / 'boot/initramfs-5.14.0-687.66.1.el9_8.x86_64kdump.img'
+    initrd.write_text('built at boot')
+    fstab = root / 'etc/fstab'
+    fstab.write_text('UUID=1 / xfs defaults 0 0\n')
+    os.utime(initrd, (1000, 1000))
+    os.utime(fstab, (2000, 2000))
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    stub = tmp_path / 'bin/systemctl'
+    if rebuilt_by_restart:
+        stub.write_text(
+            stub.read_text().replace(
+                '#!/bin/bash\n',
+                f'#!/bin/bash\n[[ "$1" != restart ]] || touch -d @3000 {initrd}\n',
+            )
+        )
+    for name, body in (
+        ('uname', 'echo 5.14.0-687.66.1.el9_8.x86_64'),
+        ('journalctl', 'echo "kdumpctl[1]: kdump: Kdump already running: [WARNING]"'),
+        ('kdumpctl', f'echo "$*" >> {tmp_path}/kdumpctl.log; touch -d @3000 {initrd}'),
+    ):
+        tool = tmp_path / 'bin' / name
+        tool.write_text(f'#!/bin/bash\n{body}\n')
+        tool.chmod(0o755)
+    block = block.replace('/boot/', f'{root}/boot/').replace(
+        '/etc/fstab', f'{root}/etc/fstab'
+    )
+    result = subprocess.run(
+        ['bash', '-ec', block], check=True, env=env, capture_output=True, text=True
+    )
+    rebuilds = tmp_path / 'kdumpctl.log'
+    assert rebuilds.exists() != rebuilt_by_restart
+    if not rebuilt_by_restart:
+        assert rebuilds.read_text() == 'rebuild\n'
+    assert initrd.stat().st_mtime >= fstab.stat().st_mtime
+    # the builder log names what kdump said and both times: the journal is deleted next
+    assert 'kdump: kdumpctl[1]: kdump: Kdump already running' in result.stdout
+    assert str(initrd) in result.stdout and str(fstab) in result.stdout
+    assert ('older than' in result.stdout) != rebuilt_by_restart
+
+
+def test_scrub_is_traced_in_the_builder_log(tmp_path):
+    scrub = render('compute-node-ami-builder/image_scrub.sh.jinja2', 'rocky9')
+    lines = scrub.splitlines()
+    # after the environment is read, before the first command that changes the host
+    assert lines.index('set -x') < next(
+        i for i, line in enumerate(lines) if line.startswith('systemctl ')
+    )
+
+
+def test_compute_cleanup_keeps_the_private_tmp_of_running_services(tmp_path):
+    """
+    kdump.service on EL9 has PrivateTmp: with its directory deleted the service cannot be
+    stopped, and the scrub's restart rebuilt nothing.
+    """
+    post = render(
+        'compute-node-ami-builder/compute_node_ami_builder_post_reboot.sh.jinja2',
+        'rocky9',
+    )
+    line = next(x for x in post.splitlines() if '/var/tmp' in x and 'rm ' in x).strip()
+    root = tmp_path / 'root'
+    kept, removed = [], []
+    for base in ('tmp', 'var/tmp'):
+        private = root / base / 'systemd-private-0819df-kdump.service-AbCdEf/tmp'
+        private.mkdir(parents=True)
+        kept.append(private)
+        hidden = root / base / '.font-unix'
+        hidden.mkdir()
+        kept.append(hidden)
+        for name in ('cloud-init', 'pbs_boot_check'):
+            (root / base / name).mkdir()
+            (root / base / name / 'file').write_text('x')
+            removed.append(root / base / name)
+    # in one pass: on Linux the test's own directory is under /tmp, and a second replace
+    # would rewrite the path the first one had just written
+    line = re.sub(
+        r'(?<=\s)(/var/tmp|/tmp)(?=\s)', lambda m: f'{root}{m.group(1)}', line
+    )
+    assert line.count(str(root)) == 2
+    subprocess.run(['bash', '-ec', line], check=True)
+    assert all(path.is_dir() for path in kept)
+    assert not any(path.exists() for path in removed)
+    # still after kdump has been started, so nothing is deleted under a build in progress
+    assert post.index('systemctl start kdump.service') < post.index(line.split()[0])
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['rocky9', 'ubuntu2404'])
+def test_scrub_leaves_no_builder_lines_for_a_clones_log_stream(
+    tmp_path, builder, base_os
+):
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    start = re.search(r'^systemctl stop (syslog\.socket|rsyslog)', scrub, re.M).start()
+    block = scrub[start : scrub.index('/bin/sync')]
+    root = tmp_path / 'root'
+    journal = root / 'var/log/journal'
+    (journal / 'builder-machine-id').mkdir(parents=True)
+    (journal / 'builder-machine-id/system.journal').write_text('builder')
+    (root / 'var/lib/rsyslog').mkdir(parents=True)
+    (root / 'var/lib/rsyslog/imjournal.state').write_text('cursor')
+    for name in ('messages', 'messages-20261109', 'syslog', 'syslog.1', 'secure'):
+        (root / 'var/log' / name).write_text('builder')
+    block = block.replace('/var/', f'{root}/var/')
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    # ubuntu's rsyslog is socket activated: left listening, syslog.socket starts it again on
+    # the next line and it writes a new /var/log/syslog after the scrub has removed it
+    stub = tmp_path / 'bin/systemctl'
+    stub.write_text(
+        stub.read_text()
+        + f'[[ "$*" != "stop rsyslog" ]] || grep -qx "stop syslog.socket" {calls}'
+        f' || touch {tmp_path}/reactivated\n'
+    )
+    subprocess.run(['bash', '-ec', block], check=True, env=env)
+    assert 'stop rsyslog' in calls.read_text().splitlines()
+    assert not (tmp_path / 'reactivated').exists()
+    assert sorted(p.name for p in (root / 'var/log').iterdir()) == ['journal', 'secure']
+    # the directory stays: journald keeps the clone's journal persistent only if it exists
+    assert list(journal.iterdir()) == []
+    assert not (root / 'var/lib/rsyslog/imjournal.state').exists()
+    # the cloudwatch agent is stopped before rsyslog, so it ships nothing more from the builder
+    assert scrub.index('systemctl stop amazon-cloudwatch-agent') < start
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'rocky9', 'ubuntu2404'])
+def test_a_clone_does_not_boot_the_builders_cloudwatch_agent(
+    tmp_path, builder, base_os
+):
+    """
+    the image kept the agent enabled, so a clone started it at boot with the builder's
+    settings and its bootstrap stopped it 34 s later: 90 s lost to a stop that hung (AL2023).
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    lines = [
+        x for x in scrub.splitlines() if 'amazon-cloudwatch-agent' in x and x[0] != '#'
+    ]
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    assert calls.read_text().splitlines()[:2] == [
+        'stop amazon-cloudwatch-agent',
+        'disable amazon-cloudwatch-agent',
+    ]
+    # a host without the agent installed must not fail its scrub
+    stub = tmp_path / 'bin/systemctl'
+    stub.write_text('#!/bin/bash\nexit 5\n')
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    # what turns it back on: the host's bootstrap starts it through the agent's own tool,
+    # whose start enables the unit
+    host = Path(
+        IDEA_BOOTSTRAP_DIR, '_templates/linux/cloudwatch_agent.jinja2'
+    ).read_text()
+    assert 'amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s ' in host
+    for name in (
+        'virtual-desktop-host-linux/setup.sh.jinja2',
+        'compute-node/compute_node.sh.jinja2',
+    ):
+        assert (
+            "include '_templates/linux/cloudwatch_agent.jinja2'"
+            in Path(IDEA_BOOTSTRAP_DIR, name).read_text()
+        )
+
+
+@pytest.mark.parametrize('builder', ['dcv-host', 'compute-node'])
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'rocky9', 'ubuntu2404'])
+def test_an_al2023_clone_does_not_log_under_its_builders_name(
+    tmp_path, builder, base_os
+):
+    """
+    every line of an AL2023 compute clone's system log carried its builder's host name, and
+    a desktop's until its first reboot: rsyslog keeps the name it read at its start, and the
+    image started it at boot, before cloud-init had named the clone.
+    """
+    scrub = render(f'{builder}-ami-builder/image_scrub.sh.jinja2', base_os)
+    lines = [
+        x
+        for x in scrub.splitlines()
+        if re.match(r'systemctl \w+ (rsyslog|syslog\.socket)\b', x)
+    ]
+    env, calls = _stub_systemctl(tmp_path, enabled=True)
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    expected = ['stop syslog.socket', 'stop rsyslog']
+    # only where IDEA adds rsyslog itself; elsewhere it is the system's and starts after
+    # the host has its name
+    if base_os == 'amazonlinux2023':
+        expected.append('disable rsyslog')
+    assert calls.read_text().splitlines() == expected
+    # a host without the unit must not fail its scrub
+    (tmp_path / 'bin/systemctl').write_text('#!/bin/bash\nexit 5\n')
+    subprocess.run(['bash', '-ec', '\n'.join(lines)], check=True, env=env)
+    # what turns it back on, on the same hosts: every clone's bootstrap, image or not
+    host = render('_templates/linux/rsyslog.jinja2', base_os)
+    assert ('systemctl enable rsyslog --now' in host) == (base_os == 'amazonlinux2023')
+    for name in (
+        'virtual-desktop-host-linux/setup.sh.jinja2',
+        'compute-node/setup.sh.jinja2',
+    ):
+        setup = Path(IDEA_BOOTSTRAP_DIR, name).read_text()
+        start = setup.index("include '_templates/linux/rsyslog.jinja2'")
+        # not inside a branch a baked host skips
+        assert 'baked-release' not in setup[setup.rindex('\nfi\n', 0, start) : start]
 
 
 def test_a_failed_scrub_names_the_command(tmp_path):
@@ -1263,6 +1529,41 @@ def test_windows_user_data_that_runs_again_after_the_final_restart_is_a_no_op(ba
     written = body.index('[IO.File]::WriteAllText($ConfiguredMarker')
     assert body.index('IDEA_BOOTSTRAP_COMPLETE') < written
     assert written < body.rindex('Restart-Computer -Force')
+
+
+def test_windows_drive_paths_have_one_separator_between_parts():
+    """a share name stored with doubled backslashes went into net use as it was"""
+    from types import SimpleNamespace
+
+    shares = {
+        'data': {
+            'provider': 'fsx_netapp_ontap',
+            'mount_drive': 'H',
+            'fsx_netapp_ontap': {
+                'svm': {'smb_dns': 'SVM.EXAMPLE'},
+                'volume': {'cifs_share_name': 'Users$\\\\home\\\\%UserName%'},
+            },
+        },
+        'apps': {
+            'provider': 'fsx_netapp_ontap',
+            'mount_drive': 'A',
+            'fsx_netapp_ontap': {
+                'svm': {'smb_dns': 'SVM.EXAMPLE'},
+                'volume': {'cifs_share_name': 'Apps'},
+            },
+        },
+    }
+    context = SimpleNamespace(
+        config=SimpleNamespace(get_config=lambda key: shares),
+        eval_shared_storage_scope=lambda shared_storage: True,
+    )
+    text = (
+        Environment(loader=FileSystemLoader(IDEA_BOOTSTRAP_DIR))
+        .get_template('_templates/windows/mount_shared_storage.jinja2')
+        .render(context=context)
+    )
+    assert "Path='\\\\SVM.EXAMPLE\\Users$\\home\\%UserName%'" in text
+    assert "Path='\\\\SVM.EXAMPLE\\Apps'" in text
 
 
 @pytest.mark.parametrize('base_os', WINDOWS)

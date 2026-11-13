@@ -75,6 +75,9 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 {% include '_templates/linux/rsyslog.jinja2' %}
 
+# before the first initramfs this bake builds
+drop_xen_dracut_drivers
+
 {% include '_templates/linux/idea_service_account.jinja2' %}
 
 {% include '_templates/linux/aws_ssm.jinja2' %}

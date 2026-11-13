@@ -214,10 +214,10 @@ def test_unauthorized_project_lists_projects_the_user_can_use(context, monkeypat
     with pytest.raises(exceptions.SocaException) as exc_info:
         util.check_acls()
 
-    assert (
-        'User: researcher is not authorized to submit jobs for project: '
-        'project-a on queue: normal. You can use: project-b, project-c'
-    ) in exc_info.value.message
+    assert exc_info.value.message == (
+        "You can't use project project-a on queue normal. "
+        'Choose one of these projects (#PBS -P in a script): project-b, project-c.'
+    )
 
 
 @pytest.mark.parametrize('project', [None, 'project-b'])
@@ -332,6 +332,7 @@ def test_hook_writes_project_only_when_needed(
             'is_applicable': lambda e: True,
             'PRE_EXECUTION_HOOKS': ['queuejob', 'modifyjob'],
             'HOOK_EVENT_QUEUEJOB': 'queuejob',
+            'HOOK_EVENT_RUNJOB': 'runjob',
             'HOOK_EVENT_MODIFYJOB': 'modifyjob',
             'invoke_soca_scheduler': lambda e: {
                 'success': True,
@@ -415,10 +416,7 @@ def test_modifyjob_validates_requested_project_without_writing_event(
     if accepted:
         assert result.project == expected_project
     else:
-        assert (
-            'not authorized to submit jobs for project: project-a'
-            in result.formatted_user_message
-        )
+        assert "You can't use project project-a" in result.formatted_user_message
     assert writes == []
     assert hook.event.job.project == changed_project
     assert hook.event.job.Job_Owner is None
@@ -480,3 +478,27 @@ def test_missing_project_with_no_enabled_queue_projects(context, monkeypatch, pr
     assert result.accept is False
     assert 'Queue normal has no enabled projects' in result.formatted_user_message
     assert 'one of:' not in result.formatted_user_message
+
+
+def test_no_allowed_project_says_who_to_ask(context, monkeypatch):
+    _use_queue(context, monkeypatch, _projects('project-a'))
+    monkeypatch.setattr(
+        context.projects_client, 'get_user_projects', lambda username: []
+    )
+    job = SocaJob(
+        owner='researcher',
+        project='project-a',
+        queue='normal',
+        job_id='1',
+        params=SocaJobParams(nodes=1, cpus=1),
+    )
+    util = JobProvisioningUtil(context=context, jobs=[job])
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        util.check_acls()
+
+    assert exc_info.value.message == (
+        "You aren't in a project allowed on queue normal. "
+        'Ask an administrator to add you to one.'
+    )
+    assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS

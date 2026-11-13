@@ -214,7 +214,7 @@ export interface S3Api {
 export interface ConfigWriter {
   syncModulesInDb(modules: ModuleSpec[]): Promise<void>;
   syncClusterSettingsInDb(entries: ConfigEntry[], overwrite?: boolean, source?: 'cli' | 'template'): Promise<void>;
-  setConfigEntry(key: string, value: unknown): Promise<void>;
+  setConfigEntry(key: string, value: unknown, source?: 'cli' | 'template'): Promise<void>;
   deleteConfigEntries(configKeyPrefix: string): Promise<void>;
 }
 

@@ -73,6 +73,7 @@ The client install is gated on `base_os` and the running kernel series, because 
 * `rhel8`/`rocky8`, `rhel9`/`rocky9`: from the AWS FSx client repo matching the running kernel. An unrecognized kernel series logs an error and skips the install.
 * `rhel10`/`rocky10`: **require an EL 10.1 or 10.2 AMI.** EL 10.0 has no client; the bootstrap logs an error and Lustre is not mounted. The AMI refresh tooling pins EL10 lookups to 10.1 and 10.2 for this reason.
 * `ubuntu2204`, `ubuntu2404`: install normally from the AWS FSx client repo.
+* EL compute images and compute nodes keep the kernel series their image boots when the cluster uses FSx for Lustre, as desktops do: a new EL point release ships its kernel before AWS publishes a client for it. An image that already boots such a kernel cannot be baked for a Lustre cluster until the client exists, and the bake fails with `lustre_kernel`.
 * `ubuntu2604` (virtual desktops): the `resolute` suite carries modules for one `7.0.0-*-aws` kernel at a time. Desktop image bakes move to that kernel and hold it; a desktop launched from the stock image needs that kernel to be the one it boots.
 
 An EL 10 client cannot mount a Lustre 2.10 or 2.12 filesystem. New scratch filesystems default to 2.15, but an imported pre-2.15 filesystem does not mount from these nodes.

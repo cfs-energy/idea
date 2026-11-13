@@ -54,6 +54,25 @@ export class ClusterConfigDbError extends Error {
   }
 }
 
+/**
+ * A settings write the credentials may not make. Of the control-plane task roles only
+ * cluster-manager's writes any setting; the controller and scheduler roles write only the few
+ * rows they own, so ideactl in their task shells can show settings but not change them.
+ */
+export class ClusterSettingsWriteDenied extends Error {
+  constructor(table: string, cause: unknown) {
+    super(
+      `These AWS credentials cannot change ${table}. In a control-plane task, only the cluster-manager ` +
+        "task's role can; the others write only their own rows. Run the command in a cluster-manager " +
+        'task, or from a workstation with an administrator profile (--aws-profile). If an administrator ' +
+        'is refused, an SCP, permissions boundary or endpoint policy denies the write: IDEA_DEBUG=1 ' +
+        'prints the AWS error.',
+      { cause },
+    );
+    this.name = 'ClusterSettingsWriteDenied';
+  }
+}
+
 export interface ConfigEntry {
   key: string;
   value?: unknown;
@@ -105,6 +124,12 @@ async function dynamoRegion(client: DynamoDBClient): Promise<string | undefined>
     if (typeof value === 'string' && value !== '') return value;
   }
   return undefined;
+}
+
+/** A value as a log line shows it: a map or list as JSON, never `[object Object]`. */
+function shown(value: unknown): string {
+  if (value === null || typeof value !== 'object') return String(value);
+  return JSON.stringify(value, (_key, item: unknown) => (item instanceof Set ? [...item] : item));
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -244,8 +269,8 @@ export class ClusterConfigDb {
 
   /** Write value and last writer atomically; version counts writes. */
   async setConfigEntry(key: string, value: unknown, source: 'cli' | 'template' = 'cli'): Promise<void> {
-    this.logger(`updating config: ${key} = ${String(value)}`);
-    await this.doc.send(
+    this.logger(`updating config: ${key} = ${shown(value)}`);
+    await this.write(
       new UpdateCommand({
         TableName: this.clusterSettingsTableName,
         Key: { key },
@@ -309,7 +334,7 @@ export class ClusterConfigDb {
     for (const module of modulesToCreate) {
       const status = module.type === 'config' ? 'deployed' : 'not-deployed';
       this.logger(`creating module entry for module: ${module.name}, module_id: ${module.id}`);
-      await this.doc.send(
+      await this.write(
         new UpdateCommand({
           TableName: this.modulesTableName,
           Key: { module_id: module.id },
@@ -359,8 +384,8 @@ export class ClusterConfigDb {
     }
     this.logger(`found ${toDelete.length} config entries matching: ${configKeyPrefix}`);
     for (const item of toDelete) {
-      this.logger(`deleting config entry - ${String(item['key'])} = ${String(item['value'])}`);
-      await this.doc.send(
+      this.logger(`deleting config entry - ${String(item['key'])} = ${shown(item['value'])}`);
+      await this.write(
         new DeleteCommand({
           TableName: this.clusterSettingsTableName,
           Key: { key: item['key'] },
@@ -368,5 +393,17 @@ export class ClusterConfigDb {
       );
     }
     this.logger(`deleted ${toDelete.length} config entries`);
+  }
+
+  private async write(command: UpdateCommand | DeleteCommand): Promise<void> {
+    try {
+      if (command instanceof UpdateCommand) await this.doc.send(command);
+      else await this.doc.send(command);
+    } catch (error) {
+      if ((error as { name?: string })?.name === 'AccessDeniedException') {
+        throw new ClusterSettingsWriteDenied(String(command.input.TableName), error);
+      }
+      throw error;
+    }
   }
 }

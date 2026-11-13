@@ -18,6 +18,7 @@ import {
   createLiveUpgradeDeps,
   dcvUbuntuPinTargets,
   planCostIntervalDefault,
+  planCostLookbackDefault,
   planDcvUbuntuPins,
   planEcsImageFollowsRelease,
   prepareUpgradeDriftInput,
@@ -103,12 +104,14 @@ function replay(): Replay {
         .filter((name): name is string => name !== undefined);
       if (announced.length > 0) events.push(`module-sets:${overwrite === true}:${announced.sort().join(",")}`);
     },
-    async setConfigEntry(key, value) {
+    async setConfigEntry(key, value, source = "cli") {
       events.push(`set:${key}=${String(value)}`);
       const table = rows[`${clusterName}.cluster-settings`]!;
       const index = table.findIndex((row) => row["key"] === key);
-      if (index < 0) table.push(setting(key, value));
-      else table[index] = setting(key, value);
+      // as the table writer does: stamp the writer, count the write
+      const version = index < 0 ? 1 : Number(table[index]!["version"] ?? 0) + 1;
+      if (index < 0) table.push({ ...setting(key, value), source, version });
+      else table[index] = { ...setting(key, value), source, version };
     },
     async deleteConfigEntries(prefix) {
       events.push(`delete:${prefix}`);
@@ -504,17 +507,46 @@ test("the pinned DCV release matches the global settings template", () => {
 });
 
 const COST_INTERVAL = "cluster-manager.metrics.cost.interval_hours";
+const COST_LOOKBACK = "cluster-manager.metrics.cost.lookback_days";
 const CLUSTER_MANAGER = [{ module_id: "cluster-manager", name: "cluster-manager", type: "app" }];
 
+test("the cost lookback moves from the old three-day default to seven and nothing else moves", () => {
+  const plan = (row?: { value: unknown; source?: string; version?: number }) =>
+    planCostLookbackDefault(CLUSTER_MANAGER, row === undefined ? [] : [{ key: COST_LOOKBACK, ...row }]);
+  assert.deepEqual(plan({ value: 3, source: "template" }), [{ key: COST_LOOKBACK, value: 7 }]);
+  assert.deepEqual(plan({ value: 3 }), [{ key: COST_LOOKBACK, value: 7 }]);
+  // `config update` at install stamps every row it writes cli at version 1: the template's value
+  assert.deepEqual(plan({ value: 3, source: "cli", version: 1 }), [{ key: COST_LOOKBACK, value: 7 }]);
+  assert.deepEqual(plan({ value: 5, source: "cli", version: 1 }), []);
+  assert.deepEqual(plan({ value: 5, source: "template" }), []);
+  assert.deepEqual(plan(), []);
+  // written again since, or from the portal: the operator chose three
+  assert.deepEqual(plan({ value: 3, source: "cli", version: 2 }), []);
+  assert.deepEqual(plan({ value: 3, source: "cli" }), []);
+  assert.deepEqual(plan({ value: 3, source: "api", version: 1 }), []);
+  assert.deepEqual(plan({ value: 3, source: "api" }), []);
+  assert.deepEqual(plan({ value: 7, source: "template" }), []);
+  assert.deepEqual(planCostLookbackDefault([], [{ key: COST_LOOKBACK, value: 3 }]), []);
+
+  const report = compareUpgradeDrift({
+    current: [{ key: COST_LOOKBACK, value: 3, source: "template" }],
+    generated: [{ key: COST_LOOKBACK, value: 7 }],
+    phase3: plan({ value: 3, source: "template" }),
+  });
+  assert.equal(report.findings.find((row) => row.key === COST_LOOKBACK)?.routineUpdate, "template default");
+});
+
 test("the cost interval moves from the old six-hour default to 24 and nothing else moves", () => {
-  const plan = (row?: { value: unknown; source?: string }) =>
+  const plan = (row?: { value: unknown; source?: string; version?: number }) =>
     planCostIntervalDefault(CLUSTER_MANAGER, row === undefined ? [] : [{ key: COST_INTERVAL, ...row }]);
   assert.deepEqual(plan({ value: 6, source: "template" }), [{ key: COST_INTERVAL, value: 24 }]);
   // a release that stamped no source wrote the template default too
   assert.deepEqual(plan({ value: 6 }), [{ key: COST_INTERVAL, value: 24 }]);
   assert.deepEqual(plan({ value: 12, source: "template" }), []);
   assert.deepEqual(plan(), []);
+  assert.deepEqual(plan({ value: 6, source: "cli", version: 1 }), [{ key: COST_INTERVAL, value: 24 }]);
   // the operator chose six
+  assert.deepEqual(plan({ value: 6, source: "cli", version: 2 }), []);
   assert.deepEqual(plan({ value: 6, source: "cli" }), []);
   assert.deepEqual(plan({ value: 6, source: "api" }), []);
   // a second upgrade finds 24 and plans nothing
@@ -554,6 +586,25 @@ for (const [stored, expected] of [[6, 24], [12, 12], [undefined, undefined]] as 
     });
   });
 }
+
+test("a cost default moved in Phase 3 stays the template's, so a later upgrade can move it again", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    const table = rows[`${clusterName}.cluster-settings`]!;
+    rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
+    // written by `config update` at install
+    table.push({ key: COST_LOOKBACK, value: 3, source: "cli", version: 1 });
+    const run = () => upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, skipGlobalSettingsUpdate: true });
+    await run();
+    assert.ok(events.includes(`set:${COST_LOOKBACK}=7`));
+    const moved = table.find((row) => row["key"] === COST_LOOKBACK)!;
+    assert.equal(moved["value"], 7);
+    // stamped cli at version 2 it would read as an operator's choice from then on
+    assert.equal(moved["source"], "template");
+    events.length = 0;
+    await run();
+    assert.ok(!events.some((event) => event.startsWith(`set:${COST_LOOKBACK}=`)));
+  });
+});
 
 for (const serviceSoftwareOptions of [
   { newVersion: "R20260901-P1", updateAvailable: true, updateStatus: "ELIGIBLE" },
@@ -1221,12 +1272,12 @@ for (const point of ["global-write", "full-sync", "phase3", "deployment"]) {
             }
             await writer.syncClusterSettingsInDb(entries, overwrite, source);
           },
-          async setConfigEntry(key, value) {
+          async setConfigEntry(key, value, source) {
             if (!failed && point === "phase3" && key === "analytics.opensearch.data_node_instance_type") {
               failed = true;
               throw new Error("injected interruption");
             }
-            await writer.setConfigEntry(key, value);
+            await writer.setConfigEntry(key, value, source);
           },
         };
       };
@@ -1253,7 +1304,7 @@ test("original cleared IDs restore protection even when their tags disappear", a
   });
 });
 
-for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "metrics.cost.enabled", "unrelated.last_published"]) {
+for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_collected", "metrics.storage.usage_snapshot", "accounts.reconcile.last_completed", "accounts.reconcile.last_run", "metrics.backfill.cost", "metrics.backfill.jobs", "accounts.reconcile.enabled", "metrics.cost.enabled", "unrelated.last_published"]) {
   test(`completion scopes runtime checkpoint exceptions: ${suffix}`, async () => {
     await withFixture(async ({ deps, rows }) => {
       rows[`${clusterName}.modules`]!.push(moduleRow("cluster-manager", "cluster-manager"));
@@ -1264,8 +1315,23 @@ for (const suffix of ["metrics.cost.last_collected", "metrics.storage.last_colle
         await deploy(input);
         rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = 2;
       };
-      if (suffix.endsWith("last_collected") || suffix.endsWith("last_completed") || suffix.endsWith("usage_snapshot")) await upgradeCluster(deps, containerOptions);
+      // metrics.backfill.jobs is the scheduler's row; under the cluster manager it is not a checkpoint
+      if (/last_collected$|last_completed$|usage_snapshot$|reconcile\.last_run$|backfill\.cost$/.test(suffix)) await upgradeCluster(deps, containerOptions);
       else await assert.rejects(upgradeCluster(deps, containerOptions), /Completion verification failed for setting/);
+    });
+  });
+}
+
+for (const key of ["vdc.software_stacks.expiry_last_digest_on", "scheduler.metrics.backfill.jobs"]) {
+  test(`completion lets an application advance ${key} during the upgrade`, async () => {
+    await withFixture(async ({ deps, rows }) => {
+      rows[`${clusterName}.cluster-settings`]!.push(setting(key, 1));
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)!["value"] = 2;
+      };
+      await upgradeCluster(deps, containerOptions);
     });
   });
 }
