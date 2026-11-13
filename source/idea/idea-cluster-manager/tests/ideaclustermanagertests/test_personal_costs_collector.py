@@ -1842,3 +1842,213 @@ def test_fifty_users_one_day_inventory_requests(setup, monkeypatch, capsys):
             f'RCU {before["rcu"]} -> {after["rcu"]}'
         )
     calc._workers.shutdown()
+
+
+def observed_day(store, start, missed=()):
+    """One disk kept all day, seen at a healthy collector's pace: a sweep every 937 s
+    (93 a day, 926 to 938 s apart on a real cluster), less the hours in missed."""
+    volume = {
+        'VolumeId': 'vol-test',
+        'VolumeType': 'gp3',
+        'Size': 100,
+        'CreateTime': start.shift(days=-1).isoformat(),
+        'Attachments': [],
+    }
+    day = start.format('YYYY-MM-DD')
+    store.put_source(
+        'user-a',
+        f'inventory:{day}:{start.int_timestamp}',
+        {'as_of': start.isoformat(), 'instances': {}, 'volumes': [volume]},
+    )
+    seen = start
+    while (seen := seen.shift(seconds=937)) < start.shift(days=1):
+        if seen.hour not in missed:
+            store.put_source(
+                SYSTEM,
+                f'inventory-sweep:{day}:{seen.int_timestamp}',
+                {'as_of': seen.isoformat(), 'users': ['user-a']},
+            )
+
+
+def test_a_disk_day_is_partial_only_when_observations_missed_part_of_it(
+    setup, monkeypatch
+):
+    context, store, _ = setup
+    calc = DailyCostsCalculator(context, store)
+    monkeypatch.setattr(calc, '_volume_price', lambda volume_type: 0.08)
+    whole, broken = arrow.get('2026-11-07T00:00:00Z'), arrow.get('2026-11-09T00:00:00Z')
+    observed_day(store, whole)
+    observed_day(store, broken, missed=range(6, 12))
+    result = calc.disk_day('user-a', whole, whole.shift(days=1))
+    # every day was partial, so a fully counted month read as days not counted
+    assert result.status == 'ready'
+    # 93 samples of 15 minutes: 96.9% of the day
+    assert result.cost == pytest.approx(100 * 0.08 / 30 * 93 * 900 / 86400, abs=5e-4)
+    gap = calc.disk_day('user-a', broken, broken.shift(days=1))
+    assert gap.status == 'partial' and gap.cost < result.cost * 0.8
+    calc._workers.shutdown()
+
+
+# One user's settled days as a 26.11.1 cluster stored them: a disk amount on every
+# day, every disk day partial, and no AI cost with Bedrock off.
+STORED_BEFORE = {
+    1: 0.1062,
+    2: 0.1019,
+    3: 0.1191,
+    4: 0.1022,
+    5: 0.1021,
+    6: 0.069,
+    7: 0.0,
+    8: 0.0,
+    9: 0.0208,
+}
+
+
+def stored_before(calc, start):
+    def line(cost, status):
+        return MyCostsAmount(
+            cost=cost,
+            status=status,
+            reason='r',
+            coverage={
+                'known_days': 0,
+                'missing_days': 0,
+                'missing_prices': 0,
+                'inferred_intervals': 0,
+            },
+        ).model_dump(mode='json')
+
+    days = {}
+    for number, disks in STORED_BEFORE.items():
+        cursor = start.shift(days=number - 1)
+        days[cursor.format('YYYY-MM-DD')] = dict(
+            start=cursor.isoformat(),
+            closed=False,
+            lines={
+                'jobs': line(0.0, 'ready'),
+                'desktops': line(0.0, 'ready'),
+                'desktop_disks': line(disks, 'partial'),
+                'shared_storage': line(0.0, 'ready'),
+                'ai': line(None, 'unavailable'),
+            },
+            shares={},
+        )
+    calc._store_days('user-a', start.format('YYYY-MM'), days)
+
+
+def test_a_month_with_every_disk_day_counted_and_bedrock_off_is_complete(
+    setup, monkeypatch
+):
+    context, store, _ = setup
+    context.config().get_bool = lambda key, default=None: (
+        not key.endswith('bedrock.enabled')
+    )
+    calc = DailyCostsCalculator(context, store)
+    calc.day = lambda user, lower, upper, storage=None: {
+        facet: calc._line(0.0, missing=facet == 'ai') for facet in FACETS
+    }
+    at(monkeypatch, '2026-11-13T15:26:00Z')
+    start = arrow.utcnow().floor('month')
+    stored_before(calc, start)
+    result = calc.month('user-a', start, arrow.utcnow())
+    disks = result.desktop_disks
+    assert [point.amount for point in disks.daily[:9]] == list(STORED_BEFORE.values())
+    assert {point.status for point in disks.daily} == {'ready'}
+    assert disks.status == 'ready' and disks.coverage.missing_days == 0
+    assert result.ai.cost is None and result.ai.status == 'not_applicable'
+    assert {point.status for point in result.ai.daily} == {'not_applicable'}
+    assert result.ai.coverage.missing_days == 0
+    assert not result.incomplete
+    # with Bedrock on, the same days are a cost still to come
+    context.config().get_bool = lambda key, default=None: True
+    result = calc.month('user-a', start, arrow.utcnow())
+    assert result.ai.status == 'unavailable' and result.ai.coverage.missing_days == 13
+    assert result.incomplete
+    calc._workers.shutdown()
+
+
+def test_a_stored_disk_day_with_a_missing_price_stays_partial(setup, monkeypatch):
+    context, store, _ = setup
+    calc = DailyCostsCalculator(context, store)
+    calc.day = lambda user, lower, upper, storage=None: {
+        facet: calc._line(0.0) for facet in FACETS
+    }
+    at(monkeypatch, '2026-11-13T15:26:00Z')
+    start = arrow.utcnow().floor('month')
+    stored_before(calc, start)
+    days = calc._stored_days('user-a', '2026-11')
+    days['2026-11-02']['lines']['desktop_disks']['coverage']['missing_prices'] = 1
+    calc._store_days('user-a', '2026-11', days)
+    daily = calc.month('user-a', start, arrow.utcnow()).desktop_disks.daily
+    assert [point.status for point in daily[:3]] == ['ready', 'partial', 'ready']
+    calc._workers.shutdown()
+
+
+def test_a_day_settled_as_unknown_keeps_its_amount_without_staleness():
+    from ideadatamodel import MyCostsDaily
+
+    def storage(third, status, as_of):
+        return MyCostsAmount(
+            cost=0.5 if third is None else 0.5 + third,
+            status=status,
+            reason='Rate estimate.',
+            source_as_of=as_of,
+            daily=[
+                MyCostsDaily(date='2026-09-03', day=3, amount=third, status='partial'),
+                MyCostsDaily(
+                    date='2026-09-06', day=6, amount=0.5, status='estimated_share'
+                ),
+            ],
+        )
+
+    old = month()
+    old.shared_storage = storage(0.0, 'partial', '2026-09-06T16:01:41-05:00')
+    candidate = month()
+    candidate.shared_storage = storage(None, 'partial', '2026-09-13T10:26:15-05:00')
+    assert not PersonalCostsCollector.retain_known(candidate, old, {'2026-09-03'})
+    line = candidate.shared_storage
+    assert line.daily[0].amount == 0.0 and line.daily[0].status == 'partial'
+    assert line.cost == 0.5 and line.status == 'partial'
+    # the min against the last result could only go back, for the rest of the month
+    assert line.source_as_of == '2026-09-13T10:26:15-05:00'
+    assert 'Source unavailable' not in line.reason
+    # a day still being computed is a failed read, as before
+    candidate.shared_storage = storage(None, 'partial', '2026-09-13T10:26:15-05:00')
+    assert PersonalCostsCollector.retain_known(candidate, old)
+    assert candidate.shared_storage.source_as_of == '2026-09-06T16:01:41-05:00'
+
+
+def test_the_header_time_is_the_collection_and_a_settled_gap_is_not_stale(
+    setup, monkeypatch
+):
+    worker, _ = fifty_users(setup, monkeypatch)
+    _, store, _ = setup
+    calc = worker.calculator
+    inner = calc.day
+
+    def day(user, lower, upper, storage=None):
+        lines = inner(user, lower, upper, storage)
+        if lower.day == 11 and arrow.utcnow() < arrow.get('2026-11-14'):
+            # known while the day was open, then unknown for good (day 11 has no AI)
+            lines['ai'] = calc._line(1.0)
+        return lines
+
+    calc.day = day
+
+    def collected(when):
+        at(monkeypatch, when)
+        worker.check()
+        return GetMyCostsResult(
+            **store.projection('user-00', store.get('user-00', 'head'), 'costs')
+        )
+
+    first = collected('2026-11-13T12:00:00Z')
+    assert first.current.ai.daily[10].amount == 1.0 and first.state == 'ready'
+    for when in ('2026-11-15T12:00:00Z', '2026-11-15T12:16:00Z'):
+        result = collected(when)
+        assert result.current.ai.daily[10].amount == 1.0
+        assert result.current.ai.daily[10].status == 'partial'
+        # stale on every run, and the header pinned to the oldest source, until Dec 1
+        assert result.state == 'ready'
+        assert arrow.get(result.refreshed_at) == arrow.get(when)
+    calc._workers.shutdown()

@@ -24,6 +24,10 @@ describe('personal costs card', () => {
     it.each([
         [{cost: 1, status: 'ready'}, false, null],
         [{cost: 1, status: 'partial'}, false, 'Partial'],
+        // a real desktop disk line before 26.11.2 stored it as counted: an amount on every day, none missing
+        [{cost: 0.6245, status: 'partial', coverage: {missing_days: 0}}, false, null],
+        [{cost: 1, status: 'ready', daily: [{date: '2020-01-01', day: 1, amount: null, status: 'unavailable'}]}, false, 'Partial'],
+        [{cost: 1, status: 'partial', daily: [{date: '2020-01-01', day: 1, amount: 1, status: 'partial'}]}, false, 'Partial'],
         [{status: 'unavailable'}, false, 'No data'],
         [{cost: 0, status: 'ready'}, false, null],
         [{cost: 1, status: 'estimated_share'}, false, 'Shared cost'],

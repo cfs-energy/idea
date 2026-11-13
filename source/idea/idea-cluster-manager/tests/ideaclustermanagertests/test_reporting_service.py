@@ -189,6 +189,21 @@ def test_missing_zero_stale_and_currency_are_distinct():
     )
 
 
+def test_a_facet_that_does_not_apply_misses_no_days():
+    selected = period('2024-02-01', '2024-02-02')
+    off = [
+        dict(date=f'2024-02-0{day}', amount=None, status='not_applicable')
+        for day in (1, 2)
+    ]
+    amount, cover = selected_money(projection(off), 'ai', selected, 'USD', 'UTC')
+    # AI with Bedrock off read "missing at least 2 days" on every row of an export
+    assert amount is None
+    assert cover['status'] == 'not_applicable' and cover['missing_days'] == 0
+    off[1] = dict(date='2024-02-02', amount=None, status='unavailable')
+    amount, cover = selected_money(projection(off), 'ai', selected, 'USD', 'UTC')
+    assert cover['status'] == 'unavailable' and cover['missing_days'] == 1
+
+
 def test_efficiency_is_ratio_of_sums_and_can_exceed_one_hundred():
     value = data()
     value['jobs'] = [

@@ -164,20 +164,63 @@ it.each([['cost-jobs', 'Jobs'], ['cost-storage', 'Storage'], ['cost-ai', 'Overvi
 const partialLine = {amount: 10, status: 'partial', note: 'Stored calculation rule.', daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}, {date: '2999-01-01', amount: null, status: 'unavailable'}]};
 const withLine = (key: string, line: any): GetMyCostsResult => ({...snapshot, current: {...month, [key]: line} as MyCostsMonth});
 describe('at real scale', () => {
-    it('labels a month with missing days, counting past days only', async () => {
+    it('keeps the amount as the headline and names missing past days in the line under it', async () => {
         const {costs} = setup();
         costs.mockResolvedValue(withLine('jobs', partialLine));
         open();
-        expect(await screen.findByText('At least $150.00')).toBeInTheDocument();
-        expect(within(tile('Job spend')).getByText('At least $10.00')).toBeInTheDocument();
-        expect(within(tile('Job spend')).getByText('A day is not counted yet, so this may be higher.')).toBeInTheDocument();
+        expect(await screen.findByText('$150.00')).toBeInTheDocument();
+        expect(within(tile('Job spend')).getByText('$10.00')).toBeInTheDocument();
+        expect(within(tile('Job spend')).getByText('So far. A day is not counted yet.')).toBeInTheDocument();
+        expect(within(tile('Total spend')).getByText('So far. Some days are not fully counted yet.')).toBeInTheDocument();
+        expect(screen.queryByText(/At least/)).toBeNull();
     });
     it('does not call a running month partial because today is not in yet', async () => {
         const {costs} = setup();
         costs.mockResolvedValue(withLine('jobs', {...partialLine, daily: [{date: '2999-01-01', amount: null, status: 'unavailable'}]}));
         open();
         expect(await screen.findByText('$150.00')).toBeInTheDocument();
+        expect(screen.queryByText(/So far/)).toBeNull();
+    });
+    // The stored rows of three real users on 2026-11-13, as the 26.11.2 release candidate published them: a
+    // desktop disk amount on every day, every disk day partial, coverage.missing_days 0, and no AI cost at all.
+    const november = (amounts: (number | null)[], status: (day: number) => string) => amounts.map((amount, index) => ({date: `2020-11-${String(index + 1).padStart(2, '0')}`, day: index + 1, amount, status: status(index + 1)}));
+    const coverage = (missing_days: number, missing_prices = 0) => ({known_days: 13 - missing_days, missing_days, missing_prices, inferred_intervals: 0});
+    const disks = {amount: 0.6245, cost: 0.6245, status: 'partial', coverage: coverage(0), daily: november([0.1062, 0.1019, 0.1191, 0.1022, 0.1021, 0.069, 0, 0, 0.0208, 0.0032, 0, 0, 0], () => 'partial')};
+    const aiOff = {amount: null, cost: null, status: 'unavailable', coverage: coverage(13), daily: november(Array(13).fill(null), () => 'unavailable')};
+    const pricedJobs = {amount: 0.7688, cost: 0.7688, status: 'partial', coverage: coverage(0, 4), daily: november([0.0195, 0, 0, 0, 0.1463, 0, 0, 0, 0.3608, 0.156, 0, 0.0862, 0], day => [5, 9, 10].includes(day) ? 'partial' : 'ready')};
+    const real = (lines: Record<string, any>): GetMyCostsResult => ({...snapshot, current: {...month, total: 5.6229, incomplete: true, ...lines} as MyCostsMonth});
+    it('never calls a day with an amount not counted', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue(real({desktop_disks: disks, ai: aiOff}));
+        open();
+        expect(within(await screen.findByRole('heading', {level: 3, name: 'Total spend'}).then(() => tile('Total spend'))).getByText('$5.62')).toBeInTheDocument();
+        expect(within(tile('Desktop disks')).getByText('$0.62')).toBeInTheDocument();
         expect(screen.queryByText(/At least/)).toBeNull();
+        expect(screen.queryByText(/not counted yet/)).toBeNull();
+    });
+    it('shows the same month plainly once the collector has stored it as counted, with AI off', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue(real({incomplete: false, desktop_disks: {...disks, status: 'ready', daily: disks.daily.map(day => ({...day, status: 'ready'}))},
+            ai: {...aiOff, status: 'not_applicable', coverage: coverage(0), daily: aiOff.daily.map(day => ({...day, status: 'not_applicable'}))}}));
+        open();
+        await screen.findByRole('heading', {level: 3, name: 'Desktop disks'});
+        expect(within(tile('Desktop disks')).getByText('$0.62')).toBeInTheDocument();
+        expect(within(tile('Desktop disks')).queryByText(/So far/)).toBeNull();
+        expect(within(tile('Total spend')).getByText('$5.62')).toBeInTheDocument();
+        expect(screen.queryByText(/So far|At least/)).toBeNull();
+        // Bedrock is off on this cluster, so there is no next update to check back for
+        expect(screen.queryByRole('heading', {level: 3, name: 'AI'})).toBeNull();
+        expect(screen.queryByText(/Not calculated yet/)).toBeNull();
+    });
+    it('says so when days with an amount leave something out', async () => {
+        const {costs} = setup();
+        costs.mockResolvedValue(real({jobs: pricedJobs}));
+        open();
+        await screen.findByRole('heading', {level: 3, name: 'Job spend'});
+        // 4 jobs on 3 days have no price: the days are counted, the amount is a floor
+        expect(within(tile('Job spend')).getByText('$0.77')).toBeInTheDocument();
+        expect(within(tile('Job spend')).getByText('So far. 3 days are only partly counted.')).toBeInTheDocument();
+        expect(within(tile('Total spend')).getByText('So far. Some days are not fully counted yet.')).toBeInTheDocument();
     });
     it('rounds big totals to whole dollars', async () => {
         const {costs} = setup();

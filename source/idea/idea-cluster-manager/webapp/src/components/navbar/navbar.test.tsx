@@ -42,7 +42,9 @@ describe('cost ticker', () => {
         setup({...ready, incomplete});
         await act(async () => {});
         const link = screen.getByRole('link', {name: /MTD cost as of/});
-        expect(link).toHaveAccessibleName(expect.stringContaining('Some days are not counted yet'));
+        expect(link).toHaveAccessibleName(expect.stringContaining('Some days are not fully counted yet'));
+        // the amount stays the headline: a plus marks a floor, and only when the costs say so
+        expect(link).toHaveTextContent(incomplete ? '$12.50+ this month' : '$12.50 this month');
         expect(screen.queryByRole('button', {name: 'Cost information'})).not.toBeInTheDocument();
     });
 
@@ -116,8 +118,8 @@ describe('cost ticker', () => {
         expect(link).toHaveAccessibleName(expect.stringContaining(`cost as of ${new Date('2026-09-22T12:00:00Z').toLocaleString()}`));
         expect(link).not.toHaveAccessibleName(expect.stringContaining('not counted'));
         await act(async () => { update({current: {total: 48.87, incomplete: true}, currency: 'USD'} as GetMyCostsResult); });
-        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveTextContent('At least $48.87 this month');
-        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveAccessibleName(expect.stringContaining('Some days are not counted yet'));
+        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveTextContent('$48.87+ this month');
+        expect(screen.getByRole('link', {name: /MTD cost as of/})).toHaveAccessibleName(expect.stringContaining('Some days are not fully counted yet'));
         unmount();
         expect(unsubscribe).toHaveBeenCalledOnce();
     });

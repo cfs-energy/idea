@@ -77,6 +77,10 @@ INVENTORY_SWEEP = 'inventory-sweep:'
 # ponytail: a killed task loses at most this much of a run's sweep: those users get a
 # 15 minute unknown gap, never an invented interval. Write per user if that ever matters.
 SWEEP_FLUSH_SECONDS = 60
+# A disk day is an estimate from 15 minute observations. It is complete when they cover
+# this much of the day: the collector starts a run up to a minute late in every 15, so
+# up to 1/16 of a healthy day is unobserved by design. Less than this is a real gap.
+OBSERVED_DAY = 0.9
 
 
 class _FaultLog:
@@ -131,6 +135,7 @@ class DailyCostsCalculator(MonthlyCostsService):
         self._faulted_keys = set()
         self.computed_days = 0
         self.stored_days = 0
+        self.settled = set()
         self._run_shared = {}
         # as_of -> this process's sweep. Kept until written, then for the rest of the run.
         self._sweeps = {}
@@ -139,6 +144,7 @@ class DailyCostsCalculator(MonthlyCostsService):
     def begin(self):
         self.computed_days = 0
         self.stored_days = 0
+        self.settled = set()
         self._run_shared = {}
         self._sweeps = {
             as_of: sweep for as_of, sweep in self._sweeps.items() if sweep['dirty']
@@ -576,7 +582,7 @@ class DailyCostsCalculator(MonthlyCostsService):
 
     def disk_day(self, username, start, end):
         snapshots = self._inventory_samples(username, start)
-        amounts, missing, dates = [], 0, []
+        amounts, missing, dates, observed_seconds = [], 0, [], 0
         for index, snapshot in enumerate(snapshots):
             observed = arrow.get(snapshot['as_of'])
             lower = max(start, observed)
@@ -587,6 +593,7 @@ class DailyCostsCalculator(MonthlyCostsService):
                 upper = min(upper, arrow.get(snapshots[index + 1]['as_of']))
             if lower >= upper:
                 continue
+            observed_seconds += (upper - lower).total_seconds()
             self.inventory_subject = username
             self.inventory_value = (snapshot['instances'], snapshot['volumes'])
             self._reads.pop(('inventory', username), None)
@@ -596,10 +603,13 @@ class DailyCostsCalculator(MonthlyCostsService):
                 amounts.append(sum(known))
             missing += sum(row.cost is None for row in rows)
             dates.append(snapshot['as_of'])
+        # Partial means the amount is a floor: observations missed part of the day, or a
+        # disk had no price. Until 26.11.2 every disk day was stored partial.
         result = self._line(
             sum(amounts),
             not amounts,
-            True,
+            missing > 0
+            or observed_seconds < OBSERVED_DAY * (end - start).total_seconds(),
             DISKS_NOTE
             + ' Dated observations cover at most 15 minutes each; gaps are unknown.',
             missing,
@@ -1024,7 +1034,18 @@ class DailyCostsCalculator(MonthlyCostsService):
                     shares[fs_id] = [
                         MyCostsStorageShare.model_validate(r) for r in rows
                     ]
+                disks = lines.get('desktop_disks')
+                if (
+                    not saved.get('observed')
+                    and disks
+                    and disks.status == 'partial'
+                    and not (disks.coverage and disks.coverage.missing_prices)
+                ):
+                    # Stored before 26.11.2, when every disk day was partial whatever
+                    # was observed. How much was observed is no longer known.
+                    disks.status = 'ready'
                 self.stored_days += 1
+                self.settled.add(date)
             else:
                 self.faulted = False
                 lines = self.day(username, cursor, upper, storage=shares)
@@ -1034,9 +1055,11 @@ class DailyCostsCalculator(MonthlyCostsService):
                     and cursor < open_from
                     and not self.faulted
                 ):
+                    self.settled.add(date)
                     stored[key][date] = dict(
                         start=cursor.isoformat(),
                         closed=closed,
+                        observed=True,
                         lines={
                             facet: line.model_dump(mode='json')
                             for facet, line in lines.items()
@@ -1065,11 +1088,20 @@ class DailyCostsCalculator(MonthlyCostsService):
         facets = {}
         for facet, note in zip(FACETS, NOTES):
             points = daily[facet]
+            if facet == 'ai' and not self.context.config().get_bool(
+                'cluster-manager.bedrock.enabled', False
+            ):
+                # With Bedrock off there is no AI cost to wait for: not a missing day.
+                for point in points:
+                    if point.amount is None:
+                        point.status = 'not_applicable'
             known = [point.amount for point in points if point.amount is not None]
-            missing = len(points) - len(known)
+            missing = sum(
+                p.amount is None and p.status != 'not_applicable' for p in points
+            )
             partial = missing or any(p.status == 'partial' for p in points)
             status = (
-                'unavailable'
+                ('unavailable' if missing or not points else 'not_applicable')
                 if not known
                 else (
                     'partial'
@@ -1259,7 +1291,13 @@ class PersonalCostsCollector:
             lock.release(key='personal-costs-collector')
 
     @staticmethod
-    def retain_known(candidate, previous):
+    def retain_known(candidate, previous, settled=frozenset()):
+        """
+        keep amounts the last result had for days this run could not read. true when a
+        source failed, which makes the result stale. a day in settled is not a failure:
+        it was computed for good as unknown, so its earlier amount stays without
+        holding the result stale, or its as-of back, for the rest of the month.
+        """
         if previous is None or candidate.start_date != previous.start_date:
             return False
         retained = False
@@ -1268,13 +1306,14 @@ class PersonalCostsCollector:
             old_days = {
                 point.date: point for point in old.daily if point.amount is not None
             }
-            restored = False
+            restored = failed = False
             for index, point in enumerate(line.daily):
                 if point.amount is None and point.date in old_days:
                     saved_day = old_days[point.date].model_copy(deep=True)
                     saved_day.status = 'partial'
                     line.daily[index] = saved_day
                     restored = True
+                    failed |= point.date not in settled
             if restored:
                 line.cost = line.amount = round(
                     sum(
@@ -1283,18 +1322,26 @@ class PersonalCostsCollector:
                     4,
                 )
                 line.status = 'partial'
-                line.reason = (
-                    'Source unavailable during refresh; retaining previously known daily amounts. '
-                    + line.reason
-                )
-                dates = [
-                    value for value in (line.source_as_of, old.source_as_of) if value
-                ]
-                line.source_as_of = (
-                    min(dates, key=lambda value: arrow.get(value).float_timestamp)
-                    if dates
-                    else None
-                )
+                if failed:
+                    line.reason = (
+                        'Source unavailable during refresh; retaining previously known daily amounts. '
+                        + line.reason
+                    )
+                    dates = [
+                        value
+                        for value in (line.source_as_of, old.source_as_of)
+                        if value
+                    ]
+                    line.source_as_of = (
+                        min(dates, key=lambda value: arrow.get(value).float_timestamp)
+                        if dates
+                        else None
+                    )
+                else:
+                    line.reason = (
+                        'Days that can no longer be measured keep their earlier amounts. '
+                        + line.reason
+                    )
                 if line.coverage:
                     line.coverage.known_days = sum(
                         point.amount is not None for point in line.daily
@@ -1302,7 +1349,7 @@ class PersonalCostsCollector:
                     line.coverage.missing_days = sum(
                         point.amount is None for point in line.daily
                     )
-                retained = True
+                retained |= failed
             if line.cost is None and old.cost is not None:
                 saved = old.model_copy(deep=True)
                 recorded = {point.date for point in saved.daily}
@@ -1425,6 +1472,7 @@ class PersonalCostsCollector:
             start = local.floor('month')
             request = self.store.get(username, 'refresh')
             try:
+                self.calculator.settled = set()
                 try:
                     self.calculator.capture_inventory(username, local)
                 except Exception:
@@ -1443,28 +1491,20 @@ class PersonalCostsCollector:
                     if old_head
                     else None
                 )
+                settled = self.calculator.settled
                 retained_current = self.retain_known(
-                    current, old.current if old else None
+                    current, old.current if old else None, settled
                 )
                 retained_previous = self.retain_known(
-                    previous, old.previous if old else None
+                    previous, old.previous if old else None, settled
                 )
-                dates = [
-                    getattr(month, facet).source_as_of
-                    for month in (current,)
-                    for facet in FACETS
-                    if getattr(month, facet).source_as_of
-                    and getattr(month, facet).cost is not None
-                ]
                 result = GetMyCostsResult(
                     currency=locale.get_currency_code(),
                     state='stale' if retained_current or retained_previous else 'ready',
                     timezone=timezone,
-                    refreshed_at=min(
-                        dates, key=lambda value: arrow.get(value).float_timestamp
-                    )
-                    if dates
-                    else local.isoformat(),
+                    # When this was calculated. How old each source is stays on its
+                    # own line: one old source must not date the whole page.
+                    refreshed_at=local.isoformat(),
                     current=current,
                     previous=previous,
                 )

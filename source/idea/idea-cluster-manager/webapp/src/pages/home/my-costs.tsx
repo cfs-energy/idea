@@ -7,7 +7,7 @@ import {IdeaSideNavigationProps} from '../../components/side-navigation';
 import IdeaAppLayout, {IdeaAppLayoutProps} from '../../components/app-layout';
 import {AppContext} from '../../common';
 import {withRouter} from '../../navigation/navigation-utils';
-import {collectingLabel, gapDays} from '../../components/monthly-costs';
+import {collectingLabel, costCaveat, costGaps, localToday} from '../../components/monthly-costs';
 import {FACETS, facetAmount} from '../../components/cost-charts';
 import {personalCostsCache} from '../../client/personal-costs-cache';
 import {InfoTitle, InsightTab, MetricTile, TileRow} from '../reporting/insights-components';
@@ -24,22 +24,22 @@ function MonthTiles({costs, previous = false, computeRate = 1, costError = false
     const currency = costs?.currency ?? 'USD';
     const currentTotal = costs?.current?.total, previousTotal = costs?.previous?.total;
     if (!costs && !costError) return <StatusIndicator type="loading">Loading this month's costs</StatusIndicator>;
-    const today = new Intl.DateTimeFormat('en-CA', {timeZone: costs?.timezone ?? 'UTC'}).format(new Date());
-    const gaps = FACETS.map(({key}) => gapDays(month?.[key], today));
-    const totalValue = wholeMoney(month?.total, currency);
+    const today = localToday(costs?.timezone);
+    // The amount is the headline. What it leaves out goes in the line under it.
+    const caveat = (key: typeof FACETS[number]['key']) => costCaveat(costGaps(month?.[key], today));
     return <TileRow>
-        <MetricTile title="Total spend" value={!costs?.current ? collectingLabel(costs) : gaps.some(Boolean) ? `At least ${totalValue}` : totalValue} info="Adds the available job, desktop, desktop disk, shared storage and AI costs for the calendar month.">
+        <MetricTile title="Total spend" value={!costs?.current ? collectingLabel(costs) : wholeMoney(month?.total, currency)} info="Adds the available job, desktop, desktop disk, shared storage and AI costs for the calendar month.">
             {costs?.current && <Box color="text-body-secondary">{previous ? `This month so far ${wholeMoney(currentTotal, currency)}` : `Last month ${wholeMoney(previousTotal, currency)}`}
                 {currentTotal != null && previousTotal != null && <> · {wholeMoney(Math.abs(currentTotal - previousTotal), currency)} {currentTotal >= previousTotal ? 'more' : 'less'} (this month so far vs full last month)</>}
             </Box>}
+            {costs?.current && FACETS.some(({key}) => caveat(key)) && <Box color="text-body-secondary">So far. Some days are not fully counted yet.</Box>}
         </MetricTile>
-        {costs?.current && FACETS.filter(({key}) => key !== 'ai' || facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0).map(({key}, index) => {
+        {/* AI is left out when it costs nothing, and when Bedrock is off: there is no next update to wait for. */}
+        {costs?.current && FACETS.filter(({key}) => key !== 'ai' || (month?.[key]?.status !== 'not_applicable' && (facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0))).map(({key}, index) => {
             const line = month?.[key];
-            const missing = gapDays(line, today);
-            const amount = wholeMoney(facetAmount(line), currency);
-            return <MetricTile key={key} title={titles[key]} value={facetAmount(line) == null ? 'Not available' : missing ? `At least ${amount}` : amount} info={key === 'jobs' ? `Recorded job costs for this calendar month. ${jobRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'}>
+            return <MetricTile key={key} title={titles[key]} value={facetAmount(line) == null ? 'Not available' : wholeMoney(facetAmount(line), currency)} info={key === 'jobs' ? `Recorded job costs for this calendar month. ${jobRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'}>
                 {facetAmount(line) == null ? <Box color="text-body-secondary">Not calculated yet. Check back after the next update.</Box>
-                    : missing > 0 ? <Box color="text-body-secondary">{missing === 1 ? 'A day is' : `${missing} days are`} not counted yet, so this may be higher.</Box>
+                    : caveat(key) ? <Box color="text-body-secondary">{caveat(key)}</Box>
                     : line?.status === 'estimated_share' ? <Box color="text-body-secondary">Your share of a shared file system.</Box> : null}
             </MetricTile>;
         })}

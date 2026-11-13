@@ -319,9 +319,10 @@ class IdeaNavbar extends Component<IdeaNavbarProps, IdeaNavbarState> {
                         }] : []),
                         ...(showTicker ? [{
                             type: 'button' as const,
-                            text: `${ticker.incomplete === true ? 'At least ' : ''}${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency, ...(ticker.total! >= 1000 ? {maximumFractionDigits: 0} : {})}).format(ticker.total!)} ${TICKER_PERIOD_WORDS[ticker.period!] ?? ticker.period}`,
+                            // the plus marks a floor; the label says why
+                            text: `${new Intl.NumberFormat(undefined, {style: 'currency', currency: ticker.currency, ...(ticker.total! >= 1000 ? {maximumFractionDigits: 0} : {})}).format(ticker.total!)}${ticker.incomplete === true ? '+' : ''} ${TICKER_PERIOD_WORDS[ticker.period!] ?? ticker.period}`,
                             href: '#/home/my-costs',
-                                                        ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some days are not counted yet' : ''}. ${computeRateNote(AppContext.get().getClusterSettingsService().getComputeRate())} Open My costs`
+                                                        ariaLabel: `${ticker.period} cost as of ${asOf}${ticker.incomplete !== false ? '. Some days are not fully counted yet' : ''}. ${computeRateNote(AppContext.get().getClusterSettingsService().getComputeRate())} Open My costs`
                         }] : []),
                         {
                             type: "menu-dropdown",

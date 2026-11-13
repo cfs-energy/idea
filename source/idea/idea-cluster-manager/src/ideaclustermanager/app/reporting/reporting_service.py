@@ -247,10 +247,15 @@ def selected_money(projection, facet, period, currency, timezone_name):
         for point in selected
     ]
     known = [day for day, amount in zip(dates, amounts) if amount is not None]
-    missing = len(dates) - len(known)
+    # A day a facet does not apply to (AI with Bedrock off) is not a missing day.
+    missing = (
+        len(dates)
+        - len(known)
+        - sum(point.get('status') == 'not_applicable' for point in selected)
+    )
     stale = projection.get('state') == 'stale'
     status = (
-        'unavailable'
+        ('unavailable' if missing else 'not_applicable')
         if not known
         else 'partial'
         if missing or stale or any(p.get('status') == 'partial' for p in selected)
