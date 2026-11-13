@@ -33,7 +33,7 @@ describe('personal costs card', () => {
         [{cost: 1, status: 'estimated_share'}, false, 'Shared cost'],
         [undefined, true, 'Collecting']
     ])('uses a badge only for affected coverage', (value, collecting, expected) => {
-        expect(costBadge(value, collecting)).toBe(expected);
+        expect(costBadge(value as any, collecting)).toBe(expected);
     });
     it('keeps known values during refresh and offers a keyboard coverage explanation', async () => {
         render(<CostsBillboard costs={{...costs, state: 'refreshing', current: {...month, incomplete: true, shared_storage: {status: 'unavailable', reason: 'Missing dated usage.'}}}}/>);
