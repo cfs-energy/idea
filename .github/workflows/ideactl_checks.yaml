@@ -38,7 +38,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.5
           install_args: node python java actionlint shellcheck
       - name: Setup DynamoDB Local
         uses: ./.github/actions/setup_dynamodb_local
@@ -113,7 +113,7 @@ jobs:
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           # renovate: datasource=github-releases depName=jdx/mise
-          version: 2026.10.19
+          version: 2026.11.5
           install_args: node python java actionlint shellcheck
       - name: Setup DynamoDB Local
         uses: ./.github/actions/setup_dynamodb_local

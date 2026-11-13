@@ -3,4 +3,4 @@ openapi-pydantic
 pytest
 pytest-mock
 pytest-cov
-moto==5.2.4
+moto==5.2.5
