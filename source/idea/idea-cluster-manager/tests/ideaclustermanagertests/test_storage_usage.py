@@ -906,6 +906,190 @@ def test_a_refused_content_read_is_about_that_path(monkeypatch, tree):
     assert not ontap_analytics.refused_this_path(RuntimeError('timed out'))
 
 
+def slow_filer(monkeypatch, tree, answers, needs, hung):
+    """filer() where a folder read takes needs[name] seconds of ONTAP's work. ONTAP sends nothing
+    before it answers: by the request's return_timeout it answers with the rows it has and a next
+    link, and a name in hung (or 'labels', the read about the volume root) it never answers. A
+    client that stops waiting first gets ReadTimeout."""
+    import requests
+    from urllib.parse import parse_qs, urlsplit
+
+    analytics, sent = filer(monkeypatch, tree, answers)
+    answer = requests.get
+
+    def get(url, timeout=None, **kwargs):
+        parts = urlsplit(url)
+        query = parse_qs(parts.query)
+        name = next((n for n in needs if parts.path.endswith(n)), None)
+        if ('return_metadata' in query and 'labels' in hung) or name in hung:
+            sent.append(parts.path)
+            raise requests.exceptions.ReadTimeout()
+        if name is None:
+            return answer(url, timeout=timeout, **kwargs)
+        cut = float(query['return_timeout'][0])
+        if timeout <= min(needs[name], cut):
+            sent.append(parts.path)
+            raise requests.exceptions.ReadTimeout()
+        response = answer(url, timeout=timeout, **kwargs)
+        if needs[name] > cut:
+            page = dict(response.json())
+            page['_links'] = dict(
+                next=dict(href=f'{parts.path}?{parts.query}&start.iter_key=k')
+            )
+            return Mock(status_code=200, json=lambda: page, text='')
+        return response
+
+    monkeypatch.setattr(requests, 'get', get)
+    return analytics, sent
+
+
+def test_a_slow_folder_comes_back_short_and_leaves_analytics_on(monkeypatch, tree):
+    # ONTAP spends its whole return_timeout on a folder of millions of entries, then answers
+    big = dict(
+        records=[analytics_row('.', 10**12, 10**6), analytics_row('a', 10**9, 9)]
+    )
+    small = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = slow_filer(
+        monkeypatch,
+        tree,
+        {'%2Fbig': (200, big), '%2Falice': (200, small)},
+        needs={'%2Fbig': 60},
+        hung=(),
+    )
+    found = analytics.folder(tree + '/big')
+    assert found['self']['bytes'] == 10**12
+    assert found['truncated'] is True
+    assert analytics._failed_at == float('-inf')
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+
+
+def test_a_folder_the_filer_never_answers_is_that_folder_only(monkeypatch, tree):
+    small = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = slow_filer(
+        monkeypatch,
+        tree,
+        {'%2Falice': (200, small)},
+        needs={'%2Fbig': 0},
+        hung=('%2Fbig',),
+    )
+    assert analytics.folder(tree + '/big') is None
+    assert analytics._failed_at == float('-inf')
+    assert analytics.status(tree)['state'] == 'on'
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+    # and it is not asked again on the next open
+    reads = len(sent)
+    assert analytics.folder(tree + '/big') is None
+    assert len(sent) == reads
+
+
+def test_a_filer_that_stops_answering_still_backs_off_for_everyone(monkeypatch, tree):
+    small = dict(records=[analytics_row('.', 1000, 40)])
+    hung = set()
+    analytics, sent = slow_filer(
+        monkeypatch, tree, {'%2Falice': (200, small)}, needs={'%2Fbig': 0}, hung=hung
+    )
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+    hung.update({'%2Fbig', 'labels'})
+    assert analytics.folder(tree + '/big') is None
+    assert analytics.status(tree) == dict(state='failed')
+
+
+def test_a_missing_folder_is_asked_about_once_a_minute(monkeypatch, tree):
+    # nothing creates <mount>/shared, and every home view asks for it
+    analytics, sent = filer(monkeypatch, tree, {'%2Fshared': (404, {})})
+    shared = os.path.join(os.path.dirname(os.path.dirname(tree)), 'shared')
+    assert analytics.folder(shared) is None
+    reads = len(sent)
+    assert analytics.folder(shared) is None
+    assert len(sent) == reads
+    assert analytics._failed_at == float('-inf')
+
+
+def test_reads_waiting_for_a_slot_do_not_ask_a_filer_that_just_failed(
+    monkeypatch, tree
+):
+    import requests
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    analytics, sent = filer(monkeypatch, tree, {'%2Fd': (503, {})})
+    answer = requests.get
+    count = ontap_analytics.MAX_CONCURRENT_READS * 2
+    passed = threading.Semaphore(0)
+    status = analytics.status
+
+    def counted_status(path):
+        result = status(path)
+        passed.release()
+        return result
+
+    def get(url, **kwargs):
+        if 'type=directory' in url:
+            # every request is past the backoff check before the first read fails
+            for _ in range(count):
+                passed.acquire(timeout=5)
+            for _ in range(count):
+                passed.release()
+        return answer(url, **kwargs)
+
+    analytics.status = counted_status
+    monkeypatch.setattr(requests, 'get', get)
+    results = []
+    threads = [
+        threading.Thread(
+            target=lambda i=i: results.append(analytics.folder(f'{tree}/d{i}'))
+        )
+        for i in range(count)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    folder_reads = [
+        path for path in sent if '/files/' in path and 'return_metadata' not in path
+    ]
+    assert results == [None] * count
+    assert len(folder_reads) == ontap_analytics.MAX_CONCURRENT_READS
+
+
+def test_a_read_that_cannot_get_a_slot_goes_without(monkeypatch, tree):
+    import requests
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    listing = dict(records=[analytics_row('.', 1000, 40)])
+    slots = ontap_analytics.MAX_CONCURRENT_READS
+    answers = {f'%2Fbusy{i}': (200, listing) for i in range(slots)}
+    analytics, sent = filer(monkeypatch, tree, answers | {'%2Falice': (200, listing)})
+    answer = requests.get
+    release = threading.Event()
+    threading.Timer(10, release.set).start()
+    waiting = []
+
+    def get(url, **kwargs):
+        if 'type=directory' in url and '%2Fbusy' in url:
+            waiting.append(url)
+            release.wait()
+        return answer(url, **kwargs)
+
+    monkeypatch.setattr(requests, 'get', get)
+    monkeypatch.setattr(ontap_analytics, 'READ_WAIT_SECONDS', 0.2)
+    busy = [
+        threading.Thread(target=analytics.folder, args=(f'{tree}/busy{i}',))
+        for i in range(slots)
+    ]
+    for thread in busy:
+        thread.start()
+    while len(waiting) < len(busy):
+        time.sleep(0.01)
+    started = time.monotonic()
+    assert analytics.folder(tree) is None
+    assert time.monotonic() - started < 5
+    release.set()
+    for thread in busy:
+        thread.join(timeout=10)
+    assert analytics._failed_at == float('-inf')
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+
+
 def test_analytics_on_but_first_scan_unfinished_is_initializing(monkeypatch, tree):
     volumes = [
         dict(
