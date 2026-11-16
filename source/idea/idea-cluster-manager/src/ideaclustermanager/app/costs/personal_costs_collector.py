@@ -77,9 +77,11 @@ INVENTORY_SWEEP = 'inventory-sweep:'
 # ponytail: a killed task loses at most this much of a run's sweep: those users get a
 # 15 minute unknown gap, never an invented interval. Write per user if that ever matters.
 SWEEP_FLUSH_SECONDS = 60
-# A disk day is an estimate from 15 minute observations. It is complete when they cover
-# this much of the day: the collector starts a run up to a minute late in every 15, so
-# up to 1/16 of a healthy day is unobserved by design. Less than this is a real gap.
+# A disk observation holds until the next one, for at most this long: a run every 15
+# minutes that starts up to a minute late, and a minute's margin. Held for only 15, a
+# healthy day priced about 96% of itself.
+SAMPLE_HOLD_MINUTES = 17
+# A disk day is complete when its observations cover this much of it. Less is a real gap.
 OBSERVED_DAY = 0.9
 
 
@@ -588,7 +590,7 @@ class DailyCostsCalculator(MonthlyCostsService):
             lower = max(start, observed)
             # Evidence has a bounded interval. Missed sweeps never extend an inventory
             # indefinitely, and a deleted disk retains the earlier observed intervals.
-            upper = min(end, observed.shift(minutes=15))
+            upper = min(end, observed.shift(minutes=SAMPLE_HOLD_MINUTES))
             if index + 1 < len(snapshots):
                 upper = min(upper, arrow.get(snapshots[index + 1]['as_of']))
             if lower >= upper:
@@ -611,7 +613,7 @@ class DailyCostsCalculator(MonthlyCostsService):
             missing > 0
             or observed_seconds < OBSERVED_DAY * (end - start).total_seconds(),
             DISKS_NOTE
-            + ' Dated observations cover at most 15 minutes each; gaps are unknown.',
+            + f' Dated observations cover at most {SAMPLE_HOLD_MINUTES} minutes each; gaps are unknown.',
             missing,
         )
         result.source_as_of = (

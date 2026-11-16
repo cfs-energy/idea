@@ -1728,8 +1728,9 @@ def test_a_run_reads_its_own_sweep_before_it_is_written(setup, monkeypatch):
     assert [k[1] for k in store.table.rows if k[1].startswith('inventory-sweep')] == [
         f'inventory-sweep:2026-09-02:{first.int_timestamp}'
     ]
+    # the first sample holds until the second, the last for at most 17 minutes
     assert calc.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
-        round(100 * 0.08 / 30 / 24 / 2, 4)
+        round(100 * 0.08 / 30 / 24 / 60 * (15 + 17), 4)
     )
     calc._workers.shutdown()
 
@@ -1749,7 +1750,7 @@ def test_a_sweep_not_written_leaves_a_gap_and_is_retried(setup, monkeypatch):
     capture_run(calc, second, ['user-a'])
     # a task killed here: what is durable never claims the unwritten sample
     lost = priced(DailyCostsCalculator(context, store), monkeypatch)
-    one = round(100 * 0.08 / 30 / 24 / 4, 4)
+    one = round(100 * 0.08 / 30 / 24 / 60 * 17, 4)
     assert lost.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
         one
     )
@@ -1759,7 +1760,7 @@ def test_a_sweep_not_written_leaves_a_gap_and_is_retried(setup, monkeypatch):
     calc.flush_sweeps()
     kept = priced(DailyCostsCalculator(context, store), monkeypatch)
     assert kept.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
-        round(100 * 0.08 / 30 / 24 / 2, 4)
+        round(100 * 0.08 / 30 / 24 / 60 * (15 + 17), 4)
     )
     kept._workers.shutdown()
     calc._workers.shutdown()
@@ -1913,8 +1914,9 @@ def test_a_disk_day_is_partial_only_when_observations_missed_part_of_it(
     result = calc.disk_day('user-a', whole, whole.shift(days=1))
     # every day was partial, so a fully counted month read as days not counted
     assert result.status == 'ready'
-    # 93 samples of 15 minutes: 96.9% of the day
-    assert result.cost == pytest.approx(100 * 0.08 / 30 * 93 * 900 / 86400, abs=5e-4)
+    # each sample holds until the next one at a healthy pace: the whole day, where 15
+    # minutes per sample priced 96.9% of it (each sample is rounded to 4 places)
+    assert result.cost == pytest.approx(100 * 0.08 / 30, abs=1e-3)
     gap = calc.disk_day('user-a', broken, broken.shift(days=1))
     assert gap.status == 'partial' and gap.cost < result.cost * 0.8
     calc._workers.shutdown()
