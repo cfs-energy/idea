@@ -1,4 +1,4 @@
-amends "package://github.com/jdx/hk/releases/download/v2.11.1/hk@2.11.1#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
 
 // Fail after fixing so contributors can review and stage the changes.
 mise = true
@@ -192,7 +192,7 @@ steps {
     glob = Regex("^source/idea/idea-cluster-manager/webapp/src/.*\\.(ts|tsx|js|jsx|css|scss)$")
     allow_binary = true
     depends = "repository-hygiene"
-    check = "NODE_PATH=$(mise where npm:typescript)/node_modules node source/idea/idea-cluster-manager/webapp/build-support/lint-cloudscape-usage.mjs {{files}}"
+    check = "NODE_PATH=$(mise where npm:oxc-parser)/node_modules node source/idea/idea-cluster-manager/webapp/build-support/lint-cloudscape-usage.mjs {{files}}"
   }
   ["typos"] {
     glob = Regex("")

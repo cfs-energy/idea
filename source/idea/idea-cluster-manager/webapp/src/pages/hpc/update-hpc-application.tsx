@@ -115,6 +115,12 @@ function AvailableVariable(props: AvailableVariableProps) {
     )
 }
 
+// Without useWebWorker: false the library loads its worker script from cdn.jsdelivr.net, which a
+// cluster without internet egress cannot reach and the portal should not run in any case.
+export function resizeApplicationIcon(file: File): Promise<File> {
+    return imageCompression(file, {maxWidthOrHeight: 150, useWebWorker: false})
+}
+
 class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHpcApplicationState> {
 
     formBuilder: RefObject<IdeaFormBuilder | null>
@@ -289,9 +295,7 @@ class UpdateHpcApplication extends Component<UpdateHpcApplicationProps, UpdateHp
 
     resizeImage(file: File): Promise<File> {
         return new Promise(resolve => {
-            imageCompression(file, {
-                maxWidthOrHeight: 150
-            }).then(file => {
+            resizeApplicationIcon(file).then(file => {
                 resolve(file)
             })
         })

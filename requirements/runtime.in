@@ -27,7 +27,6 @@ Jinja2
 certifi
 cryptography
 PyJWT
-random-password-generator
 shortuuid
 dataset
 prometheus-client

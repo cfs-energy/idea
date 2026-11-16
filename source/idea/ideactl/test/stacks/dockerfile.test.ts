@@ -84,6 +84,21 @@ test('S-39: the image uv pin follows the toolchain through Renovate', () => {
 });
 
 
+test('the image, the host installer and the toolchain pin the same Node, each seen by Renovate', () => {
+  const renovate = JSON.parse(readFileSync(new URL('../../../../../.github/renovate.json', import.meta.url), 'utf8'));
+  const manager = renovate.customManagers.find((entry: any) => entry.depNameTemplate === 'node');
+  const versions = readFileSync(new URL('../../../../../software_versions.yml', import.meta.url), 'utf8');
+  const mise = readFileSync(new URL('../../../../../mise.toml', import.meta.url), 'utf8');
+  const found = (source: string) => manager.matchStrings
+    .map((pattern: string) => source.match(new RegExp(pattern))?.groups?.currentValue)
+    .find((value: string | undefined) => value != null);
+  const image = found(text);
+  assert.match(image, /^\d+\.\d+\.\d+$/);
+  assert.equal(found(versions), image);
+  assert.equal(mise.match(/^node = "([^"]+)"$/m)?.[1], image);
+});
+
+
 test('U-27: mise Java and java-jdk platform major and minor updates stay manual', () => {
   const renovate = JSON.parse(readFileSync(new URL('../../../../../.github/renovate.json', import.meta.url), 'utf8'));
   for (const depName of ['java', 'java-jdk']) {

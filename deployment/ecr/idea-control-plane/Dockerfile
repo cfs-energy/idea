@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+# syntax=docker/dockerfile:1.29@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/arm64 \
@@ -115,7 +115,7 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
-ARG UV_VERSION=0.13.7
+ARG UV_VERSION=0.13.8
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
@@ -142,12 +142,12 @@ RUN set -eux; \
 
 # Build ideactl and include its pinned CDK CLI.
 # The build uses the repository path expected by its resource-copy script.
-ARG NODE_VERSION=26.8.2
-# Node archive checksums for 26.8.2
+ARG NODE_VERSION=26.13.1
+# Node archive checksums for 26.13.1
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
-      amd64) N=x64; SUM=badb3fe6a61b85e1352ca6564dc56b8b7bd5ecd5c474c52acc21dd0cdd586f35 ;; \
-      arm64) N=arm64; SUM=746cdbf21565b4ea06f77642bb0e85466de8bb722242be2c5e006f272c361c63 ;; \
+      amd64) N=x64; SUM=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778 ;; \
+      arm64) N=arm64; SUM=80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d ;; \
       *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
     esac; \
     mkdir -p /usr/local/node; \

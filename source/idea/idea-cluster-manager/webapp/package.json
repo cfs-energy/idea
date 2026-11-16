@@ -43,16 +43,17 @@
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
-    "@testing-library/user-event": "14.6.8",
+    "@testing-library/user-event": "14.6.10",
     "@types/node": "26.6.6",
     "@types/nunjucks": "3.2.6",
     "@vitejs/plugin-react": "6.2.1",
     "fake-indexeddb": "6.2.8",
     "jsdom": "31.0.0",
-    "sass": "1.108.1",
+    "oxc-parser": "0.158.0",
+    "sass": "1.108.2",
     "source-map-explorer": "2.5.3",
-    "typescript": "5.9.3",
-    "vite": "8.3.7",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
     "vite-plugin-pwa": "2.0.0",
     "vitest": "5.1.0",
     "workbox-build": "7.4.1",
@@ -78,6 +79,7 @@
     "nth-check": ">=2.0.1",
     "d3-color": ">=3.1.0",
     "minimist": ">=1.2.6",
-    "moment": ">=2.29.4"
+    "moment": ">=2.29.4",
+    "**/workbox-build/glob": "^14.0.2"
   }
 }

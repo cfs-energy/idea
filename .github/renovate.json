@@ -222,16 +222,6 @@
       "groupSlug": null
     },
     {
-      "description": "The mise TypeScript tool is the parser hk's lint-cloudscape-usage step loads; TypeScript 7 has no JS compiler API at its package root",
-      "matchManagers": [
-        "mise"
-      ],
-      "matchDepNames": [
-        "npm:typescript"
-      ],
-      "allowedVersions": "<7"
-    },
-    {
       "description": "opensearch-py 3.1 and later hard-require opensearch-protobufs, which pulls grpcio and protobuf for a gRPC transport this codebase never constructs",
       "matchManagers": [
         "pip-compile"
