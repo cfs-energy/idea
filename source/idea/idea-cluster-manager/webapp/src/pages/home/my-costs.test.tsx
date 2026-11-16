@@ -180,7 +180,7 @@ describe('at real scale', () => {
         const {costs} = setup();
         const stored = {...partialLine, daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}]};
         const none = {amount: null, cost: null, status: 'unavailable', daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}]};
-        costs.mockResolvedValue({...snapshot, previous: {...month, total: 200, jobs: stored, desktops: none} as MyCostsMonth});
+        costs.mockResolvedValue({...snapshot, previous: {...month, total: 200, ...({jobs: stored, desktops: none} as Record<string, any>)} as MyCostsMonth});
         open('?period=last_month');
         await screen.findByRole('heading', {level: 3, name: 'Job spend'});
         expect(within(tile('Job spend')).getByText('A day is not counted.')).toBeInTheDocument();
