@@ -8,6 +8,7 @@ finished jobs table with its provisioning error rather than be deleted from the 
 
 from ideasdk.config.soca_config import SocaConfig
 import logging
+import time
 from typing import Dict, List, Optional
 from unittest.mock import Mock
 
@@ -97,8 +98,13 @@ class FakeDocumentStore:
         self.indexed: List[SocaJob] = []
         self.jobs_by_uid: Dict[str, SocaJob] = {}
         self.lookup_error: Optional[Exception] = None
+        self.lookups: List[str] = []
+        self.lookup_secs = 0.0
 
     def get_job(self, job_uid=None, **_):
+        self.lookups.append(job_uid)
+        if self.lookup_secs:
+            time.sleep(self.lookup_secs)
         if self.lookup_error is not None:
             raise self.lookup_error
         return self.jobs_by_uid.get(job_uid)
@@ -1584,6 +1590,39 @@ def test_a_failed_index_lookup_still_records_the_job(fake_context, pricing_spy):
     assert ids == ['14906']
     assert [job.job_uid for job in fake_context.job_cache.finished_jobs] == ['uid-3']
     assert fake_context.job_notifications.completed == ['14906']
+
+
+@pytest.mark.parametrize('index_is', ['down', 'slow'])
+def test_an_index_that_is_down_or_slow_is_asked_once_a_cycle(
+    fake_context, pricing_spy, index_is
+):
+    """
+    the lookup is for a restore and runs for every finished job, one after another. An
+    index that drops traffic costs about 40 s a lookup: 300 finished jobs held every row
+    running, and its nodes up, for hours. The first failed or slow answer ends the
+    lookups for the cycle; the jobs are recorded as after a failed lookup.
+    """
+    store = fake_context.document_store
+    if index_is == 'down':
+        store.lookup_error = RuntimeError('index unreachable')
+    else:
+        store.lookup_secs = 0.2
+    poller = build_poller(fake_context)
+    poller.INDEX_LOOKUP_SLOW_SECS = 0.1
+    jobs = [
+        make_job(job_id=str(n), provisioned=True, job_uid=f'uid-{n}') for n in range(5)
+    ]
+
+    ids = poller._process_finished_jobs(jobs)
+    unprovisioned = poller._process_unprovisioned_jobs(
+        [make_job(job_id='9', job_uid='uid-9')]
+    )
+
+    assert ids == [job.job_id for job in jobs]
+    assert unprovisioned == ['9']
+    assert len(fake_context.job_cache.finished_jobs) == 6
+    # one lookup for each pass of the cycle, not one a job
+    assert store.lookups == ['uid-0', 'uid-9']
 
 
 # ------------------------------------------- what a job launched, not what its queue says now
