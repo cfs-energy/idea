@@ -260,7 +260,8 @@ on this public fallback path. This protects task replacements from a release tag
 When `ecs.image` names this partition's release repository at an older release tag, the upgrade
 moves it to the tool's release tag and prints the move. It does not count that move as drift or
 require a manual image setting. Images outside the configured repository, operator-set digests, build tags and newer tags stay
-unchanged and remain visible in the preview.
+unchanged and remain visible in the preview. Such an image must be a 26.11.2 build before you upgrade: the 26.11.2 bastion
+health check runs a script older images do not have, so its deployment rolls back and the upgrade stops.
 
 Global settings last written by the settings sync have `source=template`. Changed defaults are
 listed as "Template defaults updated" and rewritten without drift acceptance. The add-only sync
@@ -343,6 +344,50 @@ with a warning and the command continues. Install `bind-utils` to restore the re
 `IDEA_ECR_CREDS_RESET=false` to skip it without the warning.
 
 ### Going Back to 26.11.1
+
+Go back with the 26.11.1 administrator and the 26.11.1 control-plane image together. Neither is enough alone. The 26.11.1 upgrade leaves an `ecs.image` newer than itself where it is, so its stacks would run the 26.11.2 image: the cluster-manager role loses the Secrets Manager grants that image hands passwords over with, and every password change, first sign-in and forgotten-password reset fails with "The password could not be set right now. Try again." The 26.11.2 administrator with a 26.11.1 image gives the bastion a health check script that image does not have, so the bastion deployment rolls back and the deploy stops.
+
+1. Read the image settings:
+
+   ```bash
+   IDEA_REVISION=v26.11.1 ./idea-admin.sh config show --cluster-name <CLUSTER_NAME> --aws-region <REGION> \
+     --query '^ecs\.(image|previous_release_image)$'
+   ```
+
+2. Set `ecs.image` to the 26.11.1 image: the same repository at tag `26.11.1`. On GovCloud pulling the public image, the upgrade wrote a `26.11.2@sha256:...` digest. Use `ecs.previous_release_image` instead of the tag only if it reads `...:26.11.1@sha256:...`; the upgrade records it only when the image before was a release digest, so after a candidate or operator image it holds an older release or nothing. A mirror needs its own 26.11.1 image.
+
+   ```bash
+   IDEA_REVISION=v26.11.1 ./idea-admin.sh config set "Key=ecs.image,Type=string,Value=<REPOSITORY>:26.11.1" \
+     --cluster-name <CLUSTER_NAME> --aws-region <REGION>
+   ```
+
+3. Delete the job cache copy interval 26.11.2 added at 3600 seconds, unless you set it yourself. 26.11.1 reads it, and without it copies every 5 minutes. A 26.11.1 scheduler task that dies without an orderly stop starts again from that copy, up to an hour old, and repeats the completion emails and metrics of the jobs that finished since. The next 26.11.2 upgrade adds the row again at 3600 seconds.
+
+   ```bash
+   IDEA_REVISION=v26.11.1 ./idea-admin.sh config delete scheduler.job_cache.backup_interval_seconds \
+     --cluster-name <CLUSTER_NAME> --aws-region <REGION>
+   ```
+
+4. Run the 26.11.1 upgrade straight away, so no 26.11.2 deploy runs on the 26.11.1 image:
+
+   ```bash
+   IDEA_REVISION=v26.11.1 ./idea-admin.sh upgrade-cluster --cluster-name <CLUSTER_NAME> --aws-region <REGION>
+   ```
+
+5. Once it has finished, delete the password secrets 26.11.2 left. 26.11.1 neither reads nor removes them, and each holds a password in clear:
+
+   ```bash
+   aws secretsmanager list-secrets --region <REGION> \
+     --filters Key=name,Values=<CLUSTER_NAME>-password-sync- --query 'SecretList[].ARN' --output text
+   aws secretsmanager delete-secret --region <REGION> --secret-id <ARN> --force-delete-without-recovery
+   ```
+
+What going back leaves:
+
+* **Queued passwords**: a password still queued for the directory when the 26.11.1 tasks take over is lost. 26.11.1 cannot read the secret it points to, retries it until the queue moves it to `<CLUSTER_NAME>-cluster-manager-tasks-dlq.fifo`, and the user sets the password again. A password set while the 26.11.2 cluster-manager tasks drain can fail with "The password could not be set right now. Try again." and must be set again. 26.11.1 runs a user's account tasks in order, so the failing message holds that user's later account tasks, the password set again among them, for about 40 minutes: 16 tries, each 150 seconds apart. Every other user's queued account tasks run on 26.11.1 as before.
+* **Settings**: the settings 26.11.2 added stay. Apart from the job cache copy deleted in step 3, 26.11.1 does not read them, and they apply again after the next upgrade. `cluster-manager.metrics.cost.lookback_days` stays at 7 where 26.11.2 moved it; 26.11.1 re-reads seven days of Cost Explorer with it.
+* **Desktop and compute images**: 26.11.1 rebuilds every managed image that is not pinned, as after any upgrade. Until a rebuild passes, new launches use the image 26.11.2 baked, whose CloudWatch agent and rsyslog 26.11.1's bootstrap starts.
+* **Cost records**: see below.
 
 26.11.2 stores a user's desktop disk inventory when it changes rather than every 15 minutes. 26.11.1 reads each stored row as one 15 minute sample, so after going back it undercounts disk costs on any day 26.11.2 wrote. A day is recomputed on every collector run until it is more than 3 days old and is stored after that, so return to 26.11.2 within 3 days and these days are computed correctly again. A day stored while on 26.11.1 stays low until the month-close pass on the 5th of the next month recomputes it on 26.11.2.
 

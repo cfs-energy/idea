@@ -97,4 +97,4 @@ Only a cluster administrator can change these, because they decide whether root 
 
 ## Records
 
-The **Removal log** keeps every removal: folder, owner, job, size, who, when, and the result. The record, log and run history are in the `<cluster>.scheduler.scratch-cleanup` DynamoDB table, and each removal is also logged by the scheduler. Metrics are `scratch_cleanup.used_percent`, `kept_folders`, `removed_folders`, `removed_bytes`, `runs` and `run_failed`.
+The **Removal log** keeps every removal: folder, owner, job, size, who, when, and the result. The record, log and run history are in the `<cluster>.scheduler.scratch-cleanup` DynamoDB table, and each removal is also logged by the scheduler. Metrics are `scratch_cleanup.used_percent`, `kept_folders` and `folders_by_reason` (tagged `reason`); `runs`, `removed_folders`, `removed_bytes` and `run_failed` per run; and `folder_removed`, `folder_partly_removed` (a removal that failed after deleting part of the folder) and `folder_skipped` (a folder declined on its last check) per folder.
