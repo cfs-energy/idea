@@ -597,6 +597,8 @@ class FinishedJobProcessor:
             try:
                 if not self._may_record(cached, history):
                     continue
+                if not self._delete_unused_stack(cached, history.get(cached.job_id)):
+                    continue
                 from_history = cached.job_id in history
                 finished_job = history.get(cached.job_id, cached)
                 # a record under this job_uid from another id is not this job's: an earlier
@@ -684,6 +686,43 @@ class FinishedJobProcessor:
             f'(state: {history[cached.job_id].state}); left in the job cache'
         )
         return False
+
+    def _delete_unused_stack(self, cached: SocaJob, history: Optional[SocaJob]) -> bool:
+        """
+        delete the stack of a job that ended before it started when no instance came up on
+        it. Nothing else would: the housekeeper deletes stacks through their instances and
+        the provisioning sweep only through jobs still queued. A stack shared with other
+        jobs is left, as that sweep leaves it, and one with an instance is the housekeeper's.
+        False while the instance cache cannot say: the job stays tracked for the next cycle.
+        """
+        if (
+            not cached.is_provisioned()
+            or cached.is_shared_capacity()
+            or not ProcessFinishedJob.never_started(cached)
+            or (history is not None and not ProcessFinishedJob.never_started(history))
+        ):
+            return True
+        instance_cache = self._context.instance_cache
+        if not instance_cache.is_ready():
+            self._logger.info(
+                f'{cached.log_tag} instance cache not ready; left in the job cache'
+            )
+            return False
+        if instance_cache.list_compute_instances(
+            job_id=cached.job_id, states=['pending', 'running']
+        ):
+            return True
+        stack_name = cached.get_compute_stack()
+        self._logger.info(
+            f'{cached.log_tag} never started; deleting stack {stack_name}'
+        )
+        try:
+            self._context.aws_util().cloudformation_delete_stack(stack_name=stack_name)
+        except Exception as e:
+            self._logger.error(
+                f'{cached.log_tag} failed to delete stack {stack_name}: {e}'
+            )
+        return True
 
     def _process_unprovisioned_jobs(self, jobs: List[SocaJob]):
         """

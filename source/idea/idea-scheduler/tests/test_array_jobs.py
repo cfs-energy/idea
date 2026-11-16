@@ -193,6 +193,10 @@ def world(tmp_path, monkeypatch):
         scheduler=pbs,
         metrics=FakeMetrics(),
         job_notifications=FakeJobNotifications(),
+        instance_cache=SocaAnyPayload(
+            is_ready=lambda: True, list_compute_instances=lambda **_: []
+        ),
+        aws_util=Mock(),
     )
     context.config = lambda: Mock(get_int=lambda key, default=None: default)
     yield SimpleNamespace(context=context, cache=cache, pbs=pbs)
