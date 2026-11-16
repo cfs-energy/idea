@@ -453,9 +453,7 @@ class FolderAnalytics:
                     return MISSING
                 # ONTAP took the request and did not answer even by its own return_timeout. That
                 # is this folder unless the filer cannot answer a small read about the volume root.
-                if timed_out(e) and self._answers(
-                    client, status['uuid']
-                ):
+                if timed_out(e) and self._answers(client, status['uuid']):
                     self.logger.warning(
                         'storage analytics read of one folder timed out'
                     )

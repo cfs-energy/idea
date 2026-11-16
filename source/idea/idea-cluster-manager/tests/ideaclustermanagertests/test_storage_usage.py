@@ -1139,9 +1139,7 @@ def test_a_read_that_cannot_get_a_slot_goes_without(monkeypatch, tree):
     assert analytics.folder(tree)['self']['bytes'] == 1000
 
 
-def test_requests_queued_behind_one_read_of_a_folder_take_its_answer(
-    monkeypatch, tree
-):
+def test_requests_queued_behind_one_read_of_a_folder_take_its_answer(monkeypatch, tree):
     # every home view asks for <mount>/shared: with the slots busy, the requests for it that
     # queue behind the first must not each wait their own READ_WAIT_SECONDS after it
     import requests
