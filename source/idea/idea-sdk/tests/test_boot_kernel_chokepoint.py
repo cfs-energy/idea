@@ -361,6 +361,9 @@ def test_a_desktop_bootstrap_ending_with_no_reboot_runs_the_check(tmp_path):
         base_os='rhel9',
     )
     head = rendered[: rendered.index('CONTROLLER_EVENTS_QUEUE_URL=')]
+    # the runner's own /etc/environment (Linux) would reset PATH and drop the stubs
+    assert head.count('source /etc/environment') == 1
+    head = head.replace('source /etc/environment', ':')
     (tmp_path / 'common').mkdir()
     (tmp_path / 'common/bootstrap_common.sh').write_text(
         COMMON.read_text().replace(
