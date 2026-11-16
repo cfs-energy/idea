@@ -78,7 +78,9 @@ A check stops and alerts rather than continuing when:
 * the settings are out of bounds, for example a removal time under 14 days saved outside this page
 * the settings or the cleanup table cannot be read
 
-A check also alerts, and carries on, when no digest reached SES for an owner, and once a day when 5000 folders need a check at once, so later ones wait. An owner folder that cannot be read keeps its folders, which come up again at the next check.
+A check also alerts, and carries on, when no digest reached SES for an owner, when an owner folder cannot be read (its folders stay and come up again at the next check), and when more than 5000 folders are due at once: each check looks at the 5000 soonest and the rest come up in the checks after. The last two alert at most once a day for each file system. A job that cannot be recorded while the scheduler starts alerts too.
+
+The cluster manager records each digest SES takes in the cleanup table. Until its role allows that, as for a moment during an upgrade, every digest counts as not sent and the check says so: folders wait, nothing goes early.
 
 An alert is an error in the scheduler log containing `SCRATCH_CLEANUP_ALERT`, the `scratch_cleanup.run_failed` metric, and the top of this page. Put your monitor on the log word or the metric. The cluster administrator gets a summary on the digest day for each selected file system that has something to say: what is scheduled, what waits for undeliverable notices, what went, and what stopped.
 

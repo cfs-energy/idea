@@ -84,7 +84,7 @@ class FakeStore:
             if row['status'] in ('started', 'failed')
         }
 
-    def list_due(self, before, limit, now):
+    def list_due(self, before, now=None):
         rows = sorted(
             ({**row, 'key': key} for key, row in self.removals.items()),
             key=lambda row: row['remove_at'],
@@ -92,8 +92,9 @@ class FakeStore:
         return [
             row
             for row in rows
-            if row['remove_at'] < f'{before}~' and row.get('next_check_at', now) <= now
-        ][:limit]
+            if row['remove_at'] < f'{before}~'
+            and (now is None or row.get('next_check_at', now) <= now)
+        ]
 
     def delivered_at(self, receipt):
         return self.delivered.get(receipt)

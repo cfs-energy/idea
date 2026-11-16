@@ -17,7 +17,7 @@ from ideaclustermanager.app.notifications.notifications_service import (
 )
 from ideascheduler.app.scratch_cleanup import service as module
 from ideascheduler.app.scratch_cleanup import store as store_module
-from ideascheduler.app.scratch_cleanup.rules import Reason
+from ideascheduler.app.scratch_cleanup.rules import ActiveJobs, Reason
 from ideascheduler.app.scratch_cleanup.store import ScratchCleanupStore
 import test_scratch_cleanup_service as base
 from test_scratch_cleanup_service import (
@@ -27,8 +27,12 @@ from test_scratch_cleanup_service import (
     due_in,
     job_folder,
     logged_alert,
+    folder_on,
     put_event,
     run,
+    run_on,
+    second_file_system,
+    told_about,
 )
 
 world = base.world
@@ -154,6 +158,10 @@ def removals(world):
     return world.store.page_removals(100)[0]
 
 
+def ses_sent(world):
+    return world.ses.get_send_quota()['SentLast24Hours']
+
+
 # SCRATCH-3: a notice counts once SES takes it, not when it is queued
 
 
@@ -183,6 +191,20 @@ def test_a_digest_ses_takes_counts_from_then_and_the_folder_goes(on_aws):
     assert checks(world, 21) == 1
     assert not folder.exists()
     assert not logged_alert(world)
+
+
+def test_a_digest_still_on_its_way_is_not_sent_again(on_aws):
+    world = on_aws
+    world.ses.verify_email_identity(EmailAddress=SENDER)
+    digests_on(world)
+    due_in(world, days=10)
+    assert run(world)['noticed_folders'] == 1
+    # the same day's digest tried again, before the cluster manager has worked the queue
+    world.store.release_alert('digest:scratch')
+    world.now += timedelta(hours=1)
+    assert run(world)['noticed_folders'] == 0
+    world.deliver()
+    assert ses_sent(world) == 1
 
 
 # SCRATCH-1: kept folders keep their date, and must not fill every check
@@ -218,6 +240,43 @@ def test_kept_folders_do_not_hold_back_the_rest(on_aws, monkeypatch):
     }
 
 
+def test_folders_that_wait_for_their_owner_hold_back_no_one(on_aws, monkeypatch):
+    world = on_aws
+    world.ses.verify_email_identity(EmailAddress=SENDER)
+    monkeypatch.setattr(module, 'MAX_RECORDS_PER_CHECK', 2)
+    digests_on(world)
+    # never told, with the earliest dates: bob cannot be told, carol always has a job running
+    world.disabled.add('bob')
+    for name in ('100', '101'):
+        due_in(world, name=name, owner='bob', days=-60)
+    for name in ('102', '103'):
+        due_in(world, name=name, owner='carol', days=-59)
+    world.state.active = ActiveJobs(owners=frozenset({'carol'}))
+    fresh = due_in(world, name='200', days=10)
+    assert checks(world, 21) == 1
+    assert not fresh.exists(), 'alice was told twice and her folder went'
+    assert {row['owner'] for row in removals(world)} == {'bob', 'carol'}
+
+
+def test_a_folder_kept_on_one_file_system_is_still_told_of_on_another(on_aws, tmp_path):
+    world = on_aws
+    world.ses.verify_email_identity(EmailAddress=SENDER)
+    digests_on(world)
+    other = second_file_system(world, tmp_path)
+    job_folder(world)
+    folder_on(other)
+    # told twice on scratch, kept there an hour ago: not asked about again until tomorrow
+    put_event(
+        world,
+        world.state.records['123'][0],
+        remove_at=(world.now + timedelta(days=3)).isoformat(),
+        targets=told_about(world, '123'),
+        next_check_at=(world.now + timedelta(hours=23)).isoformat(),
+        last_reason=Reason.CHANGED_AFTER_JOB.value,
+    )
+    assert run_on(world, 'other')['noticed_folders'] == 1
+
+
 # SCRATCH-2: an owner folder that cannot be read is not a folder that is gone
 
 
@@ -241,6 +300,10 @@ def test_a_read_error_keeps_the_record(world, monkeypatch, where, name, error):
         outcome = run(world)
     assert outcome['removed_folders'] == 0 and folder.exists()
     assert world.store.removals, 'the record stays'
+    assert any(
+        f'Could not read {world.mount}/alice' in str(call)
+        for call in world.service._logger.error.call_args_list
+    ), 'and an administrator hears of it'
     assert run(world)['removed_folders'] == 1, 'and the next check finds it'
     assert not folder.exists()
 
@@ -260,6 +323,28 @@ def test_a_job_finishing_before_the_table_opens_is_recorded_after(world):
     assert not world.store.removals
     world.service._record_waiting()
     assert len(world.store.removals) == 1
+
+
+def test_a_waiting_job_that_cannot_be_recorded_holds_up_no_other(world, monkeypatch):
+    world.service._store_ready = False
+    broken, fine = base.finished_job('7'), base.finished_job('8')
+    world.service.record_job_finished(broken)
+    world.service.record_job_finished(fine)
+    real = world.store.get_removal
+
+    def get_removal(key):
+        if key == module.job_key(broken):
+            raise RuntimeError('ValidationException')
+        return real(key)
+
+    monkeypatch.setattr(world.store, 'get_removal', get_removal)
+    world.service._record_waiting()
+    assert [row['job_id'] for row in world.store.removals.values()] == ['8']
+    assert not world.service._waiting
+    assert any(
+        module.ALERT_MARKER in str(call)
+        for call in world.service._logger.exception.call_args_list
+    )
 
 
 def test_the_service_exists_before_finished_jobs_are_processed(monkeypatch):

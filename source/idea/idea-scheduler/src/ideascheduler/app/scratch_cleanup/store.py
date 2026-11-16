@@ -236,27 +236,27 @@ class ScratchCleanupStore:
             self.table.delete_item(Key={'pk': 'removal', 'sk': pointer['removal_sk']})
             self.table.delete_item(Key={'pk': 'removal-key', 'sk': key})
 
-    def list_due(self, before: str, limit: int, now: str) -> List[Dict]:
+    def list_due(self, before: str, now: Optional[str] = None) -> List[Dict]:
         """
-        the soonest removals up to a date, oldest first, never more than the limit. A kept
-        folder keeps its date, so one not to be asked about until later is passed over here:
-        enough of them would otherwise fill the limit for good.
+        every removal up to a date, oldest first. A kept folder keeps its date and stays at the
+        front, as does one whose owner cannot be told, so nothing short of all of them will do.
+        With now, one kept and not to be asked about until later is passed over.
         """
-        rows: List[Dict] = []
         arguments = {
             'KeyConditionExpression': Key('pk').eq('removal')
             & Key('sk').lt(f'{before}~'),
-            'FilterExpression': Attr('next_check_at').not_exists()
-            | Attr('next_check_at').lte(now),
-            'Limit': limit,
         }
-        while len(rows) < limit:
+        if now is not None:
+            arguments['FilterExpression'] = Attr('next_check_at').not_exists() | Attr(
+                'next_check_at'
+            ).lte(now)
+        rows: List[Dict] = []
+        while True:
             result = self.table.query(**arguments)
             rows.extend(_plain(item) for item in result.get('Items', []))
             if 'LastEvaluatedKey' not in result:
-                break
+                return rows
             arguments['ExclusiveStartKey'] = result['LastEvaluatedKey']
-        return rows[:limit]
 
     def page_removals(
         self, limit: int, start_key: Optional[Dict] = None
