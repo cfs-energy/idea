@@ -1151,7 +1151,9 @@ def test_one_sweep_retries_a_job_whose_stack_never_launched_an_instance(
     waiting = job_cache.get_job(job.job_id)
     assert waiting.state != SocaJobState.HELD
     assert waiting.reason_class == 'capacity'
-    assert 'no instance could be launched' in waiting.error_message
+    assert 'No instance could be launched for this job in 30 min' in (
+        waiting.error_message
+    )
     assert 'instance_ami' not in waiting.error_message
     assert ',' not in waiting.error_message, 'qalter splits on commas'
 

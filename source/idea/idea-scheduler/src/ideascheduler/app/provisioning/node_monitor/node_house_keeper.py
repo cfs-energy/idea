@@ -1637,7 +1637,7 @@ class NodeHouseKeepingSession:
                         job_id=job.job_id,
                         error_code=errorcodes.CAPACITY_UNAVAILABLE,
                         message=(
-                            f'no instance could be launched for this job in '
+                            f'No instance could be launched for this job in '
                             f'{max(1, stack_provisioning_timeout_secs // 60)} min '
                             f'(no capacity for its instance types). Retrying.'
                         ),
