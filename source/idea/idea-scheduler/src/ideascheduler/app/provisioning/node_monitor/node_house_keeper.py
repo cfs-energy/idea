@@ -28,6 +28,7 @@ from ideasdk.metrics import BaseMetrics
 
 from ideascheduler.app.provisioning import JobProvisioningUtil
 from ideascheduler.app.provisioning.lifecycle_events import (
+    REASON_CLASS_CAPACITY,
     REASON_CLASS_CLOUDFORMATION,
     REASON_CLASS_STACK_TIMEOUT,
 )
@@ -1165,6 +1166,38 @@ class NodeHouseKeepingSession:
             )
         return None
 
+    def _stack_launched_an_instance(self, job: SocaJob) -> bool:
+        """
+        True when a pending or running node of this job's current stack is in the instance
+        cache. A spot fleet is CREATE_COMPLETE once its request is active, with no instance
+        at all while spot capacity is short: a timed-out stack without one never launched.
+        """
+        try:
+            stack_id = job.params.stack_id if job.params is not None else None
+            for instance in self._context.instance_cache.list_compute_instances(
+                job_id=job.job_id, states=['pending', 'running']
+            ):
+                instance_stack_id = instance.aws_cloudformation_stack_id
+                if instance_stack_id and stack_id and instance_stack_id != stack_id:
+                    continue
+                return True
+        except Exception as e:
+            # no evidence of a node: retried and counted rather than held as a bad image
+            self._logger.warning(
+                f'{job.log_tag} nodes of its stack could not be read: {e}'
+            )
+        return False
+
+    def _timed_out_stack_reason(
+        self, job: SocaJob, timeout_secs: int
+    ) -> Tuple[str, str]:
+        if self._stack_launched_an_instance(job):
+            return (
+                REASON_CLASS_STACK_TIMEOUT,
+                f'stack created but job did not start within {timeout_secs}s',
+            )
+        return REASON_CLASS_CAPACITY, f'no instance launched within {timeout_secs}s'
+
     def _hold_after_stack_timeout(
         self, job: SocaJob, timeout_secs: int, too_small: Optional[str] = None
     ):
@@ -1510,25 +1543,26 @@ class NodeHouseKeepingSession:
                             f'{job.log_tag} Stack has timed out ({delta_secs}s > {stack_provisioning_timeout_secs}s), marking for deletion'
                         )
                         delete_stack = True
-                        stack_failure_reason_class = REASON_CLASS_STACK_TIMEOUT
-                        stack_failure_message = (
-                            f'stack created but job did not start within '
-                            f'{stack_provisioning_timeout_secs}s'
+                        stack_failure_reason_class, stack_failure_message = (
+                            self._timed_out_stack_reason(
+                                job, stack_provisioning_timeout_secs
+                            )
                         )
 
                 elif provisioning_status == ProvisioningStatus.TIMEOUT:
                     # check_status reports a created stack past the timeout as TIMEOUT and
                     # never as COMPLETED, so this is where a stack whose nodes launched
-                    # and never ran the job arrives. It is not a failed create.
+                    # and never ran the job arrives, and a spot fleet that launched none.
+                    # It is not a failed create.
                     self._logger.info(
                         f'{job.log_tag} Stack was created but the job did not start within '
                         f'{stack_provisioning_timeout_secs}s, marking for deletion'
                     )
                     delete_stack = True
-                    stack_failure_reason_class = REASON_CLASS_STACK_TIMEOUT
-                    stack_failure_message = (
-                        f'stack created but job did not start within '
-                        f'{stack_provisioning_timeout_secs}s'
+                    stack_failure_reason_class, stack_failure_message = (
+                        self._timed_out_stack_reason(
+                            job, stack_provisioning_timeout_secs
+                        )
                     )
 
                 elif provisioning_status == ProvisioningStatus.FAILED:
@@ -1597,6 +1631,17 @@ class NodeHouseKeepingSession:
                         timeout_secs=hold_timeout_secs,
                         too_small=too_small,
                     )
+                elif stack_failure_reason_class == REASON_CLASS_CAPACITY:
+                    # no commas: qalter splits a resource value on them
+                    self._context.job_cache.set_job_provisioning_error(
+                        job_id=job.job_id,
+                        error_code=errorcodes.CAPACITY_UNAVAILABLE,
+                        message=(
+                            f'no instance could be launched for this job in '
+                            f'{max(1, stack_provisioning_timeout_secs // 60)} min '
+                            f'(no capacity for its instance types). Retrying.'
+                        ),
+                    )
 
                 # a stack that went from under a job that owns it alone is an attempt
                 # too, whoever deleted it: no path may provision the job again uncounted
@@ -1611,6 +1656,8 @@ class NodeHouseKeepingSession:
                         + (
                             'was deleted before the job started.'
                             if stack_gone
+                            else 'launched no instance (no capacity for its instance types).'
+                            if stack_failure_reason_class == REASON_CLASS_CAPACITY
                             else f'provisioning failed or timed out (status: {provisioning_status}).'
                         ),
                         # the next provisioning cycle sees this same failure while
