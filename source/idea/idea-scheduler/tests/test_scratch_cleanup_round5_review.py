@@ -277,6 +277,62 @@ def test_a_folder_kept_on_one_file_system_is_still_told_of_on_another(on_aws, tm
     assert run_on(world, 'other')['noticed_folders'] == 1
 
 
+def test_a_folder_whose_owner_cannot_be_told_uses_none_of_the_digest_walk(
+    world, monkeypatch
+):
+    # one folder's worth: bob's, the oldest, would use all of it every week
+    monkeypatch.setattr(module, 'SCAN_BUDGET_ENTRIES', 3)
+    digests_on(world)
+    world.disabled.add('bob')
+    waiting = due_in(world, name='100', owner='bob', days=-60)
+    shutil.rmtree(due_in(world, name='101', owner='bob', days=-60))
+    due_in(world, name='200', days=10)
+    outcome = run(world)
+    assert outcome['noticed_folders'] == 1, 'alice is told'
+    assert 'their owner has no enabled account' in outcome['message']
+    assert 'bob' in outcome['message'] and logged_alert(world)
+    assert waiting.exists()
+    left = {row['job_id'] for row in world.store.removals.values()}
+    assert left == {'100', '200'}, 'a record of bob whose folder is gone still ends'
+
+
+def test_a_digest_that_runs_out_of_walk_says_so(world, monkeypatch):
+    monkeypatch.setattr(module, 'SCAN_BUDGET_ENTRIES', 3)
+    digests_on(world)
+    due_in(world, name='100', days=9)
+    due_in(world, name='200', days=10)
+    outcome = run(world)
+    assert outcome['noticed_folders'] == 1
+    assert '1 folders were not checked' in (outcome.get('message') or '')
+    assert logged_alert(world)
+
+
+def test_a_record_gone_here_and_waiting_on_another_file_system_holds_back_no_one(
+    world, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(module, 'MAX_RECORDS_PER_CHECK', 2)
+    world.config['scheduler.scratch_cleanup.digest_weekday'] = (base.DAY + 1) % 7
+    other = second_file_system(world, tmp_path)
+    # told twice here and gone from here, still on other and not yet told there
+    for name in ('100', '101'):
+        here = job_folder(world, name)
+        made = world.state.records[name][0]
+        put_event(world, made, remove_at=(LATER - timedelta(days=40)).isoformat())
+        folder_on(other, name=name)
+        shutil.rmtree(here)
+    fresh = job_folder(world, '200')
+    removed = 0
+    for _ in range(3):
+        world.now += timedelta(hours=1)
+        removed += run_on(world, 'scratch')['removed_folders']
+    assert removed == 1 and not fresh.exists()
+    left = {row['job_id']: row for row in world.store.removals.values()}
+    assert set(left) == {'100', '101'}, 'their folders on other still wait'
+    assert not any(
+        key.startswith('scratch|') for row in left.values() for key in row['targets']
+    ), 'what they were told about here is gone'
+
+
 # SCRATCH-2: an owner folder that cannot be read is not a folder that is gone
 
 

@@ -78,7 +78,7 @@ A check stops and alerts rather than continuing when:
 * the settings are out of bounds, for example a removal time under 14 days saved outside this page
 * the settings or the cleanup table cannot be read
 
-A check also alerts, and carries on, when no digest reached SES for an owner, when an owner folder cannot be read (its folders stay and come up again at the next check), and when more than 5000 folders are due at once: each check looks at the 5000 soonest and the rest come up in the checks after. The last two alert at most once a day for each file system. A job that cannot be recorded while the scheduler starts alerts too.
+A check also alerts, and carries on, when no digest reached SES for an owner, when a digest stops walking folders after 20 million files and folders (the rest wait for a later digest), when an owner folder cannot be read (its folders stay and come up again at the next check), and when more than 5000 folders are due at once: each check looks at the 5000 soonest and the rest come up in the checks after. The last two alert at most once a day for each file system. A job that cannot be recorded while the scheduler starts alerts too.
 
 The cluster manager records each digest SES takes in the cleanup table. Until its role allows that, as for a moment during an upgrade, every digest counts as not sent and the check says so: folders wait, nothing goes early.
 

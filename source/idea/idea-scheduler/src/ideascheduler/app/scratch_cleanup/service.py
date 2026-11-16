@@ -211,6 +211,8 @@ class Scan:
     seen_paths: set = field(default_factory=set)
     # owner folders a read error left unknown: their records stay
     unreadable: List[str] = field(default_factory=list)
+    # folders a digest would mention but whose owner cannot be told: they are not walked
+    held: List[Row] = field(default_factory=list)
 
     def keep(self, row: Row, reason: Reason):
         row.action = 'keep'
@@ -871,11 +873,19 @@ class ScratchCleanupService:
 
     # scanning the record
     def _scan_records(
-        self, file_system, limits, active, unfinished, records, any_age=False
+        self,
+        file_system,
+        limits,
+        active,
+        unfinished,
+        records,
+        any_age=False,
+        untold: frozenset = frozenset(),
     ) -> Tuple[Scan, List[str]]:
         """
         the folders these records name, each classified by the same rules as anything else.
-        Also returns the records with no folder here.
+        Also returns the records with no folder here. Folders of untold owners are set aside
+        before the walk, which has a budget: nothing would come of walking them.
         """
         scan = Scan(file_system=file_system, any_age=any_age)
         scan.capacity_bytes, scan.used_bytes, scan.used_percent = usage(
@@ -895,6 +905,11 @@ class ScratchCleanupService:
                     scan, root_fd, record, active, limits, now, owners
                 ):
                     absent.append(record['key'])
+            if untold:
+                scan.held = [row for row in scan.candidates if row.owner in untold]
+                scan.candidates = [
+                    row for row in scan.candidates if row.owner not in untold
+                ]
             self._inspect_candidates(scan, root_fd, root_device, unfinished, limits)
         finally:
             os.close(root_fd)
@@ -991,8 +1006,18 @@ class ScratchCleanupService:
     def _forget_absent(self, absent: List[str], records, limits, file_system):
         by_key = {record['key']: record for record in records}
         for key in absent:
-            if not self._on_another_file_system(by_key[key], limits, file_system):
+            record = by_key[key]
+            if not self._on_another_file_system(record, limits, file_system):
                 self.store.delete_removal(key)
+                continue
+            # the folders it told of here are gone: it waits on the other file system alone,
+            # and is not due here again in every check
+            targets = record.get('targets') or {}
+            here = [name for name in targets if name.startswith(f'{file_system.name}|')]
+            for name in here:
+                del targets[name]
+            if here:
+                self._put_removal(key, record)
 
     def _on_another_file_system(self, record, limits, file_system) -> bool:
         """
@@ -1559,7 +1584,13 @@ class ScratchCleanupService:
             if _may_need_notice(record, file_system.name, now)
         ]
         scan, absent = self._scan_records(
-            file_system, limits, active, unfinished, wanted, any_age=True
+            file_system,
+            limits,
+            active,
+            unfinished,
+            wanted,
+            any_age=True,
+            untold=self._owners_who_cannot_be_told(wanted),
         )
         self._stop_if_blind(scan)
         self._alert_unreadable(file_system, scan, run)
@@ -1574,6 +1605,19 @@ class ScratchCleanupService:
             ):
                 row.action = 'notice'
         warning = self._hold_undeliverable_notices(scan, limits)
+        unchecked = scan.reason_counts[Reason.NOT_CHECKED.value]
+        if unchecked:
+            warning = ' '.join(
+                filter(
+                    None,
+                    [
+                        warning,
+                        f'{unchecked} folders were not checked for this digest: a check '
+                        f'reads at most {SCAN_BUDGET_ENTRIES} files and folders. They wait '
+                        'for a later digest.',
+                    ],
+                )
+            )
         by_owner = defaultdict(list)
         for row in scan.rows:
             if row.action == 'notice':
@@ -1748,9 +1792,7 @@ class ScratchCleanupService:
         period nobody hears about. There is no setting to go without: removal pauses.
         """
         rows = [row for row in scan.rows if row.action == 'notice']
-        if not rows:
-            return None
-        if not self._cluster_can_send_email():
+        if rows and not self._cluster_can_send_email():
             for row in rows:
                 row.action = 'later'
                 row.remove_after = None
@@ -1758,22 +1800,23 @@ class ScratchCleanupService:
                 f'{len(rows)} folders wait because the cluster cannot send email, so their '
                 'owners cannot be told. Turn on email.'
             )
-        blocked = []
-        reachable: Dict[str, bool] = {}
-        for row in rows:
-            if row.owner not in reachable:
-                reachable[row.owner] = self._can_receive_email(row.owner)
-                if not reachable[row.owner]:
-                    blocked.append(row.owner)
-            if not reachable[row.owner]:
-                row.action = 'later'
-                row.remove_after = None
+        blocked = sorted({row.owner for row in scan.held})
         if blocked:
             return (
                 'Some folders wait because their owner has no enabled account with an email '
-                f'address: {", ".join(sorted(blocked))}.'
+                f'address: {", ".join(blocked)}.'
             )
         return None
+
+    def _owners_who_cannot_be_told(self, records: List[Dict]) -> frozenset:
+        """asked before the scan, so their folders are not walked for a digest they cannot get"""
+        if not self._cluster_can_send_email():
+            # nobody can be told, and _hold_undeliverable_notices says so for every folder
+            return frozenset()
+        owners = {record.get('owner') or '' for record in records}
+        return frozenset(
+            owner for owner in owners if not self._can_receive_email(owner)
+        )
 
     def _cluster_can_send_email(self) -> bool:
         config = self.context.config()
