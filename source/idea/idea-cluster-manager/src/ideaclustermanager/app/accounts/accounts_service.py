@@ -1279,12 +1279,21 @@ class AccountsService:
         finally:
             self._password_sets.release()
 
-    def _refuse_unknown_account(self, username: str, refused: str):
-        # The sign-in page's two paths: an account with no record, or a disabled one,
-        # cannot be given a password, so its request makes nothing.
+    def _refuse_unknown_account(self, username: str, refused: str) -> str:
+        """
+        The sign-in page's two paths: an account with no record, or a disabled one,
+        cannot be given a password, so its request makes nothing.
+        :return: the account's username, as its record and its tasks know it
+        """
         user = self.user_dao.get_user(username)
+        if user is None and '@' in username:
+            # the user pool signs in by email too, and no username has an '@'
+            pool_user = self.user_pool.admin_get_user(username.strip(), use_cache=False)
+            if pool_user is not None and pool_user.Username:
+                user = self.user_dao.get_user(pool_user.Username)
         if not Utils.get_value_as_bool('enabled', user, False):
             raise exceptions.general_exception(refused)
+        return user['username']
 
     def _hold_password(self, password: str) -> str:
         request = {
@@ -1639,7 +1648,7 @@ class AccountsService:
             raise exceptions.invalid_params('confirmation_code is required')
 
         # the user pool's answer to a code it did not send
-        self._refuse_unknown_account(
+        username = self._refuse_unknown_account(
             username, 'Invalid verification code provided, please try again.'
         )
         # the user pool verifies the confirmation code; then sync with LDAP/AD

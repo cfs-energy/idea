@@ -1421,6 +1421,71 @@ def test_a_sign_in_page_password_for_no_enabled_account_makes_nothing(
     send.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    'typed, account',
+    [
+        ('user@example.com', 'user'),
+        (' User@Example.com ', 'user'),
+        ('USER', 'user'),
+        ('nobody@example.com', None),
+    ],
+)
+def test_a_forgot_password_typed_as_the_email_reaches_the_account(
+    context: AppContext, monkeypatch, secrets, typed, account
+):
+    # the sign-in page sends what the user typed, and the user pool signs in by email
+    real_user_pool = context.accounts.user_pool
+    user_pool, send = Mock(), Mock()
+    user_pool.admin_get_user = real_user_pool.admin_get_user
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    monkeypatch.setattr(context.ldap_client, 'is_existing_user', lambda _: True)
+
+    def cognito_admin_get_user(UserPoolId, Username):
+        # the user pool answers to a username or an email alias, in any case
+        if Username.lower() in ('user', 'user@example.com'):
+            return {
+                'Username': 'user',
+                'Enabled': True,
+                'UserAttributes': [{'Name': 'email', 'Value': 'user@example.com'}],
+            }
+        raise client_error('UserNotFoundException', 'AdminGetUser')
+
+    monkeypatch.setattr(
+        context.aws().cognito_idp(), 'admin_get_user', cognito_admin_get_user
+    )
+    users = context.accounts.user_dao.table
+    users.put_item(
+        Item={'username': 'user', 'email': 'user@example.com', 'enabled': True}
+    )
+    try:
+        if account is None:
+            with pytest.raises(exceptions.SocaException) as refused:
+                context.accounts.confirm_forgot_password(
+                    typed, 'secret-value', '123456'
+                )
+            assert (
+                refused.value.message
+                == 'Invalid verification code provided, please try again.'
+            )
+            assert secrets.created == []
+            user_pool.confirm_forgot_password.assert_not_called()
+            send.assert_not_called()
+            return
+        context.accounts.confirm_forgot_password(typed, 'secret-value', '123456')
+    finally:
+        users.delete_item(Key={'username': 'user'})
+    user_pool.confirm_forgot_password.assert_called_once_with(
+        account, 'secret-value', '123456'
+    )
+    # the password is queued for the account's own name, in its own group
+    (queued,) = send.call_args_list
+    assert queued.kwargs['task_name'] == 'accounts.sync-password'
+    assert queued.kwargs['payload']['username'] == account
+    assert queued.kwargs['message_group_id'] == account
+    assert len(secrets.created) == 1
+
+
 @every_password_change
 def test_only_a_signed_in_password_change_sweeps(request, tmp_path, password_change):
     secrets, in_user_pool, change, _ = password_change
