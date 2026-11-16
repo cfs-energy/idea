@@ -16,7 +16,9 @@ import pathlib
 import platform
 import random
 import re
+import secrets
 import stat
+import string
 import time
 import unicodedata
 import urllib.parse
@@ -29,7 +31,6 @@ import arrow
 import semver
 import shortuuid
 import yaml
-from password_generator import PasswordGenerator
 from pydantic import BaseModel
 from decimal import Decimal
 import botocore.session
@@ -51,6 +52,11 @@ DIRECTORY_TREE_SPACE = '    '
 DIRECTORY_TREE_BRANCH = '│   '
 DIRECTORY_TREE_TEE = '├── '
 DIRECTORY_TREE_LAST = '└── '
+
+# Symbols a generated password draws from: all count as symbols for Cognito and Active Directory.
+# No '$' (the Windows desktop bootstrap puts the password in a double-quoted PowerShell string),
+# quotes, backslashes or backticks.
+PASSWORD_SPECIAL_CHARS = '!#%^&*(),.-_+=<>?'
 
 
 # noinspection InsecureHash
@@ -395,15 +401,22 @@ class Utils:
         min_numbers=1,
         min_special_chars=1,
     ) -> str:
-        generator = PasswordGenerator()
-        generator.maxlen = length
-        generator.minlen = length
-        generator.minuchars = min_uppercase_chars
-        generator.minlchars = min_lowercase_chars
-        generator.minnumbers = min_numbers
-        generator.minschars = min_special_chars
-        generator.excludeschars = '$'
-        return generator.generate()
+        """
+        A random password from the OS CSPRNG (secrets only): at least the given count of each
+        class, padded to length from all classes, then shuffled. When the minimums add up to more
+        than length, the password is that long instead.
+        """
+        counts = (min_uppercase_chars, min_lowercase_chars, min_numbers, min_special_chars)
+        if length < 0 or min(counts) < 0:
+            raise ValueError('password length and minimums must not be negative')
+        pools = (string.ascii_uppercase, string.ascii_lowercase, string.digits, PASSWORD_SPECIAL_CHARS)
+        characters = [secrets.choice(pool) for pool, count in zip(pools, counts) for _ in range(count)]
+        everything = ''.join(pools)
+        characters += [secrets.choice(everything) for _ in range(length - len(characters))]
+        for index in range(len(characters) - 1, 0, -1):
+            other = secrets.randbelow(index + 1)
+            characters[index], characters[other] = characters[other], characters[index]
+        return ''.join(characters)
 
     @staticmethod
     def to_title_case(s: str) -> str:
