@@ -10,7 +10,7 @@ About once a day the cluster manager leader reads the settings that must hold on
 | --- | --- | --- |
 | `ontap_cifs_session_security` | `session-security-for-ad-ldap` is `sign` or `seal` on the CIFS server | `/api/protocols/cifs/services` |
 | `ontap_ldap_session_security` | Session security is `sign` or `seal` on the LDAP client | `/api/name-services/ldap` |
-| `ontap_dns_domain_controllers` | Every SVM DNS server is a domain controller of the directory. AWS Managed AD only: with no `directoryservice.directory_id` (self-managed AD, OpenLDAP) there is nothing to compare with and the check is not reported | `/api/name-services/dns`, `ds:DescribeDirectories` |
+| `ontap_dns_domain_controllers` | Every SVM DNS server is a domain controller of the directory. AWS Managed AD only: with no `directoryservice.directory_id` (self-managed AD, OpenLDAP) there is nothing to compare with, so the servers are not compared. It is still sent where it fails alongside `ontap_secure_ddns`: unknown when the SVM's DNS cannot be read (no login, no password, a failed read or a timeout), and drift when the SVM has no DNS configuration | `/api/name-services/dns`, `ds:DescribeDirectories` |
 | `ontap_cifs_aes` | AES is on for Kerberos to the directory | `/api/protocols/cifs/services` |
 | `ontap_secure_ddns` | Dynamic DNS is on and secure | `/api/name-services/dns` |
 | `ontap_machine_account` | The CIFS server is enabled and ONTAP's LDAP client is up. This is ONTAP's view of its machine account: the directory's own record is not read | CIFS and LDAP above |
