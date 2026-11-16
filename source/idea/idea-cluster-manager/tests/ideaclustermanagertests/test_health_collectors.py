@@ -395,17 +395,32 @@ def test_a_directory_secret_that_is_not_a_certificate_does_not_cost_the_module_o
     assert metrics.value('cert.days_to_expiry', cert='module_tls') == [20]
 
 
+def cluster_secret(name, cluster='idea-com', **dates):
+    # every secret the list returns carries the tag its filter asked for
+    return {
+        'Name': f'{cluster}-{name}',
+        'Tags': [{'Key': 'idea:ClusterName', 'Value': cluster}],
+        **dates,
+    }
+
+
 def test_secrets_are_listed_for_this_cluster_and_never_read():
     client = Mock()
     client.get_paginator.return_value = SimpleNamespace(
         paginate=lambda Filters: [
             {
                 'SecretList': [
-                    {
-                        'Name': 'idea-com-ad-admin',
-                        'LastChangedDate': NOW - timedelta(days=30),
-                        'NextRotationDate': NOW + timedelta(days=2),
-                    }
+                    cluster_secret(
+                        'ad-admin',
+                        LastChangedDate=NOW - timedelta(days=30),
+                        NextRotationDate=NOW + timedelta(days=2),
+                    ),
+                    # the list's tag filter matches by prefix: not this cluster's
+                    cluster_secret(
+                        'ad-admin',
+                        cluster='idea-com2',
+                        LastChangedDate=NOW - timedelta(days=5),
+                    ),
                 ]
             }
         ]
@@ -414,6 +429,9 @@ def test_secrets_are_listed_for_this_cluster_and_never_read():
     SecretsCollector(context_with(secretsmanager=client)).collect(
         metrics, NOW.timestamp()
     )
+    assert [tags for name, _, tags in metrics.levels if name == 'secret.age_days'] == [
+        {'secret': 'ad-admin'}
+    ]
     assert metrics.value('secret.age_days', secret='ad-admin') == [30]
     assert metrics.value('secret.days_to_rotation', secret='ad-admin') == [2]
     assert metrics.value('secret.password_sync_waiting') == [0]
@@ -441,7 +459,7 @@ def test_passwords_waiting_for_their_sync_are_counted_and_never_named():
                     password('stray', timedelta(days=3)),
                     # the list's tag filter matches by prefix: not this cluster's
                     password('theirs', timedelta(days=3), cluster='idea-com2'),
-                    {'Name': 'idea-com-ad-admin', 'CreatedDate': NOW},
+                    cluster_secret('ad-admin', CreatedDate=NOW),
                 ]
             }
         ]
@@ -467,7 +485,7 @@ def test_the_sweep_gets_the_listed_password_secrets_after_the_gauges_are_out():
     client = Mock()
     client.get_paginator.return_value = SimpleNamespace(
         paginate=lambda Filters: [
-            {'SecretList': [waiting, {'Name': 'idea-com-ad-admin', 'CreatedDate': NOW}]}
+            {'SecretList': [waiting, cluster_secret('ad-admin', CreatedDate=NOW)]}
         ]
     )
     context = context_with(secretsmanager=client)

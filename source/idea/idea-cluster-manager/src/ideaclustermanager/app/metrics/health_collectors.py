@@ -376,6 +376,8 @@ class SecretsCollector(HealthCollector):
             ]
         ):
             secrets.extend(page.get('SecretList', []))
+        # the tag-value filter matches by prefix: other clusters whose name starts with this one's
+        secrets = [s for s in secrets if _tags(s).get('idea:ClusterName') == cluster]
         # A password waiting for its directory sync task is a secret of its own, under
         # a random name: a series each would never end. One count instead, of those
         # an hour old, which the task should have deleted within seconds.
@@ -386,9 +388,7 @@ class SecretsCollector(HealthCollector):
             sum(
                 1
                 for secret in passwords
-                # the filter above matches a tag value by prefix: this cluster's only
-                if _tags(secret).get('idea:ClusterName') == cluster
-                and secret.get('CreatedDate') is not None
+                if secret.get('CreatedDate') is not None
                 and now - secret['CreatedDate'].timestamp() > 3600
             ),
         )
