@@ -29,7 +29,7 @@ jobs:
           ref: ${{ github.head_ref }}
           token: ${{ steps.app.outputs.token || github.token }}
       - name: Set up pinned tools
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5
         with:
           # renovate: datasource=github-releases depName=jdx/mise
           version: 2026.10.19
