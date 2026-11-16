@@ -277,7 +277,7 @@ describe('script workbench', () => {
         const user = userEvent.setup();
         renderScriptWorkbench();
 
-        const script = '#!/bin/bash\n#PBS -P default\n# Bob’s run, café → done\necho hi\n';
+        const script = '#!/bin/bash\n#PBS -P default\n# Bob\u2019s run, café → done\necho hi\n';
         await setScript(user, script);
         await user.click(screen.getByRole('button', {name: /Check script/i}));
 

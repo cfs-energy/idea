@@ -6453,7 +6453,11 @@ def coerce_settings(
         return result
 
     values = visit(settings)
-    retention = values.get('log_archive', {}).get('s3_retention_days') if module == 'scheduler' else None
+    retention = (
+        values.get('log_archive', {}).get('s3_retention_days')
+        if module == 'scheduler'
+        else None
+    )
     if retention is not None and 0 < retention < 30:
         # ideactl bootstrap refuses these, so a saved one would stop the next bootstrap
         raise exceptions.invalid_params(

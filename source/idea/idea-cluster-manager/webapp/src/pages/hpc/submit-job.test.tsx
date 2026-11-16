@@ -118,8 +118,8 @@ describe('submit job page', () => {
         const submitJob = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({ accepted: true } as any);
 
         const user = userEvent.setup();
-        renderSubmitJob({}, btoa(JSON.stringify({ applicationId: APPLICATION.application_id, params: { job_name: 'Bob’s café run' } })
-            .replace('Bob’s café run', 'Bob\\u2019s caf\\u00e9 run')));
+        // JSON escapes keep the state ASCII, so the test can build it with btoa
+        renderSubmitJob({}, btoa('{"applicationId": "app-1", "params": {"job_name": "Bob\\u2019s caf\\u00e9 run"}}'));
 
         await screen.findByText('Job Name');
         const submitButton = (await screen.findAllByRole('button', { name: /^Submit Job$/ }))[0];
@@ -128,7 +128,7 @@ describe('submit job page', () => {
 
         await waitFor(() => expect(submitJob).toHaveBeenCalledTimes(1));
         const bytes = Uint8Array.from(atob(submitJob.mock.calls[0][0].job_script!), (char) => char.charCodeAt(0));
-        expect(new TextDecoder('utf-8', {fatal: true}).decode(bytes)).toContain('# Bob’s café run\n');
+        expect(new TextDecoder('utf-8', {fatal: true}).decode(bytes)).toContain('# Bob\u2019s café run\n');
     });
 
     // templates saved by earlier releases hold é as one Latin-1 byte
