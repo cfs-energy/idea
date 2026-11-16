@@ -793,3 +793,32 @@ def test_a_plain_job_id_is_its_own_aws_job_id():
     assert ModelUtils.pbs_job_id('42') == '42'
     assert ModelUtils.pbs_job_id(ModelUtils.aws_job_id('311[]')) == '311[]'
     assert ModelUtils.pbs_job_id(None) is None
+
+
+@pytest.mark.parametrize('iops, volume_type', [(0, 'gp3'), (3000, 'io1')])
+def test_an_ebs_scratch_job_builds_its_launch_template(context, iops, volume_type):
+    params = {'nodes': 1, 'cpus': 1, 'scratch_storage_size': 100}
+    if iops > 0:
+        params['scratch_iops'] = iops
+    result = build_template(
+        context=context,
+        job_name='ebs-scratch',
+        params=params,
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+    )
+    mappings = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.BlockDeviceMappings'
+    )
+    assert len(mappings) == 2
+    scratch = mappings[1]
+    assert scratch['DeviceName'] == '/dev/xvdbx'
+    assert scratch['Ebs']['VolumeSize'] == 100
+    assert scratch['Ebs']['VolumeType'] == volume_type
+    assert scratch['Ebs']['Encrypted'] is True
+    if iops > 0:
+        assert scratch['Ebs']['Iops'] == iops
