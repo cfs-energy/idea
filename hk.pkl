@@ -192,7 +192,7 @@ steps {
     glob = Regex("^source/idea/idea-cluster-manager/webapp/src/.*\\.(ts|tsx|js|jsx|css|scss)$")
     allow_binary = true
     depends = "repository-hygiene"
-    check = "NODE_PATH=$(mise where npm:typescript)/node_modules node source/idea/idea-cluster-manager/webapp/build-support/lint-cloudscape-usage.mjs {{files}}"
+    check = "NODE_PATH=$(mise where npm:oxc-parser)/node_modules node source/idea/idea-cluster-manager/webapp/build-support/lint-cloudscape-usage.mjs {{files}}"
   }
   ["typos"] {
     glob = Regex("")

@@ -49,6 +49,7 @@
     "@vitejs/plugin-react": "6.2.1",
     "fake-indexeddb": "6.2.8",
     "jsdom": "31.0.0",
+    "oxc-parser": "0.158.0",
     "sass": "1.108.2",
     "source-map-explorer": "2.5.3",
     "typescript": "5.9.3",
