@@ -1492,11 +1492,17 @@ class PersonalCostsCollector:
                     else None
                 )
                 settled = self.calculator.settled
+                # on the 1st, last month is the head's current month, not its previous
+                old_months = {
+                    month.start_date: month
+                    for month in ((old.previous, old.current) if old else ())
+                    if month
+                }
                 retained_current = self.retain_known(
-                    current, old.current if old else None, settled
+                    current, old_months.get(current.start_date), settled
                 )
                 retained_previous = self.retain_known(
-                    previous, old.previous if old else None, settled
+                    previous, old_months.get(previous.start_date), settled
                 )
                 result = GetMyCostsResult(
                     currency=locale.get_currency_code(),

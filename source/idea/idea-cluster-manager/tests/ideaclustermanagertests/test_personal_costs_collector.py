@@ -1383,6 +1383,37 @@ def test_fifty_users_mid_month_work_per_run(setup, monkeypatch):
     worker.calculator._workers.shutdown()
 
 
+def test_a_retained_day_survives_the_turn_of_the_month(setup, monkeypatch):
+    worker, _ = fifty_users(setup, monkeypatch)
+    _, store, _ = setup
+    calc = worker.calculator
+    inner = calc.day
+
+    def day(user, lower, upper, storage=None):
+        lines = inner(user, lower, upper, storage)
+        if lower.day == 11 and arrow.utcnow() < arrow.get('2026-11-14'):
+            # known while the day was open, then unknown for good (day 11 has no AI)
+            lines['ai'] = calc._line(1.0)
+        return lines
+
+    calc.day = day
+    for when in ('2026-11-13T12:00:00Z', '2026-11-30T12:00:00Z'):
+        at(monkeypatch, when)
+        worker.check()
+    for when in ('2026-12-01T00:16:00Z', '2026-12-02T12:00:00Z'):
+        at(monkeypatch, when)
+        worker.check()
+        result = GetMyCostsResult(
+            **store.projection('user-00', store.get('user-00', 'head'), 'costs')
+        )
+        assert result.previous.start_date == '2026-11-01'
+        # last month used to be paired with the head's own last month (October)
+        assert result.previous.ai.daily[10].amount == 1.0
+        assert result.previous.ai.daily[10].status == 'partial'
+        assert result.state == 'ready'
+    calc._workers.shutdown()
+
+
 def test_a_long_run_cannot_start_the_next_back_to_back(setup, monkeypatch):
     worker, _ = fifty_users(setup, monkeypatch)
     _, store, _ = setup
