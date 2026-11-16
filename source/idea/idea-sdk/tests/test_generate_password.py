@@ -44,13 +44,21 @@ def test_symbols_satisfy_the_pool_policy_and_powershell_quoting():
     assert set(PASSWORD_SPECIAL_CHARS) <= COGNITO_SYMBOLS
     assert not set(PASSWORD_SPECIAL_CHARS) & set('$`"\'\\')
     password = Utils.generate_password(16, 2, 2, 2, 2)
-    for pattern in ('[0-9]', '[A-Z]', '[a-z]', '[\\^\\$\\*\\.\\[\\]{}\\(\\)\\?"!@#%&\\/\\\\,><\':;\\|_~`=\\+\\-]'):
+    for pattern in (
+        '[0-9]',
+        '[A-Z]',
+        '[a-z]',
+        '[\\^\\$\\*\\.\\[\\]{}\\(\\)\\?"!@#%&\\/\\\\,><\':;\\|_~`=\\+\\-]',
+    ):
         assert re.search(pattern, password)
 
 
 def test_every_position_is_shuffled():
     # with 2+2+2+2 in 8 characters the classes would sit in fixed slots if the shuffle were missing
-    first = {Utils.generate_password(8, 2, 2, 2, 2)[0] in string.ascii_uppercase for _ in range(200)}
+    first = {
+        Utils.generate_password(8, 2, 2, 2, 2)[0] in string.ascii_uppercase
+        for _ in range(200)
+    }
     assert first == {True, False}
 
 
@@ -58,7 +66,16 @@ def test_uses_secrets_not_random(monkeypatch):
     def refuse(*args, **kwargs):
         raise AssertionError('random module used for a password')
 
-    for name in ('random', 'choice', 'choices', 'shuffle', 'randint', 'randrange', 'sample', 'uniform'):
+    for name in (
+        'random',
+        'choice',
+        'choices',
+        'shuffle',
+        'randint',
+        'randrange',
+        'sample',
+        'uniform',
+    ):
         monkeypatch.setattr(random, name, refuse)
     monkeypatch.setattr(random, 'SystemRandom', refuse)
     assert len(Utils.generate_password(16, 2, 2, 2, 2)) == 16

@@ -406,13 +406,29 @@ class Utils:
         class, padded to length from all classes, then shuffled. When the minimums add up to more
         than length, the password is that long instead.
         """
-        counts = (min_uppercase_chars, min_lowercase_chars, min_numbers, min_special_chars)
+        counts = (
+            min_uppercase_chars,
+            min_lowercase_chars,
+            min_numbers,
+            min_special_chars,
+        )
         if length < 0 or min(counts) < 0:
             raise ValueError('password length and minimums must not be negative')
-        pools = (string.ascii_uppercase, string.ascii_lowercase, string.digits, PASSWORD_SPECIAL_CHARS)
-        characters = [secrets.choice(pool) for pool, count in zip(pools, counts) for _ in range(count)]
+        pools = (
+            string.ascii_uppercase,
+            string.ascii_lowercase,
+            string.digits,
+            PASSWORD_SPECIAL_CHARS,
+        )
+        characters = [
+            secrets.choice(pool)
+            for pool, count in zip(pools, counts)
+            for _ in range(count)
+        ]
         everything = ''.join(pools)
-        characters += [secrets.choice(everything) for _ in range(length - len(characters))]
+        characters += [
+            secrets.choice(everything) for _ in range(length - len(characters))
+        ]
         for index in range(len(characters) - 1, 0, -1):
             other = secrets.randbelow(index + 1)
             characters[index], characters[other] = characters[other], characters[index]
