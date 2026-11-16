@@ -52,7 +52,7 @@
     "oxc-parser": "0.158.0",
     "sass": "1.108.2",
     "source-map-explorer": "2.5.3",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "vite": "8.3.8",
     "vite-plugin-pwa": "2.0.0",
     "vitest": "5.1.0",
