@@ -1063,21 +1063,21 @@ def test_reads_waiting_for_a_slot_do_not_ask_a_filer_that_just_failed(
     analytics, sent = filer(monkeypatch, tree, {'%2Fd': (503, {})})
     answer = requests.get
     count = ontap_analytics.MAX_CONCURRENT_READS * 2
-    passed = threading.Semaphore(0)
+    passed = []
+    everyone = threading.Event()
     status = analytics.status
 
     def counted_status(path):
         result = status(path)
-        passed.release()
+        passed.append(path)
+        if len(passed) >= count:
+            everyone.set()
         return result
 
     def get(url, **kwargs):
         if 'type=directory' in url:
             # every request is past the backoff check before the first read fails
-            for _ in range(count):
-                passed.acquire(timeout=5)
-            for _ in range(count):
-                passed.release()
+            everyone.wait(5)
         return answer(url, **kwargs)
 
     analytics.status = counted_status
@@ -1136,6 +1136,59 @@ def test_a_read_that_cannot_get_a_slot_goes_without(monkeypatch, tree):
     for thread in busy:
         thread.join(timeout=10)
     assert analytics._failed_at == float('-inf')
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+
+
+def test_requests_queued_behind_one_read_of_a_folder_take_its_answer(
+    monkeypatch, tree
+):
+    # every home view asks for <mount>/shared: with the slots busy, the requests for it that
+    # queue behind the first must not each wait their own READ_WAIT_SECONDS after it
+    import requests
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    listing = dict(records=[analytics_row('.', 1000, 40)])
+    slots = ontap_analytics.MAX_CONCURRENT_READS
+    answers = {f'%2Fbusy{i}': (200, listing) for i in range(slots)}
+    analytics, sent = filer(monkeypatch, tree, answers | {'%2Falice': (200, listing)})
+    answer = requests.get
+    release = threading.Event()
+    waiting = []
+
+    def get(url, **kwargs):
+        if 'type=directory' in url and '%2Fbusy' in url:
+            waiting.append(url)
+            release.wait(20)
+        return answer(url, **kwargs)
+
+    monkeypatch.setattr(requests, 'get', get)
+    wait = 0.5
+    monkeypatch.setattr(ontap_analytics, 'READ_WAIT_SECONDS', wait)
+    busy = [
+        threading.Thread(target=analytics.folder, args=(f'{tree}/busy{i}',))
+        for i in range(slots)
+    ]
+    for thread in busy:
+        thread.start()
+    while len(waiting) < len(busy):
+        time.sleep(0.01)
+    took = []
+
+    def ask():
+        started = time.monotonic()
+        took.append((analytics.folder(tree), time.monotonic() - started))
+
+    askers = [threading.Thread(target=ask) for _ in range(5)]
+    for thread in askers:
+        thread.start()
+    for thread in askers:
+        thread.join(timeout=10)
+    release.set()
+    for thread in busy:
+        thread.join(timeout=10)
+    assert [found for found, _ in took] == [None] * 5
+    # one slot wait for all of them, not one after another (0.5, 1.0, ... 2.5 s)
+    assert max(seconds for _, seconds in took) < wait * 2
     assert analytics.folder(tree)['self']['bytes'] == 1000
 
 

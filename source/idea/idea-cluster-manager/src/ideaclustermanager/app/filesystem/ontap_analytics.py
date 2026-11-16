@@ -70,6 +70,7 @@ READ_WAIT_SECONDS = READ_TIMEOUT_SECONDS
 # what _read gives for one folder ONTAP refused or could not answer in time: kept for
 # RETRY_SECONDS, so the next request does not ask again
 MISSING = object()
+PENDING = object()
 MAX_CACHED_FOLDERS = 5000
 # what ONTAP answers about the filer itself: a bad login, a timeout, too many requests
 FILER_ERRORS = {401, 408, 429}
@@ -326,8 +327,13 @@ class FolderAnalytics:
         key = (status['uuid'], status['relative'])
         max_age = REFRESHED_SECONDS if fresh else FOLDER_SECONDS
         with self._lock:
-            flight = self._folder_locks.setdefault(key, threading.Lock())
-        with flight:
+            # [lock, the answer of the read under it once that read is done]
+            flight = self._folder_locks.setdefault(key, [threading.Lock(), PENDING])
+        with flight[0]:
+            if flight[1] is not PENDING:
+                # the read this request queued behind has answered, None included: asking again
+                # would make each request behind it wait its own turn for a slot
+                return None if flight[1] is MISSING else flight[1]
             with self._lock:
                 cached = self._folders.get(key)
                 if cached and time.monotonic() - cached[0] < (
@@ -335,7 +341,7 @@ class FolderAnalytics:
                 ):
                     self._folders.move_to_end(key)
                     return None if cached[1] is MISSING else cached[1]
-            result = self._read(status, path)
+            result = flight[1] = self._read(status, path)
             with self._lock:
                 self._folder_locks.pop(key, None)
                 if result is not None:
