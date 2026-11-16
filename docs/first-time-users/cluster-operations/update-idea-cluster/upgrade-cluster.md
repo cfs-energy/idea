@@ -354,17 +354,17 @@ Go back with the 26.11.1 administrator and the 26.11.1 control-plane image toget
      --query '^ecs\.(image|previous_release_image)$'
    ```
 
-2. Set `ecs.image` to the 26.11.1 image: the same repository at tag `26.11.1`. If `ecs.image` is a `26.11.2@sha256:...` digest, which the upgrade writes on GovCloud pulling the public image, use the value of `ecs.previous_release_image`, the 26.11.1 digest. A mirror needs its own 26.11.1 image.
+2. Set `ecs.image` to the 26.11.1 image: the same repository at tag `26.11.1`. On GovCloud pulling the public image, the upgrade wrote a `26.11.2@sha256:...` digest. Use `ecs.previous_release_image` instead of the tag only if it reads `...:26.11.1@sha256:...`; the upgrade records it only when the image before was a release digest, so after a candidate or operator image it holds an older release or nothing. A mirror needs its own 26.11.1 image.
 
    ```bash
    IDEA_REVISION=v26.11.1 ./idea-admin.sh config set "Key=ecs.image,Type=string,Value=<REPOSITORY>:26.11.1" \
      --cluster-name <CLUSTER_NAME> --aws-region <REGION>
    ```
 
-3. Set the job cache copy back to 26.11.1's five minutes. 26.11.2 added this row at 3600 seconds and 26.11.1 reads it. A 26.11.1 scheduler task that dies without an orderly stop starts again from that copy, up to an hour old, and repeats the completion emails and metrics of the jobs that finished since.
+3. Delete the job cache copy interval 26.11.2 added at 3600 seconds, unless you set it yourself. 26.11.1 reads it, and without it copies every 5 minutes. A 26.11.1 scheduler task that dies without an orderly stop starts again from that copy, up to an hour old, and repeats the completion emails and metrics of the jobs that finished since. The next 26.11.2 upgrade adds the row again at 3600 seconds.
 
    ```bash
-   IDEA_REVISION=v26.11.1 ./idea-admin.sh config set "Key=scheduler.job_cache.backup_interval_seconds,Type=int,Value=300" \
+   IDEA_REVISION=v26.11.1 ./idea-admin.sh config delete scheduler.job_cache.backup_interval_seconds \
      --cluster-name <CLUSTER_NAME> --aws-region <REGION>
    ```
 
@@ -384,8 +384,8 @@ Go back with the 26.11.1 administrator and the 26.11.1 control-plane image toget
 
 What going back leaves:
 
-* **Queued passwords**: a password still queued for the directory when the 26.11.1 tasks take over is lost. 26.11.1 cannot read the secret it points to, retries it until the queue moves it to `<CLUSTER_NAME>-cluster-manager-tasks-dlq.fifo`, and the user sets the password again. A password set while the 26.11.2 cluster-manager tasks drain can fail with "The password could not be set right now. Try again." and must be set again. Every other queued account task runs on 26.11.1 as before.
-* **Settings**: the settings 26.11.2 added stay. Apart from the job cache copy in step 3, 26.11.1 does not read them, and they apply again after the next upgrade. `cluster-manager.metrics.cost.lookback_days` stays at 7 where 26.11.2 moved it; 26.11.1 re-reads seven days of Cost Explorer with it.
+* **Queued passwords**: a password still queued for the directory when the 26.11.1 tasks take over is lost. 26.11.1 cannot read the secret it points to, retries it until the queue moves it to `<CLUSTER_NAME>-cluster-manager-tasks-dlq.fifo`, and the user sets the password again. A password set while the 26.11.2 cluster-manager tasks drain can fail with "The password could not be set right now. Try again." and must be set again. 26.11.1 runs a user's account tasks in order, so the failing message holds that user's later account tasks, the password set again among them, for about 40 minutes: 16 tries, each 150 seconds apart. Every other user's queued account tasks run on 26.11.1 as before.
+* **Settings**: the settings 26.11.2 added stay. Apart from the job cache copy deleted in step 3, 26.11.1 does not read them, and they apply again after the next upgrade. `cluster-manager.metrics.cost.lookback_days` stays at 7 where 26.11.2 moved it; 26.11.1 re-reads seven days of Cost Explorer with it.
 * **Desktop and compute images**: 26.11.1 rebuilds every managed image that is not pinned, as after any upgrade. Until a rebuild passes, new launches use the image 26.11.2 baked, whose CloudWatch agent and rsyslog 26.11.1's bootstrap starts.
 * **Cost records**: see below.
 
