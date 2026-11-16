@@ -1683,6 +1683,13 @@ describe('file browser', () => {
             expect(await screen.findByText(/took too long to list\. To see it, run this in a terminal: ls/)).toBeInTheDocument();
         });
 
+        // the first listing asks for the home folder without a path, so there is no path to put in a command
+        it('gives a command that works when the home folder took too long to list', async () => {
+            renderFileBrowser({ listFailure: { errorCode: 'FILE_OPERATION_TIMED_OUT', message: 'stopped' } });
+
+            expect(await screen.findByText("Your home folder took too long to list. To see it, run this in a terminal: ls ~")).toBeInTheDocument();
+        });
+
         it('does not blame the open folder, which is empty, for a failed move to another', async () => {
             const { user, api } = renderFileBrowser({ listing: [] });
             await waitFor(() => expect(api.listFiles).toHaveBeenCalled());

@@ -471,7 +471,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             if (onError != null) {
                 onError(error)
             } else {
-                this.setState({listError: describeListingFailure(cwd ?? 'your home folder', error)})
+                this.setState({listError: describeListingFailure(cwd ?? '', error)})
             }
             return false
         })
