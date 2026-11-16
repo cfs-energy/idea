@@ -106,7 +106,7 @@ Queue to start, node provisioning and job outcomes already exist: `idea.jobs_pen
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.scheduler.pbs_up` | `reason` | `qstat` answered and the server is Active or Scheduling, every minute, killed at 20 seconds. 1 always carries `reason:ok`; 0 carries why: `failed`, `timeout`, `stuck`, `unreadable` (no server in the answer), `no_state` (a server with no state in the answer), or the server state in lower case (for example `hot_start`). `idle` is a server with scheduling turned off (`qmgr -c "set server scheduling=False"`): it answers, and the metric still reads 0, so mute a `pbs_up` monitor for that maintenance. A scheduler restart leaves no points for its length, so alert on no data as well as on 0. |
+| `idea.health.scheduler.pbs_up` | `reason` | `qstat` answered and the server is Active or Scheduling, every minute, killed at 20 seconds. 1 always carries `reason:ok`; 0 carries why: `failed`, `timeout`, `stuck`, `unreadable` (no server in the answer), `no_state` (a server with no state in the answer), or the server state in lower case (for example `hot_start`). `idle` is a server with scheduling turned off (`qmgr -c "set server scheduling=False"`): it answers, and the metric still reads 0, so mute a `pbs_up` monitor for that maintenance. No point is sent while the scheduler task is down, so alert on no data as well as on 0: a task that exits at every start sends nothing at all. Give the no-data alert 20 minutes, since a routine restart leaves a gap of a few minutes before the new leader's first reading. |
 | `idea.health.scheduler.pbs_check_seconds` | | How long `qstat` took. |
 | `idea.health.scheduler.jobs` | `state` | Jobs the server holds by state. |
 | `idea.health.scheduler.capacity_errors` | `reason`, `instance_family` | Each failed scaling activity of a compute stack, once: `insufficient_capacity`, `quota`, `other`. Seen when a stack has waited long enough for the scheduler to ask. |
@@ -119,7 +119,7 @@ A separate process in each task, once a minute, using only what the task can see
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback: 0 when nothing answers or sshd refuses the connection, as it would a user's. |
+| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback: 0 when nothing answers or sshd refuses the connection, as it would a user's. A dead sshd ends its task, so a bastion whose sshd dies at every start sends no points: alert on no data for 20 minutes as well as on 0. |
 | `idea.health.bastion.sshd_check_seconds` | `host` | How long that took. |
 | `idea.health.bastion.sessions` | `host` | Logged-in connections. |
 | `idea.health.bastion.tcp_established` | `host` | Established on port 22, including those not logged in yet. |
