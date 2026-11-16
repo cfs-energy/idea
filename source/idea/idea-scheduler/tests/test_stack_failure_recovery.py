@@ -78,6 +78,10 @@ class MockScheduler:
     def get_job(self, job_id: str) -> Optional[SocaJob]:
         return self.live_jobs.get(job_id)
 
+    def list_nodes(self, **_):
+        # no node registered for any instance: none of them reached the scheduler
+        return []
+
     def get_array_subjobs(self, job_id: str):
         submitted, states = self.subjobs[job_id]
         return submitted, [
@@ -1152,6 +1156,38 @@ def test_one_sweep_retries_a_job_whose_stack_never_launched_an_instance(
     assert waiting.state != SocaJobState.HELD
     assert waiting.reason_class == 'capacity'
     assert 'No instance could be launched for this job in 30 min' in (
+        waiting.error_message
+    )
+    assert 'instance_ami' not in waiting.error_message
+    assert ',' not in waiting.error_message, 'qalter splits on commas'
+
+
+def test_one_sweep_retries_a_job_whose_stack_launched_only_some_of_its_nodes(
+    context, job_cache, monkeypatch
+):
+    """
+    a two-node spot job whose fleet got one instance: that node joined the scheduler and
+    sits free, and the stack is CREATE_COMPLETE past the timeout. It was held after one
+    attempt with "Check instance_ami", as if the node had never joined. It is the same
+    capacity wait as a fleet with no instance: retried and counted, and the owner reads why.
+    """
+    from ideadatamodel import SocaComputeNodeState
+
+    job = mock_job(provisioned=True)
+    job.params.nodes = 2
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 1826, 1814, job)
+    scheduler.node.states = [SocaComputeNodeState.FREE]
+
+    sweep(context)
+
+    assert aws.deleted_stacks == [job.get_compute_stack()]
+    assert scheduler.reset_jobs == [job.job_id]
+    assert scheduler.held_jobs == []
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    waiting = job_cache.get_job(job.job_id)
+    assert waiting.state != SocaJobState.HELD
+    assert waiting.reason_class == 'capacity'
+    assert 'Not every node of this job could be launched in 30 min' in (
         waiting.error_message
     )
     assert 'instance_ami' not in waiting.error_message
