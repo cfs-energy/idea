@@ -159,8 +159,9 @@ def walk_home(
         total['newest_mtime'] = info.st_mtime
         total['identity'] = directory_identity(info)
         total['partial'] = True
-        # The whole top level is listed before any folder is entered, whatever the limits, so a
-        # cutoff can leave a folder unmeasured but cannot leave it out.
+        # The whole top level is listed before any folder is entered, whatever the entry and time
+        # limits, so those can leave a folder unmeasured but not out. Only TOP_LEVEL_SECONDS stops
+        # the listing itself, and the folders it had not reached are then left out.
         pending = []
         home_incomplete = False
         top_level_deadline = time.monotonic() + TOP_LEVEL_SECONDS
