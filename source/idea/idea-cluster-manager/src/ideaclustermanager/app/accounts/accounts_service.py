@@ -107,6 +107,8 @@ class AccountsService:
         self._next_password_secret_sweep = 0.0
         self._password_secret_sweep = threading.Lock()
         self._password_sets = threading.BoundedSemaphore(self.PASSWORD_SETS_AT_ONCE)
+        self._password_refusals = {}
+        self._password_refusals_lock = threading.Lock()
 
     def is_cluster_administrator(self, username: str) -> bool:
         cluster_administrator = self.context.config().get_string(
@@ -1251,6 +1253,27 @@ class AccountsService:
     # other workload in it shares.
     PASSWORD_SETS_AT_ONCE = 4
     PASSWORD_SET_WAIT_SECONDS = 10
+    # The places above bound how many run at once, not how many come in an hour. A
+    # username the user pool keeps refusing is turned away, with no secret made, once
+    # it has this many refusals in this long. Counted in each cluster-manager task, so
+    # the bound for a username is this many per task.
+    PASSWORD_REFUSALS_ALLOWED = 5
+    PASSWORD_REFUSALS_WINDOW_SECONDS = 900
+
+    def _password_refused(self, username: str, count: bool = False) -> bool:
+        """
+        :param count: record one more refusal for the username
+        :return: True once the username has used up its refusals for the window
+        """
+        now = time.monotonic()
+        with self._password_refusals_lock:
+            refusals, since = self._password_refusals.get(username, (0, now))
+            if now - since >= self.PASSWORD_REFUSALS_WINDOW_SECONDS:
+                refusals, since = 0, now
+            if count:
+                refusals += 1
+                self._password_refusals[username] = (refusals, since)
+            return refusals >= self.PASSWORD_REFUSALS_ALLOWED
 
     def _set_password(self, username: str, password: str, change_in_user_pool):
         """
@@ -1259,6 +1282,10 @@ class AccountsService:
         directory never gets. Made first, a failure leaves nothing changed.
         :return: what change_in_user_pool returned
         """
+        if self._password_refused(username):
+            raise exceptions.general_exception(
+                'Too many attempts. Try again in 15 minutes.'
+            )
         if not self._password_sets.acquire(timeout=self.PASSWORD_SET_WAIT_SECONDS):
             raise exceptions.general_exception(
                 'The password could not be set right now. Try again.'
@@ -1269,11 +1296,14 @@ class AccountsService:
                 result = change_in_user_pool()
             except Exception:
                 self._drop_password_secret(password_secret)
+                self._password_refused(username, count=True)
                 raise
             if result is False:
                 # the user pool has not taken the password
                 self._drop_password_secret(password_secret)
+                self._password_refused(username, count=True)
             else:
+                self._password_refusals.pop(username, None)
                 self._queue_password_sync(username, password_secret)
             return result
         finally:

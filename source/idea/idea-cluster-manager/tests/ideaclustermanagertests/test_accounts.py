@@ -1323,6 +1323,7 @@ def password_change(context: AppContext, monkeypatch, secrets, request):
     # the sign-in page's paths set a password only for an account with a record
     users = context.accounts.user_dao.table
     users.put_item(Item={'username': 'user', 'enabled': True})
+    context.accounts._password_refusals.clear()
     yield secrets, in_user_pool, change, send
     users.delete_item(Key={'username': 'user'})
 
@@ -1362,6 +1363,34 @@ def test_a_password_the_user_pool_refuses_leaves_no_secret(password_change):
     assert len(secrets.created) == 1
     assert secrets.secrets == {}
     send.assert_not_called()
+
+
+@every_password_change
+def test_refused_passwords_stop_making_secrets_until_the_window_passes(
+    context: AppContext, monkeypatch, password_change
+):
+    secrets, in_user_pool, change, send = password_change
+    allowed = context.accounts.PASSWORD_REFUSALS_ALLOWED
+    clock = [1000.0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    in_user_pool.side_effect = RuntimeError('wrong code')
+    for _ in range(100):
+        with pytest.raises((RuntimeError, exceptions.SocaException)):
+            change()
+    # 100 refused attempts made no more secrets than the username is allowed
+    assert len(secrets.created) == allowed
+    assert in_user_pool.call_count == allowed
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    assert refused.value.message == 'Too many attempts. Try again in 15 minutes.'
+    # the window passes: the right code sets the password and clears the count
+    clock[0] += context.accounts.PASSWORD_REFUSALS_WINDOW_SECONDS
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    assert len(secrets.created) == allowed + 1
+    assert context.accounts._password_refusals == {}
+    send.assert_called()
 
 
 @every_password_change
