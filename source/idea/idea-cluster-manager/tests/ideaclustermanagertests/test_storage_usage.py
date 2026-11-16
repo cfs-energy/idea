@@ -311,6 +311,25 @@ def test_delete_is_bound_to_measured_directory(
         service._workers.shutdown()
 
 
+def test_delete_with_dotdot_after_a_symlink_deletes_the_folder_it_checked(
+    monkeypatch, tree, tmp_path
+):
+    service, helper, _ = make_service(monkeypatch, tree)
+    elsewhere = tmp_path / 'team'
+    (elsewhere / 'sub').mkdir(parents=True)
+    (elsewhere / 'y').mkdir()
+    os.symlink(elsewhere / 'sub', tree + '/x')
+    os.mkdir(tree + '/y')
+    try:
+        measured = service.get_usage('alice', tree + '/y')['folder']
+        service.delete_folder('alice', tree + '/x/../y', measured['identity'])
+        assert helper.delete_files.call_args.args[0].files == [
+            os.path.realpath(tree + '/y')
+        ]
+    finally:
+        service._workers.shutdown()
+
+
 def test_new_folder_is_measured_fresh_and_can_be_deleted(monkeypatch, tree):
     service, helper, _ = make_service(monkeypatch, tree)
     try:

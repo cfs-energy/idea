@@ -654,6 +654,9 @@ class StorageUsageService:
             or os.path.normpath(path) == home
         ):
             raise exceptions.invalid_params('A folder inside your home is required')
+        # the folder opened and checked below is this path with '..' taken out as text: realpath
+        # of the path as sent would follow a symlink before its '..' and delete somewhere else
+        path = os.path.normpath(path)
 
         def delete():
             with open_directory(home, path) as fd:
