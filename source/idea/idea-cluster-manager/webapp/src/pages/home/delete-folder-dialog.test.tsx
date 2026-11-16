@@ -31,6 +31,16 @@ describe('delete folder dialog', () => {
         expect(screen.queryByText(/storage analytics/)).toBeNull();
     });
 
+    it('measures the folder afresh rather than showing a size kept from browsing', async () => {
+        const getStorageUsage = renderDialog({
+            state: 'ready', home: HOME, measured_at: 1,
+            folder: { identity: { inode: '2' }, bytes: 1, files: 1, newest_mtime: null, partial: false }
+        });
+
+        expect(await screen.findByText(/Size:/)).toBeInTheDocument();
+        expect(getStorageUsage).toHaveBeenCalledWith({ folder: `${HOME}/runs`, refresh: true });
+    });
+
     it('says a folder has not been measured yet, rather than too large', async () => {
         renderDialog({
             state: 'ready', home: HOME, measured_at: 1,

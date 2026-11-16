@@ -27,7 +27,8 @@ export function aboutCount(count: number): string {
     return `${(count / 1000000).toLocaleString(undefined, {maximumFractionDigits: 2})}M`;
 }
 
-export function useStorageUsage(folder?: string, refreshSignal = 0) {
+/** fresh: the first read asks for a new measurement, not one kept from earlier. */
+export function useStorageUsage(folder?: string, refreshSignal = 0, fresh = false) {
     const [usage, setUsage] = useState<StorageUsageResult | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [attempt, setAttempt] = useState(0);
@@ -40,7 +41,7 @@ export function useStorageUsage(folder?: string, refreshSignal = 0) {
         if (shownFolder.current !== folder) setUsage(null);
         shownFolder.current = folder;
         setError(null);
-        let refresh = lastRefresh.current !== refreshSignal;
+        let refresh = fresh || lastRefresh.current !== refreshSignal;
         lastRefresh.current = refreshSignal;
         const fetchUsage = async () => {
             try {
@@ -60,7 +61,7 @@ export function useStorageUsage(folder?: string, refreshSignal = 0) {
         };
         fetchUsage();
         return () => { active = false; clearTimeout(timer); };
-    }, [folder, attempt, refreshSignal]);
+    }, [folder, attempt, refreshSignal, fresh]);
     return {usage, error, retry: () => setAttempt(value => value + 1)};
 }
 
