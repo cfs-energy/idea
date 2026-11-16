@@ -1607,7 +1607,10 @@ class AccountsService:
 
         self.logger.debug(f'respond_to_auth_challenge() - Request: {request}')
         # the user pool's answer to a session it did not give
-        self._refuse_unknown_account(request.username, 'Invalid session for the user.')
+        username = self._refuse_unknown_account(
+            request.username, 'Invalid session for the user.'
+        )
+        request = request.model_copy(update={'username': username})
 
         result = None
 
@@ -1617,7 +1620,7 @@ class AccountsService:
             # another challenge follows: no password is set yet
             return result.auth is not None
 
-        self._set_password(request.username, request.new_password, respond)
+        self._set_password(username, request.new_password, respond)
         return result
 
     def forgot_password(self, username: str):
