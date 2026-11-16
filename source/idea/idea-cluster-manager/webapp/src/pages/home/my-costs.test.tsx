@@ -162,7 +162,7 @@ it.each([['cost-jobs', 'Jobs'], ['cost-storage', 'Storage'], ['cost-ai', 'Overvi
 });
 
 // yesterday is still computed again on every run; 2020 was stored long ago
-const yesterday = new Intl.DateTimeFormat('en-CA', {timeZone: 'America/New_York'}).format(new Date(Date.now() - 86400000));
+const yesterday = new Date(Date.parse(`${new Intl.DateTimeFormat('en-CA', {timeZone: 'America/New_York'}).format(new Date())}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
 const partialLine = {amount: 10, status: 'partial', note: 'Stored calculation rule.', daily: [{date: yesterday, amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}, {date: '2999-01-01', amount: null, status: 'unavailable'}]};
 const withLine = (key: string, line: any): GetMyCostsResult => ({...snapshot, current: {...month, [key]: line} as MyCostsMonth});
 describe('at real scale', () => {
