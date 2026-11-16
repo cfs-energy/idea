@@ -21,6 +21,9 @@ from ideaclustermanager.app.metrics.storage_metrics_service import StorageMetric
 MAX_ENTRIES = 100_000
 MAX_SECONDS = 10
 MAX_DEPTH = 128
+# the top level is listed whatever the limits above, but not past this: the scan is waited on for
+# MAX_SECONDS + 10, and a partial answer beats none
+TOP_LEVEL_SECONDS = MAX_SECONDS + 5
 CACHE_SECONDS = 3600
 REFRESH_SECONDS = 60
 COSTS_WAIT_SECONDS = 120
@@ -156,12 +159,17 @@ def walk_home(
         total['newest_mtime'] = info.st_mtime
         total['identity'] = directory_identity(info)
         total['partial'] = True
-        # The whole top level is listed before any folder is entered, whatever the limits, so a
-        # cutoff can leave a folder unmeasured but cannot leave it out.
+        # The whole top level is listed before any folder is entered, whatever the entry and time
+        # limits, so those can leave a folder unmeasured but not out. Only TOP_LEVEL_SECONDS stops
+        # the listing itself, and the folders it had not reached are then left out.
         pending = []
         home_incomplete = False
+        top_level_deadline = time.monotonic() + TOP_LEVEL_SECONDS
         with os.scandir(home_fd) as iterator:
             for entry in iterator:
+                if time.monotonic() >= top_level_deadline:
+                    home_incomplete = True
+                    break
                 entries += 1
                 try:
                     info = entry.stat(follow_symlinks=False)
@@ -654,6 +662,9 @@ class StorageUsageService:
             or os.path.normpath(path) == home
         ):
             raise exceptions.invalid_params('A folder inside your home is required')
+        # the folder opened and checked below is this path with '..' taken out as text: realpath
+        # of the path as sent would follow a symlink before its '..' and delete somewhere else
+        path = os.path.normpath(path)
 
         def delete():
             with open_directory(home, path) as fd:

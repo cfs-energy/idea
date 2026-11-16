@@ -1001,7 +1001,7 @@ describe('file browser', () => {
             const dialog = await findDialogContaining('Permanently delete');
             expect(await within(dialog).findByText('Size: 1 KiB in 2 files')).toBeInTheDocument();
             expect(within(dialog).getByText(/Last changed: 10 days ago/)).toBeInTheDocument();
-            expect(api.getStorageUsage).toHaveBeenCalledWith({folder: `${HOME}/reports`});
+            expect(api.getStorageUsage).toHaveBeenCalledWith({folder: `${HOME}/reports`, refresh: true});
             const confirm = within(dialog).getByRole('button', {name: 'Delete folder'});
             const input = within(dialog).getByRole('textbox', {name: 'Type reports to confirm deletion'});
             expect(confirm).toBeDisabled();

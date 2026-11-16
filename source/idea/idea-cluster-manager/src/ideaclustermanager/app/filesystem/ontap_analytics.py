@@ -15,6 +15,9 @@ from collections import OrderedDict
 from datetime import date, datetime, timezone
 from urllib.parse import quote
 
+import requests
+import urllib3
+
 from ideaclustermanager.app.metrics.storage_metrics_service import (
     FileContentsRefused,
     OntapClient,
@@ -57,8 +60,17 @@ FOLDER_SECONDS = 900
 REFRESHED_SECONDS = 60
 VOLUME_SECONDS = 300
 RETRY_SECONDS = 60
-READ_TIMEOUT_SECONDS = 10
+# ONTAP answers a folder read by return_timeout with the rows it has, and a next link. The client
+# waits longer, so a slow folder comes back short instead of as a timeout.
+RETURN_TIMEOUT_SECONDS = 10
+READ_TIMEOUT_SECONDS = RETURN_TIMEOUT_SECONDS + 5
 MAX_CONCURRENT_READS = 4
+# a read waiting this long for one of those goes without, and its caller falls back
+READ_WAIT_SECONDS = READ_TIMEOUT_SECONDS
+# what _read gives for one folder ONTAP refused or could not answer in time: kept for
+# RETRY_SECONDS, so the next request does not ask again
+MISSING = object()
+PENDING = object()
 MAX_CACHED_FOLDERS = 5000
 # what ONTAP answers about the filer itself: a bad login, a timeout, too many requests
 FILER_ERRORS = {401, 408, 429}
@@ -73,6 +85,16 @@ def refused_this_path(error):
     status = getattr(error, 'status_code', None)
     return (
         isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
+    )
+
+
+def timed_out(error):
+    """the client stopped waiting for ONTAP, before its answer began (ReadTimeout) or partway
+    through one (requests raises that as a ConnectionError around urllib3's ReadTimeoutError)."""
+    return isinstance(error, requests.exceptions.ReadTimeout) or (
+        isinstance(error, requests.exceptions.ConnectionError)
+        and bool(error.args)
+        and isinstance(error.args[0], urllib3.exceptions.ReadTimeoutError)
     )
 
 
@@ -305,14 +327,21 @@ class FolderAnalytics:
         key = (status['uuid'], status['relative'])
         max_age = REFRESHED_SECONDS if fresh else FOLDER_SECONDS
         with self._lock:
-            flight = self._folder_locks.setdefault(key, threading.Lock())
-        with flight:
+            # [lock, the answer of the read under it once that read is done]
+            flight = self._folder_locks.setdefault(key, [threading.Lock(), PENDING])
+        with flight[0]:
+            if flight[1] is not PENDING:
+                # the read this request queued behind has answered, None included: asking again
+                # would make each request behind it wait its own turn for a slot
+                return None if flight[1] is MISSING else flight[1]
             with self._lock:
                 cached = self._folders.get(key)
-                if cached and time.monotonic() - cached[0] < max_age:
+                if cached and time.monotonic() - cached[0] < (
+                    RETRY_SECONDS if cached[1] is MISSING else max_age
+                ):
                     self._folders.move_to_end(key)
-                    return cached[1]
-            result = self._read(status, path)
+                    return None if cached[1] is MISSING else cached[1]
+            result = flight[1] = self._read(status, path)
             with self._lock:
                 self._folder_locks.pop(key, None)
                 if result is not None:
@@ -320,12 +349,12 @@ class FolderAnalytics:
                     self._folders.move_to_end(key)
                     while len(self._folders) > MAX_CACHED_FOLDERS:
                         self._folders.popitem(last=False)
-            return result
+            return None if result is MISSING else result
 
-    def _bucket_labels(self, client, uuid):
+    def _bucket_labels(self, client, uuid, fresh=False):
         # A listing leaves the labels out of its rows. They only change with the calendar.
         cached = self._labels.get(uuid)
-        if cached and time.monotonic() - cached[0] < LABELS_SECONDS:
+        if cached and not fresh and time.monotonic() - cached[0] < LABELS_SECONDS:
             return cached[1]
         page = client.first_page(
             f'/api/storage/volumes/{uuid}/files/%2F?return_metadata=true&fields={LABELS_FIELD}'
@@ -376,14 +405,30 @@ class FolderAnalytics:
             return largest.get('records', []), True
         return records, False
 
+    def _answers(self, client, uuid):
+        try:
+            self._bucket_labels(client, uuid, fresh=True)
+            return True
+        except Exception:
+            return False
+
     def _read(self, status, path):
         now = time.time()
         relative = quote(status['relative'] or '/', safe='')
         request = (
             f'/api/storage/volumes/{status["uuid"]}/files/{relative}?type=directory'
-            f'&fields={ANALYTICS_FIELDS}&max_records={MAX_ROWS}&return_timeout=10'
+            f'&fields={ANALYTICS_FIELDS}&max_records={MAX_ROWS}'
+            f'&return_timeout={RETURN_TIMEOUT_SECONDS}'
         )
-        with self._reads:
+        if not self._reads.acquire(timeout=READ_WAIT_SECONDS):
+            return None
+        try:
+            # a filer that failed, or refused this volume, while this read waited is not asked again
+            since = max(
+                self._failed_at, self._refused_at.get(status['uuid'], float('-inf'))
+            )
+            if time.monotonic() - since < RETRY_SECONDS:
+                return None
             try:
                 client = self._client(status['target'])
                 # about the volume root, not this path: a refusal here is the role's, for everyone
@@ -405,9 +450,18 @@ class FolderAnalytics:
                     # Names and paths stay out of the log here too.
                     code = getattr(e, 'status_code', type(e).__name__)
                     self.logger.info(f'storage analytics refused one folder: {code}')
-                else:
-                    self._failed(e)
+                    return MISSING
+                # ONTAP took the request and did not answer even by its own return_timeout. That
+                # is this folder unless the filer cannot answer a small read about the volume root.
+                if timed_out(e) and self._answers(client, status['uuid']):
+                    self.logger.warning(
+                        'storage analytics read of one folder timed out'
+                    )
+                    return MISSING
+                self._failed(e)
                 return None
+        finally:
+            self._reads.release()
         own = None
         children = []
         for record in records:

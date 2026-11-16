@@ -29,7 +29,8 @@ function CannotDeleteHere(props: {path: string, onClose: () => void}) {
 }
 
 function ConfirmDelete(props: {path: string, name: string, onClose: () => void, onDeleted: () => void}) {
-    const {usage, error, retry} = useStorageUsage(props.path);
+    // a size kept from browsing could be from before a job filled the folder
+    const {usage, error, retry} = useStorageUsage(props.path, 0, true);
     const [confirmation, setConfirmation] = useState('');
     const [deleting, setDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
