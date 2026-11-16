@@ -24,7 +24,6 @@ from ideasdk.aws import (
     AwsClientProvider,
     AWSUtil,
     AWSClientProviderOptions,
-    AwsResources,
 )
 
 from typing import Any, Union, Optional, Dict, List
@@ -59,9 +58,6 @@ class SocaCliContext(SocaContext):
         self._console = Console()
         self._api_context_path = api_context_path
         self._unix_socket_client: Optional[SocaClient] = None
-        self._aws_resources = AwsResources(
-            context=self, aws=self._aws, aws_util=self._aws_util
-        )
         self._unix_socket_timeout: Optional[int] = unix_socket_timeout
 
     @property
@@ -312,9 +308,6 @@ class SocaCliContext(SocaContext):
                 options=AWSClientProviderOptions(profile=aws_profile, region=aws_region)
             )
             self._aws_util = AWSUtil(context=self, aws=self._aws)
-            self._aws_resources = AwsResources(
-                context=self, aws=self._aws, aws_util=self._aws_util
-            )
 
         except Exception as e:
             if self._aws_util is None:
@@ -327,9 +320,6 @@ class SocaCliContext(SocaContext):
         if not self.aws().are_credentials_expired():
             return
         self.aws_init(self._aws.aws_profile(), self._aws.aws_region())
-
-    def get_aws_resources(self):
-        return self._aws_resources
 
     def aws(self) -> AwsClientProvider:
         if self._aws.are_credentials_expired():
