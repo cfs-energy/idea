@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+# syntax=docker/dockerfile:1.29@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 # Build the control-plane image. IDEA_CONTAINER_ROLE selects the task process.
 # Use the repository root as the build context:
 #   docker buildx build --platform linux/arm64 \
@@ -115,7 +115,7 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # nano are in the package list above; emacs, ~840 MB with its dependencies, is left to a
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
-ARG UV_VERSION=0.13.5
+ARG UV_VERSION=0.13.8
 RUN set -eux; \
     python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
