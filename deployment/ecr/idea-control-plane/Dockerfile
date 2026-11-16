@@ -142,12 +142,12 @@ RUN set -eux; \
 
 # Build ideactl and include its pinned CDK CLI.
 # The build uses the repository path expected by its resource-copy script.
-ARG NODE_VERSION=26.8.2
-# Node archive checksums for 26.8.2
+ARG NODE_VERSION=26.13.1
+# Node archive checksums for 26.13.1
 RUN set -eux; \
     case "${TARGETARCH:-}" in \
-      amd64) N=x64; SUM=badb3fe6a61b85e1352ca6564dc56b8b7bd5ecd5c474c52acc21dd0cdd586f35 ;; \
-      arm64) N=arm64; SUM=746cdbf21565b4ea06f77642bb0e85466de8bb722242be2c5e006f272c361c63 ;; \
+      amd64) N=x64; SUM=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778 ;; \
+      arm64) N=arm64; SUM=80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d ;; \
       *) echo "TARGETARCH must be amd64 or arm64 (build with buildx); got '${TARGETARCH:-}'" >&2; exit 1 ;; \
     esac; \
     mkdir -p /usr/local/node; \
