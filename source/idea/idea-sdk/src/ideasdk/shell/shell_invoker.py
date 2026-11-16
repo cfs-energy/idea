@@ -235,32 +235,3 @@ class ShellInvoker:
             stop_signal=stop_signal,
             ignore_keyboard_interrupt=ignore_keyboard_interrupt,
         )
-
-    def invoke_pipe(
-        self, cmds: List[List] = None, env: Optional[Dict] = None
-    ) -> ShellInvocationResult:
-        start_time = Utils.current_time_ms()
-
-        result = None
-        prev_result = None
-        for cmd in cmds:
-            if prev_result:
-                result = subprocess.run(
-                    args=cmd,
-                    shell=False,
-                    capture_output=True,
-                    input=prev_result.stdout,
-                    cwd=self.cwd,
-                    env=env,
-                )
-            else:
-                result = subprocess.run(
-                    args=cmd, shell=False, capture_output=True, cwd=self.cwd, env=env
-                )
-            prev_result = result
-
-        total_time = Utils.current_time_ms() - start_time
-
-        return ShellInvocationResult(
-            command=cmds, result=result, total_time_ms=total_time, pipe=True
-        )

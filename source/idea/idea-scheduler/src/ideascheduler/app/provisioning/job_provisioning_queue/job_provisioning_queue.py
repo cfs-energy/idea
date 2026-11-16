@@ -316,26 +316,6 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
             if job_id in self._queued_jobs:
                 self._queued_jobs[job_id].deleted = True
 
-    def _check_and_clear_processed_jobs(self):
-        with self._lock:
-            now = Utils.current_time_ms()
-
-            is_expired = Utils.is_interval_expired(
-                last_run_ms=self._clear_processed_jobs_timestamp,
-                now_ms=now,
-                interval_secs=CLEAR_PROCESSED_JOBS_INTERVAL_SECS,
-            )
-
-            if not is_expired:
-                return
-
-            self._clear_processed_jobs_timestamp = now
-
-            for job_id in list(self._queued_jobs.keys()):
-                queued_job = self._queued_jobs[job_id]
-                if queued_job.processed:
-                    del self._queued_jobs[job_id]
-
     def _remove_queued_job(self, job: QueuedJob):
         with self._lock:
             # pop, not del: the job may already have been re-queued and released

@@ -10,14 +10,12 @@
 #  and limitations under the License.
 
 from ideasdk.context import SocaContext, SocaContextOptions
-from ideasdk.artwork import ascii_banner
 from ideasdk.shell import ShellInvoker
 from ideasdk.utils import Utils
 from ideasdk.client import SocaClient, SocaClientOptions
 from ideadatamodel import (
     exceptions,
     errorcodes,
-    SocaKeyValue,
     SocaUserInputChoice,
 )
 from ideasdk.aws import (
@@ -29,21 +27,14 @@ from ideasdk.aws import (
 from typing import Any, Union, Optional, Dict, List
 from pydantic import BaseModel
 import os
-import sys
 from rich.console import Console
 from rich.text import Text
-from rich.rule import Rule
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.style import Style
 from questionary import unsafe_prompt, Choice
 from contextlib import contextmanager
 import arrow
-
-if sys.version_info >= (3, 8):
-    from typing import Literal
-else:
-    from typing_extensions import Literal  # pragma: no cover
 
 
 class SocaCliContext(SocaContext):
@@ -97,16 +88,6 @@ class SocaCliContext(SocaContext):
     def console(self) -> Console:
         return self._console
 
-    def print_banner(self, meta_info: List[SocaKeyValue] = None):
-        if self.is_windows():
-            # todo - need to investigate why rich banner printing on windows gives index out of bounds error
-            banner = ascii_banner(meta_info=meta_info, rich=False)
-            print(banner)
-        else:
-            banner = ascii_banner(meta_info=meta_info, rich=True)
-            self.console.print(banner)
-        self.new_line()
-
     def spinner(self, message: Any):
         return self.console.status(status=message)
 
@@ -139,22 +120,6 @@ class SocaCliContext(SocaContext):
 
     def new_line(self, count: int = 1):
         self.console.line(count)
-
-    def print_rule(
-        self,
-        title: Optional[str] = None,
-        align: Literal['left', 'center', 'right'] = 'left',
-        style=None,
-    ):
-        if Utils.is_empty(title):
-            text = ''
-        else:
-            text = Text(
-                text=title, style=Style(bold=True, italic=True, color='bright_white')
-            )
-        if style is None:
-            style = 'rule.line'
-        self.print(Rule(text, align=align, style=style))
 
     def print_json(self, payload: Union[str, BaseModel, Any]):
         if isinstance(payload, str):

@@ -541,50 +541,6 @@ class NodeHouseKeepingSession:
                 desired=False,
             )
 
-    def pass3_filter_deletion_candidates(self):
-        """
-        filter deletion candidates based on present capacity and required capacity
-
-        For each job group if non-ephemeral capacity, check if the present capacity is less than required capacity
-        for the group.
-        This is to avoid scenarios where, instances are provisioned, become free and terminated as terminate when idle
-        interval is too short.
-        This can happen when capacity is still being provisioned.
-        """
-        for job_group, instances in self.job_groups.items():
-            ref = instances[0]
-            if ref.is_soca_ephemeral_capacity:
-                continue
-
-            required_capacity = self._context.job_cache.get_desired_capacity(
-                job_group=ref.soca_job_group
-            )
-
-            if ref.soca_capacity_type == SocaCapacityType.SPOT:
-                if (
-                    ref.aws_ec2spot_fleet_request_id
-                    not in self.spot_fleet_present_capacities
-                ):
-                    continue
-                present_capacity = self.spot_fleet_present_capacities[
-                    ref.aws_ec2spot_fleet_request_id
-                ]
-                if present_capacity < required_capacity:
-                    del self.spot_fleet_instances[ref.aws_ec2spot_fleet_request_id]
-            else:
-                if (
-                    ref.aws_autoscaling_group_name
-                    not in self.auto_scaling_group_present_capacities
-                ):
-                    continue
-                present_capacity = self.auto_scaling_group_present_capacities[
-                    ref.aws_autoscaling_group_name
-                ]
-                if present_capacity < required_capacity:
-                    del self.auto_scaling_group_instances[
-                        ref.aws_autoscaling_group_name
-                    ]
-
     @staticmethod
     def _registered_host(node: Optional[SocaComputeNode], fallback: str) -> str:
         """
