@@ -31,7 +31,6 @@ vi.mock('../pages/hpc/scratch-cleanup', () => ({default: (props: any) => <IdeaAp
 vi.mock('../pages/cluster-admin/reconciliation-runs', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>ReconciliationRuns content</p>}/>}));
 vi.mock('../pages/cluster-admin/cluster-status', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>ClusterStatus content</p>}/>}));
 vi.mock('../pages/cluster-admin/projects', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>Projects content</p>}/>}));
-vi.mock('../pages/cluster-admin/ai-usage', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>AiUsage content</p>}/>}));
 vi.mock('../pages/cluster-admin/user-costs', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>UserCostsPage content</p>}/>}));
 vi.mock('../pages/hpc/hpc-licenses', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>HpcLicenses content</p>}/>}));
 vi.mock('../pages/hpc/hpc-custom-amis', () => ({default: (props: any) => <IdeaAppLayout {...props} content={<p>HpcCustomAmis content</p>}/>}));
