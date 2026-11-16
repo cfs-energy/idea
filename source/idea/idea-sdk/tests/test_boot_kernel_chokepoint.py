@@ -352,6 +352,42 @@ def test_the_check_would_see_a_direct_reboot():
     assert not REBOOT.search('set_reboot_required "x"')
 
 
+def test_a_desktop_bootstrap_ending_with_no_reboot_runs_the_check(tmp_path):
+    # the rendered head of the desktop's last script, run where it lives: the check must be
+    # defined by the time it is called, not just named in the file
+    host = Host(tmp_path, grubby_can_select=False)
+    rendered = render(
+        'virtual-desktop-host-linux/configure_dcv_host_post_reboot.sh.jinja2',
+        base_os='rhel9',
+    )
+    head = rendered[: rendered.index('CONTROLLER_EVENTS_QUEUE_URL=')]
+    (tmp_path / 'common').mkdir()
+    (tmp_path / 'common/bootstrap_common.sh').write_text(
+        COMMON.read_text().replace(
+            'BOOTSTRAP_DIR="/root/bootstrap"', f'BOOTSTRAP_DIR="{host.bootstrap}"'
+        )
+    )
+    (tmp_path / 'virtual-desktop-host-linux').mkdir()
+    script = tmp_path / 'virtual-desktop-host-linux/post_reboot.sh'
+    script.write_text(head + 'echo reached\n')
+    (host.bootstrap / 'logs').mkdir()
+    result = subprocess.run(
+        ['bash', str(script)],
+        env=dict(
+            PATH=f'{host.bin}:{os.environ["PATH"]}',
+            BOOTSTRAP_DIR=str(host.bootstrap),
+            KERNEL_BOOT_DIR=str(host.boot),
+            AWS_REGION='us-east-2',
+        ),
+        capture_output=True,
+        text=True,
+    )
+    log = (host.bootstrap / 'logs/configure_dcv_host_post_reboot.log').read_text()
+    assert 'command not found' not in log, log
+    assert result.returncode == 1 and 'reached' not in log, log
+    assert 'would not boot' in (host.bootstrap / 'bootstrap_failed.txt').read_text()
+
+
 @pytest.mark.parametrize(
     'template',
     [
