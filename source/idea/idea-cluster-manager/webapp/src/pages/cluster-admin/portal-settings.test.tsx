@@ -205,6 +205,20 @@ it.each([
     expect(legacySettingsGroup(path, tab)).toBe(group);
 });
 
+// upgrade-cluster and ideactl deploy never apply a bootstrap setting, so its card must not say "upgrade"
+it('labels a card holding a bootstrap setting with ideactl bootstrap', async () => {
+    const context = setup();
+    const definitions = [
+        {...definition('cluster.network.client_ip', 'network', 'list', 'bootstrap'), section: 'Encryption and access'},
+        {...definition('cluster-manager.server.max_workers', 'network', 'integer', 'restart', true), section: 'Encryption and access'},
+    ];
+    vi.mocked(context.client().clusterSettings().describeSettingsCatalog).mockResolvedValue({settings: definitions});
+    await renderGroups('/cluster/settings/network', context);
+    expect(screen.getAllByText('Applies on next ideactl bootstrap')).toHaveLength(1);
+    expect(screen.queryByText('Applies after restart')).not.toBeInTheDocument();
+    expect(screen.queryByText('Applies on next upgrade')).not.toBeInTheDocument();
+});
+
 it('isolates normal and advanced fields in one card with one strongest effect badge', async () => {
     const context = setup();
     const definitions = [

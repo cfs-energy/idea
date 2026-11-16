@@ -1041,7 +1041,7 @@ export interface SettingDefinition {
   advanced: boolean;
   read_only?: boolean;
   hidden?: boolean;
-  effect: "runtime" | "restart" | "deployment";
+  effect: "runtime" | "restart" | "deployment" | "bootstrap";
 }
 export interface SettingValidation {
   required?: boolean;
