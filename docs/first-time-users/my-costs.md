@@ -56,7 +56,7 @@ A user without saved monthly results sees **Collecting · about N min**. The est
 
 ## Storage evidence
 
-Today's byte share is never reused to fill last month. Historical days without a dated share remain missing. ONTAP shares use the sum of all user quota bytes rather than volume usage after storage savings. The sum includes root and unresolved identities whose costs remain unassigned. Dated shares and disk observations are retained for 400 days from collection onward. Disk observations account for at most 15 minutes each. Earlier observations survive deletion. Missed collection intervals remain unknown.
+Today's byte share is never reused to fill last month. Historical days without a dated share remain missing. ONTAP shares use the sum of all user quota bytes rather than volume usage after storage savings. The sum includes root and unresolved identities whose costs remain unassigned. Dated shares and disk observations are retained for 400 days from collection onward. Disk observations hold until the next one, for at most 17 minutes each. Earlier observations survive deletion. Missed collection intervals remain unknown.
 
 Complete home-directory scans can establish measured bytes. A home-directory listing alone cannot establish the filesystem total needed to calculate a cost share. The collector verifies the mounted filesystem before retaining home measurements. For a verifiable EFS root mount, a complete filesystem scan can supply that total. Users receive only their byte share. System or unrelated bytes remain unassigned. Subdirectory mounts, unverifiable proxy mounts, and partial root scans cannot establish that total. Shared-storage costs stay unavailable when user storage cannot be separated from system space or unrelated directories.
 

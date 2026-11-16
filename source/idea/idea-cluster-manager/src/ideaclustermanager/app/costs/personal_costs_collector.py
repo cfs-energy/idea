@@ -74,8 +74,9 @@ MONTH_CLOSE_DAYS = 4
 # A sweep names the users it observed; their inventory record is only written when it
 # changes and once a day, so disk_day rebuilds one sample per sweep from the two.
 INVENTORY_SWEEP = 'inventory-sweep:'
-# ponytail: a killed task loses at most this much of a run's sweep: those users get a
-# 15 minute unknown gap, never an invented interval. Write per user if that ever matters.
+# ponytail: a killed task loses at most this much of a run's sweep: those users get an
+# unknown gap of about 13 minutes, never an invented interval. Write per user if that
+# ever matters.
 SWEEP_FLUSH_SECONDS = 60
 # A disk observation holds until the next one, for at most this long: a run every 15
 # minutes that starts up to a minute late, and a minute's margin. Held for only 15, a

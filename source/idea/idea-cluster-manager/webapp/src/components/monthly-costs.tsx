@@ -12,7 +12,9 @@ export const collectingLabel = (costs: GetMyCostsResult | null) => {
     return `Collecting · about ${minutes} min`;
 };
 // pending: a gap is recent enough to be computed again. The collector recomputes today and the 3 days before it
-// (SETTLE_DAYS) on every run and stores older days as they are, so only a recent gap can still fill in.
+// (SETTLE_DAYS) on every run and stores older days as they are. ponytail: a day whose source failed is not stored
+// and is retried on every run, so it can still fill in after 3 days and reads as final here. The day points do not
+// say which days are stored; send a per-day settled flag from the collector if outages that long ever matter.
 export interface CostGaps {missing: number; partly: number; pending: boolean}
 const SETTLE_DAYS = 3;
 // The one rule for what the portal calls not counted. A day is not counted only when it has no amount; today is
