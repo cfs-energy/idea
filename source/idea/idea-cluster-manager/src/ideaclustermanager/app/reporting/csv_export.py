@@ -40,7 +40,9 @@ def completeness(coverage) -> str:
     missing = total.get('missing_days') or 0
     if missing:
         return f'Partial: missing at least {missing} day{"" if missing == 1 else "s"}'
-    return 'Partial' if total.get('status') in ('partial', 'unavailable') else 'Complete'
+    return (
+        'Partial' if total.get('status') in ('partial', 'unavailable') else 'Complete'
+    )
 
 
 def safe_text(value):
