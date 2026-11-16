@@ -270,7 +270,11 @@ describe('getJobWaitingSignals', () => {
 describe('jobFailureNextStep', () => {
     it('sends a script failure to the output files', () => {
         expect(jobFailureNextStep({job_id: '2345', name: 'plasma', exit_status: 2})).toBe(
-            "Exit code 2 came from your script. Check the job's output files (plasma.o2345 and plasma.e2345 in the folder it was submitted from).");
+            "Exit code 2 came from your script. Check the job's output files (plasma.o2345 and plasma.e2345 in the folder it was submitted from, unless the script sets -o or -e).");
+    });
+
+    it('names the per-subjob files of an array job', () => {
+        expect(jobFailureNextStep({job_id: '123[]', name: 'sweep', exit_status: 1})).toContain('(sweep.o123.<index> and sweep.e123.<index> ');
     });
 
     it('names the signal case above 256', () => {
