@@ -78,6 +78,10 @@ class MockScheduler:
     def get_job(self, job_id: str) -> Optional[SocaJob]:
         return self.live_jobs.get(job_id)
 
+    def list_nodes(self, **_):
+        # no node registered for any instance: none of them reached the scheduler
+        return []
+
     def get_array_subjobs(self, job_id: str):
         submitted, states = self.subjobs[job_id]
         return submitted, [
@@ -446,6 +450,7 @@ def test_housekeeper_holds_and_explains_a_job_whose_nodes_never_started_it(
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
     mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache([job_instance(job)])
 
     housekeeping_session(context).retry_provisioning_cleanup()
 
@@ -850,6 +855,8 @@ class SweepAws:
         }
         self.launch_time = arrow.utcnow().shift(seconds=-node_age_secs)
         self.instance_state = 'running'
+        # a spot fleet is CREATE_COMPLETE once its request is active, before any instance
+        self.launched = True
         self.deleted_stacks: List[str] = []
         self.terminated: List[str] = []
 
@@ -933,6 +940,8 @@ class SweepInstanceCache:
         return self.aws.instance(self.bootstrap_status)
 
     def list_compute_instances(self, job_id=None, states=None, **_):
+        if not self.aws.launched:
+            return []
         instance = self.aws.instance(self.bootstrap_status)
         if instance.soca_job_id == job_id and instance.state in states:
             return [instance]
@@ -962,6 +971,9 @@ class SweepScheduler(MockScheduler):
 
     def find_node(self, hosts, **_):
         return self.node
+
+    def no_node(self):
+        self.node = None
 
     def set_node_state(self, host, state):
         return True
@@ -1121,6 +1133,67 @@ def test_the_hold_does_not_depend_on_which_half_of_the_sweep_runs_first(
     assert job_cache.get_job(job.job_id).reason_class == 'stack_timeout'
 
 
+def test_one_sweep_retries_a_job_whose_stack_never_launched_an_instance(
+    context, job_cache, monkeypatch
+):
+    """
+    a spot fleet stack is CREATE_COMPLETE with no instance while spot capacity is short.
+    Past the timeout it was held after one attempt as nodes that launched and never
+    joined, with "Check instance_ami": no node had launched. It is a capacity wait: the
+    stack is deleted and the job retried and counted, and the owner reads why.
+    """
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 1826, 1814)
+    aws.launched = False
+    scheduler.no_node()
+
+    sweep(context)
+
+    assert aws.deleted_stacks == [job.get_compute_stack()]
+    assert scheduler.reset_jobs == [job.job_id]
+    assert scheduler.held_jobs == []
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    waiting = job_cache.get_job(job.job_id)
+    assert waiting.state != SocaJobState.HELD
+    assert waiting.reason_class == 'capacity'
+    assert 'No instance could be launched for this job in 30 min' in (
+        waiting.error_message
+    )
+    assert 'instance_ami' not in waiting.error_message
+    assert ',' not in waiting.error_message, 'qalter splits on commas'
+
+
+def test_one_sweep_retries_a_job_whose_stack_launched_only_some_of_its_nodes(
+    context, job_cache, monkeypatch
+):
+    """
+    a two-node spot job whose fleet got one instance: that node joined the scheduler and
+    sits free, and the stack is CREATE_COMPLETE past the timeout. It was held after one
+    attempt with "Check instance_ami", as if the node had never joined. It is the same
+    capacity wait as a fleet with no instance: retried and counted, and the owner reads why.
+    """
+    from ideadatamodel import SocaComputeNodeState
+
+    job = mock_job(provisioned=True)
+    job.params.nodes = 2
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 1826, 1814, job)
+    scheduler.node.states = [SocaComputeNodeState.FREE]
+
+    sweep(context)
+
+    assert aws.deleted_stacks == [job.get_compute_stack()]
+    assert scheduler.reset_jobs == [job.job_id]
+    assert scheduler.held_jobs == []
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    waiting = job_cache.get_job(job.job_id)
+    assert waiting.state != SocaJobState.HELD
+    assert waiting.reason_class == 'capacity'
+    assert 'Not every node of this job could be launched in 30 min' in (
+        waiting.error_message
+    )
+    assert 'instance_ami' not in waiting.error_message
+    assert ',' not in waiting.error_message, 'qalter splits on commas'
+
+
 def test_one_sweep_leaves_a_job_whose_nodes_are_still_coming_up(
     context, job_cache, monkeypatch
 ):
@@ -1277,6 +1350,7 @@ def test_a_released_job_no_longer_carries_the_reason_it_was_held_for(
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
     mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache([job_instance(job)])
     housekeeping_session(context).retry_provisioning_cleanup()
     job_cache.sync(jobs=[job.model_copy(update={'state': SocaJobState.HELD})])
     assert job_cache.get_job(job.job_id).reason_class == 'stack_timeout'
@@ -1336,6 +1410,7 @@ def test_a_held_row_counts_the_attempt_it_made_and_says_why_in_plain_words(
     job = mock_job(provisioned=True)
     job_cache.sync(jobs=[job])
     mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache([job_instance(job)])
     housekeeping_session(context).retry_provisioning_cleanup()
     assert mock_scheduler.held_jobs == [job.job_id]
 

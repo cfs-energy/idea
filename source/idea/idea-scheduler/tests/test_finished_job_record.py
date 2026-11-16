@@ -8,6 +8,7 @@ finished jobs table with its provisioning error rather than be deleted from the 
 
 from ideasdk.config.soca_config import SocaConfig
 import logging
+import time
 from typing import Dict, List, Optional
 from unittest.mock import Mock
 
@@ -97,8 +98,13 @@ class FakeDocumentStore:
         self.indexed: List[SocaJob] = []
         self.jobs_by_uid: Dict[str, SocaJob] = {}
         self.lookup_error: Optional[Exception] = None
+        self.lookups: List[str] = []
+        self.lookup_secs = 0.0
 
     def get_job(self, job_uid=None, **_):
+        self.lookups.append(job_uid)
+        if self.lookup_secs:
+            time.sleep(self.lookup_secs)
         if self.lookup_error is not None:
             raise self.lookup_error
         return self.jobs_by_uid.get(job_uid)
@@ -1584,6 +1590,66 @@ def test_a_failed_index_lookup_still_records_the_job(fake_context, pricing_spy):
     assert ids == ['14906']
     assert [job.job_uid for job in fake_context.job_cache.finished_jobs] == ['uid-3']
     assert fake_context.job_notifications.completed == ['14906']
+
+
+def test_an_index_that_is_down_is_asked_once_a_cycle(fake_context, pricing_spy):
+    """
+    the lookup is for a restore and runs for every finished job, one after another. An
+    index that drops traffic costs about 40 s a lookup: 300 finished jobs held every row
+    running, and its nodes up, for hours. The first failed answer ends the lookups for the
+    pass; the jobs are recorded as after a failed lookup.
+    """
+    store = fake_context.document_store
+    store.lookup_error = RuntimeError('index unreachable')
+    poller = build_poller(fake_context)
+    jobs = [
+        make_job(job_id=str(n), provisioned=True, job_uid=f'uid-{n}') for n in range(5)
+    ]
+
+    ids = poller._process_finished_jobs(jobs)
+    unprovisioned = poller._process_unprovisioned_jobs(
+        [make_job(job_id='9', job_uid='uid-9')]
+    )
+
+    assert ids == [job.job_id for job in jobs]
+    assert unprovisioned == ['9']
+    assert len(fake_context.job_cache.finished_jobs) == 6
+    # one lookup for each pass of the cycle, not one a job
+    assert store.lookups == ['uid-0', 'uid-9']
+
+
+def test_a_slow_index_is_asked_until_the_pass_has_spent_its_lookup_time(
+    fake_context, pricing_spy
+):
+    """
+    one slow answer that finds the job is not a reason to stop: on the pass after a
+    restore every later restored job would repeat its completion email. Nor may a slow
+    index that always answers hold the pass for as many lookups as jobs finished. The
+    lookups stop once the pass has spent its lookup time, and start again with the next.
+    """
+    store = fake_context.document_store
+    store.lookup_secs = 0.3
+    for n in (0, 1):
+        store.jobs_by_uid[f'uid-{n}'] = make_job(
+            job_id=str(n), job_uid=f'uid-{n}', state=SocaJobState.FINISHED
+        )
+    poller = build_poller(fake_context)
+    poller.INDEX_LOOKUP_BUDGET_SECS = 0.5
+    jobs = [
+        make_job(job_id=str(n), provisioned=True, job_uid=f'uid-{n}') for n in range(5)
+    ]
+
+    ids = poller._process_finished_jobs(jobs)
+    unprovisioned = poller._process_unprovisioned_jobs(
+        [make_job(job_id='9', job_uid='uid-9')]
+    )
+
+    assert ids == [job.job_id for job in jobs]
+    assert unprovisioned == ['9']
+    assert store.lookups == ['uid-0', 'uid-1', 'uid-9']
+    # both restored jobs the slow index found are not processed again
+    assert fake_context.job_notifications.completed == ['2', '3', '4']
+    assert len(fake_context.job_cache.finished_jobs) == 6
 
 
 # ------------------------------------------- what a job launched, not what its queue says now

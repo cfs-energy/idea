@@ -277,6 +277,15 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     self._context.job_cache.add_active_licenses(
                         [job for job in jobs if job.is_provisioned()]
                     )
+                    # and it can predate a reset that released them: a job with no
+                    # stack holds none, and its own stale row would count against it
+                    for job in jobs:
+                        if (
+                            not job.is_provisioned()
+                            and job.params
+                            and job.params.licenses
+                        ):
+                            self._context.job_cache.release_active_licenses(job.job_id)
 
                     for job in jobs:
                         if self._provisioning_retries_exhausted(job):

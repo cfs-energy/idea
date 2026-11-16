@@ -42,7 +42,6 @@ from troposphere.autoscaling import (
 from troposphere.autoscaling import LaunchTemplate as asg_LaunchTemplate
 from troposphere.ec2 import (
     PlacementGroup,
-    BlockDeviceMapping,
     LaunchTemplate,
     LaunchTemplateData,
     EBSBlockDevice,
@@ -646,7 +645,7 @@ class CloudFormationStackBuilder:
         ):
             iops = Utils.get_as_int(self.job.params.scratch_storage_iops, 0)
             launch_template_data.BlockDeviceMappings.append(
-                BlockDeviceMapping(
+                LaunchTemplateBlockDeviceMapping(
                     DeviceName='/dev/xvdbx',
                     Ebs=EBSBlockDevice(
                         VolumeSize=self.job.params.scratch_storage_size.int_val(),
