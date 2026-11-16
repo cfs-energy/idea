@@ -30,18 +30,17 @@ COLUMN_TITLES = {
 
 
 def completeness(coverage) -> str:
-    """Plain words for the coverage of one row: nobody reads JSON in a spreadsheet."""
-    missing = 0
-    partial = False
-    for value in (coverage or {}).values():
-        if isinstance(value, dict):
-            missing = max(missing, value.get('missing_days') or 0)
-            partial = partial or value.get('status') in ('partial', 'unavailable')
+    """Plain words for whether a row's money is fully counted: nobody reads JSON in a
+    spreadsheet. Only spend_total: every row carries facets and activity metrics it can
+    never have (idle stops, a project's desktop spend), so those would make every row
+    partial."""
+    total = (coverage or {}).get('spend_total') or {}
+    # facets and users can miss different days, and only their counts are kept: the
+    # largest is a floor, the true number is their union
+    missing = total.get('missing_days') or 0
     if missing:
-        # facets and users can miss different days, and only their counts are kept: the
-        # largest is a floor, the true number is their union
         return f'Partial: missing at least {missing} day{"" if missing == 1 else "s"}'
-    return 'Partial' if partial else 'Complete'
+    return 'Partial' if total.get('status') in ('partial', 'unavailable') else 'Complete'
 
 
 def safe_text(value):

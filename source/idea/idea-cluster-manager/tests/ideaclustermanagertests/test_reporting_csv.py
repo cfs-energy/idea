@@ -211,23 +211,26 @@ def test_rows_filter_on_server_and_bind_cursor_to_username():
 
 def test_csv_says_in_words_whether_a_row_is_complete():
     assert completeness({}) == 'Complete'
-    assert completeness({'jobs': {'status': 'ready', 'missing_days': 0}}) == 'Complete'
-    assert completeness({'jobs': {'status': 'partial'}}) == 'Partial'
     assert (
-        completeness({'jobs': {'status': 'partial', 'missing_days': 12}})
+        completeness({'spend_total': {'status': 'estimated', 'missing_days': 0}})
+        == 'Complete'
+    )
+    assert completeness({'spend_total': {'status': 'partial'}}) == 'Partial'
+    assert (
+        completeness({'spend_total': {'status': 'partial', 'missing_days': 12}})
         == 'Partial: missing at least 12 days'
     )
-    # AI misses days 1-5 and jobs days 20-25: 11 days, but only the counts are kept
+    assert (
+        completeness({'spend_total': {'status': 'partial', 'missing_days': 1}})
+        == 'Partial: missing at least 1 day'
+    )
+    # metrics a row can never have do not make its money partial
     assert (
         completeness(
             {
-                'ai': {'status': 'partial', 'missing_days': 5},
-                'jobs': {'status': 'partial', 'missing_days': 6},
+                'spend_total': {'status': 'estimated'},
+                'idle_stops': {'status': 'unavailable'},
             }
         )
-        == 'Partial: missing at least 6 days'
-    )
-    assert (
-        completeness({'jobs': {'status': 'partial', 'missing_days': 1}})
-        == 'Partial: missing at least 1 day'
+        == 'Complete'
     )
