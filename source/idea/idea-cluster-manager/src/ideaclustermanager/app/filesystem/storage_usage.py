@@ -21,6 +21,9 @@ from ideaclustermanager.app.metrics.storage_metrics_service import StorageMetric
 MAX_ENTRIES = 100_000
 MAX_SECONDS = 10
 MAX_DEPTH = 128
+# the top level is listed whatever the limits above, but not past this: the scan is waited on for
+# MAX_SECONDS + 10, and a partial answer beats none
+TOP_LEVEL_SECONDS = MAX_SECONDS + 5
 CACHE_SECONDS = 3600
 REFRESH_SECONDS = 60
 COSTS_WAIT_SECONDS = 120
@@ -160,8 +163,12 @@ def walk_home(
         # cutoff can leave a folder unmeasured but cannot leave it out.
         pending = []
         home_incomplete = False
+        top_level_deadline = time.monotonic() + TOP_LEVEL_SECONDS
         with os.scandir(home_fd) as iterator:
             for entry in iterator:
+                if time.monotonic() >= top_level_deadline:
+                    home_incomplete = True
+                    break
                 entries += 1
                 try:
                     info = entry.stat(follow_symlinks=False)

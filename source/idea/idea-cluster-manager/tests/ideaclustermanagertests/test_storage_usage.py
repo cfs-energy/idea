@@ -128,6 +128,16 @@ def test_cutoff_still_lists_every_top_level_folder(tree):
         assert result['scanned_files'] == result['total']['files']
 
 
+def test_a_top_level_too_long_to_list_is_partial_not_an_error(tree, monkeypatch):
+    # the scan is waited on for MAX_SECONDS + 10: a home with a very long top level would run
+    # past that and come back as an error instead of what it had listed
+    monkeypatch.setattr(storage_usage, 'TOP_LEVEL_SECONDS', 0)
+    result = storage_usage.walk_home(tree, now=NOW)
+    assert result['state'] == 'ready'
+    assert result['partial'] is True
+    assert storage_usage.TOP_LEVEL_SECONDS < storage_usage.MAX_SECONDS + 10
+
+
 def test_folders_are_largest_first(tree):
     os.mkdir(tree + '/aaa-small')
     with open(tree + '/aaa-small/file', 'wb') as stream:
