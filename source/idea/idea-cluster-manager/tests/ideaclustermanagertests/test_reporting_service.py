@@ -950,6 +950,33 @@ def test_custom_period_retains_stored_spend_and_explains_unstored_dates(start, m
     assert row['coverage']['spend_total']['missing_days'] == missing
 
 
+def test_csv_says_complete_for_a_fully_counted_period():
+    import csv
+    import io
+    from datetime import date, timedelta
+    from ideaclustermanager.app.reporting.csv_export import export_csv
+
+    value = data()
+    days = [date(2024, 2, 1) + timedelta(days=n) for n in range(29)]
+    value['projections']['former'] = projection(
+        [dict(date=day.isoformat(), amount=5, status='ready') for day in days]
+    )
+    value['jobs'] = [job()]
+    selected = period()
+    tables, _, _, _ = build(value, selected)
+    for table, rows in tables.items():
+        result = export_csv(
+            dict(period=selected.model_dump(), currency='USD', as_of=None),
+            rows,
+            table,
+            ['key', 'spend_total'],
+        )
+        exported = csv.DictReader(io.StringIO(result.content.lstrip('\ufeff')))
+        assert {line['Key']: line['Complete'] for line in exported} == {
+            row['key']: 'Complete' for row in rows
+        }
+
+
 def test_saturated_report_workers_fail_busy_and_recover():
     import threading
     from concurrent.futures import ThreadPoolExecutor

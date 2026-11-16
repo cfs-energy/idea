@@ -1383,6 +1383,37 @@ def test_fifty_users_mid_month_work_per_run(setup, monkeypatch):
     worker.calculator._workers.shutdown()
 
 
+def test_a_retained_day_survives_the_turn_of_the_month(setup, monkeypatch):
+    worker, _ = fifty_users(setup, monkeypatch)
+    _, store, _ = setup
+    calc = worker.calculator
+    inner = calc.day
+
+    def day(user, lower, upper, storage=None):
+        lines = inner(user, lower, upper, storage)
+        if lower.day == 11 and arrow.utcnow() < arrow.get('2026-11-14'):
+            # known while the day was open, then unknown for good (day 11 has no AI)
+            lines['ai'] = calc._line(1.0)
+        return lines
+
+    calc.day = day
+    for when in ('2026-11-13T12:00:00Z', '2026-11-30T12:00:00Z'):
+        at(monkeypatch, when)
+        worker.check()
+    for when in ('2026-12-01T00:16:00Z', '2026-12-02T12:00:00Z'):
+        at(monkeypatch, when)
+        worker.check()
+        result = GetMyCostsResult(
+            **store.projection('user-00', store.get('user-00', 'head'), 'costs')
+        )
+        assert result.previous.start_date == '2026-11-01'
+        # last month used to be paired with the head's own last month (October)
+        assert result.previous.ai.daily[10].amount == 1.0
+        assert result.previous.ai.daily[10].status == 'partial'
+        assert result.state == 'ready'
+    calc._workers.shutdown()
+
+
 def test_a_long_run_cannot_start_the_next_back_to_back(setup, monkeypatch):
     worker, _ = fifty_users(setup, monkeypatch)
     _, store, _ = setup
@@ -1697,8 +1728,9 @@ def test_a_run_reads_its_own_sweep_before_it_is_written(setup, monkeypatch):
     assert [k[1] for k in store.table.rows if k[1].startswith('inventory-sweep')] == [
         f'inventory-sweep:2026-09-02:{first.int_timestamp}'
     ]
+    # the first sample holds until the second, the last for at most 17 minutes
     assert calc.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
-        round(100 * 0.08 / 30 / 24 / 2, 4)
+        round(100 * 0.08 / 30 / 24 / 60 * (15 + 17), 4)
     )
     calc._workers.shutdown()
 
@@ -1718,7 +1750,7 @@ def test_a_sweep_not_written_leaves_a_gap_and_is_retried(setup, monkeypatch):
     capture_run(calc, second, ['user-a'])
     # a task killed here: what is durable never claims the unwritten sample
     lost = priced(DailyCostsCalculator(context, store), monkeypatch)
-    one = round(100 * 0.08 / 30 / 24 / 4, 4)
+    one = round(100 * 0.08 / 30 / 24 / 60 * 17, 4)
     assert lost.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
         one
     )
@@ -1728,7 +1760,7 @@ def test_a_sweep_not_written_leaves_a_gap_and_is_retried(setup, monkeypatch):
     calc.flush_sweeps()
     kept = priced(DailyCostsCalculator(context, store), monkeypatch)
     assert kept.disk_day('user-a', start, start.shift(days=1)).cost == pytest.approx(
-        round(100 * 0.08 / 30 / 24 / 2, 4)
+        round(100 * 0.08 / 30 / 24 / 60 * (15 + 17), 4)
     )
     kept._workers.shutdown()
     calc._workers.shutdown()
@@ -1882,8 +1914,9 @@ def test_a_disk_day_is_partial_only_when_observations_missed_part_of_it(
     result = calc.disk_day('user-a', whole, whole.shift(days=1))
     # every day was partial, so a fully counted month read as days not counted
     assert result.status == 'ready'
-    # 93 samples of 15 minutes: 96.9% of the day
-    assert result.cost == pytest.approx(100 * 0.08 / 30 * 93 * 900 / 86400, abs=5e-4)
+    # each sample holds until the next one at a healthy pace: the whole day, where 15
+    # minutes per sample priced 96.9% of it (each sample is rounded to 4 places)
+    assert result.cost == pytest.approx(100 * 0.08 / 30, abs=1e-3)
     gap = calc.disk_day('user-a', broken, broken.shift(days=1))
     assert gap.status == 'partial' and gap.cost < result.cost * 0.8
     calc._workers.shutdown()

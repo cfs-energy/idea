@@ -11,18 +11,26 @@ export const collectingLabel = (costs: GetMyCostsResult | null) => {
     const minutes = costs.expected_ready_at ? Math.max(1, Math.ceil((Date.parse(costs.expected_ready_at) - Date.now()) / 60000)) : 20;
     return `Collecting · about ${minutes} min`;
 };
-export interface CostGaps {missing: number; partly: number}
+// pending: a gap is recent enough to be computed again. The collector recomputes today and the 3 days before it
+// (SETTLE_DAYS) on every run and stores older days as they are. ponytail: a day whose source failed is not stored
+// and is retried on every run, so it can still fill in after 3 days and reads as final here. The day points do not
+// say which days are stored; send a per-day settled flag from the collector if outages that long ever matter.
+export interface CostGaps {missing: number; partly: number; pending: boolean}
+const SETTLE_DAYS = 3;
 // The one rule for what the portal calls not counted. A day is not counted only when it has no amount; today is
 // still being counted, so it isn't one, and neither is a day the cost does not apply to. A partial day has an
 // amount that is a floor: a price was missing, or the observations missed part of the day.
 export function costGaps(line: MyCostsAmount | undefined, today: string): CostGaps {
     const days = line?.daily ?? [];
-    if (!days.length) return {missing: facetAmount(line) == null ? 0 : line?.coverage?.missing_days ?? (line?.status === 'partial' ? 1 : 0), partly: 0};
-    return {missing: days.filter(day => day.date < today && day.amount == null && day.status !== 'not_applicable').length,
-        partly: days.filter(day => day.amount != null && day.status === 'partial').length};
+    if (!days.length) return {missing: facetAmount(line) == null ? 0 : line?.coverage?.missing_days ?? (line?.status === 'partial' ? 1 : 0), partly: 0, pending: true};
+    const settled = new Date(Date.parse(`${today}T00:00:00Z`) - SETTLE_DAYS * 86400000).toISOString().slice(0, 10);
+    const missing = days.filter(day => day.date < today && day.amount == null && day.status !== 'not_applicable');
+    const partly = days.filter(day => day.amount != null && day.status === 'partial');
+    return {missing: missing.length, partly: partly.length, pending: [...missing, ...partly].some(day => day.date >= settled)};
 }
 const days = (count: number) => count === 1 ? 'A day is' : `${count} days are`;
-export const costCaveat = ({missing, partly}: CostGaps) => missing ? `So far. ${days(missing)} not counted yet.` : partly ? `So far. ${days(partly)} only partly counted.` : null;
+export const costCaveat = ({missing, partly, pending}: CostGaps) => missing ? `${pending ? 'So far. ' : ''}${days(missing)} not counted${pending ? ' yet' : ''}.`
+    : partly ? `${pending ? 'So far. ' : ''}${days(partly)} only partly counted.` : null;
 export const localToday = (timezone?: string) => new Intl.DateTimeFormat('en-CA', {timeZone: timezone ?? 'UTC'}).format(new Date());
 export function costBadge(line: MyCostsAmount | undefined, collecting: boolean, today = '9999-12-31') {
     if (collecting) return 'Collecting';

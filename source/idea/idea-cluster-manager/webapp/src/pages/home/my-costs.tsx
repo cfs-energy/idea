@@ -27,18 +27,19 @@ function MonthTiles({costs, previous = false, computeRate = 1, costError = false
     const today = localToday(costs?.timezone);
     // The amount is the headline. What it leaves out goes in the line under it.
     const caveat = (key: typeof FACETS[number]['key']) => costCaveat(costGaps(month?.[key], today));
+    const pending = (key: typeof FACETS[number]['key']) => costGaps(month?.[key], today).pending;
     return <TileRow>
         <MetricTile title="Total spend" value={!costs?.current ? collectingLabel(costs) : wholeMoney(month?.total, currency)} info="Adds the available job, desktop, desktop disk, shared storage and AI costs for the calendar month.">
             {costs?.current && <Box color="text-body-secondary">{previous ? `This month so far ${wholeMoney(currentTotal, currency)}` : `Last month ${wholeMoney(previousTotal, currency)}`}
                 {currentTotal != null && previousTotal != null && <> · {wholeMoney(Math.abs(currentTotal - previousTotal), currency)} {currentTotal >= previousTotal ? 'more' : 'less'} (this month so far vs full last month)</>}
             </Box>}
-            {costs?.current && FACETS.some(({key}) => caveat(key)) && <Box color="text-body-secondary">So far. Some days are not fully counted yet.</Box>}
+            {costs?.current && FACETS.some(({key}) => caveat(key)) && <Box color="text-body-secondary">{FACETS.some(({key}) => caveat(key) && pending(key)) ? 'So far. Some days are not fully counted yet.' : 'Some days are not fully counted.'}</Box>}
         </MetricTile>
         {/* AI is left out when it costs nothing, and when Bedrock is off: there is no next update to wait for. */}
         {costs?.current && FACETS.filter(({key}) => key !== 'ai' || (month?.[key]?.status !== 'not_applicable' && (facetAmount(month?.[key]) == null || Number(facetAmount(month?.[key])) !== 0))).map(({key}, index) => {
             const line = month?.[key];
             return <MetricTile key={key} title={titles[key]} value={facetAmount(line) == null ? 'Not available' : wholeMoney(facetAmount(line), currency)} info={key === 'jobs' ? `Recorded job costs for this calendar month. ${jobRateNote(computeRate)}` : key === 'desktops' ? `Recorded desktop costs from stored daily costs for this calendar month. ${computeRateNote(computeRate)}` : key === 'shared_storage' ? `Uses the available daily costs for this calendar month. ${STORAGE_EXCLUSIONS}` : 'Uses the available daily costs for this calendar month.'}>
-                {facetAmount(line) == null ? <Box color="text-body-secondary">Not calculated yet. Check back after the next update.</Box>
+                {facetAmount(line) == null ? <Box color="text-body-secondary">{previous && !pending(key) ? 'Not counted.' : 'Not calculated yet. Check back after the next update.'}</Box>
                     : caveat(key) ? <Box color="text-body-secondary">{caveat(key)}</Box>
                     : line?.status === 'estimated_share' ? <Box color="text-body-secondary">Your share of a shared file system.</Box> : null}
             </MetricTile>;

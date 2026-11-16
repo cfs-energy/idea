@@ -547,10 +547,10 @@ class ReportingService:
                         row['coverage'][facet] = coverage(
                             'unavailable', 'No recorded project split.'
                         )
+                    # a project's total is its job spend: the other facets are
+                    # never split by project, so they say nothing about this number
                     row['spend_total'] = row['spend_by_facet']['jobs']
-                    row['coverage']['spend_total'] = combine(
-                        [row['coverage'][facet] for facet in FACETS]
-                    )
+                    row['coverage']['spend_total'] = combine([row['coverage']['jobs']])
         sessions = {}
         for hit in data['desktops']:
             source = hit.get('_source', {})

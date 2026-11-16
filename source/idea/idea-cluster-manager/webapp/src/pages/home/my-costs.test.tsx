@@ -161,7 +161,9 @@ it.each([['cost-jobs', 'Jobs'], ['cost-storage', 'Storage'], ['cost-ai', 'Overvi
     expect(screen.getByRole('tab', {name: tab})).toHaveAttribute('aria-selected', 'true');
 });
 
-const partialLine = {amount: 10, status: 'partial', note: 'Stored calculation rule.', daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}, {date: '2999-01-01', amount: null, status: 'unavailable'}]};
+// yesterday is still computed again on every run; 2020 was stored long ago
+const yesterday = new Date(Date.parse(`${new Intl.DateTimeFormat('en-CA', {timeZone: 'America/New_York'}).format(new Date())}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+const partialLine = {amount: 10, status: 'partial', note: 'Stored calculation rule.', daily: [{date: yesterday, amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}, {date: '2999-01-01', amount: null, status: 'unavailable'}]};
 const withLine = (key: string, line: any): GetMyCostsResult => ({...snapshot, current: {...month, [key]: line} as MyCostsMonth});
 describe('at real scale', () => {
     it('keeps the amount as the headline and names missing past days in the line under it', async () => {
@@ -173,6 +175,18 @@ describe('at real scale', () => {
         expect(within(tile('Job spend')).getByText('So far. A day is not counted yet.')).toBeInTheDocument();
         expect(within(tile('Total spend')).getByText('So far. Some days are not fully counted yet.')).toBeInTheDocument();
         expect(screen.queryByText(/At least/)).toBeNull();
+    });
+    it('does not say a stored gap will be counted later', async () => {
+        const {costs} = setup();
+        const stored = {...partialLine, daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}, {date: '2020-01-02', amount: 10, status: 'ready'}]};
+        const none = {amount: null, cost: null, status: 'unavailable', daily: [{date: '2020-01-01', amount: null, status: 'unavailable'}]};
+        costs.mockResolvedValue({...snapshot, previous: {...month, total: 200, ...({jobs: stored, desktops: none} as Record<string, any>)} as MyCostsMonth});
+        open('?period=last_month');
+        await screen.findByRole('heading', {level: 3, name: 'Job spend'});
+        expect(within(tile('Job spend')).getByText('A day is not counted.')).toBeInTheDocument();
+        expect(within(tile('Desktop spend')).getByText('Not counted.')).toBeInTheDocument();
+        expect(within(tile('Total spend')).getByText('Some days are not fully counted.')).toBeInTheDocument();
+        expect(screen.queryByText(/So far|yet|Check back/)).toBeNull();
     });
     it('does not call a running month partial because today is not in yet', async () => {
         const {costs} = setup();
@@ -219,8 +233,9 @@ describe('at real scale', () => {
         await screen.findByRole('heading', {level: 3, name: 'Job spend'});
         // 4 jobs on 3 days have no price: the days are counted, the amount is a floor
         expect(within(tile('Job spend')).getByText('$0.77')).toBeInTheDocument();
-        expect(within(tile('Job spend')).getByText('So far. 3 days are only partly counted.')).toBeInTheDocument();
-        expect(within(tile('Total spend')).getByText('So far. Some days are not fully counted yet.')).toBeInTheDocument();
+        // stored days: their amounts stay as they are
+        expect(within(tile('Job spend')).getByText('3 days are only partly counted.')).toBeInTheDocument();
+        expect(within(tile('Total spend')).getByText('Some days are not fully counted.')).toBeInTheDocument();
     });
     it('rounds big totals to whole dollars', async () => {
         const {costs} = setup();
