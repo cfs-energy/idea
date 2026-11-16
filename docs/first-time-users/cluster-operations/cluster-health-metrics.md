@@ -110,7 +110,7 @@ Queue to start, node provisioning and job outcomes already exist: `idea.jobs_pen
 | `idea.health.scheduler.pbs_check_seconds` | | How long `qstat` took. |
 | `idea.health.scheduler.jobs` | `state` | Jobs the server holds by state. |
 | `idea.health.scheduler.capacity_errors` | `reason`, `instance_family` | Each failed scaling activity of a compute stack, once: `insufficient_capacity`, `quota`, `other`. Seen when a stack has waited long enough for the scheduler to ask. |
-| `idea.health.scheduler.provisioning_failures` | `reason_class`, `instance_family` | Jobs that could not be provisioned, by the lifecycle event's class. |
+| `idea.health.scheduler.provisioning_failures` | `reason_class`, `instance_family` | Each provisioning attempt that failed, by the lifecycle event's class: a cycle can try one job several times, so this counts attempts, not jobs. Designed waits (licenses, service quota, shared capacity, reserved instances, Bedrock access) are not failures and are not counted. |
 | `idea.health.orphan_sweep` | `kind` | What a sweep found left behind: `job`, `instance_without_queue`, `compute_image_builder`, `desktop_image_builder`. |
 
 ## Bastion
