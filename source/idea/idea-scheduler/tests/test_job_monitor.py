@@ -490,3 +490,42 @@ def test_start_restores_licenses_of_provisioned_jobs_a_restored_cache_lacks(
     monitor._sync_all_jobs()
 
     assert fake_context.job_cache.license_job_ids == ['600']
+
+
+def test_start_drops_licenses_a_restored_cache_holds_for_a_job_that_holds_no_capacity(
+    monitor, fake_context, tmp_path, monkeypatch
+):
+    """
+    the housekeeper reset a licensed job whose stack failed and released its licenses,
+    and the task died before its next copy. The copy still counted them, so the job's
+    own row stood against it: asking for 2 of 3 it needed 4 and never provisioned, and
+    every other job asking for the license saw 2 fewer free.
+    """
+    from ideadatamodel import SocaJobLicenseAsk, SocaJobParams
+    from ideascheduler.app.provisioning import JobCache
+    from test_job_cache import FakeSchedulerContext
+
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    job = make_job('700')
+    job.params = SocaJobParams(licenses=[SocaJobLicenseAsk(name='comsol', count=2)])
+    provisioned = job.model_copy(update={'provisioned': True})
+    lost = JobCache(FakeSchedulerContext(str(tmp_path / 'lost'), ecs_enabled=True))
+    lost.sync([provisioned])
+    lost.add_active_licenses([provisioned])
+    assert lost._jobs_db.backup(force=True)
+    lost.release_active_licenses('700')
+    lost._jobs_db._stop.set()  # killed: no copy on the way out
+
+    restored = JobCache(FakeSchedulerContext(str(tmp_path / 'new'), ecs_enabled=True))
+    assert restored.get_active_license_count('comsol') == 2
+    fake_context.job_cache = restored
+    fake_context.queue_profiles.queue_profiles = [
+        SimpleNamespace(name='compute', enabled=True, queues=['normal']),
+    ]
+    # PBS lists it queued with no stack, as the reset left it
+    fake_context.scheduler.jobs_by_id = {'700': job}
+
+    monitor._sync_all_jobs()
+
+    assert restored.get_active_license_count('comsol') == 0
+    restored.stop()
