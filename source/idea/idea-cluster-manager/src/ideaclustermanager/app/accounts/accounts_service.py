@@ -106,6 +106,7 @@ class AccountsService:
         )
         self._next_password_secret_sweep = 0.0
         self._password_secret_sweep = threading.Lock()
+        self._password_sets = threading.BoundedSemaphore(self.PASSWORD_SETS_AT_ONCE)
 
     def is_cluster_administrator(self, username: str) -> bool:
         cluster_administrator = self.context.config().get_string(
@@ -1232,7 +1233,24 @@ class AccountsService:
         :param password:
         :return: True when the task that creates the account was queued too
         """
+        self._remove_password_leftovers()
         return self._queue_password_sync(username, self._hold_password(password))
+
+    def _remove_password_leftovers(self):
+        # Only where an administrator or a signed-in user sets a password: the sign-in
+        # page's two paths need no session, and would let anyone run these.
+        # ponytail: the file sweep goes with the password_file branch of
+        # accounts.sync-password, in the release after 26.11.2
+        self.remove_stranded_password_files()
+        self.remove_stray_password_secrets()
+
+    # A password set makes a secret and, when the user pool refuses the password,
+    # deletes it. The sign-in page's two paths need no session, so requests that only
+    # ever fail can come as fast as cluster-manager serves them: this many at a time
+    # keeps their Secrets Manager writes well under the account's quotas, which every
+    # other workload in it shares.
+    PASSWORD_SETS_AT_ONCE = 4
+    PASSWORD_SET_WAIT_SECONDS = 10
 
     def _set_password(self, username: str, password: str, change_in_user_pool):
         """
@@ -1241,25 +1259,34 @@ class AccountsService:
         directory never gets. Made first, a failure leaves nothing changed.
         :return: what change_in_user_pool returned
         """
-        password_secret = self._hold_password(password)
+        if not self._password_sets.acquire(timeout=self.PASSWORD_SET_WAIT_SECONDS):
+            raise exceptions.general_exception(
+                'The password could not be set right now. Try again.'
+            )
         try:
-            result = change_in_user_pool()
-        except Exception:
-            self._drop_password_secret(password_secret)
-            raise
-        if result is False:
-            # the user pool has not taken the password
-            self._drop_password_secret(password_secret)
-        else:
-            self._queue_password_sync(username, password_secret)
-        return result
+            password_secret = self._hold_password(password)
+            try:
+                result = change_in_user_pool()
+            except Exception:
+                self._drop_password_secret(password_secret)
+                raise
+            if result is False:
+                # the user pool has not taken the password
+                self._drop_password_secret(password_secret)
+            else:
+                self._queue_password_sync(username, password_secret)
+            return result
+        finally:
+            self._password_sets.release()
+
+    def _refuse_unknown_account(self, username: str, refused: str):
+        # The sign-in page's two paths: an account with no record, or a disabled one,
+        # cannot be given a password, so its request makes nothing.
+        user = self.user_dao.get_user(username)
+        if not Utils.get_value_as_bool('enabled', user, False):
+            raise exceptions.general_exception(refused)
 
     def _hold_password(self, password: str) -> str:
-        # ponytail: the file sweep goes with the password_file branch of
-        # accounts.sync-password, in the release after 26.11.2
-        self.remove_stranded_password_files()
-        self.remove_stray_password_secrets()
-
         request = {
             'Name': f'{self.password_secret_prefix}{Utils.uuid()}',
             'SecretString': password,
@@ -1360,7 +1387,8 @@ class AccountsService:
         The secrets health collector calls this on the leader, every six hours and soon
         after a start, with the secrets it has just listed for its own count (`listed`),
         so a cluster where nobody sets a password still sweeps and no second list is
-        made. A password set looks too, with a list of its own, at most once an hour
+        made. A password an administrator or a signed-in user sets looks too, with a
+        list of its own, at most once an hour
         and not within an hour of any other look: the only look where the health
         collectors do not run (metrics provider not DogStatsD, or switched off).
         """
@@ -1472,6 +1500,7 @@ class AccountsService:
         :return:
         """
 
+        self._remove_password_leftovers()
         # change password in user pool before changing in ldap
         self._set_password(
             username,
@@ -1568,6 +1597,8 @@ class AccountsService:
             raise exceptions.invalid_params('new_password is required.')
 
         self.logger.debug(f'respond_to_auth_challenge() - Request: {request}')
+        # the user pool's answer to a session it did not give
+        self._refuse_unknown_account(request.username, 'Invalid session for the user.')
 
         result = None
 
@@ -1607,6 +1638,10 @@ class AccountsService:
         if Utils.is_empty(confirmation_code):
             raise exceptions.invalid_params('confirmation_code is required')
 
+        # the user pool's answer to a code it did not send
+        self._refuse_unknown_account(
+            username, 'Invalid verification code provided, please try again.'
+        )
         # the user pool verifies the confirmation code; then sync with LDAP/AD
         self._set_password(
             username,

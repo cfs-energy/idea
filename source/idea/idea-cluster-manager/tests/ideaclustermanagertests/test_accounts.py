@@ -1320,7 +1320,11 @@ def password_change(context: AppContext, monkeypatch, secrets, request):
     monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
     monkeypatch.setattr(context.accounts.task_manager, 'send', send)
     in_user_pool, change = user_pool_password_changes(context, user_pool)[request.param]
-    return secrets, in_user_pool, change, send
+    # the sign-in page's paths set a password only for an account with a record
+    users = context.accounts.user_dao.table
+    users.put_item(Item={'username': 'user', 'enabled': True})
+    yield secrets, in_user_pool, change, send
+    users.delete_item(Key={'username': 'user'})
 
 
 every_password_change = pytest.mark.parametrize(
@@ -1385,6 +1389,105 @@ def test_a_challenge_that_sets_no_password_leaves_no_secret(password_change):
     assert len(secrets.created) == 1
     assert secrets.secrets == {}
     send.assert_not_called()
+
+
+sign_in_page_password_changes = pytest.mark.parametrize(
+    'password_change', ['forgot', 'challenge'], indirect=True
+)
+
+
+@sign_in_page_password_changes
+@pytest.mark.parametrize('record', [None, {'enabled': False}])
+def test_a_sign_in_page_password_for_no_enabled_account_makes_nothing(
+    context: AppContext, tmp_path, password_change, record
+):
+    secrets, in_user_pool, change, send = password_change
+    users = context.accounts.user_dao.table
+    if record is None:
+        users.delete_item(Key={'username': 'user'})
+    else:
+        users.put_item(Item={'username': 'user', **record})
+    old_file = stranded(tmp_path / 'tmpold', 15)
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    # what the user pool answers a code or session it did not give
+    assert refused.value.message in (
+        'Invalid verification code provided, please try again.',
+        'Invalid session for the user.',
+    )
+    assert (secrets.created, secrets.list_calls) == ([], [])
+    assert old_file.exists()
+    in_user_pool.assert_not_called()
+    send.assert_not_called()
+
+
+@every_password_change
+def test_only_a_signed_in_password_change_sweeps(request, tmp_path, password_change):
+    secrets, in_user_pool, change, _ = password_change
+    old_secret = secrets.add(
+        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
+    )
+    old_file = stranded(tmp_path / 'tmpold', 15)
+    # the sign-in page's paths need no session: a wrong code is the common request
+    in_user_pool.side_effect = RuntimeError('wrong code')
+    with pytest.raises(RuntimeError):
+        change()
+    swept = request.node.callspec.params['password_change'] == 'change'
+    assert (old_secret in secrets.deleted) is swept
+    assert old_file.exists() is not swept
+    # the password's own secret is gone either way
+    assert len(secrets.created) == 1
+    assert list(secrets.secrets) == ([] if swept else [old_secret])
+
+
+@sign_in_page_password_changes
+def test_password_sets_past_the_limit_wait_then_fail_with_nothing_made(
+    context: AppContext, monkeypatch, password_change
+):
+    import threading
+
+    secrets, in_user_pool, change, _ = password_change
+    limit = context.accounts.PASSWORD_SETS_AT_ONCE
+    inside, release = threading.Semaphore(0), threading.Event()
+
+    def slow_user_pool(*_, **__):
+        inside.release()
+        release.wait(10)
+        raise RuntimeError('wrong code')
+
+    in_user_pool.side_effect = slow_user_pool
+    monkeypatch.setattr(context.accounts, 'PASSWORD_SET_WAIT_SECONDS', 0.2)
+    errors = []
+
+    def attempt():
+        try:
+            change()
+        except Exception as error:
+            errors.append(error)
+
+    running = [threading.Thread(target=attempt) for _ in range(limit)]
+    for thread in running:
+        thread.start()
+    try:
+        for _ in running:
+            assert inside.acquire(timeout=10)
+        with pytest.raises(exceptions.SocaException) as refused:
+            change()
+        assert (
+            refused.value.message
+            == 'The password could not be set right now. Try again.'
+        )
+        assert len(secrets.created) == limit
+    finally:
+        release.set()
+        for thread in running:
+            thread.join(10)
+    assert [str(error) for error in errors] == ['wrong code'] * limit
+    # the places are given back, a failed attempt's included
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    assert len(secrets.created) == limit + 1
 
 
 def test_a_sweep_that_cannot_list_secrets_does_not_stop_a_password_change(
