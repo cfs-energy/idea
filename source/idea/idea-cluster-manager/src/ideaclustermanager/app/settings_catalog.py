@@ -3623,7 +3623,7 @@ _ROWS = [
     (
         'scheduler.log_archive.s3_retention_days',
         'integer',
-        'deployment',
+        'bootstrap',
         'monitoring',
         True,
         False,
@@ -5241,7 +5241,7 @@ _ROWS = [
 ]
 
 
-_EFFECTS = {'runtime', 'restart', 'deployment'}
+_EFFECTS = {'runtime', 'restart', 'deployment', 'bootstrap'}
 SETTINGS_GROUPS = {
     'general': 'General',
     'desktops': 'Desktops',
@@ -5508,6 +5508,7 @@ _UNITS = {
     'percent': '%',
 }
 _LABELS = {
+    'scheduler.log_archive.s3_retention_days': 'Log archive retention (days)',
     'cluster-manager.web_terminal.enabled': 'Browser terminal',
     'cluster.failure_capture.enabled': 'Keep what failed hosts said',
     'virtual-desktop-controller.software_stacks.expiry.default_days': 'Default expiry (days)',
@@ -5784,6 +5785,7 @@ _KEY_CHOICES = {
     'cluster-manager.bedrock.budgets.action': ['block', 'warn'],
 }
 _DESCRIPTIONS = {
+    'scheduler.log_archive.s3_retention_days': 'How long the cluster bucket keeps the scheduler log archive, PBS accounting records included. 0 keeps it forever; otherwise at least 30. Applied by ideactl bootstrap, not by an upgrade or deploy.',
     'virtual-desktop-controller.software_stacks.expiry.default_days': 'For a software stack the monthly rebuild does not feed and with no date of its own, how long after it was created it expires.',
     'virtual-desktop-controller.software_stacks.expiry.digest_enabled': 'Once a week at most, emails each owner the stacks past or near their date. Stacks with no owner go to the cluster administrator.',
     'virtual-desktop-controller.software_stacks.expiry.enforce_from': 'From this day, expired stacks are not offered for new desktops. Empty means warnings only and nothing is hidden. Existing desktops keep working either way.',
@@ -6451,6 +6453,16 @@ def coerce_settings(
         return result
 
     values = visit(settings)
+    retention = (
+        values.get('log_archive', {}).get('s3_retention_days')
+        if module == 'scheduler'
+        else None
+    )
+    if retention is not None and 0 < retention < 30:
+        # ideactl bootstrap refuses these, so a saved one would stop the next bootstrap
+        raise exceptions.invalid_params(
+            'scheduler.log_archive.s3_retention_days must be 0 (keep forever) or at least 30'
+        )
     if module == 'identity-provider':
         cognito = values.get('cognito', {})
         names = (

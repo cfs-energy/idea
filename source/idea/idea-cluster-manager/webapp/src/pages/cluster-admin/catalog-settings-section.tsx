@@ -6,6 +6,7 @@ import {AppContext} from '../../common';
 export const EFFECT_LABELS: Record<string, string> = {
     restart: 'Applies after restart',
     deployment: 'Applies on next upgrade',
+    bootstrap: 'Applies on next ideactl bootstrap',
 };
 const MODULE_TITLES: Record<string, string> = {
     'global-settings': 'Global', cluster: 'Cluster', 'cluster-manager': 'Portal', 'virtual-desktop-controller': 'Desktops', scheduler: 'Jobs',
@@ -89,7 +90,7 @@ export default function CatalogSettingsSection({settings, values, moduleId, titl
     const desktop = values['virtual-desktop-controller']?.bedrock;
     const editable = visible.filter(setting => !isReadOnly(setting));
     const deferred = editable.filter(setting => setting.effect !== 'runtime');
-    const effect = deferred.some(setting => setting.effect === 'deployment') ? 'deployment' : deferred.length ? 'restart' : null;
+    const effect = ['deployment', 'bootstrap'].find(value => deferred.some(setting => setting.effect === value)) ?? (deferred.length ? 'restart' : null);
     useEffect(() => {if (!editing) setChanges({});}, [editing]);
     useEffect(() => {if (settings.some(setting => setting.key === highlightedKey && (setting.advanced || (title === 'Amazon Bedrock' && /invocation|usage|retention|claude_code/.test(setting.path))))) setAdvanced(true);}, [settings, highlightedKey, title]);
     const save = async () => {

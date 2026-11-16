@@ -197,6 +197,12 @@ describe('path bar', () => {
             expect(message).toMatch(/access/);
         });
 
+        it('sends a user whose home folder cannot be opened to the administrator', () => {
+            expect(describeListingFailure('', { errorCode: 'UNAUTHORIZED_ACCESS', message: 'Unauthorized Access' })).toBe(
+                'Cannot open your home folder. It does not exist, is not a folder, or you do not have access. If you need it, ask your cluster administrator.'
+            );
+        });
+
         it('passes any other failure through with its own message', () => {
             expect(describeListingFailure('/data', { errorCode: 'GENERAL_ERROR', message: 'backend is down' })).toBe(
                 'Cannot open /data: backend is down'

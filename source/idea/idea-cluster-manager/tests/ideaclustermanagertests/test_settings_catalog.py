@@ -54,7 +54,7 @@ def test_catalog_metadata_and_uniqueness():
             'enum',
             'secret',
         }
-        assert item['effect'] in {'runtime', 'restart', 'deployment'}
+        assert item['effect'] in {'runtime', 'restart', 'deployment', 'bootstrap'}
         assert all(
             item[field] for field in ('group', 'label', 'section', 'module', 'path')
         )
@@ -572,6 +572,30 @@ def test_update_coerces_all_values_and_returns_effects():
         'logging.profile': 'restart',
         'cloudwatch_logs.enabled': 'deployment',
     }
+
+
+# only ideactl bootstrap writes this bucket rule, and it refuses 1 to 29: the portal must say so and refuse them too
+@pytest.mark.parametrize(
+    'days, accepted', [(0, True), (30, True), (400, True), (1, False), (29, False)]
+)
+def test_update_scheduler_log_archive_retention_is_applied_by_bootstrap(days, accepted):
+    api, config = make_api('scheduler')
+    context = invocation('scheduler-b', {'log_archive': {'s3_retention_days': days}})
+    if not accepted:
+        with pytest.raises(
+            exceptions.SocaException, match='0 \\(keep forever\\) or at least 30'
+        ):
+            api.update_module_settings(context)
+        config.db.sync_cluster_settings_in_db.assert_not_called()
+        return
+    api.update_module_settings(context)
+    assert context.success.call_args.args[0].effects == {
+        'log_archive.s3_retention_days': 'bootstrap'
+    }
+    assert (
+        'ideactl bootstrap'
+        in BY_KEY['scheduler.log_archive.s3_retention_days']['description']
+    )
 
 
 def test_update_validates_the_whole_request_before_writing():

@@ -497,7 +497,10 @@ export function jobFailureNextStep(job: SocaJob): string | null {
     if (code > 256) {
         return 'Stopped by a signal, often the walltime limit.'
     }
-    return `Exit code ${code} came from your script. Check the job's output files (${job.name}.o${job.job_id} and ${job.name}.e${job.job_id} in the folder it was submitted from).`
+    // PBS names an array job's files per subjob: plasma.o123.1 for subjob 1 of 123[]
+    const jobId = job.job_id ?? ''
+    const suffix = jobId.endsWith('[]') ? `${jobId.slice(0, -2)}.<index>` : jobId
+    return `Exit code ${code} came from your script. Check the job's output files (${job.name}.o${suffix} and ${job.name}.e${suffix} in the folder it was submitted from, unless the script sets -o or -e).`
 }
 
 /** What is true about a job that has not started: how long it has waited, which provisioning attempt

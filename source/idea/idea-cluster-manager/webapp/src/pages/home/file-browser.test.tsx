@@ -8,7 +8,8 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { vi } from 'vitest';
 import { ToastContainer } from 'react-toastify';
 import Uppy from '@uppy/core';
-import FileBrowser, { decodeFileContent, describeUploadFailure, describeUploadOutcome, encodeFileContent } from './file-browser';
+import FileBrowser, { describeUploadFailure, describeUploadOutcome } from './file-browser';
+import { decodeFileContent, encodeFileContent } from '../../common/utils';
 import { FILE_BROWSER_PAGE_SIZE } from './file-browser-table';
 import { initTestAppContext } from '../../test-support';
 
@@ -1680,6 +1681,13 @@ describe('file browser', () => {
             await openEntry(user, 'reports');
 
             expect(await screen.findByText(/took too long to list\. To see it, run this in a terminal: ls/)).toBeInTheDocument();
+        });
+
+        // the first listing asks for the home folder without a path, so there is no path to put in a command
+        it('gives a command that works when the home folder took too long to list', async () => {
+            renderFileBrowser({ listFailure: { errorCode: 'FILE_OPERATION_TIMED_OUT', message: 'stopped' } });
+
+            expect(await screen.findByText("Your home folder took too long to list. To see it, run this in a terminal: ls ~")).toBeInTheDocument();
         });
 
         it('does not blame the open folder, which is empty, for a failed move to another', async () => {

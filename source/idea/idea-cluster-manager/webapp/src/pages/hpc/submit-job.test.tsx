@@ -32,11 +32,10 @@ const INSTANCE_TYPE_OPTIONS = {
     instance_types: [{ name: 'c5.large', default_core_count: 1, threads_per_core: 2 }]
 };
 
-function renderSubmitJob(props: any = {}) {
+function renderSubmitJob(props: any = {}, state = btoa(JSON.stringify({ applicationId: APPLICATION.application_id }))) {
     // the page loads its application from ?state=, as the application catalog links do
-    const state = btoa(JSON.stringify({ applicationId: APPLICATION.application_id }));
     render(
-        <MemoryRouter initialEntries={[`/?state=${state}`]}>
+        <MemoryRouter initialEntries={[`/?state=${encodeURIComponent(state)}`]}>
             <SubmitJob
                 ideaPageId="submit-job"
                 toolsOpen={false}
@@ -106,6 +105,41 @@ describe('submit job page', () => {
 
         expect(await screen.findByText('Job Submission Failed')).toBeInTheDocument();
         expect(await screen.findByText(/qsub: Queue is not enabled/)).toBeInTheDocument();
+    });
+
+    // the scheduler decodes job_script as UTF-8, and btoa threw on the curly apostrophe before submitting
+    it('submits a parameter with non-ASCII text as UTF-8', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({
+            applications: [{ ...APPLICATION, job_script_template: APPLICATION.job_script_template + '# %job_name%\n' }]
+        } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const submitJob = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({ accepted: true } as any);
+
+        const user = userEvent.setup();
+        // JSON escapes keep the state ASCII, so the test can build it with btoa
+        renderSubmitJob({}, btoa('{"applicationId": "app-1", "params": {"job_name": "Bob\\u2019s caf\\u00e9 run"}}'));
+
+        await screen.findByText('Job Name');
+        const submitButton = (await screen.findAllByRole('button', { name: /^Submit Job$/ }))[0];
+        await waitFor(() => expect(submitButton).not.toBeDisabled());
+        await user.click(submitButton);
+
+        await waitFor(() => expect(submitJob).toHaveBeenCalledTimes(1));
+        const bytes = Uint8Array.from(atob(submitJob.mock.calls[0][0].job_script!), (char) => char.charCodeAt(0));
+        expect(new TextDecoder('utf-8', {fatal: true}).decode(bytes)).toContain('# Bob\u2019s café run\n');
+    });
+
+    // templates saved by earlier releases hold é as one Latin-1 byte
+    it('reads a saved state with Latin-1 text', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({ applications: [APPLICATION] } as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        renderSubmitJob({}, btoa(JSON.stringify({ applicationId: APPLICATION.application_id, params: { job_name: 'café' } })));
+
+        expect(await screen.findByDisplayValue('café')).toBeInTheDocument();
     });
 
     it('confirms a large job before submitting it', async () => {
