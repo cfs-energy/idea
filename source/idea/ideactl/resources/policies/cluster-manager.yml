@@ -40,6 +40,11 @@ Statement:
       - '{{ context.arns.ses_arn }}'
     Effect: Allow
 
+  # scratch cleanup counts a digest as told once SES takes it, from this receipt
+  - Action: dynamodb:PutItem
+    Resource: '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("scheduler") + ".scratch-cleanup") }}'
+    Effect: Allow
+
   - Action:
       - s3:GetObject
       - s3:ListBucket

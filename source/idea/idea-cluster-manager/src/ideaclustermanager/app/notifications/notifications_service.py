@@ -12,7 +12,7 @@
 from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
 from ideasdk.utils import Utils, Jinja2Utils
-from ideadatamodel import GetEmailTemplateRequest, Notification
+from ideadatamodel import GetEmailTemplateRequest, Notification, constants
 
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.email_templates.email_templates_service import (
@@ -21,10 +21,15 @@ from ideaclustermanager.app.email_templates.email_templates_service import (
 
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+import re
 import threading
 import time
 
 MAX_WORKERS = 1  # must be between 1 and 10
+# scratch cleanup counts a notice as given only once SES has taken its digest
+DELIVERY_RECEIPT_TEMPLATES = 'scheduler.scratch-cleanup-'
+DELIVERY_RECEIPT_SECONDS = 30 * 24 * 3600
 
 
 class NotificationsService(SocaService):
@@ -131,12 +136,37 @@ class NotificationsService(SocaService):
                     'Body': {'Html': {'Data': body}},
                 },
             )
+            self.record_delivery(template_name, params)
 
             delay = float(1 / max_sending_rate)
             time.sleep(delay)
 
         except Exception as e:
             self.logger.exception(f'failed to send email notification: {e}')
+
+    def record_delivery(self, template_name: str, params: Dict):
+        receipt = params.get('delivery_receipt')
+        if not (
+            str(template_name).startswith(DELIVERY_RECEIPT_TEMPLATES)
+            and isinstance(receipt, str)
+            and re.fullmatch(r'[0-9a-f]{32}', receipt)
+        ):
+            return
+        try:
+            scheduler = self.context.config().get_module_id(constants.MODULE_SCHEDULER)
+            self.context.aws().dynamodb_table().Table(
+                f'{self.context.cluster_name()}.{scheduler}.scratch-cleanup'
+            ).put_item(
+                Item={
+                    'pk': 'delivered',
+                    'sk': receipt,
+                    'at': datetime.now(timezone.utc).isoformat(),
+                    'expires_at': int(time.time()) + DELIVERY_RECEIPT_SECONDS,
+                }
+            )
+        except Exception as e:
+            # the email went; scratch cleanup treats it as not sent and says so
+            self.logger.exception(f'could not record delivery of {template_name}: {e}')
 
     def execute_notifications(self, sqs_message: Dict):
         notifications_name = None

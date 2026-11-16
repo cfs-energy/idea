@@ -236,12 +236,18 @@ class ScratchCleanupStore:
             self.table.delete_item(Key={'pk': 'removal', 'sk': pointer['removal_sk']})
             self.table.delete_item(Key={'pk': 'removal-key', 'sk': key})
 
-    def list_due(self, before: str, limit: int) -> List[Dict]:
-        """the soonest removals up to a date, oldest first, never more than the limit"""
+    def list_due(self, before: str, limit: int, now: str) -> List[Dict]:
+        """
+        the soonest removals up to a date, oldest first, never more than the limit. A kept
+        folder keeps its date, so one not to be asked about until later is passed over here:
+        enough of them would otherwise fill the limit for good.
+        """
         rows: List[Dict] = []
         arguments = {
             'KeyConditionExpression': Key('pk').eq('removal')
             & Key('sk').lt(f'{before}~'),
+            'FilterExpression': Attr('next_check_at').not_exists()
+            | Attr('next_check_at').lte(now),
             'Limit': limit,
         }
         while len(rows) < limit:
@@ -278,6 +284,11 @@ class ScratchCleanupStore:
             if 'LastEvaluatedKey' not in result:
                 return total
             arguments['ExclusiveStartKey'] = result['LastEvaluatedKey']
+
+    # the cluster manager writes one when SES takes a digest: until then nobody was told
+    def delivered_at(self, receipt: str) -> Optional[str]:
+        row = self._get('delivered', receipt)
+        return row.get('at') if row else None
 
     # what an owner's next digest says went
     def list_removed(self) -> List[Dict]:

@@ -43,6 +43,7 @@ class FakeStore:
         self.lease_free = True
         self.renew_error = None
         self.alerts = {}
+        self.delivered = {}
 
     def initialize(self):
         pass
@@ -83,12 +84,19 @@ class FakeStore:
             if row['status'] in ('started', 'failed')
         }
 
-    def list_due(self, before, limit):
+    def list_due(self, before, limit, now):
         rows = sorted(
             ({**row, 'key': key} for key, row in self.removals.items()),
             key=lambda row: row['remove_at'],
         )
-        return [row for row in rows if row['remove_at'] < f'{before}~'][:limit]
+        return [
+            row
+            for row in rows
+            if row['remove_at'] < f'{before}~' and row.get('next_check_at', now) <= now
+        ][:limit]
+
+    def delivered_at(self, receipt):
+        return self.delivered.get(receipt)
 
     def page_removals(self, limit, start_key=None):
         rows = sorted(
@@ -267,7 +275,7 @@ def world(tmp_path, monkeypatch):
         )
     )
     context.notifications_client.send_notification.side_effect = lambda notification: (
-        world.sent.append(notification)
+        delivered(world, notification)
     )
     world.fsx = context.aws.return_value.fsx.return_value
     world.fsx.describe_file_systems.return_value = {
@@ -288,6 +296,14 @@ def world(tmp_path, monkeypatch):
     world.service._store_ready = True
     monkeypatch.setattr(module, 'ScratchCleanupMetrics', lambda *_: Mock())
     return world
+
+
+def delivered(world, notification):
+    """what the cluster manager does once SES takes an email"""
+    world.sent.append(notification)
+    receipt = (notification.params or {}).get('delivery_receipt')
+    if receipt:
+        world.store.delivered[receipt] = world.now.isoformat()
 
 
 def _usage(world):
@@ -2203,6 +2219,8 @@ def test_a_folder_never_goes_without_its_final_notice(world):
     digests_on(world)
     folder = due_in(world, days=-30)
     run(world)
+    world.now += timedelta(hours=1)
+    run(world)
     row = next(iter(world.store.removals.values()))
     notices = next(iter(row['targets'].values()))
     assert notices.get('first_notice_at') and not notices.get('final_notice_at')
@@ -2223,7 +2241,7 @@ def test_a_digest_that_did_not_go_moves_the_date(world):
     assert outcome['noticed_folders'] == 0 and 'alice' in outcome['message']
     assert logged_alert(world)
     world.context.notifications_client.send_notification.side_effect = (
-        lambda notification: world.sent.append(notification)
+        lambda notification: delivered(world, notification)
     )
     world.now += timedelta(days=3)
     assert run(world)['removed_folders'] == 0, 'the date has passed but nobody was told'

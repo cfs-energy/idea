@@ -55,13 +55,13 @@ Only a cluster administrator can run or read a preview or start a backfill, not 
 
 ## Owners
 
-Each owner gets at most one email a week, on the set day, in UTC, and only when there is something new. It gives counts and total size, the soonest date, the five largest folders, how to keep one, and a link. The email stays that size however many folders there are.
+Each owner gets at most one email a week for each selected file system, on the set day, in UTC, and only when there is something new. It gives counts and total size, the soonest date, the five largest folders, how to keep one, and a link. The email stays that size however many folders there are.
 
-Each folder appears in exactly two digests: a first notice once 14 days or less remain, and a final notice in the digest before it goes. A folder goes only after both, at least 7 days after the first and 3 after the final. If a digest did not go, the date moves.
+Each folder appears in exactly two digests: a first notice once 14 days or less remain, and a final notice in the digest before it goes. A folder goes only after both, at least 7 days after the first and 3 after the final, counted from when SES took the digest. A digest SES has not taken within a day, for any reason, told nobody: its folders wait for the next digest, their dates move, and the check alerts.
 
 To keep a folder, an owner copies what they need to their home directory, renames the folder to anything that is not just a number, or changes a file in it. Windows desktops do not mount Lustre, so those users reach it from a Linux desktop or SSH.
 
-A digest needs SES and email notifications on, and an enabled account with an address. Otherwise the folder waits and the check alerts. There is no setting to go without notices: with email off, nothing is removed.
+A digest needs SES and email notifications on, and an enabled account with an address. Otherwise the folder waits and the check alerts. An SES account still in the sandbox takes mail only for verified addresses, so other owners' folders wait too. There is no setting to go without notices: with email off, nothing is removed.
 
 What went since the last digest is in the next one, including a removal that stopped part way, and the job's details say so.
 
@@ -75,8 +75,12 @@ A check stops and alerts rather than continuing when:
 * PBS lists no active jobs while the job cache tracks some or nodes are running jobs
 * a check would remove more than the allowed share of capacity, or a backfill more than the allowed share of job folders
 * a removal fails, or something writes to a folder while it is being removed
+* the settings are out of bounds, for example a removal time under 14 days saved outside this page
+* the settings or the cleanup table cannot be read
 
-An alert is an error in the scheduler log containing `SCRATCH_CLEANUP_ALERT`, the `scratch_cleanup.run_failed` metric, and the top of this page. Put your monitor on the log word or the metric. The cluster administrator gets one summary a week, on the digest day: what is scheduled, what waits for undeliverable notices, what went, and what stopped.
+A check also alerts, and carries on, when no digest reached SES for an owner, and once a day when 5000 folders need a check at once, so later ones wait. An owner folder that cannot be read keeps its folders, which come up again at the next check.
+
+An alert is an error in the scheduler log containing `SCRATCH_CLEANUP_ALERT`, the `scratch_cleanup.run_failed` metric, and the top of this page. Put your monitor on the log word or the metric. The cluster administrator gets a summary on the digest day for each selected file system that has something to say: what is scheduled, what waits for undeliverable notices, what went, and what stopped.
 
 ## Settings
 
