@@ -10,12 +10,12 @@ About once a day the cluster manager leader reads the settings that must hold on
 | --- | --- | --- |
 | `ontap_cifs_session_security` | `session-security-for-ad-ldap` is `sign` or `seal` on the CIFS server | `/api/protocols/cifs/services` |
 | `ontap_ldap_session_security` | Session security is `sign` or `seal` on the LDAP client | `/api/name-services/ldap` |
-| `ontap_dns_domain_controllers` | Every SVM DNS server is a domain controller of the directory | `/api/name-services/dns`, `ds:DescribeDirectories` |
+| `ontap_dns_domain_controllers` | Every SVM DNS server is a domain controller of the directory. AWS Managed AD only: with no `directoryservice.directory_id` (self-managed AD, OpenLDAP) there is nothing to compare with, so the servers are not compared. It is still sent where it fails alongside `ontap_secure_ddns`: unknown when the SVM's DNS cannot be read (no login, no password, a failed read or a timeout), and drift when the SVM has no DNS configuration | `/api/name-services/dns`, `ds:DescribeDirectories` |
 | `ontap_cifs_aes` | AES is on for Kerberos to the directory | `/api/protocols/cifs/services` |
 | `ontap_secure_ddns` | Dynamic DNS is on and secure | `/api/name-services/dns` |
 | `ontap_machine_account` | The CIFS server is enabled and ONTAP's LDAP client is up. This is ONTAP's view of its machine account: the directory's own record is not read | CIFS and LDAP above |
 | `ad_agent_bind` | The directory accepts the password in the AD automation secret, as it is now. One bind; the password is never logged. AD automation clusters only | Secrets Manager, LDAP |
-| `values_owned_settings` | Settings that `values.yml` overwrites on each upgrade match the copy in the cluster bucket. Drift here means the next upgrade changes that setting | `values/values.yml` in the cluster bucket, only those keys |
+| `values_owned_settings` | Settings that `values.yml` overwrites on each upgrade match the copy in the cluster bucket. Drift here means the next upgrade changes that setting. A bare address in `ssh_client_ip` matches the `/32` that ideactl stores | `values/values.yml` in the cluster bucket, only those keys |
 | `settings_must_match` | Keys the release fixes hold the template's value. Today, the desktop and scheduler provisioning timeouts. The log line names any that differ | Settings |
 
 A cluster with no file server on ONTAP has no `ontap_*` checks. These are an SVM's settings, so they are reported once per SVM, under the shared-storage entry whose metrics login reads it: a second entry on the same SVM (the same `svm.management_dns`) with no login of its own reports nothing. An entry on an SVM that no login reads reports `unknown` with `no_login` on every check until it has one, and the two day alert below fires for it.

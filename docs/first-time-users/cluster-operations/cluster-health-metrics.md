@@ -106,11 +106,11 @@ Queue to start, node provisioning and job outcomes already exist: `idea.jobs_pen
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.scheduler.pbs_up` | `reason` | `qstat` answered and the server is Active or Scheduling, every minute, killed at 20 seconds. 1 always carries `reason:ok`; 0 carries why: `failed`, `timeout`, `stuck`, `unreadable` (no server in the answer), `no_state` (a server with no state in the answer), or the server state in lower case (for example `hot_start`). `idle` is a server with scheduling turned off (`qmgr -c "set server scheduling=False"`): it answers, and the metric still reads 0, so mute a `pbs_up` monitor for that maintenance. A scheduler restart leaves no points for its length, so alert on no data as well as on 0. |
+| `idea.health.scheduler.pbs_up` | `reason` | `qstat` answered and the server is Active or Scheduling, every minute, killed at 20 seconds. 1 always carries `reason:ok`; 0 carries why: `failed`, `timeout`, `stuck`, `unreadable` (no server in the answer), `no_state` (a server with no state in the answer), or the server state in lower case (for example `hot_start`). `idle` is a server with scheduling turned off (`qmgr -c "set server scheduling=False"`): it answers, and the metric still reads 0, so mute a `pbs_up` monitor for that maintenance. No point is sent while the scheduler task is down, so alert on no data as well as on 0: a task that exits at every start sends nothing at all. Give the no-data alert 20 minutes, since a routine restart leaves a gap of a few minutes before the new leader's first reading, and mute it before stopping the scheduler or deleting the cluster. |
 | `idea.health.scheduler.pbs_check_seconds` | | How long `qstat` took. |
 | `idea.health.scheduler.jobs` | `state` | Jobs the server holds by state. |
 | `idea.health.scheduler.capacity_errors` | `reason`, `instance_family` | Each failed scaling activity of a compute stack, once: `insufficient_capacity`, `quota`, `other`. Seen when a stack has waited long enough for the scheduler to ask. |
-| `idea.health.scheduler.provisioning_failures` | `reason_class`, `instance_family` | Jobs that could not be provisioned, by the lifecycle event's class. |
+| `idea.health.scheduler.provisioning_failures` | `reason_class`, `instance_family` | Each provisioning attempt that failed, by the lifecycle event's class: a cycle can try one job several times, so this counts attempts, not jobs. Designed waits (licenses, service quota, shared capacity, reserved instances, Bedrock access) are not failures and are not counted. |
 | `idea.health.orphan_sweep` | `kind` | What a sweep found left behind: `job`, `instance_without_queue`, `compute_image_builder`, `desktop_image_builder`. |
 
 ## Bastion
@@ -119,7 +119,7 @@ A separate process in each task, once a minute, using only what the task can see
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback: 0 when nothing answers or sshd refuses the connection, as it would a user's. |
+| `idea.health.bastion.sshd_up` | `host` | sshd offered its banner on loopback: 0 when nothing answers or sshd refuses the connection, as it would a user's. A dead sshd ends its task, so a bastion whose sshd dies at every start sends no points: alert on no data for 20 minutes as well as on 0, and mute that alert before scaling the bastion to 0 or deleting the cluster. |
 | `idea.health.bastion.sshd_check_seconds` | `host` | How long that took. |
 | `idea.health.bastion.sessions` | `host` | Logged-in connections. |
 | `idea.health.bastion.tcp_established` | `host` | Established on port 22, including those not logged in yet. |
@@ -129,7 +129,7 @@ A separate process in each task, once a minute, using only what the task can see
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.storage.mount_ok` | `mount` | The shared-storage mount answered, from a separate process killed at 15 seconds. |
+| `idea.health.storage.mount_ok` | `mount`, `reason` | The shared-storage mount answered, from a separate process killed at 15 seconds. 1 carries `reason:ok`; 0 carries `timeout`, `stuck` (an earlier read is still hung, so none started), `failed`, or `local_disk`: the path is a local disk and not NFS or Lustre, as on a container host whose network mount failed at boot, which gives its tasks the empty directory under it. Tasks on that host write to its root disk until it is drained, so treat `local_disk` as data at risk, not a slow server. Find the host with `min:idea.health.storage.mount_ok{idea_cluster:<cluster>,mount:<mount>,reason:local_disk} by {host}`: `host` is the EC2 instance id the agent adds, and the container instance to drain is the one in the point's `ecs_cluster_name` with that `ec2InstanceId`. |
 | `idea.health.storage.mount_used_percent`, `mount_inodes_used_percent`, `mount_free_bytes`, `mount_read_seconds` | `mount` | Levels of each mount the cluster manager or scheduler has, every five minutes. On GovCloud this is the only record of EFS and Lustre levels. |
 | `idea.health.secret.age_days`, `secret.days_to_rotation` | `secret` | Secrets tagged for this cluster, every six hours, from their metadata. No value is read. A password waiting for its directory sync is not listed here. |
 | `idea.health.secret.password_sync_waiting` | | How many passwords have waited more than an hour for their directory sync, counted every six hours from the secrets that hold them. The sync deletes its secret within seconds, so above 0 means a password is stuck or its task was lost. A lost one is deleted at 9 days, by this collector on the read after its count: switching the collector off leaves that to the next password anyone sets. |

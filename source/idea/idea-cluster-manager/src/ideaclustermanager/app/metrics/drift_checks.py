@@ -38,6 +38,8 @@ SIGNED_SESSION_SECURITY = ('sign', 'seal')
 
 # a little under a day, so a monitor's one day window always holds a reading
 RUN_EVERY_SECONDS = 23 * 3600
+# no AWS managed directory (self-managed AD, OpenLDAP): nothing to hold the SVM's DNS servers to
+NO_DIRECTORY = frozenset({'no directory'})
 WAKE_EVERY_SECONDS = 300
 GROUP_LIMIT_SECONDS = 60
 ONTAP_READ_TIMEOUT_SECONDS = 10
@@ -269,7 +271,9 @@ def check_dns(
         ]
     results = []
     servers = set(record.get('servers') or [])
-    if controllers is None:
+    if controllers is NO_DIRECTORY:
+        pass
+    elif controllers is None:
         results.append(
             DriftResult(
                 'ontap_dns_domain_controllers',
@@ -306,6 +310,12 @@ def check_dns(
     return results
 
 
+def as_cidr(entry) -> str:
+    """ideactl stores a bare address in values.yml as address/32: the file holds it as written"""
+    text = str(entry).strip()
+    return text if '/' in text else f'{text}/32'
+
+
 def analytics_value(volumes: List[Dict]) -> str:
     """on, off, or mixed across the data volumes. the SVM root has nothing to analyse."""
     states = {
@@ -331,7 +341,7 @@ class DriftChecks:
     def domain_controllers(self) -> Optional[Set[str]]:
         directory_id = self.context.config().get_string('directoryservice.directory_id')
         if Utils.is_empty(directory_id):
-            return None
+            return NO_DIRECTORY
         described = (
             self.context.aws()
             .ds()
@@ -555,8 +565,8 @@ class DriftChecks:
         stale = sorted(
             key
             for values_key, key in VALUES_OWNED.items()
-            if {str(v).strip() for v in (values.get(values_key) or [])}
-            != {str(v).strip() for v in (config.get_list(key, default=[]) or [])}
+            if {as_cidr(v) for v in (values.get(values_key) or [])}
+            != {as_cidr(v) for v in (config.get_list(key, default=[]) or [])}
         )
         return dict(
             results=[

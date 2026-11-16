@@ -28,6 +28,7 @@ from ideasdk.metrics.health import (
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
+import pytest
 import subprocess
 import time
 
@@ -322,6 +323,42 @@ def test_mount_probe_skips_a_path_that_is_not_a_mount(tmp_path):
     assert result.returncode == MOUNT_NOT_HERE
 
 
+MOUNTINFO = (
+    '24 1 259:1 / / rw,noatime shared:1 - xfs /dev/nvme0n1p1 rw\n'
+    '120 24 0:52 {root} /dev rw,relatime - {fstype} {source} rw,vers=4.1\n'
+)
+
+
+@pytest.mark.parametrize(
+    'root, fstype, source, mount_ok, reason',
+    [
+        # the host's NFS mount, bound into the task
+        ('/', 'nfs4', 'svm-1.fs-1.example:/vol1', 1, 'ok'),
+        ('/', 'lustre', '10.0.0.5@tcp:/abc', 1, 'ok'),
+        # the host's mount failed at boot: the task gets the empty directory on its root disk
+        ('/data', 'xfs', '/dev/nvme0n1p1', 0, 'local_disk'),
+    ],
+)
+def test_mount_probe_fails_a_bind_of_a_local_disk_and_names_it(
+    tmp_path, root, fstype, source, mount_ok, reason
+):
+    found = Mock()
+    found.config().get_config.return_value = {'data': {'mount_dir': '/dev'}}
+    collector = StorageMountsCollector(found)
+    # /dev is a mount on every Linux and macOS host, so the real st_dev test passes it; the
+    # real probe reads this file in place of the task's /proc/self/mountinfo
+    mountinfo = tmp_path / 'mountinfo'
+    mountinfo.write_text(MOUNTINFO.format(root=root, fstype=fstype, source=source))
+    collector._probes['data'] = IsolatedProbe(
+        python_probe(MOUNT_PROBE_SCRIPT, '/dev', str(mountinfo)), 10
+    )
+    metrics = Recorder()
+    collector.collect(metrics)
+    levels = {n: (v, t) for n, v, t in metrics.levels}
+    assert levels['storage.mount_ok'] == (mount_ok, {'mount': 'data', 'reason': reason})
+    assert ('storage.mount_free_bytes' in levels) == (mount_ok == 1)
+
+
 def test_mounts_report_levels_and_a_dead_one_reports_only_that(monkeypatch):
     found = Mock()
     found.config().get_config.return_value = {
@@ -348,6 +385,10 @@ def test_mounts_report_levels_and_a_dead_one_reports_only_that(monkeypatch):
     assert by_name[('storage.mount_inodes_used_percent', 'home')] == 50
     assert by_name[('storage.mount_ok', 'apps')] == 0
     assert ('storage.mount_free_bytes', 'apps') not in by_name
+    reasons = {
+        t['mount']: t['reason'] for n, _, t in metrics.levels if n == 'storage.mount_ok'
+    }
+    assert reasons == {'home': 'ok', 'apps': 'timeout'}
 
 
 def test_bake_failure_reasons_are_a_small_vocabulary():

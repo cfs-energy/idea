@@ -541,13 +541,15 @@ class ProvisionJobs:
                 self._context.metrics.job_provisioning_failed(
                     queue_type=self.job.queue_type, error_code=e.error_code
                 )
-                HealthMetrics(self._context).add(
-                    'scheduler.provisioning_failures',
-                    reason_class=ProvisioningLifecycleEvents.get_reason_class(
-                        e.error_code
-                    ),
-                    instance_family=instance_family_of(self.job),
-                )
+                # a designed wait comes back every cycle until it clears: not a failure
+                if e.error_code not in PROVISIONING_WAIT_ERROR_CODES:
+                    HealthMetrics(self._context).add(
+                        'scheduler.provisioning_failures',
+                        reason_class=ProvisioningLifecycleEvents.get_reason_class(
+                            e.error_code
+                        ),
+                        instance_family=instance_family_of(self.job),
+                    )
                 if self._lifecycle_events is not None:
                     # designed wait states (licenses, quota headroom, stale shared
                     # stacks) are waits in the event stream, not stack failures.

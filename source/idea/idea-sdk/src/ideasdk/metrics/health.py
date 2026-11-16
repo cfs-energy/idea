@@ -323,16 +323,31 @@ except OSError:
 """
 HOME_PROBE_REASONS = {3: 'denied', 4: 'error'}
 
-# levels of one mount; exit 5 when the path is not a mount in this task.
+# levels of one mount; exit 5 when the path is not a mount in this task, 6 when it is a bind
+# of a local disk: a host whose network mount failed at boot hands the task its empty directory.
 MOUNT_PROBE_SCRIPT = """
 import os, sys
 path = sys.argv[1]
 if not os.path.exists(path) or os.stat(path).st_dev == os.stat(os.path.dirname(path.rstrip('/')) or '/').st_dev:
     sys.exit(5)
+types = []
+try:
+    with open(sys.argv[2] if len(sys.argv) > 2 else '/proc/self/mountinfo') as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) > 5 and fields[4] == (path.rstrip('/') or '/'):
+                types.append(fields[fields.index('-', 5) + 1])
+except (OSError, ValueError, IndexError):
+    types = []
+if types and types[-1] not in ('nfs', 'nfs4', 'lustre'):
+    sys.exit(6)
 v = os.statvfs(path)
 print(v.f_blocks * v.f_frsize, v.f_bfree * v.f_frsize, v.f_files, v.f_ffree)
 """
 MOUNT_NOT_HERE = 5
+MOUNT_LOCAL_DISK = 6
+# ponytail: this only reports a missing boot mount. The host still starts tasks on its root disk
+# until ecs.service on container hosts gets RequiresMountsFor= for each storage directory.
 
 
 class StorageMountsCollector(HealthCollector):
@@ -372,7 +387,16 @@ class StorageMountsCollector(HealthCollector):
             if result.status == 'failed' and result.returncode == MOUNT_NOT_HERE:
                 continue
             answered = result.status == 'ok' and len(result.output.split()) == 4
-            metrics.level('storage.mount_ok', 1 if answered else 0, mount=name)
+            if answered:
+                reason = 'ok'
+            elif result.returncode == MOUNT_LOCAL_DISK:
+                reason = 'local_disk'
+            else:
+                # failed, timeout or stuck; ok with output that is not four numbers is failed
+                reason = 'failed' if result.status == 'ok' else result.status
+            metrics.level(
+                'storage.mount_ok', 1 if answered else 0, mount=name, reason=reason
+            )
             if not answered:
                 continue
             total, free, files, files_free = (int(v) for v in result.output.split())

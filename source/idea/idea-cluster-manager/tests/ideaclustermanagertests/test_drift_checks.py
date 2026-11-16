@@ -511,6 +511,15 @@ def test_domain_controllers_that_cannot_be_read_make_dns_unknown(monkeypatch):
     assert states(checks.run_once())['ontap_dns_domain_controllers'] == UNKNOWN
 
 
+def test_without_a_managed_directory_the_svm_dns_is_held_to_nothing(monkeypatch):
+    # self-managed AD or OpenLDAP: no directory_id, so no domain controllers to compare
+    checks = harness(monkeypatch, Config(**{'directoryservice.directory_id': None}))
+    found = states(checks.run_once())
+    assert 'ontap_dns_domain_controllers' not in found
+    assert found['ontap_secure_ddns'] == OK
+    checks.context.aws().ds().describe_directories.assert_not_called()
+
+
 def test_a_hung_read_is_left_behind_reported_and_not_started_twice(monkeypatch):
     checks = harness(monkeypatch)
     monkeypatch.setattr(module, 'GROUP_LIMIT_SECONDS', 0.05)
@@ -709,6 +718,12 @@ def test_a_setting_values_yml_would_overwrite_is_stale(monkeypatch):
     # the 26.11.1 closeout: an old values.yml without the VPN egress
     checks = harness(monkeypatch, values_yml=b'ssh_client_ip: []\n')
     assert states(checks.run_once())['values_owned_settings'] == DRIFT
+
+
+def test_a_bare_address_in_values_yml_reads_as_the_row_ideactl_stored(monkeypatch):
+    # ideactl takes 1.2.3.4 and stores 1.2.3.4/32; values.yml keeps what was written
+    checks = harness(monkeypatch, values_yml=b'ssh_client_ip:\n- 1.2.3.4\n')
+    assert states(checks.run_once())['values_owned_settings'] == OK
 
 
 def test_a_values_file_that_cannot_be_read_is_unknown(monkeypatch):
