@@ -1320,7 +1320,11 @@ def password_change(context: AppContext, monkeypatch, secrets, request):
     monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
     monkeypatch.setattr(context.accounts.task_manager, 'send', send)
     in_user_pool, change = user_pool_password_changes(context, user_pool)[request.param]
-    return secrets, in_user_pool, change, send
+    # the sign-in page's paths set a password only for an account with a record
+    users = context.accounts.user_dao.table
+    users.put_item(Item={'username': 'user', 'enabled': True})
+    yield secrets, in_user_pool, change, send
+    users.delete_item(Key={'username': 'user'})
 
 
 every_password_change = pytest.mark.parametrize(
@@ -1385,6 +1389,197 @@ def test_a_challenge_that_sets_no_password_leaves_no_secret(password_change):
     assert len(secrets.created) == 1
     assert secrets.secrets == {}
     send.assert_not_called()
+
+
+sign_in_page_password_changes = pytest.mark.parametrize(
+    'password_change', ['forgot', 'challenge'], indirect=True
+)
+
+
+@sign_in_page_password_changes
+@pytest.mark.parametrize('record', [None, {'enabled': False}])
+def test_a_sign_in_page_password_for_no_enabled_account_makes_nothing(
+    context: AppContext, tmp_path, password_change, record
+):
+    secrets, in_user_pool, change, send = password_change
+    users = context.accounts.user_dao.table
+    if record is None:
+        users.delete_item(Key={'username': 'user'})
+    else:
+        users.put_item(Item={'username': 'user', **record})
+    old_file = stranded(tmp_path / 'tmpold', 15)
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    # what the user pool answers a code or session it did not give
+    assert refused.value.message in (
+        'Invalid verification code provided, please try again.',
+        'Invalid session for the user.',
+    )
+    assert (secrets.created, secrets.list_calls) == ([], [])
+    assert old_file.exists()
+    in_user_pool.assert_not_called()
+    send.assert_not_called()
+
+
+@pytest.mark.parametrize('path', ['forgot', 'challenge'])
+@pytest.mark.parametrize(
+    'typed, account',
+    [
+        ('user@example.com', 'user'),
+        (' User@Example.com ', 'user'),
+        ('USER', 'user'),
+        ('nobody@example.com', None),
+    ],
+)
+def test_a_sign_in_page_password_typed_as_the_email_reaches_the_account(
+    context: AppContext, monkeypatch, secrets, path, typed, account
+):
+    from ideadatamodel.auth import RespondToAuthChallengeRequest
+
+    # the sign-in page sends what the user typed, and the user pool signs in by email
+    real_user_pool = context.accounts.user_pool
+    user_pool, send = Mock(), Mock()
+    user_pool.admin_get_user = real_user_pool.admin_get_user
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    monkeypatch.setattr(context.ldap_client, 'is_existing_user', lambda _: True)
+
+    def cognito_admin_get_user(UserPoolId, Username):
+        # the user pool answers to a username or an email alias, in any case
+        if Username.lower() in ('user', 'user@example.com'):
+            return {
+                'Username': 'user',
+                'Enabled': True,
+                'UserAttributes': [{'Name': 'email', 'Value': 'user@example.com'}],
+            }
+        raise client_error('UserNotFoundException', 'AdminGetUser')
+
+    monkeypatch.setattr(
+        context.aws().cognito_idp(), 'admin_get_user', cognito_admin_get_user
+    )
+    users = context.accounts.user_dao.table
+    users.put_item(
+        Item={'username': 'user', 'email': 'user@example.com', 'enabled': True}
+    )
+    if path == 'forgot':
+        in_user_pool, refused_with = (
+            user_pool.confirm_forgot_password,
+            'Invalid verification code provided, please try again.',
+        )
+
+        def change():
+            context.accounts.confirm_forgot_password(typed, 'secret-value', '123456')
+
+    else:
+        in_user_pool, refused_with = (
+            user_pool.respond_to_auth_challenge,
+            'Invalid session for the user.',
+        )
+
+        def change():
+            context.accounts.respond_to_auth_challenge(
+                RespondToAuthChallengeRequest(
+                    username=typed,
+                    challenge_name='NEW_PASSWORD_REQUIRED',
+                    session='session',
+                    new_password='secret-value',
+                )
+            )
+
+    try:
+        if account is None:
+            with pytest.raises(exceptions.SocaException) as refused:
+                change()
+            assert refused.value.message == refused_with
+            assert secrets.created == []
+            in_user_pool.assert_not_called()
+            send.assert_not_called()
+            return
+        change()
+    finally:
+        users.delete_item(Key={'username': 'user'})
+    # the user pool is asked for the account's own name
+    (asked,) = in_user_pool.call_args_list
+    if path == 'forgot':
+        assert asked.args == (account, 'secret-value', '123456')
+    else:
+        assert asked.args[0].username == account
+        assert asked.args[0].new_password == 'secret-value'
+    # the password is queued for the account's own name, in its own group
+    (queued,) = send.call_args_list
+    assert queued.kwargs['task_name'] == 'accounts.sync-password'
+    assert queued.kwargs['payload']['username'] == account
+    assert queued.kwargs['message_group_id'] == account
+    assert len(secrets.created) == 1
+
+
+@every_password_change
+def test_only_a_signed_in_password_change_sweeps(request, tmp_path, password_change):
+    secrets, in_user_pool, change, _ = password_change
+    old_secret = secrets.add(
+        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
+    )
+    old_file = stranded(tmp_path / 'tmpold', 15)
+    # the sign-in page's paths need no session: a wrong code is the common request
+    in_user_pool.side_effect = RuntimeError('wrong code')
+    with pytest.raises(RuntimeError):
+        change()
+    swept = request.node.callspec.params['password_change'] == 'change'
+    assert (old_secret in secrets.deleted) is swept
+    assert old_file.exists() is not swept
+    # the password's own secret is gone either way
+    assert len(secrets.created) == 1
+    assert list(secrets.secrets) == ([] if swept else [old_secret])
+
+
+@sign_in_page_password_changes
+def test_password_sets_past_the_limit_wait_then_fail_with_nothing_made(
+    context: AppContext, monkeypatch, password_change
+):
+    import threading
+
+    secrets, in_user_pool, change, _ = password_change
+    limit = context.accounts.PASSWORD_SETS_AT_ONCE
+    inside, release = threading.Semaphore(0), threading.Event()
+
+    def slow_user_pool(*_, **__):
+        inside.release()
+        release.wait(10)
+        raise RuntimeError('wrong code')
+
+    in_user_pool.side_effect = slow_user_pool
+    monkeypatch.setattr(context.accounts, 'PASSWORD_SET_WAIT_SECONDS', 0.2)
+    errors = []
+
+    def attempt():
+        try:
+            change()
+        except Exception as error:
+            errors.append(error)
+
+    running = [threading.Thread(target=attempt) for _ in range(limit)]
+    for thread in running:
+        thread.start()
+    try:
+        for _ in running:
+            assert inside.acquire(timeout=10)
+        with pytest.raises(exceptions.SocaException) as refused:
+            change()
+        assert (
+            refused.value.message
+            == 'The password could not be set right now. Try again.'
+        )
+        assert len(secrets.created) == limit
+    finally:
+        release.set()
+        for thread in running:
+            thread.join(10)
+    assert [str(error) for error in errors] == ['wrong code'] * limit
+    # the places are given back, a failed attempt's included
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    assert len(secrets.created) == limit + 1
 
 
 def test_a_sweep_that_cannot_list_secrets_does_not_stop_a_password_change(

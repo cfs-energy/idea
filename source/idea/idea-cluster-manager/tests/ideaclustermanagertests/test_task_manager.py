@@ -771,6 +771,20 @@ def test_a_failing_password_sync_does_not_delay_home_creation(tmp_path):
     ]
 
 
+def test_a_failing_home_folder_does_not_hold_up_a_user_named_after_its_lane(
+    tmp_path,
+):
+    # usernames may hold a dot: 'user' and 'user.home' are two accounts
+    _, manager, _, tasks, ran, _, drain = account_queue(tmp_path)
+    home = tasks['accounts.create-home-directory']
+    home.invoke.side_effect = RuntimeError('apps file system away')
+    manager.send('accounts.create-home-directory', {'username': 'user'}, 'user')
+    manager.send('accounts.sync-user', {'username': 'user.home'}, 'user.home', 'u1')
+    drain()
+    assert home.invoke.call_count == 1
+    assert [name for name, _ in ran] == ['accounts.sync-user']
+
+
 def test_a_retryable_failure_retries_with_backoff(tmp_path):
     module, manager, queue, tasks, ran, password, drain = account_queue(tmp_path)
     sync = tasks['accounts.sync-password']
@@ -964,8 +978,8 @@ def test_a_password_from_the_old_group_still_applies_in_send_order(
     queue_password('second', group='user')
     drain()
     assert [message['group'] for message in queue.messages] == [
-        'user.password',
-        'user.password',
+        'user#password',
+        'user#password',
     ]
     directory['down'] = False
     queue.now += 3600
@@ -1057,8 +1071,9 @@ def test_a_redelivered_password_does_not_clear_a_recorded_failure(
         # sent by the release before lanes, whatever the name ends in
         ('user', 'user', True),
         ('user.password', 'user.password', True),
+        ('user', 'user#password', False),
         ('user', 'user.password', False),
-        ('user.password', 'user.password.password', False),
+        ('user.password', 'user.password#password', False),
     ],
 )
 def test_only_a_message_in_the_bare_group_of_its_user_is_moved_into_the_lane(
@@ -1079,7 +1094,7 @@ def test_only_a_message_in_the_bare_group_of_its_user_is_moved_into_the_lane(
     payload = json.loads(message['Body'])['payload']
     assert manager._move_into_lane(task, payload, message) is moved
     assert [m['group'] for m in queue.messages] == [
-        f'{username}.password' if moved else group
+        f'{username}#password' if moved else group
     ]
 
 
