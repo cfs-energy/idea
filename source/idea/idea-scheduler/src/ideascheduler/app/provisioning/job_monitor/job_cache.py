@@ -525,11 +525,6 @@ class JobsDB:
         # Refresh database object after raw connection usage
         self.db = self._connect()
 
-    def init_tables(self):
-        # This method is kept for backward compatibility
-        # But actual table creation is now handled by create_all_tables()
-        pass
-
     def drop_unique_index(self, table: str, index_name: str):
         """
         drop an index carried over from an earlier schema, if it is still unique.

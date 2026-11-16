@@ -443,10 +443,6 @@ class AWSUtil(AWSUtilProtocol):
             return []
         return strategies
 
-    def is_instance_type_ena_express_supported(self, instance_type: str) -> bool:
-        ec2_instance_type = self.get_ec2_instance_type(instance_type=instance_type)
-        return ec2_instance_type.network_info_ena_express_supported
-
     def s3_bucket_has_access(self, bucket_name: str) -> Dict:
         cache_key = f'aws.s3.bucket.{bucket_name}.has_access'
         result = self._context.cache().long_term().get(cache_key)

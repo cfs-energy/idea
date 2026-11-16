@@ -19,8 +19,6 @@ import {
     GetUserResult,
     ModifyUserRequest,
     ModifyUserResult,
-    DeleteUserRequest,
-    DeleteUserResult,
     EnableUserRequest,
     EnableUserResult,
     DisableUserRequest,
@@ -31,16 +29,10 @@ import {
     GlobalSignOutResult,
     CreateGroupRequest,
     CreateGroupResult,
-    ModifyGroupRequest,
-    ModifyGroupResult,
-    DeleteGroupRequest,
-    DeleteGroupResult,
     EnableGroupRequest,
     EnableGroupResult,
     DisableGroupRequest,
     DisableGroupResult,
-    GetGroupRequest,
-    GetGroupResult,
     ListGroupsRequest,
     ListGroupsResult,
     AddUserToGroupRequest,
@@ -128,13 +120,6 @@ class AccountsClient extends IdeaBaseClient<AuthAdminClientProps>{
         )
     }
 
-    deleteUser(req: DeleteUserRequest): Promise<DeleteUserResult> {
-        return this.apiInvoker.invoke_alt<DeleteUserRequest, DeleteUserResult>(
-            'Accounts.DeleteUser',
-            req
-        )
-    }
-
     listUsers(req?: ListUsersRequest): Promise<ListUsersResult> {
         return this.apiInvoker.invoke_alt<ListUsersRequest, ListUsersResult>(
             'Accounts.ListUsers',
@@ -149,20 +134,6 @@ class AccountsClient extends IdeaBaseClient<AuthAdminClientProps>{
         )
     }
 
-    getGroup(req: GetGroupRequest): Promise<GetGroupResult> {
-        return this.apiInvoker.invoke_alt<GetGroupRequest, GetGroupResult>(
-            'Accounts.GetGroup',
-            req
-        )
-    }
-
-    modifyGroup(req: ModifyGroupRequest): Promise<ModifyGroupResult> {
-        return this.apiInvoker.invoke_alt<ModifyGroupRequest, ModifyGroupResult>(
-            'Accounts.ModifyGroup',
-            req
-        )
-    }
-
     enableGroup(req: EnableGroupRequest): Promise<EnableGroupResult> {
         return this.apiInvoker.invoke_alt<EnableGroupRequest, EnableGroupResult>(
             'Accounts.EnableGroup',
@@ -173,13 +144,6 @@ class AccountsClient extends IdeaBaseClient<AuthAdminClientProps>{
     disableGroup(req: DisableGroupRequest): Promise<DisableGroupResult> {
         return this.apiInvoker.invoke_alt<DisableGroupRequest, DisableGroupResult>(
             'Accounts.DisableGroup',
-            req
-        )
-    }
-
-    deleteGroup(req: DeleteGroupRequest): Promise<DeleteGroupResult> {
-        return this.apiInvoker.invoke_alt<DeleteGroupRequest, DeleteGroupResult>(
-            'Accounts.DeleteGroup',
             req
         )
     }

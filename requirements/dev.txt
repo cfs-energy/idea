@@ -185,8 +185,6 @@ sanic==25.12.1
     # via -r runtime.in
 sanic-routing==23.12.0
     # via sanic
-semver==3.1.1
-    # via -r runtime.in
 sh==2.4.0
     # via -r runtime.in
 shortuuid==1.0.13

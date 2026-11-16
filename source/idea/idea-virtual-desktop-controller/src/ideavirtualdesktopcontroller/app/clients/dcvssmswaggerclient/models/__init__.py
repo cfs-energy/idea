@@ -15,18 +15,6 @@ from __future__ import absolute_import
 
 # import models into model package
 from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.aws import Aws
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.close_server_request_data import (
-    CloseServerRequestData,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.close_server_successful_response import (
-    CloseServerSuccessfulResponse,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.close_server_unsuccessful_response import (
-    CloseServerUnsuccessfulResponse,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.close_servers_response import (
-    CloseServersResponse,
-)
 from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.cpu_info import (
     CpuInfo,
 )
@@ -93,18 +81,6 @@ from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.logged_
 )
 from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.memory import (
     Memory,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.open_server_request_data import (
-    OpenServerRequestData,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.open_server_successful_response import (
-    OpenServerSuccessfulResponse,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.open_server_unsuccessful_response import (
-    OpenServerUnsuccessfulResponse,
-)
-from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.open_servers_response import (
-    OpenServersResponse,
 )
 from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.os import Os
 from ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient.models.server import (

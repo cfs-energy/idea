@@ -1,5 +1,4 @@
 # Shared Python runtime for the three control-plane services.
-semver
 pytz
 arrow
 pydantic

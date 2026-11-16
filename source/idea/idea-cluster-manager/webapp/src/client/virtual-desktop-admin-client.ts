@@ -28,8 +28,6 @@ import {
     ListSessionsResponse,
     GetSessionScreenshotRequest,
     GetSessionScreenshotResponse,
-    BatchCreateSessionRequest,
-    BatchCreateSessionResponse,
     StopSessionRequest,
     StopSessionResponse,
     ResumeSessionsRequest,
@@ -58,16 +56,10 @@ import {
     GetSoftwareStackInfoRequest,
     UpdatePermissionProfileResponse,
     UpdatePermissionProfileRequest,
-    UpdateSessionPermissionRequest,
-    UpdateSessionPermissionResponse,
     ListDesktopImagesRequest,
     ListDesktopImagesResponse,
     BuildDesktopImageRequest,
     BuildDesktopImageResponse,
-    BuildAllDesktopImagesRequest,
-    BuildAllDesktopImagesResponse,
-    UseBuiltDesktopImagesRequest,
-    UseBuiltDesktopImagesResponse,
     ListImageRowsRequest,
     ListImageRowsResponse,
     RefreshImagesRequest,
@@ -102,13 +94,6 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
     createSession(req: CreateSessionRequest): Promise<CreateSessionResponse> {
         return this.apiInvoker.invoke_alt<CreateSessionRequest, CreateSessionResponse>(
             'VirtualDesktopAdmin.CreateSession',
-            req
-        )
-    }
-
-    batchCreateSessions(req: BatchCreateSessionRequest): Promise<BatchCreateSessionResponse> {
-        return this.apiInvoker.invoke_alt<BatchCreateSessionRequest, BatchCreateSessionResponse>(
-            'VirtualDesktopAdmin.BatchCreateSessions',
             req
         )
     }
@@ -274,13 +259,6 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
         )
     }
 
-    updateSessionPermission(req: UpdateSessionPermissionRequest): Promise<UpdateSessionPermissionResponse> {
-        return this.apiInvoker.invoke_alt<UpdateSessionPermissionRequest, UpdateSessionPermissionResponse>(
-            'VirtualDesktopAdmin.UpdateSessionPermissions',
-            req
-        )
-    }
-
     joinSession(idea_session_id: string, idea_session_owner: string, username?: string): Promise<boolean> {
         return new Promise<boolean>(() => {
             let connection_info: VirtualDesktopSessionConnectionInfo = {
@@ -317,20 +295,6 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
     buildDesktopImage(req: BuildDesktopImageRequest): Promise<BuildDesktopImageResponse> {
         return this.apiInvoker.invoke_alt<BuildDesktopImageRequest, BuildDesktopImageResponse>(
             'VirtualDesktopAdmin.BuildDesktopImage',
-            req
-        )
-    }
-
-    buildAllDesktopImages(req: BuildAllDesktopImagesRequest): Promise<BuildAllDesktopImagesResponse> {
-        return this.apiInvoker.invoke_alt<BuildAllDesktopImagesRequest, BuildAllDesktopImagesResponse>(
-            'VirtualDesktopAdmin.BuildAllDesktopImages',
-            req
-        )
-    }
-
-    useBuiltDesktopImages(req: UseBuiltDesktopImagesRequest): Promise<UseBuiltDesktopImagesResponse> {
-        return this.apiInvoker.invoke_alt<UseBuiltDesktopImagesRequest, UseBuiltDesktopImagesResponse>(
-            'VirtualDesktopAdmin.UseBuiltDesktopImages',
             req
         )
     }

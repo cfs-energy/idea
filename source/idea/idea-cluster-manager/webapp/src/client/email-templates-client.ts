@@ -14,10 +14,6 @@
 import {
     CreateEmailTemplateRequest,
     CreateEmailTemplateResult,
-    GetEmailTemplateRequest,
-    GetEmailTemplateResult,
-    DeleteEmailTemplateRequest,
-    DeleteEmailTemplateResult,
     UpdateEmailTemplateRequest,
     UpdateEmailTemplateResult,
     ListEmailTemplatesRequest,
@@ -33,20 +29,6 @@ class EmailTemplatesClient extends IdeaBaseClient<EmailTemplatesClientProps> {
     createEmailTemplate(req: CreateEmailTemplateRequest): Promise<CreateEmailTemplateResult> {
         return this.apiInvoker.invoke_alt<CreateEmailTemplateRequest, CreateEmailTemplateResult>(
             'EmailTemplates.CreateEmailTemplate',
-            req
-        )
-    }
-
-    getEmailTemplate(req: GetEmailTemplateRequest): Promise<GetEmailTemplateResult> {
-        return this.apiInvoker.invoke_alt<GetEmailTemplateRequest, GetEmailTemplateResult>(
-            'EmailTemplates.GetEmailTemplate',
-            req
-        )
-    }
-
-    deleteEmailTemplate(req: DeleteEmailTemplateRequest): Promise<DeleteEmailTemplateResult> {
-        return this.apiInvoker.invoke_alt<DeleteEmailTemplateRequest, DeleteEmailTemplateResult>(
-            'EmailTemplates.DeleteEmailTemplate',
             req
         )
     }

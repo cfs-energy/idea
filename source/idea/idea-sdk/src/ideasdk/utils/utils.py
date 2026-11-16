@@ -19,16 +19,13 @@ import re
 import secrets
 import stat
 import string
-import time
 import unicodedata
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Union, List, Set, Dict, Any, Mapping, Callable, TypeVar
+from typing import Optional, Union, List, Set, Dict, Any, Mapping, TypeVar
 
 import arrow
-import semver
 import shortuuid
 import yaml
 from pydantic import BaseModel
@@ -37,7 +34,7 @@ import botocore.session
 import boto3
 
 import ideasdk
-from ideadatamodel import exceptions, errorcodes, constants
+from ideadatamodel import exceptions, constants
 from ideadatamodel.model_utils import ModelUtils
 from ideasdk.utils import EnvironmentUtils
 
@@ -308,41 +305,6 @@ class Utils:
         return backoff_in_seconds * 2**current_retry + random.uniform(0, 1)
 
     @staticmethod
-    def retry_with_backoff(fn: Callable[[], T], retries=5, backoff_in_seconds=1) -> T:
-        """
-        retry and exponential backoff
-        To make a setup more resilient we should allow for certain actions to be retried before they fail.
-        We should not "hammer" our underlying systems, so it is wise to wait a bit before a
-        retry (exponential backoff).
-        Note: this only works if actions are idempotent and you can afford to wait.
-
-        credits: Kees C. Bakker
-        sourced from https://keestalkstech.com/2021/03/python-utility-function-retry-with-exponential-backoff/
-
-        modified as per SOCA requirements.
-
-        :param fn:
-        :param retries:
-        :param backoff_in_seconds:
-        :return:
-        """
-        x = 0
-        while True:
-            try:
-                return fn()
-            except:  # noqa
-                if x == retries:
-                    raise exceptions.exceeded_max_retries(f'retries: {retries}')
-                else:
-                    sleep = Utils.get_retry_backoff_interval(
-                        current_retry=x,
-                        max_retries=retries,
-                        backoff_in_seconds=backoff_in_seconds,
-                    )
-                    time.sleep(sleep)
-                    x += 1
-
-    @staticmethod
     def minutes(seconds=None, millis=None) -> int:
         seconds = Utils.get_as_int(seconds, 0)
         if seconds > 0:
@@ -511,25 +473,6 @@ class Utils:
     @staticmethod
     def current_time_ms() -> int:
         return int(arrow.utcnow().timestamp() * 1000)
-
-    @staticmethod
-    def extract_semver(filename_or_uri) -> str:
-        stem = Path(filename_or_uri).stem
-        index = None
-        for index, c in enumerate(stem):
-            if not c.isnumeric():
-                continue
-            break
-        version = stem[index:]
-        try:
-            semver.VersionInfo.parse(version)
-            return version
-        except ValueError:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.INVALID_SEMVER,
-                message=f'Could not extract semantic version from: {filename_or_uri}. '
-                f'Please ensure you have included a semantic version in the package name.',
-            )
 
     @staticmethod
     def base64_encode(data: Union[str, bytes]) -> str:

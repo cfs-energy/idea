@@ -606,61 +606,6 @@ def clear_software_stacks_index(context):
         return None
 
 
-def get_opensearch_client(context):
-    """
-    Get the OpenSearch client from the context.
-    This function may need to be adjusted based on the actual implementation.
-    """
-    # This is a placeholder. The actual implementation will depend on how
-    # OpenSearch is configured in the application.
-    # Options might include:
-    # 1. Using a client already available in the context
-    # 2. Creating a new client using configuration from the context
-    # 3. Importing and using an existing client from elsewhere in the codebase
-
-    # For example:
-    # from some.module import opensearch_client
-    # return opensearch_client
-
-    # Or:
-    # return OpenSearch(
-    #     hosts=[{'host': context.config.opensearch_host, 'port': context.config.opensearch_port}],
-    #     http_auth=(context.config.opensearch_username, context.config.opensearch_password),
-    #     use_ssl=True,
-    #     verify_certs=False
-    # )
-
-    # For now, we'll check if the context has an opensearch_client attribute
-    if hasattr(context, 'opensearch_client'):
-        return context.opensearch_client
-
-    # If not, we might need to look elsewhere or create one
-    # This is just a placeholder and should be replaced with actual implementation
-    raise NotImplementedError('OpenSearch client retrieval not implemented')
-
-
-def get_software_stacks_index_name(context):
-    """
-    Get the name of the OpenSearch index for software stacks.
-    This function may need to be adjusted based on the actual implementation.
-    """
-    # This is a placeholder. The actual implementation will depend on how
-    # the index name is configured in the application.
-
-    # For example:
-    # return context.config.opensearch_software_stacks_index
-
-    # For now, we'll check if the context has configuration for this
-    if hasattr(context, 'config') and hasattr(
-        context.config, 'opensearch_software_stacks_index'
-    ):
-        return context.config.opensearch_software_stacks_index
-
-    # If not, we might need to use a default or look elsewhere
-    # This is just a placeholder and should be replaced with actual implementation
-    return 'software_stacks'
-
-
 # the pattern and publisher tables live in the sdk so the scheduler's compute image
 # builds resolve stock AMIs the same way; re-exported here for ideactl update-base-stacks
 from ideasdk.aws.stock_amis import (  # noqa: E402,F401
