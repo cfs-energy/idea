@@ -8,7 +8,8 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { vi } from 'vitest';
 import { ToastContainer } from 'react-toastify';
 import Uppy from '@uppy/core';
-import FileBrowser, { decodeFileContent, describeUploadFailure, describeUploadOutcome, encodeFileContent } from './file-browser';
+import FileBrowser, { describeUploadFailure, describeUploadOutcome } from './file-browser';
+import { decodeFileContent, encodeFileContent } from '../../common/utils';
 import { FILE_BROWSER_PAGE_SIZE } from './file-browser-table';
 import { initTestAppContext } from '../../test-support';
 

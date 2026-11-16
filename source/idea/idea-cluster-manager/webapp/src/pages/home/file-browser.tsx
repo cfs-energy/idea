@@ -17,7 +17,7 @@ import {FileBrowserClient} from '../../client'
 import {AppContext} from "../../common";
 import {ListFilesResult} from '../../client/data-model'
 import {LocalStorageService} from '../../service'
-import Utils from "../../common/utils";
+import Utils, {decodeFileContent, encodeFileContent} from "../../common/utils";
 import {registerAceWorkerUrls} from "../../common/ace-worker-urls";
 import {Alert, Box, Button, ButtonDropdown, CodeEditor, ColumnLayout, Container, Header, Link, Modal, SpaceBetween, StatusIndicator, Tabs, TextContent, Tiles, Table, Input, FormField} from "@cloudscape-design/components";
 import {ButtonDropdownProps} from "@cloudscape-design/components/button-dropdown";
@@ -313,15 +313,6 @@ export function describeDownloadFailure(what: string, error: {errorCode?: string
         return `You do not have access to ${what}. If you need it, ask its owner.`
     }
     return `Could not download ${what}: ${error?.message ?? 'unknown error'}`
-}
-
-// atob and btoa work on bytes as characters, so µ arrives as Âµ and → cannot be sent at all.
-export function decodeFileContent(base64: string): string {
-    return new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)))
-}
-
-export function encodeFileContent(content: string): string {
-    return btoa(Array.from(new TextEncoder().encode(content), (byte) => String.fromCharCode(byte)).join(''))
 }
 
 class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserState> {

@@ -42,7 +42,7 @@ import {
 import {ProjectsClient, SchedulerClient} from "../../client";
 import IdeaException from '../../common/exceptions'
 import {AppContext} from "../../common";
-import Utils from "../../common/utils";
+import Utils, {encodeFileContent} from "../../common/utils";
 import {TableProps} from "@cloudscape-design/components/table";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
 import {JobTemplate} from "../../service/job-templates-service";
@@ -263,7 +263,14 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             // ?state= is user-editable and template_data comes from stored job templates;
             // a corrupt value must not throw inside componentDidMount and blank the page
             try {
-                state = JSON.parse(atob(stateBase64))
+                const bytes = atob(stateBase64)
+                let json = bytes
+                try {
+                    json = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(bytes, (char) => char.charCodeAt(0)))
+                } catch {
+                    // templates saved before 26.11.2 hold é as one Latin-1 byte, which is not valid UTF-8
+                }
+                state = JSON.parse(json)
             } catch (error) {
                 console.error('failed to decode job submission state', error)
                 state = null
@@ -311,7 +318,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             applicationId: this.state.application?.application_id,
             params: this.state.jobSubmissionParameters
         }
-        return btoa(JSON.stringify(state))
+        return encodeFileContent(JSON.stringify(state))
     }
 
     updateUrlState = (stateBase64?: string) => {
@@ -1562,7 +1569,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                         project: this.state.selectedProject?.value,
                         dry_run: dryRun,
                         job_script_interpreter: this.state.application?.job_script_interpreter,
-                        job_script: btoa(jobScript),
+                        job_script: encodeFileContent(jobScript),
                         client_submission_id: this.state.clientSubmissionId
                     }).then(result => {
                         this.setState({

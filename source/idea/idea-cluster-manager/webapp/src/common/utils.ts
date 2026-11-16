@@ -1063,4 +1063,13 @@ class Utils {
     }
 }
 
+// atob and btoa work on bytes as characters, so µ arrives as Âµ and → cannot be sent at all.
+export function decodeFileContent(base64: string): string {
+    return new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)))
+}
+
+export function encodeFileContent(content: string): string {
+    return btoa(Array.from(new TextEncoder().encode(content), (byte) => String.fromCharCode(byte)).join(''))
+}
+
 export default Utils

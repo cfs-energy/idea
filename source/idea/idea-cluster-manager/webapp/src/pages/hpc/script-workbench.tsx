@@ -19,7 +19,7 @@ import { FileBrowserClient, ProjectsClient, SchedulerClient } from "../../client
 import { ProjectBedrockModels } from "../../components/common";
 import QueueReference from "./queue-reference";
 import { AppContext } from "../../common";
-import Utils from "../../common/utils";
+import Utils, {decodeFileContent, encodeFileContent} from "../../common/utils";
 import { IdeaSideNavigationProps } from "../../components/side-navigation";
 import IdeaAppLayout, { IdeaAppLayoutProps } from "../../components/app-layout";
 import { withRouter } from "../../navigation/navigation-utils";
@@ -227,7 +227,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                 const hadSuccessfulDryRun = this.isDryRunSuccessful();
                 const shouldMarkAsModified = hadSuccessfulDryRun || this.state.scriptModifiedSinceDryRun;
                 this.setState({
-                    jobScript: atob(result.content),
+                    jobScript: decodeFileContent(result.content),
                     isLoading: false,
                     scriptModifiedSinceDryRun: shouldMarkAsModified,
                     submitJobResult: hadSuccessfulDryRun ? undefined : this.state.submitJobResult
@@ -397,7 +397,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
 
     submitJob(dryRun: boolean = false) {
         return new Promise((resolve, reject) => {
-            const base64Script = btoa(this.state.jobScript);
+            const base64Script = encodeFileContent(this.state.jobScript);
             this.getSchedulerClient().submitJob({
                 job_script_interpreter: "pbs",
                 job_script: base64Script,

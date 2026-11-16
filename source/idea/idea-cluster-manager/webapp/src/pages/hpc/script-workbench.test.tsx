@@ -270,6 +270,22 @@ describe('script workbench', () => {
         expect(atob(submitJob.mock.calls[0][0].job_script!)).toBe(script);
     });
 
+    // the scheduler decodes job_script as UTF-8: a curly apostrophe made btoa throw and é went as one byte
+    it('sends a script with non-ASCII text as UTF-8', async () => {
+        const context = initTestAppContext();
+        const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue(DRY_RUN_ACCEPTED);
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+
+        const script = '#!/bin/bash\n#PBS -P default\n# Bob’s run, café → done\necho hi\n';
+        await setScript(user, script);
+        await user.click(screen.getByRole('button', {name: /Check script/i}));
+
+        expect(await screen.findByText('Script passed the check')).toBeInTheDocument();
+        const bytes = Uint8Array.from(atob(submitJob.mock.calls[0][0].job_script!), (char) => char.charCodeAt(0));
+        expect(new TextDecoder('utf-8', {fatal: true}).decode(bytes)).toBe(script);
+    });
+
     it('does not read a priority line as the project', async () => {
         const context = initTestAppContext();
         const submitJob = vi.spyOn(context.client().scheduler(), 'submitJob');
