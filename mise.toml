@@ -16,7 +16,7 @@ java = "temurin-21.0.13+9.0.LTS"
 "npm:typescript" = "5.9.3"
 "npm:json-schema-to-typescript" = "16.0.0"
 "pypi:identify" = "2.6.19"
-"pypi:texthooks" = "0.6.8"
+"pypi:texthooks" = "1.0.0"
 "pypi:yamllint" = "1.37.1"
 "pypi:j2lint" = "1.2.0"
 "pypi:pip-tools" = { version = "7.6.2", with = ["click==8.5.0"] }
