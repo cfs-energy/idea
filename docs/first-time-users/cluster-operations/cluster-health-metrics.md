@@ -129,7 +129,7 @@ A separate process in each task, once a minute, using only what the task can see
 
 | Metric | Tags | Meaning |
 | --- | --- | --- |
-| `idea.health.storage.mount_ok` | `mount` | The shared-storage mount answered, from a separate process killed at 15 seconds. |
+| `idea.health.storage.mount_ok` | `mount` | The shared-storage mount answered, from a separate process killed at 15 seconds. 0 too when the path is a local disk and not NFS or Lustre: a container host whose network mount failed at boot gives its tasks the empty directory under it. |
 | `idea.health.storage.mount_used_percent`, `mount_inodes_used_percent`, `mount_free_bytes`, `mount_read_seconds` | `mount` | Levels of each mount the cluster manager or scheduler has, every five minutes. On GovCloud this is the only record of EFS and Lustre levels. |
 | `idea.health.secret.age_days`, `secret.days_to_rotation` | `secret` | Secrets tagged for this cluster, every six hours, from their metadata. No value is read. A password waiting for its directory sync is not listed here. |
 | `idea.health.secret.password_sync_waiting` | | How many passwords have waited more than an hour for their directory sync, counted every six hours from the secrets that hold them. The sync deletes its secret within seconds, so above 0 means a password is stuck or its task was lost. A lost one is deleted at 9 days, by this collector on the read after its count: switching the collector off leaves that to the next password anyone sets. |

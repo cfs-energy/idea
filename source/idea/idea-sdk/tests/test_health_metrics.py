@@ -28,6 +28,7 @@ from ideasdk.metrics.health import (
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
+import pytest
 import subprocess
 import time
 
@@ -320,6 +321,35 @@ def test_home_probe_answers_for_a_live_directory_and_not_a_missing_one(tmp_path)
 def test_mount_probe_skips_a_path_that_is_not_a_mount(tmp_path):
     result = IsolatedProbe(python_probe(MOUNT_PROBE_SCRIPT, str(tmp_path)), 10).run()
     assert result.returncode == MOUNT_NOT_HERE
+
+
+MOUNTINFO = (
+    '24 1 259:1 / / rw,noatime shared:1 - xfs /dev/nvme0n1p1 rw\n'
+    '120 24 0:52 {root} /dev rw,relatime - {fstype} {source} rw,vers=4.1\n'
+)
+
+
+@pytest.mark.parametrize(
+    'root, fstype, source, returncode',
+    [
+        # the host's NFS mount, bound into the task
+        ('/', 'nfs4', 'svm-1.fs-1.example:/vol1', 0),
+        ('/', 'lustre', '10.0.0.5@tcp:/abc', 0),
+        # the host's mount failed at boot: the task gets the empty directory on its root disk
+        ('/data', 'xfs', '/dev/nvme0n1p1', 6),
+    ],
+)
+def test_mount_probe_fails_a_bind_of_a_local_disk(
+    tmp_path, root, fstype, source, returncode
+):
+    # /dev is a mount on every Linux and macOS host, so the real st_dev test passes it
+    mountinfo = tmp_path / 'mountinfo'
+    mountinfo.write_text(MOUNTINFO.format(root=root, fstype=fstype, source=source))
+    result = IsolatedProbe(
+        python_probe(MOUNT_PROBE_SCRIPT, '/dev', str(mountinfo)), 10
+    ).run()
+    assert result.returncode == returncode
+    assert (len(result.output.split()) == 4) == (returncode == 0)
 
 
 def test_mounts_report_levels_and_a_dead_one_reports_only_that(monkeypatch):
