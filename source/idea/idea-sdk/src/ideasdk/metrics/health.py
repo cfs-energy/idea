@@ -345,6 +345,9 @@ v = os.statvfs(path)
 print(v.f_blocks * v.f_frsize, v.f_bfree * v.f_frsize, v.f_files, v.f_ffree)
 """
 MOUNT_NOT_HERE = 5
+MOUNT_LOCAL_DISK = 6
+# ponytail: this only reports a missing boot mount. The host still starts tasks on its root disk
+# until ecs.service on container hosts gets RequiresMountsFor= for each storage directory.
 
 
 class StorageMountsCollector(HealthCollector):
@@ -384,7 +387,16 @@ class StorageMountsCollector(HealthCollector):
             if result.status == 'failed' and result.returncode == MOUNT_NOT_HERE:
                 continue
             answered = result.status == 'ok' and len(result.output.split()) == 4
-            metrics.level('storage.mount_ok', 1 if answered else 0, mount=name)
+            if answered:
+                reason = 'ok'
+            elif result.returncode == MOUNT_LOCAL_DISK:
+                reason = 'local_disk'
+            else:
+                # failed, timeout or stuck; ok with output that is not four numbers is failed
+                reason = 'failed' if result.status == 'ok' else result.status
+            metrics.level(
+                'storage.mount_ok', 1 if answered else 0, mount=name, reason=reason
+            )
             if not answered:
                 continue
             total, free, files, files_free = (int(v) for v in result.output.split())
