@@ -19,24 +19,12 @@ from ideadatamodel import (
     errorcodes,
     SocaKeyValue,
     SocaUserInputChoice,
-    SocaUserInputParamMetadata,
-    SocaUserInputSectionMetadata,
-    SocaUserInputModuleMetadata,
-    SocaInputParamSpec,
 )
 from ideasdk.aws import (
     AwsClientProvider,
     AWSUtil,
     AWSClientProviderOptions,
     AwsResources,
-)
-from ideasdk.user_input.framework import (
-    SocaUserInputArgs,
-    SocaUserInputParamRegistry,
-    SocaUserInputModule,
-    SocaUserInputSection,
-    SocaPromptRegistry,
-    SocaPrompt,
 )
 
 from typing import Any, Union, Optional, Dict, List
@@ -347,61 +335,3 @@ class SocaCliContext(SocaContext):
         if self._aws.are_credentials_expired():
             self.aws_init(self._options.aws_profile, self._options.aws_region)
         return self._aws
-
-    def ask(
-        self,
-        questions: List[SocaUserInputParamMetadata],
-        title: str = None,
-        description: str = None,
-        module_name: str = None,
-    ) -> Dict:
-        if Utils.is_empty(module_name):
-            module_name = 'default'
-
-        spec = SocaInputParamSpec(
-            params=questions,
-            modules=[
-                SocaUserInputModuleMetadata(
-                    name=module_name,
-                    title=title,
-                    description=description,
-                    sections=[
-                        SocaUserInputSectionMetadata(name='default', params=questions)
-                    ],
-                )
-            ],
-        )
-
-        param_registry = SocaUserInputParamRegistry(context=self, spec=spec)
-        args = SocaUserInputArgs(context=self, param_registry=param_registry)
-        prompt_registry = SocaPromptRegistry(context=self, param_spec=param_registry)
-
-        module_meta = param_registry.get_module(module=module_name)
-
-        section_prompts = []
-        params = param_registry.get_params(module=module_name)
-        for param_meta in params:
-            section_prompts.append(
-                SocaPrompt(
-                    context=self, args=args, param=param_meta, registry=prompt_registry
-                )
-            )
-
-        sections = []
-        for section_meta in module_meta.sections:
-            sections.append(
-                SocaUserInputSection(
-                    context=self, section=section_meta, prompts=section_prompts
-                )
-            )
-
-        user_input_module = SocaUserInputModule(
-            context=self,
-            module=module_meta,
-            sections=sections,
-            restart_errorcodes=[errorcodes.INSTALLER_MISSING_PERMISSIONS],
-        )
-
-        user_input_module.safe_ask()
-
-        return args.build()
