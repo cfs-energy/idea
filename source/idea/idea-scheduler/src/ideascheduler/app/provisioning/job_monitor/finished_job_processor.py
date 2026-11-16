@@ -448,9 +448,10 @@ class FinishedJobProcessor:
     prepares finished jobs for post processing
     """
 
-    # a lookup that fails or answers this slowly ends the index lookups for the pass
-    INDEX_LOOKUP_SLOW_SECS = 2.0
-    _index_lookups_open = True
+    # a pass stops asking the index after a lookup fails or once its lookups took this
+    # long in all: the default wait between passes
+    INDEX_LOOKUP_BUDGET_SECS = 30.0
+    _index_lookup_secs_left = INDEX_LOOKUP_BUDGET_SECS
 
     def __init__(self, context: ideascheduler.AppContext):
         self._context = context
@@ -487,26 +488,27 @@ class FinishedJobProcessor:
         folder still goes on the record. a failed lookup repeats them, which is better than
         losing the record.
 
-        it runs once for every finished job, so an index that is down or slow is asked
-        once a pass: the rest of the pass is recorded as after a failed lookup.
+        it runs once for every finished job, so an index that is down is asked once a
+        pass, and a slow one until the pass has spent INDEX_LOOKUP_BUDGET_SECS on it: the
+        rest of the pass is recorded as after a failed lookup.
         """
         stored = self._context.job_cache.get_completed_job_by_uid(job_uid)
         if stored is not None or Utils.is_empty(job_uid):
             return stored
-        if not self._index_lookups_open:
+        if self._index_lookup_secs_left <= 0:
             return None
         started = time.monotonic()
         try:
             indexed = self._context.document_store.get_job(job_uid=job_uid)
         except Exception as e:
-            self._index_lookups_open = False
+            self._index_lookup_secs_left = 0.0
             self._logger.warning(
                 f'(JobUid: {job_uid}) index lookup failed, '
                 f'not asked again this pass: {e}'
             )
             return None
-        if time.monotonic() - started > self.INDEX_LOOKUP_SLOW_SECS:
-            self._index_lookups_open = False
+        self._index_lookup_secs_left -= time.monotonic() - started
+        if self._index_lookup_secs_left <= 0:
             self._logger.warning('index lookups slow, not asked again this pass')
         if indexed is not None:
             self._context.job_cache.add_finished_job(indexed)
@@ -569,7 +571,7 @@ class FinishedJobProcessor:
         """
         if len(jobs) == 0:
             return []
-        self._index_lookups_open = True
+        self._index_lookup_secs_left = self.INDEX_LOOKUP_BUDGET_SECS
 
         # qstat -x answers for live jobs as well as finished ones
         try:
@@ -690,7 +692,7 @@ class FinishedJobProcessor:
         """
         metrics_batch = JobCompletionBatch(self._context)
         recorded_ids = []
-        self._index_lookups_open = True
+        self._index_lookup_secs_left = self.INDEX_LOOKUP_BUDGET_SECS
         for job in jobs:
             try:
                 # the same proof as for a job that ran: PBS says it is finished, or that

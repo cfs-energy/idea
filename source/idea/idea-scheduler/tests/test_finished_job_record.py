@@ -1592,23 +1592,16 @@ def test_a_failed_index_lookup_still_records_the_job(fake_context, pricing_spy):
     assert fake_context.job_notifications.completed == ['14906']
 
 
-@pytest.mark.parametrize('index_is', ['down', 'slow'])
-def test_an_index_that_is_down_or_slow_is_asked_once_a_cycle(
-    fake_context, pricing_spy, index_is
-):
+def test_an_index_that_is_down_is_asked_once_a_cycle(fake_context, pricing_spy):
     """
     the lookup is for a restore and runs for every finished job, one after another. An
     index that drops traffic costs about 40 s a lookup: 300 finished jobs held every row
-    running, and its nodes up, for hours. The first failed or slow answer ends the
-    lookups for the cycle; the jobs are recorded as after a failed lookup.
+    running, and its nodes up, for hours. The first failed answer ends the lookups for the
+    pass; the jobs are recorded as after a failed lookup.
     """
     store = fake_context.document_store
-    if index_is == 'down':
-        store.lookup_error = RuntimeError('index unreachable')
-    else:
-        store.lookup_secs = 0.2
+    store.lookup_error = RuntimeError('index unreachable')
     poller = build_poller(fake_context)
-    poller.INDEX_LOOKUP_SLOW_SECS = 0.1
     jobs = [
         make_job(job_id=str(n), provisioned=True, job_uid=f'uid-{n}') for n in range(5)
     ]
@@ -1623,6 +1616,40 @@ def test_an_index_that_is_down_or_slow_is_asked_once_a_cycle(
     assert len(fake_context.job_cache.finished_jobs) == 6
     # one lookup for each pass of the cycle, not one a job
     assert store.lookups == ['uid-0', 'uid-9']
+
+
+def test_a_slow_index_is_asked_until_the_pass_has_spent_its_lookup_time(
+    fake_context, pricing_spy
+):
+    """
+    one slow answer that finds the job is not a reason to stop: on the pass after a
+    restore every later restored job would repeat its completion email. Nor may a slow
+    index that always answers hold the pass for as many lookups as jobs finished. The
+    lookups stop once the pass has spent its lookup time, and start again with the next.
+    """
+    store = fake_context.document_store
+    store.lookup_secs = 0.3
+    for n in (0, 1):
+        store.jobs_by_uid[f'uid-{n}'] = make_job(
+            job_id=str(n), job_uid=f'uid-{n}', state=SocaJobState.FINISHED
+        )
+    poller = build_poller(fake_context)
+    poller.INDEX_LOOKUP_BUDGET_SECS = 0.5
+    jobs = [
+        make_job(job_id=str(n), provisioned=True, job_uid=f'uid-{n}') for n in range(5)
+    ]
+
+    ids = poller._process_finished_jobs(jobs)
+    unprovisioned = poller._process_unprovisioned_jobs(
+        [make_job(job_id='9', job_uid='uid-9')]
+    )
+
+    assert ids == [job.job_id for job in jobs]
+    assert unprovisioned == ['9']
+    assert store.lookups == ['uid-0', 'uid-1', 'uid-9']
+    # both restored jobs the slow index found are not processed again
+    assert fake_context.job_notifications.completed == ['2', '3', '4']
+    assert len(fake_context.job_cache.finished_jobs) == 6
 
 
 # ------------------------------------------- what a job launched, not what its queue says now
