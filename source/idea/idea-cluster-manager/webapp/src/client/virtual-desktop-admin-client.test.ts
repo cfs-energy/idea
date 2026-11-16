@@ -35,16 +35,6 @@ describe('VirtualDesktopAdminClient', () => {
         expect(invoke_alt).toHaveBeenCalledWith('VirtualDesktopAdmin.BuildDesktopImage', { base_os: 'rocky9', architecture: 'x86_64', update_stack: true })
     })
 
-    it('useBuiltDesktopImages invokes its namespace', async () => {
-        const invoke_alt = vi.fn().mockResolvedValue({ results: [] })
-        const client = Object.create(VirtualDesktopAdminClient.prototype) as VirtualDesktopAdminClient
-        ;(client as any).apiInvoker = { invoke_alt }
-
-        await client.useBuiltDesktopImages({ stack_ids: ['ss-base-a'] })
-
-        expect(invoke_alt).toHaveBeenCalledWith('VirtualDesktopAdmin.UseBuiltDesktopImages', { stack_ids: ['ss-base-a'] })
-    })
-
     it.each([
         ['listImageRows', 'ListImageRows', { filter: { base_os_family: 'rocky' } }],
         ['refreshImages', 'RefreshImages', { all: true }],

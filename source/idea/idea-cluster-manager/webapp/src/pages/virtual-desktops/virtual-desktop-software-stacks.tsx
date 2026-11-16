@@ -496,32 +496,6 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         required: true
                     }
                 },
-/*                {
-                    name: 'pool_enabled',
-                    title: 'Pool Enabled',
-                    description: 'Select to activate warming pool',
-                    data_type: 'boolean',
-                    param_type: 'confirm',
-                    default: false,
-                    validate: {
-                        required: true
-                    }
-                },
-                {
-                    name: 'pool_asg_name',
-                    title: 'Pool ASG',
-                    description: 'Pool ASG',
-                    data_type: 'str',
-                    param_type: 'text',
-                    validate: {
-                        // TODO Regex
-                        required: false
-                    },
-                    when: {
-                        param: 'pool_enabled',
-                        eq: true
-                    }
-                }*/
                 {
                     name: 'allowed_instance_types',
                     title: 'Allowed Instance Families/Types',

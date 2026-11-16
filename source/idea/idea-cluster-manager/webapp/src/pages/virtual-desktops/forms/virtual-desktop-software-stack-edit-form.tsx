@@ -389,32 +389,6 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         },
                         dynamic_choices: true
                     },
-/*                    {
-                        name: 'pool_enabled',
-                        title: 'Warming Pool Enabled',
-                        description: 'Enable Warming Pool Behavior',
-                        data_type: 'bool',
-                        param_type: 'checkbox',
-                        default: this.props.softwareStack?.pool_enabled,
-                        validate: {
-                            required: true
-                        }
-                    },
-                    {
-                        name: 'pool_asg_name',
-                        title: 'Warming Pool ASG Name',
-                        description: 'Warming Pool ASG Name',
-                        data_type: 'str',
-                        param_type: 'text',
-                        default: this.props.softwareStack?.pool_asg_name,
-                        validate: {
-                            required: true
-                        },
-                        when: {
-                            param: 'pool_enabled',
-                            eq: true
-                        }
-                    },*/
                 ]}/>
         )
     }

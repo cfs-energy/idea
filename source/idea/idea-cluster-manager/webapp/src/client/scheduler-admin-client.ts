@@ -29,12 +29,6 @@ import {
     GetQueueProfileResult,
     UpdateQueueProfileRequest,
     UpdateQueueProfileResult,
-    DeleteQueueProfileRequest,
-    DeleteQueueProfileResult,
-    CreateQueuesRequest,
-    CreateQueuesResult,
-    DeleteQueuesRequest,
-    DeleteQueuesResult,
     ListHpcApplicationsRequest,
     ListHpcApplicationsResult,
     CreateHpcApplicationRequest,
@@ -55,8 +49,6 @@ import {
     GetHpcLicenseResourceResult,
     UpdateHpcLicenseResourceRequest,
     UpdateHpcLicenseResourceResult,
-    DeleteHpcLicenseResourceRequest,
-    DeleteHpcLicenseResourceResult,
     ListHpcLicenseResourcesRequest,
     ListHpcLicenseResourcesResult,
     CheckHpcLicenseResourceAvailabilityRequest,
@@ -154,13 +146,6 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
         )
     }
 
-    deleteQueueProfile(req: DeleteQueueProfileRequest): Promise<DeleteQueueProfileResult> {
-        return this.apiInvoker.invoke_alt<DeleteQueueProfileRequest, DeleteQueueProfileResult>(
-            'SchedulerAdmin.DeleteQueueProfile',
-            req
-        )
-    }
-
     enableQueueProfile(req: EnableQueueProfileRequest): Promise<EnableQueueProfileResult> {
         return this.apiInvoker.invoke_alt<EnableQueueProfileRequest, EnableQueueProfileResult>(
             'SchedulerAdmin.EnableQueueProfile',
@@ -178,20 +163,6 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     listQueueProfiles(req: ListQueueProfilesRequest): Promise<ListQueueProfilesResult> {
         return this.apiInvoker.invoke_alt<ListQueueProfilesRequest, ListQueueProfilesResult>(
             'SchedulerAdmin.ListQueueProfiles',
-            req
-        )
-    }
-
-    createQueues(req: CreateQueuesRequest): Promise<CreateQueuesResult> {
-        return this.apiInvoker.invoke_alt<CreateQueuesRequest, CreateQueuesResult>(
-            'SchedulerAdmin.CreateQueues',
-            req
-        )
-    }
-
-    deleteQueues(req: DeleteQueuesRequest): Promise<DeleteQueuesResult> {
-        return this.apiInvoker.invoke_alt<DeleteQueuesRequest, DeleteQueuesResult>(
-            'SchedulerAdmin.DeleteQueues',
             req
         )
     }
@@ -255,13 +226,6 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     updateHpcLicenseResource(req: UpdateHpcLicenseResourceRequest): Promise<UpdateHpcLicenseResourceResult> {
         return this.apiInvoker.invoke_alt<UpdateHpcLicenseResourceRequest, UpdateHpcLicenseResourceResult>(
             'SchedulerAdmin.UpdateHpcLicenseResource',
-            req
-        )
-    }
-
-    deleteHpcLicenseResource(req: DeleteHpcLicenseResourceRequest): Promise<DeleteHpcLicenseResourceResult> {
-        return this.apiInvoker.invoke_alt<DeleteHpcLicenseResourceRequest, DeleteHpcLicenseResourceResult>(
-            'SchedulerAdmin.DeleteHpcLicenseResource',
             req
         )
     }

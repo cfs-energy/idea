@@ -28,8 +28,6 @@ import {
     ChangePasswordResult,
     ConfirmForgotPasswordRequest,
     ConfirmForgotPasswordResult,
-    SignOutRequest,
-    SignOutResult,
     GlobalSignOutRequest,
     GlobalSignOutResult,
     GetUserResult,
@@ -40,8 +38,6 @@ import {
     AddUserToGroupResult,
     RemoveUserFromGroupRequest,
     RemoveUserFromGroupResult,
-    GetGroupRequest,
-    GetGroupResult,
     GetModuleInfoRequest,
     GetModuleInfoResult,
     ListUsersInGroupRequest,
@@ -135,13 +131,6 @@ class AuthClient extends IdeaBaseClient<AuthClientProps>{
         )
     }
 
-    signOut(req: SignOutRequest): Promise<SignOutResult> {
-        return this.apiInvoker.invoke_alt<SignOutRequest, SignOutResult>(
-            'Auth.SignOut',
-            req
-        )
-    }
-
     globalSignOut(req: GlobalSignOutRequest): Promise<GlobalSignOutResult> {
         return this.apiInvoker.invoke_alt<GlobalSignOutRequest, GlobalSignOutResult>(
             'Auth.GlobalSignOut',
@@ -166,13 +155,6 @@ class AuthClient extends IdeaBaseClient<AuthClientProps>{
     getUserPrivateKey(request: GetUserPrivateKeyRequest): Promise<GetUserPrivateKeyResult> {
         return this.apiInvoker.invoke_alt<GetUserPrivateKeyRequest, GetUserPrivateKeyResult>(
             'Auth.GetUserPrivateKey',
-            request
-        )
-    }
-
-    getGroup(request: GetGroupRequest): Promise<GetGroupResult> {
-        return this.apiInvoker.invoke_alt<GetGroupRequest, GetGroupResult>(
-            'Auth.GetGroup',
             request
         )
     }
