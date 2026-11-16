@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from urllib.parse import quote
 
 import requests
+import urllib3
 
 from ideaclustermanager.app.metrics.storage_metrics_service import (
     FileContentsRefused,
@@ -83,6 +84,16 @@ def refused_this_path(error):
     status = getattr(error, 'status_code', None)
     return (
         isinstance(status, int) and 400 <= status < 500 and status not in FILER_ERRORS
+    )
+
+
+def timed_out(error):
+    """the client stopped waiting for ONTAP, before its answer began (ReadTimeout) or partway
+    through one (requests raises that as a ConnectionError around urllib3's ReadTimeoutError)."""
+    return isinstance(error, requests.exceptions.ReadTimeout) or (
+        isinstance(error, requests.exceptions.ConnectionError)
+        and bool(error.args)
+        and isinstance(error.args[0], urllib3.exceptions.ReadTimeoutError)
     )
 
 
@@ -436,7 +447,7 @@ class FolderAnalytics:
                     return MISSING
                 # ONTAP took the request and did not answer even by its own return_timeout. That
                 # is this folder unless the filer cannot answer a small read about the volume root.
-                if isinstance(e, requests.exceptions.ReadTimeout) and self._answers(
+                if timed_out(e) and self._answers(
                     client, status['uuid']
                 ):
                     self.logger.warning(

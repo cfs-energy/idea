@@ -994,6 +994,55 @@ def test_a_filer_that_stops_answering_still_backs_off_for_everyone(monkeypatch, 
     assert analytics.status(tree) == dict(state='failed')
 
 
+def test_a_folder_that_stalls_partway_through_its_answer_is_that_folder_only(
+    monkeypatch, tree
+):
+    # ONTAP may send its headers and then stall in the body: requests reports that as a
+    # ConnectionError, not a ReadTimeout. A real server and the real requests stack show which.
+    import socket
+    import requests
+    from ideaclustermanager.app.filesystem import ontap_analytics
+
+    real_get = requests.get
+    small = dict(records=[analytics_row('.', 1000, 40)])
+    analytics, sent = filer(monkeypatch, tree, {'%2Falice': (200, small)})
+    answer = requests.get
+    server = socket.socket()
+    server.bind(('127.0.0.1', 0))
+    server.listen(1)
+    stalled = threading.Event()
+
+    def serve():
+        connection, _ = server.accept()
+        connection.recv(65536)
+        connection.sendall(
+            b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n'
+            b'Transfer-Encoding: chunked\r\n\r\n9\r\n{"records\r\n'
+        )
+        stalled.wait(10)
+        connection.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    def get(url, **kwargs):
+        if '%2Fbig' in url:
+            sent.append(url)
+            port = server.getsockname()[1]
+            return real_get(f'http://127.0.0.1:{port}/', timeout=kwargs['timeout'])
+        return answer(url, **kwargs)
+
+    monkeypatch.setattr(requests, 'get', get)
+    monkeypatch.setattr(ontap_analytics, 'READ_TIMEOUT_SECONDS', 0.5)
+    try:
+        assert analytics.folder(tree + '/big') is None
+    finally:
+        stalled.set()
+        server.close()
+    assert analytics._failed_at == float('-inf')
+    assert analytics.status(tree)['state'] == 'on'
+    assert analytics.folder(tree)['self']['bytes'] == 1000
+
+
 def test_a_missing_folder_is_asked_about_once_a_minute(monkeypatch, tree):
     # nothing creates <mount>/shared, and every home view asks for it
     analytics, sent = filer(monkeypatch, tree, {'%2Fshared': (404, {})})
