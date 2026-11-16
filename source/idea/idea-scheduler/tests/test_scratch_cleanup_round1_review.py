@@ -107,16 +107,20 @@ def removal(day, **more):
     }
 
 
-def test_due_reads_stop_at_the_date_and_the_limit_oldest_first(real_store):
+def test_due_reads_stop_at_the_date_oldest_first(real_store):
     for day in range(1, 11):
         real_store.put_removal(f'k{day}', removal(day))
-    due = real_store.list_due('2026-12-05T12:00:00', limit=100)
+    now = '2026-12-01T00:00:00'
+    due = real_store.list_due('2026-12-05T12:00:00', now=now)
     assert [row['key'] for row in due] == ['k1', 'k2', 'k3', 'k4', 'k5']
-    assert [row['key'] for row in real_store.list_due('2026-12-31', limit=3)] == [
-        'k1',
-        'k2',
-        'k3',
-    ]
+
+
+def test_due_reads_pass_over_a_kept_record_only_when_asked(real_store):
+    real_store.put_removal('k1', removal(1, next_check_at='2026-12-02T00:00:00'))
+    real_store.put_removal('k2', removal(2))
+    now = '2026-12-01T00:00:00'
+    assert [row['key'] for row in real_store.list_due('2026-12-31', now=now)] == ['k2']
+    assert [row['key'] for row in real_store.list_due('2026-12-31')] == ['k1', 'k2']
 
 
 def test_a_new_date_replaces_the_old_row(real_store):

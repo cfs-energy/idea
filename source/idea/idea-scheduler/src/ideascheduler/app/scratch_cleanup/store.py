@@ -236,21 +236,27 @@ class ScratchCleanupStore:
             self.table.delete_item(Key={'pk': 'removal', 'sk': pointer['removal_sk']})
             self.table.delete_item(Key={'pk': 'removal-key', 'sk': key})
 
-    def list_due(self, before: str, limit: int) -> List[Dict]:
-        """the soonest removals up to a date, oldest first, never more than the limit"""
-        rows: List[Dict] = []
+    def list_due(self, before: str, now: Optional[str] = None) -> List[Dict]:
+        """
+        every removal up to a date, oldest first. A kept folder keeps its date and stays at the
+        front, as does one whose owner cannot be told, so nothing short of all of them will do.
+        With now, one kept and not to be asked about until later is passed over.
+        """
         arguments = {
             'KeyConditionExpression': Key('pk').eq('removal')
             & Key('sk').lt(f'{before}~'),
-            'Limit': limit,
         }
-        while len(rows) < limit:
+        if now is not None:
+            arguments['FilterExpression'] = Attr('next_check_at').not_exists() | Attr(
+                'next_check_at'
+            ).lte(now)
+        rows: List[Dict] = []
+        while True:
             result = self.table.query(**arguments)
             rows.extend(_plain(item) for item in result.get('Items', []))
             if 'LastEvaluatedKey' not in result:
-                break
+                return rows
             arguments['ExclusiveStartKey'] = result['LastEvaluatedKey']
-        return rows[:limit]
 
     def page_removals(
         self, limit: int, start_key: Optional[Dict] = None
@@ -278,6 +284,11 @@ class ScratchCleanupStore:
             if 'LastEvaluatedKey' not in result:
                 return total
             arguments['ExclusiveStartKey'] = result['LastEvaluatedKey']
+
+    # the cluster manager writes one when SES takes a digest: until then nobody was told
+    def delivered_at(self, receipt: str) -> Optional[str]:
+        row = self._get('delivered', receipt)
+        return row.get('at') if row else None
 
     # what an owner's next digest says went
     def list_removed(self) -> List[Dict]:

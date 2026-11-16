@@ -172,6 +172,9 @@ class SchedulerApp(ideasdk.app.SocaApp):
             context=self.context
         )
         self.context.job_cache = JobCache(context=self.context)
+        # before the finished-job thread starts: jobs that ended while the scheduler was down
+        # are recorded as soon as it does
+        self._create_scratch_cleanup()
         self.context.job_monitor = JobMonitor(context=self.context)
         self.context.node_monitor = NodeMonitor(context=self.context)
         self.context.job_submission_tracker = JobSubmissionTracker(context=self.context)
@@ -235,14 +238,24 @@ class SchedulerApp(ideasdk.app.SocaApp):
         if self.context.projects_client is not None:
             self.context.projects_client.destroy()
 
-    def _start_scratch_cleanup(self):
-        """reads the job state above, so it comes last; a failure leaves jobs running"""
+    def _create_scratch_cleanup(self):
+        """no reads here: a failure leaves jobs running"""
         from ideascheduler.app.scratch_cleanup import ScratchCleanupService
 
         try:
-            service = ScratchCleanupService(self.context)
+            self.context.scratch_cleanup = ScratchCleanupService(self.context)
+        except Exception as e:
+            self.context.logger('scheduler-app').error(
+                f'scratch cleanup could not be created: {e}'
+            )
+
+    def _start_scratch_cleanup(self):
+        """reads the job state above, so it comes last; a failure leaves jobs running"""
+        service = getattr(self.context, 'scratch_cleanup', None)
+        if service is None:
+            return
+        try:
             service.start()
-            self.context.scratch_cleanup = service
         except Exception as e:
             self.context.logger('scheduler-app').error(
                 f'scratch cleanup could not be started: {e}'

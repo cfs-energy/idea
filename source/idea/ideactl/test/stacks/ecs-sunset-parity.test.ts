@@ -56,6 +56,7 @@ export function templateDigest(template: any): string {
 // under MaxStartups.
 // The cluster manager application policy carries the two password secret statements.
 // The cluster manager tasks queue states its retention, the 4 days it already had by default.
+// The cluster manager can write scratch cleanup delivery receipts, the `delivered` rows only.
 // Keep hashing every field except the three validated random values above.
 test('all eleven ECS module templates match the reviewed v26.11.1 baseline', async () => {
   const baseline = JSON.parse(readFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), 'utf8'));

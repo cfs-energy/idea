@@ -40,6 +40,17 @@ Statement:
       - '{{ context.arns.ses_arn }}'
     Effect: Allow
 
+{% if context.config.is_module_enabled('scheduler') %}
+
+  # scratch cleanup counts a digest as told once SES takes it, from this receipt, and only that
+  - Action: dynamodb:PutItem
+    Resource: '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("scheduler") + ".scratch-cleanup") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:LeadingKeys: [delivered]
+    Effect: Allow
+{% endif %}
+
   - Action:
       - s3:GetObject
       - s3:ListBucket

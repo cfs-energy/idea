@@ -20,7 +20,7 @@ administrator's backfill of what existed before, and a backfill only adds to the
 an API caller sends reaches a path.
 """
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock, Thread
@@ -103,6 +103,9 @@ MAX_PREVIEW_ROWS = 20000
 SCAN_BUDGET_ENTRIES = 20_000_000
 LOOP_SECONDS = 60
 STORE_RETRY_SECONDS = 60
+# ponytail: jobs that finish before the table opens wait in memory, this many; a backfill finds the
+# rest, and a restart loses them. Persist them if a table ever stays shut that long.
+MAX_WAITING_JOBS = 20000
 # what the next digest will say went does not wait forever for an owner who cannot be told
 IDLE_RECORD_SECONDS = 400 * 24 * 3600
 # how often due removals are looked for, in the record and nowhere else
@@ -114,11 +117,14 @@ FIRST_NOTICE_BEFORE = timedelta(days=14)
 # and never goes sooner than these after each mention, whatever its date said
 AFTER_FIRST_NOTICE = timedelta(days=7)
 AFTER_FINAL_NOTICE = timedelta(days=3)
+# a digest SES has not taken by then told nobody: its folders wait for the next digest
+NOTICE_DELIVERY_WAIT = timedelta(days=1)
 DIGEST_PERIOD = timedelta(days=7)
 DIGEST_LARGEST_FOLDERS = 5
 SUMMARY_MAX_ITEMS = 20
-# ponytail: a check reads this many of the soonest records. Past that many kept folders, later
-# dates wait their turn; page through them if a cluster ever holds that many kept at once.
+# ponytail: a check reads every record in range and looks at this many of the soonest due ones,
+# alerting past it; one looked at that stays waits a day, so the rest get their turn. Holds every
+# record in range in memory, about a kilobyte each: stream them if a cluster keeps millions.
 MAX_RECORDS_PER_CHECK = 5000
 LEASE_RENEW_SECONDS = 60
 # a large folder takes a long time to remove; a job can start wanting it meanwhile
@@ -203,6 +209,10 @@ class Scan:
     # ignore how long ago jobs ended, to find folders for a later date
     any_age: bool = False
     seen_paths: set = field(default_factory=set)
+    # owner folders a read error left unknown: their records stay
+    unreadable: List[str] = field(default_factory=list)
+    # folders a digest would mention but whose owner cannot be told: they are not walked
+    held: List[Row] = field(default_factory=list)
 
     def keep(self, row: Row, reason: Reason):
         row.action = 'keep'
@@ -278,12 +288,14 @@ class ScratchCleanupService:
         self._previews: Dict[str, Preview] = {}
         self._usage: Dict[str, Dict] = {}
         self._store_ready = False
+        self._waiting: deque = deque()
         self._store_tried = -STORE_RETRY_SECONDS
         self._store_error: Optional[str] = None
         self._last_lease_renewal = 0.0
         self._holding_lease = False
         self._last_state_check = 0.0
         self._last_gate = 0.0
+        self._settings_alerted = -float(REMOVAL_CHECK_SECONDS)
         self._current_audit: Dict = {}
 
     # lifecycle
@@ -312,7 +324,7 @@ class ScratchCleanupService:
         except Exception as e:
             # a task started before its role allowed the table: nothing runs without an audit log
             self._store_error = f'The cleanup table could not be opened: {e}'
-            self._logger.error(self._store_error)
+            self._logger.error(f'{ALERT_MARKER} {self._store_error}')
         return self._store_ready
 
     def _loop(self):
@@ -323,10 +335,13 @@ class ScratchCleanupService:
             self._logger.error(f'could not settle earlier scratch cleanup runs: {e}')
         while True:
             try:
+                self._record_waiting()
                 self._refresh_usage()
                 self._run_if_due()
             except Exception as e:
-                self._logger.exception(f'scratch cleanup loop failed: {e}')
+                self._logger.exception(
+                    f'{ALERT_MARKER} scratch cleanup loop failed: {e}'
+                )
             if self._stop.wait(LOOP_SECONDS):
                 return
 
@@ -357,7 +372,16 @@ class ScratchCleanupService:
 
     def _run_if_due(self):
         limits = self.limits()
-        if not limits.enabled or limits.kill_switch or limits_problem(limits):
+        if not limits.enabled or limits.kill_switch:
+            return
+        problem = limits_problem(limits)
+        if problem:
+            # settings saved past the page's checks stop every check: once an hour, as they would run
+            if time.monotonic() - self._settings_alerted >= REMOVAL_CHECK_SECONDS:
+                self._settings_alerted = time.monotonic()
+                for file_system in self.file_systems():
+                    if file_system.name in limits.file_systems:
+                        self._alert(file_system, problem, 'settings')
             return
         if not self._ensure_store():
             return
@@ -397,8 +421,12 @@ class ScratchCleanupService:
             return
         if job.start_time is None or not is_finished(job):
             return
+        if not self.file_systems() or not self._arming_now():
+            return
         # the loop opens the table: this thread finishes jobs and must not wait for that
-        if not self._store_ready or not self.file_systems() or not self._arming_now():
+        if not self._store_ready:
+            if len(self._waiting) < MAX_WAITING_JOBS:
+                self._waiting.append(job)
             return
         key = job_key(job)
         ended = _iso(_as_utc(job.end_time))
@@ -430,6 +458,20 @@ class ScratchCleanupService:
                 'recorded_at': _iso(_now()),
             },
         )
+
+    def _record_waiting(self):
+        """the jobs that finished before the table opened, once it has"""
+        if not self._waiting or not self._ensure_store():
+            return
+        while self._waiting:
+            job = self._waiting.popleft()
+            try:
+                self.record_job_finished(job)
+            except Exception as e:
+                # as the finished-job thread does: one job that cannot be recorded holds up no other
+                self._logger.exception(
+                    f'{ALERT_MARKER} job {job.job_id} could not be recorded for scratch cleanup: {e}'
+                )
 
     def _retention(self, succeeded: bool) -> timedelta:
         config = self.context.config()
@@ -831,11 +873,19 @@ class ScratchCleanupService:
 
     # scanning the record
     def _scan_records(
-        self, file_system, limits, active, unfinished, records, any_age=False
+        self,
+        file_system,
+        limits,
+        active,
+        unfinished,
+        records,
+        any_age=False,
+        untold: frozenset = frozenset(),
     ) -> Tuple[Scan, List[str]]:
         """
         the folders these records name, each classified by the same rules as anything else.
-        Also returns the records with no folder here.
+        Also returns the records with no folder here. Folders of untold owners are set aside
+        before the walk, which has a budget: nothing would come of walking them.
         """
         scan = Scan(file_system=file_system, any_age=any_age)
         scan.capacity_bytes, scan.used_bytes, scan.used_percent = usage(
@@ -855,21 +905,33 @@ class ScratchCleanupService:
                     scan, root_fd, record, active, limits, now, owners
                 ):
                     absent.append(record['key'])
+            if untold:
+                scan.held = [row for row in scan.candidates if row.owner in untold]
+                scan.candidates = [
+                    row for row in scan.candidates if row.owner not in untold
+                ]
             self._inspect_candidates(scan, root_fd, root_device, unfinished, limits)
         finally:
             os.close(root_fd)
         return scan, absent
 
     def _scan_record(self, scan, root_fd, record, active, limits, now, owners) -> bool:
+        """whether the record names a folder here; one that could not be read may be there"""
         owner = record.get('owner') or ''
         if not is_owner_folder_name(owner):
             return False
+        owner_path = _join(scan.file_system.mount_dir, owner)
         try:
             owner_fd = open_child_dir(root_fd, owner)
-        except (OSError, NotASafeTarget):
+        except NotASafeTarget:
             return False
+        except OSError as e:
+            return _unreadable(scan, owner_path, owner, e, self._logger)
         try:
-            found = _named_folders(record, owner_fd)
+            try:
+                found = _named_folders(record, owner_fd)
+            except OSError as e:
+                return _unreadable(scan, owner_path, owner, e, self._logger)
             for name, is_dir in found:
                 path = _join(_join(scan.file_system.mount_dir, owner), name)
                 # a subjob's own record and its array's both name its folder
@@ -944,8 +1006,18 @@ class ScratchCleanupService:
     def _forget_absent(self, absent: List[str], records, limits, file_system):
         by_key = {record['key']: record for record in records}
         for key in absent:
-            if not self._on_another_file_system(by_key[key], limits, file_system):
+            record = by_key[key]
+            if not self._on_another_file_system(record, limits, file_system):
                 self.store.delete_removal(key)
+                continue
+            # the folders it told of here are gone: it waits on the other file system alone,
+            # and is not due here again in every check
+            targets = record.get('targets') or {}
+            here = [name for name in targets if name.startswith(f'{file_system.name}|')]
+            for name in here:
+                del targets[name]
+            if here:
+                self._put_removal(key, record)
 
     def _on_another_file_system(self, record, limits, file_system) -> bool:
         """
@@ -971,6 +1043,8 @@ class ScratchCleanupService:
                 try:
                     if _named_folders(record, owner_fd):
                         return True
+                except OSError:
+                    return True
                 finally:
                     os.close(owner_fd)
             finally:
@@ -1303,6 +1377,8 @@ class ScratchCleanupService:
 
         if limits.dry_run:
             due = [record for record in records if _reached_its_date(record, now)]
+            # a dry run keeps nothing, so it reports on the soonest each time
+            due = due[:MAX_RECORDS_PER_CHECK]
             scan, _ = self._scan_records(file_system, limits, active, unfinished, due)
             self._stop_if_blind(scan)
             run.update(
@@ -1317,14 +1393,26 @@ class ScratchCleanupService:
             return
 
         run['dry_run'] = False
-        self._digest_stage(file_system, records, limits, active, unfinished, run, now)
+        self._settle_notices(file_system, records, run, now)
+        self._digest_stage(file_system, limits, active, unfinished, run, now)
         due = [
             record
             for record in self._records_in_range(now)
             if _may_be_due(record, file_system.name, limits, now)
         ]
+        if len(due) > MAX_RECORDS_PER_CHECK:
+            # the soonest go first, and one checked that stays waits a day: the rest come up
+            if self.store.should_alert(f'backlog:{file_system.name}'):
+                self._alert(
+                    file_system,
+                    f'{len(due)} folders are due for a check. Each check looks at the '
+                    f'{MAX_RECORDS_PER_CHECK} soonest, so the rest wait for later checks.',
+                    run['run_id'],
+                )
+            due = due[:MAX_RECORDS_PER_CHECK]
         scan, absent = self._scan_records(file_system, limits, active, unfinished, due)
         self._stop_if_blind(scan)
+        self._alert_unreadable(file_system, scan, run)
         self._note_kept(scan, now)
         self._forget_absent(absent, due, limits, file_system)
         ready = sorted(
@@ -1377,10 +1465,51 @@ class ScratchCleanupService:
                 ready.append(row)
         return ready
 
-    def _records_in_range(self, now: datetime) -> List[Dict]:
-        """what could be mentioned or removed now: nothing further off has to be read"""
+    def _settle_notices(self, file_system, records, run, now):
+        """
+        a notice counts from when SES took its digest, which the cluster manager records. One
+        that SES never took told nobody, whatever went wrong on the way, so it is dropped.
+        """
+        delivered: Dict[str, Optional[str]] = {}
+        lost = set()
+        for record in records:
+            changed = False
+            for notices in (record.get('targets') or {}).values():
+                pending = notices.get('pending')
+                if not pending:
+                    continue
+                receipt = pending.get('receipt')
+                if receipt not in delivered:
+                    delivered[receipt] = (
+                        self.store.delivered_at(receipt) if receipt else None
+                    )
+                if delivered[receipt]:
+                    notices[pending['field']] = delivered[receipt]
+                elif _parse_time(pending['queued_at']) > now - NOTICE_DELIVERY_WAIT:
+                    continue
+                else:
+                    lost.add(record.get('owner') or '')
+                del notices['pending']
+                changed = True
+            if changed:
+                self._put_removal(record['key'], record)
+        if lost:
+            self._alert(
+                file_system,
+                f'No digest reached SES for: {", ".join(sorted(lost))}. Their folders were '
+                'not counted as told and wait for the next digest. Either SES refused them '
+                '(see the cluster manager log) or the cluster manager could not record that '
+                'SES took them, as before its role allows the cleanup table.',
+                run['run_id'],
+            )
+
+    def _records_in_range(self, now: datetime, kept_too: bool = False) -> List[Dict]:
+        """
+        what could be mentioned or removed now: nothing further off has to be read. A record
+        kept on one file system may still need a notice on another, so a digest reads them all.
+        """
         return self.store.list_due(
-            _iso(now + FIRST_NOTICE_BEFORE), MAX_RECORDS_PER_CHECK
+            _iso(now + FIRST_NOTICE_BEFORE), None if kept_too else _iso(now)
         )
 
     @staticmethod
@@ -1388,8 +1517,20 @@ class ScratchCleanupService:
         if scan.reason_counts[Reason.STATE_UNAVAILABLE.value]:
             raise RunStopped('Job records could not be read.')
 
+    def _alert_unreadable(self, file_system, scan: Scan, run: Dict):
+        """an owner folder a read error hid keeps its folders, and an administrator hears once a day"""
+        if scan.unreadable and self.store.should_alert(
+            f'unreadable:{file_system.name}'
+        ):
+            self._alert(
+                file_system,
+                f'Could not read {", ".join(scan.unreadable[:SUMMARY_MAX_ITEMS])}, so the '
+                'folders of their jobs stay until they can be read.',
+                run['run_id'],
+            )
+
     # digests
-    def _digest_stage(self, file_system, records, limits, active, unfinished, run, now):
+    def _digest_stage(self, file_system, limits, active, unfinished, run, now):
         """
         one email per owner, at most weekly on the set day, only when there is something new.
         A folder is in exactly two: a first mention once 14 days or less remain, and a final one
@@ -1404,7 +1545,10 @@ class ScratchCleanupService:
         ):
             return
         removed_by_owner = defaultdict(list)
+        records: List[Dict] = []
         try:
+            records = self._cancel_requeued(self._records_in_range(now, kept_too=True))
+            self._settle_notices(file_system, records, run, now)
             for row in self.store.list_removed():
                 removed_by_owner[row.get('owner')].append(row)
             self._send_digests(
@@ -1440,16 +1584,40 @@ class ScratchCleanupService:
             if _may_need_notice(record, file_system.name, now)
         ]
         scan, absent = self._scan_records(
-            file_system, limits, active, unfinished, wanted, any_age=True
+            file_system,
+            limits,
+            active,
+            unfinished,
+            wanted,
+            any_age=True,
+            untold=self._owners_who_cannot_be_told(wanted),
         )
         self._stop_if_blind(scan)
+        self._alert_unreadable(file_system, scan, run)
         self._forget_absent(absent, wanted, limits, file_system)
         for row in scan.rows:
-            if row.reason == Reason.ELIGIBLE and _digest_stage_of(
-                row.record, now, _notices_of(row)
+            notices = _notices_of(row)
+            # one still on its way to SES is not sent again: it counts once it gets there
+            if (
+                row.reason == Reason.ELIGIBLE
+                and not notices.get('pending')
+                and _digest_stage_of(row.record, now, notices)
             ):
                 row.action = 'notice'
         warning = self._hold_undeliverable_notices(scan, limits)
+        unchecked = scan.reason_counts[Reason.NOT_CHECKED.value]
+        if unchecked:
+            warning = ' '.join(
+                filter(
+                    None,
+                    [
+                        warning,
+                        f'{unchecked} folders were not checked for this digest: a check '
+                        f'reads at most {SCAN_BUDGET_ENTRIES} files and folders. They wait '
+                        'for a later digest.',
+                    ],
+                )
+            )
         by_owner = defaultdict(list)
         for row in scan.rows:
             if row.action == 'notice':
@@ -1483,6 +1651,7 @@ class ScratchCleanupService:
             for row in rows
         ]
         largest = sorted(rows, key=lambda row: row.size_bytes, reverse=True)
+        receipt = uuid.uuid4().hex
         if not self._can_receive_email(owner) or not self._notify(
             owner,
             TEMPLATE_DIGEST,
@@ -1504,6 +1673,7 @@ class ScratchCleanupService:
                 ),
                 'partly_removed_count': sum(1 for row in removed if row.get('partly')),
                 'page_url': self._page_url('/home/completed-jobs'),
+                'delivery_receipt': receipt,
             },
         ):
             return False
@@ -1513,9 +1683,10 @@ class ScratchCleanupService:
             )
             # on the shared record, so the next folder of the same job adds to this one
             _forget_replaced(row)
+            # queued is not told: it counts once SES has taken it (_settle_notices)
             row.record.setdefault('targets', {}).setdefault(_target_key(row), {})[
-                field
-            ] = _iso(now)
+                'pending'
+            ] = {'field': field, 'receipt': receipt, 'queued_at': _iso(now)}
             self._put_removal(row.record_key, row.record)
             run['noticed_folders'] += 1
         for row in removed:
@@ -1621,9 +1792,7 @@ class ScratchCleanupService:
         period nobody hears about. There is no setting to go without: removal pauses.
         """
         rows = [row for row in scan.rows if row.action == 'notice']
-        if not rows:
-            return None
-        if not self._cluster_can_send_email():
+        if rows and not self._cluster_can_send_email():
             for row in rows:
                 row.action = 'later'
                 row.remove_after = None
@@ -1631,22 +1800,23 @@ class ScratchCleanupService:
                 f'{len(rows)} folders wait because the cluster cannot send email, so their '
                 'owners cannot be told. Turn on email.'
             )
-        blocked = []
-        reachable: Dict[str, bool] = {}
-        for row in rows:
-            if row.owner not in reachable:
-                reachable[row.owner] = self._can_receive_email(row.owner)
-                if not reachable[row.owner]:
-                    blocked.append(row.owner)
-            if not reachable[row.owner]:
-                row.action = 'later'
-                row.remove_after = None
+        blocked = sorted({row.owner for row in scan.held})
         if blocked:
             return (
                 'Some folders wait because their owner has no enabled account with an email '
-                f'address: {", ".join(sorted(blocked))}.'
+                f'address: {", ".join(blocked)}.'
             )
         return None
+
+    def _owners_who_cannot_be_told(self, records: List[Dict]) -> frozenset:
+        """asked before the scan, so their folders are not walked for a digest they cannot get"""
+        if not self._cluster_can_send_email():
+            # nobody can be told, and _hold_undeliverable_notices says so for every folder
+            return frozenset()
+        owners = {record.get('owner') or '' for record in records}
+        return frozenset(
+            owner for owner in owners if not self._can_receive_email(owner)
+        )
 
     def _cluster_can_send_email(self) -> bool:
         config = self.context.config()
@@ -2349,10 +2519,20 @@ def _named_folders(record: Dict, owner_fd: int) -> List[Tuple[str, bool]]:
     for name in names:
         try:
             info = os.stat(name, dir_fd=owner_fd, follow_symlinks=False)
-        except OSError:
+        except FileNotFoundError:
             continue
         found.append((name, stat.S_ISDIR(info.st_mode)))
     return found
+
+
+def _unreadable(scan: Scan, path: str, owner: str, error: OSError, logger) -> bool:
+    """a read that failed says nothing about whether the folder is there: it stays, asked again"""
+    if path not in scan.seen_paths:
+        scan.seen_paths.add(path)
+        scan.unreadable.append(path)
+        logger.warning(f'{path} could not be read, so its folders stay: {error}')
+        scan.keep(Row(scan.file_system.name, path, None, owner), Reason.UNREADABLE)
+    return True
 
 
 def _partly_removed(row: Row, unfinished: Dict[Tuple[int, int], Dict]) -> bool:
