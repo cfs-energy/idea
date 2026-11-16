@@ -21,6 +21,7 @@ from ideadatamodel import (
     SocaJobEstimatedBOMCost,
     SocaJobExecutionHost,
     SocaJobParams,
+    SocaJobProvisioningOptions,
     SocaJobState,
 )
 from ideascheduler.app.aws import PricingHelper
@@ -209,6 +210,10 @@ def fake_context():
         scheduler=FakeScheduler(),
         metrics=FakeMetrics(),
         job_notifications=FakeJobNotifications(),
+        instance_cache=SocaAnyPayload(
+            is_ready=lambda: True, list_compute_instances=lambda **_: []
+        ),
+        aws_util=Mock(),
     )
 
 
@@ -801,6 +806,54 @@ def test_user_deleted_job_after_provisioning_is_not_priced(fake_context, pricing
     assert job.get_total_time_seconds() != WALLTIME_SECONDS
     assert pricing_spy.calls == []
     assert job.estimated_bom_cost is None
+
+
+def test_a_job_deleted_before_any_instance_came_up_deletes_its_own_stack_once(
+    fake_context, pricing_spy
+):
+    """
+    a spot job with no capacity is deleted while queued: its stack has no instance for the
+    housekeeper to find and no queued job for the provisioning sweep, so it stayed up for
+    good. A stack shared by a job group, and one with an instance, are not this path's.
+    """
+
+    def queued(job_id, terminate_when_idle=0):
+        return make_job(
+            job_id=job_id,
+            provisioned=True,
+            cluster_name='idea-dev',
+            queue_type='test',
+            params=SocaJobParams(
+                walltime=WALLTIME, nodes=1, cpus=1, spot=True, stack_id='arn:stack'
+            ),
+            provisioning_options=SocaJobProvisioningOptions(
+                keep_forever=False, terminate_when_idle=terminate_when_idle
+            ),
+        )
+
+    unused, array, batch, launched = (
+        queued('480'),
+        queued('481[]'),
+        queued('482', terminate_when_idle=3),
+        queued('483'),
+    )
+    fake_context.instance_cache.list_compute_instances = lambda job_id, states: (
+        [Mock()] if job_id == '483' and 'running' in states else []
+    )
+
+    build_poller(fake_context)._process_finished_jobs([unused, array, batch, launched])
+
+    delete_stack = fake_context.aws_util().cloudformation_delete_stack
+    deleted = [call.kwargs['stack_name'] for call in delete_stack.mock_calls]
+    assert deleted == ['idea-dev-test-spot-480', 'idea-dev-test-spot-481-array']
+    assert array.get_compute_stack() == deleted[1]
+    # each job is still recorded
+    assert [job.job_id for job in fake_context.job_cache.finished_jobs] == [
+        '480',
+        '481[]',
+        '482',
+        '483',
+    ]
 
 
 # ------------------------------------------------ what a job that never ran is worth
