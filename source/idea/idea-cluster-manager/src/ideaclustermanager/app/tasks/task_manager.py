@@ -545,9 +545,10 @@ class TaskManager(SocaService):
         if Utils.is_empty(message_group_id):
             message_group_id = task_name
         # Tasks in different lanes of one entity do not wait on each other's retries.
+        # '#' is in no username, so no user's group is another user's lane.
         lane = getattr(self.tasks.get(task_name), 'lane', None)
         if lane and not behind_entity_tasks:
-            message_group_id = f'{message_group_id}.{lane}'
+            message_group_id = f'{message_group_id}#{lane}'
         if Utils.is_empty(message_dedupe_id):
             message_dedupe_id = Utils.sha256(Utils.to_json(task_message))
 
