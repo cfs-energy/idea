@@ -397,8 +397,7 @@ export class ClusterConfigDb {
 
   private async write(command: UpdateCommand | DeleteCommand): Promise<void> {
     try {
-      if (command instanceof UpdateCommand) await this.doc.send(command);
-      else await this.doc.send(command);
+      await this.doc.send(command);
     } catch (error) {
       if ((error as { name?: string })?.name === 'AccessDeniedException') {
         throw new ClusterSettingsWriteDenied(String(command.input.TableName), error);
