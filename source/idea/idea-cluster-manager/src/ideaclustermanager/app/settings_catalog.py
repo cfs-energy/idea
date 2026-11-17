@@ -5813,7 +5813,7 @@ _DESCRIPTIONS = {
     'scheduler.scratch_cleanup.failed_retention_days': 'After any other job that ran ends, including one killed or deleted.',
     'scheduler.scratch_cleanup.digest_weekday': 'The day owners get their digest and administrators their summary, in UTC. 0 is Monday, 6 is Sunday.',
     'scheduler.scratch_cleanup.enabled': 'Off by default. Gives the numbered scratch folder of each job that finishes a removal date. Jobs that finish while this is off stay until you run a backfill.',
-    'scheduler.scratch_cleanup.dry_run': 'Reports what would be removed and removes nothing. Turn off only after reviewing a preview on the Scratch cleanup page.',
+    'scheduler.scratch_cleanup.dry_run': 'Records dates and reports what would be removed. Removes nothing and tells nobody. Turn off after reviewing the results on the Scratch cleanup page.',
     'scheduler.scratch_cleanup.kill_switch': 'Stops every removal within a couple of seconds, including one in progress.',
     'scheduler.scratch_cleanup.file_systems': 'Shared storage names to clean, for example scratch. Nothing is cleaned while this is empty.',
     'scheduler.scratch_cleanup.max_run_bytes_percent': 'A run that would remove more than this share of capacity stops and alerts instead.',
