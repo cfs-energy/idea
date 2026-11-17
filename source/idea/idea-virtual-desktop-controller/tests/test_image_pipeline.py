@@ -1993,7 +1993,7 @@ def overdue_row(h, **kwargs):
 
 
 @pytest.mark.parametrize(
-    'status', ['resolving', 'building', 'checking', 'test_launching', 'promoting']
+    'status', ['resolving', 'building', 'checking', 'test_launching']
 )
 def test_a_row_past_the_limit_with_no_worker_fails_instead_of_resuming(status):
     h = Harness()
@@ -2241,6 +2241,31 @@ def test_the_time_limit_removes_the_test_launch_and_the_next_cleanup_the_candida
     assert h.ec2.terminated == ['i-builder']
     assert h.ec2.deregistered == ['ami-candidate']
     assert h.ec2.deleted_snapshots == ['snap-ami-candidate']
+
+
+def test_the_time_limit_leaves_a_validated_image_being_promoted():
+    h = Harness([base_stack('rocky9', ami='ami-current')])
+    for image_id in ('ami-candidate', 'ami-current'):
+        h.ec2.add_image(image_id)
+    h.records.put(
+        ImageBuildRecord(
+            kind='desktop',
+            base_os='rocky9',
+            architecture='x86_64',
+            status='promoting',
+            image_id='ami-candidate',
+            current_image_id='ami-current',
+            validated_on=T0 - timedelta(minutes=5),
+            release=VERSION,
+            host='a-dead-controller',
+            started_on=T0 - timedelta(hours=3),
+            attempt_started_on=T0 - timedelta(hours=3),
+        )
+    )
+    h.pipeline._enforce_time_limit(T0)
+    h.pipeline.cleanup()
+    assert h.row().status == 'promoting'
+    assert h.ec2.deregistered == []
 
 
 def test_a_discard_that_fails_does_not_stop_the_row_failing():

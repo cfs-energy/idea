@@ -1102,7 +1102,7 @@ def test_a_row_with_no_clock_gets_one_and_no_failure():
 
 
 @pytest.mark.parametrize(
-    'status', ['resolving', 'building', 'checking', 'test_launching', 'promoting']
+    'status', ['resolving', 'building', 'checking', 'test_launching']
 )
 def test_a_row_past_the_limit_fails_instead_of_resuming(status):
     svc = service()
@@ -1116,6 +1116,13 @@ def test_a_row_past_the_limit_fails_instead_of_resuming(status):
     assert stored.checks[-1].name == 'time_limit' and stored.checks[-1].ok is False
     svc.tick(LIMIT_NOW)
     svc._start_row.assert_not_called()
+
+
+def test_a_validated_image_being_promoted_is_not_failed_by_the_limit():
+    svc = service()
+    svc.records.put(stuck_row(status='promoting'))
+    svc._enforce_time_limit(LIMIT_NOW)
+    assert svc.records.get('rocky9', 'x86_64').status == 'promoting'
 
 
 def test_a_hung_worker_past_the_limit_gives_its_slot_back():

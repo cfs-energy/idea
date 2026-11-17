@@ -42,6 +42,10 @@ class Host:
         self.stub('aws', log)
         self.stub('systemctl', 'echo SubState=exited\necho Job=\n')
         self.stub('reboot', log)
+        # a truncated image lists until its end is missing
+        lister = 'grep -qx truncated "$1" || exit 0\necho "cpio: premature end of archive" >&2\nexit 2'
+        self.stub('lsinitrd', lister)
+        self.stub('lsinitramfs', lister)
         if rpm:
             self.stub('uname', f'echo {RUNNING}')
             self.stub(
@@ -426,3 +430,68 @@ def test_every_bootstrap_that_can_end_or_reboot_is_listed_above():
         'virtual-desktop-host-linux/setup.sh.jinja2',
         '_templates/linux/mount_shared_storage.jinja2',
     }
+
+
+# a truncated image is not a bootable one
+
+
+def test_a_truncated_initramfs_is_rebuilt(tmp_path):
+    host = Host(tmp_path, dracut_builds=True)
+    (host.boot / f'initramfs-{BROKEN}.img').write_text('truncated\n')
+    _, calls = host.run('complete_bootstrap_reboot\n')
+    assert 'dracut -f' in calls and rebooted(calls)
+    assert host.default.read_text().strip().endswith(BROKEN)
+
+
+def test_a_truncated_initrd_is_rebuilt_in_place(tmp_path):
+    host = Host(tmp_path, rpm=False)
+    host.write_grub(UBUNTU_RUNNING)
+    (host.boot / f'initrd.img-{UBUNTU_RUNNING}').write_text('truncated\n')
+    code, calls = host.run('complete_bootstrap_reboot\n')
+    assert 'update-initramfs -u -k ' + UBUNTU_RUNNING in calls
+    assert code == 1 and not rebooted(calls)
+
+
+def test_a_lister_that_cannot_run_leaves_the_size_check(tmp_path):
+    host = Host(tmp_path)
+    host.select(RUNNING)
+    host.stub('lsinitrd', 'exit 127')
+    (host.boot / f'initramfs-{RUNNING}.img').write_text('truncated\n')
+    _, calls = host.run('complete_bootstrap_reboot\n')
+    assert rebooted(calls) and 'dracut' not in calls
+
+
+def test_a_builder_reports_a_kernel_that_would_not_boot_through_its_checks(tmp_path):
+    # the backend reads only the checks' tag: a bootstrap tag left the bake waiting out its limit
+    host = Host(tmp_path, grubby_can_select=False)
+    state = tmp_path / 'state'
+    package = tmp_path / 'package'
+    (package / 'common').mkdir(parents=True)
+    (package / 'common/bootstrap_common.sh').write_text(
+        COMMON.read_text()
+        .replace('/var/lib/idea', str(state))
+        .replace('BOOTSTRAP_DIR="/root/bootstrap"', f'BOOTSTRAP_DIR="{host.bootstrap}"')
+    )
+    (package / 'compute-node-ami-builder').mkdir()
+    (package / 'compute-node-ami-builder/image_checks.sh').write_text(
+        f'echo "checks $*" >> {host.calls}\n'
+    )
+    script = package / 'compute-node-ami-builder/post_reboot.sh'
+    script.write_text(
+        'source "$(dirname "$0")/../common/bootstrap_common.sh"\n'
+        'ensure_boot_kernel_bootable\necho reached\n'
+    )
+    result = subprocess.run(
+        ['bash', str(script)],
+        env=dict(
+            PATH=f'{host.bin}:{os.environ["PATH"]}',
+            BOOTSTRAP_DIR=str(host.bootstrap),
+            KERNEL_BOOT_DIR=str(host.boot),
+        ),
+        capture_output=True,
+        text=True,
+    )
+    calls = host.calls.read_text()
+    assert result.returncode == 1 and 'reached' not in result.stdout
+    assert 'checks' in calls, calls
+    assert (state / 'bake-failed').read_text().startswith('kernel-boot-mismatch: ')
