@@ -530,10 +530,39 @@ def fake_analytics(monkeypatch, tree, volumes=None, pages=None, calls=None):
     config.get_string.side_effect = lambda key, default=None: {
         'shared-storage.data.mount_dir': root,
         'shared-storage.data.fsx_netapp_ontap.volume.volume_path': '/profiles/Users',
+        'shared-storage.data.fsx_netapp_ontap.svm.management_dns': FakeTarget.endpoint,
     }.get(key, default)
+    config.get_config.side_effect = lambda key, default=None: dict(data={})
     collector = Mock(targets=lambda: [FakeTarget()])
     context = Mock(config=lambda: config)
     return ontap_analytics.FolderAnalytics(context, collector)
+
+
+def test_an_attachment_without_its_own_login_uses_one_on_its_svm(monkeypatch, tree):
+    # the login sits on the shared attachment; home, on the same SVM, carries none
+    analytics = fake_analytics(monkeypatch, tree)
+    root = os.path.dirname(os.path.dirname(tree))
+    config = analytics.context.config()
+    settings = {
+        'shared-storage.data.mount_dir': '/data',
+        'shared-storage.data.fsx_netapp_ontap.volume.volume_path': '/data',
+        'shared-storage.data.fsx_netapp_ontap.svm.management_dns': FakeTarget.endpoint,
+        'shared-storage.home.mount_dir': root,
+        'shared-storage.home.fsx_netapp_ontap.volume.volume_path': '/profiles/Users',
+        'shared-storage.home.fsx_netapp_ontap.svm.management_dns': 'https://SVM.fs-1.fsx.example.invalid/',
+        'shared-storage.other.mount_dir': '/other',
+        'shared-storage.other.fsx_netapp_ontap.volume.volume_path': '/profiles',
+        'shared-storage.other.fsx_netapp_ontap.svm.management_dns': 'svm.fs-2.fsx.example.invalid',
+    }
+    config.get_string.side_effect = lambda key, default=None: settings.get(key, default)
+    config.get_config.side_effect = lambda key, default=None: dict(
+        data={}, home={}, other={}
+    )
+    status = analytics.status(tree)
+    assert status['state'] == 'on' and status['target'].name == 'data'
+    assert status['relative'] == f'Users{tree[len(root) :]}'
+    # an SVM no attachment carries a login for stays unavailable
+    assert analytics.status('/other/x') == dict(state='unavailable')
 
 
 def test_analytics_rolls_up_without_touching_files_and_is_cached(monkeypatch, tree):
