@@ -1185,9 +1185,7 @@ class NodeHouseKeepingSession:
                         f'stack created but job did not start within {timeout_secs}s',
                         launched,
                     )
-                stack_created = (
-                    provisioning_util.stack.creation_time if young else None
-                )
+                stack_created = provisioning_util.stack.creation_time if young else None
                 if (
                     stack_created is not None
                     and (now - stack_created).total_seconds()
