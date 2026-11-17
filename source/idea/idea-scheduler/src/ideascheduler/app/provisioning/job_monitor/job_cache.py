@@ -198,6 +198,7 @@ class JobsDB:
         self._stop = Event()
         self._prune_thread: Optional[Thread] = None
         self._prune_cursor = 0
+        self._prune_retained_run = 0
         self._backup_thread: Optional[Thread] = None
         self._backup_connection: Optional[sqlite3.Connection] = None
         self._backed_up_version = None
@@ -335,10 +336,14 @@ class JobsDB:
         """
         Delete finished jobs older than the retention, within a fixed budget per pass. The age
         lives in job_data, so rows are walked by id, and each pass goes on from where the last
-        stopped, wrapping at the end: a stretch with nothing to delete, such as rows with no
-        readable time, which are kept, cannot hide what lies behind it. The cursor is only this
-        process's: a restart walks from the start. The database lock is held only for each delete, and
-        a pass that deletes nothing writes nothing, so it does not trigger a backup.
+        stopped: a stretch of rows with no readable time, which are kept, cannot hide what lies
+        behind it. Rows are mostly written as jobs finish, so the walk goes back to the start
+        after one pass budget of rows inside the retention in a row, or at the end: walking
+        every retained row each lap let expired rows wait for months at scale. A shorter run of
+        retained rows, such as a reused job id rewritten in place, is stepped over. The cursor
+        is only this process's: a restart walks from the start. The database lock is held only
+        for each delete, and a pass that deletes nothing writes nothing, so it does not
+        trigger a backup.
         :return: the number of rows deleted
         """
         retention_days = self._context.config().get_int(
@@ -361,7 +366,7 @@ class JobsDB:
                     (self._prune_cursor, self.PRUNE_BATCH_SIZE),
                 ).fetchall()
                 if not rows:
-                    self._prune_cursor = 0
+                    self._prune_cursor = self._prune_retained_run = 0
                     break
                 self._prune_cursor = rows[-1][0]
                 expired = []
@@ -369,14 +374,22 @@ class JobsDB:
                     finished = self._finished_job_time(job_data)
                     if finished is not None and finished < cutoff:
                         expired.append((row_id,))
-                if not expired:
-                    continue
-                with self._db_lock:
-                    conn.executemany(
-                        f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
-                    )
-                    conn.commit()
-                deleted += len(expired)
+                        self._prune_retained_run = 0
+                    elif finished is not None:
+                        self._prune_retained_run += 1
+                if expired:
+                    with self._db_lock:
+                        conn.executemany(
+                            f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
+                        )
+                        conn.commit()
+                    deleted += len(expired)
+                if (
+                    self._prune_retained_run
+                    >= self.PRUNE_BATCH_SIZE * self.PRUNE_MAX_BATCHES
+                ):
+                    self._prune_cursor = self._prune_retained_run = 0
+                    break
         finally:
             conn.close()
         if deleted > 0:

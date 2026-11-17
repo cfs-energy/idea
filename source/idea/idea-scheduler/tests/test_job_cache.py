@@ -823,11 +823,58 @@ def test_one_pass_stays_inside_its_budget(job_cache, monkeypatch):
     monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
     monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
     for index in range(5):
-        add_finished_job_aged(job_cache, f'recent-{index}', 1)
+        add_finished_job_undated(job_cache, f'undated-{index}')
     db.prune_finished_jobs()
     assert db._prune_cursor == 2
     db.prune_finished_jobs()
     assert db._prune_cursor == 4
+
+
+def test_the_walk_starts_over_after_a_pass_budget_of_retained_rows(
+    job_cache, monkeypatch
+):
+    """
+    once the walk has read a pass budget of retained rows in a row it starts from the
+    oldest row again, instead of walking every retained row before it looks there again
+    """
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 1)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 3)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    add_finished_job_aged(job_cache, 'old', 500)
+    for index in range(8):
+        add_finished_job_aged(job_cache, f'recent-{index}', 1)
+
+    assert db.prune_finished_jobs() == 1
+    assert db.prune_finished_jobs() == 0
+    assert db._prune_cursor == 0
+
+    # the oldest retained row expires (its record rewritten in place, as a day passing
+    # would): the next pass reaches it in its first batch
+    add_finished_job_aged(job_cache, 'recent-0', 500)
+    assert db.prune_finished_jobs() == 1
+    assert 'recent-0' not in finished_job_ids(job_cache)
+
+
+def test_a_stray_retained_row_does_not_stop_the_walk(job_cache, monkeypatch):
+    """
+    a retained row at a low id, as a reused job id rewritten in place leaves, is stepped
+    over: the expired rows behind it are still reached
+    """
+    db = job_cache._jobs_db
+    monkeypatch.setattr(db, 'PRUNE_BATCH_SIZE', 1)
+    monkeypatch.setattr(db, 'PRUNE_MAX_BATCHES', 2)
+    monkeypatch.setattr(db, 'PRUNE_BATCH_PAUSE_SECONDS', 0)
+    add_finished_job_aged(job_cache, 'old-1', 500)
+    add_finished_job_aged(job_cache, 'stray', 1)
+    add_finished_job_aged(job_cache, 'old-2', 500)
+    add_finished_job_aged(job_cache, 'old-3', 500)
+    for index in range(3):
+        add_finished_job_aged(job_cache, f'recent-{index}', 1)
+
+    assert [db.prune_finished_jobs() for _ in range(3)] == [1, 2, 0]
+
+    assert finished_job_ids(job_cache) == {'stray', 'recent-0', 'recent-1', 'recent-2'}
 
 
 def test_prune_does_not_hold_the_database_lock_between_batches(job_cache, monkeypatch):
