@@ -290,7 +290,9 @@ def removal_rows(world):
     'setting', [{'enabled': False}, {'kill_switch': True}], ids=['off', 'kill switch']
 )
 def test_nothing_is_written_unless_armed(world, setting):
-    world.config.update({f'scheduler.scratch_cleanup.{k}': v for k, v in setting.items()})
+    world.config.update(
+        {f'scheduler.scratch_cleanup.{k}': v for k, v in setting.items()}
+    )
     world.service.record_job_finished(finished_job())
     assert not world.store.removals
 
