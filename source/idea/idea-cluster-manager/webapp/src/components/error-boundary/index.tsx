@@ -32,6 +32,12 @@ class IdeaErrorBoundary extends Component<IdeaErrorBoundaryProps, IdeaErrorBound
         reportClientError('render_crash', {error});
     }
 
+    // a plain #/ link does nothing when already at #/, and the outer boundary has no resetKey to clear it
+    goHome = () => {
+        window.location.hash = '#/';
+        this.setState({crashed: false});
+    };
+
     render() {
         if (!this.state.crashed) {
             return this.props.children;
@@ -42,7 +48,7 @@ class IdeaErrorBoundary extends Component<IdeaErrorBoundaryProps, IdeaErrorBound
                     <Box>Nothing you saved is affected. Reload the page to try again. If it keeps happening, tell your administrator which page it was.</Box>
                     <SpaceBetween direction="horizontal" size="xs">
                         <Button variant="primary" onClick={() => window.location.reload()}>Reload page</Button>
-                        <Button href="#/">Go to home</Button>
+                        <Button onClick={this.goHome}>Go to home</Button>
                     </SpaceBetween>
                 </SpaceBetween>
             </Alert>
