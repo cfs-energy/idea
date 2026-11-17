@@ -807,6 +807,17 @@ class BastionMetrics(unittest.TestCase):
             {('maxstartups', 'remote'): 10},
         )
 
+    def test_drops_are_counted_whatever_case_sshd_spells_them_in(self):
+        # 9.9 writes "past Maxstartups" and "MaxStartups throttling"; a release may respell either
+        self.assertEqual(
+            self.tally_of(
+                'drop connection #50 from [131.0.2.9]:5 on [10.0.0.1]:22 past MaxStartups',
+                'MAXSTARTUPS logging rate-limited: additional 9 connections dropped',
+                'timeout before authentication for 131.0.2.9 port 5',
+            ),
+            {('maxstartups', 'remote'): 10, ('auth_timeout', 'remote'): 1},
+        )
+
     def test_10_5_checks_refusals_it_does_not_name_are_not_remote(self):
         # a local 10.5 run, slots held, five checks, a minute, two checks: sshd named six of the
         # seven refusals and counted the seventh in the summary that the next drop set off
