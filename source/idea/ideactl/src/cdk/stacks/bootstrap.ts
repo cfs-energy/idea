@@ -80,8 +80,8 @@ export function elbAccountIdForRegion(region: string, path: string = regionElbAc
 }
 
 /**
- * The scheduler uploads a copy of each day's logs daily and keeps ten days on disk. Expiring the copy
- * sooner than twice that would only have the next sync upload what is still on disk again.
+ * The scheduler uploads each day's changed logs and keeps ten days on disk (twenty after a failed
+ * upload). The bucket copy must outlive the local copy; an expired file is not uploaded again.
  */
 export const SCHEDULER_LOG_ARCHIVE_MIN_RETENTION_DAYS = 30;
 
