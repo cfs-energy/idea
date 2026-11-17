@@ -335,9 +335,11 @@ class JobsDB:
         """
         Delete finished jobs older than the retention, within a fixed budget per pass. The age
         lives in job_data, so rows are walked by id, and each pass goes on from where the last
-        stopped, wrapping at the end: a stretch with nothing to delete, such as rows with no
-        readable time, which are kept, cannot hide what lies behind it. The cursor is only this
-        process's: a restart walks from the start. The database lock is held only for each delete, and
+        stopped: a stretch of rows with no readable time, which are kept, cannot hide what lies
+        behind it. Rows are written as jobs finish, so the walk goes back to the start at the
+        first row inside the retention, or at the end: walking every retained row each lap let
+        expired rows wait for months at scale. A row written late is pruned once the rows
+        before it are. The cursor is only this process's: a restart walks from the start. The database lock is held only for each delete, and
         a pass that deletes nothing writes nothing, so it does not trigger a backup.
         :return: the number of rows deleted
         """
@@ -365,18 +367,23 @@ class JobsDB:
                     break
                 self._prune_cursor = rows[-1][0]
                 expired = []
+                retained = False
                 for row_id, job_data in rows:
                     finished = self._finished_job_time(job_data)
                     if finished is not None and finished < cutoff:
                         expired.append((row_id,))
-                if not expired:
-                    continue
-                with self._db_lock:
-                    conn.executemany(
-                        f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
-                    )
-                    conn.commit()
-                deleted += len(expired)
+                    elif finished is not None:
+                        retained = True
+                if expired:
+                    with self._db_lock:
+                        conn.executemany(
+                            f'DELETE FROM {FINISHED_JOBS_TABLE} WHERE id = ?', expired
+                        )
+                        conn.commit()
+                    deleted += len(expired)
+                if retained:
+                    self._prune_cursor = 0
+                    break
         finally:
             conn.close()
         if deleted > 0:
