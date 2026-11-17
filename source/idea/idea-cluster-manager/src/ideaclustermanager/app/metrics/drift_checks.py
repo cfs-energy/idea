@@ -26,7 +26,6 @@ from ideasdk.utils import Utils
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
-import hashlib
 import threading
 import time
 import yaml
@@ -118,12 +117,6 @@ class DriftValue:
     setting: str
     value: str
     scope: str = 'cluster'
-
-
-def digest(values: Iterable[str]) -> str:
-    """order and duplicates do not matter, and the addresses stay out of the tag."""
-    joined = '\n'.join(sorted({str(value).strip() for value in values}))
-    return hashlib.sha256(joined.encode()).hexdigest()[:12]
 
 
 def read_reason(error: Exception) -> str:
@@ -523,7 +516,7 @@ class DriftChecks:
         results.append(
             DriftResult('ssh_client_ip', OK, detail=f'{len(addresses)} entries')
         )
-        values.append(DriftValue('ssh_client_ip', 'digest', digest(addresses)))
+        # the count only: a hash of a list this short is reversed by trying every address
         values.append(DriftValue('ssh_client_ip', 'count', str(len(set(addresses)))))
         if Utils.is_not_empty(config.get_config('bastion-host', default=None)):
             results.append(DriftResult('bastion_settings', OK))

@@ -19,7 +19,6 @@ from ideaclustermanager.app.metrics.drift_checks import (
     DriftChecks,
     DriftCheckCollector,
     analytics_value,
-    digest,
 )
 from ideaclustermanager.app.metrics import storage_metrics_service
 from ideaclustermanager.app.metrics.storage_metrics_service import (
@@ -678,7 +677,7 @@ def test_a_directory_that_cannot_be_reached_is_unknown_not_a_rejected_secret(
     assert states(checks.run_once())['ad_agent_bind'] == UNKNOWN
 
 
-def test_empty_ssh_client_ip_is_the_default_not_drift_and_the_value_is_a_digest(
+def test_empty_ssh_client_ip_is_the_default_not_drift_and_only_the_count_is_published(
     monkeypatch,
 ):
     # values.yml ships it empty, which keeps the cluster's own prefix lists
@@ -703,15 +702,7 @@ def test_empty_ssh_client_ip_is_the_default_not_drift_and_the_value_is_a_digest(
     ok = harness(monkeypatch)
     ok.run_once()
     tags = [t for _, t in ok.published['value'] if t['check'] == 'ssh_client_ip']
-    assert {t['setting']: t['current'] for t in tags}['digest'] == digest(
-        ['1.2.3.4/32']
-    )
-    assert '1.2.3.4' not in str(tags)
-
-
-def test_digest_ignores_order_and_duplicates():
-    assert digest(['b', 'a', 'a']) == digest(['a', 'b'])
-    assert digest(['a']) != digest(['b'])
+    assert {t['setting']: t['current'] for t in tags} == {'count': '1'}
 
 
 def test_a_setting_values_yml_would_overwrite_is_stale(monkeypatch):
