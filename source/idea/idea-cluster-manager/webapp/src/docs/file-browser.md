@@ -8,7 +8,7 @@ A folder or several files download as one zip, built on the server and removed o
 
 ### Storage and deletion
 
-Open **My costs > Storage** for home usage, top-level folder sizes, **Last changed**, **Oldest file**, and total bytes unchanged for 90 days. Ages use modification times, not last-read times. Measurements are cached for one hour and exclude symbolic links.
+Open **My costs > Storage > Storage usage: folders and quotas** for folder sizes largest first, file counts, **Last changed**, and bytes unchanged for 90 days (3 months or more when the file system's analytics is on). Select a folder to look inside it. Ages use modification times, not last-read times. Scan results are kept for one hour and analytics results for 15 minutes; **Refresh** reads them again. Symbolic links are not followed.
 
 Your storage quota shows used space, files, and limit. If your quota can't be read, My costs says so.
 

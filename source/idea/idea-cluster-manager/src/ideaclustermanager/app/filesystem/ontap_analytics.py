@@ -19,8 +19,10 @@ import requests
 import urllib3
 
 from ideaclustermanager.app.metrics.storage_metrics_service import (
+    PROVIDER,
     FileContentsRefused,
     OntapClient,
+    svm_host,
 )
 
 VOLUMES = (
@@ -223,13 +225,22 @@ class FolderAnalytics:
         )
 
     def _attachment(self, path):
-        """the attachment whose mount holds this path, and the path from the SVM's namespace root."""
+        """the login for the attachment whose mount holds this path, and the path from the SVM's
+        namespace root. One login reads a whole SVM, so the attachment need not carry its own:
+        a login on another attachment on its SVM serves, as it does for cost collection."""
         config = self.context.config()
-        for target in self.collector.targets():
-            prefix = f'shared-storage.{target.name}'
+        targets = self.collector.targets()
+        logins = {svm_host(target.endpoint): target for target in targets}
+        for name in config.get_config('shared-storage', default={}) or {}:
+            prefix = f'shared-storage.{name}'
             mount = (config.get_string(f'{prefix}.mount_dir') or '').rstrip('/')
-            export = config.get_string(f'{prefix}.fsx_netapp_ontap.volume.volume_path')
+            export = config.get_string(f'{prefix}.{PROVIDER}.volume.volume_path')
             if mount and export and (path == mount or path.startswith(f'{mount}/')):
+                own = next((target for target in targets if target.name == name), None)
+                endpoint = config.get_string(f'{prefix}.{PROVIDER}.svm.management_dns')
+                target = own or logins.get(svm_host(endpoint))
+                if target is None:
+                    return None, None
                 return target, f'{export.rstrip("/")}{path[len(mount) :]}'
         return None, None
 
