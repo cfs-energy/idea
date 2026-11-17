@@ -56,7 +56,6 @@ from ideascheduler.app.scratch_cleanup.filesystem import (
 )
 from ideascheduler.app.scratch_cleanup.holds import (
     DEFAULT_HOLDS_DIR,
-    HOLD_TTL_SECONDS,  # noqa: F401
     MAX_HOLD_SECONDS,
     HoldLapsed,
     HoldUnavailable,
@@ -172,10 +171,6 @@ class Row:
     removed_entries: int = 0
     record_key: Optional[str] = None
     record: Optional[Dict] = None
-
-    @property
-    def identity(self) -> Tuple[str, int, int]:
-        return self.path, self.device, self.inode
 
     def as_listing(self) -> Dict:
         return {

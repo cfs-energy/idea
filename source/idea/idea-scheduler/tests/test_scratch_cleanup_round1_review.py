@@ -13,6 +13,7 @@ from moto import mock_aws
 
 from ideadatamodel import exceptions
 from ideascheduler.app.scratch_cleanup import filesystem as fs_module
+from ideascheduler.app.scratch_cleanup.holds import HOLD_TTL_SECONDS
 from ideascheduler.app.scratch_cleanup import service as module
 from ideascheduler.app.scratch_cleanup.store import ScratchCleanupStore
 import test_scratch_cleanup_service as base
@@ -283,7 +284,7 @@ def _hook_function():
         'os': os,
         'time': time,
         'SCRATCH_HOLDS_DIR': '/run/idea-scratch-holds',
-        'SCRATCH_HOLD_TTL_SECS': module.HOLD_TTL_SECONDS,
+        'SCRATCH_HOLD_TTL_SECS': HOLD_TTL_SECONDS,
     }
     exec(compile(ast.Module([node], []), HOOK, 'exec'), scope)
     return scope['scratch_hold_reason']
@@ -374,7 +375,7 @@ def test_a_hold_nobody_can_read_lets_jobs_start_only_after_expiry(world):
     with open(os.path.join(holds.directory, 'alice'), 'w') as garbled:
         garbled.write('not a time')
     assert reason(owner_event(), holds.directory), 'unreadable is held, until it is old'
-    old = time.time() - module.HOLD_TTL_SECONDS - 1
+    old = time.time() - HOLD_TTL_SECONDS - 1
     os.utime(os.path.join(holds.directory, 'alice'), (old, old))
     assert reason(owner_event(), holds.directory) is None
 
