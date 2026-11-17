@@ -8,7 +8,7 @@ not - and that neither of them resets a job on a stack status they cannot interp
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Event
 from typing import Dict, List, Optional
 from unittest.mock import Mock
@@ -1047,9 +1047,6 @@ def sweep(context):
 @pytest.mark.parametrize(
     'stack_age_secs, node_age_secs, node_timeout_secs',
     [
-        # the gap the hold used to need: the stack past its timeout, its node 12 s younger
-        # and not yet past the node-down one
-        (1805, 1793, 1800),
         # the usual sweep: both are past. Job 433's first two stacks, 1814 s and 1845 s
         (1826, 1814, 1800),
         (1857, 1845, 1800),
@@ -1104,9 +1101,7 @@ def test_one_sweep_holds_a_job_whose_nodes_never_joined_whichever_rule_sees_it_f
     assert scheduler.deleted_nodes == ['10.0.0.1']
 
 
-@pytest.mark.parametrize(
-    'stack_age_secs, node_age_secs', [(1805, 1793), (1826, 1814), (1857, 1845)]
-)
+@pytest.mark.parametrize('stack_age_secs, node_age_secs', [(1826, 1814), (1857, 1845)])
 def test_the_hold_does_not_depend_on_which_half_of_the_sweep_runs_first(
     context, job_cache, monkeypatch, stack_age_secs, node_age_secs
 ):
@@ -1131,6 +1126,96 @@ def test_the_hold_does_not_depend_on_which_half_of_the_sweep_runs_first(
     assert scheduler.reset_jobs == [job.job_id]
     assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
     assert job_cache.get_job(job.job_id).reason_class == 'stack_timeout'
+
+
+def age_world(aws: SweepAws, secs: int):
+    """the clock moves on: the stack and its instance are both secs older"""
+    aws.stack['CreationTime'] = aws.stack['CreationTime'] - timedelta(seconds=secs)
+    aws.launch_time = aws.launch_time.shift(seconds=-secs)
+
+
+def test_the_stack_timeout_waits_for_its_node_to_reach_the_node_timeout_before_holding(
+    context, job_cache, monkeypatch
+):
+    """
+    the stack past its timeout, its node 12 s younger and not yet past the node-down one.
+    The node has not had the time any node gets to join, so the stack is left, and the
+    sweep after it is old enough holds the job and counts the attempt, once.
+    """
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 1805, 1793)
+
+    sweep(context)
+
+    assert aws.deleted_stacks == []
+    assert scheduler.held_jobs == []
+    assert scheduler.reset_jobs == []
+
+    age_world(aws, 20)
+    sweep(context)
+
+    assert aws.deleted_stacks == [job.get_compute_stack()]
+    assert aws.terminated == []
+    assert scheduler.held_jobs == [job.job_id]
+    assert scheduler.reset_jobs == [job.job_id]
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    assert job_cache.get_job(job.job_id).reason_class == 'stack_timeout'
+
+
+@pytest.mark.parametrize('registered', [True, False])
+def test_late_spot_capacity_is_left_to_join_and_then_retried_not_held(
+    context, job_cache, monkeypatch, registered
+):
+    """
+    a two-node spot job whose fleet got its instance at minute 28 of the 30-minute stack
+    timeout: down in PBS, or not yet registered. It was held with "Check instance_ami"
+    as a node that never joined. The stack is left while the node joins; it joins and
+    sits free, the fleet is still short, and the job is retried as a capacity wait.
+    """
+    from ideadatamodel import SocaComputeNodeState
+
+    job = mock_job(provisioned=True)
+    job.params.nodes = 2
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 1826, 120, job)
+    node = scheduler.node
+    if not registered:
+        scheduler.no_node()
+
+    sweep(context)
+
+    assert aws.deleted_stacks == []
+    assert aws.terminated == []
+    assert scheduler.held_jobs == []
+    assert scheduler.reset_jobs == []
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 0
+
+    scheduler.node = node
+    node.states = [SocaComputeNodeState.FREE]
+    age_world(aws, 180)
+    sweep(context)
+
+    assert aws.deleted_stacks == [job.get_compute_stack()]
+    assert scheduler.held_jobs == []
+    assert scheduler.reset_jobs == [job.job_id]
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    waiting = job_cache.get_job(job.job_id)
+    assert waiting.state != SocaJobState.HELD
+    assert waiting.reason_class == 'capacity'
+    assert 'instance_ami' not in waiting.error_message
+
+
+def test_a_late_instance_does_not_keep_its_stack_past_both_timeouts(
+    context, job_cache, monkeypatch
+):
+    """a fleet that keeps replacing its instance: past both timeouts it is a capacity wait"""
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 3605, 120)
+
+    sweep(context)
+
+    assert aws.deleted_stacks == [job.get_compute_stack()]
+    assert scheduler.held_jobs == []
+    assert scheduler.reset_jobs == [job.job_id]
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    assert job_cache.get_job(job.job_id).reason_class == 'capacity'
 
 
 def test_one_sweep_retries_a_job_whose_stack_never_launched_an_instance(

@@ -1123,8 +1123,8 @@ class NodeHouseKeepingSession:
         return None
 
     def _timed_out_stack_reason(
-        self, job: SocaJob, timeout_secs: int
-    ) -> Tuple[str, str, int]:
+        self, job: SocaJob, timeout_secs: int, provisioning_util: JobProvisioningUtil
+    ) -> Tuple[Optional[str], str, int]:
         """
         why a stack past the timeout has not started its job, and how many of its instances
         are up. The hold is for a node that launched and never joined the scheduler (a bad
@@ -1132,9 +1132,21 @@ class NodeHouseKeepingSession:
         once its request is active, with fewer instances than it asked for while spot
         capacity is short, or none, and the ones it got join and sit free: a capacity wait,
         retried and counted.
+
+        An instance younger than node_unavailable_timeout_seconds has not yet had the time
+        any node gets to join, so it is no evidence: late spot capacity is one. While the
+        stack is less than that past its own timeout, the reason class is None and the
+        stack is left for a later sweep, by when the instance has joined or is old enough
+        to hold for. After that it is a capacity wait, so a fleet that keeps replacing
+        instances cannot keep its stack waiting.
         """
         launched = 0
         try:
+            node_timeout_secs = self.config.get_int(
+                'scheduler.job_provisioning.node_unavailable_timeout_seconds',
+                default=1800,
+            )
+            now = arrow.utcnow()
             stack_id = job.params.stack_id if job.params is not None else None
             instances = [
                 instance
@@ -1154,14 +1166,34 @@ class NodeHouseKeepingSession:
                     for node in self._context.scheduler.list_nodes()
                     if node.instance_id
                 }
+                young = False
                 for instance in instances:
                     node = nodes.get(instance.instance_id)
-                    if node is None or node.has_state(*UNAVAILABLE_NODE_STATES):
-                        return (
-                            REASON_CLASS_STACK_TIMEOUT,
-                            f'stack created but job did not start within {timeout_secs}s',
-                            launched,
-                        )
+                    if node is not None and not node.has_state(
+                        *UNAVAILABLE_NODE_STATES
+                    ):
+                        continue
+                    if (
+                        instance.launch_time is not None
+                        and (now - instance.launch_time).total_seconds()
+                        < node_timeout_secs
+                    ):
+                        young = True
+                        continue
+                    return (
+                        REASON_CLASS_STACK_TIMEOUT,
+                        f'stack created but job did not start within {timeout_secs}s',
+                        launched,
+                    )
+                stack_created = (
+                    provisioning_util.stack.creation_time if young else None
+                )
+                if (
+                    stack_created is not None
+                    and (now - stack_created).total_seconds()
+                    < timeout_secs + node_timeout_secs
+                ):
+                    return None, 'an instance launched late is still joining', launched
         except Exception as e:
             # no evidence of a node that never joined: retried and counted, not held
             self._logger.warning(
@@ -1523,7 +1555,7 @@ class NodeHouseKeepingSession:
                         delete_stack = True
                         stack_failure_reason_class, stack_failure_message, launched = (
                             self._timed_out_stack_reason(
-                                job, stack_provisioning_timeout_secs
+                                job, stack_provisioning_timeout_secs, provisioning_util
                             )
                         )
 
@@ -1539,7 +1571,7 @@ class NodeHouseKeepingSession:
                     delete_stack = True
                     stack_failure_reason_class, stack_failure_message, launched = (
                         self._timed_out_stack_reason(
-                            job, stack_provisioning_timeout_secs
+                            job, stack_provisioning_timeout_secs, provisioning_util
                         )
                     )
 
@@ -1550,6 +1582,12 @@ class NodeHouseKeepingSession:
                     delete_stack = True
                     stack_failure_reason_class = REASON_CLASS_CLOUDFORMATION
                     stack_failure_message = f'ProvisioningStatus: {provisioning_status}'
+
+                if delete_stack and stack_failure_reason_class is None:
+                    self._logger.info(
+                        f'{job.log_tag} {stack_failure_message}; stack left in place'
+                    )
+                    continue
 
                 if delete_stack and not self._not_started(job):
                     continue
