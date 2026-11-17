@@ -1037,16 +1037,8 @@ class DailyCostsCalculator(MonthlyCostsService):
                     shares[fs_id] = [
                         MyCostsStorageShare.model_validate(r) for r in rows
                     ]
-                disks = lines.get('desktop_disks')
-                if (
-                    not saved.get('observed')
-                    and disks
-                    and disks.status == 'partial'
-                    and not (disks.coverage and disks.coverage.missing_prices)
-                ):
-                    # Stored before 26.11.2, when every disk day was partial whatever
-                    # was observed. How much was observed is no longer known.
-                    disks.status = 'ready'
+                # A disk day stored before 26.11.2 stays partial: it was priced on its
+                # observed share, which is not kept, until the month close recomputes it.
                 self.stored_days += 1
                 self.settled.add(date)
             else:
@@ -1062,7 +1054,6 @@ class DailyCostsCalculator(MonthlyCostsService):
                     stored[key][date] = dict(
                         start=cursor.isoformat(),
                         closed=closed,
-                        observed=True,
                         lines={
                             facet: line.model_dump(mode='json')
                             for facet, line in lines.items()

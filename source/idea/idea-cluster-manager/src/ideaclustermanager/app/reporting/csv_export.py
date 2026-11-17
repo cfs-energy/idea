@@ -35,14 +35,14 @@ def completeness(coverage) -> str:
     never have (idle stops, a project's desktop spend), so those would make every row
     partial."""
     total = (coverage or {}).get('spend_total') or {}
+    if total.get('status') == 'unavailable':
+        return 'Unavailable'
     # facets and users can miss different days, and only their counts are kept: the
     # largest is a floor, the true number is their union
     missing = total.get('missing_days') or 0
     if missing:
         return f'Partial: missing at least {missing} day{"" if missing == 1 else "s"}'
-    return (
-        'Partial' if total.get('status') in ('partial', 'unavailable') else 'Complete'
-    )
+    return 'Partial' if total.get('status') == 'partial' else 'Complete'
 
 
 def safe_text(value):

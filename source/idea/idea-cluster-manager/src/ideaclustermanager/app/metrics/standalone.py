@@ -150,10 +150,12 @@ def run_backfill(context, environ):
         days = int(environ[BACKFILL_DAYS])
     except ValueError:
         raise ValueError(f'{BACKFILL_DAYS} must be a whole number of days')
+    apply = environ.get(BACKFILL_APPLY, '').strip().lower()
+    if apply not in ('', 'true', 'false'):
+        # a mistyped "apply" must not finish as a dry run that looks like success
+        raise ValueError(f'{BACKFILL_APPLY} must be true or false')
     backfill = CostMetricsBackfill(context)
-    backfill.start_request(
-        dict(days=days, dry_run=environ.get(BACKFILL_APPLY, '').lower() != 'true')
-    )
+    backfill.start_request(dict(days=days, dry_run=apply != 'true'))
     backfill.thread.join()
     status = backfill.status()
     context.logger().info(f'cost metrics backfill finished: {status}')

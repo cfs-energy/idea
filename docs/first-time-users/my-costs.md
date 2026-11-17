@@ -26,7 +26,7 @@ Memory efficiency compares peak memory use with requested memory. Without a memo
 
 Job hints can suggest fewer requested cores when less than half were used. For multi-node jobs, the suggestion is per node. Low memory use without a memory request can suggest a smaller instance type.
 
-**Desktops** shows desktop spend, estimated hours, daily costs, and costs by project. **Storage** shows shared-storage spend and measured storage use. Open **Storage usage: folders and quotas** on the Storage tab for folder sizes, file ages, bytes unchanged for 90 days, and available quotas. This view loads only when opened.
+**Desktops** shows desktop spend, estimated hours, daily costs, and costs by project. **Storage** shows shared-storage spend and measured storage use. Open **Storage usage: folders and quotas** on the Storage tab for your storage quota, folder sizes largest first with file counts, **Last changed**, and bytes unchanged for 90 days (3 months or more when analytics is on). Select a folder to look inside it. **Refresh** rereads storage and shows its progress. This view loads only when opened.
 
 | Tile | Calculation |
 | --- | --- |

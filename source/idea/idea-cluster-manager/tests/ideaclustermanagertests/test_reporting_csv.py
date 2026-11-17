@@ -68,7 +68,7 @@ def test_csv_all_rows_same_order_as_pages_and_totals():
             break
     assert collected == [row['Name'] for row in content]
     assert content[0]['Currency'] == 'USD'
-    assert content[0]['Complete'].startswith(('Complete', 'Partial'))
+    assert content[0]['Complete'].startswith(('Complete', 'Partial', 'Unavailable'))
 
 
 @pytest.mark.parametrize(
@@ -223,6 +223,11 @@ def test_csv_says_in_words_whether_a_row_is_complete():
     assert (
         completeness({'spend_total': {'status': 'partial', 'missing_days': 1}})
         == 'Partial: missing at least 1 day'
+    )
+    # a total with no amount is not partly counted
+    assert (
+        completeness({'spend_total': {'status': 'unavailable', 'missing_days': 30}})
+        == 'Unavailable'
     )
     # metrics a row can never have do not make its money partial
     assert (
