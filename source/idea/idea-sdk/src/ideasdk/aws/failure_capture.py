@@ -121,7 +121,9 @@ REDACTIONS: Tuple[Tuple['re.Pattern', str], ...] = (
             # for it from every character of a long run is what made this slow. a quote left
             # open runs to the end of its line, where an over-long line was cut
             r'(?im)((?:password|passwd|pwd|passphrase|secret|token|api[_-]?key'
-            r'|access[_-]?key|private[_-]?key|credential)[\w.-]*["\']?\s*[:= ]\s*)'
+            # sssd's ldap_default_authtok, nslcd's bindpw, slapd's rootpw and other *_pw keys
+            r'|access[_-]?key|private[_-]?key|credential|authtok|bindpw|rootpw|_pw\b)'
+            r'[\w.-]*["\']?\s*[:= ]\s*)'
             r'("[^"\n]*(?:"|$)|\'[^\'\n]*(?:\'|$)|[^\s,;]+)'
         ),
         r'\1[redacted]',

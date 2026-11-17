@@ -80,6 +80,10 @@ def test_the_portal_sentence_comes_from_the_table_never_from_the_text():
         'curl -H "bearer hunter2sss"',
         'scheme://admin:' + 'hunter2sss' + '@host/x',
         'join token hunter2sss',
+        'ldap_default_authtok = hunter2sss',
+        'bindpw hunter2sss',
+        'rootpw {SSHA}hunter2sss',
+        'admin_pw: hunter2sss',
     ],
 )
 def test_redaction_removes_the_secret(secret_line):
