@@ -17,6 +17,7 @@ from ideaclustermanager.app.metrics.storage_metrics_service import (
     SVMS_PATH,
     OntapClient,
     fs_id_from_host,
+    svm_host,
     tag_value,
 )
 from botocore.exceptions import ClientError
@@ -25,7 +26,6 @@ from ideasdk.utils import Utils
 
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
-import hashlib
 import threading
 import time
 import yaml
@@ -88,6 +88,20 @@ BASTION_VALUES = {
 }
 
 
+def domain_controllers(context) -> Optional[Set[str]]:
+    """the AWS managed directory's DNS addresses: NO_DIRECTORY with none, None if not described."""
+    directory_id = context.config().get_string('directoryservice.directory_id')
+    if Utils.is_empty(directory_id):
+        return NO_DIRECTORY
+    described = (
+        context.aws()
+        .ds()
+        .describe_directories(DirectoryIds=[directory_id])
+        .get('DirectoryDescriptions', [])
+    )
+    return set(described[0].get('DnsIpAddrs', [])) if described else None
+
+
 @dataclass
 class DriftResult:
     check: str
@@ -103,12 +117,6 @@ class DriftValue:
     setting: str
     value: str
     scope: str = 'cluster'
-
-
-def digest(values: Iterable[str]) -> str:
-    """order and duplicates do not matter, and the addresses stay out of the tag."""
-    joined = '\n'.join(sorted({str(value).strip() for value in values}))
-    return hashlib.sha256(joined.encode()).hexdigest()[:12]
 
 
 def read_reason(error: Exception) -> str:
@@ -338,18 +346,6 @@ class DriftChecks:
 
     # the groups
 
-    def domain_controllers(self) -> Optional[Set[str]]:
-        directory_id = self.context.config().get_string('directoryservice.directory_id')
-        if Utils.is_empty(directory_id):
-            return NO_DIRECTORY
-        described = (
-            self.context.aws()
-            .ds()
-            .describe_directories(DirectoryIds=[directory_id])
-            .get('DirectoryDescriptions', [])
-        )
-        return set(described[0].get('DnsIpAddrs', [])) if described else None
-
     def ontap_entries(self) -> List[str]:
         shared_storage = (
             self.context.config().get_config('shared-storage', default={}) or {}
@@ -370,9 +366,7 @@ class DriftChecks:
     @staticmethod
     def svm_of(endpoint: Optional[str]) -> Optional[str]:
         """the SVM an endpoint names, however it is spelled. None matches nothing."""
-        host = (endpoint or '').strip().lower()
-        host = host.removeprefix('https://').removeprefix('http://').rstrip('/')
-        return host or None
+        return svm_host((endpoint or '').strip()) or None
 
     def smb_expected(self, target) -> bool:
         """
@@ -522,7 +516,7 @@ class DriftChecks:
         results.append(
             DriftResult('ssh_client_ip', OK, detail=f'{len(addresses)} entries')
         )
-        values.append(DriftValue('ssh_client_ip', 'digest', digest(addresses)))
+        # the count only: a hash of a list this short is reversed by trying every address
         values.append(DriftValue('ssh_client_ip', 'count', str(len(set(addresses)))))
         if Utils.is_not_empty(config.get_config('bastion-host', default=None)):
             results.append(DriftResult('bastion_settings', OK))
@@ -631,7 +625,9 @@ class DriftChecks:
                 'domain-controllers',
                 [],
                 'cluster',
-                lambda: dict(results=[], values=[], found=self.domain_controllers()),
+                lambda: dict(
+                    results=[], values=[], found=domain_controllers(self.context)
+                ),
             )
             controllers = controller_answer.get('found')
             targets = {t.name: t for t in self.storage_metrics.targets()}
@@ -721,5 +717,6 @@ class DriftCheckCollector(HealthCollector):
         now = time.monotonic() if now is None else now
         if self._last_run is not None and now - self._last_run < RUN_EVERY_SECONDS:
             return
-        self._last_run = now
         self.checks.run_once()
+        # after the run: one that raised is tried again at the next wake, not a day later
+        self._last_run = now

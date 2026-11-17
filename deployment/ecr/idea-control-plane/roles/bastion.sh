@@ -192,7 +192,8 @@ BEGIN {
 # drops ("past Maxstartups" on 9.9, "Maxstartups" on 10.5) and counts the rest in a summary: 9.9
 # "in|exited MaxStartups throttling ..., N connections dropped" (the episode so far), 10.5
 # "Maxstartups logging rate-limited: additional N connections dropped", matched whole so that
-# its first word is not taken for a named drop.
+# its first word is not taken for a named drop. Matched in any case: sshd's own spelling differs
+# between those messages and between releases.
 # sshd gives those counts late, so the remote count is exact for an episode but not minute by
 # minute. 9.9 names the first drop and logs the total when the episode ends ("exited"): its "in"
 # line needs five minutes without a drop inside an episode, a gap a flood never has. 10.5
@@ -206,7 +207,7 @@ BEGIN {
 SSHD_DROP_SOURCES='^(drop connection #[0-9]+ from \[[^] ]+\]:[0-9]+ on \[[^] ]+\]:[0-9]+ (past )?Maxstartups|(in|exited) MaxStartups throttling (for|after) [^ ]+, [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication for |Timeout, client not responding from )'
 SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
 sshd_drop_phrases() {
-  grep --line-buffered -oE "${SSHD_DROP_SOURCES}" | grep --line-buffered -oE "${SSHD_DROP_LINES}"
+  grep --line-buffered -ioE "${SSHD_DROP_SOURCES}" | grep --line-buffered -ioE "${SSHD_DROP_LINES}"
 }
 sshd_log_filter() {
   tee -p >(sshd_drop_phrases >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \

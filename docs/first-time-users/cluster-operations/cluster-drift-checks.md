@@ -35,7 +35,7 @@ A cluster cannot see the others, so what must agree between them is published as
 
 | `check` | `setting` | `current` |
 | --- | --- | --- |
-| `ssh_client_ip` | `digest`, `count` | A hash of the sorted addresses, so they stay out of the tag, and how many |
+| `ssh_client_ip` | `count` | How many addresses. The addresses are not published, not even as a hash |
 | `bastion_settings` | `public`, `cloudwatch_logs`, `desired_count` | The setting |
 | `fsx_parity` | `deployment_type`, `storage_type`, `backup_retention_days`, `disk_iops_mode`, `ha_pairs` | From `fsx:DescribeFileSystems`. Sizes are left out: they are meant to differ |
 | `ontap_analytics` | `state` | `on`, `off`, or `mixed` across the data volumes |

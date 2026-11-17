@@ -5,7 +5,11 @@ holds the directory agent and the ONTAP metrics login already. See docs for what
 """
 
 from ideaclustermanager.app.accounts.auth_constants import USER_HOME_DIR_BASE
-from ideaclustermanager.app.metrics.drift_checks import SIGNED_SESSION_SECURITY
+from ideaclustermanager.app.metrics.drift_checks import (
+    NO_DIRECTORY,
+    SIGNED_SESSION_SECURITY,
+    domain_controllers,
+)
 from ideaclustermanager.app.metrics.storage_metrics_service import (
     SVMS_PATH,
     OntapClient,
@@ -477,18 +481,10 @@ class DirectoryCollector(HealthCollector):
         self.storage_metrics = storage_metrics
 
     def domain_controller_addresses(self) -> Optional[Set[str]]:
-        directory_id = self.context.config().get_string('directoryservice.directory_id')
-        if Utils.is_empty(directory_id):
-            return None
-        described = (
-            self.context.aws()
-            .ds()
-            .describe_directories(DirectoryIds=[directory_id])
-            .get('DirectoryDescriptions', [])
-        )
-        if not described:
+        found = domain_controllers(self.context)
+        if found is None:
             raise NoControllers()
-        return set(described[0].get('DnsIpAddrs', []))
+        return None if found is NO_DIRECTORY else found
 
     def collect(self, metrics: HealthMetrics) -> None:
         # None with no directory to ask. One that would not answer is not that: its read is

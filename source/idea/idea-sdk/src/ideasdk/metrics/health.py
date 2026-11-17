@@ -356,6 +356,8 @@ class StorageMountsCollector(HealthCollector):
     name = 'storage_mounts'
     interval_seconds = 300
     time_limit_seconds = 120
+    # every task: a mount that failed at boot is one host's, and only that host can see it
+    leader_only = False
     PROBE_SECONDS = 15
 
     def __init__(self, context):

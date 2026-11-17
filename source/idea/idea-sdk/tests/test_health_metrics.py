@@ -174,6 +174,18 @@ def test_a_collector_that_was_not_yet_leader_runs_once_elected_not_an_interval_l
     assert starts == [1090.0]
 
 
+def test_storage_mounts_are_read_on_a_task_that_is_not_leader(monkeypatch):
+    # a mount that failed at boot is one host's: only the task on that host can report it
+    clock = Clock(60)
+    found = context()
+    found.is_leader.return_value = False
+    sample = StorageMountsCollector(found)
+    starts = []
+    monkeypatch.setattr(sample, 'collect', lambda metrics: starts.append(clock.now))
+    run_loop(monkeypatch, sample, found, clock)
+    assert starts == [1000.0]
+
+
 def test_a_failed_leader_or_switch_read_looks_again_soon_not_an_interval_later(
     monkeypatch,
 ):

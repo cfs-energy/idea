@@ -128,7 +128,8 @@ class DropTally:
                 self.offset += len(data)
         except OSError:
             return counts
-        for line in data.splitlines():
+        # sshd's spelling differs between its messages and releases
+        for line in data.lower().splitlines():
             if line.startswith(LOOPBACK_REFUSED):
                 add(('maxstartups', 'loopback'))
                 self.episode += 1
@@ -148,7 +149,7 @@ class DropTally:
                     self.episode = 0
                 else:
                     self.counted_ahead = True
-            elif b'Maxstartups' in line:
+            elif b'maxstartups' in line:
                 if self.counted_ahead:
                     self.counted_ahead = False
                 elif b'127.0.0.1' in line:
