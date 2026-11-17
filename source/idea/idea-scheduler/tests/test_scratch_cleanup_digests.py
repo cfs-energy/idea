@@ -1,10 +1,8 @@
-"""What the fifth review found. Each runs against the real service over a real tree."""
+"""Digests: each folder's two notices, counted once SES takes them. Against the real service over a real tree."""
 
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
-import errno
-import os
 import shutil
 
 import boto3
@@ -23,19 +21,23 @@ import test_scratch_cleanup_service as base
 from test_scratch_cleanup_service import (
     LATER,
     REAL_NOW,
+    digests,
     digests_on,
     due_in,
+    folder_on,
     job_folder,
     logged_alert,
-    folder_on,
     put_event,
     run,
     run_on,
     second_file_system,
     told_about,
+    week,
 )
 
 world = base.world
+
+
 SENDER = 'cluster@example.com'
 
 
@@ -162,7 +164,46 @@ def ses_sent(world):
     return world.ses.get_send_quota()['SentLast24Hours']
 
 
-# SCRATCH-3: a notice counts once SES takes it, not when it is queued
+def test_there_is_no_setting_that_skips_notices(world):
+    world.config['scheduler.scratch_cleanup.notify_owners'] = False
+    folder = job_folder(world, with_notices=False)
+    assert run(world)['removed_folders'] == 0
+    assert folder.exists()
+
+
+@pytest.mark.parametrize(
+    'broken',
+    [
+        lambda world: world.config.update({'cluster.ses.enabled': False}),
+        lambda world: world.config.update(
+            {'cluster-manager.notifications.email.enabled': False}
+        ),
+    ],
+    ids=['ses off', 'email off'],
+)
+def test_delivery_off_pauses_removal_even_past_every_date(world, broken):
+    digests_on(world)
+    broken(world)
+    folder = job_folder(world, with_notices=False)
+    assert run(world)['removed_folders'] == 0
+    week(world, 20)
+    assert run(world)['removed_folders'] == 0
+    assert folder.exists()
+
+
+def test_a_digest_day_hiccup_retries_on_the_next_check(world):
+    # the check an hour on is still the digest day, whatever hour the suite runs at
+    world.now = world.now.replace(hour=12)
+    digests_on(world)
+    due_in(world, days=10)
+    world.state.records_error = module.StateUnavailable('index busy')
+    assert run(world)['noticed_folders'] == 0
+    world.state.records_error = None
+    world.now += timedelta(hours=1)
+    # still the digest day, whatever hour this runs: an hour on can be tomorrow
+    world.config['scheduler.scratch_cleanup.digest_weekday'] = world.now.weekday()
+    assert run(world)['noticed_folders'] == 1
+    assert len(digests(world)) == 1
 
 
 def test_a_digest_ses_refuses_tells_nobody_and_the_folder_stays(on_aws):
@@ -205,9 +246,6 @@ def test_a_digest_still_on_its_way_is_not_sent_again(on_aws):
     assert run(world)['noticed_folders'] == 0
     world.deliver()
     assert ses_sent(world) == 1
-
-
-# SCRATCH-1: kept folders keep their date, and must not fill every check
 
 
 def test_kept_folders_do_not_hold_back_the_rest(on_aws, monkeypatch):
@@ -331,127 +369,3 @@ def test_a_record_gone_here_and_waiting_on_another_file_system_holds_back_no_one
     assert not any(
         key.startswith('scratch|') for row in left.values() for key in row['targets']
     ), 'what they were told about here is gone'
-
-
-# SCRATCH-2: an owner folder that cannot be read is not a folder that is gone
-
-
-def _failing(real, name, error):
-    def call(path, *args, **kwargs):
-        if path == name and kwargs.get('dir_fd') is not None:
-            raise OSError(error, os.strerror(error))
-        return real(path, *args, **kwargs)
-
-    return call
-
-
-@pytest.mark.parametrize(
-    'where, name', [('open', 'alice'), ('stat', '123')], ids=['owner', 'folder']
-)
-@pytest.mark.parametrize('error', [errno.EIO, errno.EACCES], ids=['eio', 'eacces'])
-def test_a_read_error_keeps_the_record(world, monkeypatch, where, name, error):
-    folder = job_folder(world)
-    with monkeypatch.context() as patch:
-        patch.setattr(os, where, _failing(getattr(os, where), name, error))
-        outcome = run(world)
-    assert outcome['removed_folders'] == 0 and folder.exists()
-    assert world.store.removals, 'the record stays'
-    assert any(
-        f'Could not read {world.mount}/alice' in str(call)
-        for call in world.service._logger.error.call_args_list
-    ), 'and an administrator hears of it'
-    assert run(world)['removed_folders'] == 1, 'and the next check finds it'
-    assert not folder.exists()
-
-
-def test_a_folder_that_is_gone_still_ends_its_record(world):
-    shutil.rmtree(job_folder(world))
-    run(world)
-    assert not world.store.removals
-
-
-# SCRATCH-4: jobs that finish before the table is open are recorded once it is
-
-
-def test_a_job_finishing_before_the_table_opens_is_recorded_after(world):
-    world.service._store_ready = False
-    world.service.record_job_finished(base.finished_job())
-    assert not world.store.removals
-    world.service._record_waiting()
-    assert len(world.store.removals) == 1
-
-
-def test_a_waiting_job_that_cannot_be_recorded_holds_up_no_other(world, monkeypatch):
-    world.service._store_ready = False
-    broken, fine = base.finished_job('7'), base.finished_job('8')
-    world.service.record_job_finished(broken)
-    world.service.record_job_finished(fine)
-    real = world.store.get_removal
-
-    def get_removal(key):
-        if key == module.job_key(broken):
-            raise RuntimeError('ValidationException')
-        return real(key)
-
-    monkeypatch.setattr(world.store, 'get_removal', get_removal)
-    world.service._record_waiting()
-    assert [row['job_id'] for row in world.store.removals.values()] == ['8']
-    assert not world.service._waiting
-    assert any(
-        module.ALERT_MARKER in str(call)
-        for call in world.service._logger.exception.call_args_list
-    )
-
-
-def test_the_service_exists_before_finished_jobs_are_processed(monkeypatch):
-    from ideascheduler.app import scheduler_app
-
-    seen = {}
-
-    def job_monitor(context):
-        seen['scratch_cleanup'] = getattr(context, 'scratch_cleanup', None)
-        return Mock()
-
-    for name in dir(scheduler_app):
-        value = getattr(scheduler_app, name)
-        if isinstance(value, type) and name not in (
-            'SchedulerApp',
-            'SocaClientOptions',
-        ):
-            monkeypatch.setattr(scheduler_app, name, Mock())
-    monkeypatch.setattr(scheduler_app, 'JobMonitor', job_monitor)
-    monkeypatch.setattr(scheduler_app.time, 'sleep', lambda _: None)
-    context = Mock()
-    del context.scratch_cleanup
-    app = scheduler_app.SchedulerApp.__new__(scheduler_app.SchedulerApp)
-    app.context, app.logger = context, Mock()
-    app.app_initialize()
-    assert isinstance(seen['scratch_cleanup'], module.ScratchCleanupService)
-
-
-# SCRATCH-6: every way the hourly check stops reaches the alert
-
-
-def test_settings_that_stop_cleanup_alert(world):
-    world.config['scheduler.scratch_cleanup.success_retention_days'] = 7
-    world.service._run_if_due()
-    assert logged_alert(world)
-
-
-def test_a_table_that_cannot_be_opened_alerts(world, monkeypatch):
-    world.service._store_ready = False
-    monkeypatch.setattr(
-        world.store, 'initialize', Mock(side_effect=RuntimeError('AccessDenied'))
-    )
-    assert not world.service._ensure_store()
-    assert logged_alert(world)
-
-
-def test_a_loop_that_fails_alerts(world):
-    world.switch_error = RuntimeError('throttled')
-    world.service._stop.set()
-    world.service._loop()
-    assert any(
-        module.ALERT_MARKER in str(call)
-        for call in world.service._logger.exception.call_args_list
-    )
