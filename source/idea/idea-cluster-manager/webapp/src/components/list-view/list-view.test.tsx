@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import {vi} from 'vitest';
 import IdeaListView, {MIN_AUTO_REFRESH_INTERVAL_SECONDS} from './list-view';
 import {initTestAppContext} from '../../test-support';
+import {IdeaApiInvoker} from '../../client/idea-api-invoker';
+import {installClientErrorReporting, resetClientErrorReporting} from '../../common/client-error-reporter';
 import {USER_TABLE_COLUMN_DEFINITIONS} from '../../pages/user-management/users';
 import createWrapper from '@cloudscape-design/components/test-utils/dom';
 
@@ -52,6 +54,26 @@ describe('list view refresh affordances', () => {
         expect(await screen.findByText('Not loaded')).toBeInTheDocument();
         expect(screen.queryByText(/^Last updated /)).toBeNull();
         consoleError.mockRestore();
+    });
+
+    it('files one client error report for one failed list load', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const send = vi.fn().mockResolvedValue(undefined);
+        installClientErrorReporting(send, '26.11.2');
+        const invoker = new IdeaApiInvoker({
+            name: 'test-invoker',
+            url: 'http://localhost:8080/api/v1',
+            serviceWorkerRegistration: {active: {postMessage: (_message: any, transfer: any[]) => transfer[0].postMessage({response: {success: false, error_code: 'SERVER_ERROR', message: 'boom'}})}} as any
+        });
+        try {
+            renderListView({showLastRefreshed: true, onFetchRecords: () => invoker.invoke_alt('Scheduler.ListActiveJobs', {})});
+            expect(await screen.findByText('Not loaded')).toBeInTheDocument();
+            expect(send).toHaveBeenCalledTimes(1);
+            expect(send).toHaveBeenCalledWith(expect.objectContaining({error_type: 'api_failure', api_namespace: 'Scheduler.ListActiveJobs'}));
+        } finally {
+            resetClientErrorReporting();
+            vi.restoreAllMocks();
+        }
     });
 
     it('says a failed fetch failed instead of showing the empty state, and retries', async () => {

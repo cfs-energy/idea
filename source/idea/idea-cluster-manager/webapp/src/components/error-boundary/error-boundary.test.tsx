@@ -1,4 +1,4 @@
-import {render, screen} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 import {vi} from 'vitest';
 import IdeaErrorBoundary from '.';
 import {installClientErrorReporting, resetClientErrorReporting} from '../../common/client-error-reporter';
@@ -27,5 +27,19 @@ describe('error boundary', () => {
         expect(send).toHaveBeenCalledWith(expect.objectContaining({error_type: 'render_crash', message: 'TypeError Cannot read properties of undefined'}));
         rerender(<IdeaErrorBoundary resetKey="/b"><Bomb armed={false}/></IdeaErrorBoundary>);
         expect(screen.getByText('page content')).toBeInTheDocument();
+    });
+
+    it('goes home from a crash already at home, and from a boundary with no reset key', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        window.location.hash = '#/';
+        let armed = true;
+        function Page() {
+            return <Bomb armed={armed}/>;
+        }
+        render(<IdeaErrorBoundary><Page/></IdeaErrorBoundary>);
+        armed = false;
+        fireEvent.click(screen.getByRole('button', {name: 'Go to home'}));
+        expect(window.location.hash).toBe('#/');
+        expect(await screen.findByText('page content')).toBeInTheDocument();
     });
 });

@@ -83,6 +83,8 @@ let sender: ClientErrorSender | null = null;
 let appVersion = 'unknown';
 let sentThisLoad = 0;
 let lastSent = new Map<string, number>();
+// API failures the invoker already reported, so a page that catches one does not file it again
+let reportedErrors = new WeakSet<object>();
 
 export function routePattern(hash: string = window.location.hash): string {
     const path = hash.replace(/^#/, '').split(/[?#]/)[0] || '/';
@@ -116,7 +118,7 @@ function describe(error: any): string | undefined {
 /** Never throws and never reports its own failure: the page must not notice this at all. */
 export function reportClientError(errorType: ClientErrorType, details: {error?: unknown, message?: string, apiNamespace?: string} = {}): void {
     try {
-        if (sender == null) {
+        if (sender == null || (details.error instanceof Object && reportedErrors.has(details.error))) {
             return;
         }
         const message = details.message ?? describe(details.error);
@@ -145,9 +147,12 @@ export function reportClientError(errorType: ClientErrorType, details: {error?: 
     }
 }
 
-export function reportApiFailure(apiNamespace: string, errorCode: string): void {
+export function reportApiFailure(apiNamespace: string, errorCode: string, error?: object): void {
     if (REPORTED_API_CODES.has(errorCode)) {
         reportClientError('api_failure', {apiNamespace, message: errorCode});
+        if (error) {
+            reportedErrors.add(error);
+        }
     }
 }
 
@@ -165,6 +170,7 @@ export function resetClientErrorReporting(): void {
     sender = null;
     sentThisLoad = 0;
     lastSent = new Map();
+    reportedErrors = new WeakSet();
     window.removeEventListener('error', onWindowError);
     window.removeEventListener('unhandledrejection', onUnhandledRejection);
 }

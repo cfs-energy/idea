@@ -31,6 +31,7 @@ import {FlashbarProps} from "@cloudscape-design/components/flashbar";
 import VirtualDesktopCreateSessionForm from "./forms/virtual-desktop-create-session-form";
 import {withRouter} from "../../navigation/navigation-utils";
 import VirtualDesktopDCVClient from "../../client/virtual-desktop-dcv-client";
+import {getConnectionInfo, openInNewTab, POPUP_BLOCKED_MESSAGE} from "./desktop-connection";
 
 export interface VirtualDesktopSessionsProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 
@@ -135,24 +136,6 @@ const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefini
             const dateA = a.updated_on ? new Date(a.updated_on).getTime() : 0;
             const dateB = b.updated_on ? new Date(b.updated_on).getTime() : 0;
             return dateA - dateB;
-        }
-    },
-    {
-        id: 'connect-session',
-        header: 'Join Session',
-        cell: e => {
-            if (e.state === 'READY') {
-                let username: string | undefined = undefined
-                if (e.software_stack?.base_os?.includes('windows')) {
-                    username = 'administrator'
-                }
-
-                return <Link external>
-                <span onClick={() => {
-                    AppContext.get().client().virtualDesktopAdmin().joinSession(e.idea_session_id!, e.owner!, username).finally()
-                }}>Connect</span>
-                </Link>
-            }
         }
     }
 ]
@@ -373,6 +356,29 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
             />
         )
     }
+
+    onConnect = (session: VirtualDesktopSession) => {
+        getConnectionInfo(this.getVirtualDesktopAdminClient(), {
+            idea_session_id: session.idea_session_id,
+            idea_session_owner: session.owner,
+            username: session.software_stack?.base_os?.includes('windows') ? 'administrator' : undefined
+        }).then(info => {
+            if (!openInNewTab(info)) {
+                this.setFlashMessage(POPUP_BLOCKED_MESSAGE, 'error')
+            }
+        }).catch(error => {
+            this.setFlashMessage(`Could not connect to ${session.name}: ${error?.message ?? 'Try again.'}`, 'error')
+        })
+    }
+
+    columnDefinitions: TableProps.ColumnDefinition<VirtualDesktopSession>[] = [
+        ...VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS,
+        {
+            id: 'connect-session',
+            header: 'Join Session',
+            cell: e => e.state === 'READY' && <Link external onFollow={() => this.onConnect(e)}>Connect</Link>
+        }
+    ]
 
     setFlashMessage = (content: React.ReactNode, type: 'success' | 'info' | 'error') => {
         this.props.onFlashbarChange({
@@ -1031,7 +1037,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                             date_range: this.getListing().getDateRange()
                         })
                 }}
-                columnDefinitions={VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS}
+                columnDefinitions={this.columnDefinitions}
             />
         )
     }
