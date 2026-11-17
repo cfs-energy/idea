@@ -224,6 +224,10 @@ def bake_overdue(record: ImageBuildRecord, now: datetime, limit: timedelta) -> b
     """
     if not record.is_in_flight() or record.status in OFF_THE_BAKE_CLOCK:
         return False
+    # a validated image a few writes from current: failing it here threw the bake away, and
+    # the next leader resumes a promotion whose worker died
+    if record.status == ImageRowStatus.PROMOTING.value:
+        return False
     started = record.attempt_started_on
     if started is None:
         return False
