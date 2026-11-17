@@ -24,6 +24,7 @@ from ideasdk.utils import Utils
 from ideadatamodel import errorcodes, exceptions
 
 import ideaclustermanager
+from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
     PasswordRefused,
 )
@@ -44,12 +45,6 @@ import time
 
 class PasswordSecretUnavailable(Exception):
     """Secrets Manager failed a password task. Says so without the role or the secret."""
-
-
-def _error_code(error: Exception) -> str:
-    if isinstance(error, ClientError):
-        return error.response['Error']['Code']
-    return type(error).__name__
 
 
 class SyncGroupInDirectoryServiceTask(BaseTask):
@@ -410,7 +405,7 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
                 .get_secret_value(SecretId=password_secret)['SecretString']
             )
         except (ClientError, BotoCoreError) as error:
-            code = _error_code(error)
+            code = AccountsService._error_code(error)
             gone = code == 'ResourceNotFoundException' or (
                 # the answer while a deleted secret is still being removed
                 code == 'InvalidRequestException' and 'deletion' in str(error)
@@ -495,7 +490,7 @@ class SyncPasswordInDirectoryServiceTask(BaseTask):
                 SecretId=payload['password_secret'], ForceDeleteWithoutRecovery=True
             )
         except (ClientError, BotoCoreError) as error:
-            code = _error_code(error)
+            code = AccountsService._error_code(error)
             if code == 'ResourceNotFoundException':
                 return
             if code != 'AccessDeniedException':

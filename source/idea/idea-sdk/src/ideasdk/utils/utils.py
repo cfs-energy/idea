@@ -391,9 +391,7 @@ class Utils:
         characters += [
             secrets.choice(everything) for _ in range(length - len(characters))
         ]
-        for index in range(len(characters) - 1, 0, -1):
-            other = secrets.randbelow(index + 1)
-            characters[index], characters[other] = characters[other], characters[index]
+        secrets.SystemRandom().shuffle(characters)
         return ''.join(characters)
 
     @staticmethod

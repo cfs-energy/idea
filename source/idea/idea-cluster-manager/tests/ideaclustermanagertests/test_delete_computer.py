@@ -436,3 +436,42 @@ def test_ecs_host_termination_resolves_own_computer(agent, state):
         )
         agent.ldap_client.delete_s.assert_not_called()
         vars(host).update(original)
+
+
+@pytest.mark.parametrize('returncode', [0, 1])
+def test_preset_computer_logs_no_one_time_password(monkeypatch, returncode):
+    import subprocess
+
+    from ideasdk.shell import ShellInvoker
+
+    commands = []
+
+    def run(args, **_):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, returncode, 'out', 'adcli failed')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    helper = PresetComputeHelper.__new__(PresetComputeHelper)
+    helper.logger = Mock()
+    # the helper's own shell logs every command it runs
+    helper._shell = ShellInvoker(logger=helper.logger)
+    helper.instance_id, helper.nonce = 'i-target', 'nonce'
+    helper.ADCLI = 'adcli'
+    helper.ldap_client = Mock(ldap_root_password='root', domain_name='example.invalid')
+    helper.ou = OU
+    helper.hostname = TARGET
+    shown = ''
+    if returncode == 0:
+        helper.preset_computer(domain_controller_ip='dc')
+    else:
+        with pytest.raises(exceptions.SocaException) as failed:
+            helper.preset_computer(domain_controller_ip='dc')
+        shown = failed.value.message
+        # adcli's answer stays in the message: the retry rule reads it
+        assert 'adcli failed' in shown
+    (otp,) = [
+        arg.split('=', 1)[1]
+        for arg in commands[0]
+        if arg.startswith('--one-time-password=')
+    ]
+    assert otp not in str(helper.logger.mock_calls) + shown

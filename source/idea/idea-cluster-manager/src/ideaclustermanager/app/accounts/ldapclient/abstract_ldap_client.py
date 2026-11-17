@@ -73,6 +73,15 @@ GID_MAX = 65533
 
 ROOT_BIND_TIMEOUT_SECONDS = 10
 
+# a password or its hash: the trace of a change names these, never their values
+PASSWORD_ATTRIBUTES = {'userpassword', 'unicodepwd'}
+
+
+def _trace_attribute(key, values) -> str:
+    if key.lower() in PASSWORD_ATTRIBUTES:
+        return f'{key}=*****'
+    return f'{key}={",".join(Utils.from_bytes(value) for value in values)}'
+
 
 class AbstractLDAPClient:
     def __init__(self, context: SocaContext, options: LdapClientOptions, logger=None):
@@ -157,13 +166,7 @@ class AbstractLDAPClient:
         trace_message = (
             f'ldapadd -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
         )
-        attributes = []
-        for mod in modlist:
-            key = mod[0]
-            values = []
-            for value in mod[1]:
-                values.append(Utils.from_bytes(value))
-            attributes.append(f'{key}={",".join(values)}')
+        attributes = [_trace_attribute(key, values) for key, values in modlist]
         self.logger.info(f'> {trace_message}, attributes: ({" ".join(attributes)})')
         with self.get_ldap_root_connection() as conn:
             conn.add_s(dn, modlist)
@@ -172,13 +175,7 @@ class AbstractLDAPClient:
         trace_message = (
             f'ldapmodify -x -D "{self.ldap_root_bind}" -H {self.ldap_uri} "{dn}"'
         )
-        attributes = []
-        for mod in modlist:
-            key = mod[1]
-            values = []
-            for value in mod[2]:
-                values.append(Utils.from_bytes(value))
-            attributes.append(f'{key}={",".join(values)}')
+        attributes = [_trace_attribute(key, values) for _, key, values in modlist]
         self.logger.info(f'> {trace_message}, attributes: ({" ".join(attributes)})')
         with self.get_ldap_root_connection() as conn:
             conn.modify_s(dn, modlist)

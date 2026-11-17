@@ -1324,6 +1324,7 @@ def password_change(context: AppContext, monkeypatch, secrets, request):
     users = context.accounts.user_dao.table
     users.put_item(Item={'username': 'user', 'enabled': True})
     context.accounts._password_refusals.clear()
+    monkeypatch.setattr(context.accounts, '_password_sets_paused_until', 0.0)
     yield secrets, in_user_pool, change, send
     users.delete_item(Key={'username': 'user'})
 
@@ -1391,6 +1392,77 @@ def test_refused_passwords_stop_making_secrets_until_the_window_passes(
     assert len(secrets.created) == allowed + 1
     assert context.accounts._password_refusals == {}
     send.assert_called()
+
+
+@every_password_change
+def test_a_busy_user_pool_is_no_refusal_and_pauses_new_secrets(
+    context: AppContext, monkeypatch, password_change
+):
+    secrets, in_user_pool, change, send = password_change
+    pause = context.accounts.PASSWORD_SET_WAIT_SECONDS
+    clock = [1000.0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    in_user_pool.side_effect = client_error('TooManyRequestsException', 'Throttle')
+    for _ in range(context.accounts.PASSWORD_REFUSALS_ALLOWED + 1):
+        with pytest.raises(botocore.exceptions.ClientError):
+            change()
+        # while it is busy, no attempt makes a secret
+        for _ in range(100):
+            with pytest.raises(exceptions.SocaException) as paused:
+                change()
+            assert paused.value.message == (
+                'The password could not be set right now. Try again.'
+            )
+        clock[0] += pause
+    assert len(secrets.created) == context.accounts.PASSWORD_REFUSALS_ALLOWED + 1
+    # more busy answers than the refusals allowed, and the username is not turned away
+    assert 'user' not in context.accounts._password_refusals
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    send.assert_called()
+
+
+@pytest.mark.parametrize('password_change', ['challenge'], indirect=True)
+def test_a_challenge_logs_neither_the_password_nor_the_session(
+    context: AppContext, monkeypatch, password_change
+):
+    secrets, in_user_pool, change, send = password_change
+    logger = Mock()
+    monkeypatch.setattr(context.accounts, 'logger', logger)
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    logged = str(logger.mock_calls)
+    assert 'secret-value' not in logged and "'session'" not in logged
+
+
+def test_a_directory_change_logs_no_password_or_hash(context: AppContext, monkeypatch):
+    from contextlib import nullcontext
+    from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+        AbstractLDAPClient,
+    )
+
+    client = context.ldap_client
+    logger = Mock()
+    monkeypatch.setattr(client, 'logger', logger)
+    monkeypatch.setattr(client, 'get_ldap_root_connection', lambda: nullcontext(Mock()))
+    AbstractLDAPClient.modify_s(
+        client,
+        'uid=user',
+        [
+            (ldap.MOD_REPLACE, 'userPassword', [b'{CRYPT}$6$salt$hash']),
+            (ldap.MOD_REPLACE, 'mail', [b'user@example.invalid']),
+        ],
+    )
+    AbstractLDAPClient.add_s(
+        client,
+        'cn=user',
+        [('unicodePwd', [b'"secret-value"']), ('cn', [b'user'])],
+    )
+    logged = str(logger.mock_calls)
+    assert '$6$' not in logged and 'secret-value' not in logged
+    # the other attributes are traced as before
+    assert 'mail=user@example.invalid' in logged and 'cn=user' in logged
 
 
 @every_password_change

@@ -109,6 +109,7 @@ class AccountsService:
         self._password_sets = threading.BoundedSemaphore(self.PASSWORD_SETS_AT_ONCE)
         self._password_refusals = {}
         self._password_refusals_lock = threading.Lock()
+        self._password_sets_paused_until = 0.0
 
     def is_cluster_administrator(self, username: str) -> bool:
         cluster_administrator = self.context.config().get_string(
@@ -1286,7 +1287,9 @@ class AccountsService:
             raise exceptions.general_exception(
                 'Too many attempts. Try again in 15 minutes.'
             )
-        if not self._password_sets.acquire(timeout=self.PASSWORD_SET_WAIT_SECONDS):
+        if time.monotonic() < self._password_sets_paused_until or not (
+            self._password_sets.acquire(timeout=self.PASSWORD_SET_WAIT_SECONDS)
+        ):
             raise exceptions.general_exception(
                 'The password could not be set right now. Try again.'
             )
@@ -1294,9 +1297,16 @@ class AccountsService:
             password_secret = self._hold_password(password)
             try:
                 result = change_in_user_pool()
-            except Exception:
+            except Exception as error:
                 self._drop_password_secret(password_secret)
-                self._password_refused(username, count=True)
+                if self._error_code(error) == 'TooManyRequestsException':
+                    # The user pool is busy, which says nothing of this username, so it
+                    # is no refusal. No one's attempt makes a secret for a while instead.
+                    self._password_sets_paused_until = (
+                        time.monotonic() + self.PASSWORD_SET_WAIT_SECONDS
+                    )
+                else:
+                    self._password_refused(username, count=True)
                 raise
             if result is False:
                 # the user pool has not taken the password
@@ -1635,7 +1645,6 @@ class AccountsService:
         if Utils.is_empty(request.new_password):
             raise exceptions.invalid_params('new_password is required.')
 
-        self.logger.debug(f'respond_to_auth_challenge() - Request: {request}')
         # the user pool's answer to a session it did not give
         username = self._refuse_unknown_account(
             request.username, 'Invalid session for the user.'
