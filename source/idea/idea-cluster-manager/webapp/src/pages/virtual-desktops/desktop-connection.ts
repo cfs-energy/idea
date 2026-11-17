@@ -18,7 +18,7 @@ import {AppContext} from "../../common";
 export const POPUP_BLOCKED_MESSAGE = 'Your browser blocked the new tab. Allow pop-ups for this site, then click Connect again.'
 
 /** The connection details, or a rejection in words a person can read: a successful answer can still carry no token. */
-export function getConnectionInfo(client: VirtualDesktopClient, connection_info: VirtualDesktopSessionConnectionInfo): Promise<VirtualDesktopSessionConnectionInfo> {
+export function getConnectionInfo(client: Pick<VirtualDesktopClient, 'getSessionConnectionInfo'>, connection_info: VirtualDesktopSessionConnectionInfo): Promise<VirtualDesktopSessionConnectionInfo> {
     return client.getSessionConnectionInfo({connection_info}).then(result => {
         if (result.connection_info?.failure_reason) {
             throw new Error(result.connection_info.failure_reason)

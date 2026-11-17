@@ -120,4 +120,20 @@ describe('manage desktops', () => {
         await waitFor(() => expect(stopSessions).toHaveBeenCalled());
         expect(stopSessions.mock.calls[0][0].sessions![0].force).toBe(true);
     });
+
+    it('says why Connect failed instead of doing nothing', async () => {
+        const { admin, user, flashbarItems } = await renderPage();
+        vi.spyOn(admin, 'getSessionConnectionInfo').mockRejectedValue(new Error('Broker down'));
+        await user.click(screen.getByText('Connect'));
+        await waitFor(() => expect(flashbarItems.map(item => item.content)).toContain('Could not connect to beamline: Broker down'));
+    });
+
+    it('opens the desktop for an admin, as administrator on Windows', async () => {
+        const { admin, user } = await renderPage([{ ...SESSION, software_stack: { base_os: 'windows' } }]);
+        const info = vi.spyOn(admin, 'getSessionConnectionInfo').mockResolvedValue({ connection_info: { endpoint: 'https://cluster.example', web_url_path: '/dcv', access_token: 'token', dcv_session_id: 'dcv-1' } } as any);
+        const open = vi.spyOn(window, 'open').mockImplementation(() => ({}) as any);
+        await user.click(screen.getByText('Connect'));
+        await waitFor(() => expect(open).toHaveBeenCalledWith('https://cluster.example/dcv?authToken=token#dcv-1'));
+        expect(info.mock.calls[0][0].connection_info).toMatchObject({ idea_session_id: 'session-1', idea_session_owner: 'someowner', username: 'administrator' });
+    });
 });
