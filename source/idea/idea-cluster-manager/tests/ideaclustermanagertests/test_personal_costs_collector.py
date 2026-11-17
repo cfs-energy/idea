@@ -1982,10 +1982,8 @@ def test_a_month_with_every_disk_day_counted_and_bedrock_off_is_complete(
     }
     at(monkeypatch, '2026-11-13T15:26:00Z')
     start = arrow.utcnow().floor('month')
-    stored_before(calc, start)
     result = calc.month('user-a', start, arrow.utcnow())
     disks = result.desktop_disks
-    assert [point.amount for point in disks.daily[:9]] == list(STORED_BEFORE.values())
     assert {point.status for point in disks.daily} == {'ready'}
     assert disks.status == 'ready' and disks.coverage.missing_days == 0
     assert result.ai.cost is None and result.ai.status == 'not_applicable'
@@ -2000,7 +1998,9 @@ def test_a_month_with_every_disk_day_counted_and_bedrock_off_is_complete(
     calc._workers.shutdown()
 
 
-def test_a_stored_disk_day_with_a_missing_price_stays_partial(setup, monkeypatch):
+def test_disk_days_stored_before_the_upgrade_stay_partial_until_the_month_close(
+    setup, monkeypatch
+):
     context, store, _ = setup
     calc = DailyCostsCalculator(context, store)
     calc.day = lambda user, lower, upper, storage=None: {
@@ -2009,11 +2009,15 @@ def test_a_stored_disk_day_with_a_missing_price_stays_partial(setup, monkeypatch
     at(monkeypatch, '2026-11-13T15:26:00Z')
     start = arrow.utcnow().floor('month')
     stored_before(calc, start)
-    days = calc._stored_days('user-a', '2026-11')
-    days['2026-11-02']['lines']['desktop_disks']['coverage']['missing_prices'] = 1
-    calc._store_days('user-a', '2026-11', days)
-    daily = calc.month('user-a', start, arrow.utcnow()).desktop_disks.daily
-    assert [point.status for point in daily[:3]] == ['ready', 'partial', 'ready']
+    disks = calc.month('user-a', start, arrow.utcnow()).desktop_disks
+    assert [point.amount for point in disks.daily[:9]] == list(STORED_BEFORE.values())
+    assert {point.status for point in disks.daily[:9]} == {'partial'}
+    assert disks.status == 'partial'
+    # the month close computes every day again, with what is observed now
+    at(monkeypatch, '2026-12-05T00:00:00Z')
+    disks = calc.month('user-a', start, start.shift(months=1)).desktop_disks
+    assert [point.amount for point in disks.daily[:9]] == [0.0] * 9
+    assert {point.status for point in disks.daily} == {'ready'}
     calc._workers.shutdown()
 
 
