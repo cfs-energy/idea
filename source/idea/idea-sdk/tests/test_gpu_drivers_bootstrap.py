@@ -439,9 +439,16 @@ def run_kernel_header_prep(
             f'#!/bin/bash\n{KERNEL_INCLUDE}\n{HARNESS}\n{KERNEL_HARNESS}\n{block}\n'
         )
 
+    # placeholder images: a host's own lister would reject them
+    lister = os.path.join(base_dir, 'bin', 'lsinitrd')
+    os.makedirs(os.path.dirname(lister), exist_ok=True)
+    with open(lister, 'w') as f:
+        f.write('#!/bin/sh\n')
+    os.chmod(lister, 0o755)
     env = dict(os.environ)
     env.update(
         {
+            'PATH': f'{os.path.dirname(lister)}:{os.environ["PATH"]}',
             'BOOTSTRAP_DIR': bootstrap_dir,
             'GPU_PCI_DEVICES_DIR': pci_dir,
             'TEST_INSTANCE_TYPE': 'g4dn.xlarge',

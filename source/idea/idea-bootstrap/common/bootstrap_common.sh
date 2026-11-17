@@ -125,18 +125,38 @@ function install_matching_kernel_devel() {
 # boot loader will actually boot, whoever selected it, before every bootstrap reboot and at the end
 # of every bootstrap that does not reboot.
 function kernel_initramfs_ready () {
-  local version="${1}" boot="${KERNEL_BOOT_DIR:-/boot}"
+  local version="${1}" boot="${KERNEL_BOOT_DIR:-/boot}" image lister
+  # A truncated image (dracut stopped by a full /boot) is not empty and still panics, so read it
+  # to the end. With no lister, or one that cannot finish in a minute, the size is all we have.
+  image_complete () {
+    local errors status=0
+    [[ -s "${1}" ]] || return 1
+    command -v "${lister}" > /dev/null 2>&1 || return 0
+    errors=$(timeout 60 "${lister}" "${1}" 2>&1 > /dev/null) || status=$?
+    case "${status}" in
+      0) grep -Eqi 'premature end|unexpected end|truncated|corrupt' <<< "${errors}" || return 0 ;;
+      124|126|127) return 0 ;;
+    esac
+    log_warning "${1} cannot be read to the end (exit ${status}): $(tr -s '\n' ' ' <<< "${errors}" | tail -c 300)"
+    return 1
+  }
   if command -v grubby > /dev/null 2>&1; then
-    [[ -s "${boot}/initramfs-${version}.img" ]] && return 0
-    log_warning "Kernel ${version} has no initramfs; building it"
-    timeout 300 dracut -f "${boot}/initramfs-${version}.img" "${version}" || true
-    [[ -s "${boot}/initramfs-${version}.img" ]]
+    image="${boot}/initramfs-${version}.img" lister=lsinitrd
+    image_complete "${image}" && return 0
+    log_warning "Kernel ${version} has no usable initramfs; building it"
+    timeout 300 dracut -f "${image}" "${version}" || true
   else
-    [[ -s "${boot}/initrd.img-${version}" ]] && return 0
-    log_warning "Kernel ${version} has no initrd; building it"
-    timeout 300 update-initramfs -c -k "${version}" || true
-    [[ -s "${boot}/initrd.img-${version}" ]]
+    image="${boot}/initrd.img-${version}" lister=lsinitramfs
+    image_complete "${image}" && return 0
+    log_warning "Kernel ${version} has no usable initrd; building it"
+    # -c refuses an image that exists; -u rebuilds a damaged one
+    if [[ -e "${image}" ]]; then
+      timeout 300 update-initramfs -u -k "${version}" || true
+    else
+      timeout 300 update-initramfs -c -k "${version}" || true
+    fi
   fi
+  image_complete "${image}"
 }
 
 # The kernel GRUB's generated menu selects, including saved entries and nested menu titles and ids.
@@ -296,6 +316,15 @@ function fail_bootstrap () {
   printf '%s\n' "${1}" > "${BOOTSTRAP_DIR}/bootstrap_failed.txt"
   # Failure reporting must not hang on metadata or AWS either, including under cron.
   set +x
+  # An image builder's backend reads only its checks' tag: without them a bake waits out its limit.
+  local checks
+  for checks in "${BASH_SOURCE[0]%/*}"/../*-ami-builder/image_checks.sh; do
+    [[ -f "${checks}" ]] || continue
+    mkdir -p /var/lib/idea
+    printf '%s: %s\n' "${status}" "${1}" >> /var/lib/idea/bake-failed
+    /bin/bash "${checks}"
+    exit 1
+  done
   local token id region
   token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || true
   id=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: ${token}" http://169.254.169.254/latest/meta-data/instance-id) || true

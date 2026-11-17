@@ -380,6 +380,8 @@ find() {{ echo {tmp_path}/vmlinuz-{TARGET_SERIES}; }}
 ls() {{ echo {tmp_path}/vmlinuz-{TARGET_SERIES}; }}
 rpm() {{ echo kernel-{TARGET_SERIES}; }}
 dracut() {{ echo "dracut $*" >> "$CALLS"; {f'echo x > {image}' if dracut_builds else 'return 1'}; }}
+# placeholder images: a host's own lister would reject them
+lsinitrd() {{ :; }}
 grubby() {{
   echo "grubby $*" >> "$CALLS"
   case "$1" in
