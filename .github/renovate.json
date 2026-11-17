@@ -234,6 +234,17 @@
       "allowedVersions": "<3.1"
     },
     {
+      "description": "boto3 1.44 changes the default retry mode; boto3 and the botocore it requires stay on 1.43 until that is tested",
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchDepNames": [
+        "boto3",
+        "botocore"
+      ],
+      "allowedVersions": "<1.44"
+    },
+    {
       "description": "Cloudscape components 3.0.1410 gave Toggle role switch, which 3.0.1411 reverted",
       "matchPackageNames": [
         "@cloudscape-design/components"

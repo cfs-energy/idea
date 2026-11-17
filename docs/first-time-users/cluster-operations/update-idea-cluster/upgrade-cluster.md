@@ -261,7 +261,10 @@ When `ecs.image` names this partition's release repository at an older release t
 moves it to the tool's release tag and prints the move. It does not count that move as drift or
 require a manual image setting. Images outside the configured repository, operator-set digests, build tags and newer tags stay
 unchanged and remain visible in the preview. Such an image must be a 26.11.2 build before you upgrade: the 26.11.2 bastion
-health check runs a script older images do not have, so its deployment rolls back and the upgrade stops.
+health check runs a script older images do not have. When an operator digest names this repository at an older release or
+candidate tag (`<repository>:26.11.1@sha256:...`), the preview reports it as blocking and the upgrade refuses before it
+changes anything. The upgrade cannot read the release of a bare digest, another repository or a build tag; if such an image
+is older, the bastion deployment rolls back and the upgrade stops.
 
 Global settings last written by the settings sync have `source=template`. Changed defaults are
 listed as "Template defaults updated" and rewritten without drift acceptance. The add-only sync

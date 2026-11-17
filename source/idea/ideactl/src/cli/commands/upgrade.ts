@@ -978,7 +978,7 @@ export async function planUpgradePhase3Entries(
     ...planCostIntervalDefault(modules, settings),
     ...planCostLookbackDefault(modules, settings),
     ...planDcvUbuntuPins(settings, deps.out),
-    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure),
+    ...await verifyReleaseImage(deps, planEcsImageFollowsRelease(settings, releaseVersion), settings, options.skipReleaseImageCheck, onReleaseImageFailure, releaseVersion),
   ];
 }
 
@@ -997,11 +997,21 @@ export async function verifyReleaseImage(
   settings: readonly CurrentConfigRow[],
   skipReleaseImageCheck = false,
   onFailure?: (message: string) => void,
+  releaseVersion: string = ideaVersion(),
 ): Promise<ConfigEntry[]> {
   const move = entries.find((entry) => entry.key === "ecs.image");
   if (move === undefined) {
     const rows = new Map(settings.map((row) => [row.key, row.value]));
     const image = rows.get("ecs.image");
+    const pinned = pinnedReleaseOf(rows);
+    if (pinned !== undefined && (compareIdeaRelease(pinned, releaseVersion) ?? 0) < 0) {
+      // The new bastion health check needs this release's image; stop before any write.
+      const message = `ecs.image ${String(image)} is a ${pinned} build the upgrade leaves in place, older than ${releaseVersion}, ` +
+        `so nothing was changed. Set ecs.image to a ${releaseVersion} or later image and run the upgrade again.`;
+      if (onFailure === undefined) throw new Error(message);
+      onFailure(message);
+      return entries;
+    }
     if (typeof image === "string" && image.includes("@sha256:") &&
       image !== rows.get("ecs.release_image") && image !== rows.get("ecs.previous_release_image")) {
       deps.out(`ecs.image stays ${image}; this digest is an operator pin and does not follow releases.`);
@@ -1170,12 +1180,7 @@ export function planEcsImageFollowsRelease(
   const image = typeof storedImage === "string" &&
     (storedImage === rows.get("ecs.release_image") || storedImage === rows.get("ecs.previous_release_image"))
     ? storedImage.replace(/@sha256:[a-f0-9]{64}$/, "") : storedImage;
-  const partition = rows.get("cluster.aws.partition") ?? "aws";
-  const configured = rows.get(`ecs.image_repositories.${String(partition)}`);
-  // GovCloud can pull the public release image without a separate registry.
-  const repository = partition === "aws-us-gov" && (configured == null || configured === "")
-    ? rows.get("ecs.image_repositories.aws")
-    : configured;
+  const repository = releaseRepository(rows);
   if (typeof image !== "string" || typeof repository !== "string" || repository === "") return [];
   if (!image.startsWith(`${repository}:`)) return [];
   const tag = image.slice(repository.length + 1);
@@ -1187,6 +1192,28 @@ export function planEcsImageFollowsRelease(
   }
   if (!RELEASE_IMAGE_TAG.test(tag) || (compareIdeaRelease(tag, releaseVersion) ?? 0) >= 0) return [];
   return [{ key: "ecs.image", value: `${repository}:${releaseVersion}` }];
+}
+
+function releaseRepository(rows: ReadonlyMap<string, unknown>): unknown {
+  const partition = rows.get("cluster.aws.partition") ?? "aws";
+  const configured = rows.get(`ecs.image_repositories.${String(partition)}`);
+  // GovCloud can pull the public release image without a separate registry.
+  return partition === "aws-us-gov" && (configured == null || configured === "")
+    ? rows.get("ecs.image_repositories.aws")
+    : configured;
+}
+
+/**
+ * The release an operator-pinned `repository:<release or candidate>@sha256:...` image names.
+ * Anything else (a bare digest, another repository, a build tag) cannot be read and is undefined.
+ */
+function pinnedReleaseOf(rows: ReadonlyMap<string, unknown>): string | undefined {
+  const image = rows.get("ecs.image");
+  const repository = releaseRepository(rows);
+  if (typeof image !== "string" || typeof repository !== "string" || repository === "") return undefined;
+  if (!image.startsWith(`${repository}:`)) return undefined;
+  const tag = image.slice(repository.length + 1).replace(/@sha256:[a-f0-9]{64}$/, "");
+  return CANDIDATE_IMAGE_TAG.exec(tag)?.[1] ?? (RELEASE_IMAGE_TAG.test(tag) ? tag : undefined);
 }
 
 /** Apply the already previewed Phase 3 plan without recalculating it after approval. */

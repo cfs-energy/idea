@@ -6,7 +6,8 @@ PyYAML
 orjson
 Click
 botocore
-boto3
+# held on 1.43: 1.44 changes the default retry mode
+boto3<1.44
 requests
 requests-unixsocket
 questionary
