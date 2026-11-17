@@ -537,7 +537,8 @@ class PresetComputeHelper:
                 message=f'{self.log_tag} Internal error - Failed to generate a strong domain OTP password',
             )
 
-        preset_computer_result = self._shell.invoke(
+        # no logger: the command line carries the one-time password
+        preset_computer_result = ShellInvoker().invoke(
             cmd_input=self.ldap_client.ldap_root_password,
             cmd=[
                 self.ADCLI,
@@ -557,7 +558,10 @@ class PresetComputeHelper:
         if preset_computer_result.returncode != 0:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                message=f'{self.log_tag} failed to preset-computer. details: {preset_computer_result}',
+                # adcli's output only: the command line carries the one-time password
+                message=f'{self.log_tag} failed to preset-computer. details: '
+                f'returncode: {preset_computer_result.returncode} >> '
+                f'{preset_computer_result.stderr or preset_computer_result.stdout}',
             )
 
         # We cannot issue an immediate update as the modify_s aims at the domain
