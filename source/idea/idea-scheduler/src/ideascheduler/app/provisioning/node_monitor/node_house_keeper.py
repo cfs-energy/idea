@@ -1137,8 +1137,9 @@ class NodeHouseKeepingSession:
         any node gets to join, so it is no evidence: late spot capacity is one. While the
         stack is less than that past its own timeout, the reason class is None and the
         stack is left for a later sweep, by when the instance has joined or is old enough
-        to hold for. After that it is a capacity wait, so a fleet that keeps replacing
-        instances cannot keep its stack waiting.
+        to hold for. After that any instance that has not joined holds the job, whatever its
+        age: a group that keeps replacing an instance that fails its status checks always
+        has a young one, and must not keep its stack waiting or be retried as capacity.
         """
         launched = 0
         try:
@@ -1167,6 +1168,11 @@ class NodeHouseKeepingSession:
                     if node.instance_id
                 }
                 young = False
+                hold = (
+                    REASON_CLASS_STACK_TIMEOUT,
+                    f'stack created but job did not start within {timeout_secs}s',
+                    launched,
+                )
                 for instance in instances:
                     node = nodes.get(instance.instance_id)
                     if node is not None and not node.has_state(
@@ -1180,18 +1186,20 @@ class NodeHouseKeepingSession:
                     ):
                         young = True
                         continue
-                    return (
-                        REASON_CLASS_STACK_TIMEOUT,
-                        f'stack created but job did not start within {timeout_secs}s',
-                        launched,
-                    )
-                stack_created = provisioning_util.stack.creation_time if young else None
-                if (
-                    stack_created is not None
-                    and (now - stack_created).total_seconds()
-                    < timeout_secs + node_timeout_secs
-                ):
-                    return None, 'an instance launched late is still joining', launched
+                    return hold
+                if young:
+                    stack_created = provisioning_util.stack.creation_time
+                    if (
+                        stack_created is not None
+                        and (now - stack_created).total_seconds()
+                        < timeout_secs + node_timeout_secs
+                    ):
+                        return (
+                            None,
+                            'an instance launched late is still joining',
+                            launched,
+                        )
+                    return hold
         except Exception as e:
             # no evidence of a node that never joined: retried and counted, not held
             self._logger.warning(

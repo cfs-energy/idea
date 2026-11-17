@@ -1203,19 +1203,33 @@ def test_late_spot_capacity_is_left_to_join_and_then_retried_not_held(
     assert 'instance_ami' not in waiting.error_message
 
 
-def test_a_late_instance_does_not_keep_its_stack_past_both_timeouts(
+def test_an_instance_replaced_again_and_again_holds_its_job_past_both_timeouts(
     context, job_cache, monkeypatch
 ):
-    """a fleet that keeps replacing its instance: past both timeouts it is a capacity wait"""
-    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 3605, 120)
+    """
+    a bad image fails its status checks and its group replaces the instance every few
+    minutes, so each sweep sees a young instance that has not joined. Past the stack
+    timeout plus the node timeout that is evidence enough: held with the stack-timeout
+    reason, one delete and one counted attempt, not retried as a capacity wait
+    """
+    import arrow
 
-    sweep(context)
+    job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 1826, 120)
+    # the stack is described once and kept, so the clock moves instead of the stack
+    started = arrow.utcnow()
+    for stack_age_secs in (1826, 2426, 3626):
+        now = started.shift(seconds=stack_age_secs - 1826)
+        monkeypatch.setattr(arrow, 'utcnow', lambda now=now: now)
+        aws.launch_time = now.shift(seconds=-120)
+        sweep(context)
 
     assert aws.deleted_stacks == [job.get_compute_stack()]
-    assert scheduler.held_jobs == []
+    assert scheduler.held_jobs == [job.job_id]
     assert scheduler.reset_jobs == [job.job_id]
     assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
-    assert job_cache.get_job(job.job_id).reason_class == 'capacity'
+    held = job_cache.get_job(job.job_id)
+    assert held.reason_class == 'stack_timeout'
+    assert 'instance_ami' in held.error_message
 
 
 def test_one_sweep_retries_a_job_whose_stack_never_launched_an_instance(
