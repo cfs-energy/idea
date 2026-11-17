@@ -43,7 +43,7 @@ export function modeText(status: GetScratchCleanupStatusResult): {type: 'info' |
     const settings = status.settings;
     if (settings?.kill_switch) return {type: 'warning', text: 'All removals are stopped. Nothing is removed until this is allowed again.'};
     if (!settings?.enabled) return {type: 'info', text: 'Automatic cleanup is off. Nothing is removed. Jobs that finish now get no date until a backfill.'};
-    if (settings.dry_run) return {type: 'info', text: 'Dry run. Checks report what they would remove. Nothing is removed, nobody is told, and jobs that finish now get no date until a backfill.'};
+    if (settings.dry_run) return {type: 'info', text: 'Dry run. Checks report what they would remove. Nothing is removed and nobody is told. Jobs that finish get their date, and each folder still gets both notices once dry run is off.'};
     return {type: 'success', text: `On. A job's numbered folder goes ${settings.success_retention_days} days after it ends, or ${settings.failed_retention_days} if it failed, once its owner has had two weekly notices and every check still passes.`};
 }
 
@@ -333,7 +333,7 @@ export function ScratchCleanupContent() {
                 <Button disabled={working || !isAdmin} loading={starting} onClick={startPreview}>Preview</Button>
                 <Button
                     variant="primary"
-                    disabled={working || !isAdmin || !preview?.confirm_phrase || !settings.enabled || settings.dry_run || settings.kill_switch || !current.selected}
+                    disabled={working || !isAdmin || !preview?.confirm_phrase || !settings.enabled || settings.kill_switch || !current.selected}
                     onClick={() => setConfirming(true)}>
                     Run backfill
                 </Button>

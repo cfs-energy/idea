@@ -717,6 +717,32 @@ def test_a_stopped_removal_resumes_after_every_check_passes(world, monkeypatch):
     assert not folder.exists()
 
 
+def test_a_removal_stopped_after_its_last_file_is_finished_later(world):
+    # the job ended more than the clock slack before the removal emptied its directories
+    folder = job_folder(
+        world, end_time=datetime.now(timezone.utc) - timedelta(minutes=16)
+    )
+    # what a removal stopped after its last file leaves: directories it emptied, changed since
+    for path in (folder / 'a.dat', folder / 'sub' / 'b.dat'):
+        path.unlink()
+    info = os.lstat(folder)
+    stopped = datetime.now(timezone.utc).isoformat()
+    world.store.put_audit(
+        {
+            'path': str(folder),
+            'job_id': '123',
+            'started_at': stopped,
+            'last_removal_at': stopped,
+            'status': 'started',
+            'device': info.st_dev,
+            'inode': info.st_ino,
+        }
+    )
+    outcome = run(world)
+    assert outcome['removed_folders'] == 1, outcome.get('message')
+    assert not folder.exists()
+
+
 def test_a_resumed_removal_still_stops_for_an_active_job(world, monkeypatch):
     folder = job_folder(world)
     info = os.lstat(folder)
@@ -1522,6 +1548,14 @@ def finished_job(job_id='123', owner='alice', uid=None, **overrides):
     return SocaJob(**values)
 
 
+def test_a_finished_job_reads_no_switch_from_the_table(world):
+    table = world.context.aws().dynamodb_table().Table()
+    table.get_item.reset_mock()
+    world.service.record_job_finished(finished_job())
+    assert len(world.store.removals) == 1
+    assert not table.get_item.called
+
+
 def test_a_duplicate_finish_event_changes_nothing(world):
     job = finished_job()
     world.service.record_job_finished(job)
@@ -1752,8 +1786,8 @@ def test_a_backfill_needs_the_exact_phrase(world):
 
 @pytest.mark.parametrize(
     'switches',
-    [{'dry_run': True}, {'enabled': False}, {'kill_switch': True}],
-    ids=['dry run', 'off', 'kill switch'],
+    [{'enabled': False}, {'kill_switch': True}],
+    ids=['off', 'kill switch'],
 )
 def test_a_backfill_is_refused_unless_cleanup_is_on(world, switches):
     backlog(world)
@@ -1762,6 +1796,18 @@ def test_a_backfill_is_refused_unless_cleanup_is_on(world, switches):
     with pytest.raises(exceptions.SocaException):
         world.service.start_backfill(result.preview_id, 'schedule 1', 'admin')
     assert not world.store.removals
+
+
+def test_a_dry_run_can_backfill_and_still_removes_nothing(world):
+    world.switches['dry_run'] = True
+    folder = backlog(world)
+    result = preview(world)
+    world.service.start_backfill(result.preview_id, result.confirm_phrase, 'admin')
+    wait_for_run(world)
+    assert len(world.store.removals) == 1
+    outcome = run(world)
+    assert outcome['status'] == 'dry_run' and outcome['would_remove_folders'] == 1
+    assert folder.exists() and world.sent == []
 
 
 def test_a_backfill_is_refused_for_a_file_system_not_selected(world):
@@ -2143,6 +2189,37 @@ def digests(world):
 
 def week(world, count=1):
     world.now = world.now + timedelta(days=7 * count)
+
+
+def test_a_dry_run_records_dates_and_going_live_still_gives_both_notices(world):
+    """
+    a dry run writes the date, already past here, and nothing else. Going live, the folder
+    still gets its first notice, its final one a week later, and goes 3 days after that.
+    """
+    digests_on(world)
+    world.switches['dry_run'] = True
+    folder = job_folder(world, with_record=False)
+    world.state.records['123'] = [record('123', job_uid='uid-123')]
+    world.service.record_job_finished(finished_job())
+    assert len(world.store.removals) == 1
+    outcome = run(world)
+    assert outcome['status'] == 'dry_run' and outcome['would_remove_folders'] == 1
+    assert folder.exists() and world.sent == []
+    world.switches['dry_run'] = False
+    world.now += timedelta(hours=1)
+    outcome = run(world)
+    assert outcome['noticed_folders'] == 1 and outcome['removed_folders'] == 0
+    assert digests(world)[0].params['first_count'] == 1
+    world.sent.clear()
+    week(world)
+    outcome = run(world)
+    assert digests(world)[0].params['final_count'] == 1
+    assert outcome['removed_folders'] == 0
+    world.now += timedelta(days=2)
+    assert run(world)['removed_folders'] == 0, 'the final notice gives 3 days'
+    world.now += timedelta(days=2)
+    assert run(world)['removed_folders'] == 1
+    assert not folder.exists()
 
 
 def test_a_folder_is_in_exactly_two_digests_then_goes(world):

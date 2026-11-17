@@ -335,6 +335,13 @@ def decide_contents(
     ]
     if not windows:
         return Reason.UNREADABLE
+    if (
+        resuming
+        and contents.newest_file_change is None
+        and contents.newest_access is None
+    ):
+        # no file is left, only directories the earlier removal emptied, checked just above
+        return Reason.ELIGIBLE
     oldest = _aware(oldest)
     latest = _aware(newest) if newest is not None else oldest
     if any(start <= oldest and latest <= end for start, end in windows):
