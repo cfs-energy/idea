@@ -5799,7 +5799,7 @@ _DESCRIPTIONS = {
     'metrics.health.directory.enabled': "Every five minutes, each file server's LDAP, CIFS signing and DNS settings, and the domain controller addresses. Reads settings only.",
     'metrics.health.ecs.enabled': 'Every five minutes, control plane task stops by reason, running and desired tasks, and rollouts.',
     'metrics.health.gateway_certificate.enabled': 'Every hour, days left on the desktop gateway certificate.',
-    'metrics.health.home_probe.enabled': 'Every five minutes, times a look at /data/home from a separate process. Reads no one\'s folder.',
+    'metrics.health.home_probe.enabled': "Every five minutes, times a look at /data/home from a separate process. Reads no one's folder.",
     'metrics.health.image_bakes.enabled': 'Every five minutes, the state of each desktop and compute image row and whether it is current on the running release.',
     'metrics.health.stack_expiry.enabled': 'Counts software stacks by expiry state and desktop instances with no desktop. The weekly owner email is sent either way.',
     'metrics.health.pbs.enabled': 'Every minute, whether the PBS server answers and is active, and its jobs by state.',
