@@ -236,6 +236,15 @@ def test_backfill_applies_and_sends_timestamped_points(monkeypatch):
     assert transport.log.called
 
 
+def test_backfill_refuses_an_apply_value_it_does_not_know(monkeypatch):
+    reader = Mock()
+    monkeypatch.setattr(CostMetricsService, 'reader', lambda self: reader)
+    env = backfill_env(IDEA_COST_METRICS_BACKFILL_APPLY='1')
+    with pytest.raises(ValueError, match='must be true or false'):
+        standalone.run_backfill(standalone.StandaloneContext(env), env)
+    reader.fetch_all.assert_not_called()
+
+
 def test_backfill_failure_exits_nonzero(monkeypatch):
     reader = Mock()
     reader.fetch_all.side_effect = RuntimeError('cost explorer down')
