@@ -118,11 +118,15 @@ describe('scratch cleanup page', () => {
 
     it.each([
         ['off', {enabled: false}],
-        ['in dry run', {dry_run: true}],
         ['stopped', {kill_switch: true}],
     ])('does not offer a run when %s', async (_, changes) => {
         setup({previews: [preview], settings: {...settings, ...changes}});
         expect(await screen.findByRole('button', {name: 'Run backfill'})).toBeDisabled();
+    });
+
+    it('offers a run in dry run, which only records dates', async () => {
+        setup({previews: [preview], settings: {...settings, dry_run: true}});
+        expect(await screen.findByRole('button', {name: 'Run backfill'})).toBeEnabled();
     });
 
     it('does not offer a run for a file system that is not selected', async () => {

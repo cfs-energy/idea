@@ -43,11 +43,11 @@ The notices are the safeguard for those. A folder that changes after its job end
 
 ## Turning it on
 
-1. In **Settings**, under **Jobs**, **Scratch cleanup**, add the file system to **File systems to clean** and turn on **Automatic cleanup**. It runs as a dry run. **Last runs** shows what each check would have removed.
-2. When that looks right, turn off **Dry run only**. From then on, jobs that finish get armed dates.
-3. For what was already there, select **Preview** under **Backfill**, review it, then **Run backfill** and type the phrase it shows.
+1. In **Settings**, under **Jobs**, **Scratch cleanup**, add the file system to **File systems to clean** and turn on **Automatic cleanup**. It runs as a dry run. Jobs that finish get their dates, and **Last runs** shows what each check would have removed.
+2. For what was already there, select **Preview** under **Backfill**, review it, then **Run backfill** and type the phrase it shows. A backfill works in dry run too, so the dry run reports on those folders as well.
+3. When that looks right, turn off **Dry run only**.
 
-Nothing is recorded while it is off or in dry run, so jobs that finish then get a date only from a backfill. Turning it on never removes anything from before.
+A dry run records dates and does nothing else: nobody is told and nothing is removed. Notices start only when dry run is off, so a folder whose date passed during the dry run still gets both notices before it goes. Nothing is recorded while cleanup is off or all removals are stopped, so jobs that finish then get a date only from a backfill. Turning it on never removes anything from before.
 
 Only a cluster administrator can run or read a preview or start a backfill, not a scheduler manager. A backfill walks the file system once and puts numbered folders of finished jobs on the record, with the date their job's ending gives them. It removes nothing itself and causes no bulk surprise: each folder then gets both notices, one week apart at least, and every check. Named folders stay. On a first backfill the preview usually stops on **Most job folders per run** or **Most capacity per run**, because most folders are job folders. It says what to set. Hourly checks do not use the folder limit, and they do use the capacity limit, so set that one back afterwards. Folders of an owner with an active job stay out of a backfill: run another when those jobs have ended.
 

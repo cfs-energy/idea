@@ -413,15 +413,20 @@ class ScratchCleanupService:
         called as a job's finished record is written. No file system access: a slow mount must
         not hold up finishing jobs. Writing the same event twice changes nothing, and a later
         finish of the same job replaces the earlier one. A job that never ran has no folder.
-        Nothing is written while cleanup is off, in dry run or stopped: a backfill finds those
-        folders from the jobs' own records when an administrator chooses that.
+        Nothing is written while cleanup is off or stopped: a backfill finds those folders from
+        the jobs' own records when an administrator chooses that. A dry run writes dates, so its
+        checks have something to report; a date removes nothing until both notices, which only
+        a live check sends.
         """
         config = self.context.config()
+        # the config tree, not the table: this runs once per finished job, and removes nothing
         if not config.get_bool('scheduler.scratch_cleanup.enabled', default=False):
+            return
+        if config.get_bool('scheduler.scratch_cleanup.kill_switch', default=False):
             return
         if job.start_time is None or not is_finished(job):
             return
-        if not self.file_systems() or not self._arming_now():
+        if not self.file_systems():
             return
         # the loop opens the table: this thread finishes jobs and must not wait for that
         if not self._store_ready:
@@ -483,14 +488,6 @@ class ScratchCleanupService:
         return timedelta(
             days=config.get_int(f'{prefix}.failed_retention_days', default=60)
         )
-
-    def _arming_now(self) -> bool:
-        try:
-            limits = self.limits()
-        except Exception as e:
-            self._logger.warning(f'could not read cleanup settings: {e}')
-            return False
-        return limits.enabled and not limits.dry_run and not limits.kill_switch
 
     # configuration
     def file_systems(self) -> List[FileSystem]:
@@ -1199,12 +1196,14 @@ class ScratchCleanupService:
         expected = preview.confirm_phrase
         if not expected or confirm_phrase != expected:
             raise exceptions.invalid_params('The confirmation text does not match.')
-        try:
-            self._gate()
-        except SwitchedOff as e:
-            raise exceptions.invalid_params(str(e))
+        # a backfill only writes dates, so a dry run may run one: removal alone waits for it
+        limits = self.limits()
+        if limits.kill_switch:
+            raise exceptions.invalid_params('The kill switch is on.')
+        if not limits.enabled:
+            raise exceptions.invalid_params('Scratch cleanup is turned off.')
         file_system = self._file_system(preview.file_system)
-        if file_system.name not in self.limits().file_systems:
+        if file_system.name not in limits.file_systems:
             raise exceptions.invalid_params(
                 f'{file_system.name} is not selected for cleanup in settings.'
             )
