@@ -832,6 +832,15 @@ def test_it_runs_once_a_day_however_often_it_wakes(monkeypatch):
     assert item.checks.run_once.call_count == 2
 
 
+def test_a_run_that_raised_is_tried_again_at_the_next_wake(monkeypatch):
+    item = collector(monkeypatch)
+    item.checks.run_once.side_effect = [RuntimeError('lock table'), None]
+    with pytest.raises(RuntimeError):
+        item.collect(None, now=1000.0)
+    item.collect(None, now=1000.0 + module.WAKE_EVERY_SECONDS)
+    assert item.checks.run_once.call_count == 2
+
+
 def test_the_emitter_keeps_it_to_the_leader_and_gives_it_its_switch(monkeypatch):
     item = collector(monkeypatch)
     assert item.leader_only is True

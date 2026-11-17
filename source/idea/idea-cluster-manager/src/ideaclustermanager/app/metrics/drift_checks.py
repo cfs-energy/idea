@@ -724,5 +724,6 @@ class DriftCheckCollector(HealthCollector):
         now = time.monotonic() if now is None else now
         if self._last_run is not None and now - self._last_run < RUN_EVERY_SECONDS:
             return
-        self._last_run = now
         self.checks.run_once()
+        # after the run: one that raised is tried again at the next wake, not a day later
+        self._last_run = now
