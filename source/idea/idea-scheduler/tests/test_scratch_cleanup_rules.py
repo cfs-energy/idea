@@ -463,6 +463,17 @@ def test_resuming_with_only_empty_directories_left_can_finish():
     assert decide_contents(found, [record()], resume_until=NOW) == Reason.ELIGIBLE
 
 
+def test_only_empty_directories_changed_after_the_removal_stopped_stay():
+    stopped = END + timedelta(days=5)
+    later = stopped + CLOCK_SLACK + timedelta(minutes=1)
+    found = FolderContents(
+        newest_change=later, oldest_change=later, newest_dir_change=later
+    )
+    assert decide_contents(found, [record()], resume_until=stopped) == (
+        Reason.CHANGED_AFTER_JOB
+    )
+
+
 def test_every_reason_has_plain_text():
     assert set(REASON_TEXT) == set(Reason)
 

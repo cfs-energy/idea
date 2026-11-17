@@ -14,7 +14,6 @@ import time
 import pytest
 
 from ideadatamodel import SocaJob, SocaJobState, exceptions
-from ideascheduler.app.scratch_cleanup import rules as rules_module
 from ideascheduler.app.scratch_cleanup import service as module
 from ideascheduler.app.scratch_cleanup.job_state import StateUnavailable
 from ideascheduler.app.scratch_cleanup.rules import ActiveJobs, JobRecord, Reason
@@ -718,11 +717,11 @@ def test_a_stopped_removal_resumes_after_every_check_passes(world, monkeypatch):
     assert not folder.exists()
 
 
-def test_a_removal_stopped_after_its_last_file_is_finished_later(world, monkeypatch):
-    # the job's window ends just after its files were written, without the usual slack
-    monkeypatch.setattr(rules_module, 'CLOCK_SLACK', timedelta(0))
-    folder = job_folder(world, end_time=datetime.now(timezone.utc))
-    time.sleep(0.05)
+def test_a_removal_stopped_after_its_last_file_is_finished_later(world):
+    # the job ended more than the clock slack before the removal emptied its directories
+    folder = job_folder(
+        world, end_time=datetime.now(timezone.utc) - timedelta(minutes=16)
+    )
     # what a removal stopped after its last file leaves: directories it emptied, changed since
     for path in (folder / 'a.dat', folder / 'sub' / 'b.dat'):
         path.unlink()
