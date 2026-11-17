@@ -161,12 +161,13 @@ export class IdeaApiInvoker {
             return result.payload!
         } else {
             console.error(result)
-            reportApiFailure(namespace, result.error_code!)
-            throw new IdeaException({
+            const error = new IdeaException({
                 errorCode: result.error_code!,
                 message: result.message,
                 payload: result.payload
             })
+            reportApiFailure(namespace, result.error_code!, error)
+            throw error
         }
     }
 
