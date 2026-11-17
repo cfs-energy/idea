@@ -17,6 +17,7 @@ from ideaclustermanager.app.metrics.storage_metrics_service import (
     SVMS_PATH,
     OntapClient,
     fs_id_from_host,
+    svm_host,
     tag_value,
 )
 from botocore.exceptions import ClientError
@@ -86,6 +87,20 @@ BASTION_VALUES = {
     'cloudwatch_logs': 'bastion-host.cloudwatch_logs.enabled',
     'desired_count': 'ecs.tasks.bastion-host.desired',
 }
+
+
+def domain_controllers(context) -> Optional[Set[str]]:
+    """the AWS managed directory's DNS addresses: NO_DIRECTORY with none, None if not described."""
+    directory_id = context.config().get_string('directoryservice.directory_id')
+    if Utils.is_empty(directory_id):
+        return NO_DIRECTORY
+    described = (
+        context.aws()
+        .ds()
+        .describe_directories(DirectoryIds=[directory_id])
+        .get('DirectoryDescriptions', [])
+    )
+    return set(described[0].get('DnsIpAddrs', [])) if described else None
 
 
 @dataclass
@@ -338,18 +353,6 @@ class DriftChecks:
 
     # the groups
 
-    def domain_controllers(self) -> Optional[Set[str]]:
-        directory_id = self.context.config().get_string('directoryservice.directory_id')
-        if Utils.is_empty(directory_id):
-            return NO_DIRECTORY
-        described = (
-            self.context.aws()
-            .ds()
-            .describe_directories(DirectoryIds=[directory_id])
-            .get('DirectoryDescriptions', [])
-        )
-        return set(described[0].get('DnsIpAddrs', [])) if described else None
-
     def ontap_entries(self) -> List[str]:
         shared_storage = (
             self.context.config().get_config('shared-storage', default={}) or {}
@@ -370,9 +373,7 @@ class DriftChecks:
     @staticmethod
     def svm_of(endpoint: Optional[str]) -> Optional[str]:
         """the SVM an endpoint names, however it is spelled. None matches nothing."""
-        host = (endpoint or '').strip().lower()
-        host = host.removeprefix('https://').removeprefix('http://').rstrip('/')
-        return host or None
+        return svm_host((endpoint or '').strip()) or None
 
     def smb_expected(self, target) -> bool:
         """
@@ -631,7 +632,9 @@ class DriftChecks:
                 'domain-controllers',
                 [],
                 'cluster',
-                lambda: dict(results=[], values=[], found=self.domain_controllers()),
+                lambda: dict(
+                    results=[], values=[], found=domain_controllers(self.context)
+                ),
             )
             controllers = controller_answer.get('found')
             targets = {t.name: t for t in self.storage_metrics.targets()}
