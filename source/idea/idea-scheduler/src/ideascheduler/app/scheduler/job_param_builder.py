@@ -2233,13 +2233,14 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         return self._draw(others) if others else preferred
 
     def _draw(self, subnet_ids: List[str]) -> str:
-        # the same job and attempt draw the same subnet on every read: the subnet is in
-        # the job's group, and a new draw per read changed the group of an unedited job.
-        # a retry draws again. a submission-time build has no job id and stores nothing
-        job_id = self.context.job_id
-        if Utils.is_empty(job_id):
+        # the same job and attempt draw the same subnet on every read and at submission:
+        # the subnet is in the job's group, which is stored at submission. the seed is the
+        # job's uid, the one identity it has from submission on (its PBS id comes later).
+        # a retry draws again. a build for no job (an estimate) stays random
+        job_uid = Utils.get_value_as_string('job_uid', self.params)
+        if Utils.is_empty(job_uid):
             return random.choice(subnet_ids)
-        seed = f'{job_id}:{self._provisioning_retry_count()}'
+        seed = f'{job_uid}:{self._provisioning_retry_count()}'
         return random.Random(seed).choice(subnet_ids)
 
     def default(self) -> List[str]:
