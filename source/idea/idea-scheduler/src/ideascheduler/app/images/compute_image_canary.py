@@ -69,13 +69,27 @@ _home_probe_lock = threading.Lock()
 _home_probes: dict = {}
 
 
-def home_answers(home) -> bool:
+def home_answers(home, logger=None) -> bool:
+    def log(message):
+        if logger is not None:
+            logger.info(message)
+
     with _home_probe_lock:
         seen = _home_probes.get(str(home))
         if seen is not None and time.monotonic() - seen[0] < HOME_PROBE_REUSE_SECONDS:
+            log(
+                f'home probe {home}: cached result used, '
+                f'{"answered" if seen[1] else "did not answer"} '
+                f'{int(time.monotonic() - seen[0])} seconds ago'
+            )
             return seen[1]
+        started = time.monotonic()
         answered = path_answers(str(home), ANSWER_SECONDS)
         _home_probes[str(home)] = (time.monotonic(), answered)
+        log(
+            f'home probe {home}: {"answered" if answered else "did not answer"} '
+            f'in {time.monotonic() - started:.1f} seconds'
+        )
         return answered
 
 
@@ -459,7 +473,7 @@ class ComputeImageCanary:
         output = Path(data) / 'home' / user / 'jobs' / (name + '.json')
         # the submit below stats this path with no timeout: on a hung mount it never returns
         home = output.parents[1]
-        if not home_answers(home):
+        if not home_answers(home, self.context.logger('compute-image-canary')):
             raise exceptions.general_exception(home_unanswered(home))
         # the submit writes into the home and does not create it
         wait_for_home(home)

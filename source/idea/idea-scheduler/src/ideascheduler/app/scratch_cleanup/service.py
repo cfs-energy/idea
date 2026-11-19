@@ -39,6 +39,7 @@ from ideadatamodel import (
     exceptions,
 )
 from ideasdk.metrics import BaseMetrics
+from ideasdk.config.cluster_config import shared_storage_entries
 from ideasdk.utils import Utils
 
 from ideascheduler.app.scratch_cleanup.filesystem import (
@@ -487,14 +488,14 @@ class ScratchCleanupService:
     # configuration
     def file_systems(self) -> List[FileSystem]:
         """every Lustre attachment that could hold job scratch; none means nothing shows"""
-        storage = self.context.config().get_config('shared-storage', default={}) or {}
         found = []
         home_dir = (
             self.context.config().get_string('cluster.home_dir', default='') or ''
         )
-        for name in sorted(storage.keys()):
-            entry = storage.get(name)
-            if not hasattr(entry, 'get') or entry.get('provider') != 'fsx_lustre':
+        for name, entry in sorted(
+            shared_storage_entries(self.context.config(), self._logger)
+        ):
+            if entry.get('provider') != 'fsx_lustre':
                 continue
             mount_dir = entry.get('mount_dir')
             if not mount_dir or name in NEVER_SCRATCH:

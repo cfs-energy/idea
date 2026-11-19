@@ -204,6 +204,16 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
             print(log_message)
         key = entry['key']
         super().pop(key)
+        # the table holds leaves only: deleting a subtree's last leaf left its parents as
+        # empty mappings here, and readers took the empty shell for an entry (a removed
+        # shared-storage file system with no provider). they go with their last leaf
+        parent = key.rpartition('.')[0]
+        while parent:
+            node = self._config.get(parent, None)
+            if not isinstance(node, ConfigTree) or len(node) > 0:
+                break
+            super().pop(parent)
+            parent = parent.rpartition('.')[0]
 
     def get_cluster_external_endpoint(self) -> str:
         cluster_module_id = self.get_module_id(constants.MODULE_CLUSTER)
@@ -242,3 +252,34 @@ class ClusterConfig(SocaConfig, DynamoDBStreamSubscriber):
         if Utils.is_empty(internal_alb_dns):
             raise exceptions.cluster_config_error('cluster internal endpoint not found')
         return f'https://{internal_alb_dns}'
+
+
+_skipped_storage: set = set()
+
+
+def shared_storage_entries(config, logger=None) -> List[tuple]:
+    """
+    (name, entry) for every shared-storage entry that names its provider, as plain dicts.
+    an entry without one (a file system being removed, or added part by part) is skipped
+    with one warning per name: a reader that took it for an entry raised on its missing
+    provider and stopped (the scratch cleanup every minute, every compute image bake)
+    """
+    storage = config.get_config('shared-storage', default={}) or {}
+    if hasattr(storage, 'as_plain_ordered_dict'):
+        storage = storage.as_plain_ordered_dict()
+    entries = []
+    for name, entry in storage.items():
+        if isinstance(entry, dict) and entry.get('provider'):
+            entries.append((name, entry))
+            continue
+        if name not in _skipped_storage:
+            _skipped_storage.add(name)
+            message = (
+                f'shared-storage.{name} has no provider and is skipped: a file system '
+                f'being removed or added. Set or delete its remaining settings'
+            )
+            if logger is not None:
+                logger.warning(message)
+            else:
+                print(message)
+    return entries
