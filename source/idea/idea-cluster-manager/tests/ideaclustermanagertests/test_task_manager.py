@@ -19,6 +19,7 @@ from ideaclustermanager.app.accounts import account_tasks
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideaclustermanager.app.accounts.db.group_dao import GroupDAO
 from ideaclustermanager.app.accounts.ldapclient.active_directory_client import (
+    ActiveDirectoryClient,
     PasswordRefused,
 )
 from ideaclustermanager.app.projects import project_tasks
@@ -1377,11 +1378,30 @@ class Directory:
     def delete_group(self, group_name):
         self._delete(self.groups, group_name)
 
-    def add_user_to_group(self, usernames, group_name):
-        for username in usernames:
-            if not self.is_existing_user(username):
+    # membership changes go through the client's own add and remove, down to the
+    # answers Active Directory gives for a member it already has or does not have
+    add_user_to_group = ActiveDirectoryClient.add_user_to_group
+    remove_user_from_group = ActiveDirectoryClient.remove_user_from_group
+
+    def build_group_dn(self, group_name):
+        return group_name
+
+    def build_user_dn(self, username):
+        return username
+
+    def modify_s(self, group_name, changes):
+        for operation, _, values in changes:
+            member = (group_name, values[0].decode())
+            if operation == ldap.MOD_DELETE:
+                if member not in self.members:
+                    raise ldap.UNWILLING_TO_PERFORM()
+                self.members.remove(member)
+            elif not self.is_existing_user(member[1]):
                 raise ldap.NO_SUCH_OBJECT()
-            self.members.append((group_name, username))
+            elif member in self.members:
+                raise ldap.ALREADY_EXISTS({'desc': 'Already exists'})
+            else:
+                self.members.append(member)
 
     def change_password(self, username, password):
         if username not in self.accounts or self.now < self.password_behind_until:
@@ -1825,6 +1845,100 @@ def test_removing_a_member_the_directory_no_longer_has_still_drops_the_project_r
     context.projects.user_projects_dao.group_member_removed.assert_called_once_with(
         group_name='team', username='user'
     )
+
+
+def project_groups(context, *names):
+    # one enabled project per group, each granted by that group alone
+    from ideadatamodel import CreateProjectRequest, EnableProjectRequest, Group, Project
+
+    projects = {}
+    for name in names:
+        context.accounts.create_group(
+            Group(name=name, group_type='project', title=name)
+        )
+        project = context.projects.create_project(
+            CreateProjectRequest(
+                project=Project(name=f'{name}-p', title=name, ldap_groups=[name])
+            )
+        ).project
+        context.projects.enable_project(
+            EnableProjectRequest(project_id=project.project_id)
+        )
+        project_tasks.ProjectEnabledTask(context).invoke(
+            {'project_id': project.project_id}
+        )
+        projects[name] = project.project_id
+    return projects
+
+
+def test_a_new_user_created_with_project_groups_gets_those_projects(live_accounts):
+    # the account task adds the new account to its groups, so each membership task
+    # finds the member already there, as Active Directory then tells it
+    from ideadatamodel import User
+
+    context, _, queue, directory, _, _, drain = live_accounts
+    projects = project_groups(context, 'tasks-proj-a', 'tasks-proj-b')
+    context.accounts.create_user(
+        user=User(
+            username='tasks_proj1',
+            email='tasks_proj1@example.com',
+            password='MockPassword_123',
+            additional_groups=list(projects),
+        ),
+        email_verified=True,
+    )
+    drain()
+    assert {('tasks-proj-a', 'tasks_proj1'), ('tasks-proj-b', 'tasks_proj1')} <= set(
+        directory.members
+    )
+    assert set(projects.values()) <= set(
+        context.projects.user_projects_dao.get_projects_by_username('tasks_proj1')
+    )
+    assert 'last_task_failure' not in context.accounts.user_dao.get_user('tasks_proj1')
+    assert queue.messages == []
+
+
+def test_a_member_added_after_creation_gets_the_project_as_before(live_accounts):
+    context, _, queue, directory, _, create, drain = live_accounts
+    projects = project_groups(context, 'tasks-proj-c')
+    create('tasks_proj2')
+    drain()
+    context.accounts.add_users_to_group(['tasks_proj2'], 'tasks-proj-c')
+    drain()
+    assert directory.members.count(('tasks-proj-c', 'tasks_proj2')) == 1
+    assert projects['tasks-proj-c'] in (
+        context.projects.user_projects_dao.get_projects_by_username('tasks_proj2')
+    )
+    assert 'last_task_failure' not in context.accounts.user_dao.get_user('tasks_proj2')
+    assert queue.messages == []
+
+
+def test_removing_a_member_the_directory_already_dropped_drops_the_project(
+    live_accounts,
+):
+    from ideadatamodel import User
+
+    context, _, queue, directory, _, _, drain = live_accounts
+    projects = project_groups(context, 'tasks-proj-d')
+    context.accounts.create_user(
+        user=User(
+            username='tasks_proj3',
+            email='tasks_proj3@example.com',
+            password='MockPassword_123',
+            additional_groups=['tasks-proj-d'],
+        ),
+        email_verified=True,
+    )
+    drain()
+    # removed from the directory group by hand
+    directory.members.remove(('tasks-proj-d', 'tasks_proj3'))
+    context.accounts.remove_user_from_groups('tasks_proj3', ['tasks-proj-d'])
+    drain()
+    assert projects['tasks-proj-d'] not in (
+        context.projects.user_projects_dao.get_projects_by_username('tasks_proj3')
+    )
+    assert 'last_task_failure' not in context.accounts.user_dao.get_user('tasks_proj3')
+    assert queue.messages == []
 
 
 def test_an_enabled_account_gets_its_memberships_back_and_a_password_reset(
