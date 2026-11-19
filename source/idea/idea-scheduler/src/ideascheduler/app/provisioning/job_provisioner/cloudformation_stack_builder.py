@@ -697,12 +697,17 @@ class CloudFormationStackBuilder:
             ec2.TagSpecifications(
                 ResourceType='volume', Tags=Tags(**self.get_common_tags(), **tags)
             ),
-            # tagged at launch, so the node needs no later tag call for its interfaces
-            ec2.TagSpecifications(
-                ResourceType='network-interface',
-                Tags=Tags(**self.get_common_tags(), **tags),
-            ),
         ]
+        # the spot fleet launches as its service-linked role, whose AWS policy may tag
+        # instances, volumes and spot requests but not interfaces: an interface entry
+        # here refuses every launch. the node's bootstrap tags its interfaces on that path.
+        if not self.job.is_spot_capacity():
+            launch_template_data.TagSpecifications.append(
+                ec2.TagSpecifications(
+                    ResourceType='network-interface',
+                    Tags=Tags(**self.get_common_tags(), **tags),
+                )
+            )
 
         # Require IMDSv2
         launch_template_data.MetadataOptions = ec2.MetadataOptions(

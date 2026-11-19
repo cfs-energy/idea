@@ -341,9 +341,8 @@ def test_cfn_stack_builder_spotfleet_basic(context):
     assert volume_tags is not None
     check_tags(volume_tags)
 
-    # interfaces carry the same tags from launch, as instances and volumes do
-    assert interface_tags is not None
-    check_tags(interface_tags)
+    # the spot fleet's service-linked role may not tag interfaces; bootstrap tags them
+    assert interface_tags is None
 
     assert spot_instances_request is not None
     # SP-34: this checked the instance tags a second time
@@ -1083,3 +1082,41 @@ def test_an_efa_spot_fleet_is_given_the_jobs_subnet(context):
     overrides = configs[0]['Overrides']
     subnet = context.config().get_list('cluster.network.private_subnets')[0]
     assert overrides and all(o['SubnetId'] == subnet for o in overrides)
+
+
+@pytest.mark.parametrize(
+    'params, launcher, interface_tagged',
+    [
+        ({'nodes': 2, 'cpus': 1}, 'AutoScalingComputeGroup', True),
+        ({'nodes': 2, 'cpus': 1, 'spot_price': 'auto'}, 'SpotFleet', False),
+        (
+            {'nodes': 2, 'cpus': 1, 'spot_allocation_count': '1', 'spot_price': 'auto'},
+            'AutoScalingComputeGroup',
+            True,
+        ),
+    ],
+    ids=['on-demand', 'spot-fleet', 'mixed'],
+)
+def test_interfaces_are_tagged_at_launch_only_where_the_launcher_may(
+    context, params, launcher, interface_tagged
+):
+    # the auto scaling service-linked role may tag any resource it launches; the spot
+    # fleet's may not tag interfaces, and an interface entry left every spot launch refused
+    result = build_template(
+        context=context,
+        job_name='launch-tags',
+        params=params,
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+    )
+    assert result.template.get(f'Resources.{launcher}') is not None
+    specs = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.TagSpecifications'
+    )
+    expected = ['instance', 'volume']
+    expected += ['network-interface'] if interface_tagged else ['spot-instances-request']
+    assert [spec['ResourceType'] for spec in specs] == expected
