@@ -273,12 +273,13 @@ def test_gov_rocky_rows_say_unsupported_instead_of_no_match():
     db = FakeStackDb([a_stack('ss-base-rocky9-x86-64-base', 'ami-oldoldoldoldold01')])
     ec2 = FakeEc2('ami-x', 'irrelevant')
     ec2.meta = Mock(region_name='us-gov-west-1')
+    ec2.describe_images = Mock(side_effect=AssertionError('looked up a stock image'))
     utils = build_utils(db, ec2)
 
     results = utils.refresh_base_software_stack_amis()
 
-    assert results[0].status == 'error'
-    assert 'GovCloud' in results[0].message
+    assert results[0].status == 'unsupported'
+    assert results[0].message.startswith('Not available in this partition')
     assert db.updated == []
 
 

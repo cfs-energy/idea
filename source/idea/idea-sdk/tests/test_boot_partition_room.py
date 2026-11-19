@@ -258,3 +258,78 @@ def test_both_bakes_drop_them_before_their_first_initramfs(builder):
     ):
         assert later not in setup or call < setup.index(later)
     assert 'mount_shared_storage.jinja2' in setup
+
+
+OLDER = '5.14.0-687.10.1.el9_8.0.1.x86_64'
+
+
+def _run_bake_update(tmp_path, base_os, free_mb, running_mb=300):
+    """update_within_target_series in a bake: /boot reports free_mb free, the running kernel's
+    files take running_mb, and the image also carries an older kernel"""
+    boot = tmp_path / 'boot'
+    (boot / 'loader' / 'entries').mkdir(parents=True)
+    for name in (
+        f'vmlinuz-{RUNNING}',
+        f'initramfs-{RUNNING}.img',
+        'initramfs-0-rescue-abc.img',
+    ):
+        (boot / name).touch()
+    calls = tmp_path / 'calls'
+    stubs = f"""
+BAKE_STAGE=packages
+uname() {{ echo {RUNNING}; }}
+log_warning() {{ echo "warning $*" >> {calls}; }}
+set_reboot_required() {{ echo "reboot $*" >> {calls}; }}
+grubby() {{ :; }}
+rpm() {{
+  printf '%s %s\\n' kernel-core-{OLDER} {OLDER} kernel-core-{RUNNING} {RUNNING}
+  echo 'package kernel-modules-extra is not installed'
+}}
+du() {{ printf '%s\\ttotal\\n' {running_mb * 1048576}; }}
+df() {{ printf 'Avail\\n%s\\n' {free_mb * 1048576}; }}
+dnf() {{
+  case "$*" in *repoquery*) echo {NEWEST} ;; esac
+}}
+package_transaction() {{ echo "transaction $*" >> {calls}; }}
+fail_kernel_bootstrap() {{ echo "fail $1: $2" >> {calls}; exit 1; }}
+TARGET_KERNEL_VERSION='5.14.0-687*'
+"""
+    result = subprocess.run(
+        [
+            BASH,
+            '-c',
+            stubs
+            + _update_function(tmp_path, base_os)
+            + '\nupdate_within_target_series\n',
+        ],
+        text=True,
+        capture_output=True,
+    )
+    return result.returncode, calls.read_text().splitlines() if calls.exists() else []
+
+
+@pytest.mark.parametrize('base_os', EL)
+def test_a_bake_with_a_nearly_full_boot_stops_before_installing_a_kernel(
+    tmp_path, base_os
+):
+    code, calls = _run_bake_update(tmp_path, base_os, free_mb=200)
+    assert code == 1
+    # the older kernel and the rescue images went first, and no kernel was installed
+    assert calls[0] == f'transaction dnf remove -y --noautoremove kernel-core-{OLDER}'
+    assert not (tmp_path / 'boot' / 'initramfs-0-rescue-abc.img').exists()
+    assert not [c for c in calls if c.startswith('transaction dnf install')]
+    assert calls[-1] == (
+        'fail kernel-install-failed: '
+        f'{tmp_path}/boot has 200 MB free after removing rescue images and older kernels, '
+        'and kernel 5.14.0-687* needs about 360 MB. To fix: bake from a base image with a '
+        'larger /boot partition.'
+    )
+
+
+def test_a_bake_with_room_installs_the_kernel_after_removing_the_older_one(tmp_path):
+    code, calls = _run_bake_update(tmp_path, 'rocky9', free_mb=600)
+    assert code == 0, calls
+    assert calls[0] == f'transaction dnf remove -y --noautoremove kernel-core-{OLDER}'
+    assert f'kernel-core-{NEWEST}' in calls[1] and 'install' in calls[1]
+    # the running kernel is never removed
+    assert not [c for c in calls if 'remove' in c and RUNNING in c]

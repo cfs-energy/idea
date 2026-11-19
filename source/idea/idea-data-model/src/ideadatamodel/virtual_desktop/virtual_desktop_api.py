@@ -207,7 +207,8 @@ class SetSessionCleanupExemptionResponse(SocaPayload):
 class BaseSoftwareStackAmiRefreshResult(SocaPayload):
     stack_id: Optional[str] = Field(default=None)
     # updated (ami_id moved to the newest stock image) | base_updated (only the base
-    # advanced; the stack keeps launching from a built image) | up_to_date | error
+    # advanced; the stack keeps launching from a built image) | up_to_date | unsupported (no
+    # stock image is published for the OS in this partition) | error
     status: Optional[str] = Field(default=None)
     old_ami: Optional[str] = Field(default=None)
     new_ami: Optional[str] = Field(default=None)

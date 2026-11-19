@@ -90,7 +90,11 @@
   # a plain call, so a bake records the failure by name; a host stops rather than run without its storage
   mount_shared_storage
   # shellcheck disable=SC2181
-  [[ $? -eq 0 ]] || exit_fail "Shared storage did not mount"
+  if [[ $? -ne 0 ]]; then
+    # its own status, so the scheduler and the desktop controller can tell a storage problem
+    # from an image one
+    fail_bootstrap shared-storage-unavailable "Shared storage did not mount after 5 attempts: ${SHARED_STORAGE_NOT_MOUNTED:-a configured file system}. Check that the file system exists and that this host's subnet and security groups reach it."
+  fi
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
     # Lustre client tuning for some adjustments takes place _after_ the client mounts have taken place
     {% include '_templates/linux/fsx_lustre_client_tuning_postmount.jinja2' %}

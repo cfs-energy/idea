@@ -543,29 +543,67 @@ def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
     script = render(
         '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
     )
-    marker = 'exit_fail "Shared storage did not mount"'
-    block = script[
-        script.index('function mount_shared_storage ()') : script.index(marker)
-        + len(marker)
-    ]
+    marker = 'fail_bootstrap shared-storage-unavailable'
+    start = script.index('function mount_shared_storage ()')
+    block = script[start : script.index('\n  fi\n', script.index(marker)) + 6]
     bin_dir, source = _mount_stubs(tmp_path, ['/data/'])  # /apps/ never mounts
-    stubs = 'mkdir() { :; }\nsleep() { :; }\n' + ''.join(
-        f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)
+    stubs = (
+        'mkdir() { :; }\nsleep() { :; }\n'
+        # the instance tag the scheduler and the desktop controller read
+        f'curl() {{ echo i-0; }}\naws() {{ echo "aws $*" >> {tmp_path}/tags; }}\n'
+        'timeout() { shift; "$@"; }\n'
+        + ''.join(f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block))
     )
     result = subprocess.run(
-        ['bash', '-c', source + '\nBAKE_STAGE=setup\n' + stubs + block],
+        [
+            'bash',
+            '-c',
+            source + f'\nBAKE_STAGE=setup\nBOOTSTRAP_DIR={tmp_path}\n' + stubs + block,
+        ],
         capture_output=True,
         text=True,
         env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
     )
-    # five attempts, then the stage stops: the bake names the function, the host exits
+    # five attempts, then the host stops with a status that says it is the storage
     assert result.returncode == 1, result.stdout + result.stderr
     assert (tmp_path / 'mounts').read_text().count('mount') == 5
     assert (tmp_path / 'bake-failed').read_text().splitlines()[0] == (
         'setup: [[ ${#not_mounted[@]} -eq 0 ]] (exit 1)'
     )
     assert result.stdout.count('Shared storage not mounted: /apps/') == 5
-    assert 'Failed: Shared storage did not mount' in result.stdout
+    assert (
+        '[ERROR] Shared storage did not mount after 5 attempts: /apps/. Check'
+        in result.stdout
+    )
+    assert (
+        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable'
+        in (tmp_path / 'tags').read_text()
+    )
+
+
+def test_a_host_whose_storage_mounts_goes_on(tmp_path):
+    script = render(
+        '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
+    )
+    start = script.index('function mount_shared_storage ()')
+    block = script[
+        start : script.index(
+            '\n  fi\n', script.index('fail_bootstrap shared-storage-unavailable')
+        )
+        + 6
+    ]
+    bin_dir, source = _mount_stubs(tmp_path, ['/data/', '/apps/'])
+    stubs = 'mkdir() { :; }\nsleep() { :; }\naws() { echo tagged; }\n' + ''.join(
+        f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)
+    )
+    result = subprocess.run(
+        ['bash', '-c', source + '\n' + stubs + block + '\necho went-on\n'],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    assert result.returncode == 0 and 'went-on' in result.stdout
+    assert 'tagged' not in result.stdout
 
 
 def test_parent_stage_preserves_the_reported_failure(tmp_path):

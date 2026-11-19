@@ -627,7 +627,7 @@ def test_govcloud_rocky_rows_are_unsupported_and_windows_rows_bake():
     }
     assert results['windows2022'].outcome == 'queued'
     assert results['rocky9'].outcome == 'unsupported'
-    assert 'GovCloud' in h.row().error
+    assert h.row().error.startswith('Not available in this partition')
 
 
 # the promote gate on the pipeline path
@@ -2535,3 +2535,130 @@ def test_a_desktop_image_carries_its_lineage():
     assert (tags['idea:BakeMode'], tags['idea:BakeLineageDepth']) == ('full', '0')
     assert tags['idea:BakeRootImage'] == 'ami-stock-rocky9'
     assert len(tags['idea:BakeInputs']) == 64
+
+
+# Rocky's publisher has no images in the aws-us-gov partition: nothing is ever attempted there
+
+
+def gov_harness(**kwargs):
+    h = Harness([base_stack('rocky9'), base_stack('rhel9')], **kwargs)
+    h.ec2.meta = Mock(region_name='us-gov-west-1')
+    h.pipeline._start = lambda record, blocking: True
+    return h
+
+
+def test_govcloud_never_queues_rocky_on_a_release_change():
+    h = gov_harness(config={'vdc.software_stacks.images_baked_release': '26.10.0'})
+    h.pipeline.tick(now=T0)
+    assert h.row('rhel9').status == 'queued'  # the trigger ran
+    assert h.row('rocky9') is None or h.row('rocky9').status == 'unsupported'
+
+
+def test_govcloud_never_queues_rocky_on_a_monthly_run():
+    tz = ZoneInfo('America/Chicago')
+    last = datetime(2026, 9, 6, 2, 5, tzinfo=tz)
+    h = gov_harness(
+        config={
+            LAST_RUN_KEY.replace('virtual-desktop-controller.', 'vdc.'): int(
+                last.timestamp() * 1000
+            )
+        }
+    )
+    for base_os in ('rocky9', 'rhel9'):
+        h.records.put(
+            ImageBuildRecord(
+                base_os=base_os,
+                architecture='x86_64',
+                status='current',
+                release=VERSION,
+                source_ami=f'ami-stock-{base_os}',
+                current_image_id='ami-x',
+                promoted_on=T0,
+            )
+        )
+    h.pipeline.tick(now=datetime(2026, 10, 4, 2, 1, tzinfo=tz).astimezone(timezone.utc))
+    assert h.row('rhel9').status == 'queued' and h.row('rhel9').trigger == 'monthly'
+    assert h.row('rocky9').status == 'current'  # stored as it was, never queued
+    assert {r.base_os: r for r in h.pipeline.managed()}[
+        'rocky9'
+    ].status == 'unsupported'
+
+
+def test_govcloud_never_queues_rocky_from_a_forced_refresh():
+    h = gov_harness()
+    results = h.pipeline.refresh(RefreshImagesRequest(all=True, force=True), 'admin')
+    outcomes = {r.row.base_os: r.outcome for r in results}
+    assert outcomes['rocky9'] == 'unsupported' and outcomes['rhel9'] == 'queued'
+
+
+def test_an_existing_rocky_row_in_govcloud_reads_not_available_not_failed():
+    h = gov_harness()
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='failed',
+            error='lustre: something broke',
+            current_image_id='ami-x',
+        )
+    )
+    rows = {r.base_os: r for r in h.pipeline.managed()}
+    assert rows['rocky9'].status == 'unsupported'
+    assert rows['rocky9'].error.startswith('Not available in this partition: no Rocky')
+    assert rows['rocky9'].current_image_id == 'ami-x'
+    listed = {r.base_os: r for r in h.pipeline.list_rows()}
+    assert listed['rocky9'].status == 'unsupported'
+
+
+def test_a_rocky_row_queued_before_the_rule_ends_unsupported_without_a_bake():
+    h = gov_harness()
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9', architecture='x86_64', status='queued', host='leader'
+        )
+    )
+    h.pipeline._start = DesktopImagePipeline._start.__get__(h.pipeline)
+    h.pipeline.tick(now=T0, blocking=True)
+    assert h.row().status == 'unsupported'
+    assert h.row().error.startswith('Not available in this partition')
+
+
+def test_a_pinned_rocky_image_in_govcloud_is_left_as_it_is():
+    h = gov_harness()
+    h.records.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='x86_64',
+            status='current',
+            pinned=True,
+            current_image_id='ami-site',
+        )
+    )
+    rows = {r.base_os: r for r in h.pipeline.managed()}
+    assert rows['rocky9'].status == 'current' and rows['rocky9'].pinned
+    results = h.pipeline.refresh(RefreshImagesRequest(all=True, force=True), 'admin')
+    assert {r.row.base_os: r.outcome for r in results}['rocky9'] == 'pinned'
+    assert h.row().current_image_id == 'ami-site'
+
+
+def test_the_commercial_partition_still_bakes_rocky():
+    h = Harness([base_stack('rocky9')])
+    h.pipeline._start = lambda record, blocking: True
+    results = h.pipeline.refresh(RefreshImagesRequest(all=True), 'admin')
+    assert results[0].outcome == 'queued'
+
+
+def test_no_rocky_base_stack_is_seeded_in_a_govcloud_region():
+    import yaml
+    from pathlib import Path
+
+    config = yaml.safe_load(
+        (
+            Path(__file__).parents[1] / 'resources' / 'base-software-stack-config.yaml'
+        ).read_text()
+    )
+    for base_os, arches in config.items():
+        if not base_os.startswith('rocky'):
+            continue
+        for arch in (arches or {}).values():
+            assert not [r for r in arch or {} if str(r).startswith('us-gov-')], base_os
