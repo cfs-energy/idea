@@ -947,6 +947,64 @@ test("default upgrade deployment executes a settings-only stack change, which st
   });
 });
 
+async function withCdkBin(action: () => Promise<void>): Promise<void> {
+  const previousCdkBin = process.env.IDEA_CDK_BIN;
+  process.env.IDEA_CDK_BIN = "/opt/idea/lib/idea-cdk/node_modules/aws-cdk/bin/cdk";
+  try {
+    await action();
+  } finally {
+    if (previousCdkBin === undefined) delete process.env.IDEA_CDK_BIN;
+    else process.env.IDEA_CDK_BIN = previousCdkBin;
+  }
+}
+
+test("the upgrade prints a timestamp and elapsed time per phase and per stack, and a summary table", async () => {
+  await withFixture(async ({ deps, events, rows }) => withCdkBin(async () => {
+    rows[`${clusterName}.modules`] = [{ ...moduleRow("analytics", "analytics"), version: "26.10.0" }];
+    let clock = Date.UTC(2026, 10, 19, 14, 21, 23);
+    deps.now = () => (clock += 1000);
+    deps.cfn.describeChangeSet = async () => ({
+      Status: "CREATE_COMPLETE",
+      Changes: [change("Modify", "analyticsclustersettings", "Custom::ClusterSettings", "False")],
+    });
+    deps.cfn.executeChangeSet = async () => {
+      (rows[`${clusterName}.modules`] as Array<Record<string, unknown>>)[0].version = ideaVersion();
+    };
+    const { withDefaultUpgradeDeployment } = await import("../../src/cli/commands/upgrade.ts");
+    await upgradeCluster(withDefaultUpgradeDeployment(deps), {
+      clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules: ["analytics"],
+    });
+    for (const phase of ["Pre-flight", "Phase 1", "Phase 2", "Phase 2b", "Phase 3", "Phase 4", "Broker rule pass", "Completion"]) {
+      assert.ok(events.some((line) => new RegExp(`^timing \\d\\d:\\d\\d:\\d\\dZ \\+\\d+s: ${phase} started$`).test(line)), `${phase} start`);
+      assert.ok(events.some((line) => new RegExp(`^timing .*: ${phase} took \\d+s$`).test(line)), `${phase} end`);
+    }
+    assert.ok(events.some((line) => /^timing .*: idea-test1-analytics deployed in \d+s$/.test(line)));
+    const table = events.find((line) => line.startsWith("Upgrade timing (seconds)"));
+    assert.ok(table !== undefined);
+    assert.match(table, /\| phase +\| stack +\| seconds \|/);
+    assert.match(table, /\| Phase 4 +\| idea-test1-analytics +\| \d+ +\|/);
+    assert.match(table, /\| total +\| +\| \d+ +\|/);
+    // the table closes the run: nothing is printed after it
+    assert.equal(events.at(-1), table);
+  }));
+});
+
+test("a failed stack still gets its timing row, and the table prints when the upgrade stops", async () => {
+  await withFixture(async ({ deps, events, rows }) => withCdkBin(async () => {
+    rows[`${clusterName}.modules`] = [moduleRow("analytics", "analytics")];
+    deps.cfn.describeChangeSet = async () => ({
+      Status: "CREATE_COMPLETE",
+      Changes: [change("Modify", "identityprovideruserpool", "AWS::Cognito::UserPool", "True")],
+    });
+    const { withDefaultUpgradeDeployment } = await import("../../src/cli/commands/upgrade.ts");
+    await assert.rejects(upgradeCluster(withDefaultUpgradeDeployment(deps), {
+      clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules: ["analytics"],
+    }), (error: unknown) => error instanceof Error && error.name === "ChangeSetRefused");
+    assert.ok(events.some((line) => /^timing .*: idea-test1-analytics failed in \d+s$/.test(line)));
+    assert.match(events.at(-1) ?? "", /^Upgrade timing \(seconds\)[\s\S]*\| Phase 4 +\| idea-test1-analytics /);
+  }));
+});
+
 test("declining the global-settings prompt leaves Phase 1 applied and stops before Phase 2", async () => {
   await withFixture(async ({ deps, events }) => {
     const answers = ["Yes", "no"];

@@ -128,7 +128,18 @@ export interface DeploymentHelperOptions {
   allowReplacement?: readonly string[];
   allowReplacementOfType?: ReadonlyMap<string, string>;
   staggerMs?: number;
+  /** Called once per module stack with its wall-clock span, whether it deployed or failed. */
+  onStack?: (event: StackTiming) => void;
   deps: Deps;
+}
+
+/** One module stack's span inside a deployment, for the upgrade's timing summary. */
+export interface StackTiming {
+  moduleId: string;
+  stackName: string;
+  startedAt: number;
+  endedAt: number;
+  ok: boolean;
 }
 
 /**
@@ -366,6 +377,17 @@ export class DeploymentHelper {
   }
 
   async deployModule(moduleId: string): Promise<void> {
+    const startedAt = this.deps.now();
+    let ok = false;
+    try {
+      await this.deployModuleStack(moduleId);
+      ok = true;
+    } finally {
+      this.options.onStack?.({ moduleId, stackName: `${this.clusterName}-${moduleId}`, startedAt, endedAt: this.deps.now(), ok });
+    }
+  }
+
+  private async deployModuleStack(moduleId: string): Promise<void> {
     const moduleInfo = this.config.moduleInfoById(moduleId);
     if (moduleInfo === undefined) throw new GeneralException(`module not found for module_id: ${moduleId}`);
     this.deps.out(`deploying module: ${moduleInfo.name}, module id: ${moduleId}`);

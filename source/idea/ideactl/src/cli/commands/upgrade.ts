@@ -41,10 +41,11 @@ import { vpcEndpointsFor } from "../../config/vpc-endpoints.ts";
 import { ideaVersion } from "../../version.ts";
 import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
 import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
-import { DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData } from "../deployment-helper.ts";
+import { DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData, type StackTiming } from "../deployment-helper.ts";
 import { compareIdeaRelease, upgradeFloorRefusal, HOST_CONTROL_PLANE_REFUSAL, RECOVERY_COMMAND } from "../upgrade-floor.ts";
 import {
   buildTree,
+  renderTable,
   toYaml,
   type ConfigDriftPreviewDeps,
   type ConfigUpgradePreviewOptions,
@@ -231,6 +232,7 @@ export interface UpgradeDeploymentOptions {
   allModules: boolean;
   moduleIds?: readonly string[];
   allowReplacement?: readonly string[];
+  onStack?: (event: StackTiming) => void;
 }
 
 export interface ContainerHost {
@@ -1520,6 +1522,7 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
     moduleIds: options.moduleIds,
     rollback: options.rollback,
     allowReplacement: options.allowReplacement,
+    onStack: options.onStack,
     deps,
   });
   await helper.invoke();
@@ -1693,8 +1696,69 @@ async function verifyUpgradeCompletion(
   deps.out("Completion verified: settings and deployed module versions read back");
 }
 
+const wholeSeconds = (ms: number): number => Math.round(ms / 1000);
+
+/**
+ * Wall-clock marks for one upgrade run: a line when each phase starts and ends and when each stack
+ * ends, and a table at the end. Measurement only; nothing waits on it.
+ */
+export class UpgradeTiming {
+  private readonly rows: string[][] = [];
+  private readonly startedAt: number;
+  private current: { name: string; startedAt: number } | undefined;
+  private readonly deps: Pick<UpgradeDeps, "now" | "out">;
+
+  constructor(deps: Pick<UpgradeDeps, "now" | "out">) {
+    this.deps = deps;
+    this.startedAt = deps.now();
+  }
+
+  private mark(at: number): string {
+    return `${new Date(at).toISOString().slice(11, 19)}Z +${wholeSeconds(at - this.startedAt)}s`;
+  }
+
+  phase(name: string): void {
+    this.close();
+    const at = this.deps.now();
+    this.current = { name, startedAt: at };
+    this.deps.out(`timing ${this.mark(at)}: ${name} started`);
+  }
+
+  stack(event: StackTiming): void {
+    const took = wholeSeconds(event.endedAt - event.startedAt);
+    this.rows.push([this.current?.name ?? "", event.stackName, String(took)]);
+    this.deps.out(`timing ${this.mark(event.endedAt)}: ${event.stackName} ${event.ok ? "deployed" : "failed"} in ${took}s`);
+  }
+
+  /** Closes the open phase and prints the table, whatever the run's outcome. */
+  summary(): void {
+    this.close();
+    this.rows.push(["total", "", String(wholeSeconds(this.deps.now() - this.startedAt))]);
+    this.deps.out(`Upgrade timing (seconds)\n${renderTable(["phase", "stack", "seconds"], this.rows)}`);
+  }
+
+  private close(): void {
+    if (this.current === undefined) return;
+    const at = this.deps.now();
+    const took = wholeSeconds(at - this.current.startedAt);
+    this.rows.push([this.current.name, "", String(took)]);
+    this.deps.out(`timing ${this.mark(at)}: ${this.current.name} took ${took}s`);
+    this.current = undefined;
+  }
+}
+
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
+  const timing = new UpgradeTiming(deps);
+  timing.phase("Pre-flight");
+  try {
+    await runUpgrade(deps, options, timing);
+  } finally {
+    timing.summary();
+  }
+}
+
+async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, timing: UpgradeTiming): Promise<void> {
   // Validate the source release and deployment mode before any mutation.
   // An incomplete inventory cannot establish a safe starting release.
   const modulesBefore = await clusterModules(deps, options.clusterName);
@@ -1777,6 +1841,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
     await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
 
+    timing.phase("Phase 1");
     deps.out("Phase 1: Update Base OS in values.yml");
     resolveRegionAmi((deps.regionAmiConfig ?? loadRegionAmiConfig)(), options.awsRegion, baseOs);
     await updateValuesBaseOs(deps, options, baseOs);
@@ -1787,6 +1852,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         const confirm = await deps.prompt({ message: "Continue with global settings backup and update?", default: true });
         if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
       }
+      timing.phase("Phase 2");
       deps.out("Phase 2: Global Settings Backup and Update");
       configDir = await backupAndUpdateGlobalSettings(deps, options, modulesBefore);
     }
@@ -1801,10 +1867,12 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         const values = loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion));
         generateConfigFromTemplates(values, configDir, { vpcEndpoints: await vpcEndpointsFor(deps, values, options.awsProfile) });
       }
+      timing.phase("Phase 2b");
       deps.out("Phase 2b: Sync full configuration without overwrite");
       await syncFullConfiguration(deps, options, configDir, modulesBefore);
     }
 
+    timing.phase("Phase 3");
     deps.out("Phase 3: Update AMI IDs and Settings");
     let updateAmis = options.force === true;
     if (options.force !== true) {
@@ -1823,6 +1891,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         `and this release's modules cannot deploy on it. Nothing was deployed. Run the upgrade again and answer Yes to the AMI and settings updates.`);
     }
 
+    timing.phase("Phase 4");
     deps.out("Phase 4: Module Deployment");
     if (!options.force && allModules) {
       const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
@@ -1848,17 +1917,20 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       allModules,
       moduleIds: allModules ? undefined : options.modules,
       allowReplacement: options.allowReplacement,
+      onStack: (event) => timing.stack(event),
     };
     await deps.deploy(deployment);
     // Every module is upgraded and serving by now; a failed second cluster pass leaves the wide
     // rule in place, so the rest of the upgrade still runs and the failure is reported at the end.
     let convergence: unknown;
+    timing.phase("Broker rule pass");
     try {
       await convergeBrokerListenerRules(deps, options, deployment);
     } catch (error) {
       convergence = error;
       deps.out(`warning: ${(error as Error).message}`);
     }
+    timing.phase("Completion");
     if (options.skipGlobalSettingsUpdate !== true) await removeObsoleteGlobalSettings(deps, options, configDir);
     let restore = cleared;
     try {
