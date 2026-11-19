@@ -35,6 +35,11 @@ Statement:
       - autoscaling:DescribeAutoScalingGroups
       - autoscaling:DescribeScalingActivities
       - autoscaling:DescribeLaunchConfigurations
+      # CloudFormation reads these with the scheduler's credentials while it creates a job
+      # stack's auto scaling group (test/stacks/role-script-calls.test.ts JOB_STACK_CALLS)
+      - autoscaling:DescribeLifecycleHooks
+      - autoscaling:DescribeNotificationConfigurations
+      - ec2:DescribeNetworkAcls
       - elasticloadbalancing:DescribeRules
       - elasticloadbalancing:DescribeListeners
       - elasticloadbalancing:DescribeTargetGroups
