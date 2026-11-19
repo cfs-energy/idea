@@ -266,6 +266,8 @@ def test_catalog_count_contract_and_explicit_dispositions():
         'scheduler.scratch_cleanup.max_folders_per_run',
         'scheduler.scratch_cleanup.max_run_bytes_percent',
         'scheduler.scratch_cleanup.max_run_share_percent',
+        'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64',
+        'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64',
     }
     baseline = [item for item in CATALOG if item['key'] not in post_review_keys]
     assert len(DESTINATION_SECTIONS) == 38
@@ -273,7 +275,7 @@ def test_catalog_count_contract_and_explicit_dispositions():
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == 'db9220d832497233c733e301e734930ce70b5974defc65dbd28b96527c4c7c7f'
+        == 'f5e652693d2647ddb54e258f4fbbcde5a57ec9136fd9974d0ee1cbc459706c93'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -1323,3 +1325,44 @@ def test_the_desktop_cleanup_warning_window_stays_within_the_receipts_life(
     else:
         with pytest.raises(exceptions.SocaException):
             coerce_value(setting, days)
+
+
+def test_image_builder_types_are_saved_per_architecture():
+    values, effects = coerce_settings(
+        'virtual-desktop-controller',
+        {
+            'software_stacks': {
+                'image_pipeline': {
+                    'builder_instance_types': {
+                        'x86_64': 'c7i.4xlarge',
+                        'arm64': '',
+                    }
+                }
+            }
+        },
+    )
+    types = values['software_stacks']['image_pipeline']['builder_instance_types']
+    assert types == {'x86_64': 'c7i.4xlarge', 'arm64': ''}
+    assert set(effects.values()) == {'runtime'}
+
+
+@pytest.mark.parametrize(
+    'architecture, value, reason',
+    [
+        ('x86_64', 'c8g.4xlarge', 'c8g.4xlarge is arm64'),
+        ('arm64', 'c7i.4xlarge', 'c7i.4xlarge is x86_64'),
+        ('x86_64', 'c7i.16xlarge', 'must be one of'),
+        ('x86_64', 'g4dn.xlarge', 'must be one of'),
+    ],
+)
+def test_image_builder_types_refuse_the_other_architecture(architecture, value, reason):
+    with pytest.raises(exceptions.SocaException) as raised:
+        coerce_settings(
+            'virtual-desktop-controller',
+            {
+                'software_stacks': {
+                    'image_pipeline': {'builder_instance_types': {architecture: value}}
+                }
+            },
+        )
+    assert reason in raised.value.message

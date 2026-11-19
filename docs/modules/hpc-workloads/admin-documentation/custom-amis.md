@@ -243,5 +243,11 @@ ideactl build-desktop-image --base-os rocky9 --base-ami <vendor ami> --force
 | `virtual-desktop-controller.images.legacy_cleanup_min_age_days` | `30` | Age before untracked desktop builder images are removed. `0` keeps them. |
 | `scheduler.images.legacy_cleanup_min_age_days` | `30` | The same for compute builder images. |
 | `scheduler.images.default_image_pinned` | `false` | Keep `scheduler.compute_node_ami` when a compute row switches. |
+| `virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64` | empty | Builder for x86_64 desktop and compute bakes. Empty uses `m7i.large` for desktops and `c7i.large` for compute. |
+| `virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64` | empty | Builder for arm64 desktop and compute bakes. Empty uses `m8g.large`. |
+
+### Builder size
+
+Both pipelines read the builder type for CPU bakes from `builder_instance_types`; GPU desktop images keep their GPU builder (`g4dn.xlarge`, `g5g.xlarge`, `g4ad.xlarge`). The x86_64 key takes `c7i`, `c7a` and `m7i` from `large` to `8xlarge` (and `c6i`, `m6i` `large` or `xlarge`); the arm64 key takes `c8g` and `m8g` from `large` to `8xlarge` (and `c6g`, `m6g` `large` or `xlarge`). The settings page refuses a type of the other architecture. Set it on the cluster settings page (Deployment, Installed deployment, advanced settings), or with `./idea-admin.sh config set Key=vdc.software_stacks.image_pipeline.builder_instance_types.x86_64,Type=string,Value=c7i.4xlarge --cluster-name <cluster> --aws-region <region>`; a value written with `config set` is not checked until the next bake, which fails with the reason. The next bake uses it; a bake already running keeps its builder. A larger builder draws on the same On-Demand vCPU quota as jobs, so lower `max_concurrent_bakes` (desktop and compute) when the quota is tight.
 
 The stored key prefix is the module ID, `vdc` for the default desktop module. Use `list-modules` to check a customized module ID before writing a key with `config set`.

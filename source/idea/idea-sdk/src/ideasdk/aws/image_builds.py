@@ -23,6 +23,7 @@ from ideadatamodel import (
     IMAGE_ROW_IN_FLIGHT,
     ImageBuildRecord,
     ImageKind,
+    ImagePipelineSettings,
     ImageRowKey,
     ImageRowStatus,
     ImageVariant,
@@ -105,18 +106,19 @@ def builder_log_link(context, instance_id: str) -> str:
 # visible reason rather than launched into an account limit
 MAX_CONCURRENT_BUILDS = 16
 
-# the builder only runs a bootstrap script, so the allowlist is general-purpose sizes plus
-# one GPU size per architecture
+# the builder only runs a bootstrap script, so the allowlist is general-purpose and
+# compute-optimized sizes plus one GPU size per architecture. the current families go up to
+# 8xlarge because the source builds (efs-utils, OpenPBS) use every core
+_LARGER_SIZES = ('large', 'xlarge', '2xlarge', '4xlarge', '8xlarge')
 BUILDER_INSTANCE_TYPES = {
     'x86_64': (
         'c6i.large',
         'c6i.xlarge',
-        'c7i.large',
-        'c7i.xlarge',
+        *(f'c7i.{size}' for size in _LARGER_SIZES),
+        *(f'c7a.{size}' for size in _LARGER_SIZES),
         'm6i.large',
         'm6i.xlarge',
-        'm7i.large',
-        'm7i.xlarge',
+        *(f'm7i.{size}' for size in _LARGER_SIZES),
         'g4dn.xlarge',
         'g5.xlarge',
         'g4ad.xlarge',
@@ -124,12 +126,10 @@ BUILDER_INSTANCE_TYPES = {
     'arm64': (
         'c6g.large',
         'c6g.xlarge',
-        'c8g.large',
-        'c8g.xlarge',
+        *(f'c8g.{size}' for size in _LARGER_SIZES),
         'm6g.large',
         'm6g.xlarge',
-        'm8g.large',
-        'm8g.xlarge',
+        *(f'm8g.{size}' for size in _LARGER_SIZES),
         'g5g.xlarge',
     ),
 }
@@ -911,6 +911,22 @@ def check_builder_instance_type(
     raise exceptions.invalid_params(
         f'instance_type must be one of: {", ".join(allowed)}'
     )
+
+
+def pipeline_builder_instance_type(
+    settings: ImagePipelineSettings, architecture: Optional[str], x86_default: str
+) -> str:
+    """
+    the builder type for a pipeline's CPU bake: image_pipeline.builder_instance_types for
+    the architecture, else the module default. a stored type off the allowlist (written
+    around the settings page) fails the bake with the reason instead of launching
+    """
+    wanted = architecture or 'x86_64'
+    configured = (settings.builder_instance_types or {}).get(wanted)
+    if Utils.is_empty(configured):
+        return default_builder_instance_type(wanted, x86_default)
+    check_builder_instance_type(configured, wanted)
+    return configured
 
 
 def sanitize_aws_message(text: Optional[str]) -> str:

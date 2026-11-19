@@ -17,6 +17,7 @@ from ideasdk.aws.compute_rate import (
     COMPUTE_RATE_MULTIPLIER_KEY,
     parse_compute_rate_multiplier,
 )
+from ideasdk.aws.image_builds import BUILDER_INSTANCE_TYPES, check_builder_instance_type
 from ideasdk.utils.group_name_helper import (
     DEFAULT_OPERATIONS_LEADS_GROUP_NAME,
     GroupNameHelper,
@@ -4488,6 +4489,22 @@ _ROWS = [
         False,
     ),
     (
+        'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64',
+        'string',
+        'runtime',
+        'software',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64',
+        'string',
+        'runtime',
+        'software',
+        True,
+        False,
+    ),
+    (
         'virtual-desktop-controller.dcv_session.idle_autostop_delay',
         'integer',
         'runtime',
@@ -5549,6 +5566,8 @@ _LABELS = {
     'virtual-desktop-controller.software_stacks.expiry.enforce_from': 'Hide expired stacks from (YYYY-MM-DD)',
     'virtual-desktop-controller.software_stacks.expiry.exempt_amis': 'Images that never expire',
     'virtual-desktop-controller.software_stacks.expiry.warn_days': 'Warn this many days before',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64': 'Image builder type (x86_64)',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64': 'Image builder type (arm64)',
     'metrics.health.drift_checks.enabled': 'Daily configuration checks',
     'metrics.health.stack_expiry.enabled': 'Stack expiry and orphan desktop counts',
     'cluster-manager.web_terminal.idle_timeout_seconds': 'Terminal input-idle timeout (seconds)',
@@ -5765,6 +5784,9 @@ _CHOICES = {
     'spot_maintenance_strategies': ['', 'CapacityRebalance'],
     'key_type': ['', 'customer-managed', 'aws-managed'],
 }
+_BUILDER_TYPE_PREFIX = (
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types'
+)
 _KEY_CHOICES = {
     'cluster.logging.default_log_level': [
         'DEBUG',
@@ -5821,6 +5843,13 @@ _KEY_CHOICES = {
         'spread',
     ],
     'cluster-manager.bedrock.budgets.action': ['block', 'warn'],
+    **{
+        f'{_BUILDER_TYPE_PREFIX}.{architecture}': [
+            '',
+            *(t for t in types if not t.startswith('g')),
+        ]
+        for architecture, types in BUILDER_INSTANCE_TYPES.items()
+    },
 }
 _DESCRIPTIONS = {
     'scheduler.log_archive.s3_retention_days': 'How long the cluster bucket keeps the scheduler log archive, PBS accounting records included. 0 keeps it forever; otherwise at least 30. Applied by ideactl bootstrap, not by an upgrade or deploy.',
@@ -5828,6 +5857,8 @@ _DESCRIPTIONS = {
     'virtual-desktop-controller.software_stacks.expiry.digest_enabled': 'Once a week at most, emails each owner the stacks past or near their date. Stacks with no owner go to the cluster administrator.',
     'virtual-desktop-controller.software_stacks.expiry.enforce_from': 'From this day, expired stacks are not offered for new desktops. Empty means warnings only and nothing is hidden. Existing desktops keep working either way.',
     'virtual-desktop-controller.software_stacks.expiry.exempt_amis': 'AMI IDs whose stacks never expire or warn.',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64': 'Instance type that bakes x86_64 desktop and compute images (GPU images keep their GPU builder). Empty uses m7i.large for desktops and c7i.large for compute. Larger builders bake faster and draw on the same On-Demand quota as jobs; see max_concurrent_bakes.',
+    'virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64': 'Instance type that bakes arm64 desktop and compute images. Empty uses m8g.large. Larger builders bake faster and draw on the same On-Demand quota as jobs; see max_concurrent_bakes.',
     'virtual-desktop-controller.software_stacks.expiry.warn_days': 'The new desktop form warns about a stack from this many days before it expires.',
     'metrics.health.drift_checks.enabled': 'Once a day, reads the settings that must hold on every cluster, such as file server signing and DNS, and reports any that differ. Changes nothing.',
     'metrics.health.enabled': 'Off stops every cluster health collector below. Each also has its own switch. Health metrics are sent only with the dogstatsd metrics provider.',
@@ -6533,6 +6564,12 @@ def coerce_value(setting, value):
             invalid('must be greater than 0 and at most 1.5')
     if key == 'cluster-manager.web_portal.default_landing_page' and value == 'home':
         value = 'my-costs'
+    if key.startswith(f'{_BUILDER_TYPE_PREFIX}.') and value:
+        # a type of the other architecture is named as such, not as off the list
+        try:
+            check_builder_instance_type(value, key.rsplit('.', 1)[-1])
+        except exceptions.SocaException as error:
+            invalid(error.message)
     if kind == 'enum' and value not in setting['choices']:
         invalid('must be one of: ' + ', '.join(setting['choices']))
     if key.endswith('site_hook_sha256') and isinstance(value, str):

@@ -2448,3 +2448,44 @@ def test_a_controller_host_started_seconds_ago_cleans_up_on_its_first_tick(monke
     # control: the next tick is inside the half hour
     h.pipeline.tick(now=T0)
     h.pipeline.cleanup.assert_called_once()
+
+
+def test_a_cpu_row_bakes_on_the_module_default_until_a_type_is_set():
+    h = Harness([base_stack('rocky9'), base_stack('rocky9', arch='arm64')])
+    queue_and_run(h)
+    assert sorted(m['instance_type'] for m in FakeBuilder.made) == [
+        'm7i.large',
+        'm8g.large',
+    ]
+
+
+def test_a_configured_builder_type_is_used_for_cpu_rows_only():
+    h = Harness(
+        [
+            base_stack('rocky9'),
+            base_stack('rocky9', arch='arm64'),
+            base_stack('rocky9', suffix='gpu', gpu=VirtualDesktopGPU.NVIDIA),
+        ],
+        settings={
+            'builder_instance_types': {'x86_64': 'c7i.4xlarge', 'arm64': 'c8g.4xlarge'}
+        },
+    )
+    queue_and_run(h)
+    made = sorted((m['ami_name'], m['instance_type']) for m in FakeBuilder.made)
+    assert made == [
+        ('idea-dcv-host-rocky9', 'c7i.4xlarge'),
+        ('idea-dcv-host-rocky9', 'c8g.4xlarge'),
+        ('idea-dcv-host-rocky9-nvidia', 'g4dn.xlarge'),
+    ]
+
+
+def test_a_stored_builder_type_of_the_other_architecture_fails_the_row():
+    h = Harness(
+        [base_stack('rocky9', arch='arm64')],
+        settings={'builder_instance_types': {'arm64': 'c7i.4xlarge'}},
+    )
+    queue_and_run(h)
+    row = h.row(arch='arm64')
+    assert row.status == 'failed'
+    assert 'c7i.4xlarge is x86_64' in row.error
+    assert FakeBuilder.made == []

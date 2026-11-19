@@ -21,6 +21,7 @@ from ideadatamodel import (
 from ideascheduler.app.images import compute_images as module
 from ideascheduler.app.images.compute_images import ComputeImageService
 from test_compute_images import (
+    BUILDER_CONFIG,
     build_service,
     FakeEc2,
     DEFAULT_CONFIG,
@@ -1559,3 +1560,80 @@ def test_the_admin_api_refuses_a_validation_queue_name(field):
     with pytest.raises(exceptions.SocaException) as error:
         refuse_validation_names(profile)
     assert 'cannot start with iv-' in error.value.message
+
+
+class LaunchingEc2(FakeEc2):
+    """records the builder launch and the image creation the real builder asks for"""
+
+    def __init__(self):
+        super().__init__()
+        self.launches, self.images = [], []
+
+    def run_instances(self, **kwargs):
+        self.launches.append(kwargs)
+        return {'Instances': [{'InstanceId': 'i-builder'}]}
+
+    def create_image(self, **kwargs):
+        self.images.append(kwargs)
+        return {'ImageId': 'ami-candidate'}
+
+
+def bake_through_the_pipeline(monkeypatch, architecture='x86_64', settings=None):
+    """one queued row through _run_pipeline with the real builder up to CreateImage"""
+    ec2 = LaunchingEc2()
+    config = {**DEFAULT_CONFIG, **BUILDER_CONFIG, 'global-settings.custom_tags': []}
+    if settings is not None:
+        config['virtual-desktop-controller.software_stacks.image_pipeline'] = settings
+    svc = build_service(config, ec2)
+    stock = (
+        'ami-rocky9armstock01' if architecture == 'arm64' else 'ami-rocky9stock00001'
+    )
+    svc.default_base_ami = lambda base_os, arch: stock
+    svc.promote = Mock()
+
+    def build(self, progress=None):
+        self.build_userdata = lambda: 'userdata'
+        progress({'instance_id': self.launch_ec2_instance().instance_id})
+        progress({'checks': [ImageCheck(name='kernel_default', ok=True)]})
+        return self.create_image('i-builder')
+
+    monkeypatch.setattr(module.ComputeNodeAmiBuilder, 'build', build)
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *args: None
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *args: None)
+    monkeypatch.setattr(module, 'ComputeImageCanary', lambda context: Mock())
+    record = row(status='queued', architecture=architecture, base_os='rocky9')
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    return svc, ec2, record
+
+
+@pytest.mark.parametrize(
+    'architecture, expected', [('x86_64', 'c7i.large'), ('arm64', 'm8g.large')]
+)
+def test_a_compute_bake_without_the_setting_launches_todays_builder(
+    monkeypatch, architecture, expected
+):
+    _, ec2, record = bake_through_the_pipeline(monkeypatch, architecture)
+    assert record.error is None
+    assert [launch['InstanceType'] for launch in ec2.launches] == [expected]
+
+
+def test_a_compute_bake_uses_the_configured_builder_type(monkeypatch):
+    settings = {
+        'builder_instance_types': {'x86_64': 'c7a.8xlarge', 'arm64': 'c8g.4xlarge'}
+    }
+    for architecture, expected in (('x86_64', 'c7a.8xlarge'), ('arm64', 'c8g.4xlarge')):
+        _, ec2, _ = bake_through_the_pipeline(monkeypatch, architecture, settings)
+        assert ec2.launches[0]['InstanceType'] == expected
+
+
+def test_a_stored_compute_builder_type_of_the_other_architecture_fails_the_row(
+    monkeypatch,
+):
+    settings = {'builder_instance_types': {'x86_64': 'm8g.2xlarge'}}
+    _, ec2, record = bake_through_the_pipeline(monkeypatch, 'x86_64', settings)
+    assert record.status == 'failed'
+    assert 'm8g.2xlarge is arm64' in record.error
+    assert ec2.launches == []

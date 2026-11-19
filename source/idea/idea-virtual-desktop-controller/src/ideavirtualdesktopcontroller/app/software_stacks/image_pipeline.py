@@ -53,6 +53,7 @@ from ideasdk.aws.image_builds import (
     describe_image_or_none,
     builder_log_link,
     is_custom_record,
+    pipeline_builder_instance_type,
     ImageBuildRecordsDB,
     ImageBuildRunner,
     ImageNotValidated,
@@ -82,6 +83,7 @@ from ideavirtualdesktopcontroller.app.sessions.image_validation import (
 )
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (
     AMI_BUILDER_STATUS_COMPLETE,
+    DEFAULT_INSTANCE_TYPE,
     DcvHostImageBuilder,
     BUILD_SUPPORTED_BASE_OS,
     is_windows,
@@ -117,7 +119,7 @@ TERMINAL = (
 )
 
 # GPU variants bake on the vendor's smallest GPU so the driver installs; CPU rows use
-# the builder default for the architecture
+# image_pipeline.builder_instance_types, else the builder default for the architecture
 BUILDER_INSTANCE_TYPES = {
     ('x86_64', ImageVariant.NVIDIA.value): 'g4dn.xlarge',
     ('arm64', ImageVariant.NVIDIA.value): 'g5g.xlarge',
@@ -1048,8 +1050,9 @@ class DesktopImagePipeline:
                 base_ami=record.source_ami,
                 base_os=record.base_os,
                 ami_name=f'{DESKTOP_IMAGE_PREFIX}{record.base_os}{suffix}',
-                instance_type=BUILDER_INSTANCE_TYPES.get(
-                    (record.architecture, variant)
+                instance_type=BUILDER_INSTANCE_TYPES.get((record.architecture, variant))
+                or pipeline_builder_instance_type(
+                    self.settings(), record.architecture, DEFAULT_INSTANCE_TYPE
                 ),
                 ebs_volume_size=self._builder_volume_gb(record),
                 force=True,
