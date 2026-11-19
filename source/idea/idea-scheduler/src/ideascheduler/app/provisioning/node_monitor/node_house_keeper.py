@@ -67,6 +67,11 @@ BOOTSTRAP_FSX_MOUNT_FAILED = 'fsx-mount-failed'
 # an operator-set checksum for the compute node site hook no longer matches the hook file:
 # every node of the cluster stops until an administrator fixes the setting or the hook
 BOOTSTRAP_SITE_HOOK_MISMATCH = 'site-hook-mismatch'
+# a shared file system configured for the cluster did not mount after 5 attempts (the
+# bootstrap's mount_shared_storage); the node log names the mount directories. like the
+# site hook it hits every job of the cluster, so the job is held at once: a retry
+# launches another node into the same outage
+BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE = 'shared-storage-unavailable'
 # read on the host as <scheduler module id>.compute_node_site_hook_sha256; the module id can
 # differ from the module name, so the full key is built at run time
 SITE_HOOK_SETTING_KEY = 'compute_node_site_hook_sha256'
@@ -80,6 +85,15 @@ BOOTSTRAP_FSX_STATUSES = (
     BOOTSTRAP_SCRATCH_UNAVAILABLE,
     BOOTSTRAP_FSX_MOUNT_FAILED,
     BOOTSTRAP_SITE_HOOK_MISMATCH,
+    BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE,
+)
+# the stacks whose stop for shared storage the operator log has named, once each
+_shared_storage_reported: set = set()
+# what the owner is told, no commas: qalter splits a resource value on them
+SHARED_STORAGE_REASON = (
+    'a shared file system configured for the cluster could not be mounted on the node. '
+    'An administrator must check that file system and its network access. This is not '
+    'a problem with the job or the image'
 )
 # the cluster-wide site hook mismatch is logged at error level once per process, not once
 # per job: every job hits it until it is fixed
@@ -1387,6 +1401,8 @@ class NodeHouseKeepingSession:
                 f'{self.site_hook_setting()}. An administrator must update the setting or the '
                 f'hook file'
             )
+        if status == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
+            return SHARED_STORAGE_REASON
         if status == BOOTSTRAP_SCRATCH_UNAVAILABLE:
             return (
                 f'the new FSx for Lustre file system made for this job in stack '
@@ -1423,6 +1439,22 @@ class NodeHouseKeepingSession:
             f'{job.get_compute_stack()}).'
         )
 
+    def _report_cluster_stop(self, job: SocaJob, status: Optional[str]):
+        """the operator log hears of a stop that is the cluster's, not the job's"""
+        if status == BOOTSTRAP_SITE_HOOK_MISMATCH:
+            self._report_site_hook_mismatch(job)
+        elif status == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
+            stack = job.get_compute_stack()
+            if stack in _shared_storage_reported:
+                return
+            _shared_storage_reported.add(stack)
+            self._logger.error(
+                f'a compute node of stack {stack} stopped its bootstrap: a shared file '
+                f'system configured for the cluster did not mount (the node bootstrap log '
+                f'names the mount directories). Jobs are held until an administrator '
+                f'restores that file system or its network access (job {job.job_id}).'
+            )
+
     def _stack_bootstrap_status(self, job: SocaJob) -> Optional[str]:
         """a stop status a node of the job's stack reported, read by stack (shared nodes
         carry the id of the job they were made for)"""
@@ -1458,6 +1490,12 @@ class NodeHouseKeepingSession:
             comment = (
                 f'IDEA: held. The compute node site hook does not match its checksum '
                 f'setting. qrls {job.job_id} to retry'
+            )
+        elif fsx_unavailable == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
+            message = f'Job held: {SHARED_STORAGE_REASON}. qrls {job.job_id} to retry after that.'
+            comment = (
+                f'IDEA: held. Shared cluster storage did not mount on its node. '
+                f'qrls {job.job_id} to retry'
             )
         elif fsx_unavailable == BOOTSTRAP_SCRATCH_UNAVAILABLE:
             message = (
@@ -1742,8 +1780,7 @@ class NodeHouseKeepingSession:
                     # the node is retired by the node-down rule and the attempt counted
                     status = self._stack_bootstrap_status(job)
                     if status is not None:
-                        if status == BOOTSTRAP_SITE_HOOK_MISMATCH:
-                            self._report_site_hook_mismatch(job)
+                        self._report_cluster_stop(job, status)
                         self._context.job_cache.set_job_provisioning_error(
                             job_id=job.job_id,
                             error_code=errorcodes.GENERAL_ERROR,
@@ -1780,8 +1817,7 @@ class NodeHouseKeepingSession:
                         None,
                     )
 
-                if fsx_unavailable == BOOTSTRAP_SITE_HOOK_MISMATCH:
-                    self._report_site_hook_mismatch(job)
+                self._report_cluster_stop(job, fsx_unavailable)
 
                 if fsx_unavailable:
                     # the node will not run the job: hold at once with the reason rather

@@ -1340,3 +1340,66 @@ def test_list_queues_names_architecture_and_os_per_queue(
         assert queue['instance_type_rules'] == (
             'Allowed instance types: c5 (large, xlarge). Excluded: c5 (xlarge).'
         )
+
+
+def test_a_home_that_never_answers_fails_the_submission_within_the_limit(
+    context, monkeypatch
+):
+    # collab rebake: a hard NFS mount that stopped answering held the image validation
+    # (and would hold any submission) in the jobs dir check, with no time limit
+    import threading
+    import time as _time
+
+    api = _prepare_submit(context, monkeypatch)
+    monkeypatch.setattr(scheduler_api_module, 'HOME_ANSWER_SECONDS', 0.2)
+    release = threading.Event()
+    opened = []
+    real_open = scheduler_api_module.open_jobs_dir
+
+    def hung_open(*args, **kwargs):
+        release.wait(5)
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+
+    monkeypatch.setattr(scheduler_api_module, 'open_jobs_dir', hung_open)
+    started = _time.monotonic()
+    with pytest.raises(exceptions.SocaException) as raised:
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    assert _time.monotonic() - started < 2
+    data_dir = context.config().get_string('shared-storage.data.mount_dir')
+    assert raised.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
+    assert (
+        f'The home directory on {data_dir} did not answer within 0.2 seconds'
+        in raised.value.message
+    )
+    assert context.shell.commands == []
+    # the slot is free for the next submission
+    assert api.submission_slots.acquire(blocking=False)
+    api.submission_slots.release()
+
+    # the mount answers again: the script written late is removed, its folder closed
+    release.set()
+    deadline = _time.monotonic() + 5
+    while not opened and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    _time.sleep(0.2)
+    assert os.listdir(_jobs_dir(context)) == []
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+
+
+def test_a_qsub_that_never_returns_fails_the_submission(context, monkeypatch):
+    import subprocess as _subprocess
+
+    api = _prepare_submit(context, monkeypatch)
+
+    def hung(_username, command, **kwargs):
+        assert kwargs['timeout'] == scheduler_api_module.QSUB_TIMEOUT_SECONDS
+        raise _subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    context.shell.invoke_as_user = hung
+    with pytest.raises(exceptions.SocaException) as raised:
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    assert raised.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
+    assert 'Check Active Jobs before submitting it again' in raised.value.message

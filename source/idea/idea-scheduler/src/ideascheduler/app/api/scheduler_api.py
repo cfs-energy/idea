@@ -40,6 +40,7 @@ from ideadatamodel.scheduler import (
 )
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideasdk.utils import Utils, GroupNameHelper
+from ideasdk.aws.validation_identity import call_within
 from ideascheduler.app.api.active_jobs import list_active_job_page
 from ideascheduler.app.job_messages import JOB_INTERNAL_ERROR_MESSAGE
 from ideascheduler.app.api.job_waiting_signals import apply_waiting_signals
@@ -92,9 +93,22 @@ DEFAULT_SERVER_WORKERS = 16
 # shortcut: a fixed bound on a bash submission script, not a setting; make it a
 # scheduler setting if a site's submission scripts legitimately need longer
 BASH_SUBMISSION_TIMEOUT_SECONDS = 300
+# a file call under a user's home on shared storage, and qsub, which starts in the jobs dir
+HOME_ANSWER_SECONDS = 60
+QSUB_TIMEOUT_SECONDS = 120
+
 JOB_SUBMISSION_DEDUPE_MAX_ENTRIES = 512
 # same shape as the api envelope's request_id: the value is used as a cache key and is logged.
 PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
+
+
+def home_unanswered(mount: str) -> str:
+    return (
+        f'The home directory on {mount} did not answer within {HOME_ANSWER_SECONDS} '
+        f'seconds, so the job could not be submitted. Try again later; if it repeats, '
+        f'tell an administrator to check that file system.'
+    )
+
 
 # cross-module read: the maintenance window is owned by cluster-manager. read on every
 # submission, never cached, so closing the window takes effect straight away.
@@ -672,19 +686,52 @@ class SchedulerAPI(BaseAPI):
         script_name = f'{filename_base}{extension}'
         job_submit_script = os.path.join(job_submission_dir, script_name)
 
-        # defense in depth: the resolved target must resolve to a direct child of the
-        # user's jobs dir. rejects any residual traversal or a symlinked directory.
-        real_dir = os.path.realpath(job_submission_dir)
-        real_target = os.path.realpath(job_submit_script)
-        if os.path.dirname(real_target) != real_dir:
-            raise exceptions.general_exception(
-                f'refusing to write job script outside {job_submission_dir}'
-            )
-
         group_name = self.group_name_helper.get_user_group(job_owner)
-        # the script is created relative to the jobs dir opened and checked here and chowned
-        # through its fd, so nothing swapped in at the path can redirect it.
-        dir_fd = open_jobs_dir(job_submission_dir, user=job_owner, group=group_name)
+
+        def write_script() -> int:
+            # defense in depth: the resolved target must resolve to a direct child of the
+            # user's jobs dir. rejects any residual traversal or a symlinked directory.
+            real_dir = os.path.realpath(job_submission_dir)
+            real_target = os.path.realpath(job_submit_script)
+            if os.path.dirname(real_target) != real_dir:
+                raise exceptions.general_exception(
+                    f'refusing to write job script outside {job_submission_dir}'
+                )
+            # the script is created relative to the jobs dir opened and checked here and
+            # chowned through its fd, so nothing swapped in at the path can redirect it.
+            fd = open_jobs_dir(job_submission_dir, user=job_owner, group=group_name)
+            try:
+                with open_new_job_script(script_name, dir_fd=fd) as f:
+                    f.write(Utils.base64_decode(job_script))
+                    f.write('\n')
+                    chown_fd(f.fileno(), user=job_owner, group=group_name)
+            except BaseException:
+                os.close(fd)
+                raise
+            return fd
+
+        def remove(names, fd):
+            for name in names:
+                try:
+                    os.unlink(name, dir_fd=fd)
+                except OSError:
+                    pass
+            os.close(fd)
+
+        # the home is on shared storage: a hard mount that stops answering blocks a file
+        # call for ever, which held this request worker and the submission slot (the image
+        # validation hung here). a script written after the wait was given up is removed
+        try:
+            dir_fd = call_within(
+                write_script,
+                HOME_ANSWER_SECONDS,
+                on_late=lambda fd: remove([script_name], fd),
+            )
+        except TimeoutError:
+            raise exceptions.soca_exception(
+                errorcodes.JOB_SUBMISSION_FAILED,
+                home_unanswered(data_dir),
+            )
 
         # the script stays in the owner's jobs dir, where the owner and an administrator read
         # it afterwards, when the job was queued or a dry run passed; the result then names it.
@@ -695,11 +742,6 @@ class SchedulerAPI(BaseAPI):
         log_name = None
         keep_log = False
         try:
-            with open_new_job_script(script_name, dir_fd=dir_fd) as f:
-                f.write(Utils.base64_decode(job_script))
-                f.write('\n')
-                chown_fd(f.fileno(), user=job_owner, group=group_name)
-
             if job_script_interpreter == 'pbs':
                 command = ['qsub']
                 if dry_run is not None:
@@ -709,9 +751,26 @@ class SchedulerAPI(BaseAPI):
                 command += ['-l', f'job_uid={job_uid}', job_submit_script]
 
                 self.logger.info(f'as {job_owner}: {shlex.join(command)}')
-                result = self.context.shell.invoke_as_user(
-                    job_owner, command, cwd=job_submission_dir
-                )
+                try:
+                    # qsub starts in the owner's jobs dir and reads the script there
+                    result = self.context.shell.invoke_as_user(
+                        job_owner,
+                        command,
+                        cwd=job_submission_dir,
+                        timeout=QSUB_TIMEOUT_SECONDS,
+                    )
+                except subprocess.TimeoutExpired:
+                    keep_script = True
+                    self.logger.error(
+                        f'qsub did not finish in {QSUB_TIMEOUT_SECONDS} s: '
+                        f'{shlex.join(command)}'
+                    )
+                    raise exceptions.soca_exception(
+                        errorcodes.JOB_SUBMISSION_FAILED,
+                        f'The submission did not finish within {QSUB_TIMEOUT_SECONDS} '
+                        f'seconds; the home directory on {data_dir} may not be answering. '
+                        f'Check Active Jobs before submitting it again.',
+                    )
 
                 job_id = None
                 if result.returncode == 0:
@@ -786,8 +845,21 @@ class SchedulerAPI(BaseAPI):
                 # the script's output goes to <script>.log in the owner's jobs folder,
                 # never into this service's memory or log; it is kept when the script fails
                 log_name = f'{script_name}.log'
-                with open_new_job_script(log_name, dir_fd=dir_fd) as log:
+
+                def open_log():
+                    log = open_new_job_script(log_name, dir_fd=dir_fd)
                     chown_fd(log.fileno(), user=job_owner, group=group_name)
+                    return log
+
+                try:
+                    log = call_within(open_log, HOME_ANSWER_SECONDS)
+                except TimeoutError:
+                    log_name = None
+                    raise exceptions.soca_exception(
+                        errorcodes.JOB_SUBMISSION_FAILED,
+                        home_unanswered(data_dir),
+                    )
+                with log:
                     self.logger.info(f'as {job_owner}: {shlex.join(command)}')
                     try:
                         result = self.context.shell.invoke_as_user(
@@ -827,17 +899,14 @@ class SchedulerAPI(BaseAPI):
                         f'Its output is in {job_submit_script}.log.',
                     )
         finally:
-            if not keep_script:
-                try:
-                    os.unlink(script_name, dir_fd=dir_fd)
-                except OSError:
-                    pass
+            removed = [] if keep_script else [script_name]
             if log_name is not None and not keep_log:
-                try:
-                    os.unlink(log_name, dir_fd=dir_fd)
-                except OSError:
-                    pass
-            os.close(dir_fd)
+                removed.append(log_name)
+            try:
+                call_within(lambda: remove(removed, dir_fd), HOME_ANSWER_SECONDS)
+            except TimeoutError:
+                # finished on its own thread when the mount answers again
+                self.logger.warning(home_unanswered(data_dir))
 
     def list_queues(self, context: ApiInvocationContext):
         """

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -12,6 +13,7 @@ from ideadatamodel import (
     ImageCheck,
     ImagePipelineSettings,
     SocaJobParams,
+    SocaJobState,
     SocaQueueManagementParams,
     SocaQueueMode,
     SocaScalingMode,
@@ -26,6 +28,7 @@ from ideasdk.aws.failure_capture import (
 )
 from ideasdk.aws.image_builds import default_builder_instance_type, with_cause
 from ideasdk.aws.validation_identity import (
+    call_within,
     ensure_validation_identity,
     path_answers,
     wait_for_local_user,
@@ -53,6 +56,33 @@ CLEANUP_SECONDS = 180
 EXITING_SECONDS = 60
 # a new user's home is made by the cluster manager's account task shortly after the user
 HOME_SECONDS = 120
+# one file call on the shared home: a hard mount that stops answering never returns
+ANSWER_SECONDS = 60
+
+
+# the rows of a rebake validate at once: one probe of the shared home serves them all, so a
+# home that stopped answering fails every row within one probe instead of leaving a blocked
+# probe thread per row
+HOME_PROBE_REUSE_SECONDS = 300
+_home_probe_lock = threading.Lock()
+_home_probes: dict = {}
+
+
+def home_answers(home) -> bool:
+    with _home_probe_lock:
+        seen = _home_probes.get(str(home))
+        if seen is not None and time.monotonic() - seen[0] < HOME_PROBE_REUSE_SECONDS:
+            return seen[1]
+        answered = path_answers(str(home), ANSWER_SECONDS)
+        _home_probes[str(home)] = (time.monotonic(), answered)
+        return answered
+
+
+def home_unanswered(path) -> str:
+    return (
+        f'The home directory {path} did not answer within {ANSWER_SECONDS} seconds. '
+        f'Check the file system that serves it.'
+    )
 
 
 def wait_for_home(home: Path, timeout_seconds: int = HOME_SECONDS) -> None:
@@ -61,12 +91,13 @@ def wait_for_home(home: Path, timeout_seconds: int = HOME_SECONDS) -> None:
         # a hard mount that stops answering would block is_dir() past the deadline
         remaining = max(deadline - time.monotonic(), 0)
         if not path_answers(str(home), min(10, remaining) or 0.1):
-            raise exceptions.general_exception(
-                f'The shared home holding {home} stopped answering. Check the shared '
-                f'home file system.'
-            )
-        if home.is_dir():
-            return
+            raise exceptions.general_exception(home_unanswered(home))
+        # the probe answered, but the mount can stop between two calls
+        try:
+            if call_within(home.is_dir, max(remaining, 0.1)):
+                return
+        except TimeoutError:
+            raise exceptions.general_exception(home_unanswered(home))
         if time.monotonic() >= deadline:
             raise exceptions.general_exception(
                 f'The validation user home {home} was not created within '
@@ -277,6 +308,38 @@ class ComputeImageCanary:
             f'{size}, the validation instance type.'
         )
 
+    def _timeout_reason(self, job_id, last_job, observed_node, seconds) -> str:
+        """which phase the validation job stopped in, and whether that points at the
+        environment or the image: one reason for all of them said neither"""
+        if observed_node is not None or (
+            last_job is not None and last_job.state == SocaJobState.RUNNING
+        ):
+            host = getattr(observed_node, 'host', None) or 'its node'
+            return (
+                f'The validation job started on {host} but did not finish within '
+                f'{seconds} seconds. It checks the shared file systems and then waits 10 '
+                f'seconds, so a slow or unanswering file system on the node (the '
+                f'environment) is the likely cause, not the image.'
+            )
+        instance = find_job_instance(self.context, job_id)
+        if instance is None:
+            refused = last_job.error_message if last_job is not None else None
+            if refused:
+                return (
+                    f'No node was launched for the validation job within {seconds} '
+                    f'seconds: the scheduler reported "{refused}". This is the '
+                    f'environment (EC2 capacity, quota or the queue limits), not the image.'
+                )
+            return (
+                f'No node was launched for the validation job within {seconds} seconds. '
+                f'This is the environment (scheduler provisioning or EC2), not the image.'
+            )
+        return (
+            f'A node ({instance}) launched on the candidate image but did not register '
+            f'with the scheduler within {seconds} seconds. The image is the likely cause '
+            f'(its boot, bootstrap or PBS); the node log that follows says more.'
+        )
+
     def _capture_failed_node(self, record, job_id, node, error):
         return capture_failure(
             self.context,
@@ -387,11 +450,8 @@ class ComputeImageCanary:
         output = Path(data) / 'home' / user / 'jobs' / (name + '.json')
         # the submit below stats this path with no timeout: on a hung mount it never returns
         home = output.parents[1]
-        if not path_answers(str(home)):
-            raise exceptions.general_exception(
-                f'The shared home {home} did not answer within 60 seconds, so the '
-                'validation job cannot be written. Check the file system that serves it.'
-            )
+        if not home_answers(home):
+            raise exceptions.general_exception(home_unanswered(home))
         # the submit writes into the home and does not create it
         wait_for_home(home)
         # PBS directive values cannot contain line breaks or whitespace.
@@ -456,10 +516,12 @@ class ComputeImageCanary:
             )
             observed_node = None
             finished = None
+            last_job = None
             while time.monotonic() < deadline:
                 # qstat -x: plain qstat refuses a finished job (rc 35) instead of returning it
                 job = self.context.scheduler.get_finished_job(job_id)
                 if job:
+                    last_job = job
                     # qstat's SocaJob has no execution_hosts outside hook events.
                     # pbsnodes lists the jobs actually running on each registered MOM.
                     for node in self.context.scheduler.list_nodes():
@@ -475,7 +537,12 @@ class ComputeImageCanary:
                 in_time,
                 'The validation job finished within the ready gate.'
                 if in_time
-                else 'The validation job timed out before completion.',
+                else self._timeout_reason(
+                    job_id,
+                    last_job,
+                    observed_node,
+                    settings.ready_gate_seconds_linux,
+                ),
             )
             check(
                 'compute_identity',
@@ -507,8 +574,10 @@ class ComputeImageCanary:
             evidence = {}
             while time.monotonic() < deadline:
                 try:
-                    evidence = json.loads(output.read_text())
+                    evidence = json.loads(call_within(output.read_text, ANSWER_SECONDS))
                     break
+                except TimeoutError:
+                    raise exceptions.general_exception(home_unanswered(output.parent))
                 except (OSError, ValueError):
                     time.sleep(2)
             node_names = {observed_node.host, launched[0].get('PrivateDnsName', '')}
@@ -520,7 +589,11 @@ class ComputeImageCanary:
             check(
                 'compute_output',
                 evidence.get('token') == token and evidence.get('host') in node_names,
-                'The validation job must produce its known output on the registered node.',
+                'The validation job must produce its known output on the registered node.'
+                if evidence
+                else f'The validation job finished, but its output file {output} could '
+                f'not be read within {settings.ready_gate_seconds_linux} seconds. The '
+                f'shared home (the environment) is the likely cause, not the image.',
             )
             results = {item.get('name'): item for item in evidence.get('checks', [])}
             for fs, _ in mounts:
@@ -564,7 +637,10 @@ class ComputeImageCanary:
             cleanup_errors = self._release(job_id, created)
             for path in (output, Path(str(output) + '.err')):
                 try:
-                    path.unlink(missing_ok=True)
+                    call_within(lambda: path.unlink(missing_ok=True), ANSWER_SECONDS)
+                except TimeoutError:
+                    cleanup_errors.append(home_unanswered(path.parent))
+                    break
                 except OSError as error:
                     cleanup_errors.append(str(error))
             if cleanup_errors:
