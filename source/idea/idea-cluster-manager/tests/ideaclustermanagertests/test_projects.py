@@ -967,3 +967,61 @@ def test_a_failed_read_at_start_changes_no_project(
         )
         context.projects.projects_dao.delete_project(other.project_id)
         context.accounts.delete_group(failing.name, force=True)
+
+
+@pytest.fixture
+def deleted_group_on_project(context, two_group_project):
+    # the project still names a group whose record is gone, as a group deleted while
+    # on a project leaves it, and one user holds the project through it
+    t = two_group_project
+    dao = context.projects.user_projects_dao
+    projects = context.projects.projects_dao.table
+    ldap_groups = [g.name for g in t.groups]
+    projects.update_item(
+        Key={'project_id': t.project.project_id},
+        UpdateExpression='SET ldap_groups = :groups',
+        ExpressionAttributeValues={':groups': ldap_groups + ['gone-project-group']},
+    )
+    ghost = context.accounts.create_user(
+        user=User(username='gone_member', email='gone_member@example.com')
+    )
+    context.accounts.group_members_dao.create_membership(
+        'gone-project-group', ghost.username
+    )
+    dao.create_user_project(project_id=t.project.project_id, username=ghost.username)
+    yield ghost
+    context.accounts.group_members_dao.delete_membership(
+        'gone-project-group', ghost.username
+    )
+    context.accounts.delete_user(ghost.username)
+    projects.update_item(
+        Key={'project_id': t.project.project_id},
+        UpdateExpression='SET ldap_groups = :groups',
+        ExpressionAttributeValues={':groups': ldap_groups},
+    )
+    dao.refresh_project(t.project.project_id)
+
+
+@pytest.mark.parametrize('path', ['start', 'disable'])
+def test_a_disabled_group_revokes_even_when_the_project_names_a_deleted_group(
+    context, two_group_project, sole_member, deleted_group_on_project, path
+):
+    t = two_group_project
+    only, table, _ = sole_member
+    ghost = deleted_group_on_project
+    dao = context.projects.user_projects_dao
+    if path == 'start':
+        table.update_item(
+            Key={'group_name': t.groups[0].name},
+            UpdateExpression='SET enabled = :off',
+            ExpressionAttributeValues={':off': False},
+        )
+        dao.refresh_all_projects()
+    else:
+        context.accounts.disable_group(t.groups[0].name)
+    # its access came only through the disabled group
+    assert not dao.is_user_in_project(only.username, t.project.project_id)
+    # still granted through the other, enabled group
+    assert dao.is_user_in_project(t.user.username, t.project.project_id)
+    # may hold it through the group with no record: kept
+    assert dao.is_user_in_project(ghost.username, t.project.project_id)
