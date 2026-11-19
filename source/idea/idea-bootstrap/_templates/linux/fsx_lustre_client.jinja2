@@ -29,7 +29,10 @@ LUSTRE_REQUIRED=yes
 # Lustre stops with the reason instead of rebooting until check_reboot_loop gives up.
 function fail_lustre_client () {
   local reason="${1}"
-  local message="${2} Lustre filesystems cannot be mounted on this node (reason code: ${1})."
+  # what an operator can do; a bake row shows the last 400 characters of this line
+  local action="Check the bootstrap log for the package error and that the host reaches fsx-lustre-client-repo.s3.amazonaws.com and its OS repositories, then retry."
+  [[ "${reason}" != lustre-module-missing ]] || action="Use a base image whose kernel FSx for Lustre has a client for, or rebuild the image once FSx publishes one."
+  local message="${2} Lustre filesystems cannot be mounted on this node. ${action} (reason code: ${1})."
   log_error "${message}"
   [[ "${LUSTRE_REQUIRED}" == yes ]] || return 0
   echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
@@ -169,7 +172,7 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
     sudo yum clean all
     package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
   else
-    lustre_kernel_unsupported "Can't install FSx for Lustre client: kernel version $kernel does not match a supported series (6.12.0-211* for EL 10.2, 6.12.0-124* for EL 10.1). EL 10.0 has no FSx Lustre client - use a 10.1 or 10.2 AMI."
+    lustre_kernel_unsupported "No FSx for Lustre client build for kernel $kernel (EL 10 builds: 6.12.0-211 for 10.2, 6.12.0-124 for 10.1; none for 10.0)."
   fi
 fi
 {% endif %}
@@ -244,7 +247,7 @@ if [[ -z "$(rpm -qa lustre-client)" ]]; then
       sudo yum clean all
       package_transaction yum install -y kmod-lustre-client lustre-client; lustre_client_installed $?
     else
-      lustre_kernel_unsupported "Can't install FSx for Lustre client as kernel version $kernel isn't matching expected versions: (x86_64: 5.14.0-70, -362, -427, -503, -570, -611, -687, -741)!"
+      lustre_kernel_unsupported "No FSx for Lustre client build for kernel $kernel (EL 9 builds: 5.14.0-70, -362, -427, -503, -570, -611, -687, -741)."
     fi
 fi
 {% endif %}

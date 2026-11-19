@@ -591,18 +591,19 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
 # bootstrap that cannot put the running kernel back as the default, to apply the initramfs test
 # and rescue removal to a series change as well, and to keep the running kernel when the newer one
 # has no FSx for Lustre module (compute bakes report a failure through their in-bake checks),
-# and to keep an EL 9.9 (741) image on its own series.
+# and to keep an EL 9.9 (741) image on its own series. A cluster without Lustre gets no kernel series
+# move, so these renders change only by blank lines.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
         (
             'amazonlinux2023',
-            '4764e4ec8b8b47e3d7a7814730689af68fd7e97106ca5b8f4dce3306a2540e4c',
+            '578fb1241db267adfdda629d4628c844c95591d038c7c6699e057af98fd17771',
         ),
-        ('rhel8', '30d4ad519b8498e21c9ff0d89b9b3b55d02c51dd016ea721109095e37210bebb'),
-        ('rocky8', '30d4ad519b8498e21c9ff0d89b9b3b55d02c51dd016ea721109095e37210bebb'),
-        ('rhel9', 'ae515048727b94f00b047da9096ac1f1ccad89586b959f0a07930d91143cfd0c'),
-        ('rocky9', 'ae515048727b94f00b047da9096ac1f1ccad89586b959f0a07930d91143cfd0c'),
+        ('rhel8', 'b24c153acdb954e426d7f768361b208e35d59cc407f44d72049efea8d26df690'),
+        ('rocky8', 'b24c153acdb954e426d7f768361b208e35d59cc407f44d72049efea8d26df690'),
+        ('rhel9', '795b5b9f74731c5f0b0af2939207d074e1d5335c76dc32fab580c195d75c5435'),
+        ('rocky9', '795b5b9f74731c5f0b0af2939207d074e1d5335c76dc32fab580c195d75c5435'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
@@ -612,7 +613,13 @@ def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
 
     text = Template(
         Path(IDEA_BOOTSTRAP_DIR, '_templates/linux/set_kernel.jinja2').read_text()
-    ).render(context={'base_os': base_os, 'aws_region': 'us-east-1'})
+    ).render(
+        context={
+            'base_os': base_os,
+            'aws_region': 'us-east-1',
+            'has_storage_provider': lambda provider: False,
+        }
+    )
     assert hashlib.sha256(text.encode()).hexdigest() == expected
 
 
