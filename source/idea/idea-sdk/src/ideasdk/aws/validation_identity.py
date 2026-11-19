@@ -181,6 +181,43 @@ def path_answers(path: str, timeout_seconds: int = 60) -> bool:
     return answered.wait(timeout_seconds)
 
 
+def call_within(call, timeout_seconds: float = 60, on_late=None):
+    """
+    call() on a thread of its own, waited for timeout_seconds. a call on a hard NFS mount
+    that stops answering blocks without an error and cannot be interrupted, so the caller
+    stops waiting instead: TimeoutError is raised, and on_late(result) runs if the call
+    returns after that, to release what it made. an error of call() is raised as is.
+    ponytail: a blocked thread stays until the mount answers or the task ends.
+    """
+    lock = threading.Lock()
+    done = threading.Event()
+    outcome = {}
+
+    def run():
+        try:
+            outcome['result'] = call()
+        except BaseException as error:  # noqa: BLE001 (handed to the caller)
+            outcome['error'] = error
+        with lock:
+            late = outcome.get('abandoned', False)
+            done.set()
+        if late and on_late is not None and 'result' in outcome:
+            try:
+                on_late(outcome['result'])
+            except Exception:
+                pass
+
+    threading.Thread(target=run, daemon=True, name='call-within').start()
+    done.wait(timeout_seconds)
+    with lock:
+        if not done.is_set():
+            outcome['abandoned'] = True
+            raise TimeoutError(f'no answer within {timeout_seconds} seconds')
+    if 'error' in outcome:
+        raise outcome['error']
+    return outcome.get('result')
+
+
 def invoke_cluster_manager(context, namespace: str, payload: SocaBaseModel) -> None:
     """
     a write to the cluster manager. it needs cluster-manager/write on the calling

@@ -1351,3 +1351,30 @@ def test_console_links_use_the_partitions_host(region, host):
     from ideasdk.aws.image_builds import console_host
 
     assert console_host(region) == host
+
+
+def test_a_call_that_never_returns_is_given_up_and_released_when_it_does():
+    import threading
+    import time as _time
+
+    from ideasdk.aws.validation_identity import call_within
+
+    assert call_within(lambda: 7, 1) == 7
+    with pytest.raises(ValueError):
+        call_within(lambda: (_ for _ in ()).throw(ValueError('x')), 1)
+
+    release = threading.Event()
+    late = []
+    started = _time.monotonic()
+    with pytest.raises(TimeoutError):
+        call_within(
+            lambda: release.wait(5) and 'fd',
+            0.1,
+            on_late=lambda result: late.append(result),
+        )
+    assert _time.monotonic() - started < 1
+    release.set()
+    deadline = _time.monotonic() + 5
+    while not late and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    assert late == ['fd']

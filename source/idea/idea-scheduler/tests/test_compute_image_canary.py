@@ -647,7 +647,7 @@ def test_a_hung_shared_home_fails_the_canary_before_it_creates_anything(monkeypa
         module, 'ensure_validation_identity', lambda *a: Mock(project_id='p')
     )
     monkeypatch.setattr(module, 'wait_for_local_user', lambda *a: None)
-    monkeypatch.setattr(module, 'path_answers', lambda path: False)
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: False)
     source = Mock(default_job_params=None)
     source.name = 'compute'
     context.queue_profiles.list_queue_profiles.return_value = [source]
@@ -727,7 +727,7 @@ def test_waiting_for_the_home_stops_when_the_mount_stops_answering(
     monkeypatch.setattr(module.time, 'sleep', lambda _s: None)
     with pytest.raises(exceptions.SocaException) as raised:
         home_present(tmp_path / 'missing-home', timeout_seconds=120)
-    assert 'stopped answering' in raised.value.message
+    assert 'did not answer within 60 seconds' in raised.value.message
 
 
 def test_waiting_for_the_home_returns_once_it_exists(
@@ -735,3 +735,24 @@ def test_waiting_for_the_home_returns_once_it_exists(
 ):
     monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
     home_present(tmp_path)
+
+
+def test_a_home_check_that_never_returns_fails_the_validation_within_the_limit(
+    monkeypatch, tmp_path, home_present
+):
+    # the probe answered, then the mount stopped: is_dir() never returns
+    import threading
+    import time as _time
+    from pathlib import Path
+
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
+    never = threading.Event()
+    monkeypatch.setattr(Path, 'is_dir', lambda self: never.wait(5))
+    started = _time.monotonic()
+    with pytest.raises(exceptions.SocaException) as raised:
+        home_present(tmp_path / 'home', timeout_seconds=0.3)
+    assert _time.monotonic() - started < 2
+    assert f'The home directory {tmp_path / "home"} did not answer' in (
+        raised.value.message
+    )
+    never.set()

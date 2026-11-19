@@ -26,6 +26,7 @@ from ideasdk.aws.failure_capture import (
 )
 from ideasdk.aws.image_builds import default_builder_instance_type, with_cause
 from ideasdk.aws.validation_identity import (
+    call_within,
     ensure_validation_identity,
     path_answers,
     wait_for_local_user,
@@ -53,6 +54,15 @@ CLEANUP_SECONDS = 180
 EXITING_SECONDS = 60
 # a new user's home is made by the cluster manager's account task shortly after the user
 HOME_SECONDS = 120
+# one file call on the shared home: a hard mount that stops answering never returns
+ANSWER_SECONDS = 60
+
+
+def home_unanswered(path) -> str:
+    return (
+        f'The home directory {path} did not answer within {ANSWER_SECONDS} seconds. '
+        f'Check the file system that serves it.'
+    )
 
 
 def wait_for_home(home: Path, timeout_seconds: int = HOME_SECONDS) -> None:
@@ -61,12 +71,13 @@ def wait_for_home(home: Path, timeout_seconds: int = HOME_SECONDS) -> None:
         # a hard mount that stops answering would block is_dir() past the deadline
         remaining = max(deadline - time.monotonic(), 0)
         if not path_answers(str(home), min(10, remaining) or 0.1):
-            raise exceptions.general_exception(
-                f'The shared home holding {home} stopped answering. Check the shared '
-                f'home file system.'
-            )
-        if home.is_dir():
-            return
+            raise exceptions.general_exception(home_unanswered(home))
+        # the probe answered, but the mount can stop between two calls
+        try:
+            if call_within(home.is_dir, max(remaining, 0.1)):
+                return
+        except TimeoutError:
+            raise exceptions.general_exception(home_unanswered(home))
         if time.monotonic() >= deadline:
             raise exceptions.general_exception(
                 f'The validation user home {home} was not created within '
@@ -387,11 +398,8 @@ class ComputeImageCanary:
         output = Path(data) / 'home' / user / 'jobs' / (name + '.json')
         # the submit below stats this path with no timeout: on a hung mount it never returns
         home = output.parents[1]
-        if not path_answers(str(home)):
-            raise exceptions.general_exception(
-                f'The shared home {home} did not answer within 60 seconds, so the '
-                'validation job cannot be written. Check the file system that serves it.'
-            )
+        if not path_answers(str(home), ANSWER_SECONDS):
+            raise exceptions.general_exception(home_unanswered(home))
         # the submit writes into the home and does not create it
         wait_for_home(home)
         # PBS directive values cannot contain line breaks or whitespace.
@@ -507,8 +515,10 @@ class ComputeImageCanary:
             evidence = {}
             while time.monotonic() < deadline:
                 try:
-                    evidence = json.loads(output.read_text())
+                    evidence = json.loads(call_within(output.read_text, ANSWER_SECONDS))
                     break
+                except TimeoutError:
+                    raise exceptions.general_exception(home_unanswered(output.parent))
                 except (OSError, ValueError):
                     time.sleep(2)
             node_names = {observed_node.host, launched[0].get('PrivateDnsName', '')}
@@ -564,7 +574,10 @@ class ComputeImageCanary:
             cleanup_errors = self._release(job_id, created)
             for path in (output, Path(str(output) + '.err')):
                 try:
-                    path.unlink(missing_ok=True)
+                    call_within(lambda: path.unlink(missing_ok=True), ANSWER_SECONDS)
+                except TimeoutError:
+                    cleanup_errors.append(home_unanswered(path.parent))
+                    break
                 except OSError as error:
                     cleanup_errors.append(str(error))
             if cleanup_errors:
