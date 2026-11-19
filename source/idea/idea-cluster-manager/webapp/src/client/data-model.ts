@@ -464,6 +464,8 @@ export interface ImageBuildRecord {
   validated_on?: string;
   promoted_on?: string;
   checks?: ImageCheck[];
+  builder_instance_type?: string;
+  builder_fallback?: string;
   log_link?: string;
   attempts?: number;
   retry_after?: string;
