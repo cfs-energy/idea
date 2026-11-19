@@ -623,8 +623,11 @@ class SchedulerAPI(BaseAPI):
             result = self._submit_job(
                 request=request, job_owner=job_owner, dry_run=dry_run
             )
-        except BaseException:
-            self.job_submission_deduplicator.rollback(dedupe_key)
+        except BaseException as error:
+            # a qsub that timed out may have queued the job: the key stays claimed for its
+            # lifetime, so a retry with the same id is refused instead of queuing a second
+            if not getattr(error, 'submission_indeterminate', False):
+                self.job_submission_deduplicator.rollback(dedupe_key)
             raise
 
         if Utils.get_as_bool(result.accepted, False):
@@ -765,12 +768,14 @@ class SchedulerAPI(BaseAPI):
                         f'qsub did not finish in {QSUB_TIMEOUT_SECONDS} s: '
                         f'{shlex.join(command)}'
                     )
-                    raise exceptions.soca_exception(
+                    timed_out = exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
                         f'The submission did not finish within {QSUB_TIMEOUT_SECONDS} '
                         f'seconds; the home directory on {data_dir} may not be answering. '
                         f'Check Active Jobs before submitting it again.',
                     )
+                    timed_out.submission_indeterminate = True
+                    raise timed_out
 
                 job_id = None
                 if result.returncode == 0:

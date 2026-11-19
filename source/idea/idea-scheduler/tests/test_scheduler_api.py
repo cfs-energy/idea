@@ -1403,3 +1403,5 @@ def test_a_qsub_that_never_returns_fails_the_submission(context, monkeypatch):
         api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
     assert raised.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
     assert 'Check Active Jobs before submitting it again' in raised.value.message
+    # the job may be queued: the submission id is not released for a retry
+    assert raised.value.submission_indeterminate is True
