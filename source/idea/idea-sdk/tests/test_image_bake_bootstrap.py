@@ -555,7 +555,11 @@ def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
         + ''.join(f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block))
     )
     result = subprocess.run(
-        ['bash', '-c', source + f'\nBAKE_STAGE=setup\nBOOTSTRAP_DIR={tmp_path}\n' + stubs + block],
+        [
+            'bash',
+            '-c',
+            source + f'\nBAKE_STAGE=setup\nBOOTSTRAP_DIR={tmp_path}\n' + stubs + block,
+        ],
         capture_output=True,
         text=True,
         env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
@@ -567,10 +571,14 @@ def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
         'setup: [[ ${#not_mounted[@]} -eq 0 ]] (exit 1)'
     )
     assert result.stdout.count('Shared storage not mounted: /apps/') == 5
-    assert '[ERROR] Shared storage did not mount after 5 attempts: /apps/. Check' in result.stdout
-    assert 'Key=idea:BootstrapStatus,Value=shared-storage-unavailable' in (
-        tmp_path / 'tags'
-    ).read_text()
+    assert (
+        '[ERROR] Shared storage did not mount after 5 attempts: /apps/. Check'
+        in result.stdout
+    )
+    assert (
+        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable'
+        in (tmp_path / 'tags').read_text()
+    )
 
 
 def test_a_host_whose_storage_mounts_goes_on(tmp_path):
@@ -578,7 +586,12 @@ def test_a_host_whose_storage_mounts_goes_on(tmp_path):
         '_templates/linux/mount_shared_storage.jinja2', 'rocky9', lustre=False
     )
     start = script.index('function mount_shared_storage ()')
-    block = script[start : script.index('\n  fi\n', script.index('fail_bootstrap shared-storage-unavailable')) + 6]
+    block = script[
+        start : script.index(
+            '\n  fi\n', script.index('fail_bootstrap shared-storage-unavailable')
+        )
+        + 6
+    ]
     bin_dir, source = _mount_stubs(tmp_path, ['/data/', '/apps/'])
     stubs = 'mkdir() { :; }\nsleep() { :; }\naws() { echo tagged; }\n' + ''.join(
         f'{fn}() {{ :; }}\n' for fn in re.findall(r'add_\w+_to_fstab', block)
