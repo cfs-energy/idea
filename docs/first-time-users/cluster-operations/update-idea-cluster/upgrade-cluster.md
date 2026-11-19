@@ -335,7 +335,7 @@ Run these checks on each cluster before upgrading to 26.11.2. Every command only
     C=<CLUSTER_NAME>; R=<REGION>; jq -rn --argjson g "$(aws dynamodb scan --region $R --table-name $C.accounts.groups --projection-expression 'group_name,enabled' --output json)" --argjson p "$(aws dynamodb scan --region $R --table-name $C.projects --projection-expression 'project_id,#n,enabled,ldap_groups' --expression-attribute-names '{"#n":"name"}' --output json)" '[$g.Items[].group_name.S] as $all | ($g.Items[]|select(.enabled.BOOL==null)|"group without enabled: \(.group_name.S)"), ($p.Items[]|select(.enabled.BOOL==null)|"project without enabled: \(.name.S) \(.project_id.S)"), ($p.Items[] as $x|$x.ldap_groups.L[]?.S|select(IN($all[])|not)|"project \($x.name.S) names a group with no record: \(.)"), "groups \($g.Count), projects \($p.Count)"'
     ```
 
-    A group without `enabled` still grants access. A project without `enabled` is one nobody has enabled yet, which is normal; the refresh neither adds nor removes its rows. A project that names a group with no record keeps its rows. Nothing needs fixing before the upgrade, but a project in the list that people rely on should be enabled in the portal.
+    A group without `enabled` still grants access. A project without `enabled` is one nobody has enabled yet, which is normal; the refresh neither adds nor removes its rows. A project that names a group with no record keeps the rows of users its membership records still place in that group; its other rows follow the groups that do have records. Nothing needs fixing before the upgrade, but a project in the list that people rely on should be enabled in the portal.
 
 ### What Changes After the Upgrade
 
