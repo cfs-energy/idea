@@ -598,7 +598,7 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
 # has no FSx for Lustre module (compute bakes report a failure through their in-bake checks),
 # and to keep an EL 9.9 (741) image on its own series. A cluster without Lustre gets no kernel series
 # move, so these renders change only by blank lines; a bake makes room on /boot before a kernel
-# install.
+# install that is not already on disk.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
@@ -606,10 +606,10 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
             'amazonlinux2023',
             '8975140e91aa04eab33e9083b442c4111df26b7d9c96cfa1794a53c154b8be08',
         ),
-        ('rhel8', '8f1ab71670192499b6413bb4cb4b9cbca33d3764aa352bdbc92ae7b659f49b55'),
-        ('rocky8', '8f1ab71670192499b6413bb4cb4b9cbca33d3764aa352bdbc92ae7b659f49b55'),
-        ('rhel9', '72a9045048cc863a9a71884126ea2a4d809a0c3d10656e362c5098a32e43f5d0'),
-        ('rocky9', '72a9045048cc863a9a71884126ea2a4d809a0c3d10656e362c5098a32e43f5d0'),
+        ('rhel8', 'e5234441e9f34c65fb3aafd14db0e7bb77dbd330365ee8c8abd2dde51e6cf1bf'),
+        ('rocky8', 'e5234441e9f34c65fb3aafd14db0e7bb77dbd330365ee8c8abd2dde51e6cf1bf'),
+        ('rhel9', '5b42427820dd8bbccb651ee4fe973a6cf6d803e6736b28b6bfc8a0dc3995f23e'),
+        ('rocky9', '5b42427820dd8bbccb651ee4fe973a6cf6d803e6736b28b6bfc8a0dc3995f23e'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
