@@ -437,7 +437,11 @@ class ActiveDirectoryClient(AbstractLDAPClient):
                     )
                 )
             self.modify_s(group_dn, group_attrs)
-        except ldap.TYPE_OR_VALUE_EXISTS:
+        except (
+            ldap.TYPE_OR_VALUE_EXISTS,
+            # Active Directory's answer for a member it already has
+            ldap.ALREADY_EXISTS,
+        ):
             pass
 
     def remove_user_from_group(self, usernames: List[str], group_name: str):
