@@ -224,7 +224,7 @@ class AccountsService:
                 message=f'group not found for group name: {group_name}',
             )
 
-        if not db_group['enabled']:
+        if not Utils.get_value_as_bool('enabled', db_group, True):
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
                 message='cannot modify a disabled group',
@@ -363,7 +363,7 @@ class AccountsService:
                 error_code=errorcodes.AUTH_GROUP_NOT_FOUND,
                 message=f'group: {group_name} not found.',
             )
-        if not group['enabled']:
+        if not Utils.get_value_as_bool('enabled', group, True):
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
                 message='cannot add users to a disabled user group',
@@ -465,7 +465,7 @@ class AccountsService:
                     f'user: {username} cannot be removed from group: {group_name}. group not found'
                 )
                 continue
-            if not group['enabled']:
+            if not Utils.get_value_as_bool('enabled', group, True):
                 self.logger.warning(
                     f'user: {username} cannot be removed from group: {group_name}. group is disabled'
                 )
@@ -514,7 +514,7 @@ class AccountsService:
                 error_code=errorcodes.AUTH_GROUP_NOT_FOUND,
                 message=f'group: {group_name} not found.',
             )
-        if not group['enabled'] and not force:
+        if not Utils.get_value_as_bool('enabled', group, True) and not force:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AUTH_GROUP_IS_DISABLED,
                 message='cannot remove users from a disabled user group',

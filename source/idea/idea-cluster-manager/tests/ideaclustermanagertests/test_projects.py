@@ -815,3 +815,155 @@ def test_remove_add_remove_of_a_group_each_reach_the_worker(
         assert not is_memberof(context, only, t.project)
     finally:
         context.accounts.delete_user(only.username)
+
+
+@pytest.fixture
+def sole_member(context, two_group_project):
+    # a member through the first group alone, and that group's record as it was
+    t = two_group_project
+    only = context.accounts.create_user(
+        user=User(username='sole_member', email='sole_member@example.com')
+    )
+    join_group(context, only.username, t.groups[0].name)
+    table = context.accounts.group_dao.table
+    record = table.get_item(Key={'group_name': t.groups[0].name})['Item']
+    assert is_memberof(context, only, t.project)
+    yield only, table, record
+    table.put_item(Item=record)
+    context.accounts.delete_user(only.username)
+
+
+@pytest.mark.parametrize(
+    'edit',
+    [
+        {'UpdateExpression': 'REMOVE enabled'},
+        {
+            'UpdateExpression': 'SET enabled = :none',
+            'ExpressionAttributeValues': {':none': None},
+        },
+    ],
+    ids=['no-enabled', 'null-enabled'],
+)
+def test_a_group_written_without_an_enabled_value_still_grants_its_project(
+    context, two_group_project, sole_member, edit
+):
+    t = two_group_project
+    only, table, _ = sole_member
+    table.update_item(Key={'group_name': t.groups[0].name}, **edit)
+    context.projects.user_projects_dao.refresh_all_projects()
+    assert is_memberof(context, only, t.project)
+
+
+def test_a_project_without_an_enabled_value_keeps_its_rows_and_gains_none(
+    context, two_group_project
+):
+    # every release writes a new project without the value until it is first enabled:
+    # it grants nothing, and rows a record holds without it are not taken away
+    t = two_group_project
+    dao = context.projects.user_projects_dao
+    table = context.projects.projects_dao.table
+    never = context.projects.create_project(
+        CreateProjectRequest(
+            project=Project(
+                name='never-enabled', title='ne', ldap_groups=[t.groups[0].name]
+            )
+        )
+    ).project
+    assert 'enabled' not in table.get_item(Key={'project_id': never.project_id})['Item']
+    table.update_item(
+        Key={'project_id': t.project.project_id}, UpdateExpression='REMOVE enabled'
+    )
+    try:
+        dao.refresh_all_projects()
+        assert dao.is_user_in_project(t.user.username, t.project.project_id)
+        assert not dao.is_user_in_project(t.user.username, never.project_id)
+    finally:
+        table.update_item(
+            Key={'project_id': t.project.project_id},
+            UpdateExpression='SET enabled = :on',
+            ExpressionAttributeValues={':on': True},
+        )
+        context.projects.projects_dao.delete_project(never.project_id)
+
+
+def test_a_project_group_with_no_group_record_keeps_its_members(
+    context, two_group_project, sole_member, caplog
+):
+    t = two_group_project
+    only, table, _ = sole_member
+    table.delete_item(Key={'group_name': t.groups[0].name})
+    context.projects.user_projects_dao.refresh_all_projects()
+    assert is_memberof(context, only, t.project)
+    assert f'names group {t.groups[0].name}, which has no group record' in caplog.text
+
+
+def test_an_explicitly_disabled_group_loses_its_project_at_start(
+    context, two_group_project, sole_member
+):
+    t = two_group_project
+    only, table, _ = sole_member
+    table.update_item(
+        Key={'group_name': t.groups[0].name},
+        UpdateExpression='SET enabled = :off',
+        ExpressionAttributeValues={':off': False},
+    )
+    context.projects.user_projects_dao.refresh_all_projects()
+    assert not is_memberof(context, only, t.project)
+    # still granted through the other, enabled group
+    assert is_memberof(context, t.user, t.project)
+
+
+def test_a_failed_read_at_start_changes_no_project(
+    context, two_group_project, monkeypatch
+):
+    from botocore.exceptions import ClientError
+
+    t = two_group_project
+    dao = context.projects.user_projects_dao
+    failing = context.accounts.create_group(
+        Group(name='readfail-project-group', title='rf', group_type='project')
+    )
+    other = context.projects.create_project(
+        CreateProjectRequest(
+            project=Project(name='readfail', title='rf', ldap_groups=[failing.name])
+        )
+    ).project
+    enable_project(context=context, project=other)
+    # what the refresh would repair on the first project
+    dao.create_user_project(project_id=t.project.project_id, username='stale_marker')
+    dao.delete_user_project(project_id=t.project.project_id, username=t.user.username)
+
+    projects = context.projects.projects_dao.table
+    real_scan = projects.scan
+
+    class FirstProjectFirst:
+        # the first project is read before the one whose group cannot be read
+        def scan(self, **request):
+            page = real_scan(**request)
+            page['Items'].sort(key=lambda p: p['project_id'] != t.project.project_id)
+            return page
+
+    real_get_group = context.accounts.group_dao.get_group
+
+    def get_group(name):
+        if name == failing.name:
+            raise ClientError({'Error': {'Code': 'InternalServerError'}}, 'GetItem')
+        return real_get_group(name)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(context.projects.projects_dao, 'table', FirstProjectFirst())
+            patch.setattr(context.accounts.group_dao, 'get_group', get_group)
+            with pytest.raises(ClientError):
+                dao.refresh_all_projects()
+        assert dao.is_user_in_project('stale_marker', t.project.project_id)
+        assert not dao.is_user_in_project(t.user.username, t.project.project_id)
+    finally:
+        dao.delete_user_project(
+            project_id=t.project.project_id, username='stale_marker'
+        )
+        dao.create_user_project(
+            project_id=t.project.project_id, username=t.user.username
+        )
+        context.projects.projects_dao.delete_project(other.project_id)
+        context.accounts.delete_group(failing.name, force=True)
