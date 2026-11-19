@@ -70,7 +70,8 @@ E91G7bb0hOb/cA==
 =knv7
 -----END PGP PUBLIC KEY BLOCK-----
 AWS_CLI_KEY
-  if ! gpg --batch --quiet --homedir "$gnupg" --import "$gnupg/aws-cli.asc"; then
+  # no agent: a minimal gpg (Amazon Linux 2023) has none, and a failed start fails the import
+  if ! gpg --batch --quiet --no-autostart --homedir "$gnupg" --import "$gnupg/aws-cli.asc"; then
     echo "The AWS CLI key could not be imported; not installing the AWS CLI" >&2
     rm -rf "$gnupg" awscliv2.zip
     return 1
@@ -87,7 +88,7 @@ AWS_CLI_KEY
       rm -rf "$gnupg" awscliv2.zip
       return 1
     fi
-    status=$(gpg --batch --homedir "$gnupg" --status-fd 1 --verify awscliv2.zip.sig awscliv2.zip 2> /dev/null)
+    status=$(gpg --batch --no-autostart --homedir "$gnupg" --status-fd 1 --verify awscliv2.zip.sig awscliv2.zip 2> /dev/null)
     if awk -v want="$AWS_CLI_KEY_FINGERPRINT" '$2 == "VALIDSIG" && $NF == want { found = 1 } END { exit !found }' <<< "$status"; then
       rm -rf "$gnupg" awscliv2.zip.sig
       return 0

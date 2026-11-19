@@ -33,12 +33,14 @@ COMMON = (
         'signature-unreachable',
         'signature-once',
         'no-gpg',
+        'al2023-minimal',
     ],
 )
 def test_userdata_prerequisites(tmp_path, implementation, substitution, scenario):
+    base_os = 'amazonlinux2023' if scenario == 'al2023-minimal' else 'ubuntu2604'
     body = (
         BootstrapUserDataBuilder(
-            base_os='ubuntu2604',
+            base_os=base_os,
             aws_region='us-east-1',
             bootstrap_package_uri='s3://bucket/bootstrap.tar.gz',
             install_commands=['echo SETUP_REACHED'],
@@ -50,7 +52,7 @@ def test_userdata_prerequisites(tmp_path, implementation, substitution, scenario
     if implementation == 'cdk':
         module = COMMON.parents[2] / 'ideactl/src/cdk/userdata.ts'
         params = dict(
-            baseOs='ubuntu2604',
+            baseOs=base_os,
             awsRegion='us-east-1',
             bootstrapPackageUri='s3://bucket/bootstrap.tar.gz',
             installCommands=['echo SETUP_REACHED'],
@@ -83,11 +85,20 @@ sleep() { :; }
 uname() { echo aarch64; }
 curl() {
   [[ "$SCENARIO" != curl ]] || return 22
+  # curl-minimal speaks http and https only
+  [[ "$SCENARIO" != al2023-minimal || "$*" == *http://* || "$*" == *https://* ]] || return 1
   [[ "$* " != *'.sig '* || "$SCENARIO" != signature-unreachable ]] || return 7
   echo test-region
 }
 # a valid signature names the primary key fingerprint last on its VALIDSIG status line
 gpg() {
+  # gnupg2-minimal ships gpg alone: importing a new key probes gpg-agent for its secret
+  # key, and a failed agent start is an error (exit 2) even though the key was imported
+  if [[ "$SCENARIO" == al2023-minimal && " $* " == *' --import '* && " $* " != *' --no-autostart '* ]]; then
+    echo "gpg: failed to start agent '/usr/bin/gpg-agent': No such file or directory" >&2
+    echo "gpg: can't connect to the agent: No such file or directory" >&2
+    return 2
+  fi
   [[ " $* " == *' --verify '* ]] || return 0
   local fingerprint=FB5DB77FD5C118B80511ADA8A6310ACC4672475C
   [[ "$SCENARIO" != signature ]] || fingerprint=0000000000000000000000000000000000000000
@@ -114,6 +125,7 @@ apt-get() {
   fi
 }
 apt() { apt-get "$@"; }
+yum() { echo "yum $*" >> "$CALLS"; }
 unzip() {
   [[ "$SCENARIO" != unzip ]] || return 9
   mkdir -p aws
@@ -142,7 +154,12 @@ export -f aws curl tar
     )
     log = (tmp_path / 'logs/userdata.log').read_text()
     calls = (tmp_path / 'calls').read_text() if (tmp_path / 'calls').exists() else ''
-    if scenario in ('success', 'update-lag', 'signature-once', 'no-gpg'):
+    if scenario == 'al2023-minimal':
+        assert result.returncode == 0, log
+        assert 'SETUP_REACHED' in log
+        # the image's CLI goes only after the installer verified
+        assert calls.index('yum remove -y awscli') < calls.index('yum install -y unzip')
+    elif scenario in ('success', 'update-lag', 'signature-once', 'no-gpg'):
         assert result.returncode == 0, log
         assert 'SETUP_REACHED' in log
         assert calls.index('update') < calls.index('install -y unzip')
