@@ -205,6 +205,14 @@ else
 fi
 plain kill-server 2>/dev/null || true
 
+echo "== Node runtime without npm (removed after the ideactl build)"
+if /usr/local/node/bin/node --version; then pass "node runs"; else fail "/usr/local/node/bin/node does not run"; fi
+npm_left=""
+for each in /usr/local/node/bin/npm /usr/local/node/bin/npx /usr/local/node/bin/corepack /usr/local/node/lib/node_modules/npm /usr/local/node/lib/node_modules/corepack; do
+  if [[ -e "${each}" || -L "${each}" ]]; then npm_left+=" ${each}"; fi
+done
+if [[ -z "${npm_left}" ]]; then pass "npm, npx and corepack are absent"; else fail "still in the image:${npm_left}"; fi
+
 if (( failed )); then
   echo "image check failed"
   exit 1

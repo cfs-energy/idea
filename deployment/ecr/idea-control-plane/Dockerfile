@@ -209,12 +209,16 @@ COPY source/idea/idea-bootstrap /idea-build/source/idea/idea-bootstrap
 COPY source/idea/ideactl/package.json source/idea/ideactl/package-lock.json source/idea/ideactl/tsconfig.json source/idea/ideactl/cdk.json /idea-build/source/idea/ideactl/
 COPY source/idea/ideactl/src /idea-build/source/idea/ideactl/src
 COPY source/idea/ideactl/scripts /idea-build/source/idea/ideactl/scripts
+# npm (and its bundled packages) comes inside the Node archive; nothing in the image runs it after
+# this build, so the same layer removes it.
 RUN set -eux; \
     cd /idea-build/source/idea/ideactl; \
     npm ci; \
     npm run build; \
     npm prune --omit=dev; \
     npm cache clean --force; \
+    rm -rf /usr/local/node/lib/node_modules/npm /usr/local/node/lib/node_modules/corepack \
+      /usr/local/node/bin/npm /usr/local/node/bin/npx /usr/local/node/bin/corepack /root/.npm; \
     find node_modules -type f -name '*.d.ts' -delete; \
     mkdir -p /opt/idea; \
     mv /idea-build/source/idea/ideactl /opt/idea/ideactl; \
