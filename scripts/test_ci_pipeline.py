@@ -192,7 +192,8 @@ sys.exit(0)
         )
         assert init, 'copy-resources.mjs defines outputResources'
         default = re.search(
-            r'join\(\s*packageRoot\s*,((?:\s*["\'][^"\']+["\']\s*,?)+)\s*\)', init[1]
+            # each segment starts with its comma, so no two quantifiers compete for the same text
+            r'join\(\s*packageRoot((?:\s*,\s*["\'][^"\']+["\'])+)\s*(?:,\s*)?\)', init[1]
         )
         assert default, 'outputResources has a default under the package'
         segments = re.findall(r'["\']([^"\']+)["\']', default[1])
