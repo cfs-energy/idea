@@ -268,11 +268,25 @@ class UserProjectsDAO:
             {'FilterExpression': Attr('project_id').eq(project_id)},
         )
         current = {row['username'] for row in rows}
+        # a row can come through a group with no record only for a user the member
+        # rows or the user's own record still place in it; any other row is
+        # accounted for by the groups whose records exist
+        possible = set()
         for name in sorted(unknown):
             self.logger.warning(
                 f'project {project_id} names group {name}, which has no group record: '
                 'its members keep the project until an administrator edits it'
             )
+            possible.update(
+                self.accounts_service.group_members_dao.get_usernames_in_group(name)
+            )
+        if unknown:
+            for username in sorted(current - desired - possible):
+                user = self.accounts_service.user_dao.get_user(username) or {}
+                if unknown & set(
+                    Utils.get_value_as_list('additional_groups', user, [])
+                ):
+                    possible.add(username)
         if state is None:
             # never enabled, or a record whose value was lost: what is there is kept,
             # and nothing is granted until it is enabled or disabled
@@ -287,8 +301,7 @@ class UserProjectsDAO:
             'groups_added': sorted(wanted - held),
             'groups_removed': sorted(held - wanted),
             'users_added': sorted(desired - current),
-            # who has it through a group with no record cannot be told apart
-            'users_removed': [] if unknown else sorted(current - desired),
+            'users_removed': sorted(current - desired - possible),
         }
 
     def _apply_plan(self, plan: Optional[dict]):
