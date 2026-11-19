@@ -2006,7 +2006,7 @@ test("the upgrade ends with one verification, and a failed line fails the run af
 
     events.length = 0;
     stackStatus = "UPDATE_ROLLBACK_COMPLETE";
-    await assert.rejects(upgradeCluster(deps, options), /verification above found problems\. Re-run ideactl verify-cluster --cluster-name idea-test1 --aws-region us-east-2/);
+    await assert.rejects(upgradeCluster(deps, options), /verification above found problems\. Re-run ideactl verify-cluster --cluster-name idea-test1 --aws-region us-east-2 once .*Do not re-run the upgrade/);
     assert.ok(events.includes("save-values"));
     assert.ok(events.includes("delete:cluster.upgrade_module_set_owners"));
     assert.ok(!events.includes("All upgrade phases completed successfully"));

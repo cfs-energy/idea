@@ -2010,7 +2010,7 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
     const verified = await verifyCluster(deps, { ...options, since: startedAt });
     if (convergence !== undefined) throw convergence;
     if (!verified) {
-      throw new ClusterConfigError(`Every stack deployed, but the verification above found problems. Re-run ideactl verify-cluster --cluster-name ${options.clusterName} --aws-region ${options.awsRegion} once they settle; it changes nothing.`);
+      throw new ClusterConfigError(`Every stack deployed, but the verification above found problems. Re-run ideactl verify-cluster --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}${options.awsProfile ? ` --aws-profile ${options.awsProfile}` : ""} once they settle; it changes nothing. Do not re-run the upgrade for this: it has finished and would roll every stack again.`);
     }
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
