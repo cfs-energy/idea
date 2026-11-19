@@ -36,7 +36,10 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api import (
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
 from ideascheduler.app.scheduler import SocaJobBuilder
-from ideascheduler.app.scheduler.job_param_builder import JOB_UID_PATTERN
+from ideascheduler.app.scheduler.job_param_builder import (
+    COMPUTED_JOB_GROUP_PATTERN,
+    JOB_UID_PATTERN,
+)
 from ideascheduler.app.scheduler.pbs_select import (
     select_chunks,
     chunk_resources,
@@ -133,6 +136,27 @@ class OpenPBSAPIInvocationContext:
             f'jobs set fsx_lustre, so the job cannot keep it there. Submit the job to '
             f'queue {queue_name} instead of moving it.',
         )
+
+    def _bound_to_capacity(self) -> bool:
+        """an edit of a job whose node selector names its stack"""
+        if self.event.type != 'modifyjob' or self.event.job_o is None:
+            return False
+        select = (self.event.job_o.Resource_List or {}).get('select') or ''
+        return 'compute_node=' in select and 'compute_node=tbd' not in select
+
+    @staticmethod
+    def _without_computed_group(params: dict) -> tuple:
+        """
+        a group of the computed form (g + hex) is the scheduler's, never a submitter's
+        (only custom-... passes validation), so one carried on an edited or moved job is
+        not checked as the submitter's and is computed again from the request as it is
+        now: carried over, an edit kept the group of its old request and was sent to that
+        group's stack. a custom group stays.
+        """
+        group = params.get('job_group')
+        if group and COMPUTED_JOB_GROUP_PATTERN.fullmatch(str(group)):
+            return {k: v for k, v in params.items() if k != 'job_group'}, str(group)
+        return params, None
 
     def build_and_validate_job(self):
         try:
@@ -234,6 +258,11 @@ class OpenPBSAPIInvocationContext:
             ):
                 moved_fsx = job_params['fsx_lustre']
                 job_params = {k: v for k, v in job_params.items() if k != 'fsx_lustre'}
+            carried_group = None
+            if self.event.type in ('modifyjob', 'movejob'):
+                old_job_params, old_group = self._without_computed_group(old_job_params)
+                job_params, new_group = self._without_computed_group(job_params)
+                carried_group = new_group or old_group
             job_params = {**old_job_params, **job_params}
             self._job_builder = SocaJobBuilder(
                 context=self.app_context,
@@ -261,6 +290,10 @@ class OpenPBSAPIInvocationContext:
 
             self._job_validation_result: Optional[JobValidationResult] = None
             self._job_validation_result = self.job_builder.validate()
+            if carried_group and self._bound_to_capacity():
+                # a job on a stack keeps the group that names the stack
+                self._job.job_group = carried_group
+                self._job.params.job_group = carried_group
             self._refuse_move_keeping_another_queues_fsx(
                 queue_profile, queue_name, moved_fsx
             )

@@ -346,6 +346,41 @@ const SERVICE_WRITES: Array<{ role: string; requests: Request[] }> = [
   ] },
 ];
 
+/**
+ * The calls CloudFormation makes with the scheduler's credentials while it creates and deletes a
+ * job stack, by the resource types the stack builder emits (cloudformation_stack_builder.py). From
+ * each type's registry handler permissions (aws cloudformation describe-type) narrowed to the calls
+ * CloudTrail records for job stacks; a handler that is refused a read can still complete, so a
+ * denial shows only in CloudTrail (ec2:DescribeNetworkAcls and the two lifecycle and notification
+ * reads were refused on every job stack). The registry handlers' wildcard reads are not granted
+ * wholesale.
+ */
+const FSX = `arn:aws:fsx:${REGION}:${ACCOUNT}:file-system/fs-0123456789abcdef0`;
+const JOB_STACK_CALLS: Record<string, Request[]> = {
+  "AWS::EC2::LaunchTemplate": ["ec2:CreateLaunchTemplate", "ec2:DescribeLaunchTemplates", "ec2:DeleteLaunchTemplate"]
+    .map((action) => ({ action, resource: "*" })),
+  "AWS::AutoScaling::AutoScalingGroup": [
+    "autoscaling:CreateAutoScalingGroup", "autoscaling:UpdateAutoScalingGroup", "autoscaling:DeleteAutoScalingGroup",
+    "autoscaling:DescribeAutoScalingGroups", "autoscaling:DescribeScalingActivities", "autoscaling:DescribeLifecycleHooks",
+    "autoscaling:DescribeNotificationConfigurations", "ec2:DescribeSubnets", "ec2:DescribeNetworkAcls", "ec2:DescribeLaunchTemplates",
+    "ec2:DescribeInstances",
+  ].map((action) => ({ action, resource: "*" })),
+  "AWS::EC2::SpotFleet": ["ec2:RequestSpotFleet", "ec2:DescribeSpotFleetRequests", "ec2:DescribeSpotFleetInstances",
+    "ec2:DescribeInstanceStatus", "ec2:CancelSpotFleetRequests"].map((action) => ({ action, resource: "*" })),
+  "AWS::EC2::PlacementGroup": ["ec2:CreatePlacementGroup", "ec2:DescribePlacementGroups", "ec2:DeletePlacementGroup"]
+    .map((action) => ({ action, resource: "*" })),
+  "AWS::FSx::FileSystem": [
+    ...["fsx:CreateFileSystem", "fsx:TagResource"].map((action) => ({ action, resource: FSX })),
+    { action: "fsx:DescribeFileSystems", resource: "*" },
+    { action: "fsx:DeleteFileSystem", resource: FSX, context: { "aws:ResourceTag/idea:ClusterName": CLUSTER } },
+  ],
+};
+/** The troposphere classes the stack builder constructs with a logical id, by resource type. */
+const JOB_STACK_CLASSES: Record<string, string> = {
+  LaunchTemplate: "AWS::EC2::LaunchTemplate", AutoScalingGroup: "AWS::AutoScaling::AutoScalingGroup", SpotFleet: "AWS::EC2::SpotFleet",
+  PlacementGroup: "AWS::EC2::PlacementGroup", FileSystem: "AWS::FSx::FileSystem",
+};
+
 /** Requests the user data makes before any script runs: the package fetch and its status tag. */
 const USER_DATA: Array<{ role: string; requests: Request[] }> = [
   { role: "-scheduler-compute-node-role-", requests: [
@@ -404,6 +439,24 @@ describe("role scripts and host bootstrap calls are allowed for their roles", ()
       for (const request of requests) if (!allowed(statements, request)) denied.push(`user data: ${role} ${request.action} ${request.resource}`);
     }
     assert.deepEqual(denied, []);
+  });
+
+  it("every call CloudFormation makes for a job stack's resources is allowed for the scheduler", () => {
+    const builder = readFileSync(join(REPO, "source/idea/idea-scheduler/src/ideascheduler/app/provisioning/job_provisioner/cloudformation_stack_builder.py"), "utf8");
+    // a titled constructor is a resource, except the launch template's titled data property
+    const constructed = [...builder.matchAll(/\b(?:\w+\.)?(\w+)\('\w+'\)/g)].map((match) => match[1]!)
+      .filter((name) => name !== "append" && name !== "LaunchTemplateData");
+    assert.deepEqual([...new Set(constructed)].sort(), Object.keys(JOB_STACK_CLASSES).sort(), "a new job stack resource type needs its calls mapped");
+    assert.deepEqual(Object.values(JOB_STACK_CLASSES).sort(), Object.keys(JOB_STACK_CALLS).sort());
+    const scheduler = roleStatements(templates, "-scheduler-task-role-");
+    const denied = Object.entries(JOB_STACK_CALLS).flatMap(([type, requests]) =>
+      requests.filter((request) => !allowed(scheduler, request)).map((request) => `${type} ${request.action} ${request.resource}`));
+    assert.deepEqual(denied, []);
+    // the spot fleet is created with its request role (IamFleetRole) passed to it
+    const roles = Object.entries(templates.get("scheduler")!.Resources as Record<string, Json>).filter(([, resource]) =>
+      resource.Type === "AWS::IAM::Role" && String(resolve(resource.Properties.RoleName)).includes("-spot-fleet-request-role-"));
+    assert.equal(roles.length, 1);
+    assert.ok(allowed(scheduler, { action: "iam:PassRole", resource: `Fn::GetAtt:${JSON.stringify([roles[0]![0], "Arn"])}` }));
   });
 
   // Lambda invocations made with a role's credentials: a job stack created before 26.09.1 holds a

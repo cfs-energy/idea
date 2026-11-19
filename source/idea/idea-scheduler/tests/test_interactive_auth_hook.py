@@ -29,6 +29,7 @@ def submit(variables, interactive=True, event_type='queuejob'):
             'HOOK_EVENT_QUEUEJOB': 'queuejob',
             'HOOK_EVENT_RUNJOB': 'runjob',
             'HOOK_EVENT_MODIFYJOB': 'modifyjob',
+            'HOOK_EVENT_MOVEJOB': 'movejob',
             'invoke_soca_scheduler': lambda e: {
                 'success': True,
                 'payload': {'accept': True},

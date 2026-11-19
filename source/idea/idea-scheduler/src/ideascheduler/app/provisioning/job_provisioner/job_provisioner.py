@@ -46,6 +46,9 @@ from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import
 
 # wait states: capacity, licenses, quota headroom, or an in-flight update. these self-heal
 # and are excluded from the provisioning retry cap (not configuration failures).
+# SHARED_CAPACITY_MISMATCH is not one: the stack of the job's group was built for another
+# request and the job's own wait keeps it from ending, so it counts toward the cap and the
+# job is held with the reason instead of retried for ever.
 PROVISIONING_WAIT_ERROR_CODES = (
     errorcodes.SPOT_FLEET_CAPACITY_UPDATE_IN_PROGRESS,
     errorcodes.MAX_PROVISIONED_INSTANCES_LIMIT,
@@ -53,7 +56,6 @@ PROVISIONING_WAIT_ERROR_CODES = (
     errorcodes.NOT_ENOUGH_LICENSES,
     errorcodes.BEDROCK_ACCESS_NOT_READY,
     errorcodes.SERVICE_QUOTA_NOT_AVAILABLE,
-    errorcodes.SHARED_CAPACITY_MISMATCH,
     errorcodes.SHARED_CAPACITY_UNAVAILABLE,
     errorcodes.EC2_RESERVED_INSTANCES_NOT_AVAILABLE,
 )
@@ -240,9 +242,10 @@ class ProvisionJobs:
         if differing:
             raise exceptions.SocaException(
                 error_code=errorcodes.SHARED_CAPACITY_MISMATCH,
-                message=f'Provisioned capacity does not match the desired capacity requirements.'
-                f'Provisioned signature: {provisioned_capacity_signature}, '
-                f'Required signature: {capacity_signature}',
+                message=f'The capacity of job group {self.job.get_job_group()} was built '
+                f'for another request than this job asks for (Provisioned signature: '
+                f'{provisioned_capacity_signature}. Required signature: {capacity_signature}). '
+                f'Submit the job with another job_group or none.',
             )
 
     def update_capacity(self):
@@ -860,6 +863,7 @@ class JobProvisioner(SocaService):
         self._live_job = None
         if live_job is None or live_job.job_id != job.job_id:
             return job
+        live_job = self._regrouped(live_job)
         try:
             self._context.job_cache.sync(jobs=[live_job])
             return self._context.job_cache.get_job(job_id=job.job_id) or live_job
@@ -868,6 +872,51 @@ class JobProvisioner(SocaService):
                 f'{job.log_tag} live job not cached, placed as read: {e}'
             )
             return live_job
+
+    def _regrouped(self, job: SocaJob) -> SocaJob:
+        """
+        the job with the group its request computes now. an edit made as root (an
+        administrator's qalter) skips the submission hook (is_applicable), so the batch
+        system kept the group computed from the request before the edit: the job was
+        placed on that group's stack and refused there on every cycle, and its wait kept
+        the stack's idle nodes up. a job with capacity keeps the group naming its stack,
+        and a custom group (custom-...) is the submitter's or the queue's.
+        """
+        from ideascheduler.app.scheduler.job_param_builder import (
+            COMPUTED_JOB_GROUP_PATTERN,
+        )
+
+        stored = job.job_group or (job.params.job_group if job.params else None)
+        if (
+            job.is_provisioned()
+            or not stored
+            or not COMPUTED_JOB_GROUP_PATTERN.fullmatch(stored)
+        ):
+            return job
+        regrouped = job.model_copy(deep=True)
+        regrouped.job_group = None
+        regrouped.params.job_group = None
+        try:
+            group = regrouped.get_job_group()
+        except exceptions.SocaException:
+            # a request the group cannot be computed from fails placement with the reason
+            return job
+        if group == stored:
+            return job
+        regrouped.job_group = group
+        regrouped.params.job_group = group
+        self._logger.info(
+            f'{regrouped.log_tag} request changed since it was grouped; '
+            f'job group {stored} -> {group}'
+        )
+        try:
+            self._context.scheduler.set_job_attributes(
+                job_id=job.job_id, attributes={'job_group': group}
+            )
+        except Exception as e:
+            # placed under the new group all the same; the next live read writes it again
+            self._logger.warning(f'{regrouped.log_tag} job group not written: {e}')
+        return regrouped
 
     def _is_job_provisionable(self, job: SocaJob) -> bool:
         """
@@ -1081,6 +1130,13 @@ class JobProvisioner(SocaService):
             sleep = Utils.get_retry_backoff_interval(
                 current_retry=retry_count, backoff_in_seconds=backoff_in_seconds
             )
+
+        # stopped mid-retry (a queue profile saved restarts the provisioner): nothing was
+        # placed and nothing failed, the jobs are taken up again by the next provisioner
+        self._logger.info(
+            f'{jobs[0].log_tag} provisioner stopping; {len(jobs)} jobs left for the next cycle'
+        )
+        return ProvisionJobsResult(status=False, unprovisioned_jobs=jobs)
 
     def _drop_undispatchable_jobs(self, jobs: Dict[str, SocaJob]):
         """

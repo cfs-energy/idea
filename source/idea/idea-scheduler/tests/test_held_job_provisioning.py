@@ -635,3 +635,130 @@ def test_a_new_batch_stack_is_built_only_for_jobs_of_the_first_jobs_signature(
     assert [job.job_id for job in exc_info.value.ref] == [other.job_id]
     assert built_for == [first.job_id]
     assert bound == [first.job_id, second.job_id]
+
+
+def test_a_batch_job_edited_as_root_is_grouped_and_placed_as_its_new_request(
+    context, mock_scheduler, monkeypatch
+):
+    # dev rc.16 3b: an administrator's qalter skips the submission hook, so the edited
+    # job kept the group computed from its old request, was sent to that group's stack
+    # and refused there (SHARED_CAPACITY_MISMATCH) on every cycle
+    from ideadatamodel import SocaScalingMode
+
+    jobs = [mock_job(), mock_job(), mock_job()]
+    for job in jobs:
+        job.scaling_mode = SocaScalingMode.BATCH
+        job.provisioning_options.terminate_when_idle = 3
+        job.params.compute_stack = None
+        job.params.job_group = job.job_group = job.get_job_group()
+        mock_scheduler.live_jobs[job.job_id] = job
+    old_group = jobs[0].job_group
+    assert {job.job_group for job in jobs} == {old_group}
+    # what PBS holds after the root qalter: the new instance type, the old group
+    edited = _edited_instance_type(jobs[1])
+    assert edited.job_group == old_group
+    mock_scheduler.live_jobs[jobs[1].job_id] = edited
+    written = {}
+    mock_scheduler.set_job_attributes = lambda job_id, attributes: (
+        written.setdefault(job_id, {}).update(attributes) or True
+    )
+    monkeypatch.setattr(
+        OpenPBSQSelect, 'list_jobs_ids', lambda _self, raise_on_error=False: ['j'] * 3
+    )
+    store = {}
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: store.update({j.job_id: j for j in jobs})
+    context.job_cache.get_job = lambda job_id: store.get(job_id)
+    provisioner = make_provisioner(context)
+    queue = _BatchQueue(jobs)
+    provisioner._queue = queue
+    provisioner._exit = _StopAtFirstWait()
+
+    batches = provisioner._drain_batch_queue()
+
+    # the other two stay in their batch, unchanged
+    [batch] = batches.values()
+    assert sorted(job.job_id for job in batch) == sorted(
+        [jobs[0].job_id, jobs[2].job_id]
+    )
+    assert all(job.job_group == old_group for job in batch)
+    assert queue.put_job_ids == [jobs[1].job_id]
+
+    # the edited job carries the group of its new request, in PBS and in the cache
+    regrouped = store[jobs[1].job_id]
+    fresh = edited.model_copy(deep=True)
+    fresh.job_group = fresh.params.job_group = None
+    assert regrouped.job_group == regrouped.params.job_group == fresh.get_job_group()
+    assert regrouped.job_group != old_group
+    assert written == {jobs[1].job_id: {'job_group': regrouped.job_group}}
+
+    # next cycle: batched on its own and given capacity built for its request
+    queue._jobs = [regrouped]
+    mock_scheduler.live_jobs[jobs[1].job_id] = regrouped
+    provisioner._exit = _StopAtFirstWait()
+    [[next_job]] = provisioner._drain_batch_queue().values()
+    assert next_job.params.instance_types == ['m5.large']
+    assert next_job.get_compute_stack() != jobs[0].get_compute_stack()
+    assert next_job.get_compute_stack().endswith(next_job.job_group)
+    assert next_job.get_capacity_signature().startswith('s' + next_job.job_group[1:])
+
+
+def test_a_capacity_mismatch_counts_toward_the_retry_cap(context):
+    # a job refused by its group's stack is held with the reason after the cap, not
+    # retried for ever with that stack's idle nodes kept up
+    from ideascheduler.app.provisioning.job_provisioner.job_provisioner import (
+        PROVISIONING_WAIT_ERROR_CODES,
+    )
+    from ideascheduler.app.provisioning import JobProvisioningUtil
+
+    assert errorcodes.SHARED_CAPACITY_MISMATCH not in PROVISIONING_WAIT_ERROR_CODES
+    job = mock_job()
+    tracked = []
+    original = JobProvisioningUtil.track_provisioning_failure
+    try:
+        JobProvisioningUtil.track_provisioning_failure = (
+            lambda self, job, message, stack_id=None: tracked.append(message) or True
+        )
+        provisioner = make_provisioner(context)
+        requeued = provisioner._track_failed_jobs(
+            jobs=[job],
+            result=ProvisionJobsResult(
+                status=False,
+                error_code=errorcodes.SHARED_CAPACITY_MISMATCH,
+                message='mismatch',
+            ),
+        )
+    finally:
+        JobProvisioningUtil.track_provisioning_failure = original
+    assert requeued == []
+    assert len(tracked) == 1
+
+
+def test_a_job_with_capacity_or_a_custom_group_keeps_its_group(context):
+    provisioner = make_provisioner(context)
+    bound = _edited_instance_type(mock_job())
+    # what the converter reads from a select naming a compute node
+    bound.provisioned = True
+    bound.job_group = bound.params.job_group = 'g06692ffa'
+    assert provisioner._regrouped(bound) is bound
+    custom = _edited_instance_type(mock_job())
+    custom.job_group = custom.params.job_group = 'custom-batch'
+    assert provisioner._regrouped(custom) is custom
+
+
+def test_a_provisioner_stopped_mid_retry_returns_the_jobs_unplaced(context):
+    # dev rc.16: saving a queue profile restarts the provisioner while a batch retries; the
+    # retry loop returned None and the poller failed on result.status
+    provisioner = make_provisioner(context)
+    provisioner._exit.set()
+    jobs = [mock_job(), mock_job()]
+    context.lifecycle_events = None
+
+    result = provisioner._provision_with_retry_backoff(jobs=list(jobs))
+
+    assert result is not None and result.status is False
+    assert [job.job_id for job in result.unprovisioned_jobs] == [
+        job.job_id for job in jobs
+    ]
+    # not a failure: nothing is charged to the jobs' retry count
+    assert provisioner._track_failed_jobs(jobs=jobs, result=result) == jobs
