@@ -3986,9 +3986,11 @@ def test_an_unchanged_job_draws_the_same_subnet_on_every_read(context, monkeypat
 
     monkeypatch.setattr(context, 'job_cache', Cache(), raising=False)
 
-    def subnet(job_id='101'):
+    def subnet(job_uid='uid101', job_id='101'):
         result = build_and_validate(
-            context=context, params=MULTI_NODE_JOB, job_id=job_id
+            context=context,
+            params={**MULTI_NODE_JOB, 'job_uid': job_uid},
+            job_id=job_id,
         )
         assert result.success is True
         return tuple(result.job_params.subnet_ids)
@@ -4002,4 +4004,6 @@ def test_an_unchanged_job_draws_the_same_subnet_on_every_read(context, monkeypat
     assert len(drawn) > 1
     # and so does another job
     retries['count'] = 0
-    assert len({subnet(str(job_id)) for job_id in range(100, 120)}) > 1
+    assert len({subnet(f'uid{n}', str(n)) for n in range(100, 120)}) > 1
+    # submission has no PBS id yet, and draws what the first read draws (B13)
+    assert subnet(job_id=None) == subnet()

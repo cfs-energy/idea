@@ -176,6 +176,21 @@ class OpenPBSAPIInvocationContext:
             return {k: v for k, v in params.items() if k != 'job_group'}, str(group)
         return params, None
 
+    def _cached_job_uid(self) -> Optional[str]:
+        for pbs_job in (self.event.job_o, self.event.job):
+            job_id = (
+                str(pbs_job.id).split('.')[0]
+                if pbs_job is not None and pbs_job.id
+                else ''
+            )
+            if job_id and job_id.lower() != 'tbd':
+                try:
+                    cached = self.app_context.job_cache.get_job(job_id)
+                except Exception:
+                    return None
+                return cached.job_uid if cached is not None else None
+        return None
+
     def build_and_validate_job(self):
         try:
             queue_name = None
@@ -197,6 +212,12 @@ class OpenPBSAPIInvocationContext:
                 if Utils.is_not_empty(self.event.job.project):
                     project_name = self.event.job.project
 
+            # an existing job keeps its uid: its package and completion record are under
+            # it. an edit whose job_o carried none minted a new one and wrote it back
+            self.existing_uid_unknown = False
+            if Utils.is_empty(job_uid) and self.event.type == 'modifyjob':
+                job_uid = self._cached_job_uid()
+                self.existing_uid_unknown = Utils.is_empty(job_uid)
             if Utils.is_empty(job_uid):
                 job_uid = Utils.short_uuid()
 
@@ -282,6 +303,9 @@ class OpenPBSAPIInvocationContext:
                 job_params, new_group = self._without_computed_group(job_params)
                 carried_group = new_group or old_group
             job_params = {**old_job_params, **job_params}
+            # the subnet a multi-node job draws is seeded by its uid, which the job keeps
+            # from submission on, so the group stored now is the one a later read computes
+            job_params.setdefault('job_uid', job_uid)
             self._job_builder = SocaJobBuilder(
                 context=self.app_context,
                 params=job_params,

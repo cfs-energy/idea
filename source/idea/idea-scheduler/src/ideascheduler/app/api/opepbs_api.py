@@ -241,6 +241,9 @@ class OpenPBSAPI(BaseAPI):
                     'nodes': None,
                     **pinned_fsx_lustre(job),
                 }
+                if getattr(pbs_context, 'existing_uid_unknown', False):
+                    # never a new uid for an existing job
+                    resources_updated.pop('job_uid')
                 if bound_to_capacity(pbs_context):
                     # an edit of a job already given capacity keeps its node selector and
                     # stack: writing tbd unbound it from a stack that stayed up (PBS-13).

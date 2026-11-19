@@ -422,10 +422,77 @@ EXECUTION_HOOKS = [
 ]
 
 
+# the resources PBS defines for a job; the cluster's own are in resourcedef
+PBS_JOB_RESOURCES = (
+    'select',
+    'place',
+    'ncpus',
+    'nodect',
+    'nodes',
+    'mem',
+    'vmem',
+    'ngpus',
+    'mpiprocs',
+    'ompthreads',
+    'walltime',
+    'cput',
+    'pcput',
+    'pmem',
+    'pvmem',
+    'arch',
+    'host',
+    'vnode',
+    'naccelerators',
+    'accelerator',
+    'accelerator_memory',
+    'accelerator_model',
+    'file',
+    'software',
+    'site',
+    'start',
+    'min_walltime',
+    'max_walltime',
+    'soft_walltime',
+    'preempt_targets',
+)
+
+
+def job_resource_names() -> list:
+    names = list(PBS_JOB_RESOURCES)
+    try:
+        home = pbs.pbs_conf.get('PBS_HOME') or '/var/spool/pbs'
+        with open(os.path.join(home, 'server_priv', 'resourcedef')) as f:
+            for line in f:
+                tokens = line.split('#', 1)[0].split()
+                if tokens:
+                    names.append(tokens[0])
+    except Exception as e:
+        log_error(f'resourcedef not read: {e}')
+    return names
+
+
+def plain(value):
+    """a value json can write: a PBS object (a queue, a size, a duration, a resource list)
+    becomes its name or its text, so no PBS type reaches json.dumps"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(plain(k)): plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(v) for v in value]
+    name = getattr(value, 'name', None)
+    if isinstance(name, str):
+        return name
+    return str(value)
+
+
 class OpenPBSJob:
-    def __init__(self, event_type: str, job):
+    def __init__(self, event_type: str, job, original: bool = False):
         self.event_type = event_type
         self.job = job
+        # the job as it was before a modifyjob: its resource list lists no keys on the
+        # cluster's PBS, so its resources are read by name
+        self.original = original
         self.matrix = self.build_matrix()
 
     def build_matrix(self):
@@ -882,9 +949,18 @@ class OpenPBSJob:
         if self.event_type in self.matrix['Resource_List']:
             if self.job.Resource_List is None:
                 return None
+            resources = self.job.Resource_List
+            keys = list(resources.keys())
+            if not keys and self.original:
+                keys = job_resource_names()
             response = {}
-            for key in self.job.Resource_List.keys():
-                response[key] = str(self.job.Resource_List[key])
+            for key in keys:
+                try:
+                    value = resources[key]
+                except (KeyError, ValueError, AttributeError):
+                    continue
+                if value is not None:
+                    response[str(key)] = str(value)
             return response
         return None
 
@@ -1324,8 +1400,9 @@ class OpenPBSEvent:
 
     @property
     def src_queue(self):
-        if self.type in ['movejob']:
-            return self.event.src_queue
+        # a PBS queue object, not its name: json could not write it and every qmove failed
+        if self.type in ['movejob'] and self.event.src_queue is not None:
+            return plain(self.event.src_queue)
         return None
 
     @property
@@ -1362,7 +1439,9 @@ class OpenPBSEvent:
             pbs_event['job'] = OpenPBSJob(event_type=self.type, job=job).build()
         job_o = self.job_o
         if job_o:
-            pbs_event['job_o'] = OpenPBSJob(event_type=self.type, job=job_o).build()
+            pbs_event['job_o'] = OpenPBSJob(
+                event_type=self.type, job=job_o, original=True
+            ).build()
 
         result = {}
         for key in pbs_event:
@@ -1371,7 +1450,7 @@ class OpenPBSEvent:
             if DEBUG_MODE:
                 log_fine('pbs_event: %s = %s' % (key, type(pbs_event[key])))
             result[key] = pbs_event[key]
-        return result
+        return plain(result)
 
 
 def get_env(key, env_type='str', default=None):
