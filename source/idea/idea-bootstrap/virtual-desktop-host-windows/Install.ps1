@@ -142,25 +142,54 @@ function Save-Installer {
     # msiexec then failed with 1619 (package could not be opened). Download in-process, check
     # the file, and name the failure. The download is then checked against its pinned publisher
     # or SHA-256 before anything runs it.
+    # A vendor site can be down for minutes (a 504 from 7-zip.org failed whole image bakes), so a
+    # transient failure (timeout, connection error, 408, 429, 5xx, an empty file) is retried
+    # after 5, 10, 20, 40, 60 and 60 seconds: 7 attempts over about 3 minutes per source. Any
+    # other 4xx fails that source at once. Several sources are allowed only for a download pinned
+    # by SHA-256, where the hash, not the source, decides whether the file is used; they are
+    # tried in order.
     Param (
-        [Parameter(Mandatory=$true)] [String] $Uri,
+        [Parameter(Mandatory=$true)] [String[]] $Uri,
         [Parameter(Mandatory=$true)] [String] $OutFile,
         [ValidateSet('Amazon', 'NVIDIA')] [String] $Publisher,
         [String] $Sha256
     )
+    if ($Uri.Count -gt 1 -and -not $Sha256) {
+        Write-ToLog -Message "Refusing to download $(Split-Path -Leaf $OutFile) from several sources without a pinned SHA-256" -Level 'Error'
+        exit 1
+    }
     $ProgressPreference = 'SilentlyContinue'
+    $Waits = @(5, 10, 20, 40, 60, 60)
     $Saved = $false
-    foreach ($Attempt in 1..3) {
-        try {
-            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-            if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { $Saved = $true; break }
-            $Reason = 'the download wrote no file'
-        } catch { $Reason = $_.Exception.Message }
-        Write-ToLog -Message "Download of $Uri attempt $Attempt failed: $Reason" -Level 'Warn'
-        Start-Sleep -Seconds 3
+    $Failures = @()
+    foreach ($Source in $Uri) {
+        for ($Attempt = 1; $Attempt -le $Waits.Count + 1; $Attempt++) {
+            $Transient = $true
+            try {
+                Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+                Invoke-WebRequest -Uri $Source -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+                if ((Test-Path $OutFile) -and (Get-Item $OutFile).Length -gt 0) { $Saved = $true; break }
+                $Reason = 'the download wrote no file'
+            } catch {
+                $Reason = $_.Exception.Message
+                $Status = 0
+                try { $Status = [int]$_.Exception.Response.StatusCode } catch { }
+                # Windows PowerShell 5.1: "(504) Gateway Timeout"; PowerShell 7: "status code does not indicate success: 504"
+                if ($Status -eq 0 -and $Reason -match '\((\d{3})\)|success: (\d{3})') { $Status = [int]"$($Matches[1])$($Matches[2])" }
+                $Transient = $Status -eq 0 -or $Status -ge 500 -or $Status -in @(408, 429)
+            }
+            if (-not $Transient -or $Attempt -gt $Waits.Count) {
+                Write-ToLog -Message "Download of $Source attempt $Attempt failed: $Reason" -Level 'Warn'
+                break
+            }
+            Write-ToLog -Message "Download of $Source attempt $Attempt failed: $Reason; retrying in $($Waits[$Attempt - 1]) s" -Level 'Warn'
+            Start-Sleep -Seconds $Waits[$Attempt - 1]
+        }
+        if ($Saved) { break }
+        $Failures += "$Source ($Reason)"
     }
     if (-not $Saved) {
-        Write-ToLog -Message "Could not download $Uri to ${OutFile}: $Reason" -Level 'Error'
+        Write-ToLog -Message "Could not download $(Split-Path -Leaf $OutFile) to ${OutFile} from any source: $($Failures -join '; ')" -Level 'Error'
         exit 1
     }
     $Pin = @{}
@@ -292,9 +321,14 @@ function Install-7Zip {
         Write-ToLog -Message "Created directory: $workdir" -Level 'Info'
       }
 
-      $source = "https://www.7-zip.org/a/7z$Version-x64.exe"
+      # the project's own site, then its GitHub release asset for the same version: the pinned
+      # SHA-256 decides whether either file is used
+      $sources = @(
+        "https://www.7-zip.org/a/7z$Version-x64.exe",
+        "https://github.com/ip7z/7zip/releases/download/$Release/7z$Version-x64.exe"
+      )
       $destination = "$workdir\7z$Version-x64.exe"
-      Save-Installer -Uri $source -OutFile $destination -Sha256 $Sha256
+      Save-Installer -Uri $sources -OutFile $destination -Sha256 $Sha256
 
       # Install silently
       Start-Process -FilePath $destination -ArgumentList '/S' -Wait -PassThru | Out-Null

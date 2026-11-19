@@ -714,3 +714,130 @@ def test_a_bootstrap_log_that_can_be_neither_removed_nor_written_never_stops_the
     assert calls[-1] == 'INSTALL'
     assert 'WARNING could not remove' in output
     assert left == ['dcv-host-new.tar.gz', 'instance-id']
+
+
+# Save-Installer: each source answers attempt by attempt from IDEA_PLAN (the last answer repeats):
+# 'ok:<text>' writes the file, a status code throws the error Windows PowerShell 5.1 raises
+DOWNLOAD_STUBS = r"""
+function Start-Sleep { [CmdletBinding()] param($Seconds) Record "WAIT $Seconds" }
+function Invoke-WebRequest { [CmdletBinding()] param($Uri, $OutFile, [switch]$UseBasicParsing)
+  if (-not $global:Seen) { $global:Seen = @{} }
+  $global:Seen[$Uri] = 1 + [int]$global:Seen[$Uri]
+  $plan = @(($env:IDEA_PLAN | ConvertFrom-Json -AsHashtable)[$Uri])
+  $answer = $plan[[Math]::Min($global:Seen[$Uri], $plan.Count) - 1]
+  Record "GET $Uri -> $answer"
+  if ($answer -like 'ok:*') { Set-Content -LiteralPath $OutFile -Value $answer.Substring(3) -NoNewline; return }
+  $names = @{ '404' = 'Not Found'; '504' = 'Gateway Timeout'; '503' = 'Service Unavailable' }
+  throw "The remote server returned an error: ($answer) $($names[$answer])." }
+"""
+FIRST = 'https://www.example.invalid/7z-marker.exe'
+SECOND = 'https://github.example.invalid/7z-marker.exe'
+
+
+def save(tmp_path, plan, content='marker installer'):
+    import hashlib
+    import json
+
+    sha = hashlib.sha256(content.encode()).hexdigest().upper()
+    # Install-7Zip creates the folder before it downloads
+    (tmp_path / 'cdrive' / 'IDEA' / 'Assets').mkdir(parents=True)
+    return windows_pwsh.run(
+        tmp_path,
+        INSTALL,
+        functions=['Save-Installer', 'Assert-InstallerTrusted'],
+        stubs=DOWNLOAD_STUBS,
+        action=f"Save-Installer -Uri @('{FIRST}', '{SECOND}') -OutFile 'C:\\IDEA\\Assets\\7z-marker.exe' -Sha256 '{sha}'; Record 'SAVED'",
+        env={'IDEA_PLAN': json.dumps(plan)},
+    )
+
+
+def test_a_gateway_timeout_is_waited_out(tmp_path):
+    code, calls, output = save(tmp_path, {FIRST: ['504', '504', 'ok:marker installer']})
+    assert code == 0, output
+    assert [c for c in calls if c.startswith(('GET', 'WAIT'))] == [
+        f'GET {FIRST} -> 504',
+        'WAIT 5',
+        f'GET {FIRST} -> 504',
+        'WAIT 10',
+        f'GET {FIRST} -> ok:marker installer',
+    ]
+    assert calls[-2:] == [
+        'LOG Info: Verified 7z-marker.exe: SHA-256 matches pin',
+        'SAVED',
+    ]
+
+
+def test_the_second_source_is_used_when_the_first_keeps_failing(tmp_path):
+    code, calls, output = save(
+        tmp_path, {FIRST: ['504'], SECOND: ['ok:marker installer']}
+    )
+    assert code == 0, output
+    assert [c for c in calls if c.startswith('WAIT')] == [
+        'WAIT 5',
+        'WAIT 10',
+        'WAIT 20',
+        'WAIT 40',
+        'WAIT 60',
+        'WAIT 60',
+    ]
+    assert len([c for c in calls if c.startswith(f'GET {FIRST}')]) == 7
+    assert calls[-2:] == [
+        'LOG Info: Verified 7z-marker.exe: SHA-256 matches pin',
+        'SAVED',
+    ]
+
+
+def test_when_every_source_fails_the_error_names_each_one(tmp_path):
+    code, calls, output = save(tmp_path, {FIRST: ['504'], SECOND: ['404']})
+    assert code == 1, output
+    # a 404 is not retried
+    assert len([c for c in calls if c.startswith(f'GET {SECOND}')]) == 1
+    assert calls[-1] == (
+        'LOG Error: Could not download 7z-marker.exe to C:\\IDEA\\Assets\\7z-marker.exe from any '
+        f'source: {FIRST} (The remote server returned an error: (504) Gateway Timeout.); '
+        f'{SECOND} (The remote server returned an error: (404) Not Found.)'
+    )
+    assert 'SAVED' not in calls
+
+
+def test_a_file_from_the_second_source_with_the_wrong_hash_is_refused(tmp_path):
+    code, calls, output = save(
+        tmp_path, {FIRST: ['503'], SECOND: ['ok:a different file']}
+    )
+    assert code == 1, output
+    assert calls[-1].startswith(
+        'LOG Error: Refusing to install C:\\IDEA\\Assets\\7z-marker.exe: its SHA-256 '
+    )
+    assert 'SAVED' not in calls
+
+
+def test_several_sources_need_a_pinned_hash(tmp_path):
+    code, calls, output = windows_pwsh.run(
+        tmp_path,
+        INSTALL,
+        functions=['Save-Installer'],
+        stubs=DOWNLOAD_STUBS,
+        action=f"Save-Installer -Uri @('{FIRST}', '{SECOND}') -OutFile 'C:\\IDEA\\x.msi' -Publisher Amazon",
+    )
+    assert code == 1, output
+    assert calls == [
+        'LOG Error: Refusing to download x.msi from several sources without a pinned SHA-256'
+    ]
+
+
+def test_seven_zip_has_the_project_site_and_its_github_release_as_sources(tmp_path):
+    code, calls, output = windows_pwsh.run(
+        tmp_path,
+        INSTALL,
+        functions=['Install-7Zip'],
+        stubs='function Test-Path { [CmdletBinding()] param($Path, $PathType) $false }\n'
+        'function New-Item { [CmdletBinding()] param($Path, $ItemType, [switch]$Force) }\n'
+        'function Start-Process { [CmdletBinding()] param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru) }\n'
+        'function Save-Installer { param([String[]]$Uri, $OutFile, $Sha256) Record "SAVE $($Uri -join \' \') sha=$($Sha256.Length)" }\n',
+        action='Install-7Zip',
+    )
+    assert code == 0, output
+    assert [c for c in calls if c.startswith('SAVE')] == [
+        'SAVE https://www.7-zip.org/a/7z2605-x64.exe '
+        'https://github.com/ip7z/7zip/releases/download/26.05/7z2605-x64.exe sha=64'
+    ]
