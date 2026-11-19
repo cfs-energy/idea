@@ -1918,3 +1918,85 @@ def test_bake_cleanup_skips_a_root_that_is_another_mount(tmp_path):
         and not (Path(roots['/var/crash']) / 'entry').exists()
     )
     assert f'not cleaning {roots["/var/tmp"]}' in result.stdout
+
+
+def _continuation_shares(tmp_path, mounted):
+    """the compute node continuation's share check as rendered, with /apps/ in scope and
+    /opt-share/ scoped to another queue profile; returns the run result and the tags written"""
+    from test_bootstrap_shell_syntax import job
+
+    config = Config()
+    config.put(
+        'shared-storage',
+        {
+            'apps': {
+                'provider': 'efs',
+                'mount_dir': '/apps/',
+                'scope': ['cluster'],
+                'efs': {'dns': 'fs-1.efs.example.invalid'},
+            },
+            'other': {
+                'provider': 'efs',
+                'mount_dir': '/opt-share/',
+                'scope': ['scheduler:queue-profile'],
+                'queue_profiles': ['gpu'],
+                'efs': {'dns': 'fs-2.efs.example.invalid'},
+            },
+        },
+    )
+    text = render(
+        'compute-node/compute_node_post_reboot.sh.jinja2',
+        'rocky9',
+        lustre=False,
+        config=config,
+        variables={'job': job(), 'queue_profile': 'normal'},
+    )
+    start = text.index('IDEA_SHARED_MOUNT_DIRS=(')
+    end = text.index('\n', text.index('fail_bootstrap shared-storage-unavailable'))
+    bin_dir, source = _mount_stubs(tmp_path, mounted)
+    stubs = (
+        'sleep() { :; }\n'
+        f'curl() {{ echo i-0; }}\naws() {{ echo "aws $*" >> {tmp_path}/tags; }}\n'
+        'timeout() { shift; "$@"; }\n'
+    )
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            source.replace('/var/lib/idea', str(tmp_path))
+            + f'\nBOOTSTRAP_DIR={tmp_path}\n'
+            + stubs
+            + text[start:end]
+            + '\necho scheduler-start\n',
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+    )
+    tags = tmp_path / 'tags'
+    return text, result, tags.read_text() if tags.exists() else ''
+
+
+def test_a_compute_node_whose_share_did_not_come_back_does_not_start_the_scheduler(
+    tmp_path,
+):
+    text, result, tags = _continuation_shares(tmp_path, ['/data/'])  # /apps/ lost
+    # checked before the scheduler daemon is started, with the first pass's five attempts
+    assert text.index('fail_bootstrap shared-storage-unavailable') < text.index(
+        '# Begin: Scheduler Start'
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'scheduler-start' not in result.stdout
+    assert (tmp_path / 'mounts').read_text().count('mount') == 5
+    assert (
+        'Shared storage did not mount after the bootstrap reboot (5 attempts): /apps/'
+        in result.stdout
+    )
+    assert 'Key=idea:BootstrapStatus,Value=shared-storage-unavailable' in tags
+
+
+def test_an_optional_share_that_did_not_come_back_does_not_stop_the_node(tmp_path):
+    # /opt-share/ belongs to another queue profile: this node never needed it
+    _, result, tags = _continuation_shares(tmp_path, ['/apps/', '/data/'])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'scheduler-start' in result.stdout and tags == ''
