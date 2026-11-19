@@ -58,7 +58,7 @@ The upgrade moves `scheduler.compute_node_ami` to the release's AMI for the clus
 
 ### Images After the Upgrade
 
-After the upgrade, every managed desktop and compute image is rebuilt from the newest vendor image and validated, and new desktops and jobs switch to an image only after it passes every check. This runs in the background and does not hold up the upgrade. A bake takes about 45 minutes, four at a time by default. Check **Administration → Images and applications → Images** later and act on any **Failed** row; new launches stay on the previous image until the row succeeds. Pinned rows and pinned targets are skipped, and on 26.10.1 a base software stack that launches from an image an administrator set by hand is pinned before anything switches. See [Images](../../../modules/hpc-workloads/admin-documentation/custom-amis.md).
+After the upgrade, every managed desktop and compute image is rebuilt from the newest vendor image and validated, and new desktops and jobs switch to an image only after it passes every check. This runs in the background and does not hold up the upgrade. A bake takes about 45 minutes. Up to 32 bakes of compute images and up to 32 of desktop images run at a time by default (`max_concurrent_bakes`, one cap for each). Check **Administration → Images and applications → Images** later and act on any **Failed** row; new launches stay on the previous image until the row succeeds. Pinned rows and pinned targets are skipped, and on 26.10.1 a base software stack that launches from an image an administrator set by hand is pinned before anything switches. See [Images](../../../modules/hpc-workloads/admin-documentation/custom-amis.md).
 
 #### One-time builder image cleanup (upgrading to 26.10.1)
 
