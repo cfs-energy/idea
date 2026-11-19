@@ -5,7 +5,9 @@ that executes a build in a thread and keeps that record current, and the helpers
 Custom AMIs page uses to classify what a cluster runs today.
 """
 
+import hashlib
 import json
+import os
 import re
 import socket
 import threading
@@ -23,6 +25,7 @@ from ideadatamodel import (
     IMAGE_ROW_IN_FLIGHT,
     ImageBuildRecord,
     ImageKind,
+    ImagePipelineSettings,
     ImageRowKey,
     ImageRowStatus,
     ImageVariant,
@@ -105,18 +108,19 @@ def builder_log_link(context, instance_id: str) -> str:
 # visible reason rather than launched into an account limit
 MAX_CONCURRENT_BUILDS = 16
 
-# the builder only runs a bootstrap script, so the allowlist is general-purpose sizes plus
-# one GPU size per architecture
+# the builder only runs a bootstrap script, so the allowlist is general-purpose and
+# compute-optimized sizes plus one GPU size per architecture. the current families go up to
+# 8xlarge because the source builds (efs-utils, OpenPBS) use every core
+_LARGER_SIZES = ('large', 'xlarge', '2xlarge', '4xlarge', '8xlarge')
 BUILDER_INSTANCE_TYPES = {
     'x86_64': (
         'c6i.large',
         'c6i.xlarge',
-        'c7i.large',
-        'c7i.xlarge',
+        *(f'c7i.{size}' for size in _LARGER_SIZES),
+        *(f'c7a.{size}' for size in _LARGER_SIZES),
         'm6i.large',
         'm6i.xlarge',
-        'm7i.large',
-        'm7i.xlarge',
+        *(f'm7i.{size}' for size in _LARGER_SIZES),
         'g4dn.xlarge',
         'g5.xlarge',
         'g4ad.xlarge',
@@ -124,16 +128,60 @@ BUILDER_INSTANCE_TYPES = {
     'arm64': (
         'c6g.large',
         'c6g.xlarge',
-        'c8g.large',
-        'c8g.xlarge',
+        *(f'c8g.{size}' for size in _LARGER_SIZES),
         'm6g.large',
         'm6g.xlarge',
-        'm8g.large',
-        'm8g.xlarge',
+        *(f'm8g.{size}' for size in _LARGER_SIZES),
         'g5g.xlarge',
     ),
 }
 DEFAULT_ARM64_BUILDER_INSTANCE_TYPE = 'm8g.large'
+
+# the builder root disk: gp3 at these figures, lowered to what the volume size allows. the
+# image created from it keeps them in its mapping (CreateImage cannot change them), so every
+# host launch sets HOST_ROOT_GP3_IOPS / HOST_ROOT_GP3_THROUGHPUT explicitly
+BUILDER_ROOT_IOPS = 16000
+BUILDER_ROOT_THROUGHPUT = 1000
+GP3_BASELINE_IOPS = 3000
+GP3_BASELINE_THROUGHPUT = 125
+GP3_MAX_IOPS_PER_GIB = 500
+HOST_ROOT_GP3_IOPS = GP3_BASELINE_IOPS
+HOST_ROOT_GP3_THROUGHPUT = GP3_BASELINE_THROUGHPUT
+
+# lineage tags on every pipeline image, so a later bake can tell whether an image is a safe
+# starting point: how it was baked, the vendor image the chain started from, a fingerprint
+# of the slow inputs, and how many bakes deep it is (0: baked from the vendor image)
+BAKE_MODE_TAG = 'idea:BakeMode'
+BAKE_ROOT_IMAGE_TAG = 'idea:BakeRootImage'
+BAKE_INPUTS_TAG = 'idea:BakeInputs'
+BAKE_LINEAGE_DEPTH_TAG = 'idea:BakeLineageDepth'
+BAKE_MODE_FULL = 'full'
+# the bootstrap templates that install third-party software, relative to the bootstrap dir
+SLOW_INPUT_TEMPLATES = (
+    '_templates/linux/aws_ssm.jinja2',
+    '_templates/linux/cjson_devel.jinja2',
+    '_templates/linux/cloudwatch_agent.jinja2',
+    '_templates/linux/compute_kernel_hold.jinja2',
+    '_templates/linux/dcv_server.jinja2',
+    '_templates/linux/dcv_session_manager_agent.jinja2',
+    '_templates/linux/efs_mount_helper.jinja2',
+    '_templates/linux/epel_repo.jinja2',
+    '_templates/linux/fsx_lustre_client.jinja2',
+    '_templates/linux/gpu_drivers.jinja2',
+    '_templates/linux/jq.jinja2',
+    '_templates/linux/nfs_utils.jinja2',
+    '_templates/linux/openpbs.jinja2',
+    '_templates/linux/openpbs_client.jinja2',
+    '_templates/linux/prometheus.jinja2',
+    '_templates/linux/prometheus_node_exporter.jinja2',
+    '_templates/linux/stunnel.jinja2',
+    '_templates/linux/system_packages.jinja2',
+    '_templates/windows/cloudwatch_agent.jinja2',
+    '_templates/windows/gpu/amd_drivers.jinja2',
+    '_templates/windows/gpu/nvidia_drivers.jinja2',
+    'dcv-host-ami-builder-windows/Setup.ps1.jinja2',
+    'virtual-desktop-host-windows/Install.ps1',
+)
 
 _RECORD_TIMESTAMPS = (
     'started_on',
@@ -911,6 +959,97 @@ def check_builder_instance_type(
     raise exceptions.invalid_params(
         f'instance_type must be one of: {", ".join(allowed)}'
     )
+
+
+def pipeline_builder_instance_type(
+    settings: ImagePipelineSettings, architecture: Optional[str], x86_default: str
+) -> str:
+    """
+    the builder type for a pipeline's CPU bake: image_pipeline.builder_instance_types for
+    the architecture, else the module default. a stored type off the allowlist (written
+    around the settings page) fails the bake with the reason instead of launching
+    """
+    wanted = architecture or 'x86_64'
+    configured = (settings.builder_instance_types or {}).get(wanted)
+    if Utils.is_empty(configured):
+        return default_builder_instance_type(wanted, x86_default)
+    check_builder_instance_type(configured, wanted)
+    return configured
+
+
+def builder_root_ebs(volume_gb: int) -> Dict[str, Any]:
+    """
+    the builder root volume: gp3 at BUILDER_ROOT_IOPS / BUILDER_ROOT_THROUGHPUT, lowered to
+    what gp3 allows for the size (500 IOPS per GiB, never below the 3000 baseline; 0.25 MiB/s
+    per provisioned IOPS, never below 125)
+    """
+    iops = max(
+        GP3_BASELINE_IOPS,
+        min(BUILDER_ROOT_IOPS, GP3_MAX_IOPS_PER_GIB * int(volume_gb)),
+    )
+    throughput = max(GP3_BASELINE_THROUGHPUT, min(BUILDER_ROOT_THROUGHPUT, iops // 4))
+    return {
+        'VolumeSize': int(volume_gb),
+        'VolumeType': 'gp3',
+        'Iops': iops,
+        'Throughput': throughput,
+    }
+
+
+def slow_inputs(config, bootstrap_dir: Optional[str]) -> Dict[str, Any]:
+    """
+    what a bake spends its slow steps on: package pins and lists, the storage providers,
+    the scheduler provider, GPU settings and the third-party install templates. a template
+    the module does not ship is recorded as absent
+    """
+    storage = config.get_config('shared-storage', default={}) or {}
+    templates = {}
+    for path in SLOW_INPUT_TEMPLATES:
+        try:
+            with open(os.path.join(bootstrap_dir or '', path), 'rb') as f:
+                templates[path] = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            templates[path] = None
+    return {
+        'package_config': config.get_config(
+            'global-settings.package_config', default={}
+        ),
+        'storage_providers': sorted(
+            {
+                str(fs.get('provider'))
+                for fs in storage.values()
+                if hasattr(fs, 'get') and fs.get('provider')
+            }
+        ),
+        'scheduler_provider': config.get_string('scheduler.provider', default=None),
+        'gpu_settings': config.get_config('global-settings.gpu_settings', default={}),
+        'templates': templates,
+    }
+
+
+def inputs_fingerprint(inputs: Dict[str, Any]) -> str:
+    """sha256 of the inputs as canonical JSON: key order does not change it"""
+
+    def plain(value):
+        # pyhocon keeps a null as a NoneValue object, whose str() carries its address
+        return None if type(value).__name__ == 'NoneValue' else str(value)
+
+    canonical = json.dumps(
+        inputs, sort_keys=True, separators=(',', ':'), default=plain
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def lineage_tags(
+    config, bootstrap_dir: Optional[str], root_image_id: Optional[str]
+) -> Dict[str, str]:
+    """the lineage tags of a full bake from the vendor image root_image_id"""
+    return {
+        BAKE_MODE_TAG: BAKE_MODE_FULL,
+        BAKE_ROOT_IMAGE_TAG: root_image_id or '',
+        BAKE_INPUTS_TAG: inputs_fingerprint(slow_inputs(config, bootstrap_dir)),
+        BAKE_LINEAGE_DEPTH_TAG: '0',
+    }
 
 
 def sanitize_aws_message(text: Optional[str]) -> str:

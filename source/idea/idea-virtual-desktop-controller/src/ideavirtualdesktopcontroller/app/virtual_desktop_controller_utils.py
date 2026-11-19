@@ -34,7 +34,12 @@ from ideadatamodel import (
     GetProjectRequest,
     Project,
 )
-from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
+from ideasdk.aws.image_builds import (
+    HOST_ROOT_GP3_IOPS,
+    HOST_ROOT_GP3_THROUGHPUT,
+    cached_image_root_gb,
+    launch_root_gb,
+)
 from ideasdk.bootstrap import BootstrapPackageBuilder, BootstrapUserDataBuilder
 from ideasdk.context import BootstrapContext
 from ideasdk.metrics.health import HealthMetrics
@@ -1240,6 +1245,9 @@ class VirtualDesktopControllerUtils:
                                 'VolumeType': Utils.get_as_string(
                                     constants.DEFAULT_VOLUME_TYPE_VDI, default='gp3'
                                 ),
+                                # explicit: an IDEA image's mapping carries its builder's provisioned figures
+                                'Iops': HOST_ROOT_GP3_IOPS,
+                                'Throughput': HOST_ROOT_GP3_THROUGHPUT,
                             },
                         }
                     ],

@@ -53,6 +53,8 @@ from ideasdk.aws.image_builds import (
     check_builder_instance_type,
     custom_build_architecture,
     is_custom_record,
+    lineage_tags,
+    pipeline_builder_instance_type,
     IMAGE_BUILD_TAG,
     STALE_AFTER,
     ImageBuildRecordsDB,
@@ -81,7 +83,10 @@ from ideasdk.aws.stock_amis import (
     stock_unsupported_reason,
     trusted_owners,
 )
-from ideascheduler.app.images.compute_node_ami_builder import ComputeNodeAmiBuilder
+from ideascheduler.app.images.compute_node_ami_builder import (
+    DEFAULT_INSTANCE_TYPE,
+    ComputeNodeAmiBuilder,
+)
 from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 
@@ -698,13 +703,30 @@ class ComputeImageService:
                         )
                         else ()
                     )
+                    settings = ImagePipelineSettings(
+                        **dict(
+                            self.context.config().get_config(
+                                PIPELINE_SETTINGS, default={}
+                            )
+                            or {}
+                        )
+                    )
                     builder = ComputeNodeAmiBuilder(
                         enable_driver=drivers,
                         context=self.context,
                         base_os=record.base_os,
                         base_ami=source,
+                        instance_type=pipeline_builder_instance_type(
+                            settings, record.architecture, DEFAULT_INSTANCE_TYPE
+                        ),
                         force=True,
                         image_tags={PIPELINE_IMAGE_TAG: 'compute'},
+                    )
+                    # lineage for a later bake to judge this image as a starting point
+                    builder.image_tags.update(
+                        lineage_tags(
+                            self.context.config(), builder.get_bootstrap_dir(), source
+                        )
                     )
                 else:
                     builder.base_ami = source

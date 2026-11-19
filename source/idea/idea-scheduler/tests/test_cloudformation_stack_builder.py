@@ -706,6 +706,28 @@ def test_the_launch_guard_never_lowers_a_queue_root(context):
     assert _queue_launch(context, 100, 12) == 100
 
 
+def test_a_compute_root_is_gp3_at_the_baseline_whatever_the_image_carries(context):
+    # an IDEA image's root mapping keeps its builder's 16000 IOPS / 1000 MiB/s; the node
+    # gets what an unprovisioned gp3 volume gets
+    image_id = 'ami-root12gb'
+    _describe_root(context, image_id, 12)
+    result = build_template(
+        context=context,
+        job_name='root-gp3',
+        params={'nodes': 1, 'cpus': 1, 'instance_ami': image_id},
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5.large']),
+        ),
+    )
+    ebs = result.template.get(
+        'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.BlockDeviceMappings'
+    )[0]['Ebs']
+    assert (ebs['VolumeType'], ebs['Iops'], ebs['Throughput']) == ('gp3', 3000, 125)
+
+
 # CreateStack's stack name pattern and the tag value characters CloudFormation accepts
 _STACK_NAME = re.compile(r'[a-zA-Z][-a-zA-Z0-9]{0,127}')
 _TAG_VALUE = re.compile(r'[\w\s.:/=+\-@]*')

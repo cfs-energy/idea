@@ -19,6 +19,7 @@ from ideasdk.aws.image_builds import (
     BUILDER_READY_TIMEOUT_SECONDS,
     IMAGE_BUILD_TAG,
     BuildReporter,
+    builder_root_ebs,
     builder_root_gb,
     check_builder_type_architecture,
     default_builder_instance_type,
@@ -432,7 +433,8 @@ class ComputeNodeAmiBuilder:
             'BlockDeviceMappings': [
                 {
                     'DeviceName': self.block_device_name,
-                    'Ebs': {'VolumeSize': self.ebs_volume_size},
+                    # gp3 with provisioned IOPS: the bake is disk bound
+                    'Ebs': builder_root_ebs(self.ebs_volume_size),
                 }
             ],
             'IamInstanceProfile': {'Arn': self.instance_profile_arn},

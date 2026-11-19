@@ -108,6 +108,22 @@ def test_a_linux_builder_launch_keeps_the_key():
     assert _launch_kwargs('amazonlinux2023')['KeyName'] == 'idea_test'
 
 
+@pytest.mark.parametrize('base_os', ['amazonlinux2023', 'windows2022'])
+def test_a_builder_root_is_gp3_with_provisioned_iops(base_os):
+    # the Windows vendor image is gp2: the builder sets gp3 explicitly for both
+    assert _launch_kwargs(base_os)['BlockDeviceMappings'] == [
+        {
+            'DeviceName': '/dev/xvda',
+            'Ebs': {
+                'VolumeSize': 20,
+                'VolumeType': 'gp3',
+                'Iops': 10000,
+                'Throughput': 1000,
+            },
+        }
+    ]
+
+
 def _builder_for_root(volume_gb, ebs_volume_size=None):
     context = fake_context()
     context.aws().ec2().describe_images.return_value = {

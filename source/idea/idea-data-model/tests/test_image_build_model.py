@@ -183,6 +183,8 @@ def test_defaults_and_pins():
     assert (s.max_concurrent_bakes, s.keep_generations) == (32, 2)
     assert (s.ready_gate_seconds_linux, s.ready_gate_seconds_windows) == (600, 900)
     assert s.validation_user == 'idea-validate'
+    # no builder type stored: each pipeline keeps its module default
+    assert s.builder_instance_types is None
     assert s.bake_time_limit() == timedelta(hours=2)
     # zero or a negative value must not turn the limit into an instant failure
     assert ImagePipelineSettings(bake_time_limit_minutes=0).bake_time_limit() == (

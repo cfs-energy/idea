@@ -12,7 +12,7 @@ ImageRowKey.range_key), so every existing record is already a valid CPU row.
 from ideadatamodel.base import SocaBaseModel
 from ideadatamodel.api import SocaPayload
 
-from typing import Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime, timedelta, timezone, tzinfo
 from enum import Enum
 from pydantic import Field
@@ -246,6 +246,10 @@ class ImagePipelineSettings(SocaBaseModel):
     bake_time_limit_minutes: Optional[int] = Field(default=120)
     validation_user: Optional[str] = Field(default='idea-validate')
     validation_project: Optional[str] = Field(default='idea-validate')
+    # read from vdc by both pipelines: the builder type for CPU bakes, by architecture
+    # (x86_64, arm64). empty means the module default (compute c7i.large, desktop
+    # m7i.large, arm64 m8g.large); GPU bakes keep their GPU builder
+    builder_instance_types: Optional[Dict[str, Optional[str]]] = Field(default=None)
 
     def bake_time_limit(self) -> timedelta:
         minutes = self.bake_time_limit_minutes

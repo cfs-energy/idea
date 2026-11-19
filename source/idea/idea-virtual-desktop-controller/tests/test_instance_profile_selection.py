@@ -440,3 +440,16 @@ def test_requested_security_groups_and_key_pair_do_not_reach_run_instances():
         'sg-00000000000000001'
     ]
     assert run_instances_kwargs['KeyName'] == 'idea-test-key-pair'
+
+
+def test_a_desktop_root_is_gp3_at_the_baseline_whatever_the_image_carries():
+    # an IDEA image's root mapping keeps its builder's 16000 IOPS / 1000 MiB/s
+    image_id = 'ami-root-30'
+    session = build_api().complete_create_session_request(
+        build_session(CONFIGURED_INSTANCE_PROFILE_ARN), MockApiInvocationContext()
+    )
+    session.software_stack.ami_id = image_id
+    ec2_client = RecordingEc2Client({image_id: image_with_root(image_id, 30)})
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+    ebs = ec2_client.run_instances_kwargs['BlockDeviceMappings'][0]['Ebs']
+    assert (ebs['VolumeType'], ebs['Iops'], ebs['Throughput']) == ('gp3', 3000, 125)
