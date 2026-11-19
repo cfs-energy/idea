@@ -246,10 +246,10 @@ def initialize_desktop_cleanup_table(context):
 
 def cleanup_warning_receipt(idea_session_id: str, stopped_at: datetime) -> str:
     """the notice's receipt: one per desktop and stop episode, so a later stop needs a new one"""
-    return hashlib.md5(
-        f'{idea_session_id}:{Utils.to_milliseconds(stopped_at)}'.encode(),
-        usedforsecurity=False,
-    ).hexdigest()
+    # 32 hex characters: the only receipt form the cluster manager records
+    return hashlib.sha256(
+        f'{idea_session_id}:{Utils.to_milliseconds(stopped_at)}'.encode()
+    ).hexdigest()[:32]
 
 
 CLEANUP_WARNING_NOTIFICATION_PREFIX = (

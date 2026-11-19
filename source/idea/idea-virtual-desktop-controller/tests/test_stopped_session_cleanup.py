@@ -7,6 +7,8 @@ keep tag or admin exemption, a stop time that does not parse, an ec2 answer that
 be read, a desktop running again by the time it is acted on, and a dry run.
 """
 
+import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from types import SimpleNamespace
@@ -929,14 +931,23 @@ def test_a_notice_that_was_never_delivered_is_sent_again_with_a_new_window():
 
 
 def test_the_notice_carries_its_receipt():
+    stopped_at = a_stop_time(40)
     utils = build_utils(
         FakeSessionDB(pages=[[a_session()]]),
-        FakeEc2Client(an_instance(stopped_at=a_stop_time(40))),
+        FakeEc2Client(an_instance(stopped_at=stopped_at)),
         config=a_config(stopped_after_days=30, warn_days_before=7),
     )
     sweep(utils)
     (notice,) = notices_sent(utils)
-    assert len(notice.params['delivery_receipt']) == 32
+    receipt = notice.params['delivery_receipt']
+    # the form the cluster manager's record_delivery accepts, from a sha256 of the stop episode
+    assert re.fullmatch(r'[0-9a-f]{32}', receipt)
+    assert (
+        receipt
+        == hashlib.sha256(
+            f'{a_session().idea_session_id}:{Utils.to_milliseconds(stopped_at)}'.encode()
+        ).hexdigest()[:32]
+    )
 
 
 def test_a_desktop_already_past_the_cutoff_is_warned_first_and_given_the_whole_window():
