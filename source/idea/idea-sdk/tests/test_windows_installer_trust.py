@@ -80,7 +80,7 @@ def test_every_windows_download_is_pinned(label, script):
     # the only direct download is inside Save-Installer, which checks what it saved
     downloads = re.findall(r'Invoke-WebRequest[^\n]*-OutFile[^\n]*', script)
     assert downloads == [
-        'Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop'
+        'Invoke-WebRequest -Uri $Source -OutFile $OutFile -UseBasicParsing -ErrorAction Stop'
     ] or (downloads == [] and 'function Save-Installer' not in script), (
         f'{label}: {downloads}'
     )
@@ -106,8 +106,13 @@ def test_seven_zip_is_a_release_pinned_by_sha256():
     body = function_body(INSTALL.read_text(), 'Install-7Zip')
     assert 'best_release.json' not in body
     assert re.search(r"\$Sha256 = '[0-9A-F]{64}'", body)
-    assert '$source = "https://www.7-zip.org/a/7z$Version-x64.exe"' in body
-    assert 'Save-Installer -Uri $source -OutFile $destination -Sha256 $Sha256' in body
+    # the project's site first, then its GitHub release asset for the same version
+    assert '"https://www.7-zip.org/a/7z$Version-x64.exe",' in body
+    assert (
+        '"https://github.com/ip7z/7zip/releases/download/$Release/7z$Version-x64.exe"'
+        in body
+    )
+    assert 'Save-Installer -Uri $sources -OutFile $destination -Sha256 $Sha256' in body
 
 
 @pytest.mark.parametrize('base_os', WINDOWS)
