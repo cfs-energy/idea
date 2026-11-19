@@ -575,10 +575,12 @@ def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
         '[ERROR] Shared storage did not mount after 5 attempts: /apps/. Check'
         in result.stdout
     )
+    # the directories survive the node in a tag beside the status, in the same call
     assert (
-        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable'
-        in (tmp_path / 'tags').read_text()
-    )
+        'ec2 create-tags --resources i-0 --tags '
+        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable '
+        'Key=idea:BootstrapDetail,Value=/apps/'
+    ) in (tmp_path / 'tags').read_text()
 
 
 def test_a_host_whose_storage_mounts_goes_on(tmp_path):
@@ -1993,6 +1995,7 @@ def test_a_compute_node_whose_share_did_not_come_back_does_not_start_the_schedul
         in result.stdout
     )
     assert 'Key=idea:BootstrapStatus,Value=shared-storage-unavailable' in tags
+    assert 'Key=idea:BootstrapDetail,Value=/apps/' in tags
 
 
 def test_an_optional_share_that_did_not_come_back_does_not_stop_the_node(tmp_path):
@@ -2000,3 +2003,36 @@ def test_an_optional_share_that_did_not_come_back_does_not_stop_the_node(tmp_pat
     _, result, tags = _continuation_shares(tmp_path, ['/apps/', '/data/'])
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'scheduler-start' in result.stdout and tags == ''
+
+
+@pytest.mark.parametrize(
+    'detail, tagged',
+    [
+        ('/apps/ /data/', '/apps/ /data/'),
+        ('/a,b/ /c/', '/a b/ /c/'),
+        ('/' + 'd' * 300, '/' + 'd' * 251 + ' ...'),
+    ],
+)
+def test_the_stop_detail_fits_a_tag(tmp_path, detail, tagged):
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    stubs = (
+        f'curl() {{ echo i-0; }}\naws() {{ printf "%s\\n" "$@" > {tmp_path}/tags; }}\n'
+        'timeout() { shift; "$@"; }\n'
+    )
+    subprocess.run(
+        [
+            'bash',
+            '-c',
+            common.replace('/var/lib/idea', str(tmp_path))
+            + f'\nBOOTSTRAP_DIR={tmp_path}\n'
+            + stubs
+            + f"BOOTSTRAP_DETAIL='{detail}' fail_bootstrap shared-storage-unavailable reason\n",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    lines = (tmp_path / 'tags').read_text().splitlines()
+    value = next(x for x in lines if x.startswith('Key=idea:BootstrapDetail,Value='))
+    assert value == f'Key=idea:BootstrapDetail,Value={tagged}'
+    assert len(value) - len('Key=idea:BootstrapDetail,Value=') <= 256
+    assert 'Key=idea:BootstrapStatus,Value=shared-storage-unavailable' in lines

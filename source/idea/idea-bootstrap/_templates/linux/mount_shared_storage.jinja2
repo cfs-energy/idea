@@ -93,6 +93,7 @@
   if [[ $? -ne 0 ]]; then
     # its own status, so the scheduler and the desktop controller can tell a storage problem
     # from an image one
+    BOOTSTRAP_DETAIL="${SHARED_STORAGE_NOT_MOUNTED}"
     fail_bootstrap shared-storage-unavailable "Shared storage did not mount after 5 attempts: ${SHARED_STORAGE_NOT_MOUNTED:-a configured file system}. Check that the file system exists and that this host's subnet and security groups reach it."
   fi
   {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}

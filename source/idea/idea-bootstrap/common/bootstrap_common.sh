@@ -308,8 +308,12 @@ function reboot_after_cloud_init () {
     bash "${BASH_SOURCE[0]}" || fail_bootstrap reboot-failed "Unable to schedule bootstrap reboot"
 }
 
+# BOOTSTRAP_DETAIL, when a caller sets it (a shared storage stop: the mount directories), is
+# tagged as idea:BootstrapDetail beside the status: a compute node and its log are deleted within
+# seconds, and the scheduler can still read the tag. Commas go (the tag syntax splits on them),
+# and a value past the 256 character tag limit is cut with a " ..." marker.
 function fail_bootstrap () {
-  local status="${1}"
+  local status="${1}" detail="${BOOTSTRAP_DETAIL:-}"
   shift
   log_error "${1}"
   mkdir -p "${BOOTSTRAP_DIR}"
@@ -332,8 +336,15 @@ function fail_bootstrap () {
   if [[ -z "${region}" ]]; then
     region=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: ${token}" http://169.254.169.254/latest/meta-data/placement/region) || true
   fi
+  local tags=("Key=idea:BootstrapStatus,Value=${status}")
+  if [[ -n "${detail}" ]]; then
+    detail=$(tr ',\n' '  ' <<< "${detail}" | tr -s ' ')
+    detail="${detail% }"
+    (( ${#detail} <= 256 )) || detail="${detail:0:252} ..."
+    tags+=("Key=idea:BootstrapDetail,Value=${detail}")
+  fi
   if [[ -z "${id}" ]] || ! AWS_MAX_ATTEMPTS=1 timeout 30 aws --region "${region}" --cli-connect-timeout 5 --cli-read-timeout 10 \
-      ec2 create-tags --resources "${id}" --tags "Key=idea:BootstrapStatus,Value=${status}"; then
+      ec2 create-tags --resources "${id}" --tags "${tags[@]}"; then
     log_error "Unable to tag instance with idea:BootstrapStatus=${status}"
   fi
   exit 1
