@@ -143,10 +143,7 @@ class OpenPBSAPIInvocationContext:
         node of its queue's stack (held jobs keep it) cannot be unbound: accepted, it sat
         in the target queue bound to the source queue's capacity. it is refused instead
         """
-        if self.event.type != 'movejob' or self.event.job is None:
-            return
-        select = (self.event.job.Resource_List or {}).get('select') or ''
-        if 'compute_node=' not in select or 'compute_node=tbd' in select:
+        if not self._moved_job_is_bound():
             return
         self.add_job_validation_entry(
             error_code=errorcodes.INVALID_PARAMS,
@@ -154,6 +151,14 @@ class OpenPBSAPIInvocationContext:
             f'so it cannot be moved to queue {queue_name}. Delete it and submit it to '
             f'queue {queue_name}, or move a job before it is given a node.',
         )
+
+    def _moved_job_is_bound(self) -> bool:
+        """a move of a job whose node selector names its stack: PBS keeps a provisioned
+        job's node in schedselect, which the select of its request may not show"""
+        if self.event.type != 'movejob' or self.event.job is None:
+            return False
+        select = self.event.job.get_select() or ''
+        return 'compute_node=' in select and 'compute_node=tbd' not in select
 
     def _bound_to_capacity(self) -> bool:
         """an edit of a job whose node selector names its stack"""
@@ -332,7 +337,9 @@ class OpenPBSAPIInvocationContext:
 
             self._job_validation_result: Optional[JobValidationResult] = None
             self._job_validation_result = self.job_builder.validate()
-            if carried_group and self._bound_to_capacity():
+            if carried_group and (
+                self._bound_to_capacity() or self._moved_job_is_bound()
+            ):
                 # a job on a stack keeps the group that names the stack
                 self._job.job_group = carried_group
                 self._job.params.job_group = carried_group

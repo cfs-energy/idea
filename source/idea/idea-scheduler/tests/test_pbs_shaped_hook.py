@@ -123,25 +123,39 @@ def event(kind, job, job_o=None, src_queue=None):
     )
 
 
-def moved(select='1:ncpus=4:compute_node=tbd', fsx=None):
+def moved(
+    select='1:ncpus=4:compute_node=tbd',
+    fsx=None,
+    queue='normal',
+    src='old-q',
+    schedselect=None,
+    **extra,
+):
     resources = {
         'select': select,
         'walltime': '00:10:00',
         'mem': '4gb',
         'job_uid': 'uidmove1',
         'job_group': 'g27f8153e',
+        **extra,
     }
     if fsx:
         resources['fsx_lustre'] = fsx
+    if select is None:
+        del resources['select']
+    # a movejob's job lists no resource keys on the cluster's PBS and answers by name
+    # (lane H: every movejob request sent "Resource_List": {}), and a provisioned job
+    # carries its node in schedselect
     job = PbsJob(
         id='545.scheduler',
-        queue=PbsQueue('normal'),
+        queue=PbsQueue(queue),
         project='project-a',
         Job_Name='job',
         Job_Owner='researcher@scheduler',
-        Resource_List=PbsResources(resources),
+        Resource_List=PbsResources(resources, listed=False),
+        schedselect=PbsValue(schedselect or select or '1:ncpus=4:compute_node=tbd'),
     )
-    return event(MOVEJOB, job, src_queue=PbsQueue('old-q'))
+    return event(MOVEJOB, job, src_queue=PbsQueue(src))
 
 
 def test_a_move_event_is_sent_as_plain_values(hook):
@@ -310,3 +324,149 @@ def test_the_group_stored_at_submission_is_the_one_the_first_read_computes(
         subnets.add(read.params.subnet_ids[0])
     # each job, by its own uid, can still land in another subnet
     assert len(subnets) > 1
+
+
+# the live re-test of lane H, as it ran: jobs on queue test moved to queue job-shared,
+# whose defaults ask for EFA and restrict fsx_lustre in H3
+
+
+def test_h1_a_move_is_checked_against_the_jobs_request_in_the_destination(
+    hook,
+    submit,  # noqa: F811
+):
+    # 574: a held c5.large job; accepted against an empty request, it took job-shared's
+    # EFA default and its stack failed twice ("EFA interfaces are not supported on c5.large")
+    sent = payload(
+        hook,
+        moved(
+            select='1:ncpus=1:compute_node=tbd',
+            queue='job-shared',
+            src='test',
+            instance_type='c5.large',
+        ),
+    )
+    assert sent['job']['Resource_List']['instance_type'] == 'c5.large'
+    result, _ = submit(
+        {},
+        event_type='movejob',
+        queue='job-shared',
+        src_queue=sent['src_queue'],
+        job=OpenPBSJob(**sent['job']),
+        defaults=SocaJobParams(
+            instance_types=['c5n.18xlarge'], enable_efa_support=True
+        ),
+    )
+    # refused with the true reason instead of a job that can never start
+    assert result.accept is False
+    assert 'EFA' in result.formatted_user_message
+
+
+def test_h1_a_job_that_turned_efa_off_keeps_its_choice_in_the_destination(
+    hook,
+    submit,  # noqa: F811
+):
+    sent = payload(
+        hook,
+        moved(
+            select='1:ncpus=1:compute_node=tbd',
+            queue='job-shared',
+            src='test',
+            instance_type='c5.large',
+            efa_support='False',
+        ),
+    )
+    result, context = submit(
+        {},
+        event_type='movejob',
+        queue='job-shared',
+        src_queue=sent['src_queue'],
+        job=OpenPBSJob(**sent['job']),
+        defaults=SocaJobParams(
+            instance_types=['c5n.18xlarge'], enable_efa_support=True
+        ),
+    )
+    assert result.accept is True, result.formatted_user_message
+    # its own choices, not the destination's defaults
+    assert context.job.params.instance_types == ['c5.large']
+    assert context.job.params.enable_efa_support is False
+
+
+@pytest.mark.parametrize('select_names_node', [True, False])
+def test_h2_a_bound_move_gets_the_guidance_not_an_internal_error(
+    hook,
+    submit,  # noqa: F811
+    select_names_node,
+):
+    # 575: bound (schedselect compute_node=idea-dev-test-ondemand-575); refused with
+    # "Invalid Job: params.job_group not found"
+    node = '1:ncpus=1:compute_node=idea-dev-test-ondemand-575'
+    sent = payload(
+        hook,
+        moved(
+            select=node if select_names_node else None,
+            schedselect=node,
+            queue='job-shared',
+            src='test',
+            instance_type='c5.large',
+        ),
+    )
+    result, _ = submit(
+        {},
+        event_type='movejob',
+        queue='job-shared',
+        src_queue=sent['src_queue'],
+        job=OpenPBSJob(**sent['job']),
+        defaults=SocaJobParams(instance_types=['c5.large']),
+    )
+    assert result.accept is False
+    assert (
+        'This job already has a node from queue test, so it cannot be moved to queue '
+        'job-shared. Delete it and submit it to queue job-shared, or move a job before '
+        'it is given a node.'
+    ) in result.formatted_user_message
+    assert 'job_group not found' not in result.formatted_user_message
+
+
+def test_h3_a_move_carrying_the_source_queues_fsx_into_a_restricting_queue_is_refused(
+    hook,
+    submit,  # noqa: F811
+):
+    # 577: test's default existing Lustre stamped on the job; job-shared restricts
+    # fsx_lustre; the move was accepted and the job kept the source queue's file system
+    from ideadatamodel import SocaFSxLustreConfig
+    from ideadatamodel.scheduler import SocaQueueManagementParams
+
+    dns = 'fs-0910bae4c4a6e758a.fsx.us-east-2.amazonaws.com'
+    sent = payload(
+        hook,
+        moved(
+            select='1:ncpus=1:compute_node=tbd',
+            queue='job-shared',
+            src='test',
+            fsx=dns,
+            instance_type='c5.large',
+        ),
+    )
+    assert sent['job']['Resource_List']['fsx_lustre'] == dns
+    result, _ = submit(
+        {},
+        event_type='movejob',
+        queue='job-shared',
+        src_queue=sent['src_queue'],
+        job=OpenPBSJob(**sent['job']),
+        defaults=SocaJobParams(instance_types=['c5.large']),
+        queue_settings={
+            'queue_management_params': SocaQueueManagementParams(
+                restricted_parameters=['fsx_lustre']
+            )
+        },
+        source_profile=Mock(
+            default_job_params=SocaJobParams(
+                fsx_lustre=SocaFSxLustreConfig(enabled=True, existing_fsx=dns)
+            )
+        ),
+    )
+    assert result.accept is False
+    assert f'uses the FSx for Lustre file system {dns}, the default of queue test' in (
+        result.formatted_user_message
+    )
