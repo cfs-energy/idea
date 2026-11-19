@@ -1832,6 +1832,10 @@ def test_a_site_hook_mismatch_holds_the_job_at_once_and_is_logged_once(
             'could not mount the FSx for Lustre file system fs-',
         ),
         ('site-hook-mismatch', 'scheduler.compute_node_site_hook_sha256'),
+        (
+            'shared-storage-unavailable',
+            'a shared file system configured for the cluster could not be mounted',
+        ),
     ],
 )
 def test_a_shared_jobs_stack_reports_why_its_node_stopped(
@@ -1851,6 +1855,7 @@ def test_a_shared_jobs_stack_reports_why_its_node_stopped(
     from ideascheduler.app.provisioning.node_monitor import node_house_keeper
 
     node_house_keeper._site_hook_mismatch_reported.clear()
+    node_house_keeper._shared_storage_reported.clear()
     monkeypatch.setattr(
         JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.COMPLETED
     )
@@ -1880,6 +1885,10 @@ def test_a_shared_jobs_stack_reports_why_its_node_stopped(
         r for r in caplog.records if 'site hook does not match' in r.getMessage()
     ]
     assert len(hook_errors) == (1 if status == 'site-hook-mismatch' else 0)
+    storage_errors = [
+        r for r in caplog.records if 'shared file system configured' in r.getMessage()
+    ]
+    assert len(storage_errors) == (1 if status == 'shared-storage-unavailable' else 0)
 
 
 @pytest.mark.parametrize('max_retries', [0, 5])
@@ -2005,3 +2014,100 @@ def test_the_site_hook_setting_falls_back_to_the_module_name(context, monkeypatc
         housekeeping_session(context).site_hook_setting()
         == 'scheduler.compute_node_site_hook_sha256'
     )
+
+
+def test_a_node_without_its_shared_storage_holds_the_job_at_once_with_the_reason(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    caplog,
+):
+    # a node whose cluster shared storage did not mount after 5 attempts stops with
+    # shared-storage-unavailable: an outage of that file system hits every job, so the job
+    # is held at once rather than given new nodes into the same outage
+    from ideascheduler.app.provisioning.node_monitor import node_house_keeper
+
+    node_house_keeper._shared_storage_reported.clear()
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status='shared-storage-unavailable')]
+    )
+
+    with caplog.at_level(logging.ERROR):
+        housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == [job.get_compute_stack()]
+    assert mock_scheduler.held_jobs == [job.job_id]
+    held = job_cache.get_job(job.job_id).error_message
+    assert held.startswith(
+        'Job held: a shared file system configured for the cluster could not be '
+        'mounted on the node. An administrator must check that file system and its '
+        'network access. This is not a problem with the job or the image.'
+    )
+    assert 'instance_ami' not in held and ',' not in held
+    comment = mock_scheduler.comments[job.job_id]
+    assert comment.startswith('IDEA: held. Shared cluster storage did not mount')
+    assert len(comment) <= 128
+    assert any(
+        'shared file system configured for the cluster did not mount' in r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.ERROR
+    )
+
+
+def test_every_bootstrap_status_a_compute_host_can_write_is_handled():
+    import re
+    from pathlib import Path
+
+    from ideascheduler.app.provisioning.node_monitor.node_house_keeper import (
+        BOOTSTRAP_FSX_STATUSES,
+        BOOTSTRAP_INSUFFICIENT_MEMORY,
+    )
+
+    bootstrap = Path(__file__).resolve().parents[2] / 'idea-bootstrap'
+    # the files a compute node and a compute image build run
+    templates = [
+        *(bootstrap / '_templates' / 'linux').glob('*.jinja2'),
+        *(bootstrap / 'common').glob('*.sh'),
+        *(bootstrap / 'compute-node').rglob('*.jinja2'),
+    ]
+    written = set()
+    for path in templates:
+        text = path.read_text()
+        written |= set(
+            re.findall(r'\bfail_[a-z_]+\s+"?([a-z][a-z0-9]*(?:-[a-z0-9]+)+)"?', text)
+        )
+        # fail_bootstrap {{ 'a' if ... else 'b' }}
+        for choice in re.findall(r'fail_[a-z_]+\s+\{\{([^}]*)\}\}', text):
+            written |= set(re.findall(r"'([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'", choice))
+    assert {'site-hook-mismatch', 'existing-fsx-unavailable'} <= written, (
+        'the scan no longer sees the compute statuses'
+    )
+    # held at once with their own reason, or by their own check
+    own_reason = set(BOOTSTRAP_FSX_STATUSES) | {BOOTSTRAP_INSUFFICIENT_MEMORY}
+    # a node that stopped for its image or a download: held after the stack time-out with
+    # the "check instance_ami" reason, which fits these
+    image_or_download = {
+        'download-failed',
+        'download-unverified',
+        'reboot-failed',
+        'kernel-boot-mismatch',
+        'kernel-hold-failed',
+        'kernel-install-failed',
+        'kernel-series-end-of-life',
+        'lustre-client-install-failed',
+        'lustre-module-missing',
+        'gpu-driver-mapping-missing',
+        'gpu-driver-install-failed',
+        'gpu-kernel-devel-missing',
+    }
+    # arrives with the bootstrap area's shared storage stop
+    arriving = {'shared-storage-unavailable'}
+    assert arriving <= own_reason
+    assert sorted((written | arriving) - own_reason - image_or_download) == []
