@@ -263,9 +263,12 @@ def test_both_bakes_drop_them_before_their_first_initramfs(builder):
 OLDER = '5.14.0-687.10.1.el9_8.0.1.x86_64'
 
 
-def _run_bake_update(tmp_path, base_os, free_mb, running_mb=300):
+def _run_bake_update(
+    tmp_path, base_os, free_mb, running_mb=300, newest_installed=False
+):
     """update_within_target_series in a bake: /boot reports free_mb free, the running kernel's
-    files take running_mb, and the image also carries an older kernel"""
+    files take running_mb, and the image also carries an older kernel (and the newest one,
+    when newest_installed)"""
     boot = tmp_path / 'boot'
     (boot / 'loader' / 'entries').mkdir(parents=True)
     for name in (
@@ -274,6 +277,9 @@ def _run_bake_update(tmp_path, base_os, free_mb, running_mb=300):
         'initramfs-0-rescue-abc.img',
     ):
         (boot / name).touch()
+    if newest_installed:
+        (boot / f'vmlinuz-{NEWEST}').write_text('x')
+        (boot / f'initramfs-{NEWEST}.img').write_text('x')
     calls = tmp_path / 'calls'
     stubs = f"""
 BAKE_STAGE=packages
@@ -282,6 +288,10 @@ log_warning() {{ echo "warning $*" >> {calls}; }}
 set_reboot_required() {{ echo "reboot $*" >> {calls}; }}
 grubby() {{ :; }}
 rpm() {{
+  if [[ "$1" == -q && "$#" -eq 2 ]]; then
+    [[ "$2" == kernel-core-{NEWEST} && -n '{'yes' if newest_installed else ''}' ]]
+    return
+  fi
   printf '%s %s\\n' kernel-core-{OLDER} {OLDER} kernel-core-{RUNNING} {RUNNING}
   echo 'package kernel-modules-extra is not installed'
 }}
@@ -333,3 +343,24 @@ def test_a_bake_with_room_installs_the_kernel_after_removing_the_older_one(tmp_p
     assert f'kernel-core-{NEWEST}' in calls[1] and 'install' in calls[1]
     # the running kernel is never removed
     assert not [c for c in calls if 'remove' in c and RUNNING in c]
+
+
+def test_an_installed_newest_kernel_needs_no_room(tmp_path):
+    # measured desktop figures: 232 MB free, a 322 MB kernel. The newest kernel is already on
+    # disk (the Lustre client package can pull it in), so nothing new has to fit
+    code, calls = _run_bake_update(
+        tmp_path, 'rocky9', free_mb=232, running_mb=322, newest_installed=True
+    )
+    assert code == 0, calls
+    assert not [c for c in calls if c.startswith('fail')]
+    assert f'kernel-core-{NEWEST}' in calls[0] and 'install' in calls[0]
+    assert calls[-1].startswith('reboot ')
+
+
+def test_a_newest_kernel_not_on_disk_still_needs_room(tmp_path):
+    code, calls = _run_bake_update(tmp_path, 'rocky9', free_mb=232, running_mb=322)
+    assert code == 1
+    assert calls[-1].startswith(
+        f'fail kernel-install-failed: {tmp_path}/boot has 232 MB free after removing rescue '
+        'images and older kernels, and kernel 5.14.0-687* needs about 386 MB.'
+    )
