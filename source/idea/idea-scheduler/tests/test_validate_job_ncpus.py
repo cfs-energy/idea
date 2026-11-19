@@ -36,6 +36,7 @@ def submit(context, monkeypatch):
         job_o=None,
         src_queue=None,
         source_profile=None,
+        job=None,
     ):
         _use_queue(context, monkeypatch, _projects('project-a'))
         profile = context.queue_profiles.get_queue_profile.return_value
@@ -54,7 +55,8 @@ def submit(context, monkeypatch):
             requestor='researcher',
             job_o=job_o,
             src_queue=src_queue,
-            job=OpenPBSJob(
+            job=job
+            or OpenPBSJob(
                 queue=queue,
                 project='project-a',
                 Job_Name='job',

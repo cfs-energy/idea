@@ -228,6 +228,8 @@ def get_local_node_name() -> str:
 #   > queuejob, modifyjob, runjob: r -> -
 #   sw_index
 #   > modifyjob, runjob: r -> -
+#   Executable
+#   > movejob: r -> - (reading it raised AttributeError on every qmove, OpenPBS server log)
 JOB_PARAM_EVENT_TYPE_MATRIX = """
 Job Attribute,queuejob,modifyjob,movejob,runjob,resvsub,resv_end,periodic,execjob_begin,execjob_attach,execjob_prologue,execjob_launch,execjob_postsuspend,execjob_preresume,execjob_end,execjob_epilogue,execjob_preterm,exechost_startup,exechost_periodic,
 accounting_id,-,r,r,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
@@ -253,7 +255,7 @@ Error_Path,rs,rs,r,rs,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
 estimated,-,r,r,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
 etime,-,r,r,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
 euser,-,r,r,r,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
-Executable,s,-,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
+Executable,s,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
 Execution_Time,rs,rs,r,r,-,-,-,rs,r,rs,rs,r,r,r,rs,rs,-,rs,
 exec_host,-,-,r,-,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
 exec_vnode,-,-,r,r,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
@@ -1021,81 +1023,96 @@ class OpenPBSJob:
             return response
         return None
 
+    # the attributes sent to the scheduler, in this order
+    ATTRIBUTES = (
+        'id',
+        'accounting_id',
+        'Account_Name',
+        'accrue_type',
+        'alt_id',
+        'argument_list',
+        'array',
+        'array_id',
+        'array_index',
+        'array_indices_remaining',
+        'array_indices_submitted',
+        'array_state_count',
+        'block',
+        'Checkpoint',
+        'comment',
+        'create_resv_from_job',
+        'ctime',
+        'depend',
+        'egroup',
+        'eligible_time',
+        'Error_Path',
+        'estimated',
+        'etime',
+        'euser',
+        'Executable',
+        'Execution_Time',
+        'exec_host',
+        'exec_vnode',
+        'Exit_status',
+        'group_list',
+        'hashname',
+        'Hold_Types',
+        'interactive',
+        'jobdir',
+        'Job_Name',
+        'Job_Owner',
+        'job_state',
+        'Join_Path',
+        'Keep_Files',
+        'Mail_Points',
+        'Mail_Users',
+        'mtime',
+        'no_stdio_sockets',
+        'Output_Path',
+        'Priority',
+        'project',
+        'qtime',
+        'queue',
+        'queue_rank',
+        'queue_type',
+        'release_nodes_on_stageout',
+        'Rerunable',
+        'resources_released',
+        'resources_released_list',
+        'resources_used',
+        'Resource_List',
+        'run_count',
+        'run_version',
+        'sandbox',
+        'schedselect',
+        'sched_hint',
+        'server',
+        'session_id',
+        'Shell_Path_List',
+        'stagein',
+        'stageout',
+        'Stageout_status',
+        'stime',
+        'Submit_arguments',
+        'substate',
+        'sw_index',
+        'umask',
+        'User_List',
+    )
+
+    def _read(self, name: str):
+        # a job object holds only the attributes its event carries, and reading another
+        # raises AttributeError (a movejob job has no Executable): it is left out, as an
+        # unset one is
+        try:
+            return getattr(self, name)
+        except AttributeError:
+            if DEBUG_MODE:
+                log_fine(f'{self.event_type}: job has no {name}')
+            return None
+
     def build(self):
-        pbs_job = {}
-        pbs_job['id'] = self.id
-        pbs_job['accounting_id'] = self.accounting_id
-        pbs_job['Account_Name'] = self.Account_Name
-        pbs_job['accrue_type'] = self.accrue_type
-        pbs_job['alt_id'] = self.alt_id
-        pbs_job['argument_list'] = self.argument_list
-        pbs_job['array'] = self.array
-        pbs_job['array_id'] = self.array_id
-        pbs_job['array_index'] = self.array_index
-        pbs_job['array_indices_remaining'] = self.array_indices_remaining
-        pbs_job['array_indices_submitted'] = self.array_indices_submitted
-        pbs_job['array_state_count'] = self.array_state_count
-        pbs_job['block'] = self.block
-        pbs_job['Checkpoint'] = self.Checkpoint
-        pbs_job['comment'] = self.comment
-        pbs_job['create_resv_from_job'] = self.create_resv_from_job
-        pbs_job['ctime'] = self.ctime
-        pbs_job['depend'] = self.depend
-        pbs_job['egroup'] = self.egroup
-        pbs_job['eligible_time'] = self.eligible_time
-        pbs_job['Error_Path'] = self.Error_Path
-        pbs_job['estimated'] = self.estimated
-        pbs_job['etime'] = self.etime
-        pbs_job['euser'] = self.euser
-        pbs_job['Executable'] = self.Executable
-        pbs_job['Execution_Time'] = self.Execution_Time
-        pbs_job['exec_host'] = self.exec_host
-        pbs_job['exec_vnode'] = self.exec_vnode
-        pbs_job['Exit_status'] = self.Exit_status
-        pbs_job['group_list'] = self.group_list
-        pbs_job['hashname'] = self.hashname
-        pbs_job['Hold_Types'] = self.Hold_Types
-        pbs_job['interactive'] = self.interactive
-        pbs_job['jobdir'] = self.jobdir
-        pbs_job['Job_Name'] = self.Job_Name
-        pbs_job['Job_Owner'] = self.Job_Owner
-        pbs_job['job_state'] = self.job_state
-        pbs_job['Join_Path'] = self.Join_Path
-        pbs_job['Keep_Files'] = self.Keep_Files
-        pbs_job['Mail_Points'] = self.Mail_Points
-        pbs_job['Mail_Users'] = self.Mail_Users
-        pbs_job['mtime'] = self.mtime
-        pbs_job['no_stdio_sockets'] = self.no_stdio_sockets
-        pbs_job['Output_Path'] = self.Output_Path
-        pbs_job['Priority'] = self.Priority
-        pbs_job['project'] = self.project
-        pbs_job['qtime'] = self.qtime
-        pbs_job['queue'] = self.queue
-        pbs_job['queue_rank'] = self.queue_rank
-        pbs_job['queue_type'] = self.queue_type
-        pbs_job['release_nodes_on_stageout'] = self.release_nodes_on_stageout
-        pbs_job['Rerunable'] = self.Rerunable
-        pbs_job['resources_released'] = self.resources_released
-        pbs_job['resources_released_list'] = self.resources_released_list
-        pbs_job['resources_used'] = self.resources_used
-        pbs_job['Resource_List'] = self.Resource_List
-        pbs_job['run_count'] = self.run_count
-        pbs_job['run_version'] = self.run_version
-        pbs_job['sandbox'] = self.sandbox
-        pbs_job['schedselect'] = self.schedselect
-        pbs_job['sched_hint'] = self.sched_hint
-        pbs_job['server'] = self.server
-        pbs_job['session_id'] = self.session_id
-        pbs_job['Shell_Path_List'] = self.Shell_Path_List
-        pbs_job['stagein'] = self.stagein
-        pbs_job['stageout'] = self.stageout
-        pbs_job['Stageout_status'] = self.Stageout_status
-        pbs_job['stime'] = self.stime
-        pbs_job['Submit_arguments'] = self.Submit_arguments
-        pbs_job['substate'] = self.substate
-        pbs_job['sw_index'] = self.sw_index
-        pbs_job['umask'] = self.umask
-        pbs_job['User_List'] = self.User_List
+        pbs_job = {name: self._read(name) for name in self.ATTRIBUTES}
         # pbs_job['Variable_List'] = self.Variable_List
 
         result = {}
@@ -1582,14 +1599,21 @@ try:
                 if queue_name is not None and event_type == HOOK_EVENT_QUEUEJOB:
                     e.job.queue = pbs.server().queue(queue_name)
 
+                # a movejob may only read the job (project and Resource_List are r in the
+                # matrix): writing either refused every move. the job's group and selector
+                # are brought up to date when the scheduler next reads the job
+                read_only = event_type == HOOK_EVENT_MOVEJOB
+
                 project = payload.get('project', None)
-                if project is not None and (
-                    event_type != HOOK_EVENT_MODIFYJOB or e.job.project
+                if (
+                    project is not None
+                    and not read_only
+                    and (event_type != HOOK_EVENT_MODIFYJOB or e.job.project)
                 ):
                     e.job.project = project
 
                 resources_updated = payload.get('resources_updated', None)
-                if resources_updated is not None:
+                if resources_updated is not None and not read_only:
                     job = e.job
                     for name, value in resources_updated.items():
                         if name == 'select':

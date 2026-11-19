@@ -84,3 +84,17 @@ def test_a_custom_group_is_kept(submit):  # noqa: F811
         {'instance_type': 'c5.xlarge'},
     )
     assert result.resources_updated['job_group'] == 'custom-batch'
+
+
+def test_a_job_on_a_stack_keeps_its_group_and_its_edit_is_accepted(submit):  # noqa: F811
+    # the carried computed group was checked as the submitter's and refused the edit
+    result = _edit(
+        submit,
+        {
+            'select': '1:ncpus=1:compute_node=ideamock-job-shared-ondemand-g06692ffa',
+            'instance_type': 'c5.large',
+            'job_group': 'g06692ffa',
+        },
+        {'walltime': '00:10:00'},
+    )
+    assert result.resources_updated['job_group'] == 'g06692ffa'
