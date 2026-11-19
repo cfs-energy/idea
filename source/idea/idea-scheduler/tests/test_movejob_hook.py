@@ -59,7 +59,7 @@ def hook_module(monkeypatch):
     return namespace
 
 
-def _move_event(fsx_lustre):
+def _move_event(fsx_lustre, select='1:ncpus=4:compute_node=tbd'):
     job = MoveJobObject(
         id='514.scheduler',
         queue='job-shared',
@@ -67,7 +67,7 @@ def _move_event(fsx_lustre):
         Job_Name='job',
         Job_Owner='researcher@scheduler',
         Resource_List=ReadOnlyResources(
-            select='1:ncpus=4:compute_node=tbd',
+            select=select,
             walltime='00:10:00',
             job_group='g27f8153e',
             fsx_lustre=fsx_lustre,
@@ -154,3 +154,32 @@ def test_a_move_keeping_the_source_queues_fsx_reaches_its_refusal(
         f'uses the FSx for Lustre file system {SOURCE_DNS}, the default of queue old-q'
         in result.formatted_user_message
     )
+
+
+def test_a_move_of_a_job_already_given_a_node_is_refused_with_what_to_do(
+    hook_module,
+    submit,  # noqa: F811
+):
+    # the move hook cannot unbind the job: accepted, it stayed bound to the source queue's
+    # stack in the target queue (held jobs keep their node)
+    event = _move_event(PINNED_DNS, select='1:ncpus=4:compute_node=ideamock-job-514')
+    job = OpenPBSJob(**_payload(hook_module, event)['job'])
+    result, _ = _restricted_fsx_move(submit, PINNED_DNS, src_queue='old-q', job=job)
+    assert result.accept is False
+    assert (
+        'This job already has a node from queue old-q, so it cannot be moved to queue '
+        'job-shared. Delete it and submit it to queue job-shared, or move a job before '
+        'it is given a node.'
+    ) in result.formatted_user_message
+
+
+def test_a_move_of_a_job_without_a_node_is_still_accepted(
+    hook_module,
+    submit,  # noqa: F811
+):
+    # the hook writes nothing on a move; the provisioner's live read regroups the job
+    # for its new queue (test_held_job_provisioning, the root edit case)
+    event = _move_event(PINNED_DNS)
+    job = OpenPBSJob(**_payload(hook_module, event)['job'])
+    result, _ = _restricted_fsx_move(submit, PINNED_DNS, src_queue='old-q', job=job)
+    assert result.accept is True, result.formatted_user_message
