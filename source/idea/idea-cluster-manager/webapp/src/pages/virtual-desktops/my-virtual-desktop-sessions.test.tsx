@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -150,7 +151,7 @@ describe('my virtual desktop sessions', () => {
     });
 });
 
-async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/', state = 'STOPPED') {
+async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/', state = 'STOPPED', session: object = {}) {
     const context = initTestAppContext();
 
     const clusterSettings = context.getClusterSettingsService();
@@ -172,6 +173,7 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
     vi.spyOn(virtualDesktop, 'listSessions').mockResolvedValue({
         listing: [{
             ...STOPPED_SESSION,
+            ...session,
             state,
             idle_autostop_delay: 30,
             schedule: {
@@ -205,7 +207,7 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
         </MemoryRouter>
     );
 
-    await screen.findByText('my-desktop', {}, { timeout: 10000 });
+    await screen.findByText((session as any).name ?? 'my-desktop', {}, { timeout: 10000 });
     return { virtualDesktop, flashbarItems };
 }
 
@@ -530,6 +532,36 @@ describe('opening rename or resize', () => {
         await user.click(screen.getByText('Rename or resize'));
         await waitFor(() => expect(flashbarItems.map(flashbarText)).toContain('Could not update virtual desktop: Service Unavailable'));
     });
+
+    const resize = async (legacyName: string, newName?: string) => {
+        const { virtualDesktop } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'STOPPED', { name: legacyName, server: { instance_id: 'i-marker', instance_type: 't3.large' } });
+        vi.spyOn(AppContext.get().client().virtualDesktopUtils(), 'listAllowedInstanceTypesForSession').mockResolvedValue({ listing: [] } as any);
+        const updateSession = vi.spyOn(virtualDesktop, 'updateSession').mockResolvedValue({ session: { ...STOPPED_SESSION, name: legacyName } } as any);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Actions' }));
+        await user.click(screen.getByText('Rename or resize'));
+        const name = await screen.findByDisplayValue(legacyName);
+        if (newName !== undefined) {
+            await user.clear(name);
+            await user.type(name, newName);
+        }
+        await user.click(screen.getByRole('button', { name: 'Submit' }));
+        return updateSession;
+    };
+
+    it('keeps an older desktop name the current rule would refuse', async () => {
+        const legacyName = "Marker's desktop (2019) with a name longer than the old limit";
+        const updateSession = await resize(legacyName);
+        await waitFor(() => expect(updateSession).toHaveBeenCalledTimes(1));
+        expect(updateSession.mock.calls[0][0].session!.name).toBe(legacyName);
+    });
+
+    it('checks a changed name against the server rule', async () => {
+        const updateSession = await resize('marker-desktop', 'marker (copy)');
+        // the rule shows as help text and, once refused, as the field's error
+        await waitFor(() => expect(screen.getAllByText('Use 1 to 64 letters, digits, spaces, dots, underscores or hyphens.')).toHaveLength(2));
+        expect(updateSession).not.toHaveBeenCalled();
+    });
 });
 
 describe('previews at scale', () => {
@@ -601,5 +633,78 @@ describe('needsQuickRefresh', () => {
 
     it('stops once the preview has arrived', () => {
         expect(needsQuickRefresh(desktops('READY'), { d0: { data: 'x' } }, {}, 0)).toBe(false);
+    });
+});
+
+describe('screenshot order', () => {
+    it('puts a desktop never captured after the captured ones, whichever side it is on', async () => {
+        const {screenshotOrder} = await import('./my-virtual-desktop-sessions');
+        const moment = (await import('moment')).default;
+        const order = screenshotOrder({seen: {time: moment('2026-01-01')}} as any);
+        const seen = {dcv_session_id: 'seen', create_time: '2026-01-01'} as any;
+        const fresh = {dcv_session_id: 'fresh', create_time: '2026-01-02'} as any;
+        expect([fresh, seen].sort(order).map(item => item.dcv_session_id)).toEqual(['seen', 'fresh']);
+        expect([seen, fresh].sort(order).map(item => item.dcv_session_id)).toEqual(['seen', 'fresh']);
+    });
+});
+
+describe('a desktop whose owner left its project', () => {
+    afterEach(() => vi.restoreAllMocks());
+    // the controller's words (sessions/virtual_desktop_session_utils.py OWNER_LEFT_PROJECT_MESSAGE)
+    const LEFT = "You are no longer a member of this desktop's project, so it cannot be started or connected to. Ask an administrator to move it to one of your projects or to add you back to the project. You can still delete it.";
+
+    it('says why it cannot start', async () => {
+        const flashbarItems = await startSessionAndCaptureFlashbar({ success: [], failed: [{ ...STOPPED_SESSION, failure_reason: LEFT }] });
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes(LEFT))).toBe(true));
+    });
+
+    it('says why it cannot connect', async () => {
+        const { virtualDesktop, flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'READY');
+        vi.spyOn(virtualDesktop, 'getSessionConnectionInfo').mockResolvedValue({ connection_info: { failure_reason: LEFT } } as any);
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Connect' }));
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes(LEFT))).toBe(true));
+    });
+
+    it('says why there is no preview when the controller holds the desktop for its project', async () => {
+        const ready = [{ ...twentyLinuxDesktops[0], state: 'READY', dcv_session_id: 'dcv-0' }];
+        await renderListing(vi.fn().mockResolvedValue({ listing: ready }), (virtualDesktop) => {
+            // as the controller answers: the refused request object, dcv_session_id cleared, idea_session_id kept
+            vi.spyOn(virtualDesktop, 'getSessionScreenshot').mockImplementation(async (request: any) => ({
+                success: [],
+                failed: request.screenshots.map((screenshot: any) => ({ ...screenshot, dcv_session_id: undefined, failure_reason: LEFT }))
+            }));
+        });
+        expect(await screen.findByText(LEFT, {}, { timeout: 10000 })).toBeInTheDocument();
+        expect(screen.queryByText('Preview unavailable. You can still connect.')).toBeNull();
+    });
+
+    it('never shows the broker\'s own failure text on a preview', async () => {
+        const ready = [{ ...twentyLinuxDesktops[0], state: 'READY', dcv_session_id: 'dcv-0' }];
+        await renderListing(vi.fn().mockResolvedValue({ listing: ready }), (virtualDesktop) => {
+            vi.spyOn(virtualDesktop, 'getSessionScreenshot').mockResolvedValue({ success: [], failed: [{ dcv_session_id: 'dcv-0', failure_reason: 'marker broker text' }] });
+        });
+        expect(await screen.findByText('Preview unavailable. You can still connect.', {}, { timeout: 10000 })).toBeInTheDocument();
+        expect(screen.queryByText('marker broker text')).toBeNull();
+    });
+});
+
+describe('the hold messages the preview card shows', () => {
+    // the controller's list, read from its source: on the merged tree it must match string for string
+    const path = '../../idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller/app/sessions/virtual_desktop_session_utils.py';
+    const source = readFileSync(path, 'utf8');
+    const block = (name: string) => source.match(new RegExp(`^${name} = \\(\\n([\\s\\S]*?)^\\)`, 'm'))?.[1];
+    const literal = (text: string) => [...text.matchAll(/(['"])((?:\\.|(?!\1).)*)\1/g)].map(match => match[2].replace(/\\(.)/g, '$1')).join('');
+    const list = block('PROJECT_HOLD_MESSAGES');
+    const server = list?.split(',').map(entry => entry.trim()).filter(Boolean).map(name => literal(block(name) ?? ''));
+
+    if (list == null) {
+        // shortcut: this branch carries an older controller without the list, merge with fix20-vdc to run this
+        console.warn(`SKIPPED: PROJECT_HOLD_MESSAGES not in ${path}; the drift check runs on the merged tree`);
+    }
+
+    it.skipIf(list == null)('are the controller\'s PROJECT_HOLD_MESSAGES, string for string', async () => {
+        const { PROJECT_HOLD_MESSAGES } = await import('./my-virtual-desktop-sessions');
+        expect(server!.every(message => message.length > 40)).toBe(true);
+        expect(PROJECT_HOLD_MESSAGES).toEqual(server);
     });
 });

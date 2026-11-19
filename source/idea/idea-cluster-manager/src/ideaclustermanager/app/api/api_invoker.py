@@ -30,6 +30,7 @@ from ideadatamodel.auth import (
 from ideadatamodel.filesystem import ReadFileResult, TailFileResult, SaveFileRequest
 
 from ideasdk.app import SocaAppAPI
+from ideasdk.filesystem.filebrowser_api import FileBrowserAPI
 from ideaclustermanager.app.api.file_browser_api import ClusterFileBrowserAPI
 from ideaclustermanager.app.api.cluster_settings_api import ClusterSettingsAPI
 from ideaclustermanager.app.api.analytics_api import AnalyticsAPI
@@ -69,6 +70,101 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             'Accounts.ListGroups': ListGroupsResult,
         }
 
+    # every namespace a handler answers here: each has its own metric series
+    NAMESPACES = (
+        frozenset(
+            {
+                'Accounts.AddSudoUser',
+                'Accounts.AddUserToGroup',
+                'Accounts.CreateGroup',
+                'Accounts.CreateUser',
+                'Accounts.DeleteGroup',
+                'Accounts.DeleteUser',
+                'Accounts.DisableGroup',
+                'Accounts.DisableUser',
+                'Accounts.EnableGroup',
+                'Accounts.EnableUser',
+                'Accounts.GetGroup',
+                'Accounts.GetUser',
+                'Accounts.GlobalSignOut',
+                'Accounts.ListGroups',
+                'Accounts.ListUsers',
+                'Accounts.ListUsersInGroup',
+                'Accounts.ModifyGroup',
+                'Accounts.ModifyUser',
+                'Accounts.ReconcileUsers',
+                'Accounts.RemoveSudoUser',
+                'Accounts.RemoveUserFromGroup',
+                'Accounts.RepairHomeOwnership',
+                'Accounts.ResetPassword',
+                'Analytics.OpenSearchQuery',
+                'Auth.AddUserToGroup',
+                'Auth.ChangePassword',
+                'Auth.ConfirmForgotPassword',
+                'Auth.CreateApiToken',
+                'Auth.DeleteApiToken',
+                'Auth.ForgotPassword',
+                'Auth.GetGroup',
+                'Auth.GetUser',
+                'Auth.GetUserPrivateKey',
+                'Auth.GlobalSignOut',
+                'Auth.InitiateAuth',
+                'Auth.ListApiTokens',
+                'Auth.ListUsersInGroup',
+                'Auth.RemoveUserFromGroup',
+                'Auth.RespondToAuthChallenge',
+                'Auth.SignOut',
+                'Auth.UpdateMyPreferences',
+                'ClusterSettings.BackfillCostMetrics',
+                'ClusterSettings.DescribeInstanceTypes',
+                'ClusterSettings.DescribeSettingsCatalog',
+                'ClusterSettings.FetchPricingRates',
+                'ClusterSettings.GetCostMetricsBackfill',
+                'ClusterSettings.GetModuleSettings',
+                'ClusterSettings.ListClusterHosts',
+                'ClusterSettings.ListClusterModules',
+                'ClusterSettings.ListClusterServices',
+                'ClusterSettings.UpdateModuleSettings',
+                'Costs.GetUserCosts',
+                'Costs.GetUserSummary',
+                'Costs.ListUserCosts',
+                'EmailTemplates.CreateEmailTemplate',
+                'EmailTemplates.DeleteEmailTemplate',
+                'EmailTemplates.GetEmailTemplate',
+                'EmailTemplates.ListEmailTemplates',
+                'EmailTemplates.UpdateEmailTemplate',
+                'FileBrowser.DeleteFolder',
+                'FileBrowser.GetStorageUsage',
+                'MyCosts.GetCostTicker',
+                'MyCosts.GetCosts',
+                'MyCosts.GetInsights',
+                'MyCosts.GetSummary',
+                'MyCosts.Refresh',
+                'Portal.ReportClientError',
+                'Projects.CreateProject',
+                'Projects.DisableProject',
+                'Projects.EnableProject',
+                'Projects.GetProject',
+                'Projects.GetUserProjects',
+                'Projects.ListBedrockUsage',
+                'Projects.ListProjects',
+                'Projects.UpdateProject',
+                'Reporting.ExportCsv',
+                'Reporting.GetCapabilities',
+                'Reporting.GetInsights',
+                'Reporting.GetSummary',
+                'Reporting.ListRows',
+                'Terminal.CreateTicket',
+                'Terminal.ListTargets',
+            }
+        )
+        | FileBrowserAPI.NAMESPACES
+        | SocaAppAPI.NAMESPACES
+    )
+
+    def get_namespaces(self):
+        return self.NAMESPACES
+
     def get_token_service(self) -> Optional[TokenService]:
         return self._context.token_service
 
@@ -76,6 +172,19 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
     def get_request_logging_payload(
         self, context: ApiInvocationContext
     ) -> Optional[Dict]:
+        namespace = context.namespace
+        if namespace and namespace.startswith('Auth.'):
+            try:
+                return self._request_logging_payload(context)
+            except Exception:
+                # a payload that does not parse is never logged as sent: it may hold
+                # a password, a code or a token in any field
+                request = context.get_request(deep_copy=True)
+                request['payload'] = {'redacted': True}
+                return request
+        return self._request_logging_payload(context)
+
+    def _request_logging_payload(self, context: ApiInvocationContext) -> Optional[Dict]:
         namespace = context.namespace
 
         if namespace.startswith(('Reporting.', 'Terminal.', 'Portal.')):
@@ -90,6 +199,8 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
                 payload.password = '*****'
             if payload.authorization_code is not None:
                 payload.authorization_code = '*****'
+            if payload.refresh_token is not None:
+                payload.refresh_token = '*****'
             request['payload'] = Utils.to_dict(payload)
             return request
         elif namespace == 'Auth.SignOut':
@@ -102,12 +213,16 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             request = context.get_request(deep_copy=True)
             payload = context.get_request_payload_as(RespondToAuthChallengeRequest)
             payload.new_password = '*****'
+            if payload.session is not None:
+                payload.session = '*****'
             request['payload'] = Utils.to_dict(payload)
             return request
         elif namespace == 'Auth.ConfirmForgotPassword':
             request = context.get_request(deep_copy=True)
             payload = context.get_request_payload_as(ConfirmForgotPasswordRequest)
             payload.password = '*****'
+            if payload.confirmation_code is not None:
+                payload.confirmation_code = '*****'
             request['payload'] = Utils.to_dict(payload)
             return request
         elif namespace == 'Auth.ChangePassword':
@@ -156,6 +271,9 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
                     payload.auth.id_token = '*****'
                 if payload.auth.refresh_token is not None:
                     payload.auth.refresh_token = '*****'
+            # a challenge's session continues the sign-in: not for the log
+            if payload.session is not None:
+                payload.session = '*****'
             response['payload'] = Utils.to_dict(payload)
             return response
         elif namespace == 'Auth.RespondToAuthChallenge':
@@ -163,8 +281,12 @@ class ClusterManagerApiInvoker(ApiInvokerProtocol):
             payload = context.get_response_payload_as(RespondToAuthChallengeResult)
             if payload.auth is not None:
                 payload.auth.access_token = '*****'
+                if payload.auth.id_token is not None:
+                    payload.auth.id_token = '*****'
                 if payload.auth.refresh_token is not None:
                     payload.auth.refresh_token = '*****'
+            if payload.session is not None:
+                payload.session = '*****'
             response['payload'] = Utils.to_dict(payload)
             return response
         elif namespace == 'Auth.GetUserPrivateKey':

@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+import pwd
 import ideascheduler
 
 from ideascheduler.app.scheduler.pbs_select import select_compute_node
@@ -595,15 +596,29 @@ class OpenPBSScheduler(SocaSchedulerProtocol):
         return self._deletion_log.deleted_by(job_id)
 
     def delete_job(self, job_id: str):
-        result = self._shell.invoke(
-            [
-                'su',
-                str(self.get_job(job_id=job_id).owner),
-                '-c',
-                f'{openpbs_constants.QDEL} {job_id}',
-            ],
-            skip_error_logging=True,
-        )
+        # qdel runs as the owner, without a shell and with the user environment only.
+        # this service deletes it directly when the owner is root (as `su root` did) or no
+        # longer resolves: the accounts guard deletes a removed owner's queued jobs
+        owner = str(self.get_job(job_id=job_id).owner)
+        try:
+            try:
+                owner_uid = pwd.getpwnam(owner).pw_uid
+            except KeyError:
+                owner_uid = None
+            if owner_uid in (0, None):
+                result = self._shell.invoke(
+                    [openpbs_constants.QDEL, job_id], skip_error_logging=True
+                )
+            else:
+                result = self._shell.invoke_as_user(
+                    owner,
+                    [openpbs_constants.QDEL, job_id],
+                    skip_error_logging=True,
+                )
+        except (KeyError, PermissionError) as e:
+            raise exceptions.soca_exception(
+                errorcodes.SCHEDULER_ERROR, f'Failed to delete job: {e}'
+            )
         if result.returncode != 0:
             raise exceptions.soca_exception(
                 errorcodes.SCHEDULER_ERROR, f'Failed to delete job: {result}'

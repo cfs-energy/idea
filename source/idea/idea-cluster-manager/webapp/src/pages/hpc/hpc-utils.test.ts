@@ -1,4 +1,9 @@
 import {
+    prepareQueueProfileForSave,
+    allowNewFsxLustreInitialValue,
+    clearQueueDefault,
+    applyFsxThroughputForSave,
+    fsxThroughputFormValues,
     formatBlockingLimit,
     jobFailureNextStep,
     listAllProjects,
@@ -298,5 +303,158 @@ describe('listAllProjects', () => {
         expect(projects).toHaveLength(130);
         expect(listProjects).toHaveBeenCalledTimes(2);
         expect(listProjects.mock.calls[1][0].paginator.cursor).toBe('next');
+    });
+});
+
+describe('allowNewFsxLustreInitialValue', () => {
+    it('starts unchecked for a new queue profile', () => {
+        expect(allowNewFsxLustreInitialValue(true, {})).toBe(false);
+    });
+    it('shows a profile saved before the setting existed as allowed, so saving it changes nothing', () => {
+        expect(allowNewFsxLustreInitialValue(false, {queue_management_params: {}})).toBe(true);
+        expect(allowNewFsxLustreInitialValue(false, {})).toBe(true);
+    });
+    it('shows the stored value of an existing profile', () => {
+        expect(allowNewFsxLustreInitialValue(false, {queue_management_params: {allow_new_fsx_lustre: false}})).toBe(false);
+        expect(allowNewFsxLustreInitialValue(false, {queue_management_params: {allow_new_fsx_lustre: true}})).toBe(true);
+    });
+});
+
+describe('FSx per-unit throughput on the queue form', () => {
+    const save = (fsx: any, throughput: any) => {
+        const profile: any = {default_job_params: {fsx_lustre: fsx}, fsx_lustre_throughput: throughput}
+        applyFsxThroughputForSave(profile)
+        return profile
+    }
+    it('saves a new PERSISTENT_2 profile left at the shown default with a value PERSISTENT_2 takes', () => {
+        const profile = save({deployment_type: 'persistent_2'}, fsxThroughputFormValues(undefined))
+        expect(profile.default_job_params.fsx_lustre.per_unit_throughput).toBe(125)
+        expect(profile.fsx_lustre_throughput).toBeUndefined()
+    });
+    it('saves the value chosen for the chosen type', () => {
+        expect(save({deployment_type: 'persistent_1'}, {persistent_1: '100', persistent_2: '500'})
+            .default_job_params.fsx_lustre.per_unit_throughput).toBe(100);
+        expect(save({deployment_type: 'persistent_2'}, {persistent_1: '100', persistent_2: '500'})
+            .default_job_params.fsx_lustre.per_unit_throughput).toBe(500);
+    });
+    it('drops the throughput for a scratch type', () => {
+        expect(save({deployment_type: 'scratch_2', per_unit_throughput: 50}, {persistent_1: '200'})
+            .default_job_params.fsx_lustre.per_unit_throughput).toBeUndefined();
+    });
+    it('fills the field of the stored type with the stored value', () => {
+        expect(fsxThroughputFormValues({deployment_type: 'persistent_2', per_unit_throughput: 500}))
+            .toEqual({persistent_1: '200', persistent_2: '500'});
+    });
+});
+
+describe('clearQueueDefault', () => {
+    it('sends a cleared default as null, so the server removes it and keeps the rest', () => {
+        const profile: any = {default_job_params: {fsx_lustre: {existing_fsx: 'fs-1'}, walltime: '01:00:00'}}
+        clearQueueDefault(profile, 'fsx_lustre')
+        expect(JSON.parse(JSON.stringify(profile)).default_job_params).toEqual({fsx_lustre: null, walltime: '01:00:00'})
+    });
+});
+
+describe('prepareQueueProfileForSave (the queue form save)', () => {
+    // the stored profile as the API returns it, which the wizard starts from (A-S7)
+    const stored = () => ({
+        name: 'q',
+        project_ids: ['p1'],
+        scaling_mode: 'batch',
+        default_job_params: {
+            walltime: '02:00:00',
+            enable_scratch: true,
+            scratch_provider: 'fsx-lustre-existing',
+            fsx_lustre: {enabled: true, existing_fsx: 'fs-1.fsx.us-east-1.amazonaws.com'},
+            spot: false,
+            spot_price: {amount: 0.1},
+        },
+        fsx_lustre_throughput: {persistent_1: '200', persistent_2: '125'},
+    })
+    const sent = (profile: any, before: any = stored()) =>
+        JSON.parse(JSON.stringify(prepareQueueProfileForSave(profile, before)))
+
+    it('switching scratch to EBS clears the FSx settings and keeps the rest', () => {
+        const profile: any = stored()
+        profile.default_job_params.scratch_provider = 'ebs'
+        const params = sent(profile).default_job_params
+        expect(params.fsx_lustre).toBeNull()
+        expect(params.walltime).toBe('02:00:00')
+        // Spot was already off when loaded: its stored price stays (verify-scheduler #13)
+        expect(params.spot_price).toEqual({amount: 0.1})
+    });
+    it('turning Spot off in this edit clears its stored defaults', () => {
+        const before: any = stored()
+        before.default_job_params.spot = true
+        const profile: any = stored()
+        profile.default_job_params.spot = false
+        const params = sent(profile, before).default_job_params
+        expect(params.spot_price).toBeNull()
+        expect(params.spot_allocation_count).toBeNull()
+        expect(params.spot_allocation_strategy).toBeNull()
+    });
+    it('an unrelated edit keeps the stored provider settings as stored', () => {
+        const before = (): any => ({
+            name: 'q', project_ids: ['p1'],
+            default_job_params: {
+                enable_scratch: true, scratch_provider: 'ebs',
+                scratch_storage_size: {value: 60, unit: 'gb'},
+                fsx_lustre: {enabled: true, existing_fsx: 'fs-1.fsx.us-east-1.amazonaws.com'},
+            },
+        })
+        const profile = before()
+        profile.title = 'renamed'
+        const params = sent(profile, before()).default_job_params
+        expect(params.fsx_lustre).toEqual(before().default_job_params.fsx_lustre)
+        expect(params.scratch_storage_size).toEqual({value: 60, unit: 'gb'})
+    });
+    it('switching to a new FSx clears the stored existing one', () => {
+        const profile: any = stored()
+        profile.default_job_params.scratch_provider = 'fsx-lustre-new'
+        const params = sent(profile).default_job_params
+        expect(params.fsx_lustre.existing_fsx).toBeNull()
+        expect(params.fsx_lustre.enabled).toBe(true)
+        expect(params.scratch_storage_size).toBeNull()
+    });
+    it('turning scratch off clears its settings and disables FSx', () => {
+        const profile: any = stored()
+        profile.default_job_params.enable_scratch = false
+        const params = sent(profile).default_job_params
+        expect(params.scratch_provider).toBeNull()
+        // every stored FSx setting goes as null so the server removes it, not only enabled
+        expect(params.fsx_lustre).toEqual({
+            enabled: false, existing_fsx: null, s3_backend: null, import_path: null,
+            export_path: null, deployment_type: null, per_unit_throughput: null, size: null,
+        })
+    });
+    it('an unrelated edit of a profile stored with scratch off sends its FSx values as stored', () => {
+        // rereview3 S3: a profile written through the API, scratch unset, FSx default kept
+        const apiWritten = (): any => ({
+            name: 'q',
+            project_ids: ['p1'],
+            default_job_params: {
+                walltime: '02:00:00',
+                fsx_lustre: {enabled: true, existing_fsx: 'fs-1.fsx.us-east-1.amazonaws.com', s3_backend: 's3://b'},
+            },
+        })
+        const profile = apiWritten()
+        profile.default_job_params.walltime = '03:00:00'
+        const params = sent(profile, apiWritten()).default_job_params
+        expect(params.fsx_lustre).toEqual(apiWritten().default_job_params.fsx_lustre)
+        expect('scratch_provider' in params).toBe(false)
+        expect(params.walltime).toBe('03:00:00')
+    });
+    it('a profile created with scratch off sends no clears', () => {
+        const profile: any = {name: 'q', project_ids: ['p1'], default_job_params: {enable_scratch: false}}
+        const params = sent(profile, {}).default_job_params
+        expect('fsx_lustre' in params || 'scratch_provider' in params).toBe(false)
+    });
+    it('sends the projects and no form-only fields', () => {
+        const profile: any = stored()
+        profile.scratch_off_notice = undefined
+        const body = sent(profile)
+        expect('scratch_off_notice' in body).toBe(false)
+        expect(body.projects).toEqual([{project_id: 'p1'}])
+        expect(body.fsx_lustre_throughput).toBeUndefined()
     });
 });

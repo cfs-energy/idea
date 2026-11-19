@@ -102,3 +102,51 @@ def test_a_job_that_fails_the_listing_does_not_stop_the_rest(world):
     poll(world)
     assert sorted(record.job_id for record in records(world)) == ['41', '42', '43']
     assert cached_ids(world.cache) == []
+
+
+def test_a_job_that_cannot_be_built_is_left_out_of_the_listing():
+    # SJP-26: a deleted instance profile (or an IAM error) raised for one job and failed
+    # the listing of every job, the start-up sync included
+    jobs = {
+        '395.scheduler': {'job_state': 'F', 'queue': 'test'},
+        '396.scheduler': {'job_state': 'F', 'queue': 'test'},
+    }
+    context = Mock(queue_profiles=queue_profiles())
+
+    def as_soca_job(self, **_):
+        if self.id.startswith('395'):
+            raise exceptions.SocaException(
+                error_code=errorcodes.GENERAL_ERROR,
+                message='Instance profile not found',
+            )
+        return self.id
+
+    with patch.object(OpenPBSJob, 'as_soca_job', as_soca_job):
+        assert qstat(jobs, context).list_jobs() == ['396.scheduler']
+
+
+def test_a_page_that_cannot_be_parsed_is_not_written_to_the_log(caplog):
+    # SJ-37: the raw qstat page, every job's environment in it, went to the log
+    import orjson
+    import pytest
+
+    shell = SimpleNamespace(
+        invoke=lambda cmd, **_: SimpleNamespace(
+            returncode=0,
+            stdout='{"Jobs": {"1": {"Variable_List": "SECRET_MARKER=1"',
+            stderr='',
+        )
+    )
+    listing = OpenPBSQStat(
+        context=Mock(),
+        logger=LOGGER,
+        shell=shell,
+        converter=None,
+        job_ids=['1'],
+        job_state=SocaJobState.FINISHED,
+    )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(orjson.JSONDecodeError):
+            listing.list_jobs()
+    assert 'SECRET_MARKER' not in caplog.text
+    assert 'characters' in caplog.text

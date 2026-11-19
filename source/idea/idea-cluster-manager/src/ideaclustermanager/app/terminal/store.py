@@ -66,17 +66,18 @@ class TerminalStore:
         self.table = table
         self.clock = clock
 
-    def issue(self, username, target, client):
+    def issue(self, username, target, client, signed_in_ms=None):
         ticket = secrets.token_urlsafe(32)
-        self.table.put_item(
-            Item={
-                'pk': 'ticket:' + digest(ticket),
-                'username': username,
-                'target': target,
-                'client': digest(client),
-                'expires_at': int(self.clock()) + 30,
-            }
-        )
+        item = {
+            'pk': 'ticket:' + digest(ticket),
+            'username': username,
+            'target': target,
+            'client': digest(client),
+            'expires_at': int(self.clock()) + 30,
+        }
+        if signed_in_ms is not None:
+            item['signed_in_ms'] = int(signed_in_ms)
+        self.table.put_item(Item=item)
         return ticket
 
     def consume(self, ticket, username, target, client):
@@ -90,6 +91,8 @@ class TerminalStore:
             != (username, target, digest(client))
         ):
             raise TicketRejected('Invalid or expired ticket')
+        # the sign-in time of the session the ticket was issued to
+        return int(item['signed_in_ms']) if item.get('signed_in_ms') else None
 
     def acquire(self, username, session_id, limit=3):
         limit = max(1, min(10, limit))

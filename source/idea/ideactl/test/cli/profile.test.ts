@@ -185,10 +185,12 @@ test("an account command reports its resolved identity before the action runs", 
       { from: "user" },
     );
     assert.deepEqual(trace, ["identity", "action"]);
+    // on stderr, so the command's own output stays only its result
     assert.equal(
-      deps.stdout[0],
+      deps.stderr[0],
       "AWS identity: account 123456789012, identity arn:aws:sts::123456789012:assumed-role/sample-role/sample-session, profile profile-one",
     );
+    assert.ok(!deps.stdout.some((line) => line.startsWith("AWS identity:")));
   } finally {
     restoreEnvironment("AWS_PROFILE", previousProfile);
   }

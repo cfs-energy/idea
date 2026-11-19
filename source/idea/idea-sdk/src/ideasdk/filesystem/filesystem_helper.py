@@ -8,6 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import errno
 import logging
 import os
 
@@ -36,14 +37,18 @@ from ideadatamodel import exceptions, errorcodes
 from ideasdk.utils import Utils
 from ideasdk.protocols import SocaContextProtocol
 from functools import wraps
-from ideasdk.filesystem.user_identity import UserIdentity
+from ideasdk.filesystem.user_identity import UserIdentity, os_refusal
 
 import arrow
 import mimetypes
 import re
 import secrets
 import shutil
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
+from stat import S_IMODE, S_ISDIR, S_ISLNK, S_ISREG
 from typing import Dict, List, Tuple
 from zipfile import ZipFile, ZIP_DEFLATED
 
@@ -98,8 +103,119 @@ MAX_DELETE_FAILURES_SHOWN = 5
 
 # Global rate limiting storage
 _tail_rate_limits: Dict[str, List[float]] = {}
-_active_tail_users: set = set()
 _last_global_cleanup = 0
+# taken by the limit and its clean-up, which run on any server worker
+_tail_state_lock = threading.Lock()
+
+# Archive builds hold a server worker for as long as they run, up to 5 minutes, unlike every
+# other file operation: these limits keep workers free for everyone else's quick calls.
+# Builds running at once, one person's and everyone's on a task (of 16 server workers):
+MAX_ARCHIVE_BUILDS_PER_USER = 2
+# shortcut: fixed, not derived from <module>.server.max_workers; revisit if that is lowered
+MAX_ARCHIVE_BUILDS = 6
+# A build waits this long for a slot before it is refused. Waiting holds a worker too, so
+# only this many may wait, one person's and everyone's: the rest are refused at once.
+ARCHIVE_BUILD_WAIT_SECONDS = 5
+MAX_ARCHIVE_BUILDS_WAITING_PER_USER = 1
+MAX_ARCHIVE_BUILDS_WAITING = 2
+# Longer than other file work, the builds being limited above, and still inside the 600 s
+# the load balancers and the server give one request: a build past that has no one to answer.
+ARCHIVE_BUILD_TIMEOUT_SECONDS = 570
+_archive_builds: Dict[str, int] = {}
+_archive_builds_waiting: Dict[str, int] = {}
+_archive_builds_changed = threading.Condition()
+
+
+def _archive_builds_busy(own: int) -> exceptions.SocaException:
+    return exceptions.SocaException(
+        error_code=errorcodes.FILE_OPERATION_BUSY,
+        message=(
+            f'You already have {own} downloads being prepared. '
+            'Try again when one of them has finished.'
+            if own >= MAX_ARCHIVE_BUILDS_PER_USER
+            else 'The server is preparing many downloads right now. '
+            'Try again in a minute.'
+        ),
+    )
+
+
+def _add(counts: Dict[str, int], username: str, change: int):
+    count = counts.get(username, 0) + change
+    if count > 0:
+        counts[username] = count
+    else:
+        counts.pop(username, None)
+
+
+# Entries one ListFiles answer lists, each a stat as the user: a folder holding more is
+# answered with these and truncated=True
+# shortcut: a cap, not paging; page ListFiles when the portal can ask for the next page
+MAX_LISTED_ENTRIES = 10000
+
+# What ReadFile returns, as the editor opens and saves it: larger files are downloaded
+READ_FILE_MAX_BYTES = 5 * 1024 * 1024
+# What one TailFile answer reads at most, whatever the line count and line length
+TAIL_FILE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _archive_build_free(username: str) -> bool:
+    return _archive_builds.get(username, 0) < MAX_ARCHIVE_BUILDS_PER_USER and (
+        sum(_archive_builds.values()) < MAX_ARCHIVE_BUILDS
+    )
+
+
+def _inherited_acl(fd: int) -> bool:
+    """whether a file holds an ACL (POSIX or NFSv4); False where there are no attributes"""
+    try:
+        names = os.listxattr(fd)
+    except (AttributeError, OSError):
+        return False  # macOS has no listxattr, or the file system has none
+    return any(name.startswith(('system.posix_acl_', 'system.nfs4')) for name in names)
+
+
+def _whole_utf8_length(data: bytes) -> int:
+    """how much of data ends on a whole UTF-8 character (all of it, if it is not UTF-8)"""
+    for back in range(1, min(4, len(data)) + 1):
+        byte = data[-back]
+        if byte & 0xC0 != 0x80:  # not a continuation byte: a character starts here
+            needed = (
+                1
+                if byte < 0x80
+                else 2
+                if byte >> 5 == 6
+                else 3
+                if byte >> 4 == 14
+                else 4
+            )
+            return len(data) if back >= needed else len(data) - back
+    return len(data)
+
+
+@contextmanager
+def _archive_build_slot(username: str):
+    with _archive_builds_changed:
+        if not _archive_build_free(username):
+            if (
+                _archive_builds_waiting.get(username, 0)
+                >= MAX_ARCHIVE_BUILDS_WAITING_PER_USER
+                or sum(_archive_builds_waiting.values()) >= MAX_ARCHIVE_BUILDS_WAITING
+            ):
+                raise _archive_builds_busy(_archive_builds.get(username, 0))
+            _add(_archive_builds_waiting, username, 1)
+            try:
+                if not _archive_builds_changed.wait_for(
+                    lambda: _archive_build_free(username), ARCHIVE_BUILD_WAIT_SECONDS
+                ):
+                    raise _archive_builds_busy(_archive_builds.get(username, 0))
+            finally:
+                _add(_archive_builds_waiting, username, -1)
+        _add(_archive_builds, username, 1)
+    try:
+        yield
+    finally:
+        with _archive_builds_changed:
+            _add(_archive_builds, username, -1)
+            _archive_builds_changed.notify_all()
 
 
 # Running the entire operation keeps metadata probes and file handles out of the parent.
@@ -108,6 +224,18 @@ def as_user(method):
     @wraps(method)
     def invoke(self, *args, **kwargs):
         return self.run_as_user(lambda: method(self, *args, **kwargs))
+
+    return invoke
+
+
+def as_user_archive_build(method):
+    """as_user, counted against the archive build limits"""
+
+    @wraps(method)
+    def invoke(self, *args, **kwargs):
+        return self.run_as_user(
+            lambda: method(self, *args, **kwargs), archive_build=True
+        )
 
     return invoke
 
@@ -130,22 +258,29 @@ class FileSystemHelper:
         self._permission_cache: Dict[Tuple[str, str, str], Tuple[bool, float]] = {}
         self._last_permission_cleanup = 0
         self._archive_being_written = None
+        self._archive_identity = None
         self._files_left_out = 0
 
-    def run_as_user(self, operation):
+    def run_as_user(self, operation, archive_build=False):
         if self._identity is None:
             self._identity = UserIdentity(self.context.accounts, self.username)
-        return self._identity.run(operation)
+        # a nested call runs inside the user's own worker, under the slot its caller holds
+        if not archive_build or self._identity.in_worker():
+            return self._identity.run(operation)
+        with _archive_build_slot(self.username):
+            return self._identity.run(operation, timeout=ARCHIVE_BUILD_TIMEOUT_SECONDS)
 
-    def own(self, fd: int):
+    def own(self, fd: int, keep_group: bool = False):
         """
         gives a file the server created on the user's behalf to the user, by id and by
         descriptor: the server runs in a container that cannot look the user's name up,
-        and a path can be swapped for a link between a create and a chown
+        and a path can be swapped for a link between a create and a chown.
+        keep_group leaves the group the file was created with: a set-group-id folder's,
+        as a file made in a shell there gets
         """
         if self._identity is None:
             self._identity = UserIdentity(self.context.accounts, self.username)
-        os.fchown(fd, self._identity.uid, self._identity.gid)
+        os.fchown(fd, self._identity.uid, -1 if keep_group else self._identity.gid)
 
     def get_user_home(self) -> str:
         user_home = self.context.config().get_string(
@@ -204,11 +339,13 @@ class FileSystemHelper:
 
         # Kernel checks use the same numeric credentials as the actual operation.
         # Directory traversal still requires search permission when entries are opened.
-        result = (
-            os.path.isdir(file)
-            if check_type == 'dir'
-            else os.access(file, os.R_OK if check_type == 'read' else os.W_OK)
-        )
+        if check_type == 'dir':
+            result = os.path.isdir(file)
+        elif check_type == 'read':
+            result = os.access(file, os.R_OK)
+        else:
+            # making an entry in a folder needs search on it as well as write
+            result = os.access(file, os.W_OK | (os.X_OK if os.path.isdir(file) else 0))
 
         # Cache the result
         self._permission_cache[cache_key] = (result, current_time)
@@ -229,28 +366,39 @@ class FileSystemHelper:
 
     @as_user
     def check_access(
-        self, file: str, check_dir=False, check_read=True, check_write=True
+        self,
+        file: str,
+        check_dir=False,
+        check_read=True,
+        check_write=True,
+        follow=True,
     ):
+        """
+        :param follow: test where a link leads. Deleting or renaming a link acts on the
+            link itself, so those pass False: the entry's own place is tested, and a link
+            in the home that points into a system folder can still be removed or renamed
+            (nothing is read or written through it).
+        """
         if Utils.is_empty(file):
             raise exceptions.unauthorized_access()
-        # only support absolute paths
-        if '..' in file:
+        # only absolute paths, and no step up (a name such as a..b is a name)
+        if not file.startswith('/') or '..' in file.split('/'):
             raise exceptions.unauthorized_access()
 
-        data_mount_dir = self.context.config().get_string(
-            'shared-storage.data.mount_dir'
-        )
-        is_data_mount = Utils.is_not_empty(data_mount_dir) and file.startswith(
-            data_mount_dir
-        )
+        restricted = self._in_system_folder
 
-        # do not allow any access to system folders
-        tokens = file.split('/')
-        if (
-            len(tokens) > 1
-            and tokens[1] in RESTRICTED_ROOT_FOLDERS
-            and not is_data_mount
-        ):
+        # the path as written, however many slashes start it, and where it leads as the
+        # user: a link in the home to /etc is /etc
+        written = os.path.normpath('/' + file.lstrip('/'))
+        leads_to = (
+            os.path.realpath(file)
+            if follow
+            else os.path.join(
+                os.path.realpath(os.path.dirname(written)), os.path.basename(written)
+            )
+        )
+        # do not allow any access to system folders (a listing of / leaves them out)
+        if restricted(written) or restricted(leads_to):
             raise exceptions.unauthorized_access()
 
         if check_dir:
@@ -265,6 +413,50 @@ class FileSystemHelper:
             can_write = self._check_permission(file, 'write')
             if not can_write:
                 raise exceptions.unauthorized_access()
+
+    def _in_system_folder(self, path: str) -> bool:
+        """an absolute, resolved path under one of the container's own folders"""
+        mount = getattr(self, '_data_mount', None)
+        if mount is None:
+            mount = (
+                self.context.config().get_string('shared-storage.data.mount_dir') or ''
+            ).rstrip('/')
+            self._data_mount = mount
+        in_data_mount = bool(mount) and (path == mount or path.startswith(mount + '/'))
+        return not in_data_mount and path.split('/')[1] in RESTRICTED_ROOT_FOLDERS
+
+    def _opened_in_system_folder(self, fd: int, path: str) -> bool:
+        """
+        where an opened file really is: the descriptor's own path where the platform
+        tells it (a link swapped after the open changes nothing), else the path resolved
+        """
+        try:
+            where = os.readlink(f'/proc/self/fd/{fd}')
+        except OSError:
+            where = os.path.realpath(path)
+        return self._in_system_folder(where)
+
+    @as_user
+    def identify_download(self, file: str) -> Tuple[bool, int, int]:
+        """
+        Checks that the user may read a file or folder and opens it as the user, following a
+        link of their own as the file browser does. Returns (is a folder, device, inode): the
+        server reads a download with its own rights, and streams it only if what it opens is
+        this same file.
+        """
+        self.check_access(file, check_read=True, check_write=False)
+        try:
+            fd = os.open(file, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            raise exceptions.file_not_found(file)
+        try:
+            info = os.fstat(fd)
+        finally:
+            os.close(fd)
+        # a pipe or a device is not something to download
+        if not (S_ISREG(info.st_mode) or S_ISDIR(info.st_mode)):
+            raise exceptions.unauthorized_access()
+        return S_ISDIR(info.st_mode), info.st_dev, info.st_ino
 
     @as_user
     def list_files(self, request: ListFilesRequest) -> ListFilesResult:
@@ -284,33 +476,42 @@ class FileSystemHelper:
             listing_start = Utils.current_time_ms()
 
         result = []
+        truncated = False
+        at_root = os.path.realpath(cwd) == '/'
         with os.scandir(cwd) as scandir:
             for entry in scandir:
                 if Utils.is_empty(entry):
                     continue
-
-                if entry.is_file():
-                    # Check for restricted files/dirs and do not list them
-                    if cwd == '/' and entry.name in RESTRICTED_ROOT_FOLDERS:
-                        continue
+                # the system folders are not listed at the root, folders or not
+                if at_root and entry.name in RESTRICTED_ROOT_FOLDERS:
+                    continue
+                if len(result) >= MAX_LISTED_ENTRIES:
+                    truncated = True
+                    break
 
                 is_hidden = entry.name.startswith('.')
                 try:
                     stat = entry.stat()
+                    is_dir = entry.is_dir()
                 except OSError:
-                    # a symlink whose target lives on another host (a desktop's /var/tmp)
-                    # lists as the link itself instead of failing the whole folder
-                    stat = entry.stat(follow_symlinks=False)
-                file_size = None if entry.is_dir() else stat.st_size
+                    # a symlink whose target lives on another host (a desktop's /var/tmp),
+                    # or cannot be reached, lists as the link itself instead of failing
+                    # the whole folder
+                    try:
+                        stat = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue  # gone since it was read
+                    is_dir = False
+                file_size = None if is_dir else stat.st_size
                 mod_date = arrow.get(stat.st_mtime).datetime
 
                 result.append(
                     FileData(
-                        file_id=Utils.shake_256(f'{entry.name}{entry.is_dir()}', 5),
+                        file_id=Utils.shake_256(f'{entry.name}{is_dir}', 5),
                         name=entry.name,
                         size=file_size,
                         mod_date=mod_date,
-                        is_dir=entry.is_dir(),
+                        is_dir=is_dir,
                         is_hidden=is_hidden,
                     )
                 )
@@ -321,7 +522,7 @@ class FileSystemHelper:
                 f'Directory listing - User: {self.username}, Path: {cwd}, Items: {len(result)}, Duration: {listing_end - listing_start}ms'
             )
 
-        return ListFilesResult(cwd=cwd, listing=result)
+        return ListFilesResult(cwd=cwd, listing=result, truncated=truncated or None)
 
     @as_user
     def read_file(self, request: ReadFileRequest) -> ReadFileResult:
@@ -344,7 +545,15 @@ class FileSystemHelper:
             )
 
         with open(file, 'r') as f:
-            content = f.read()
+            too_large = os.fstat(f.fileno()).st_size > READ_FILE_MAX_BYTES
+            # no more than the limit is read, even from a file that grows meanwhile
+            content = '' if too_large else f.read(READ_FILE_MAX_BYTES + 1)
+        if too_large or len(content) > READ_FILE_MAX_BYTES:
+            raise exceptions.soca_exception(
+                error_code=errorcodes.INVALID_PARAMS,
+                message=f'This file is larger than {READ_FILE_MAX_BYTES // (1024 * 1024)} MB '
+                'and cannot be opened here. Download it instead.',
+            )
 
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(
@@ -373,24 +582,11 @@ class FileSystemHelper:
         self._cleanup_permission_cache()
         self._cleanup_global_state()
 
-        # For continuation requests (with next_token), skip permission checks since
-        # the user already had access to start the tail operation
-        is_initial_request = Utils.is_empty(request.next_token)
-        if is_initial_request:
-            self.check_access(file, check_dir=False, check_read=True, check_write=False)
+        # every request, a continuation too: its token says nothing about the file named
+        self.check_access(file, check_dir=False, check_read=True, check_write=False)
 
-        # Check file size and reject files that are too large for tail operations
+        # any size of file can be tailed: what one answer reads is bounded by TAIL_FILE_MAX_BYTES
         file_size = os.path.getsize(file)
-        max_file_size = 10 * 1024 * 1024 * 1024  # 10GB limit
-        if file_size > max_file_size:
-            self.logger.warning(
-                f'User {self.username} attempted to tail large file: '
-                f'{file} ({file_size / (1024 * 1024 * 1024):.2f} GB)'
-            )
-            raise exceptions.soca_exception(
-                error_code=errorcodes.FILE_BROWSER_NOT_A_TEXT_FILE,
-                message=f'file is too large ({file_size / (1024 * 1024 * 1024):.2f} GB) for tail operations. Maximum supported size is {max_file_size / (1024 * 1024 * 1024):.0f}GB.',
-            )
 
         if Utils.is_binary_file(file):
             raise exceptions.soca_exception(
@@ -415,33 +611,39 @@ class FileSystemHelper:
                     message=f'tail file request throttled. subsequent requests should be called at {TAIL_FILE_MIN_INTERVAL_SECONDS} seconds frequency',
                 )
 
-            file_handle = None
-            try:
-                file_handle = open(file, 'r')
-                offset = Utils.get_as_int(cursor_tokens[0])
+            with open(file, 'rb') as file_handle:
+                offset = max(Utils.get_as_int(cursor_tokens[0], 0), 0)
+                # a file truncated or replaced since the last read starts again from the top
+                if offset > os.fstat(file_handle.fileno()).st_size:
+                    offset = 0
                 file_handle.seek(offset)
 
-                while len(lines) < max_line_count:
-                    line = file_handle.readline()
-                    if line == '':
+                # a long line is returned in parts: the next request carries on where this
+                # stopped. Bytes are counted, so multi-byte text reads no more than the limit
+                budget = TAIL_FILE_MAX_BYTES
+                while len(lines) < max_line_count and budget > 0:
+                    line = file_handle.readline(budget)
+                    if line == b'':
                         break
-                    lines.append(line)
+                    if not line.endswith(b'\n'):
+                        # cut by the limit: end on a whole character, the rest comes next
+                        whole = _whole_utf8_length(line)
+                        if whole < len(line):
+                            file_handle.seek(whole - len(line), os.SEEK_CUR)
+                            line = line[:whole]
+                        if not line:
+                            break
+                    budget -= len(line)
+                    lines.append(line.decode('utf-8', errors='replace'))
 
                 cursor_tokens = [file_handle.tell(), Utils.current_time_ms()]
-            finally:
-                if file_handle is not None:
-                    file_handle.close()
         else:
-            # if cursor file does not exist, prefetch last N lines
-            # Use efficient tail algorithm that reads from end of file
-            prefetch_lines = self._tail_file_efficiently(file, max_line_count)
+            # if cursor file does not exist, prefetch last N lines, and carry on from the
+            # end that was read: a line written meanwhile comes with the next request
+            prefetch_lines, end = self._tail_file_efficiently(file, max_line_count)
             for line in prefetch_lines:
                 lines.append(line.rstrip())
-
-            # Get file size for cursor position
-            with open(file, 'r') as f:
-                f.seek(0, os.SEEK_END)
-                cursor_tokens = [f.tell(), Utils.current_time_ms()]
+            cursor_tokens = [end, Utils.current_time_ms()]
 
         if cursor_tokens is not None:
             next_token = Utils.base64_encode(f'{cursor_tokens[0]};{cursor_tokens[1]}')
@@ -461,35 +663,35 @@ class FileSystemHelper:
             file=file, next_token=next_token, lines=lines, line_count=len(lines)
         )
 
-    def _tail_file_efficiently(self, file_path: str, max_lines: int) -> List[str]:
+    def _tail_file_efficiently(
+        self, file_path: str, max_lines: int
+    ) -> Tuple[List[str], int]:
         """
         Efficiently read the last N lines from a file without reading the entire file.
         This method reads from the end of the file backwards in chunks.
 
         :param file_path: Path to the file
         :param max_lines: Maximum number of lines to return
-        :return: List of lines from the end of the file
+        :return: the lines from the end of the file, and the offset of the end they were
+            read back from
         """
-        if max_lines <= 0:
-            return []
-
         with open(file_path, 'rb') as f:
             # Get file size
             f.seek(0, os.SEEK_END)
             file_size = f.tell()
 
             # If file is empty, return empty list
-            if file_size == 0:
-                return []
+            if file_size == 0 or max_lines <= 0:
+                return [], file_size
 
             # For small files, just read normally
             if file_size < 8192:  # 8KB threshold
                 f.seek(0)
-                content = f.read().decode('utf-8', errors='replace')
+                content = f.read(file_size).decode('utf-8', errors='replace')
                 all_lines = content.splitlines()
                 return (
                     all_lines[-max_lines:] if len(all_lines) > max_lines else all_lines
-                )
+                ), file_size
 
             # For larger files, read backwards in chunks
             lines = []
@@ -500,9 +702,15 @@ class FileSystemHelper:
             )
             position = file_size
 
-            while len(lines) < max_lines and position > 0:
-                # Calculate how much to read
-                read_size = min(chunk_size, position)
+            while (
+                len(lines) < max_lines
+                and position > 0
+                and file_size - position < TAIL_FILE_MAX_BYTES
+            ):
+                # Calculate how much to read: never past the byte limit
+                read_size = min(
+                    chunk_size, position, TAIL_FILE_MAX_BYTES - (file_size - position)
+                )
                 position -= read_size
 
                 # Read chunk from current position
@@ -512,21 +720,12 @@ class FileSystemHelper:
                 # Prepend to buffer
                 buffer = chunk + buffer
 
-                # Split buffer into lines, keeping incomplete line at start
-                try:
-                    decoded_buffer = buffer.decode('utf-8')
-                except UnicodeDecodeError:
-                    # Handle encoding issues by replacing problematic characters
-                    decoded_buffer = buffer.decode('utf-8', errors='replace')
-
-                buffer_lines = decoded_buffer.split('\n')
-
-                # Keep the first line (potentially incomplete) in buffer for next iteration
+                # Split into lines as bytes, keeping the incomplete first one for the next
+                # read: a character cut by the chunk edge is decoded once it is whole
+                buffer_lines = buffer.split(b'\n')
                 if position > 0 and len(buffer_lines) > 1:
-                    # Save incomplete first line for next iteration
-                    incomplete_line = buffer_lines[0]
                     complete_lines = buffer_lines[1:]
-                    buffer = incomplete_line.encode('utf-8')
+                    buffer = buffer_lines[0]
                 else:
                     # We're at the beginning of file, all lines are complete
                     complete_lines = buffer_lines
@@ -534,15 +733,21 @@ class FileSystemHelper:
 
                 # Add complete lines to our result (in reverse order since we're reading backwards)
                 complete_lines.reverse()
-                lines.extend(complete_lines)
+                lines.extend(
+                    line.decode('utf-8', errors='replace') for line in complete_lines
+                )
 
                 # If we've read enough lines, break
                 if len(lines) >= max_lines:
                     break
 
+            if buffer and len(lines) < max_lines:
+                # stopped by the byte limit inside a line: show the end of it that was read
+                lines.append(buffer.decode('utf-8', errors='replace'))
+
             # Reverse the lines to get correct order and limit to max_lines
             lines.reverse()
-            return lines[-max_lines:] if len(lines) > max_lines else lines
+            return (lines[-max_lines:] if len(lines) > max_lines else lines), file_size
 
     @as_user
     def save_file(self, request: SaveFileRequest) -> SaveFileResult:
@@ -561,8 +766,7 @@ class FileSystemHelper:
         content_base64 = request.content
         content = Utils.base64_decode(content_base64)
 
-        with open(file, 'w') as f:
-            f.write(content)
+        self._write_replacing(file, content)
 
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(
@@ -570,6 +774,91 @@ class FileSystemHelper:
             )
 
         return SaveFileResult()
+
+    def _write_replacing(self, file: str, content: str):
+        """
+        Saves new content without the old being lost on the way: written to a new file
+        beside it, synced, then renamed over it. A link is followed and its target
+        replaced. The new file takes the old one's mode and group.
+
+        Out of space or quota at any step, the save is refused and the file left as it
+        was, whatever the new content's length. Any other failure writing, syncing or
+        renaming the copy refuses the same way.
+
+        Written over in place, with no truncation before the new bytes are on disk (see
+        _write_over), only where a new file could not be the same file or could not be
+        made: someone else owns it, it has other hard links or extended attributes, its
+        group is not one the account is in, the folder cannot be written, or making the
+        copy (mkstemp, fchmod, fchown) fails for a reason other than space.
+        Replacing gives the file a new inode: a process holding the old one open (a job
+        still appending, tail -f) keeps writing to or reading the old copy.
+        """
+        target = os.path.realpath(file)
+        info = os.stat(target)
+        folder = os.path.dirname(target)
+        try:
+            extended = bool(os.listxattr(target))
+        except (AttributeError, OSError):
+            extended = False  # macOS has no listxattr, or the file system has none
+        if (
+            info.st_nlink > 1
+            or info.st_uid != os.geteuid()
+            or info.st_gid not in (os.getegid(), *os.getgroups())
+            or extended
+            or not os.access(folder, os.W_OK | os.X_OK)
+        ):
+            self._write_over(target, content)
+            return
+
+        saving = None
+        copy = None
+        try:
+            try:
+                # a short name of its own: the file's name may already be near the limit
+                fd, saving = tempfile.mkstemp(dir=folder, prefix='.idea-save-')
+                copy = open(fd, 'w')
+                os.fchmod(copy.fileno(), S_IMODE(info.st_mode))
+                # the copy's own group, not the process's: a set-group-ID folder gives a
+                # new file its group, and the saved file must keep the one it had
+                if os.fstat(copy.fileno()).st_gid != info.st_gid:
+                    os.fchown(copy.fileno(), -1, info.st_gid)
+                if _inherited_acl(copy.fileno()):
+                    # the folder's default ACL went onto the copy, and the original had
+                    # none: it could not be the same file, so written over in place
+                    raise OSError(errno.ENOTSUP, 'the copy inherited an ACL')
+            except OSError as e:
+                if e.errno in (errno.ENOSPC, errno.EDQUOT):
+                    raise
+                # no copy can be made here: written over in place instead, below
+                if copy is not None:
+                    copy.close()
+                copy = None
+            if copy is not None:
+                with copy:
+                    copy.write(content)
+                    copy.flush()
+                    os.fsync(copy.fileno())
+                os.replace(saving, target)
+                return
+        finally:
+            if copy is not None and not copy.closed:
+                copy.close()
+            if saving is not None and os.path.lexists(saving):
+                os.unlink(saving)
+        self._write_over(target, content)
+
+    @staticmethod
+    def _write_over(target: str, content: str):
+        """
+        Writes the new content over the old from the start, syncs it, and only then cuts
+        the file to the new length: a failed write leaves the old content after whatever
+        was written, never an empty file.
+        """
+        with open(target, 'r+') as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+            f.truncate()
 
     def download_files(self, request: DownloadFilesRequest) -> str:
         return self.create_download_archive(request)[0]
@@ -593,7 +882,7 @@ class FileSystemHelper:
         if self.is_generated_archive(path):
             os.remove(path)
 
-    @as_user
+    @as_user_archive_build
     def create_download_archive(self, request: DownloadFilesRequest) -> Tuple[str, int]:
         """
         :return: the archive's path, and how many files could not be read and were left out
@@ -602,10 +891,32 @@ class FileSystemHelper:
         if not files:
             raise exceptions.invalid_params('file is required')
 
+        download_list = []
+        for file in files:
+            if Utils.is_empty(file):
+                continue
+            if '..' in file.split('/'):
+                raise exceptions.unauthorized_access()
+            if not Utils.is_file(file) and not Utils.is_dir(file):
+                raise exceptions.file_not_found(file)
+
+            # Check permissions based on file type
+            if Utils.is_file(file):
+                self.check_access(
+                    file, check_dir=False, check_read=True, check_write=False
+                )
+            elif Utils.is_dir(file):
+                self.check_access(
+                    file, check_dir=True, check_read=True, check_write=False
+                )
+
+            download_list.append(file)
+
         # Calculate total size and identify large files (including directory contents)
         total_size = 0
         large_files = []
-        for file in files:
+        # only what passed the checks above is walked
+        for file in download_list:
             if Utils.is_file(file):
                 file_size = os.path.getsize(file)
                 total_size += file_size
@@ -625,29 +936,6 @@ class FileSystemHelper:
                 f'Large files: {[f"{f}({s // 1024 // 1024 // 1024}GB)" for f, s in large_files]}'
             )
 
-        download_list = []
-        for file in files:
-            if Utils.is_empty(file):
-                continue
-            if '..' in file:
-                raise exceptions.unauthorized_access()
-            if Utils.is_empty(file):
-                raise exceptions.invalid_params('file is required')
-            if not Utils.is_file(file) and not Utils.is_dir(file):
-                raise exceptions.file_not_found(file)
-
-            # Check permissions based on file type
-            if Utils.is_file(file):
-                self.check_access(
-                    file, check_dir=False, check_read=True, check_write=False
-                )
-            elif Utils.is_dir(file):
-                self.check_access(
-                    file, check_dir=True, check_read=True, check_write=False
-                )
-
-            download_list.append(file)
-
         downloads_dir = self._downloads_dir()
         if Utils.is_symlink(downloads_dir):
             # prevent symlink/hijack attacks
@@ -655,7 +943,10 @@ class FileSystemHelper:
                 f'a symbolic link already exists at: {downloads_dir}'
             )
 
-        os.makedirs(downloads_dir, exist_ok=True)
+        # private to the person, whatever the server's umask: the archive holds their files
+        os.makedirs(downloads_dir, mode=0o700, exist_ok=True)
+        # one made by an earlier release keeps its old mode otherwise
+        os.chmod(downloads_dir, 0o700)
 
         # Create meaningful filename with timestamp
         timestamp = arrow.now().format('YYYY-MM-DD_HH-mm-ss')
@@ -740,13 +1031,24 @@ class FileSystemHelper:
         # Use streaming zip creation to prevent OOM on large files
         # Enable ZIP64 for large files/archives (>4GB or >65k files)
         try:
-            with ZipFile(
+            archive_fd = os.open(
                 zip_file_path,
-                'w',
-                compression=ZIP_DEFLATED,
-                compresslevel=1,
-                allowZip64=True,
-            ) as zip_archive:
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+            )
+            archive_info = os.fstat(archive_fd)
+            # the archive itself, however it is reached from the folders being archived
+            self._archive_identity = (archive_info.st_dev, archive_info.st_ino)
+            with (
+                open(archive_fd, 'wb') as archive_file,
+                ZipFile(
+                    archive_file,
+                    'w',
+                    compression=ZIP_DEFLATED,
+                    compresslevel=1,
+                    allowZip64=True,
+                ) as zip_archive,
+            ):
                 # Track file names to avoid conflicts
                 used_names = set()
 
@@ -808,19 +1110,18 @@ class FileSystemHelper:
             )
 
         is_folder = Utils.get_as_bool(request.is_folder, False)
-        if is_folder:
-            if Utils.is_dir(create_path):
-                raise exceptions.invalid_params(
-                    f'directory: {filename} already exists under: {cwd}'
-                )
-            os.makedirs(create_path)
-        else:
-            if Utils.is_file(create_path):
-                raise exceptions.invalid_params(
-                    f'file: {filename} already exists under: {cwd}'
-                )
-            with open(create_path, 'w') as f:
-                f.write('')
+        # created only if nothing is there, decided by the create itself
+        try:
+            if is_folder:
+                os.mkdir(create_path)
+            else:
+                with open(create_path, 'x'):
+                    pass
+        except FileExistsError:
+            raise exceptions.invalid_params(
+                f'{"directory" if is_folder else "file"}: {filename} already exists '
+                f'under: {cwd}'
+            )
 
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug(
@@ -830,7 +1131,15 @@ class FileSystemHelper:
         return CreateFileResult()
 
     @as_user
-    def delete_files(self, request: DeleteFilesRequest) -> DeleteFilesResult:
+    def delete_files(
+        self, request: DeleteFilesRequest, allow_directories: bool = False
+    ) -> DeleteFilesResult:
+        """
+        :param allow_directories: remove a folder with everything in it. FileBrowser.DeleteFiles
+            leaves it False: the portal confirms files by name, and a file swapped for a folder
+            of the same name before the confirmation must not take the folder with it. The
+            measured-folder delete, which checks what it removes, passes True.
+        """
         files = request.files
         if Utils.is_empty(files):
             raise exceptions.invalid_params('files[] is required')
@@ -843,7 +1152,9 @@ class FileSystemHelper:
             try:
                 # unlink needs write on the folder, not on the file: a read-only file, or one
                 # the server wrote and never handed over, is still the user's to delete
-                self.check_access(file, check_read=False, check_write=False)
+                self.check_access(
+                    file, check_read=False, check_write=False, follow=False
+                )
                 self.check_access(
                     os.path.dirname(file.rstrip('/')) or '/',
                     check_dir=True,
@@ -851,16 +1162,20 @@ class FileSystemHelper:
                     check_write=True,
                 )
 
-                # Check file type and delete immediately to minimize race conditions
-                if os.path.islink(file):
+                # the type decided once, and the delete done by it: an entry that becomes
+                # a folder after this look is refused by os.remove, never removed whole
+                kind = os.lstat(file).st_mode
+                if S_ISLNK(kind):
                     os.unlink(file)
                     self.logger.info(f'{self.username} deleted symlink: "{file}"')
                     successfully_deleted.append(file)
-                elif Utils.is_dir(file):
+                elif S_ISDIR(kind) and not allow_directories:
+                    failures.append((file, 'is a folder'))
+                elif S_ISDIR(kind):
                     shutil.rmtree(file, ignore_errors=False)
                     self.logger.info(f'{self.username} deleted directory: "{file}"')
                     successfully_deleted.append(file)
-                elif Utils.is_file(file):
+                elif S_ISREG(kind):
                     os.remove(file)
                     self.logger.info(f'{self.username} deleted file: "{file}"')
                     successfully_deleted.append(file)
@@ -933,7 +1248,7 @@ class FileSystemHelper:
 
         # rename needs write on the folder, not on the file: a read-only file, or one the
         # server wrote and never handed over, is still the user's to rename, as to delete
-        self.check_access(file, check_read=False, check_write=False)
+        self.check_access(file, check_read=False, check_write=False, follow=False)
         self.check_access(
             os.path.dirname(file.rstrip('/')) or '/',
             check_dir=True,
@@ -997,19 +1312,10 @@ class FileSystemHelper:
             self.logger.error(
                 f'{self.username} OS error renaming file: "{file}" to "{new_file_path}" - {str(e)}'
             )
-            raise exceptions.soca_exception(
-                error_code=errorcodes.GENERAL_ERROR,
-                message=f'Failed to rename file: {str(e)}',
-            )
-        except Exception as e:
-            self.logger.error(
-                f'{self.username} unexpected error renaming file: "{file}" to "{new_file_path}" - {str(e)}',
-                exc_info=True,
-            )
-            raise exceptions.soca_exception(
-                error_code=errorcodes.GENERAL_ERROR,
-                message=f'Unexpected error during rename: {str(e)}',
-            )
+            refusal = os_refusal(e)
+            if refusal is not None:
+                raise refusal
+            raise exceptions.general_exception('The file could not be renamed.')
 
         return RenameFileResult()
 
@@ -1141,44 +1447,36 @@ class FileSystemHelper:
 
     def _check_tail_rate_limit(self, username: str) -> bool:
         """Check if user has exceeded rate limits for tail operations"""
-        global _tail_rate_limits, _active_tail_users
-
         current_time = time.time()
-
-        # Check concurrent user limit
-        if (
-            len(_active_tail_users) >= TAIL_FILE_MAX_CONCURRENT_USERS
-            and username not in _active_tail_users
-        ):
-            raise exceptions.soca_exception(
-                error_code=errorcodes.FILE_BROWSER_TAIL_THROTTLE,
-                message=f'Maximum concurrent tail users ({TAIL_FILE_MAX_CONCURRENT_USERS}) reached. Please try again later.',
-            )
-
-        # Add user to active set
-        _active_tail_users.add(username)
-
-        # Initialize user's rate limit tracking if not exists
-        if username not in _tail_rate_limits:
-            _tail_rate_limits[username] = []
-
-        # Clean old entries outside the time window
         window_start = current_time - TAIL_FILE_RATE_LIMIT_WINDOW
-        _tail_rate_limits[username] = [
-            timestamp
-            for timestamp in _tail_rate_limits[username]
-            if timestamp > window_start
-        ]
 
-        # Check if user has exceeded rate limit
-        if len(_tail_rate_limits[username]) >= TAIL_FILE_MAX_REQUESTS_PER_WINDOW:
-            raise exceptions.soca_exception(
-                error_code=errorcodes.FILE_BROWSER_TAIL_THROTTLE,
-                message=f'Rate limit exceeded. Maximum {TAIL_FILE_MAX_REQUESTS_PER_WINDOW} tail requests per {TAIL_FILE_RATE_LIMIT_WINDOW} seconds.',
-            )
+        with _tail_state_lock:
+            recent = [
+                t for t in _tail_rate_limits.get(username, []) if t > window_start
+            ]
 
-        # Record this request
-        _tail_rate_limits[username].append(current_time)
+            # people tailing now: those with a request inside the window
+            if not recent:
+                active = sum(
+                    1
+                    for user, stamps in _tail_rate_limits.items()
+                    if user != username and stamps and stamps[-1] > window_start
+                )
+                if active >= TAIL_FILE_MAX_CONCURRENT_USERS:
+                    raise exceptions.soca_exception(
+                        error_code=errorcodes.FILE_BROWSER_TAIL_THROTTLE,
+                        message=f'Maximum concurrent tail users ({TAIL_FILE_MAX_CONCURRENT_USERS}) reached. Please try again later.',
+                    )
+
+            if len(recent) >= TAIL_FILE_MAX_REQUESTS_PER_WINDOW:
+                _tail_rate_limits[username] = recent
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.FILE_BROWSER_TAIL_THROTTLE,
+                    message=f'Rate limit exceeded. Maximum {TAIL_FILE_MAX_REQUESTS_PER_WINDOW} tail requests per {TAIL_FILE_RATE_LIMIT_WINDOW} seconds.',
+                )
+
+            recent.append(current_time)
+            _tail_rate_limits[username] = recent
         return True
 
     def _cleanup_permission_cache(self):
@@ -1229,12 +1527,18 @@ class FileSystemHelper:
         """
         Clean up global state to prevent memory leaks
         """
-        global _tail_rate_limits, _active_tail_users, _last_global_cleanup
+        global _last_global_cleanup
         current_time = time.time()
 
-        # Only cleanup every 30 seconds to avoid overhead
-        if current_time - _last_global_cleanup < 30:
-            return
+        with _tail_state_lock:
+            # Only cleanup every 30 seconds to avoid overhead
+            if current_time - _last_global_cleanup < 30:
+                return
+            self._cleanup_tail_state(current_time)
+            _last_global_cleanup = current_time
+
+    def _cleanup_tail_state(self, current_time: float):
+        global _tail_rate_limits
 
         initial_users = len(_tail_rate_limits)
 
@@ -1250,7 +1554,6 @@ class FileSystemHelper:
             # Remove users with no recent activity
             if not _tail_rate_limits[user]:
                 _tail_rate_limits.pop(user, None)
-                _active_tail_users.discard(user)
                 removed_users.append(user)
 
         # Limit global storage size
@@ -1263,7 +1566,6 @@ class FileSystemHelper:
             )
             # Keep only the most recent users
             _tail_rate_limits = dict(sorted_users[-RATE_LIMIT_MAX_ENTRIES // 2 :])
-            _active_tail_users = set(_tail_rate_limits.keys())
 
         final_users = len(_tail_rate_limits)
         # Only log if significant cleanup occurred
@@ -1271,8 +1573,6 @@ class FileSystemHelper:
             self.logger.debug(
                 f'Rate limit cleanup: {initial_users} -> {final_users} users'
             )
-
-        _last_global_cleanup = current_time
 
     def _skip_generated_archives(self, start: str, root: str, files: List[str]) -> None:
         """
@@ -1291,6 +1591,8 @@ class FileSystemHelper:
                 self._skip_generated_archives(directory_path, dirpath, filenames)
                 for filename in filenames:
                     file_path = os.path.join(dirpath, filename)
+                    if self._in_system_folder(os.path.realpath(file_path)):
+                        continue  # not archived either
                     try:
                         total_size += os.path.getsize(file_path)
                     except (OSError, IOError):
@@ -1326,6 +1628,58 @@ class FileSystemHelper:
         else:  # >= 1GB
             return 4 * 1024 * 1024  # 4MB
 
+    @staticmethod
+    def _archive_name(*parts: str) -> str:
+        # each name stays one name in the archive: a backslash in it is not a separator
+        return '/'.join(part.replace('\\', '_') for part in parts if part)
+
+    def _copy_into_archive(
+        self, zip_archive: ZipFile, file_path: str, archive_name: str
+    ) -> bool:
+        """
+        Adds one file. A file that cannot be read, or that is not a regular file (a FIFO
+        would hold the build until its deadline), is left out and False returned; an error
+        writing the archive, a full disk among them, is the build's and is raised.
+        """
+        try:
+            fd = os.open(file_path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError:
+            return False
+        with open(fd, 'rb') as source:
+            info = os.fstat(fd)
+            # a link in the folder into the container's own folders is left out, as a
+            # direct read of it is refused
+            if self._opened_in_system_folder(fd, file_path):
+                return False
+            if not S_ISREG(info.st_mode) or (
+                (info.st_dev, info.st_ino) == self._archive_identity
+            ):
+                return False
+            chunk_size = self._calculate_optimal_chunk_size(info.st_size)
+            force_zip64 = info.st_size >= 2 * 1024 * 1024 * 1024  # 2GB threshold
+            with zip_archive.open(archive_name, 'w', force_zip64=force_zip64) as entry:
+                while True:
+                    try:
+                        chunk = source.read(chunk_size)
+                    except OSError:
+                        # what was read stays in the entry: the file is counted as left out
+                        return False
+                    if not chunk:
+                        return True
+                    entry.write(chunk)
+
+    @staticmethod
+    def _unique_name(base_name: str, used_names: set) -> str:
+        """the name, or name_1, name_2...: two files never become one member"""
+        file_name = base_name
+        counter = 1
+        while file_name in used_names:
+            name, ext = os.path.splitext(base_name)
+            file_name = f'{name}_{counter}{ext}'
+            counter += 1
+        used_names.add(file_name)
+        return file_name
+
     def _add_file_to_zip(
         self,
         zip_archive: ZipFile,
@@ -1335,21 +1689,11 @@ class FileSystemHelper:
     ):
         """Add a single file to the zip archive"""
         if archive_path is None:
-            base_name = os.path.basename(file_path)
+            base_name = self._archive_name(os.path.basename(file_path))
         else:
             base_name = archive_path
 
-        file_name = base_name
-
-        # Handle duplicate file names by appending a counter
-        counter = 1
-        while file_name in used_names:
-            name, ext = os.path.splitext(base_name)
-            file_name = f'{name}_{counter}{ext}'
-            counter += 1
-        used_names.add(file_name)
-
-        file_size = os.path.getsize(file_path)
+        file_name = self._unique_name(base_name, used_names)
 
         # Log if file name was changed due to conflicts
         if file_name != base_name:
@@ -1357,39 +1701,8 @@ class FileSystemHelper:
                 f'Archive conflict rename - User: {self.username}, File: {file_path}, Renamed: {base_name} -> {file_name}'
             )
 
-        try:
-            # Use streaming approach for all files to ensure consistent memory usage
-            # Enable ZIP64 for large files (>2GB) or when archive will be large
-            force_zip64 = file_size >= 2 * 1024 * 1024 * 1024  # 2GB threshold
-
-            with zip_archive.open(file_name, 'w', force_zip64=force_zip64) as zip_entry:
-                with open(file_path, 'rb') as source_file:
-                    # Calculate optimal chunk size based on file size
-                    chunk_size = self._calculate_optimal_chunk_size(file_size)
-                    bytes_written = 0
-                    while True:
-                        chunk = source_file.read(chunk_size)
-                        if not chunk:
-                            break
-                        zip_entry.write(chunk)
-                        bytes_written += len(chunk)
-
-                        # Log progress for very large files
-                        if (
-                            file_size > 1024 * 1024 * 1024
-                            and bytes_written % (500 * 1024 * 1024) == 0
-                        ):  # Every 500MB
-                            progress = (bytes_written / file_size) * 100
-                            self.logger.debug(
-                                f'Archive progress - User: {self.username}, File: {file_path}, Archive name: {file_name}, Progress: {progress:.0f}%, Chunk size: {chunk_size // 1024}KB'
-                            )
-
-        except Exception as e:
-            self.logger.error(f'Failed to add {file_name} to archive: {str(e)}')
-            raise exceptions.soca_exception(
-                error_code=errorcodes.GENERAL_ERROR,
-                message=f'Failed to create download archive: {str(e)}',
-            )
+        if not self._copy_into_archive(zip_archive, file_path, file_name):
+            self._files_left_out += 1
 
     def _add_directory_to_zip(
         self, zip_archive: ZipFile, directory_path: str, used_names: set
@@ -1397,7 +1710,7 @@ class FileSystemHelper:
         """Add a directory and all its contents to the zip archive recursively"""
         # Strip trailing slashes and get the directory name
         directory_path = directory_path.rstrip('/')
-        directory_name = os.path.basename(directory_path)
+        directory_name = self._archive_name(os.path.basename(directory_path))
 
         # Handle empty directory name (shouldn't happen with proper paths)
         if not directory_name:
@@ -1423,100 +1736,55 @@ class FileSystemHelper:
                 f'Archive conflict rename - User: {self.username}, Directory: {directory_path}, Renamed: {base_dir_name} -> {directory_name}'
             )
 
-        try:
-            # Verify directory exists and is accessible
-            if not os.path.exists(directory_path):
-                raise exceptions.file_not_found(directory_path)
-            if not os.path.isdir(directory_path):
-                raise exceptions.soca_exception(
-                    error_code=errorcodes.INVALID_PARAMS,
-                    message=f'Path is not a directory: {directory_path}',
-                )
-
-            # Walk through the directory and add all files
-            files_added = 0
-            for root, dirs, files in os.walk(directory_path):
-                self._skip_generated_archives(directory_path, root, files)
-                # Calculate relative path from the source directory
-                rel_dir = os.path.relpath(root, directory_path)
-                if rel_dir == '.':
-                    archive_dir = directory_name
-                else:
-                    archive_dir = os.path.join(directory_name, rel_dir).replace(
-                        '\\', '/'
-                    )
-
-                # Create directory entry in zip (optional, but good practice)
-                if archive_dir not in used_names:
-                    zip_archive.writestr(archive_dir + '/', '')
-                    used_names.add(archive_dir + '/')
-
-                # Add all files in this directory
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    if file_path == self._archive_being_written:
-                        continue
-                    archive_file_path = os.path.join(archive_dir, filename).replace(
-                        '\\', '/'
-                    )
-
-                    try:
-                        # Explicitly check read permission for each file before processing
-                        can_read = self._check_permission(
-                            file_path,
-                            'read',
-                        )
-                        if not can_read:
-                            if self.logger.isEnabledFor(logging.DEBUG):
-                                self.logger.debug(
-                                    'Skipping a file with no read permission'
-                                )
-                            self._files_left_out += 1
-                            continue
-
-                        # Check if we can read this file
-                        file_size = os.path.getsize(file_path)
-
-                        # Use streaming approach
-                        force_zip64 = (
-                            file_size >= 2 * 1024 * 1024 * 1024
-                        )  # 2GB threshold
-
-                        with zip_archive.open(
-                            archive_file_path, 'w', force_zip64=force_zip64
-                        ) as zip_entry:
-                            with open(file_path, 'rb') as source_file:
-                                # Use optimal chunk size based on file size
-                                chunk_size = self._calculate_optimal_chunk_size(
-                                    file_size
-                                )
-                                while True:
-                                    chunk = source_file.read(chunk_size)
-                                    if not chunk:
-                                        break
-                                    zip_entry.write(chunk)
-
-                        files_added += 1
-
-                    except (OSError, IOError, PermissionError) as e:
-                        # Skip files that can't be read, but log the issue
-                        self.logger.warning(
-                            f'Skipping a file in an archive: {type(e).__name__}'
-                        )
-                        self._files_left_out += 1
-                        continue
-
-            # Log completion
-            if self.logger.isEnabledFor(logging.DEBUG):
-                self.logger.debug(
-                    f'Directory archive complete - User: {self.username}, Directory: {directory_path}, Files added: {files_added}'
-                )
-
-        except Exception as e:
-            self.logger.error(
-                f'Failed to add directory {directory_name} to archive: {str(e)}'
-            )
+        # Verify directory exists and is accessible
+        if not os.path.exists(directory_path):
+            raise exceptions.file_not_found(directory_path)
+        if not os.path.isdir(directory_path):
             raise exceptions.soca_exception(
-                error_code=errorcodes.GENERAL_ERROR,
-                message=f'Failed to create download archive: {str(e)}',
+                error_code=errorcodes.INVALID_PARAMS,
+                message=f'Path is not a directory: {directory_path}',
+            )
+
+        def unreadable_folder(_):
+            # a folder that cannot be read is left out, and counted like a file
+            self._files_left_out += 1
+
+        # Walk through the directory and add all files
+        files_added = 0
+        for root, dirs, files in os.walk(directory_path, onerror=unreadable_folder):
+            self._skip_generated_archives(directory_path, root, files)
+            # Calculate relative path from the source directory
+            rel_dir = os.path.relpath(root, directory_path)
+            archive_dir = self._archive_name(
+                directory_name, *([] if rel_dir == '.' else rel_dir.split(os.sep))
+            )
+
+            # a folder entry for each folder, the selected one and empty ones included
+            if archive_dir + '/' not in used_names:
+                zip_archive.writestr(archive_dir + '/', '')
+                used_names.add(archive_dir + '/')
+
+            # Add all files in this directory
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                if file_path == self._archive_being_written:
+                    continue
+                if self._copy_into_archive(
+                    zip_archive,
+                    file_path,
+                    # a backslash name and its _ form in one folder would both be a_b
+                    self._unique_name(
+                        self._archive_name(archive_dir, filename), used_names
+                    ),
+                ):
+                    files_added += 1
+                else:
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug('Skipping a file that cannot be read')
+                    self._files_left_out += 1
+
+        # Log completion
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(
+                f'Directory archive complete - User: {self.username}, Directory: {directory_path}, Files added: {files_added}'
             )

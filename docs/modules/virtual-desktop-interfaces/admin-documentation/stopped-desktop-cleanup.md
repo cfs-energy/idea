@@ -44,6 +44,10 @@ With `warn_days_before` above zero, the owner is emailed before the desktop is d
 
 The email, `virtual-desktop-controller.session-cleanup-warning` under **Administration > Settings > Email and notifications**, says how many days the desktop has been stopped, the date (UTC) it will be deleted unless it is started before then, that starting it resets the clock, and that an administrator can exempt it if it must be kept. It is sent once per stop: starting the desktop clears the notice, and the next stop starts the count again. The notice can be switched off under `dcv_session.notifications.cleanup_warning`, in which case the warning window still applies but no email goes out. The session detail page shows when the notice was sent.
 
+When the owner cannot be emailed for a permanent reason (cluster email off, cluster manager notifications off, the notice switched off, the owner disabled, removed or without an email address), the desktop is still deleted once the warning window has passed, and the controller logs the reason. A send that fails is retried, and the warning window starts again.
+
+A desktop that keeps being warned and is never deleted has a notice that is not going out: email is on, but the sender address, region or the notice's template is missing, or the mail service keeps refusing the message (for example under an SES sandbox). The controller logs `warning again` once per window; the cause is in the cluster manager log under `failed to send email notification`. A notice recorded as not sendable still decides the deletion if email is turned on, or the owner is enabled, before the window ends.
+
 ## Exempting a desktop
 
 On **Virtual Desktops > Sessions**, select one or more sessions and choose **Actions > Exempt from Cleanup**. The reason you enter is shown on the session; with no reason, your username is used. **Clear Cleanup Exemption** removes it. Exempt sessions carry a "Cleanup exempt" badge in the list. The flag on the session record is what the cleanup checks; IDEA also records the exemption on the instance's `idea:keep` tag for automation that reads tags, and clears it with the exemption.

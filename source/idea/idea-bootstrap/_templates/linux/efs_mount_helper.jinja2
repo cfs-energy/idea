@@ -2,8 +2,93 @@
 
 {% include '_templates/linux/stunnel.jinja2' %}
 
+# efs-utils is needed only where an in-scope share is EFS, and required only where one mounts
+# with the helper (mount type efs); the default EFS options mount as nfs4 without it, so there a
+# failed build only warns.
+EFS_UTILS_NEEDED=no
+EFS_UTILS_REQUIRED=no
+{% for name, storage in context.config.get_config('shared-storage').items() %}
+{% if storage['provider'] == 'efs' and context.eval_shared_storage_scope(shared_storage=storage) %}
+EFS_UTILS_NEEDED=yes
+{% if (storage['mount_options'] | default('', true) | string | trim | lower).split(' ')[0] == 'efs' %}
+EFS_UTILS_REQUIRED=yes
+{% endif %}
+{% endif %}
+{% endfor %}
+{% if (efs_image_bake | default(false)) and context.has_storage_provider('efs') %}
+EFS_UTILS_NEEDED=yes
+{% endif %}
+if [[ "${EFS_UTILS_NEEDED}" == yes ]]; then
 # user data runs without HOME; rustup installs under it and the efs-utils build sources ~/.cargo/env
 export HOME="${HOME:-/root}"
+
+function efs_utils_unavailable () {
+  if [[ "${EFS_UTILS_REQUIRED}" == yes ]]; then
+    fail_bootstrap "${1}" "${2}"
+  fi
+  log_warning "${2}; continuing without the EFS mount helper (no share here mounts with it)"
+  return 1
+}
+
+{% if context.base_os in ('rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+# rustup-init 1.29.3 by its published SHA-256 (never a script piped to a shell), installing an
+# exact toolchain. 1.100.0 is newer than the 1.94 the pinned efs-utils crates need.
+function install_rust_toolchain () {
+  local triple digest
+  case "$(uname -m)" in
+    x86_64) triple=x86_64-unknown-linux-gnu; digest=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55 ;;
+    aarch64) triple=aarch64-unknown-linux-gnu; digest=9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282 ;;
+    *) efs_utils_unavailable download-unverified "no pinned rustup-init for $(uname -m)"; return 1 ;;
+  esac
+  # rustup picks its mode from the name it runs under: only a name starting rustup-init runs
+  # the installer, so the file keeps that name, in a directory only root can reach
+  local dir init status
+  dir=$(mktemp -d) || { efs_utils_unavailable download-failed "no temporary directory for rustup-init"; return 1; }
+  init="${dir}/rustup-init"
+  if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 \
+      "https://static.rust-lang.org/rustup/archive/1.29.3/${triple}/rustup-init" -o "${init}"; then
+    rm -rf "${dir}"
+    efs_utils_unavailable download-failed "rustup-init 1.29.3 could not be downloaded"
+    return 1
+  fi
+  if ! sha256_matches "${init}" "${digest}"; then
+    rm -rf "${dir}"
+    efs_utils_unavailable download-unverified "rustup-init failed its checksum"
+    return 1
+  fi
+  chmod 0700 "${init}"
+  "${init}" -y --profile minimal --no-modify-path --default-toolchain 1.100.0 > /dev/null
+  status=$?
+  rm -rf "${dir}"
+  if [[ ${status} -ne 0 ]]; then
+    efs_utils_unavailable efs-utils-build-failed "rustup-init exited ${status}: no Rust toolchain for the efs-utils build"
+    return 1
+  fi
+}
+
+# efs-utils is built from the commit its release tag named when this bundle was made. Any other
+# version needs its commit in global-settings.package_config.efs_utils.commit, which takes
+# precedence.
+function clone_efs_utils () {
+  local version='{{ context.config.get_string('global-settings.package_config.efs_utils.version', default='v3.3.0') | default('', true) | string | replace("'", "'\\''") }}'
+  local commit='{{ context.config.get_string('global-settings.package_config.efs_utils.commit', default='') | default('', true) | string | replace("'", "'\\''") }}'
+  if [[ -z "${commit}" ]]; then
+    case "${version}" in
+      v3.3.0) commit=1f8bdcaa61ac51d29dd9a826d4f248a7e13af291 ;;
+      *) efs_utils_unavailable download-unverified "efs-utils ${version} has no pinned commit: set global-settings.package_config.efs_utils.commit to the commit that tag names"; return 1 ;;
+    esac
+  fi
+  rm -rf efs-utils
+  if ! timeout 600 git clone --branch "${version}" --depth 1 https://github.com/aws/efs-utils; then
+    efs_utils_unavailable download-failed "efs-utils ${version} could not be cloned"
+    return 1
+  fi
+  if [[ "$(git -C efs-utils rev-parse HEAD 2> /dev/null)" != "${commit}" ]]; then
+    efs_utils_unavailable download-unverified "efs-utils ${version} is not the pinned commit ${commit}"
+    return 1
+  fi
+}
+{% endif %}
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
 
@@ -22,12 +107,13 @@ function install_efs_mount_helper () {
         # the distro rust lags the MSRV of the AWS SDK crates efs-utils pins (RHEL 10.2 ships
         # 1.92, the crates need 1.94), and the spec sources ~/.cargo/env itself, so build with
         # a current stable toolchain instead of downgrading the crate set.
-        curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path > /dev/null
-        source "$HOME/.cargo/env"
-        git clone --branch "{{ context.config.get_string('global-settings.package_config.efs_utils.version', default='v3.3.0') }}" --depth 1 https://github.com/aws/efs-utils
-        cd efs-utils
-        make rpm
-        package_transaction yum -y install build/amazon-efs-utils*rpm
+        if install_rust_toolchain && source "$HOME/.cargo/env" && clone_efs_utils; then
+          if ! (cd efs-utils && make rpm); then
+            efs_utils_unavailable efs-utils-build-failed "efs-utils rpm build failed"
+          else
+            package_transaction yum -y install efs-utils/build/amazon-efs-utils*rpm
+          fi
+        fi
       {% endif %}
   else
     log_info "Found existing Amazon EFS Mount Helper on system"
@@ -41,16 +127,20 @@ install_efs_mount_helper
 if [[ -z "$(dpkg -l amazon-efs-utils | grep ^ii)" ]]; then
   apt_update || log_warning "APT index refresh failed; continuing with the existing package index."
   apt install -y build-essential pkg-config libssl-dev cmake golang-go
-  curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path > /dev/null
-  source "$HOME/.cargo/env"
-  git clone --branch "{{ context.config.get_string('global-settings.package_config.efs_utils.version', default='v3.3.0') }}" --depth 1 https://github.com/aws/efs-utils
-  cd efs-utils || exit
-  ./build-deb.sh
-  apt -y install ./build/amazon-efs-utils*.deb
+  if install_rust_toolchain && source "$HOME/.cargo/env" && clone_efs_utils; then
+    if ! (cd efs-utils && ./build-deb.sh); then
+      efs_utils_unavailable efs-utils-build-failed "efs-utils deb build failed"
+    else
+      apt -y install ./efs-utils/build/amazon-efs-utils*.deb
+    fi
+  fi
 else
   log_info "Found existing Amazon EFS Mount Helper on system"
 fi
 
 {% endif %}
 
+else
+  log_info "No in-scope EFS share: the EFS mount helper is not installed"
+fi
 # End: AWS EFS Mount Helper

@@ -510,8 +510,7 @@ test("synthesized cluster-manager policy permits retirement only on the outbox p
   const policies = Template.fromStack(stack).findResources("AWS::IAM::ManagedPolicy");
   const policy = Object.values(policies)[0]!;
   const statements = policy.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: string | string[]; Effect: string }>;
-  const deletes = statements.filter(statement => [statement.Action].flat().includes("s3:DeleteObject"));
+  const deletes = statements.filter(statement => statement.Effect === "Allow" && [statement.Action].flat().includes("s3:DeleteObject"));
   assert.equal(deletes.length, 1);
-  assert.equal(deletes[0]!.Effect, "Allow");
   assert.deepEqual([deletes[0]!.Resource].flat(), ["arn:aws:s3:::sample-cluster-bucket/metrics/outbox/*"]);
 });

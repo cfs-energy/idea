@@ -89,7 +89,12 @@ def agent(monkeypatch):
     return agent
 
 
-def run_message(agent, sender=f'AROASCHEDULER:{TASK_ID}', **payload):
+def run_message(
+    agent,
+    sender=f'AROASCHEDULER:{TASK_ID}',
+    namespace='ADAutomation.DeleteComputer',
+    **payload,
+):
     agent._stop_event = Mock()
     agent._stop_event.is_set.side_effect = [False, True]
     sqs = agent.context.aws().sqs()
@@ -102,7 +107,7 @@ def run_message(agent, sender=f'AROASCHEDULER:{TASK_ID}', **payload):
                 'Attributes': {'SenderId': sender},
                 'Body': json.dumps(
                     {
-                        'header': {'namespace': 'ADAutomation.DeleteComputer'},
+                        'header': {'namespace': namespace},
                         'payload': payload,
                     }
                 ),
@@ -115,21 +120,25 @@ def run_message(agent, sender=f'AROASCHEDULER:{TASK_ID}', **payload):
 
 
 @pytest.mark.parametrize('field', ['computer_name', 'hostname'])
-def test_ec2_deletes_payload_computer(agent, field):
+@pytest.mark.parametrize(
+    'node_type,module',
+    [('infra', 'scheduler'), ('infra', 'virtual-desktop-controller'), ('compute', 'x')],
+)
+def test_ec2_sender_cannot_delete_another_computer(agent, field, node_type, module):
+    # instance tags do not make an EC2 sender part of the control plane
+    agent.context.aws_util().ec2_describe_instances.side_effect = lambda **_: [
+        SimpleNamespace(soca_node_type=node_type, idea_module_id=module)
+    ]
     assert run_message(
         agent,
         sender='AROASCHEDULER:i-sender',
         instance_id='i-target',
         **{field: TARGET},
     )
-    agent.ldap_client.delete_s.assert_called_once_with(DN)
-    agent.context.aws_util().ec2_describe_instances.assert_called_once_with(
-        filters=[
-            {'Name': 'instance-id', 'Values': ['i-sender']},
-            {'Name': 'instance-state-name', 'Values': ['running']},
-        ]
-    )
-    agent.ad_automation_dao.delete_entry.assert_called_once_with('i-target', 'old')
+    agent.ldap_client.search_s.assert_not_called()
+    agent.ldap_client.delete_s.assert_not_called()
+    agent.ad_automation_dao.delete_entry.assert_not_called()
+    assert any('only delete its own computer' in line for line in agent.logger.lines)
 
 
 @pytest.mark.parametrize('legacy', [False, True])
@@ -241,6 +250,12 @@ def generated_name(instance_id):
     return 'IDEA-' + Utils.shake_256(data, 256)[-10:].upper()
 
 
+def windows_name(instance_id):
+    # Get-IdeaHostname in virtual-desktop-host-windows/Configure.ps1
+    data = f'us-east-2|871375171278|idea-com|{instance_id}'
+    return 'IDEA-' + Utils.sha256(data)[-10:].upper()
+
+
 def set_target(agent, name):
     dn = f'CN={name},{OU}'
     agent.ldap_client.search_s.side_effect = lambda **_: [(dn, {})]
@@ -255,12 +270,12 @@ def set_target(agent, name):
         ('infra', 'bastion-host'),
     ],
 )
-@pytest.mark.parametrize('own_name', ['generated', 'recorded'])
+@pytest.mark.parametrize('own_name', ['generated', 'windows'])
 def test_ec2_delete_is_scoped_to_own_computer(agent, node_type, module, own_name):
     agent.context.aws_util().ec2_describe_instances.side_effect = lambda **_: [
         SimpleNamespace(soca_node_type=node_type, idea_module_id=module)
     ]
-    name = generated_name('i-sender') if own_name == 'generated' else 'OLD-WINDOWS'
+    name = (generated_name if own_name == 'generated' else windows_name)('i-sender')
     agent.ad_automation_dao.list_entries_by_instance_id.side_effect = lambda instance: (
         [{'nonce': 'own', 'hostname': name, 'status': 'success'}]
         if instance == 'i-sender'
@@ -285,18 +300,6 @@ def test_ec2_delete_is_scoped_to_own_computer(agent, node_type, module, own_name
     )
     agent.ldap_client.delete_s.assert_called_once_with(dn)
     agent.ad_automation_dao.delete_entry.assert_called_once_with('i-sender', 'own')
-
-
-@pytest.mark.parametrize('module', ['virtual-desktop-controller', 'scheduler'])
-def test_cross_target_ec2_delete_requires_infra_node_type(agent, module):
-    agent.ad_automation_dao.list_entries_by_instance_id.return_value = []
-    instance = SimpleNamespace(soca_node_type='compute', idea_module_id=module)
-    agent.context.aws_util().ec2_describe_instances.side_effect = lambda **_: [instance]
-    assert run_message(agent, sender='AROAINFRA:i-sender', computer_name=TARGET)
-    agent.ldap_client.delete_s.assert_not_called()
-    instance.soca_node_type = 'infra'
-    assert run_message(agent, sender='AROAINFRA:i-sender', computer_name=TARGET)
-    agent.ldap_client.delete_s.assert_called_once_with(DN)
 
 
 @pytest.mark.parametrize('legacy', [False, True])
@@ -475,3 +478,52 @@ def test_preset_computer_logs_no_one_time_password(monkeypatch, returncode):
         if arg.startswith('--one-time-password=')
     ]
     assert otp not in str(helper.logger.mock_calls) + shown
+
+
+@pytest.mark.parametrize(
+    'requested,own',
+    [
+        (None, generated_name),
+        (TARGET, generated_name),
+        ('generated:i-other', generated_name),
+        ('windows:i-sender', windows_name),
+    ],
+)
+def test_host_join_uses_its_own_computer_name(agent, requested, own):
+    """a host's join request presets only the computer named from its own instance"""
+    agent.context.aws_util().ec2_describe_instances.side_effect = lambda **_: [
+        SimpleNamespace(soca_node_type='dcv-host', idea_module_id='vdc')
+    ]
+    if requested and ':' in requested:
+        form, instance = requested.split(':')
+        requested = (generated_name if form == 'generated' else windows_name)(instance)
+    name = own('i-sender')
+    # every name asked about exists, so a foreign name would be deleted and recreated
+    agent.ldap_client.search_s.side_effect = lambda base, filterstr, **_: [
+        (filterstr, {})
+    ]
+    payload = {'nonce': 'join', 'instance_id': 'i-sender'}
+    if requested:
+        payload['hostname'] = requested
+    assert run_message(
+        agent,
+        sender='AROANODE:i-sender',
+        namespace='ADAutomation.PresetComputer',
+        **payload,
+    )
+    commands = [call.kwargs.get('cmd') for call in agent.shell.invoke.call_args_list]
+    acted_on = [cmd[-1] for cmd in commands if isinstance(cmd, list) and len(cmd) > 2]
+    # the own account is deleted (a host joining again) and preset under the same name
+    assert acted_on == [name, name]
+    agent.ldap_client.search_s.assert_called_once_with(
+        base=OU,
+        filterstr=f'(&(objectClass=computer)(cn={name}))',
+        attrlist=['dn'],
+        trace=False,
+    )
+    entry = agent.ad_automation_dao.create_ad_automation_entry.call_args.kwargs['entry']
+    assert (entry['instance_id'], entry['hostname'], entry['status']) == (
+        'i-sender',
+        name,
+        'success',
+    )

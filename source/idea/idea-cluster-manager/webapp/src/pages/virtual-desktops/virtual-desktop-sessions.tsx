@@ -47,6 +47,7 @@ export interface VirtualDesktopSessionsState {
     sessionHealth: any
     showCreateSessionForm: boolean
     showCleanupExemptionForm: boolean
+    showMoveProjectForm: boolean
 }
 
 const VIRTUAL_DESKTOP_SESSIONS_TABLE_COLUMN_DEFINITIONS: TableProps.ColumnDefinition<VirtualDesktopSession>[] = [
@@ -150,6 +151,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
     createSoftwareStackForm: RefObject<IdeaForm | null>
     createSessionForm: RefObject<VirtualDesktopCreateSessionForm | null>
     cleanupExemptionForm: RefObject<IdeaForm | null>
+    moveProjectForm: RefObject<IdeaForm | null>
     clearCleanupExemptionConfirmModal: RefObject<IdeaConfirm | null>
     virtualDesktopSettings: any
 
@@ -163,6 +165,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         this.createSoftwareStackForm = React.createRef()
         this.createSessionForm = React.createRef()
         this.cleanupExemptionForm = React.createRef()
+        this.moveProjectForm = React.createRef()
         this.clearCleanupExemptionConfirmModal = React.createRef()
         this.virtualDesktopSettings = undefined
 
@@ -175,7 +178,8 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
             forceTerminate: false,
             sessionHealth: {},
             showCreateSessionForm: false,
-            showCleanupExemptionForm: false
+            showCleanupExemptionForm: false,
+            showMoveProjectForm: false
         }
     }
 
@@ -557,6 +561,57 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
         )
     }
 
+    buildMoveProjectForm() {
+        const session = this.getSelectedSessions()[0]
+        return (
+            <IdeaForm
+                ref={this.moveProjectForm}
+                name={"move-project"}
+                modal={true}
+                title={`Move ${session?.name ?? 'desktop'} to another project`}
+                description={`Owner: ${session?.owner ?? ''}. The desktop must be stopped, and the owner must be a member of the project you choose.`}
+                modalSize={"medium"}
+                primaryCtaTitle={"Move"}
+                onCancel={() => {
+                    this.setState({showMoveProjectForm: false})
+                }}
+                onSubmit={() => {
+                    const form = this.moveProjectForm.current!
+                    form.clearError()
+                    if (!form.validate() || session == null) {
+                        return
+                    }
+                    const projectId = form.getValues().project_id
+                    const title = this.state.projectChoices.find(choice => choice.value === projectId)?.title ?? projectId
+                    return this.getVirtualDesktopAdminClient().moveSessionToProject({
+                        session: {idea_session_id: session.idea_session_id, owner: session.owner, project: {project_id: projectId}}
+                    }).then(() => {
+                        this.setState({showMoveProjectForm: false, sessionSelected: false}, () => {
+                            this.setFlashMessage(`Moved ${session.name} (Owner: ${session.owner}) to ${title}.`, 'success')
+                            this.getListing().fetchRecords()
+                        })
+                    }).catch(error => {
+                        // the controller answers each refusal in plain words: stop it first, not a member, ...
+                        form.setError(error.errorCode, error.message)
+                    })
+                }}
+                params={[
+                    {
+                        name: 'project_id',
+                        title: 'Project',
+                        description: 'The project the desktop and its costs belong to from now on',
+                        data_type: 'str',
+                        param_type: 'select',
+                        choices: this.state.projectChoices.filter(choice => choice.value !== session?.project?.project_id),
+                        validate: {
+                            required: true
+                        }
+                    }
+                ]}
+            />
+        )
+    }
+
     buildClearCleanupExemptionConfirmModal() {
         return (
             <IdeaConfirm
@@ -721,14 +776,9 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         // Show loading message
                         this.setFlashMessage('Preparing CSV export... This may take a moment for large datasets.', 'info');
 
-                        console.log('Starting CSV export for sessions...');
-
                         // Get current filters and date range, with fallbacks
                         const filters = this.getListing()?.getFilters() || [];
                         const dateRange = this.getListing()?.getDateRange();
-
-                        console.log('Filters:', filters);
-                        console.log('Date range:', dateRange);
 
                         // Fetch all records with current filters but limited by backend constraints
                         const result = await this.getVirtualDesktopAdminClient().listSessions({
@@ -739,8 +789,6 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                             },
                             date_range: dateRange
                         });
-
-                        console.log('Export result:', result);
 
                         const records = result.listing || [];
 
@@ -861,6 +909,19 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                             // we know that there is exactly 1 session
                             this.getSelectedSessions().forEach((session) => {
                                 this.showCreateSoftwareStackForm(session)
+                            })
+                        }
+                    },
+                    {
+                        id: 'move-to-project',
+                        text: 'Move to Another Project',
+                        disabled: this.getSelectedSessions().length !== 1 || this.getSelectedSessions()[0]?.state !== 'STOPPED',
+                        disabledReason: 'Select one stopped desktop',
+                        onClick: () => {
+                            this.setState({
+                                showMoveProjectForm: true
+                            }, () => {
+                                this.moveProjectForm.current?.showModal()
                             })
                         }
                     },
@@ -1080,6 +1141,7 @@ class VirtualDesktopSessions extends Component<VirtualDesktopSessionsProps, Virt
                         {this.state.showCreateSessionForm && this.buildCreateSessionForm()}
                         {this.buildClearCleanupExemptionConfirmModal()}
                         {this.state.showCleanupExemptionForm && this.buildCleanupExemptionForm()}
+                        {this.state.showMoveProjectForm && this.buildMoveProjectForm()}
                     </div>
                 }/>
         )

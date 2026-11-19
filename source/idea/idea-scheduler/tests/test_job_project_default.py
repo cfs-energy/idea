@@ -502,3 +502,45 @@ def test_no_allowed_project_says_who_to_ask(context, monkeypatch):
         'Ask an administrator to add you to one.'
     )
     assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+
+
+def test_a_project_the_queue_does_not_allow_is_refused(context, monkeypatch):
+    """
+    -P names a project the user is in, but the queue profile does not list it
+    """
+    _use_queue(context, monkeypatch, _projects('project-a'))
+    monkeypatch.setattr(
+        context.projects_client,
+        'get_user_projects',
+        lambda username: _projects('project-a', 'project-z'),
+    )
+    job = SocaJob(
+        owner='researcher',
+        project='project-z',
+        queue='normal',
+        job_id='1',
+        params=SocaJobParams(nodes=1, cpus=1),
+    )
+    util = JobProvisioningUtil(context=context, jobs=[job])
+
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        util.check_acls()
+
+    assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    assert exc_info.value.message == (
+        "You can't use project project-z on queue normal. "
+        'Choose one of these projects (#PBS -P in a script): project-a.'
+    )
+
+
+def test_the_default_project_passes_the_same_check(context, monkeypatch):
+    _use_queue(context, monkeypatch, _projects('project-a', 'project-b'))
+    monkeypatch.setattr(
+        context.projects_client,
+        'get_user_projects',
+        lambda username: _projects('project-z', 'project-b'),
+    )
+    hook = _hook(context, project=None)
+    hook.build_and_validate_job()
+    assert hook.job.project == 'project-b'
+    JobProvisioningUtil(context=context, jobs=[hook.job]).check_acls()

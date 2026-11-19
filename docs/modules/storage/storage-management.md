@@ -8,6 +8,8 @@ Refer to [.](./ "mention") to learn more about Shared Storage configuration on I
 
 For the IDEA Cluster to function, shared storage configuration must include Apps and Data storage configurations. Both **Apps** and **Data** are **cluster** scoped file systems and are mounted automatically on all applicable infrastructure hosts, eVDI linux sessions and SOCA Compute Nodes.
 
+Apps and Data use Amazon EFS. FSx for Lustre is not supported for either: the control plane's container hosts mount both as NFS, so `ideactl config generate` refuses it, and a deploy or upgrade stops before it changes anything if a stored configuration names it. FSx for Lustre remains available for job scratch and for additional shares.
+
 #### Apps
 
 * Apps shared-storage is used to save critical cluster configuration scripts, files and logs.

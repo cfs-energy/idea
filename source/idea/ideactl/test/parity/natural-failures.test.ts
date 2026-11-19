@@ -282,7 +282,8 @@ test("GAP: a rejection during change-set creation exits with the CDK code and no
 
   assert.equal(code, 2);
   assert.deepEqual(state.executed, []);
-  assert.deepEqual(state.stderr, []);
+  // the resolved identity is printed on stderr before every account command; nothing else is
+  assert.deepEqual(state.stderr.filter((line) => !line.startsWith("AWS identity:")), []);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -400,12 +401,13 @@ test("a second run redeploys the module that succeeded as a no-op and retries th
     Changes: [],
   };
 
-  // Run one: analytics commits, metrics is rolled back by CloudFormation.
+  // Run one: metrics commits, analytics is rolled back by CloudFormation. An upgrade deploys a
+  // deployed analytics module after the others (deployment-helper `runPriority`).
   const first = replay({ modules });
   let firstStack = "";
   first.deps.cfn.describeStack = async (stackName) => {
     firstStack = stackName;
-    return stackName.endsWith("-metrics")
+    return stackName.endsWith("-analytics")
       ? { StackStatus: "UPDATE_ROLLBACK_COMPLETE", StackStatusReason: "resource failed" }
       : { StackStatus: "UPDATE_COMPLETE" };
   };
@@ -418,17 +420,17 @@ test("a second run redeploys the module that succeeded as a no-op and retries th
     deps: first.deps,
   });
   await assert.rejects(() => firstHelper.invoke(), /UPDATE_ROLLBACK_COMPLETE/);
-  assert.deepEqual(first.executed, [`${CLUSTER}-analytics`, `${CLUSTER}-metrics`]);
-  assert.equal(firstStack, `${CLUSTER}-metrics`);
+  assert.deepEqual(first.executed, [`${CLUSTER}-metrics`, `${CLUSTER}-analytics`]);
+  assert.equal(firstStack, `${CLUSTER}-analytics`);
 
-  // Run two: the same selection. analytics is already at target, metrics still has work.
+  // Run two: the same selection. metrics is already at target, analytics still has work.
   const second = replay({ modules });
   second.deps.cfn.describeChangeSet = async (input) =>
-    input.StackName.endsWith("-analytics")
+    input.StackName.endsWith("-metrics")
       ? empty
       : {
         Status: "CREATE_COMPLETE",
-        Changes: [{ ResourceChange: { Action: "Modify", LogicalResourceId: "metricsrole", ResourceType: "AWS::IAM::Role" } }],
+        Changes: [{ ResourceChange: { Action: "Modify", LogicalResourceId: "analyticsrole", ResourceType: "AWS::IAM::Role" } }],
       };
   second.deps.cfn.describeStack = async () => ({ StackStatus: "UPDATE_COMPLETE" });
   const secondHelper = await DeploymentHelper.open({
@@ -444,8 +446,8 @@ test("a second run redeploys the module that succeeded as a no-op and retries th
 
   // Convergence: the completed module is re-synthesized but not updated, and only the failed
   // module's change set is executed.
-  assert.deepEqual(second.executed, [`${CLUSTER}-metrics`]);
-  assert.ok(second.stdout.includes(`${CLUSTER}-analytics: no changes`));
+  assert.deepEqual(second.executed, [`${CLUSTER}-analytics`]);
+  assert.ok(second.stdout.includes(`${CLUSTER}-metrics: no changes`));
 });
 
 // ---------------------------------------------------------------------------------------------

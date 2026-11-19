@@ -213,6 +213,11 @@ def test_known_effects_cover_live_startup_and_deployment_readers():
 
 def test_catalog_count_contract_and_explicit_dispositions():
     post_review_keys = {
+        'bastion-host.site_hook_sha256',
+        'scheduler.compute_node_site_hook_sha256',
+        'scheduler.ami_builder_site_hook_sha256',
+        'virtual-desktop-controller.dcv_host_site_hook_sha256',
+        'virtual-desktop-controller.ami_builder_site_hook_sha256',
         'cluster-manager.web_terminal.enabled',
         'cluster-manager.web_terminal.idle_timeout_seconds',
         'cluster-manager.web_terminal.max_duration_seconds',
@@ -268,7 +273,7 @@ def test_catalog_count_contract_and_explicit_dispositions():
     assert post_review_keys <= set(BY_KEY)
     assert (
         hashlib.sha256('\n'.join(sorted(BY_KEY)).encode()).hexdigest()
-        == '749daff6a0768a6a32697cc7d11679296c96234c044943013f64cca736903adf'
+        == 'db9220d832497233c733e301e734930ce70b5974defc65dbd28b96527c4c7c7f'
     )
     dispositions = Counter(
         'hidden' if item['hidden'] else 'read_only' if item['read_only'] else 'editable'
@@ -971,14 +976,16 @@ def test_group_names_and_iam_rows_need_an_administrator():
 
 
 def test_sudo_group_name_takes_only_a_plain_group_name():
-    # the value is pasted into the host join script; a space or a shell character is refused.
-    for value in ('Domain Users', 'admins;id', ''):
+    # the value is pasted into the host join script, which quotes it and escapes its
+    # spaces: a shell character, a doubled or edge space is refused
+    for value in ('admins;id', '', ' admins', 'Domain  Users', 'admins "x"'):
         with pytest.raises(exceptions.SocaException):
             coerce_settings('directoryservice', {'sudoers': {'group_name': value}})
-    values, _ = coerce_settings(
-        'directoryservice', {'sudoers': {'group_name': 'hpc-admins'}}
-    )
-    assert values['sudoers']['group_name'] == 'hpc-admins'
+    for value in ('hpc-admins', 'AWS Delegated Administrators', 'Domain Users'):
+        values, _ = coerce_settings(
+            'directoryservice', {'sudoers': {'group_name': value}}
+        )
+        assert values['sudoers']['group_name'] == value
 
 
 def test_blank_list_items_are_dropped():
@@ -1108,3 +1115,211 @@ def test_scratch_cleanup_settings_are_editable_at_runtime_and_bounded():
         assert rule['minimum'] == 14
     rule = BY_KEY['scheduler.scratch_cleanup.digest_weekday']['validation']
     assert (rule['minimum'], rule['maximum']) == (0, 6)
+
+
+# every host's root bootstrap renders these: only forms that stay plain words there
+@pytest.mark.parametrize(
+    'leaf, value',
+    [
+        ('mount_dir', '/data'),
+        ('mount_dir', '/data/home'),
+        ('mount_dir', '/scratch-lustre'),
+        ('mount_dir', '/opt/software'),
+        (
+            'mount_options',
+            'nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0',
+        ),
+        ('mount_options', 'efs _netdev,noresvport,tls,iam 0 0'),
+        ('mount_options', 'lustre defaults,noatime,flock,_netdev 0 0'),
+        ('mount_options', ''),
+        ('mount_drive', 'Z'),
+    ],
+)
+def test_storage_mount_settings_keep_their_usual_forms(leaf, value):
+    values, _ = coerce_settings(
+        'shared-storage', {'archive': {leaf: value}}, settings_catalog(['archive'])
+    )
+    assert values['archive'][leaf] == value
+
+
+@pytest.mark.parametrize(
+    'leaf, value',
+    [
+        ('mount_dir', '/data"marker'),
+        ('mount_dir', '/data marker'),
+        ('mount_dir', '/data/$marker'),
+        ('mount_dir', '/data/../marker'),
+        ('mount_dir', 'data'),
+        ('mount_dir', '/'),
+        ('mount_dir', '/etc'),
+        ('mount_dir', '/etc/marker'),
+        ('mount_dir', '/usr/local/bin'),
+        ('mount_dir', '/root'),
+        ('mount_dir', '/opt'),
+        # the first field is the file system type: options alone make no fstab entry
+        ('mount_options', 'defaults'),
+        ('mount_options', 'defaults"marker'),
+        ('mount_options', 'defaults;marker'),
+        ('mount_options', 'defaults,$marker'),
+        ('mount_options', 'defaults\nmarker'),
+        ('mount_options', 'nfs4  defaults 0 0'),
+        ('mount_options', 'nfs4 defaults 0 0 marker'),
+        ('mount_drive', 'Z:'),
+        ('mount_drive', "Z'"),
+    ],
+)
+def test_storage_mount_settings_refuse_other_forms(leaf, value):
+    with pytest.raises(exceptions.SocaException):
+        coerce_settings(
+            'shared-storage', {'archive': {leaf: value}}, settings_catalog(['archive'])
+        )
+
+
+@pytest.mark.parametrize('value', ['/scratch', '/root/marker', '/scratch"marker'])
+def test_scratch_mount_points_use_the_same_directory_rule(value):
+    setting = BY_KEY['scheduler.scratch_storage.ebs.mount_point']
+    if value == '/scratch':
+        assert coerce_value(setting, value) == value
+        return
+    with pytest.raises(exceptions.SocaException):
+        coerce_value(setting, value)
+
+
+@pytest.mark.parametrize('leaf', ['administrators_group_name', 'managers_group_name'])
+def test_the_administrators_and_managers_group_names_are_not_editable(leaf):
+    with pytest.raises(exceptions.SocaException, match='is not editable'):
+        coerce_settings('identity-provider', {'cognito': {leaf: 'renamed-marker'}})
+
+
+def storage_config(**storage):
+    config = Mock()
+    config.get_config.side_effect = lambda key, default=None: (
+        ConfigFactory.from_dict(storage) if key == 'shared-storage' else default
+    )
+    return config
+
+
+@pytest.mark.parametrize('point', ['/apps', '/apps/scratch', '/data/home'])
+def test_scratch_cannot_mount_on_or_under_shared_storage(point):
+    config = storage_config(apps={'mount_dir': '/apps'}, data={'mount_dir': '/data'})
+    with pytest.raises(exceptions.SocaException, match='shared storage mount'):
+        coerce_settings(
+            'scheduler',
+            {'scratch_storage': {'ebs': {'mount_point': point}}},
+            config=config,
+        )
+    values, _ = coerce_settings(
+        'scheduler',
+        {'scratch_storage': {'ebs': {'mount_point': '/scratch'}}},
+        config=config,
+    )
+    assert values['scratch_storage']['ebs']['mount_point'] == '/scratch'
+
+
+def test_stored_storage_values_the_rules_refuse_are_named():
+    from ideaclustermanager.app.settings_catalog import stored_storage_refusals
+
+    config = storage_config(
+        tools={'mount_dir': '/usr/local', 'provider': 'efs'},
+        data={'mount_dir': '/data', 'mount_options': 'nfs4 defaults 0 0'},
+    )
+    refused = stored_storage_refusals(config, settings_catalog(['tools', 'data']))
+    assert [key for key, _ in refused] == ['shared-storage.tools.mount_dir']
+
+
+@pytest.mark.parametrize('leaf', ['logs_directory', 'default_log_file_name'])
+def test_cluster_manager_log_location_is_not_editable(leaf):
+    with pytest.raises(exceptions.SocaException, match='is not editable'):
+        coerce_settings('cluster-manager', {'logging': {leaf: '/marker'}})
+    assert coerce_settings('cluster-manager', {'logging': {'profile': 'console'}})
+
+
+@pytest.mark.parametrize(
+    'leaf, good, bad',
+    [
+        ('https_proxy', 'http://proxy.example.invalid:3128', 'http://marker"x'),
+        ('https_proxy', 'https://user@[fd00::1]:8080/', 'http://marker x'),
+        ('no_proxy', '127.0.0.1,.example.invalid,10.0.0.0/16', 'localhost;marker'),
+        ('no_proxy', 'localhost', 'localhost,$marker'),
+    ],
+)
+def test_proxy_settings_take_plain_url_and_host_characters(leaf, good, bad):
+    assert coerce_settings('cluster', {'network': {leaf: good}})[0] == {
+        'network': {leaf: good}
+    }
+    assert coerce_settings('cluster', {'network': {leaf: ''}})
+    with pytest.raises(exceptions.SocaException):
+        coerce_settings('cluster', {'network': {leaf: bad}})
+
+
+@pytest.mark.parametrize(
+    'value, accepted',
+    [
+        ('', True),
+        ('a' * 64, True),
+        ('A' * 64, True),
+        (' ' + 'a' * 64 + ' ', True),
+        ('a' * 63, False),
+        ('g' * 64, False),
+    ],
+)
+def test_the_bastion_site_hook_checksum_is_empty_or_a_sha256(value, accepted):
+    setting = BY_KEY['bastion-host.site_hook_sha256']
+    assert not setting['read_only'] and not setting['hidden']
+    # the bastion skips a mismatched hook, unlike the other hosts
+    assert 'skips the hook' in setting['description']
+    assert 'runs unchecked' in setting['description']
+    if accepted:
+        assert coerce_value(setting, value) == value.strip().lower()
+    else:
+        with pytest.raises(exceptions.SocaException):
+            coerce_value(setting, value)
+
+
+@pytest.mark.parametrize(
+    'key',
+    [
+        'scheduler.compute_node_site_hook_sha256',
+        'scheduler.ami_builder_site_hook_sha256',
+        'virtual-desktop-controller.dcv_host_site_hook_sha256',
+        'virtual-desktop-controller.ami_builder_site_hook_sha256',
+    ],
+)
+@pytest.mark.parametrize(
+    'value, accepted',
+    [
+        ('', True),
+        ('b' * 64, True),
+        ('B' * 64, True),
+        ('  ' + 'b' * 64 + '\n', True),
+        ('b' * 65, False),
+        ('x' * 64, False),
+    ],
+)
+def test_host_site_hook_checksums_are_empty_or_a_sha256(key, value, accepted):
+    setting = BY_KEY[key]
+    assert not setting['read_only'] and not setting['hidden']
+    description = setting['description']
+    # empty runs the hook unchecked with a warning; a mismatch stops these hosts
+    assert 'runs unchecked' in description and 'warning' in description
+    assert 'stops' in description and 'every edit' in description
+    assert 'runs none' not in description
+    if accepted:
+        assert coerce_value(setting, value) == value.strip().lower()
+    else:
+        with pytest.raises(exceptions.SocaException):
+            coerce_value(setting, value)
+
+
+@pytest.mark.parametrize('days, accepted', [(30, True), (365, True), (366, False)])
+def test_the_desktop_cleanup_warning_window_stays_within_the_receipts_life(
+    days, accepted
+):
+    setting = BY_KEY[
+        'virtual-desktop-controller.dcv_session.stopped_session_cleanup.warn_days_before'
+    ]
+    if accepted:
+        assert coerce_value(setting, days) == days
+    else:
+        with pytest.raises(exceptions.SocaException):
+            coerce_value(setting, days)

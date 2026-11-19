@@ -18,7 +18,7 @@ import type {
     CfnResponseSender,
     JsonValue,
 } from "../commons/cfn-response.ts";
-import { errorMessage, sendCfnResponse } from "../commons/cfn-response.ts";
+import { errorMessage, sendCfnResponse, eventForLog } from "../commons/cfn-response.ts";
 
 const SECRETS_MANAGER_CLIENT_PACKAGE = "@aws-sdk/client-secrets-manager";
 const ACM_CLIENT_PACKAGE = "@aws-sdk/client-acm";
@@ -78,6 +78,7 @@ interface SecretsManagerSdkModule {
     SecretsManagerClient: new (configuration: Record<string, never>) => SdkClient;
     ListSecretsCommand: new (input: {
         Filters: Array<{ Key: string; Values: string[] }>;
+        NextToken?: string;
     }) => object;
 }
 
@@ -136,16 +137,23 @@ async function createSecrets(): Promise<SelfSignedCertificateSecrets> {
             tagKey: string,
             tagValues: string[],
         ): Promise<SecretSummary[]> => {
-            const result = await client.send(
-                new sdkModule.ListSecretsCommand({
-                    Filters: [
-                        { Key: "tag-key", Values: [tagKey] },
-                        { Key: "tag-value", Values: tagValues },
-                    ],
-                }),
-            );
-            const list = result.SecretList;
-            return Array.isArray(list) ? (list as SecretSummary[]) : [];
+            const secrets: SecretSummary[] = [];
+            let nextToken: string | undefined;
+            do {
+                const result = await client.send(
+                    new sdkModule.ListSecretsCommand({
+                        ...(nextToken === undefined ? {} : { NextToken: nextToken }),
+                        Filters: [
+                            { Key: "tag-key", Values: [tagKey] },
+                            { Key: "tag-value", Values: tagValues },
+                        ],
+                    }),
+                );
+                const list = result.SecretList;
+                if (Array.isArray(list)) secrets.push(...(list as SecretSummary[]));
+                nextToken = typeof result.NextToken === "string" ? result.NextToken : undefined;
+            } while (nextToken !== undefined);
+            return secrets;
         },
     };
 }
@@ -272,7 +280,7 @@ export function createHandler(
                 ? properties.certificate_name
                 : undefined;
         try {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
 
             // Delete keeps the certificate. Nothing in this handler removes a secret or an ACM
             // certificate, so a stack rollback cannot take a load balancer offline.

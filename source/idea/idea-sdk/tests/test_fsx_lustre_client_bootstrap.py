@@ -18,11 +18,21 @@ sleep() { :; }
 nproc() { echo 2; }
 free() { echo 'Mem: 16'; }
 instance_id() { echo i-0; }
-uname() { if [[ "$1" == -r ]]; then echo "$RUNNING_KERNEL"; else echo x86_64; fi; }
+uname() { if [[ "$1" == -r ]]; then echo "$RUNNING_KERNEL"; else echo "${MACHINE:-x86_64}"; fi; }
 rpm() { :; }
-curl() { :; }
+# the FSx .repo file as published: el/<major>/ only, which the script edits to its point release
+curl() {
+  [[ "$1" == *.repo ]] || return 0
+  printf 'baseurl=%s/$basearch/\n' "${1%/fsx-lustre-client.repo}" > "$3"
+}
 sudo() { "$@"; }
-sed() { if [[ "$1" == -i ]]; then :; else command sed "$@"; fi; }
+sed() {
+  if [[ "$1" == -i && "$3" == *aws-fsx.repo ]]; then
+    command sed "$2" "$3" > "$3.new" && mv "$3.new" "$3"
+  elif [[ "$1" != -i ]]; then
+    command sed "$@"
+  fi
+}
 yum() {
   echo "yum $*" >> "$CALLS"
   [[ "$1" != clean && -n "$FAIL_INSTALL" ]] || return 0
@@ -72,7 +82,12 @@ def run_install(tmp_path, template, base_os, running, **environment):
     storage = text.split('# Begin: Mount Shared Storage')[1].split(
         'IDEA_SHARED_MOUNT_DIRS=('
     )[0]
-    for path in ('/var/lib/idea/', '/etc/modprobe.d/', '/root/bootstrap/'):
+    for path in (
+        '/var/lib/idea/',
+        '/etc/modprobe.d/',
+        '/root/bootstrap/',
+        '/etc/yum.repos.d/',
+    ):
         storage = storage.replace(path, f'{tmp_path}/')
     (tmp_path / 'image_checks.sh').write_text(
         f'echo "image_checks $(head -1 {tmp_path}/bake-failed)" >> "$CALLS"\nexit 1\n'
@@ -208,3 +223,73 @@ def test_optional_lustre_failure_preserves_an_earlier_reboot(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert (tmp_path / 'reboot_required.txt').read_text() == 'yes'
+
+
+FSX = 'https://fsx-lustre-client-repo.s3.amazonaws.com'
+
+
+def repository(tmp_path):
+    repo = tmp_path / 'aws-fsx.repo'
+    return repo.read_text().strip() if repo.exists() else ''
+
+
+@pytest.mark.parametrize('machine', ['x86_64', 'aarch64'])
+@pytest.mark.parametrize(
+    'base_os, running, point_release',
+    [
+        # Rocky 9.9 base images boot 741; FSx published el/9.9 for it on 2026-11-13
+        ('rocky9', '5.14.0-741.22.1.el9_9', '9.9'),
+        ('rhel9', '5.14.0-741.22.1.el9_9', '9.9'),
+        # older series keep their own point release
+        ('rocky9', '5.14.0-687.66.1.el9_8', '9.8'),
+        ('rhel9', '5.14.0-570.12.1.el9_6', '9.6'),
+    ],
+)
+def test_el9_installs_the_client_from_its_point_release(
+    tmp_path, machine, base_os, running, point_release
+):
+    code, out, calls, history = run_install(
+        tmp_path,
+        'compute-node-ami-builder/setup.sh.jinja2',
+        base_os,
+        f'{running}.{machine}',
+        MACHINE=machine,
+    )
+    assert code == 0, out
+    assert repository(tmp_path) == f'baseurl={FSX}/el/{point_release}/$basearch/'
+    # the running kernel is supported: no other kernel is installed for the client
+    assert 'yum install -y kernel kernel-devel' not in calls
+    assert 'install -y kmod-lustre-client lustre-client' in calls
+    assert calls.splitlines()[-1] == 'reboot'
+    assert 'FSx for Lustre client installed' in history
+
+
+def test_el10_on_a_series_fsx_has_no_client_for_stops_with_the_lustre_reason(tmp_path):
+    # Rocky 10.3's only kernel, 6.12.0-264: FSx publishes el/10 (10.2) and el/10.1 only
+    code, out, calls, _ = run_install(
+        tmp_path,
+        'compute-node-ami-builder/setup.sh.jinja2',
+        'rocky10',
+        '6.12.0-264.16.1.el10_3.x86_64',
+    )
+    assert code == 1 and 'reboot' not in calls
+    assert 'kmod-lustre-client' not in calls and repository(tmp_path) == ''
+    failed = (tmp_path / 'bake-failed').read_text()
+    assert '6.12.0-264.16.1.el10_3.x86_64' in failed
+    assert '(reason code: lustre-module-missing)' in failed
+
+
+def test_el10_whose_client_cannot_install_stops_with_its_reason(tmp_path):
+    # Rocky 10.2 images once the repository moved to 10.3: the client for 211 needs kernel
+    # modules the repository no longer carries, and dnf refuses the install
+    code, out, calls, _ = run_install(
+        tmp_path,
+        'compute-node-ami-builder/setup.sh.jinja2',
+        'rocky10',
+        '6.12.0-211.26.1.el10_2.x86_64',
+        FAIL_INSTALL='1',
+    )
+    assert code == 1 and 'reboot' not in calls
+    assert repository(tmp_path) == f'baseurl={FSX}/el/10/$basearch/'
+    failed = (tmp_path / 'bake-failed').read_text()
+    assert '(reason code: lustre-client-install-failed)' in failed

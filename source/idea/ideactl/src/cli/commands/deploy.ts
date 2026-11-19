@@ -56,10 +56,14 @@ export function resolveRequestedModules(modules: readonly string[]): {
   return { allModules, moduleIds };
 }
 
+/** A true/false option value; anything unrecognised is refused, so a typo cannot turn a protection off. */
 export function asBoolFlag(value: string | boolean | undefined, defaultValue: boolean): boolean {
   if (value === undefined) return defaultValue;
   if (typeof value === 'boolean') return value;
-  return ['true', 'yes', 'y', '1', 'on'].includes(value.toLowerCase());
+  const normalized = value.trim().toLowerCase();
+  if (['true', 'yes', 'y', '1', 'on'].includes(normalized)) return true;
+  if (['false', 'no', 'n', '0', 'off'].includes(normalized)) return false;
+  throw new InvalidParams(`expected true or false, got: ${JSON.stringify(value)}`);
 }
 
 export async function runDeploy(deps: Deps, modules: readonly string[], options: DeployCommandOptions): Promise<void> {

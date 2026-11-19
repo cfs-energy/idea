@@ -222,9 +222,7 @@ class AuthService {
             username: username,
             new_password: newPassword
         }).then(_ => {
-            this.props.localStorage.removeItem(KEY_CHALLENGE_NAME)
-            this.props.localStorage.removeItem(KEY_CHALLENGE_SESSION)
-            this.props.localStorage.removeItem(KEY_CHALLENGE_PARAMS)
+            this.clearChallengeParams()
             return this.login(username, newPassword)
         })
     }
@@ -326,10 +324,6 @@ class AuthService {
             this.clearReporting()
             throw error
         })
-    }
-
-    debug() {
-        this.props.clients.auth().debug()
     }
 
     isAdmin(): boolean {
@@ -516,21 +510,45 @@ class AuthService {
         })
     }
 
+    // a first-password challenge belongs to the tab that started it: it is kept in session storage, which other tabs
+    // cannot read and which ends with the tab. Earlier versions kept it in local storage, so that copy is removed.
+    private challengeStorage(action: (storage: Storage) => void) {
+        try {
+            action(sessionStorage)
+        } catch {
+            // without session storage the challenge page asks the person to sign in again
+        }
+    }
+
+    private clearChallengeParams() {
+        for (const key of [KEY_CHALLENGE_NAME, KEY_CHALLENGE_SESSION, KEY_CHALLENGE_PARAMS]) {
+            this.props.localStorage.removeItem(key)
+            this.challengeStorage(storage => storage.removeItem(this.props.localStorage.buildKey(key)))
+        }
+    }
+
     private saveChallengeParams(name: string, session: string, params: any) {
-        this.props.localStorage.setItem(KEY_CHALLENGE_NAME, name)
-        this.props.localStorage.setItem(KEY_CHALLENGE_SESSION, session)
-        this.props.localStorage.setItem(KEY_CHALLENGE_PARAMS, JSON.stringify(params))
+        this.clearChallengeParams()
+        this.challengeStorage(storage => {
+            storage.setItem(this.props.localStorage.buildKey(KEY_CHALLENGE_NAME), name)
+            storage.setItem(this.props.localStorage.buildKey(KEY_CHALLENGE_SESSION), session)
+            storage.setItem(this.props.localStorage.buildKey(KEY_CHALLENGE_PARAMS), JSON.stringify(params))
+        })
     }
 
     getChallengeParams(): any | null {
-        let challengeName = this.props.localStorage.getItem(KEY_CHALLENGE_NAME)
+        let challengeName: string | null = null
+        let session: string | null = null
+        let paramsStr: string | null = null
+        this.challengeStorage(storage => {
+            challengeName = storage.getItem(this.props.localStorage.buildKey(KEY_CHALLENGE_NAME))
+            session = storage.getItem(this.props.localStorage.buildKey(KEY_CHALLENGE_SESSION))
+            paramsStr = storage.getItem(this.props.localStorage.buildKey(KEY_CHALLENGE_PARAMS))
+        })
         if (challengeName == null) {
             return null
         }
 
-        let session = this.props.localStorage.getItem(KEY_CHALLENGE_SESSION)
-
-        let paramsStr = this.props.localStorage.getItem(KEY_CHALLENGE_PARAMS)
         let params = null
         if (paramsStr != null) {
             params = JSON.parse(paramsStr)

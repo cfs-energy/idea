@@ -14,6 +14,7 @@ import type {
 import {
     errorMessage,
     wrapCfnHandler,
+    eventForLog,
 } from "../commons/cfn-response.ts";
 
 type ClusterSettings = Record<string, JsonValue>;
@@ -64,7 +65,7 @@ export function createHandler(
 
     return wrapCfnHandler(
         async (event: ClusterSettingsEvent): Promise<void> => {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
 
             const resourceProperties = event.ResourceProperties;
             const oldResourceProperties = event.OldResourceProperties;

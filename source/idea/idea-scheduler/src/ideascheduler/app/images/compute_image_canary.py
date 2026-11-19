@@ -33,11 +33,46 @@ from ideasdk.aws.validation_identity import (
 
 # OpenPBS PBS_MAXQUEUENAME is 15: this prefix plus 12 digest characters.
 VALIDATION_QUEUE_PREFIX = 'iv-'
+# written on every validation profile the canary creates; the sweep reaps only profiles
+# that carry it, so an administrator's profile named iv-... is never deleted (SCH-35)
+VALIDATION_PROFILE_MARKER = (
+    'IDEA image validation queue (created and removed automatically)'
+)
+
+
+def is_validation_profile(profile) -> bool:
+    return (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX) and (
+        profile.description == VALIDATION_PROFILE_MARKER
+    )
+
+
 PIPELINE_SETTINGS = 'virtual-desktop-controller.software_stacks.image_pipeline'
 # PBS keeps a finished job in its queue while it exits and stages out (state E); qdel and
 # queue deletion are refused until it leaves, which takes seconds after the exit status.
 CLEANUP_SECONDS = 180
 EXITING_SECONDS = 60
+# a new user's home is made by the cluster manager's account task shortly after the user
+HOME_SECONDS = 120
+
+
+def wait_for_home(home: Path, timeout_seconds: int = HOME_SECONDS) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        # a hard mount that stops answering would block is_dir() past the deadline
+        remaining = max(deadline - time.monotonic(), 0)
+        if not path_answers(str(home), min(10, remaining) or 0.1):
+            raise exceptions.general_exception(
+                f'The shared home holding {home} stopped answering. Check the shared '
+                f'home file system.'
+            )
+        if home.is_dir():
+            return
+        if time.monotonic() >= deadline:
+            raise exceptions.general_exception(
+                f'The validation user home {home} was not created within '
+                f"{timeout_seconds} seconds. Check that the user's home is created."
+            )
+        time.sleep(3)
 
 
 def canary_script(queue, output, mounts, token):
@@ -299,6 +334,7 @@ class ComputeImageCanary:
         candidate = source.model_copy(deep=True)
         candidate.queue_profile_id = None
         candidate.name = candidate.title = name
+        candidate.description = VALIDATION_PROFILE_MARKER
         candidate.queues = [name]
         candidate.projects = [project]
         candidate.keep_forever = False
@@ -356,6 +392,8 @@ class ComputeImageCanary:
                 f'The shared home {home} did not answer within 60 seconds, so the '
                 'validation job cannot be written. Check the file system that serves it.'
             )
+        # the submit writes into the home and does not create it
+        wait_for_home(home)
         # PBS directive values cannot contain line breaks or whitespace.
         if any(ch.isspace() for ch in str(output)):
             raise exceptions.invalid_params(

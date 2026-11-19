@@ -51,7 +51,7 @@ import {withRouter} from "../../navigation/navigation-utils";
 import {updateJobScriptSelect} from "./pbs-select";
 import {ncpusExceedsCoresMessage} from "./hpc-utils";
 
-import nunjucks from "nunjucks"
+import {renderJobTemplate, replacePlaceholders} from "./job-template"
 
 
 export interface SubmitJobProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
@@ -167,9 +167,6 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
 
             clientSubmissionId: uuid()
         }
-        nunjucks.configure({
-            autoescape: false
-        })
     }
 
     getSchedulerClient(): SchedulerClient {
@@ -229,7 +226,8 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
         }
     }
 
-    loadApplication(application: HpcApplication) {
+    /** A restored project is selected only when the application still offers it; otherwise none is, and submit asks for one. */
+    loadApplication(application: HpcApplication, restoredProject?: string) {
         let projectOptions: any = []
         application.projects?.forEach(project => {
             projectOptions.push({
@@ -245,7 +243,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             selectedApplicationId: null,
             showApplicationSelectModal: false,
             projectOptions: projectOptions,
-            selectedProject: projectOptions[0]
+            selectedProject: restoredProject === undefined
+                ? projectOptions[0]
+                : projectOptions.find((option: SelectProps.Option) => option.value === restoredProject) ?? null
         })
     }
 
@@ -282,7 +282,7 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                 application_ids: [state.applicationId]
             }).then(result => {
                 if (result.applications?.length > 0) {
-                    this.loadApplication(result.applications[0])
+                    this.loadApplication(result.applications[0], Utils.isEmpty(state.project) ? undefined : state.project)
                 }
             }).catch(error => {
                 this.onError(error, 'Failed to load the application')
@@ -313,10 +313,19 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
     }
 
     buildUrlState = () => {
+        // the address, browser history and saved templates never carry a password field's value
+        const passwords = new Set((this.state.application?.form_template?.sections ?? [])
+            .flatMap(section => section.params ?? [])
+            .filter(param => param.param_type === 'password')
+            .map(param => param.name))
+        // the form holds what is typed; the state copy is filled only by a preview or submit
+        const source = this.getJobSubmissionFormValues() ?? this.state.jobSubmissionParameters
+        const params = source == null ? source
+            : Object.fromEntries(Object.entries(source).filter(([name]) => !passwords.has(name)))
         const state = {
             project: this.state.selectedProject?.value,
             applicationId: this.state.application?.application_id,
-            params: this.state.jobSubmissionParameters
+            params: params
         }
         return encodeFileContent(JSON.stringify(state))
     }
@@ -1060,15 +1069,6 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             } else if (hasBudget()) {
                 const budget = this.state.submitJobResult?.budget_usage!
 
-                if ((budget as any).is_missing) {
-                    return <Box color="text-status-error">
-                        <StatusIndicator type="error">
-                            Budget not found: <strong>{budget.budget_name}</strong>.
-                            The configured budget no longer exists in AWS Budgets.
-                        </StatusIndicator>
-                    </Box>
-                }
-
                 if (this.state.submitJobResult?.estimated_bom_cost?.price_unavailable) {
                     return <Box>Budget impact can't be calculated without a price.</Box>
                 }
@@ -1529,21 +1529,9 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
             // ({{ ncpus }} / %ncpus%) is not a parsable PBS directive until the placeholders are gone.
             let jobScript = this.state.application.job_script_template!
             if (this.state.application?.job_script_type && this.state.application?.job_script_type === 'jinja2') {
-                jobScript = nunjucks.renderString(jobScript, values)
+                jobScript = renderJobTemplate(jobScript, values)
             } else {
-                jobScript = jobScript.replaceAll(`%project_name%`, values.project_name)
-                params.forEach((param) => {
-                    if (param.name && Utils.isNotEmpty(param.name)) {
-                        let value = ''
-                        if (param.name in values) {
-                            value = values[param.name]
-                            if (Utils.isEmpty(value)) {
-                                value = ''
-                            }
-                        }
-                        jobScript = jobScript.replaceAll(`%${param.name}%`, value)
-                    }
-                })
+                jobScript = replacePlaceholders(jobScript, values, params.map(param => param.name!).filter(name => Utils.isNotEmpty(name)))
             }
 
             // chunk resources authored in the template (mpiprocs, mem, place, ...) are preserved
@@ -1561,10 +1549,11 @@ class SubmitJob extends Component<SubmitJobProps, SubmitJobState> {
                     }))
                     return
                 }
-                this.updateUrlState()
                 this.setState({
                     jobScript: jobScript
                 }, () => {
+                    // after the values from generateJobScript are in state, so the address carries them
+                    this.updateUrlState()
                     this.getSchedulerClient().submitJob({
                         project: this.state.selectedProject?.value,
                         dry_run: dryRun,

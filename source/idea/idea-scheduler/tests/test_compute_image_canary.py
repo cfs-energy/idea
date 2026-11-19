@@ -27,6 +27,14 @@ from ideascheduler.app.api.scheduler_api import SchedulerAPI
 from test_compute_image_pipeline import service, row
 
 
+@pytest.fixture(autouse=True)
+def home_present(monkeypatch):
+    """the canary paths here use a home that is not on this machine"""
+    real = module.wait_for_home
+    monkeypatch.setattr(module, 'wait_for_home', lambda home: None)
+    return real
+
+
 @pytest.mark.parametrize('maintenance', [False, True])
 @pytest.mark.parametrize(
     'failure',
@@ -682,3 +690,48 @@ def test_a_node_that_never_registered_is_found_by_its_job_tag_and_read(monkeypat
     filters = ec2.describe_instances.call_args.kwargs['Filters']
     assert {'Name': 'tag:idea:JobId', 'Values': ['job-7']} in filters
     assert {'Name': 'tag:idea:ClusterName', 'Values': ['c']} in filters
+
+
+def test_the_canary_waits_for_a_new_users_home_and_then_goes_on(
+    home_present, monkeypatch, tmp_path
+):
+    home = tmp_path / 'home' / 'image-test'
+    waits = []
+
+    def sleep(_seconds):
+        waits.append(_seconds)
+        home.mkdir(parents=True)
+
+    monkeypatch.setattr(module.time, 'sleep', sleep)
+    home_present(home)
+    assert len(waits) == 1
+
+
+def test_the_canary_fails_plainly_when_the_home_is_never_created(
+    home_present, monkeypatch, tmp_path
+):
+    clock = iter(range(0, 10000, 10))
+    monkeypatch.setattr(module.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(module.time, 'sleep', lambda _s: None)
+    with pytest.raises(exceptions.SocaException) as raised:
+        home_present(tmp_path / 'missing', timeout_seconds=30)
+    assert 'was not created within 30 seconds' in raised.value.message
+
+
+def test_waiting_for_the_home_stops_when_the_mount_stops_answering(
+    monkeypatch, tmp_path, home_present
+):
+    # R4-35: is_dir() on a hard mount that stopped answering blocked past the deadline
+    answers = iter([True, False])
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: next(answers))
+    monkeypatch.setattr(module.time, 'sleep', lambda _s: None)
+    with pytest.raises(exceptions.SocaException) as raised:
+        home_present(tmp_path / 'missing-home', timeout_seconds=120)
+    assert 'stopped answering' in raised.value.message
+
+
+def test_waiting_for_the_home_returns_once_it_exists(
+    monkeypatch, tmp_path, home_present
+):
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
+    home_present(tmp_path)

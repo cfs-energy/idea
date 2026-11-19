@@ -39,6 +39,7 @@ from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     BASE_STACK_MIN_STORAGE_GB,
 )
 from typing import Callable, List, Optional, Dict
+import shutil
 import time
 import os.path
 from pathlib import Path
@@ -367,23 +368,34 @@ class DcvHostImageBuilder:
             enable_metrics=False,
         )
 
-        bootstrap_package_archive_file = BootstrapPackageBuilder(
-            bootstrap_context=bootstrap_context,
-            source_directory=self.get_bootstrap_dir(),
-            target_package_basename=f'dcv-host-ami-builder-{self.get_ami_full_name()}',
-            components=(
-                [WINDOWS_BUILDER_COMPONENT] if windows else ['dcv-host-ami-builder']
-            ),
-            base_os=self.base_os,
-            tmp_dir=bootstrap_tmp_dir,
-            force_build=self.overwrite,
-        ).build()
+        target_package_basename = f'dcv-host-ami-builder-{self.get_ami_full_name()}'
+        target_dir = os.path.join(bootstrap_tmp_dir, target_package_basename)
+        reused = os.path.isdir(target_dir) and not self.overwrite
+        try:
+            bootstrap_package_archive_file = BootstrapPackageBuilder(
+                bootstrap_context=bootstrap_context,
+                source_directory=self.get_bootstrap_dir(),
+                target_package_basename=target_package_basename,
+                components=(
+                    [WINDOWS_BUILDER_COMPONENT] if windows else ['dcv-host-ami-builder']
+                ),
+                base_os=self.base_os,
+                tmp_dir=bootstrap_tmp_dir,
+                force_build=self.overwrite,
+            ).build()
+        except Exception:
+            # a partial render would be reused as is by the next build without --overwrite;
+            # a directory this build only reused is the operator's and stays
+            if not reused:
+                shutil.rmtree(target_dir, ignore_errors=True)
+            raise
         self.report.info('built bootstrap package archive:')
         print(bootstrap_package_archive_file)
 
         bootstrap_package_key = f'idea/{self.context.module_id()}/bootstrap/{os.path.basename(bootstrap_package_archive_file)}'
         bootstrap_package_uri = f's3://{cluster_s3_bucket}/{bootstrap_package_key}'
         self.report.info(f'uploading bootstrap package: {bootstrap_package_uri}')
+        # the rendered directory stays: without --overwrite a later build reuses it as is
         self.context.aws().s3().upload_file(
             Bucket=cluster_s3_bucket,
             Filename=bootstrap_package_archive_file,

@@ -45,6 +45,36 @@ function Write-ToLog {
     [System.IO.File]::AppendAllText($LogFile, "$FormattedDate $LevelText $Message`r`n")
 }
 
+function Protect-IdeaDirectory {
+    # A folder made under the drive root inherits Modify for every signed-in account, and one
+    # under ProgramData or an unused profile inherits read for Users. Bootstrap folders hold
+    # logs, installers and scripts that run as SYSTEM: SYSTEM and Administrators get full
+    # control, nothing is inherited, and -UsersRead adds read and execute for Users.
+    Param(
+        [Parameter(Mandatory=$true)] [String] $Path,
+        [switch] $UsersRead
+    )
+    $null = New-Item -Path $Path -ItemType Directory -Force
+    $Grants = [ordered]@{ 'S-1-5-18' = 'FullControl'; 'S-1-5-32-544' = 'FullControl' }
+    if ($UsersRead) { $Grants['S-1-5-32-545'] = 'ReadAndExecute' }
+    $Acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $Acl.SetAccessRuleProtection($true, $false)
+    foreach ($Sid in $Grants.Keys) {
+        $Acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier $Sid), $Grants[$Sid],
+            'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $Acl
+}
+
+function Protect-IdeaBootstrapDirectories {
+    # before the first log line: the bootstrap log, transcripts and the extracted package are
+    # for SYSTEM and Administrators; C:\IDEA also holds the logon script the owner runs
+    Protect-IdeaDirectory -Path ('{0}\ProgramData\Amazon\EC2-Windows\Launch\Log' -f $env:SystemDrive)
+    Protect-IdeaDirectory -Path ('{0}\Users\Administrator\IDEA\bootstrap' -f $env:SystemDrive)
+    Protect-IdeaDirectory -Path ('{0}\IDEA' -f $env:SystemDrive) -UsersRead
+}
+
 function Wait-ForService {
     Param (
         [ValidateNotNullOrEmpty()]
@@ -150,13 +180,14 @@ function Save-Installer {
     $DCVServiceStatus = Get-Service dcvserver -ErrorAction SilentlyContinue -Verbose
 
     if($DCVServiceStatus.Status){
-      if($DCVServiceStatus.Status -eq 'Running'){
-        Stop-Service dcvserver
-      }
       $DCVInstalled = $true
     }
 
     if(!$DCVInstalled -or $Update){
+      # stopped only when it is about to be replaced: a repeated run that installs nothing keeps it running
+      if($DCVServiceStatus.Status -eq 'Running'){
+        Stop-Service dcvserver
+      }
       # Information on NICE Virtual Display Driver: https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-winprereq.html#setting-up-installing-general
       # Every supported base_os (2019, 2022, 2025) ships the Indirect Display Driver with
       # DCV 2023.1+, so the Virtual Display Driver is never installed: it conflicts with GPU drivers.
@@ -181,13 +212,14 @@ function Save-Installer {
     $DCVSMServiceStatus = Get-Service DcvSessionManagerAgentService -ErrorAction SilentlyContinue -Verbose
 
     if($DCVSMServiceStatus.Status){
-      if($DCVSMServiceStatus.Status -eq 'Running'){
-        Stop-Service DcvSessionManagerAgentService
-      }
       $DCVSMInstalled = $true
     }
 
     if(!$DCVSMInstalled -or $Update){
+      # stopped only when it is about to be replaced: a repeated run that installs nothing keeps it running
+      if($DCVSMServiceStatus.Status -eq 'Running'){
+        Stop-Service DcvSessionManagerAgentService
+      }
       # Standard distribution link for NICE DCV Session Manager Agent
       Save-Installer -Uri https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-session-manager-agent-x64-Release.msi -OutFile C:\Windows\Temp\DCVSMAgent.msi -Publisher Amazon
       $SMAgentInstall = Start-Process "msiexec.exe" -ArgumentList "/I C:\Windows\Temp\DCVSMAgent.msi /quiet /norestart " -Wait -PassThru
@@ -282,6 +314,7 @@ function Install-WindowsEC2Instance {
       [switch]$Update,
       [string]$ModuleVersion = (& "$PSScriptRoot\ModuleVersion.ps1")
     )
+    Protect-IdeaBootstrapDirectories
     # Configuration always runs; only a matching release may skip installation.
     $BakedRelease = 'C:\ProgramData\IDEA\baked-release'
     if (-not $Update -and $ModuleVersion -and (Test-Path $BakedRelease) -and

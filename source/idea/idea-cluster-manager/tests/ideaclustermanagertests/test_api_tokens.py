@@ -1,3 +1,5 @@
+import time
+import threading
 import pytest
 
 from ideadatamodel import exceptions
@@ -10,7 +12,7 @@ def env():
     return api_token_environment()
 
 
-def invoke(env, method, payload=None, signed_in=False):
+def invoke(env, method, payload=None, signed_in=False, issued_at=None, auth_time=None):
     if not signed_in:
         invocation = api_token_invocation(env, f'Auth.{method}', payload)
         AuthAPI(env.context).invoke(invocation)
@@ -19,6 +21,8 @@ def invoke(env, method, payload=None, signed_in=False):
     decode = env.service.decode_token
     env.service.decode_token = lambda token, verify_exp=True: {
         'username': 'user-a',
+        'iat': int(time.time()) if issued_at is None else issued_at,
+        **({} if auth_time is None else {'auth_time': auth_time}),
         'cognito:groups': [
             group['GroupName'] for group in env.groups.return_value['Groups']
         ],
@@ -164,12 +168,18 @@ def test_account_security_actions_revoke_all_tokens(env, path):
     account.task_manager = Mock()
     account.evdi_client = Mock()
     account.token_service = env.service
+    account._password_refusals = {}
+    account._password_refusals_lock = threading.Lock()
     env.table.scan.side_effect = lambda **kwargs: {
         'Items': [row for row in env.rows.values() if row['username'] == 'user-a']
     }
     if path == 'global_sign_out':
         env.context.accounts = account
-        invoke(env, 'GlobalSignOut')
+        # an api token cannot end its owner's sessions and revoke its siblings
+        with pytest.raises(exceptions.SocaException):
+            invoke(env, 'GlobalSignOut')
+        assert env.created.token_id in env.rows
+        invoke(env, 'GlobalSignOut', signed_in=True)
     else:
         getattr(account, path)('user-a')
     assert set(env.rows) == {other.token_id}
@@ -237,3 +247,95 @@ def test_privileged_membership_requires_administrator(
             api.invoke(invocation)
         env.context.accounts.add_users_to_group.assert_not_called()
         env.context.accounts.remove_users_from_group.assert_not_called()
+
+
+def test_a_token_gets_its_own_users_ssh_private_key(env, monkeypatch):
+    # tokens act as the account through the api; plugins fetch the key this way
+    class Home:
+        def __init__(self, context, user):
+            assert user is env.context.accounts.get_user.return_value
+
+        def get_key_name(self, key_format):
+            return 'user-a.pem'
+
+        def get_key_material(self, key_format, platform):
+            return 'key'
+
+    monkeypatch.setattr('ideaclustermanager.app.api.auth_api.UserHomeDirectory', Home)
+    payload = {'key_format': 'pem', 'platform': 'linux'}
+    assert invoke(env, 'GetUserPrivateKey', payload)['name'] == 'user-a.pem'
+    env.context.accounts.get_user.assert_called_with('user-a')
+
+
+@pytest.mark.parametrize(
+    'record',
+    [
+        # the account was created again after this session was issued
+        {'created_on': 2_000_000_000_000},
+        # signed out everywhere, or its password reset, after this session was issued
+        {'created_on': 1000, 'sessions_revoked_on': 2_000_000_000_000},
+    ],
+)
+def test_a_session_from_before_its_tokens_were_ended_mints_none(env, record):
+    env.users.get_item.return_value = {
+        'Item': {'username': 'user-a', 'enabled': True, **record}
+    }
+    before = len(env.rows)
+    with pytest.raises(exceptions.SocaException) as refused:
+        invoke(
+            env,
+            'CreateApiToken',
+            {'name': 'new', 'expires_in_days': 365},
+            signed_in=True,
+            issued_at=1_900_000_000,
+        )
+    assert refused.value.error_code == 'UNAUTHORIZED_ACCESS'
+    assert len(env.rows) == before
+
+
+def test_global_sign_out_and_reset_record_when_sessions_ended(context_free_accounts):
+    accounts, written = context_free_accounts
+    accounts.global_sign_out('User-A')
+    accounts.reset_password('user-a')
+    assert [w['username'] for w in written] == ['user-a', 'user-a']
+    accounts.user_pool.admin_global_sign_out.assert_called_once_with(username='user-a')
+    assert all(w['sessions_revoked_on'] > 0 for w in written)
+
+
+@pytest.fixture
+def context_free_accounts():
+    from unittest.mock import Mock
+    from ideaclustermanager.app.accounts.accounts_service import AccountsService
+
+    accounts = object.__new__(AccountsService)
+    accounts.user_dao = Mock()
+    accounts.user_dao.get_user.return_value = {'username': 'user-a'}
+    written = []
+    accounts.user_dao.update_user.side_effect = written.append
+    accounts.user_pool = Mock()
+    accounts.token_service = Mock()
+    accounts.revoke_user_api_tokens = Mock()
+    accounts._password_refusals = {}
+    accounts._password_refusals_lock = threading.Lock()
+    return accounts, written
+
+
+def test_a_refreshed_session_from_before_a_reset_mints_none(env):
+    # refreshed after the reset, so its iat is late; its sign-in was before the reset
+    env.users.get_item.return_value = {
+        'Item': {
+            'username': 'user-a',
+            'enabled': True,
+            'created_on': 1000,
+            'sessions_revoked_on': 2_000_000_000_000,
+        }
+    }
+    with pytest.raises(exceptions.SocaException):
+        invoke(
+            env,
+            'CreateApiToken',
+            {'name': 'new', 'expires_in_days': 365},
+            signed_in=True,
+            issued_at=2_100_000_000,
+            auth_time=1_900_000_000,
+        )

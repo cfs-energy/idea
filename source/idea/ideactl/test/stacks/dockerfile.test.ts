@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const DOCKERFILE = new URL(
   '../../../../../deployment/ecr/idea-control-plane/Dockerfile',
@@ -21,7 +22,8 @@ test('OpenPBS is compiled from pinned source inside the control-plane build', ()
   assert.match(stage, /python3-devel/);
   assert.match(stage, /make install/);
   assert.match(stage, /pbs_postinstall/);
-  assert.match(stage, /chmod 4755 \/opt\/pbs\/sbin\/pbs_iff \/opt\/pbs\/sbin\/pbs_rcp/);
+  assert.match(stage, /chmod 4755 \/opt\/pbs\/sbin\/pbs_iff;/);
+  assert.match(stage, /chmod 0755 \/opt\/pbs\/sbin\/pbs_rcp/);
   assert.doesNotMatch(stage, /IDEA_VERSION|^COPY |^ADD /m, 'release inputs must not invalidate the OpenPBS cache');
   assert.match(text, /^COPY --from=pbs \/opt\/pbs \/opt\/pbs$/m);
 });
@@ -42,6 +44,44 @@ test('the release bundle is mounted and removed in the install layer', () => {
   const install = text.split('target=/tmp/release.tar.gz')[1]?.split('\n\n')[0] ?? '';
   assert.match(install, /tar -xzf \/tmp\/release\.tar\.gz -C \/tmp\/release/);
   assert.match(install, /rm -rf \/tmp\/release \/tmp\/idea/);
+});
+
+test('module archives resolve nothing outside the lock and the build checks what is installed', () => {
+  const install = text.split('target=/tmp/release.tar.gz')[1]?.split('\n\n')[0] ?? '';
+  const pips = install.match(/python3\.13 -m pip install [^;]+/g) ?? [];
+  assert.equal(pips.length, 3);
+  // the lock's own setuptools, hashed, before anything is built
+  assert.match(pips[0]!, /--require-hashes --no-deps -r \/tmp\/setuptools\.txt$/);
+  // source-only pins and the module archives build with it, never in a fetched build environment
+  assert.match(pips[1]!, /--require-hashes --no-deps --no-build-isolation --check-build-dependencies -r "\$\{PKG\}\/requirements\.txt"$/);
+  assert.match(pips[2]!, /--no-deps --no-build-isolation --check-build-dependencies "\$\{PKG\}"\/\*-lib\.tar\.gz$/);
+  assert.ok(install.indexOf("grep -q -- '--hash=sha256:' /tmp/setuptools.txt") < install.indexOf(pips[0]!));
+  assert.ok(install.indexOf('python3.13 -m pip check') > install.lastIndexOf('pip install'));
+});
+
+test('the setuptools pin is taken from the lock with every hash line', () => {
+  const command = text.match(/awk '(\/\^setuptools==\/[^']+)'/)?.[1];
+  assert.ok(command, 'the extraction step');
+  const lock = 'aiofiles==25.1.0 \\\n    --hash=sha256:aa\n    # via sanic\nsetuptools==84.2.1 \\\n    --hash=sha256:bb \\\n    --hash=sha256:cc\n    # via -r runtime.in\nsix==1.17.0 \\\n    --hash=sha256:dd\n';
+  const out = execFileSync('awk', [command], { input: lock, encoding: 'utf8' });
+  assert.equal(out, 'setuptools==84.2.1 \\\n    --hash=sha256:bb \\\n    --hash=sha256:cc\n');
+});
+
+test('only pbs_iff and sudo keep a set-id bit, cleared after the last package change', () => {
+  const layers = text.split('\nRUN ');
+  const layer = [...layers].reverse().find((each) => /\bdnf (install|upgrade)\b/.test(each))!;
+  const strip = layer.indexOf('/opt/idea/roles/setid_strip.sh --build /;');
+  const upgrade = layer.lastIndexOf('dnf upgrade');
+  assert.ok(strip >= 0 && upgrade >= 0);
+  assert.ok(strip > upgrade, 'the strip must follow the last upgrade');
+  const roles = text.indexOf('COPY deployment/ecr/idea-control-plane/roles /opt/idea/roles');
+  assert.ok(roles >= 0 && roles < text.indexOf(layer), 'the script is in the image before the layer runs it');
+  assert.ok(layer.includes('test -u /usr/bin/sudo') && layer.includes('test -u /opt/pbs/sbin/pbs_iff'));
+  assert.match(text, /^\s+glibc-langpack-en [^\n]*\bfindutils\b/m);
+});
+
+test('the image has the service account the scheduler runs license checks as', () => {
+  assert.match(text, /useradd --system --no-create-home --shell \/sbin\/nologin ideaserviceaccount/);
 });
 
 test('base images and both Node archives are integrity pinned', () => {

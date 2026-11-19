@@ -17,6 +17,10 @@ from typing import Callable, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
+from ideadatamodel import constants
+from ideavirtualdesktopcontroller.app.clients.dcv_broker_client.dcv_broker_client_utils import (
+    DCVBrokerClientUtils,
+)
 from ideadatamodel import (
     ImageBuildRecord,
     ImageCheck,
@@ -38,7 +42,6 @@ from ideasdk.aws.validation_identity import (
     invoke_cluster_manager,
 )
 from ideasdk.utils import Utils
-from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     BOOTSTRAP_LOG_STREAM,
     BOOTSTRAP_STATUS_TAG,
@@ -354,7 +357,8 @@ def windows_share_probe() -> str:
             r'$parts = $probe.TrimEnd("\").Split("\");',
             r'if ($parts.Count -eq 4) {',
             r'$server = $parts[2]; $share = $parts[3];',
-            r'$shares = (cmd /c "net view \\$server /all 2>&1");',
+            # one string per output line, as the share match below reads them
+            r'$shares = @(& net.exe view "\\$server" /all 2>&1 | ForEach-Object { "$_" });',
             r'if ($LASTEXITCODE -ne 0) { if ($perUser) { Check $n $true "$label not probed (refused to SYSTEM)"; return }; Check $n $false "$label refused to SYSTEM, and the shares on $server could not be listed to show it exists: $(($shares | Out-String).Trim())"; return };',
             r'$found = $shares | Where-Object { $_ -match ("^" + [regex]::Escape($share) + "(\s{2,}|\s*$)") };',
             r'if ($found) { Check $n $true "$label reachable; the share exists, listing refused to SYSTEM" }',
@@ -369,19 +373,32 @@ def windows_share_probe() -> str:
 
 
 def windows_host_script(
-    dcv_session_id: str, mounts: List[Tuple[str, str]], variant: str
+    dcv_session_id: str,
+    mounts: List[Tuple[str, str]],
+    variant: str,
+    user: str = '',
+    active_directory: bool = True,
 ) -> str:
-    def ps(value: str) -> str:
-        return "'" + value.replace("'", "''") + "'"
+    # the same literal the resume commands use: typographic quotes end a string too
+    ps = DCVBrokerClientUtils._powershell_literal
 
     lines = [
         'function Check($n, $ok, $d) { $s = if ($ok) { "ok" } else { "fail" }; Write-Output "CHECK|$n|$s|$d" }',
         f'$sid = {ps(dcv_session_id)}',
         "$out = (& 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv.exe' list-sessions 2>&1 | Out-String)",
         'Check "dcv_session" ($out -match [regex]::Escape($sid)) "dcv list-sessions: $($out.Trim())"',
-        'try { $sc = Test-ComputerSecureChannel; Check "directory_user" $sc "domain secure channel: $sc" }'
-        ' catch { Check "directory_user" $false "Test-ComputerSecureChannel failed: $($_.Exception.Message)" }',
     ]
+    if active_directory:
+        lines.append(
+            'try { $sc = Test-ComputerSecureChannel; Check "directory_user" $sc "domain secure channel: $sc" }'
+            ' catch { Check "directory_user" $false "Test-ComputerSecureChannel failed: $($_.Exception.Message)" }'
+        )
+    else:
+        # a host outside a domain has the owner as a local account
+        lines.append(
+            f'$u = Get-LocalUser -Name {ps(user)} -ErrorAction SilentlyContinue; '
+            'Check "directory_user" ([bool]($u -and $u.Enabled)) "local user: $(if ($u) { "enabled=$($u.Enabled)" } else { "missing" })"'
+        )
     lines.append(windows_share_probe())
     for name, path in mounts:
         check = ps('filesystem:' + name)
@@ -689,7 +706,19 @@ class ImageTestLauncher:
         checks = [self._bootstrap_tag(session), self._connection(session)]
         mounts = shared_filesystems(self.context.config(), windows)
         script = (
-            windows_host_script(session.dcv_session_id, mounts, variant)
+            windows_host_script(
+                session.dcv_session_id,
+                mounts,
+                variant,
+                user=settings.validation_user,
+                active_directory=self.context.config().get_string(
+                    'directoryservice.provider', required=True
+                )
+                in {
+                    constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY,
+                    constants.DIRECTORYSERVICE_AWS_MANAGED_ACTIVE_DIRECTORY,
+                },
+            )
             if windows
             else linux_host_script(
                 session.dcv_session_id, settings.validation_user, mounts, variant
@@ -876,17 +905,7 @@ class ImageTestLauncher:
     # cleanup
 
     def _validation_sessions(self, settings: ImagePipelineSettings) -> List:
-        from boto3.dynamodb.conditions import Key
-
-        items = self.api.session_db._table.query(
-            KeyConditionExpression=Key(sessions_constants.USER_SESSION_DB_HASH_KEY).eq(
-                settings.validation_user
-            )
-        ).get('Items', [])
-        return [
-            self.api.session_db.convert_db_dict_to_session_object(item)
-            for item in items
-        ]
+        return self.api.session_db.list_for_owner(settings.validation_user)
 
     def discard(self, record, settings: ImagePipelineSettings) -> List[str]:
         """
@@ -915,6 +934,9 @@ class ImageTestLauncher:
         cutoff = datetime.now(tz=timezone.utc) - older_than
         reaped = []
         for session in self._validation_sessions(settings):
+            # only test launches, even if the validation account owns other desktops
+            if not (session.name or '').startswith(VALIDATION_NAME_PREFIX):
+                continue
             created = session.created_on
             if created is not None and created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)

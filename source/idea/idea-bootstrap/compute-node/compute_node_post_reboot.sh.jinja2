@@ -6,6 +6,10 @@ set -x
 set -a
 source /etc/environment
 set +a
+# started by cron after a reboot: log where the first run logged
+if [[ "${1:-}" == crontab ]]; then
+  exec >> "${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log" 2>&1
+fi
 if [[ -f /etc/profile.d/proxy.sh ]]; then
     source /etc/profile.d/proxy.sh
 fi
@@ -25,11 +29,65 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
 
 mount -a
 
-MOUNT_DIRS=$(mount | grep lustre | awk '{print $3}')
-
-for dir in $MOUNT_DIRS; do
-    chmod 777 "$dir"
+{% if context.vars.job.params.fsx_lustre.enabled %}
+{% set fsx_existing = context.vars.job.params.fsx_lustre.existing_fsx %}
+{% set fsx_check = 'Existing FSx Check' if fsx_existing else 'New FSx Check' %}
+# Begin: {{ fsx_check }}
+# A Lustre client installed on this pass may need the reboot below first: the check then runs
+# on the pass after it, the one that starts the scheduler.
+if [[ "$(cat /root/bootstrap/reboot_required.txt 2>/dev/null)" != "yes" ]]; then
+# The job (or its queue's default) asked for an FSx for Lustre file system, existing or created
+# for it: without it the job must not run here on the node's own disk. A file system can be briefly unreachable,
+# so the mount is tried 6 times 30 s apart (about 3 minutes in all) before the node fails.
+EXISTING_FSX='{{ (fsx_existing if fsx_existing else 'created for this job') | default('', true) | string | replace("'", "'\\''") }}'
+EXISTING_FSX_MOUNT='{{ context.config.get_string('scheduler.scratch_storage.fsx_lustre.mount_point', '/fsx') | default('', true) | string | replace("'", "'\\''") }}'
+EXISTING_FSX_ERROR=""
+for EXISTING_FSX_ATTEMPT in 1 2 3 4 5 6; do
+  findmnt -rn -t lustre --mountpoint "${EXISTING_FSX_MOUNT}" > /dev/null 2>&1 && break
+  EXISTING_FSX_ERROR=$(mount "${EXISTING_FSX_MOUNT}" 2>&1) && findmnt -rn -t lustre --mountpoint "${EXISTING_FSX_MOUNT}" > /dev/null 2>&1 && break
+  log_warning "(${EXISTING_FSX_ATTEMPT}/6) FSx for Lustre ${EXISTING_FSX} is not mounted at ${EXISTING_FSX_MOUNT}: ${EXISTING_FSX_ERROR:-not mounted}"
+  [[ ${EXISTING_FSX_ATTEMPT} -eq 6 ]] || sleep 30
 done
+if ! findmnt -rn -t lustre --mountpoint "${EXISTING_FSX_MOUNT}" > /dev/null 2>&1; then
+  fail_bootstrap {{ 'existing-fsx-unavailable' if fsx_existing else 'scratch-unavailable' }} "FSx for Lustre ${EXISTING_FSX} did not mount at ${EXISTING_FSX_MOUNT} after 6 attempts: ${EXISTING_FSX_ERROR:-not mounted}"
+fi
+fi
+# End: {{ fsx_check }}
+{% endif %}
+
+# Begin: Scratch Permissions
+# the job's own scratch mount is shared by its users: world-writable with the sticky bit, so
+# no user can rename or remove another's files. A shared file system keeps its owner's mode;
+# one left world-writable gains only the sticky bit. Nothing changes a mode before the mount.
+{% set job_params = context.vars.job.params %}
+{% if job_params.fsx_lustre.enabled %}
+JOB_SCRATCH_MOUNT='{{ ('' if job_params.fsx_lustre.existing_fsx else context.config.get_string('scheduler.scratch_storage.fsx_lustre.mount_point', '/fsx')) | replace("'", "'\\''") }}'
+{% elif job_params.scratch_storage_size.value > 0 %}
+JOB_SCRATCH_MOUNT='{{ context.config.get_string('scheduler.scratch_storage.ebs.mount_point', '/scratch') | replace("'", "'\\''") }}'
+{% else %}
+JOB_SCRATCH_MOUNT='{{ context.config.get_string('scheduler.scratch_storage.instance_store.mount_point', '/scratch') | replace("'", "'\\''") }}'
+{% endif %}
+# Only a mount of the source this job provisioned (scratch_storage records it) is opened up:
+# a shared file system that happens to be mounted at the scratch path keeps its mode. Lustre
+# shows its server by address in the mount table and by name in fstab, so for Lustre the
+# file system part after "@tcp:" is compared.
+function job_scratch_is_mounted () {
+  [[ -n "${1}" && -n "${2}" && "${2##*@tcp:}" == "${1##*@tcp:}" ]]
+}
+JOB_SCRATCH_SOURCE=$(cat "${BOOTSTRAP_DIR}/job_scratch_source" 2>/dev/null)
+MOUNTED_SCRATCH_SOURCE=$(findmnt -n -o SOURCE --mountpoint "${JOB_SCRATCH_MOUNT:-/nonexistent}" 2>/dev/null | tail -n 1)
+JOB_SCRATCH_OPENED=no
+if [[ -n "${JOB_SCRATCH_MOUNT}" ]] && job_scratch_is_mounted "${JOB_SCRATCH_SOURCE}" "${MOUNTED_SCRATCH_SOURCE}"; then
+    chmod 1777 "${JOB_SCRATCH_MOUNT}"
+    JOB_SCRATCH_OPENED=yes
+elif [[ -n "${JOB_SCRATCH_MOUNT}" ]]; then
+    echo "scratch permissions: ${JOB_SCRATCH_MOUNT} is not the scratch this job provisioned (${JOB_SCRATCH_SOURCE:-none}, mounted ${MOUNTED_SCRATCH_SOURCE:-nothing}); mode left as is"
+fi
+for dir in $(mount -t lustre | awk '{print $3}'); do
+    # only the job's own scratch, once identified above, is exempt from the sticky-bit pass
+    [[ "${JOB_SCRATCH_OPENED}" == yes && "${dir}" == "${JOB_SCRATCH_MOUNT}" ]] || find "${dir}" -maxdepth 0 -perm -0002 -exec chmod +t {} +
+done
+# End: Scratch Permissions
 
 {% if context.vars.job.params.enable_efa_support %}
   {% include 'compute-node/_templates/efa.jinja2' %}
@@ -45,7 +103,9 @@ done
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   log_info "reboot required. compute_node_post_reboot.sh will be executed after reboot ..."
-  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log 2>&1") | crontab -
+  # the log directory is the job's value: the script redirects to it itself, so cron's shell
+  # never reads it as part of a command line
+  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh crontab") | crontab -
   reboot_after_cloud_init
   exit 0
 else
@@ -53,10 +113,10 @@ else
   ensure_boot_kernel_bootable
   {% include 'compute-node/_templates/configure_hyperthreading.jinja2' %}
 
-  if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh ]]; then
-    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/userdata_customizations.log 2>&1 || log_warning "userdata customizations failed; continuing host bootstrap"
-  else
-    log_info "no userdata customizations"
+  if prepare_site_hook "${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/compute_node/userdata_customizations.sh" \
+      '{{ context.config.get_string('scheduler.compute_node_site_hook_sha256', default='') | default('', true) | string | trim | replace("'", "'\\''") }}' '{{ context.module_id | replace("'", "'\\''") }}.compute_node_site_hook_sha256'; then
+    /bin/bash "${SITE_HOOK_RUN}" >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/userdata_customizations.log 2>&1 || log_warning "userdata customizations failed; continuing host bootstrap"
+    finish_site_hook
   fi
 
   {% include 'compute-node/_templates/scheduler_start.jinja2' %}

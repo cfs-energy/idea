@@ -388,9 +388,9 @@ function getters(values: UserValues, options: BuildContextOptions) {
       return value as string;
     },
 
-    storageAppsProvider: () => getString('storage_apps_provider', values, 'efs') as string,
+    storageAppsProvider: () => sharedStorageProvider('apps', getString('storage_apps_provider', values, 'efs') as string),
     appsMountDir: () => getString('apps_mount_dir', values, '/apps') as string,
-    storageDataProvider: () => getString('storage_data_provider', values, 'efs') as string,
+    storageDataProvider: () => sharedStorageProvider('data', getString('storage_data_provider', values, 'efs') as string),
     dataMountDir: () => getString('data_mount_dir', values, '/data') as string,
     prefixListIds: () => getList('prefix_list_ids', values, []) as unknown[],
     clientIp: () => getIpv4List('client_ip', values),
@@ -705,6 +705,27 @@ function getters(values: UserValues, options: BuildContextOptions) {
     },
   };
   return g;
+}
+
+/** The providers config generation renders for the cluster's apps and data storage. */
+export const SHARED_STORAGE_PROVIDERS = ['efs'] as const;
+
+/**
+ * Refuses FSx for Lustre for the apps or data storage: the control plane's container hosts mount
+ * those two as NFS, and a Lustre share there leaves the install half provisioned. Lustre stays
+ * available for job scratch.
+ */
+export function refuseLustreSharedStorage(name: 'apps' | 'data', provider: string | undefined): void {
+  if (provider !== 'fsx_lustre') return;
+  throw new InvalidParams(
+    `FSx for Lustre is not supported for the ${name} storage: use ${SHARED_STORAGE_PROVIDERS.join(', ')}. ` +
+      'FSx for Lustre remains available for job scratch storage.',
+  );
+}
+
+function sharedStorageProvider(name: 'apps' | 'data', provider: string): string {
+  refuseLustreSharedStorage(name, provider);
+  return provider;
 }
 
 /**

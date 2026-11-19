@@ -10,6 +10,7 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils imp
     BOOTSTRAP_REFRESH_LINUX_BASE_OS,
 )
 from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_utils import (
+    BOOTSTRAP_REFRESH_PRELUDE,
     BOOTSTRAP_REFRESH_VERSION,
     BOOTSTRAP_REFRESH_TEMPLATES,
     bootstrap_refresh_variables,
@@ -69,13 +70,14 @@ def test_command_renders_shared_template_and_records_completion_metadata(
     command_id = refresh.command_utils.submit_ssm_command_to_refresh_bootstrap(session)
     request = refresh.ssm.requests[0]
     payload = request['Parameters']['commands'][0]
-    variables = bootstrap_refresh_variables(refresh.context.config())
+    variables = {
+        **bootstrap_refresh_variables(refresh.context.config()),
+        'ssh_allowed_users': [session.owner],
+    }
     assert payload == render_bootstrap_refresh(
         refresh.context.get_bootstrap_dir(), base_os, variables
     )
-    assert payload.startswith(
-        'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n# Begin: Post-Quantum'
-    )
+    assert payload.startswith(BOOTSTRAP_REFRESH_PRELUDE + '# Begin: Post-Quantum')
     for template in BOOTSTRAP_REFRESH_TEMPLATES:
         assert Path(refresh.context.get_bootstrap_dir(), template).is_file()
     assert '# Begin: Terminal Trust' in payload

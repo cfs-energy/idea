@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import SubmitJob, {NoApplications} from './submit-job';
 import { HpcApplication } from '../../client/data-model';
 import IdeaException from '../../common/exceptions';
@@ -56,6 +56,96 @@ function renderSubmitJob(props: any = {}, state = btoa(JSON.stringify({ applicat
 describe('submit job page', () => {
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('keeps a password field out of the address it saves', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        const withPassword = {...APPLICATION, form_template: {sections: [{name: 'job-params', params: [
+            ...APPLICATION.form_template!.sections![0].params!,
+            {name: 'license_key', title: 'License Key', param_type: 'password', data_type: 'str', default: 'marker-secret'},
+        ]}]}};
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [withPassword]} as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const submit = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({accepted: true, job: {}} as any);
+        let search = '';
+        const Probe = () => {search = useLocation().search; return null;};
+        render(
+            <MemoryRouter initialEntries={[`/?state=${encodeURIComponent(btoa(JSON.stringify({applicationId: APPLICATION.application_id})))}`]}>
+                <SubmitJob ideaPageId="submit-job" toolsOpen={false} tools={null} onToolsChange={() => {}} onPageChange={() => {}}
+                           sideNavHeader={{text: 'IDEA', href: '#/'}} sideNavItems={[]} onSideNavChange={() => {}} onFlashbarChange={() => {}} flashbarItems={[]}/>
+                <Probe/>
+            </MemoryRouter>
+        );
+        await screen.findByText('License Key');
+        const user = userEvent.setup();
+        const button = (await screen.findAllByRole('button', {name: /^Submit Job$/}))[0];
+        await waitFor(() => expect(button).not.toBeDisabled());
+        await user.click(button);
+        await waitFor(() => expect(submit).toHaveBeenCalled());
+        const saved = () => JSON.parse(atob(new URLSearchParams(search).get('state')!));
+        await waitFor(() => expect(saved().params?.job_name).toBe('test-job'));
+        expect(saved().params).not.toHaveProperty('license_key');
+        expect(search).not.toContain(btoa('marker-secret').slice(0, 8));
+    });
+
+    it('saves a template with the inputs typed, before any preview', async () => {
+        const context = initTestAppContext();
+        const scheduler = context.client().scheduler();
+        const withPassword = {...APPLICATION, form_template: {sections: [{name: 'job-params', params: [
+            ...APPLICATION.form_template!.sections![0].params!,
+            {name: 'license_key', title: 'License Key', param_type: 'password', data_type: 'str', default: 'marker-secret'},
+        ]}]}};
+        vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [withPassword]} as any);
+        vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+        const create = vi.spyOn(context.jobTemplates(), 'createJobTemplate').mockResolvedValue({} as any);
+        renderSubmitJob();
+        await screen.findByText('License Key');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', {name: /Job Templates/}));
+        await user.click(await screen.findByText('Save Job Template'));
+        const dialog = within(await screen.findByRole('dialog', {name: /Save Job Template/}));
+        const [title, description] = dialog.getAllByRole('textbox');
+        await user.type(title, 'marker template');
+        await user.type(description, 'marker');
+        const buttons = dialog.getAllByRole('button').filter(button => /^(Save|Submit|Save Job Template)$/.test(button.textContent ?? ''));
+        await user.click(buttons[buttons.length - 1]);
+        await waitFor(() => expect(create).toHaveBeenCalled());
+        const saved = JSON.parse(atob(create.mock.calls[0][0].template_data));
+        expect(saved.params.job_name).toBe('test-job');
+        expect(saved.params).not.toHaveProperty('license_key');
+    });
+
+    describe('a restored submission', () => {
+        const TWO_PROJECTS = {...APPLICATION, projects: [{project_id: 'p-1', name: 'proj-1', title: 'Project 1'}, {project_id: 'p-2', name: 'proj-2', title: 'Project 2'}]};
+        const restore = async (project?: string) => {
+            const context = initTestAppContext();
+            const scheduler = context.client().scheduler();
+            vi.spyOn(scheduler, 'getUserApplications').mockResolvedValue({applications: [TWO_PROJECTS]} as any);
+            vi.spyOn(scheduler, 'getInstanceTypeOptions').mockResolvedValue(INSTANCE_TYPE_OPTIONS as any);
+            const submit = vi.spyOn(scheduler, 'submitJob').mockResolvedValue({accepted: true, job: {}} as any);
+            renderSubmitJob({}, btoa(JSON.stringify({applicationId: APPLICATION.application_id, project})));
+            await screen.findByText('Job Name');
+            return submit;
+        };
+
+        it('selects the project it was saved under', async () => {
+            const submit = await restore('proj-2');
+            expect(await screen.findByText('Project 2')).toBeInTheDocument();
+            expect(screen.queryByText('Project 1')).not.toBeInTheDocument();
+            const user = userEvent.setup();
+            const button = (await screen.findAllByRole('button', {name: /^Submit Job$/}))[0];
+            await waitFor(() => expect(button).not.toBeDisabled());
+            await user.click(button);
+            await waitFor(() => expect(submit).toHaveBeenCalled());
+            expect(submit.mock.calls[0][0].project).toBe('proj-2');
+        });
+
+        it('selects no project when the saved one is no longer offered', async () => {
+            const submit = await restore('proj-gone');
+            await waitFor(() => expect(screen.queryByText('Project 1')).not.toBeInTheDocument());
+            expect(submit).not.toHaveBeenCalled();
+        });
     });
 
     it('renders the submit job form', async () => {

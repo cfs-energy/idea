@@ -12,6 +12,7 @@
  */
 
 import React, {Component, RefObject} from "react";
+import {DESKTOP_NAME_PATTERN, DESKTOP_NAME_RULE, patternOrUnchanged} from "../../common/form-patterns";
 
 import {
     Alert,
@@ -84,7 +85,7 @@ export interface MyVirtualDesktopSessionsState {
     loading: boolean
     screenshots: { [k: string]: ScreenShotState }
     // desktops whose last preview request came back with nothing, by remote session id
-    previewFailed: { [k: string]: boolean }
+    previewFailed: { [k: string]: boolean | string }
     selectedSession: VirtualDesktopSession | undefined
     selectedSessionApplicableInstanceTypes: SocaUserInputChoice[]
     osFilter: string,
@@ -154,6 +155,48 @@ export function mergeSessions(current: Map<string, VirtualDesktopSession>, incom
         })
     }
     return next
+}
+
+/**
+ * Why the controller holds a desktop for its project (sessions/virtual_desktop_session_utils.py
+ * PROJECT_HOLD_MESSAGES). Only these are shown on a preview card; any other failure text is not.
+ */
+export const PROJECT_HOLD_MESSAGES: string[] = [
+    "You are no longer a member of this desktop's project, so it cannot be started or connected to. Ask an administrator to move it to one of your projects or to add you back to the project. You can still delete it.",
+    "This desktop's project is disabled, so it cannot be started or connected to. Ask an administrator to enable the project or to move the desktop to another of your projects. You can still delete it.",
+    "The owner of this desktop is no longer a member of its project. Move it to one of the owner's projects, or add the owner back, before starting it.",
+    "This desktop's project is disabled. Enable the project, or move the desktop to another of the owner's projects, before starting it.",
+]
+
+/** Screenshots taken before come first, least recently taken first; desktops never captured follow, oldest first. */
+export function screenshotOrder(seen: {[dcvSessionId: string]: ScreenShotState}) {
+    return (a: VirtualDesktopSessionScreenshot, b: VirtualDesktopSessionScreenshot): number => {
+            if (a === undefined && b === undefined) {
+                return 0
+            }
+
+            if (a === undefined || a.dcv_session_id === undefined) {
+                return 1
+            }
+
+            if (b === undefined || b.dcv_session_id === undefined) {
+                return -1
+            }
+
+            if (seen[a.dcv_session_id] === undefined && seen[b.dcv_session_id] === undefined) {
+                return moment(a.create_time).diff(b.create_time)
+            }
+
+            if (seen[a.dcv_session_id] === undefined) {
+                return 1
+            }
+
+            if (seen[b.dcv_session_id] === undefined) {
+                return -1
+            }
+
+            return seen[a.dcv_session_id].time.diff(seen[b.dcv_session_id].time)
+        }
 }
 
 class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, MyVirtualDesktopSessionsState> {
@@ -402,33 +445,7 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             return
         }
 
-        screenshots = screenshots.sort((a: VirtualDesktopSessionScreenshot, b: VirtualDesktopSessionScreenshot) => {
-            if (a === undefined && b === undefined) {
-                return 0
-            }
-
-            if (a === undefined || a.dcv_session_id === undefined) {
-                return 1
-            }
-
-            if (b === undefined || b.dcv_session_id === undefined) {
-                return -1
-            }
-
-            if (this.state.screenshots[a.dcv_session_id] === undefined && this.state.screenshots[b.dcv_session_id] === undefined) {
-                return moment(a.create_time).diff(b.create_time)
-            }
-
-            if (this.state.screenshots[a.dcv_session_id] === undefined) {
-                return 1
-            }
-
-            if (this.state.screenshots[a.dcv_session_id] === undefined) {
-                return -1
-            }
-
-            return this.state.screenshots[a.dcv_session_id].time.diff(this.state.screenshots[b.dcv_session_id].time)
-        })
+        screenshots = screenshots.sort(screenshotOrder(this.state.screenshots))
 
         const delay = async (interval: number) => {
             return new Promise((resolve) => {
@@ -455,11 +472,14 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                 }
             }))
             const previewFailed = {...this.state.previewFailed}
-            batch.forEach(({dcv_session_id}) => {
+            batch.forEach(({dcv_session_id, idea_session_id}) => {
                 if (result?.success?.some(screenshot => screenshot.dcv_session_id === dcv_session_id)) {
                     delete previewFailed[dcv_session_id!]
                 } else {
-                    previewFailed[dcv_session_id!] = true
+                    // the controller answers a desktop it holds for its project by idea_session_id, with one of
+                    // its hold messages; any other failure_reason can be the broker's own text, not shown on a card
+                    const reason = result?.failed?.find(screenshot => screenshot.idea_session_id === idea_session_id)?.failure_reason
+                    previewFailed[dcv_session_id!] = reason != null && PROJECT_HOLD_MESSAGES.includes(reason) ? reason : true
                 }
             })
             this.setState({
@@ -724,10 +744,8 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
             idea_session_id: session.idea_session_id,
             idea_session_owner: session.owner,
             dcv_session_id: session.dcv_session_id
-        }).then(info => {
-            downloadDcvFile(info, `${session.name}`, session.dcv_session_id)
-            return true
-        }).catch(error => {
+        }).then(info => downloadDcvFile(info, `${session.name}`, session.dcv_session_id)
+        ).then(() => true).catch(error => {
             this.displayActionError(error, 'download the DCV client file for')
             return false
         })
@@ -866,12 +884,12 @@ class MyVirtualDesktopSessions extends Component<MyVirtualDesktopSessionsProps, 
                         title: 'Desktop name',
                         data_type: 'str',
                         param_type: 'text',
-                        help_text: 'Use 3 to 24 characters.',
+                        help_text: DESKTOP_NAME_RULE,
                         default: this.state.selectedSession?.name,
                         validate: {
                             required: true,
-                            regex: '^.{3,24}$',
-                            message: 'Use 3 to 24 characters.'
+                            regex: patternOrUnchanged(DESKTOP_NAME_PATTERN, this.state.selectedSession?.name),
+                            message: DESKTOP_NAME_RULE
                         } as IdeaFormValidate
                     },
                     {

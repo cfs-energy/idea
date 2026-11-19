@@ -239,7 +239,8 @@ describe('report views', () => {
         expect(click).toHaveBeenCalled();
         const content = await new Promise(resolve => {const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsText(create.mock.calls[0][0]);});
         expect(content).toBe('server content\r\n');
-        expect(revoke).toHaveBeenCalledWith('blob:report');
+        // released later, once the download has started (common/csv.test.ts)
+        expect(revoke).not.toHaveBeenCalled();
         expect(screen.getByText('Downloaded 123 rows across all pages.')).toHaveAttribute('role', 'status');
     });
     it('refreshes an expired export and hides the old snapshot', async () => {

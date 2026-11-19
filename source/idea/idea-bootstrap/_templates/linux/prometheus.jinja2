@@ -2,22 +2,54 @@
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10', 'ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 PROMETHEUS_AMD64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.x86_64', required=True) }}"
 PROMETHEUS_ARM64_URL="{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.aarch64', required=True) }}"
+# SHA-256 from each release's sha256sums.txt, for every archive a release of this product has
+# named by default. Any other URL (a mirror, another version) needs its digest in
+# global-settings.package_config.prometheus.installer.linux.<x86_64|aarch64>_sha256, which takes precedence.
+PROMETHEUS_AMD64_SHA256='{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.x86_64_sha256', default='') | default('', true) | string | replace("'", "'\\''") }}'
+PROMETHEUS_ARM64_SHA256='{{ context.config.get_string('global-settings.package_config.prometheus.installer.linux.aarch64_sha256', default='') | default('', true) | string | replace("'", "'\\''") }}'
+function prometheus_sha256 () {
+  case "${1}" in
+    prometheus-2.37.0.linux-amd64.tar.gz) echo -n ca70f5a261fd545da0b9893c42a73547a94ebd5111ef2b6b9f8742c5dbb73522 ;;
+    prometheus-2.37.0.linux-arm64.tar.gz) echo -n 024cc048131098d408c8c3588237c42de4a13d9030b352f0a0d7f4a734fda102 ;;
+    prometheus-2.53.4.linux-amd64.tar.gz) echo -n b8b497c4610d1b93208252b60c8f20f6b2e78596ae8df43397a2e805aa53d475 ;;
+    prometheus-2.53.4.linux-arm64.tar.gz) echo -n ec7236ecea7154d0bfe142921708b1ae7b5e921e100e0ee85ab92b7c444357e0 ;;
+    prometheus-2.53.5.linux-amd64.tar.gz) echo -n 456eb31530484d181e860e329fa0c6628e79eb388fac670cdeb4fa5d57c74ed9 ;;
+    prometheus-2.53.5.linux-arm64.tar.gz) echo -n c47274a855b6df116f5f8b6e8583a8f4f482e22e9cff9faf2518f444639a28e0 ;;
+  esac
+}
 function install_prometheus () {
   local MACHINE=$(uname -m)
-  local DOWNLOAD_URL=""
+  local DOWNLOAD_URL="" EXPECTED_SHA256 DIGEST_SETTING
   if [[ ${MACHINE} == "aarch64" ]]; then
     DOWNLOAD_URL="${PROMETHEUS_ARM64_URL}"
+    EXPECTED_SHA256="${PROMETHEUS_ARM64_SHA256}"
+    DIGEST_SETTING=global-settings.package_config.prometheus.installer.linux.aarch64_sha256
   else
     DOWNLOAD_URL="${PROMETHEUS_AMD64_URL}"
+    EXPECTED_SHA256="${PROMETHEUS_AMD64_SHA256}"
+    DIGEST_SETTING=global-settings.package_config.prometheus.installer.linux.x86_64_sha256
   fi
   local PACKAGE_ARCHIVE=$(basename ${DOWNLOAD_URL})
   local PACKAGE_NAME="${PACKAGE_ARCHIVE%.tar.gz*}"
   PROMETHEUS_DIR="/root/bootstrap/prometheus"
   mkdir -p ${PROMETHEUS_DIR}
   pushd ${PROMETHEUS_DIR}
+  rm -f "${PACKAGE_ARCHIVE}"
   wget ${DOWNLOAD_URL}
-  tar -xvf ${PACKAGE_ARCHIVE}
-  cp ${PACKAGE_NAME}/prometheus /usr/local/bin/
+  [[ -n "${EXPECTED_SHA256}" ]] || EXPECTED_SHA256=$(prometheus_sha256 "${PACKAGE_ARCHIVE}")
+  if [[ -z "${EXPECTED_SHA256}" ]]; then
+    fail_bootstrap download-unverified "${DOWNLOAD_URL} has no pinned SHA-256: set ${DIGEST_SETTING} to the archive's SHA-256"
+  fi
+  sha256_matches "${PACKAGE_ARCHIVE}" "${EXPECTED_SHA256}" \
+    || fail_bootstrap download-unverified "${PACKAGE_ARCHIVE} failed its checksum (expected from ${DIGEST_SETTING} or the release digests carried in this bundle)"
+  # the archive's single top directory need not match the downloaded file's name (a mirror may
+  # rename it): extract into a fresh directory, dropping that level, and require the binary
+  rm -rf "${PACKAGE_NAME}.extracted" && mkdir "${PACKAGE_NAME}.extracted"
+  if ! tar -xf "${PACKAGE_ARCHIVE}" --strip-components=1 -C "${PACKAGE_NAME}.extracted" \
+      || [[ ! -f "${PACKAGE_NAME}.extracted/prometheus" ]]; then
+    fail_bootstrap download-failed "${PACKAGE_ARCHIVE} holds no prometheus binary"
+  fi
+  cp "${PACKAGE_NAME}.extracted/prometheus" /usr/local/bin/ || fail_bootstrap download-failed "prometheus could not be installed"
 }
 function setup_prometheus_service () {
   echo "[Unit]
@@ -45,7 +77,10 @@ fi
 {% set prometheus_config = context.get_prometheus_config(additional_scrape_configs=additional_scrape_configs) %}
 {% if prometheus_config %}
 mkdir -p /etc/prometheus
-echo '{{ context.utils.to_yaml(prometheus_config) }}' > /etc/prometheus/prometheus.yml
+# a quoted here-document: the rendered configuration is data, whatever its labels hold
+cat > /etc/prometheus/prometheus.yml <<'IDEA_PROMETHEUS_CONFIG'
+{{ context.utils.to_yaml(prometheus_config) }}
+IDEA_PROMETHEUS_CONFIG
 setup_prometheus_service
 systemctl enable prometheus
 systemctl start prometheus

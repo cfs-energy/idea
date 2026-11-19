@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import pytest
+
+from ideascheduler.app.images import compute_image_canary as canary_module
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
@@ -716,6 +718,11 @@ def test_builder_sweep_terminates_only_orphaned_builders_past_any_real_bake(
     monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
     svc.sweep_builders(now)
     assert terminated == ['i-orphan']
+    # another cluster in the account runs builders under the same module id
+    assert {
+        'Name': 'tag:idea:ClusterName',
+        'Values': ['test-cluster'],
+    } in ec2.describe_instances.call_args.kwargs['Filters']
 
 
 def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch):
@@ -729,10 +736,14 @@ def test_builder_sweep_reaps_validation_queues_no_row_is_validating(monkeypatch)
     monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
     svc.context.queue_profiles.list_queue_profiles.return_value = [
         HpcQueueProfile(
-            name='iv-live', default_job_params=SocaJobParams(instance_ami='ami-live')
+            name='iv-live',
+            description=canary_module.VALIDATION_PROFILE_MARKER,
+            default_job_params=SocaJobParams(instance_ami='ami-live'),
         ),
         HpcQueueProfile(
-            name='iv-left', default_job_params=SocaJobParams(instance_ami='ami-old')
+            name='iv-left',
+            description=canary_module.VALIDATION_PROFILE_MARKER,
+            default_job_params=SocaJobParams(instance_ami='ami-old'),
         ),
         HpcQueueProfile(
             name='normal', default_job_params=SocaJobParams(instance_ami='ami-old')
@@ -767,7 +778,9 @@ def test_a_validation_queue_pbs_still_holds_is_asked_for_again_within_a_minute(
     monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
     svc.context.queue_profiles.list_queue_profiles.return_value = [
         HpcQueueProfile(
-            name='iv-busy', default_job_params=SocaJobParams(instance_ami='ami-old')
+            name='iv-busy',
+            description=canary_module.VALIDATION_PROFILE_MARKER,
+            default_job_params=SocaJobParams(instance_ami='ami-old'),
         ),
     ]
     answers = [['The validation queue iv-busy still has a node in PBS.']] * 2 + [[]]
@@ -1221,6 +1234,7 @@ def builder_ec2(tags):
 
 OWN_BUILDER_TAGS = [
     {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
+    {'Key': 'idea:ClusterName', 'Value': 'test-cluster'},
     {'Key': 'idea:ModuleId', 'Value': 'scheduler'},
 ]
 
@@ -1477,3 +1491,71 @@ def test_a_scheduler_host_started_seconds_ago_sweeps_builders_on_its_first_tick(
     with pytest.raises(AfterTheSweep):
         svc.tick(datetime.now(timezone.utc))
     svc.sweep_builders.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'error, traceback',
+    [(exceptions.general_exception('the canary failed'), False), (KeyError('x'), True)],
+)
+def test_a_classified_bake_failure_logs_one_line_and_a_surprise_its_traceback(
+    monkeypatch, error, traceback
+):
+    svc = service()
+    monkeypatch.setattr(
+        module.ComputeNodeAmiBuilder, 'wait_for_image', lambda *a: None, raising=False
+    )
+    monkeypatch.setattr(module, 'terminate_builder', lambda *a: None)
+    monkeypatch.setattr(module.ComputeImageCanary, 'validate', Mock(side_effect=error))
+    record = stuck_row(
+        checks=[ImageCheck(name='bootstrap', ok=True, detail='fine', seconds=0)],
+    )
+    svc.records.put(record)
+    svc._run_pipeline(record)
+    svc._logger.exception.assert_not_called()
+    [line] = [
+        call
+        for call in svc._logger.error.call_args_list
+        if 'compute image validation failed' in call.args[0]
+    ]
+    assert line.args[0].startswith('rocky9/x86_64: compute image validation failed: ')
+    assert line.kwargs['exc_info'] is traceback
+
+
+def test_an_administrator_profile_named_like_a_validation_queue_is_not_reaped(
+    monkeypatch,
+):
+    # SCH-35: the sweep reaped any profile whose name started iv-, jobs and queue included
+    from ideadatamodel import HpcQueueProfile, SocaJobParams
+
+    svc = service()
+    ec2 = Mock()
+    ec2.describe_instances.return_value = {}
+    svc.context.aws.return_value.ec2.return_value = ec2
+    monkeypatch.setattr(module, 'terminate_old_stopped_builders', lambda *a: [])
+    svc.context.queue_profiles.list_queue_profiles.return_value = [
+        HpcQueueProfile(
+            name='iv-analysis',
+            description='our analysis queue',
+            default_job_params=SocaJobParams(instance_ami='ami-old'),
+        ),
+    ]
+    reaped = []
+    monkeypatch.setattr(
+        module.ComputeImageCanary,
+        'reap',
+        lambda self, p, patience: reaped.append(p.name) or [],
+    )
+    svc.sweep_builders(datetime.now(timezone.utc))
+    assert reaped == []
+
+
+@pytest.mark.parametrize('field', ['name', 'queues'])
+def test_the_admin_api_refuses_a_validation_queue_name(field):
+    from ideadatamodel import HpcQueueProfile, exceptions
+    from ideascheduler.app.api.scheduler_admin_api import refuse_validation_names
+
+    profile = HpcQueueProfile(name='analysis', queues=['analysis'])
+    setattr(profile, field, 'iv-analysis' if field == 'name' else ['iv-analysis'])
+    with pytest.raises(exceptions.SocaException) as error:
+        refuse_validation_names(profile)
+    assert 'cannot start with iv-' in error.value.message

@@ -8,6 +8,8 @@ not - and that neither of them resets a job on a stack status they cannot interp
 """
 
 import logging
+
+import arrow
 from datetime import datetime, timedelta, timezone
 from threading import Event
 from typing import Dict, List, Optional
@@ -62,6 +64,10 @@ class MockScheduler:
     def reset_job(self, job_id: str) -> bool:
         self.reset_jobs.append(job_id)
         return True
+
+    def is_job_active(self, job_id: str) -> bool:
+        # what qstat's exit code says: the job record exists in PBS
+        return job_id in self.live_jobs
 
     def hold_job(self, job_id: str) -> bool:
         self.held_jobs.append(job_id)
@@ -288,7 +294,12 @@ def test_housekeeper_keeps_the_licenses_of_a_job_the_scheduler_says_is_running(
 
     assert mock_scheduler.reset_jobs == []
     assert deleted_stacks == []
-    assert job_cache.get_active_license_count(license_name=license_name) == 2
+    # the reservation is kept; a running job's seats are the license server's count
+    # now, so it no longer adds to the reserved seats (SCH-29)
+    reservations = list(
+        job_cache._jobs_db.db['active_job_licenses'].find(job_id=job.job_id)
+    )
+    assert [row['count'] for row in reservations] == [2]
 
 
 def test_housekeeper_deletes_failed_stack_and_retries(
@@ -314,6 +325,32 @@ def test_housekeeper_deletes_failed_stack_and_retries(
     assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
     # a failed create is retried up to the cap; only nodes that never ran the job hold it
     assert mock_scheduler.held_jobs == []
+
+
+def test_housekeeper_keeps_the_job_on_its_stack_when_the_delete_fails(
+    context, job_cache, mock_scheduler, mock_job_monitor, monkeypatch
+):
+    """
+    a failed stack the housekeeper could not delete stays with its job: a reset would let
+    the next cycle build a second stack while the first is still there
+    """
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.FAILED
+    )
+
+    def refuse(_self, stack_name: str):
+        raise RuntimeError('marker delete failure')
+
+    monkeypatch.setattr(AWSUtil, 'cloudformation_delete_stack', refuse)
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert mock_scheduler.reset_jobs == []
+    assert mock_job_monitor.modified_jobs == []
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 0
 
 
 def test_housekeeper_leaves_job_alone_on_unmapped_stack_status(
@@ -495,7 +532,8 @@ class MockInstanceCache:
         return [
             instance
             for instance in self.instances
-            if instance.soca_job_id == job_id and instance.state in states
+            if (job_id is None or instance.soca_job_id == job_id)
+            and instance.state in states
         ]
 
 
@@ -1362,6 +1400,8 @@ def test_one_sweep_takes_the_stack_of_a_job_that_is_gone(
     job, aws, scheduler = sweep_world(context, monkeypatch, job_cache, 312, 300)
     if job_is == 'deleted':
         job_cache.delete_jobs(job_ids=[job.job_id])
+        # deleted in PBS too: the cache miss asks PBS before the node goes (NM-14)
+        scheduler.live_jobs.pop(job.job_id, None)
     else:
         job_cache.sync(jobs=[job.model_copy(update={'state': SocaJobState.FINISHED})])
 
@@ -1611,3 +1651,357 @@ def test_provisioning_a_job_again_does_not_write_its_old_reason_back(
     assert row.reason_class is None
     assert row.error_message is None
     assert row.comment is None
+
+
+def test_a_queued_jobs_shared_stack_that_disappeared_costs_an_attempt(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    # NM-13 (owner option a): a shared stack whose node never joined was retired and the
+    # job provisioned again every 30 minutes, uncounted
+    from ideadatamodel import SocaScalingMode
+
+    monkeypatch.setattr(
+        JobProvisioningUtil,
+        'check_status',
+        lambda _self: ProvisioningStatus.NOT_PROVISIONED,
+    )
+    job = mock_job(provisioned=True)
+    job.scaling_mode = SocaScalingMode.BATCH
+    job.provisioning_options.terminate_when_idle = 3
+    assert job.is_shared_capacity()
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+
+
+def test_a_queue_changed_to_single_job_keeps_the_shared_stack_its_jobs_are_on(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    # NM-02: the job is rebuilt as ephemeral from the queue's new settings, and a queued
+    # job past the time-out deleted the shared stack under its running peers
+    from ideadatamodel import constants
+
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.COMPLETED
+    )
+    job = mock_job(provisioned=True)
+    assert not job.is_shared_capacity()
+    shared_stack = CloudFormationStack(
+        entry={
+            'StackId': stack_id(job.get_compute_stack()),
+            'StackName': job.get_compute_stack(),
+            'StackStatus': 'CREATE_COMPLETE',
+            # well past the stack provisioning time-out, with no node of this job up
+            'CreationTime': arrow.utcnow().shift(hours=-3).isoformat(),
+            'Tags': [{'Key': constants.IDEA_TAG_TERMINATE_WHEN_IDLE, 'Value': '3'}],
+        }
+    )
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'stack', property(lambda _self: shared_stack)
+    )
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+
+
+@pytest.mark.parametrize('status', ['existing-fsx-unavailable', 'fsx-mount-failed'])
+def test_a_node_that_cannot_mount_its_fsx_holds_the_job_at_once_with_the_reason(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    status,
+):
+    # owner decision: a node whose existing FSx stays unmounted stops its bootstrap
+    # (idea:BootstrapStatus=existing-fsx-unavailable); the job is held at once with the
+    # file system named, not after the stack time-out with a generic message
+    from ideadatamodel import SocaFSxLustreConfig
+
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job.params.fsx_lustre = SocaFSxLustreConfig(
+        enabled=True, existing_fsx='fs-0123456789abcdef0.fsx.us-east-1.amazonaws.com'
+    )
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status=status)]
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == [job.get_compute_stack()]
+    assert mock_scheduler.held_jobs == [job.job_id]
+    comment = mock_scheduler.comments[job.job_id]
+    assert comment.startswith(
+        'IDEA: held. A node could not mount FSx for Lustre fs-0123'
+    )
+    assert f'qrls {job.job_id}' in comment and len(comment) <= 128
+    held = job_cache.get_job(job.job_id)
+    assert 'could not mount the FSx for Lustre file system fs-' in held.error_message
+    assert ',' not in held.error_message, 'qalter splits on commas'
+
+
+def test_a_new_fsx_that_never_became_available_is_retried_with_the_reason(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    # idea:BootstrapStatus=scratch-unavailable: the job's new FSx was not available in
+    # time. A slow create is retried (attempt counted) rather than held at once (B-S5)
+    from ideadatamodel import SocaFSxLustreConfig
+
+    created_stack(monkeypatch, minutes_ago=12)
+    job = mock_job(provisioned=True)
+    job.params.fsx_lustre = SocaFSxLustreConfig(enabled=True, size=None)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status='scratch-unavailable')]
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == [job.get_compute_stack()]
+    assert mock_scheduler.held_jobs == []
+    assert mock_scheduler.reset_jobs == [job.job_id]
+    assert job_cache.get_job_provisioning_retry_count(job_id=job.job_id) == 1
+    held = job_cache.get_job(job.job_id)
+    assert 'did not become available in time' in held.error_message
+    assert ',' not in held.error_message, 'qalter splits on commas'
+
+
+def test_a_site_hook_mismatch_holds_the_job_at_once_and_is_logged_once(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    caplog,
+):
+    # a node whose site hook no longer matches scheduler.compute_node_site_hook_sha256
+    # stops with idea:BootstrapStatus=site-hook-mismatch; every job hits it until fixed
+    from ideascheduler.app.provisioning.node_monitor import node_house_keeper
+
+    node_house_keeper._site_hook_mismatch_reported.clear()
+    created_stack(monkeypatch, minutes_ago=4)
+    jobs = [mock_job(provisioned=True), mock_job(provisioned=True)]
+    job_cache.sync(jobs=jobs)
+    for job in jobs:
+        mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status='site-hook-mismatch') for job in jobs]
+    )
+
+    with caplog.at_level(logging.ERROR):
+        housekeeping_session(context).retry_provisioning_cleanup()
+        housekeeping_session(context).retry_provisioning_cleanup()
+
+    # the second sweep sees the same doubles again; what matters is each job's outcome
+    assert set(deleted_stacks) == {job.get_compute_stack() for job in jobs}
+    assert set(mock_scheduler.held_jobs) == {job.job_id for job in jobs}
+    for job in jobs:
+        comment = mock_scheduler.comments[job.job_id]
+        assert comment.startswith(
+            'IDEA: held. The compute node site hook does not match'
+        )
+        assert f'qrls {job.job_id}' in comment and len(comment) <= 128
+        held = job_cache.get_job(job.job_id)
+        assert 'scheduler.compute_node_site_hook_sha256' in held.error_message
+        assert (
+            'An administrator must update the setting or the hook file'
+            in held.error_message
+        )
+        assert ',' not in held.error_message, 'qalter splits on commas'
+    errors = [r for r in caplog.records if 'site hook does not match' in r.getMessage()]
+    assert len(errors) == 1 and errors[0].levelno == logging.ERROR
+
+
+@pytest.mark.parametrize(
+    'status,expected',
+    [
+        (
+            'existing-fsx-unavailable',
+            'could not mount the FSx for Lustre file system fs-',
+        ),
+        ('site-hook-mismatch', 'scheduler.compute_node_site_hook_sha256'),
+    ],
+)
+def test_a_shared_jobs_stack_reports_why_its_node_stopped(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    caplog,
+    status,
+    expected,
+):
+    # B-S4: a shared stack is left alone while complete, and the stop reason never reached
+    # the owner or the operator log
+    from ideadatamodel import SocaFSxLustreConfig, SocaScalingMode
+    from ideascheduler.app.provisioning.node_monitor import node_house_keeper
+
+    node_house_keeper._site_hook_mismatch_reported.clear()
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: ProvisioningStatus.COMPLETED
+    )
+    job = mock_job(provisioned=True)
+    job.scaling_mode = SocaScalingMode.BATCH
+    job.provisioning_options.terminate_when_idle = 3
+    job.params.fsx_lustre = SocaFSxLustreConfig(
+        enabled=True, existing_fsx='fs-0123456789abcdef0.fsx.us-east-1.amazonaws.com'
+    )
+    assert job.is_shared_capacity()
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    # the shared node carries the id of the job it was made for, not this one
+    other = mock_job(provisioned=True)
+    node = job_instance(other, bootstrap_status=status)
+    monkeypatch.setattr(
+        type(node), 'soca_compute_stack', property(lambda self: job.get_compute_stack())
+    )
+    context.instance_cache = MockInstanceCache([node])
+
+    with caplog.at_level(logging.ERROR):
+        housekeeping_session(context).retry_provisioning_cleanup()
+
+    assert deleted_stacks == []
+    assert expected in job_cache.get_job(job.job_id).error_message
+    hook_errors = [
+        r for r in caplog.records if 'site hook does not match' in r.getMessage()
+    ]
+    assert len(hook_errors) == (1 if status == 'site-hook-mismatch' else 0)
+
+
+@pytest.mark.parametrize('max_retries', [0, 5])
+def test_a_new_fsx_not_ready_is_held_on_its_second_attempt_whatever_the_cap(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    max_retries,
+):
+    # S3: with the cap off this status built a file system and a fleet without end
+    from ideadatamodel import SocaFSxLustreConfig
+
+    config = context.config()
+    key = 'scheduler.job_provisioning.max_provisioning_retries'
+    original = config.get_int(key, default=3)
+    config.put(key, max_retries)
+    try:
+        created_stack(monkeypatch, minutes_ago=12)
+        job = mock_job(provisioned=True)
+        job.params.fsx_lustre = SocaFSxLustreConfig(enabled=True, size=None)
+        job_cache.sync(jobs=[job])
+        mock_scheduler.live_jobs[job.job_id] = job
+        context.instance_cache = MockInstanceCache(
+            [job_instance(job, bootstrap_status='scratch-unavailable')]
+        )
+        housekeeping_session(context).retry_provisioning_cleanup()
+        assert mock_scheduler.held_jobs == []
+
+        # the retry's new stack reports the same
+        retry = job.model_copy(deep=True)
+        retry.params.compute_stack = f'{job.get_compute_stack()}-r'
+        retry.params.stack_id = stack_id(retry.params.compute_stack)
+        job_cache.sync(jobs=[retry])
+        context.instance_cache = MockInstanceCache(
+            [job_instance(retry, bootstrap_status='scratch-unavailable')]
+        )
+        housekeeping_session(context).retry_provisioning_cleanup()
+    finally:
+        config.put(key, original)
+
+    assert mock_scheduler.held_jobs == [job.job_id]
+    held = job_cache.get_job(job.job_id)
+    assert 'never became available' in held.error_message
+    assert 'Retrying' not in held.error_message
+
+
+def test_a_shared_jobs_hold_names_why_its_node_stopped(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    # S5: the reason reached the job while it waited; once the node was retired and the
+    # stack went, the attempt (and the hold) said only that the stack was deleted
+    from ideadatamodel import SocaScalingMode
+
+    config = context.config()
+    key = 'scheduler.job_provisioning.max_provisioning_retries'
+    original = config.get_int(key, default=3)
+    config.put(key, 1)
+    status = {'value': ProvisioningStatus.COMPLETED}
+    monkeypatch.setattr(
+        JobProvisioningUtil, 'check_status', lambda _self: status['value']
+    )
+    try:
+        job = mock_job(provisioned=True)
+        job.scaling_mode = SocaScalingMode.BATCH
+        job.provisioning_options.terminate_when_idle = 3
+        job_cache.sync(jobs=[job])
+        mock_scheduler.live_jobs[job.job_id] = job
+        # the shared node carries the id of the job it was made for, not this one
+        node = job_instance(
+            mock_job(provisioned=True), bootstrap_status='site-hook-mismatch'
+        )
+        monkeypatch.setattr(
+            type(node),
+            'soca_compute_stack',
+            property(lambda self: job.get_compute_stack()),
+        )
+        context.instance_cache = MockInstanceCache([node])
+        housekeeping_session(context).retry_provisioning_cleanup()
+        assert job_cache.get_job(job.job_id).error_message.startswith('Waiting: ')
+
+        status['value'] = ProvisioningStatus.NOT_PROVISIONED
+        context.instance_cache = MockInstanceCache([])
+        housekeeping_session(context).retry_provisioning_cleanup()
+    finally:
+        config.put(key, original)
+
+    assert mock_scheduler.held_jobs == [job.job_id]
+    held = job_cache.get_job(job.job_id).error_message
+    assert 'was deleted before the job started: the compute node site hook' in held
+    assert 'scheduler.compute_node_site_hook_sha256' in held
+
+
+def test_a_site_hook_mismatch_names_the_setting_under_the_scheduler_module_id(
+    context, job_cache, mock_scheduler, mock_job_monitor, deleted_stacks, monkeypatch
+):
+    # the host reads <module id>.compute_node_site_hook_sha256; a cluster whose scheduler
+    # module id differs from its name was told to edit scheduler.* (contracts review S2)
+    from ideascheduler.app.provisioning.node_monitor import node_house_keeper
+
+    node_house_keeper._site_hook_mismatch_reported.clear()
+    monkeypatch.setattr(context, 'module_id', lambda: 'hpc-sched')
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [job_instance(job, bootstrap_status='site-hook-mismatch')]
+    )
+
+    housekeeping_session(context).retry_provisioning_cleanup()
+
+    held = job_cache.get_job(job.job_id).error_message
+    assert 'hpc-sched.compute_node_site_hook_sha256' in held
+    assert 'scheduler.compute_node_site_hook_sha256' not in held
+
+
+def test_the_site_hook_setting_falls_back_to_the_module_name(context, monkeypatch):
+    monkeypatch.setattr(context, 'module_id', lambda: None)
+    assert (
+        housekeeping_session(context).site_hook_setting()
+        == 'scheduler.compute_node_site_hook_sha256'
+    )

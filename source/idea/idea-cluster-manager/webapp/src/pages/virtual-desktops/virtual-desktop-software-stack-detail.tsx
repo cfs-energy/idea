@@ -93,18 +93,13 @@ class VirtualDesktopSoftwareStackDetail extends Component<VirtualDesktopSoftware
 
     // Handler for edit button click
     handleEditClick() {
-        console.log("Edit button clicked directly through bound handler");
-
         // First ensure form is visible
         this.setState({
             showEditSoftwareStackForm: true
         }, () => {
-            console.log("State updated, showEditSoftwareStackForm:", this.state.showEditSoftwareStackForm);
-
             // Then wait a tick for the form to render and get its ref
             setTimeout(() => {
                 if (this.editStackForm.current) {
-                    console.log("Calling showModal on the form ref");
                     this.editStackForm.current.showModal();
                 } else {
                     console.error("Form ref is not available after state update and timeout");

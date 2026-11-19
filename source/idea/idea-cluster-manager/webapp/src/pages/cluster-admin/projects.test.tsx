@@ -336,3 +336,25 @@ describe('update project form prefill', () => {
         expect(toggles.some((t) => t.checked)).toBe(false);
     });
 });
+
+describe('editing a project', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('saves a project whose stored code the current rule would refuse', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.getClusterSettingsService(), 'getModuleSettings').mockResolvedValue({});
+        vi.spyOn(context.client().projects(), 'listProjects').mockResolvedValue({listing: [{project_id: 'p-1', name: 'ab', title: 'Marker Project', description: 'marker', ldap_groups: ['group-a'], enabled: true}]} as any);
+        const update = vi.spyOn(context.client().projects(), 'updateProject').mockResolvedValue({project: {}} as any);
+        renderProjectsPage();
+        const user = userEvent.setup();
+        await screen.findByText('Marker Project');
+        await user.click(screen.getAllByRole('radio')[0]);
+        await user.click(screen.getByRole('button', {name: 'Actions'}));
+        await user.click(await screen.findByText('Edit Project'));
+        await screen.findByDisplayValue('ab');
+        const buttons = screen.getAllByRole('button', {name: /^(Save|Update Project|Submit|Update)$/});
+        await user.click(buttons[buttons.length - 1]);
+        await vi.waitFor(() => expect(update).toHaveBeenCalled());
+        expect(update.mock.calls[0][0].project?.name).toBe('ab');
+    });
+});

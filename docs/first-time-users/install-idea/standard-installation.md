@@ -29,25 +29,23 @@ Review [pre-requisites.md](pre-requisites.md "mention") section first
 Copy/Paste this command on your terminal to launch the installation
 
 ```sh
-git clone https://github.com/cfs-energy/idea
+git clone --branch v<VERSION> --depth 1 https://github.com/cfs-energy/idea
 cd idea
 ./idea-admin.sh quick-setup
 ```
 
+Replace `<VERSION>` with the release version: the default branch can be ahead of the release.
+
 **Option 2: Download the installer and execute it manually**
 
-As an alternative, you can download `idea-admin.sh` via this [https://raw.githubusercontent.com/cfs-energy/idea/main/idea-admin.sh](https://raw.githubusercontent.com/cfs-energy/idea/main/idea-admin.sh) and execute it on your Linux or Mac environment via `/bin/bash idea-admin.sh quick-setup`
+As an alternative, download `idea-admin.sh` from the assets of the [GitHub release](https://github.com/cfs-energy/idea/releases), check it against the release's `SHA256SUMS` (`sha256sum --check --ignore-missing SHA256SUMS`), review it, and run it on your Linux or Mac environment with `/bin/bash idea-admin.sh quick-setup`. That copy carries the release's control-plane image digest, so it needs no lookup to choose the image. For a mirrored registry or a host without internet access, see [mirrored registries and offline hosts](../cluster-operations/update-idea-cluster/upgrade-cluster.md#mirrored-registries-and-offline-hosts).
 {% endtab %}
 
 {% tab title="Windows" %}
-Installation of IDEA in Windows is managed by Powershell. Download and execute the following script on your local Windows workstation:
-
-Note: This will only work on Windows 10/11 as Windows Server lacks support for Linux Containers.
+On Windows, use the `ideactl.exe` executable from the release (see the table above): download `ideactl-v<VERSION>-windows-amd64.zip`, check it with `Get-FileHash -Algorithm SHA256` against the release checksum, extract it, and run:
 
 ```powershell
-git clone https://github.com/cfs-energy/idea
-cd idea
-./idea-admin-windows.ps1 quick-setup
+.\ideactl.exe quick-setup
 ```
 {% endtab %}
 {% endtabs %}

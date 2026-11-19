@@ -9,9 +9,12 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+from botocore.exceptions import ClientError
+
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSessionState
 from ideasdk.utils import Utils
+from ideavirtualdesktopcontroller.app.sessions import constants as sessions_constants
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
     VirtualDesktopEvent,
 )
@@ -45,31 +48,78 @@ class IDEAResumeSessionCommandProgressEventHandler(
         )
         command_id = Utils.get_value_as_string('command_id', event.detail, None)
 
-        if status in {'Success', 'Failed'}:
+        if status in {'Success', 'Failed', 'TimedOut', 'Cancelled'}:
             session = self.session_db.get_from_db(
                 idea_session_owner=idea_session_owner, idea_session_id=idea_session_id
             )
+            # a desktop deleted, stopped or otherwise moved on since the command was sent
+            # keeps its state
+            if session is None or session.state != VirtualDesktopSessionState.RESUMING:
+                self.log_info(
+                    message_id=message_id,
+                    message=f'resume command {command_id} ended {status}; desktop {idea_session_id} is '
+                    f'{session.state if session else "gone"}, leaving it',
+                )
+                self.ssm_commands_db.delete(command_id=command_id)
+                return
             if status == 'Success':
                 session.state = VirtualDesktopSessionState.INITIALIZING
-                self.events_utils.publish_validate_dcv_session_creation_event(
-                    idea_session_id=session.idea_session_id,
-                    idea_session_owner=session.owner,
+            else:
+                # FAILED
+                session.state = VirtualDesktopSessionState.ERROR
+                session.failure_reason = RESUME_FAILED_MESSAGE
+            try:
+                # only while the desktop is still resuming: a delete or stop since the read wins
+                written = self.session_db.update(
+                    session,
+                    unless_changed=(sessions_constants.USER_SESSION_DB_STATE_KEY,),
                 )
+            except ClientError as e:
+                if e.response.get('Error', {}).get('Code') != (
+                    'ConditionalCheckFailedException'
+                ):
+                    raise
+                self.log_info(
+                    message_id=message_id,
+                    message=f'resume command {command_id} ended {status}; desktop '
+                    f'{idea_session_id} changed meanwhile, leaving it',
+                )
+                self.ssm_commands_db.delete(command_id=command_id)
+                return
+            if status == 'Success':
+                try:
+                    self.events_utils.publish_validate_dcv_session_creation_event(
+                        idea_session_id=session.idea_session_id,
+                        idea_session_owner=session.owner,
+                    )
+                except Exception:
+                    # nothing else moves an INITIALIZING desktop on: the state goes back to
+                    # RESUMING so the redelivered result is handled again
+                    written.state = VirtualDesktopSessionState.RESUMING
+                    try:
+                        self.session_db.update(
+                            written,
+                            unless_changed=(
+                                sessions_constants.USER_SESSION_DB_STATE_KEY,
+                            ),
+                        )
+                    except Exception as e:
+                        self.log_error(
+                            message_id=message_id,
+                            message=f'desktop {idea_session_id} could not be put back to '
+                            f'resuming after its validation was not queued: {e}',
+                        )
+                    raise
                 self.log_info(
                     message_id=message_id,
                     message=f'Session: {session.idea_session_id}:{session.name} moved to Initializing state',
                 )
                 self.ssm_commands_db.delete(command_id=command_id)
             else:
-                # FAILED
-                session.state = VirtualDesktopSessionState.ERROR
-                session.failure_reason = RESUME_FAILED_MESSAGE
                 self.log_error(
                     message_id=message_id,
                     message=f'Session: {session.idea_session_id}:{session.name} moved to Error state',
                 )
-
-            _ = self.session_db.update(session)
         elif status == 'InProgress':
             self.log_debug(
                 message_id=message_id,

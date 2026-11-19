@@ -24,6 +24,7 @@ import Utils from "../../common/utils";
 import dot from "dot-object";
 import {withRouter} from "../../navigation/navigation-utils";
 import {DetailLoadState, DetailLoadStatus} from "./components/detail-load-state";
+import {listAllSessionPermissions} from "../../common/paging";
 
 export interface VirtualDesktopSessionDetailProps extends IdeaAppLayoutProps, IdeaSideNavigationProps {
 }
@@ -113,14 +114,11 @@ class VirtualDesktopSessionDetail extends Component<VirtualDesktopSessionDetailP
             this.setState({loadStatus: 'error'})
         })
 
-        AppContext.get().client().virtualDesktopAdmin().listSessionPermissions({
-            idea_session_id: this.getIdeaSessionId(),
-            paginator: {
-                page_size: 100
-            }
-        }).then((response) => {
+        listAllSessionPermissions(request => AppContext.get().client().virtualDesktopAdmin().listSessionPermissions(request), {
+            idea_session_id: this.getIdeaSessionId()
+        }).then((listing) => {
             this.setState({
-                sessionPermissions: response.listing!,
+                sessionPermissions: listing,
                 permissionsFailed: false
             })
         }).catch(() => {

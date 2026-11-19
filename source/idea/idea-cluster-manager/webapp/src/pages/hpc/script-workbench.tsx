@@ -10,8 +10,7 @@ import {
     Header,
     Link,
     SpaceBetween,
-    Table,
-    StatusIndicator
+    Table
 } from "@cloudscape-design/components";
 import { v4 as uuid } from "uuid";
 import { Project, SubmitJobResult } from "../../client/data-model";
@@ -118,7 +117,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
 
     constructor(props: ScriptWorkbenchProps) {
         super(props);
-        console.log("ScriptWorkbench constructor", props);
         this.state = {
             jobScript: "",
             clientSubmissionId: uuid(),
@@ -135,8 +133,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
     }
 
     componentDidMount() {
-        console.log("ScriptWorkbench componentDidMount");
-
         // Detect current mode and set appropriate theme
         const isDarkMode = AppContext.get().isDarkMode();
         const editorTheme = isDarkMode ? 'github_dark' : 'github_light_default';
@@ -222,7 +218,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         this.getFileBrowserClient().readFile({
             file: filePath
         }).then(result => {
-            if (result.content) {
+            if (result.content != null) {
                 // If we had a successful dry run OR script was already modified, mark as modified
                 const hadSuccessfulDryRun = this.isDryRunSuccessful();
                 const shouldMarkAsModified = hadSuccessfulDryRun || this.state.scriptModifiedSinceDryRun;
@@ -410,10 +406,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                     // timeout still deduplicates against the first attempt
                     clientSubmissionId: (!dryRun && Utils.asBoolean(result.accepted)) ? uuid() : this.state.clientSubmissionId
                 }, () => {
-                    // Log dry run results to help with debugging
-                    if (dryRun) {
-                        this.logDryRunResults();
-                    }
                     resolve({});
                 });
             }).catch(error => {
@@ -541,18 +533,11 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
                         {budget && (
                             <div>
                                 <Box variant="awsui-key-label">Budget</Box>
-                                {(budget as any).is_missing
-                                    ? <StatusIndicator type="error">
-                                        Budget not found: <strong>{budget.budget_name}</strong>.
-                                        The configured budget no longer exists in AWS Budgets.
-                                    </StatusIndicator>
-                                    : <>
-                                        <Box variant="h3">{budget.budget_name || 'N/A'}</Box>
-                                        <Box variant="small" color="text-body-secondary">
-                                            ${this.formatCurrency(budget.actual_spend?.amount || 0)} spent of
-                                            ${this.formatCurrency(budget.budget_limit?.amount || 0)} {budget.budget_limit?.unit || 'USD'}
-                                        </Box>
-                                    </>}
+                                <Box variant="h3">{budget.budget_name || 'N/A'}</Box>
+                                <Box variant="small" color="text-body-secondary">
+                                    ${this.formatCurrency(budget.actual_spend?.amount || 0)} spent of
+                                    ${this.formatCurrency(budget.budget_limit?.amount || 0)} {budget.budget_limit?.unit || 'USD'}
+                                </Box>
                             </div>
                         )}
                     </ColumnLayout>
@@ -697,21 +682,7 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
         );
     }
 
-    // Add a debugging method to help troubleshoot dry run results
-    logDryRunResults(): void {
-        if (this.isDryRun() && this.state.submitJobResult) {
-            console.log("Dry Run Results:", {
-                isDryRun: this.isDryRun(),
-                validations: this.state.submitJobResult.validations,
-                incidentals: this.state.submitJobResult.incidentals,
-                isDryRunSuccessful: this.isDryRunSuccessful()
-            });
-        }
-    }
-
     render() {
-        console.log("ScriptWorkbench render", this.props, this.state);
-
         const breadcrumbs = [
             {
                 text: 'IDEA',
@@ -890,8 +861,6 @@ class ScriptWorkbench extends Component<ScriptWorkbenchProps, ScriptWorkbenchSta
             header: <Header variant="h1">Write script</Header>,
             content: content
         };
-
-        console.log("ScriptWorkbench appLayoutProps", appLayoutProps);
 
         return <IdeaAppLayout {...appLayoutProps} />;
     }

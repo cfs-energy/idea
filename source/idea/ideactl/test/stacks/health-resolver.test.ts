@@ -54,7 +54,7 @@ const REGION = "us-east-2";
 const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 /** Exact scheduler exec command the stack must synthesize. */
 const SCHEDULER_HEALTH_COMMAND =
-  "qstat -B && curl --fail --silent --show-error --unix-socket /run/idea.sock --max-time 4 --header 'Content-Type: application/json' --data '{\"header\":{\"namespace\":\"Scheduler.ListActiveJobs\"}}' http://localhost/scheduler/api/v1";
+  "qstat -B && pgrep -x pbs_sched >/dev/null && curl --fail --silent --show-error --unix-socket /run/idea.sock --max-time 4 --header 'Content-Type: application/json' --data '{\"header\":{\"namespace\":\"Scheduler.ListActiveJobs\"}}' http://localhost/scheduler/api/v1 | grep -Eq '\"success\": *true'";
 /** Exact assignment the gateway role script uses for the broker port. */
 const GATEWAY_BROKER_PORT_ASSIGNMENT =
   "BROKER_PORT=\"${DCV_BROKER_GATEWAY_PORT:-8446}\"";
@@ -262,6 +262,10 @@ test("scheduler health succeeds through the module Unix socket", async () => {
     const qstatPath = join(testDirectory, "qstat");
     const qstatArgsPath = join(testDirectory, "qstat.args");
     const curlPath = join(testDirectory, "curl");
+    const pgrepPath = join(testDirectory, "pgrep");
+    // pbs_sched is running unless the test says otherwise
+    writeFileSync(pgrepPath, `#!/bin/bash\n[[ "$*" == "-x pbs_sched" && -z "\${TEST_SCHED_DOWN:-}" ]]\n`);
+    chmodSync(pgrepPath, 0o755);
     writeFileSync(
       qstatPath,
       [
@@ -295,12 +299,15 @@ exec "\${REAL_CURL:?}" "\${arguments[@]}"
       { encoding: "utf8" },
     ).trim();
     assert.notEqual(realCurl, "", "curl must be available");
-    await executeHealthCommand(command, {
+    const environment = {
       ...process.env,
       PATH: `${testDirectory}:${process.env["PATH"] ?? ""}`,
       REAL_CURL: realCurl,
       TEST_MODULE_SOCKET: socketPath,
-    });
+    };
+    // a stopped job scheduler fails the check before the module is asked
+    await assert.rejects(executeHealthCommand(command, { ...environment, TEST_SCHED_DOWN: "1" }));
+    await executeHealthCommand(command, environment);
 
     assert.equal(readFileSync(qstatArgsPath, "utf8").trim(), "-B");
     assert.deepEqual(requests, [

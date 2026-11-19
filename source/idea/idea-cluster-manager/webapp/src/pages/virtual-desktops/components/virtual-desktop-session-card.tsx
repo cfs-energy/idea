@@ -47,7 +47,8 @@ interface VirtualDesktopSessionCardProps {
     idleAutoStopDelayMax?: number
     workingHours?: WorkingHours
     screenshot?: string
-    previewFailed?: boolean
+    // true, or the controller's reason when it gave one (the owner left the desktop's project)
+    previewFailed?: boolean | string
     onDeleteSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStartSession?: (session: VirtualDesktopSession) => Promise<boolean>
     onStopSession?: (session: VirtualDesktopSession) => Promise<boolean>
@@ -364,7 +365,8 @@ class VirtualDesktopSessionCard extends Component<VirtualDesktopSessionCardProps
             // In-between states get a spinner; settled states only text. Both stay centered and padded.
             const changing = ['CREATING', 'INITIALIZING', 'PROVISIONING', 'RESUMING', 'STOPPING', 'DELETING', 'DELETED'].includes(session.state ?? '')
             const settled: { [state: string]: string } = {
-                READY: this.props.previewFailed ? 'Preview unavailable. You can still connect.' : 'Preview not captured yet',
+                READY: typeof this.props.previewFailed === 'string' ? this.props.previewFailed
+                    : this.props.previewFailed ? 'Preview unavailable. You can still connect.' : 'Preview not captured yet',
                 STOPPED: desktopStateLabel(session.state, session.hibernation_enabled)
             }
             const transition = session.recovering ? 'Restarting…' : changing ? `${desktopStateLabel(session.state, session.hibernation_enabled)}…` : undefined

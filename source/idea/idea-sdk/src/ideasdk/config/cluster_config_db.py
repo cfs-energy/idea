@@ -350,7 +350,10 @@ class ClusterConfigDB(DynamoDBStreamSubscriber):
         return config
 
     def get_config_entry(self, key: str) -> Optional[Dict]:
-        result = self.cluster_settings_table.get_item(Key={'key': key})
+        # read back right after a settings write: an eventually consistent read can be stale
+        result = self.cluster_settings_table.get_item(
+            Key={'key': key}, ConsistentRead=True
+        )
         return Utils.get_value_as_dict('Item', result)
 
     def get_config_entries(

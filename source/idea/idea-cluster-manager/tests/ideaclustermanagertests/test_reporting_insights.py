@@ -295,7 +295,10 @@ def test_cache_scope_expiry_membership_and_budget_filter(monkeypatch):
     context.config().get_string.return_value = 'UTC'
     project = Mock()
     project.model_dump.return_value = dict(
-        project_id='project-a', name='project-a', budget={'budget_name': 'budget-a'}
+        project_id='project-a',
+        name='project-a',
+        enable_budgets=True,
+        budget={'budget_name': 'budget-a'},
     )
     context.projects.get_user_projects.return_value = SimpleNamespace(
         projects=[project]
@@ -309,7 +312,11 @@ def test_cache_scope_expiry_membership_and_budget_filter(monkeypatch):
     sources.read.return_value = dict(
         data(),
         project_records=[
-            dict(project_id='project-b', budget={'budget_name': 'budget-b'})
+            dict(
+                project_id='project-b',
+                enable_budgets=True,
+                budget={'budget_name': 'budget-b'},
+            )
         ],
     )
     service = InsightsService(context, sources)
@@ -466,7 +473,11 @@ def test_budget_sort_missing_and_shared_budget_fetch_once():
         Mock(model_dump=Mock(return_value=v)) for v in values
     ]
     projects = [
-        dict(project_id=f'project-{i}', budget=dict(budget_name=name))
+        dict(
+            project_id=f'project-{i}',
+            enable_budgets=True,
+            budget=dict(budget_name=name),
+        )
         for i, name in enumerate(['budget-a', 'budget-b', 'budget-c', 'budget-a'])
     ]
     rows = InsightsService(context).budgets(projects, 'USD', time.monotonic() + 30)
@@ -579,6 +590,22 @@ def test_storage_total_matches_latest_measured_tiers():
         == sum(row.bytes for row in result.storage.tier_daily)
         == 50
     )
+
+
+def test_a_zero_forecast_with_spend_is_no_forecast():
+    row = budget_row(
+        'project-a',
+        dict(
+            budget_name='budget-a',
+            budget_limit=dict(amount=100.0),
+            actual_spend=dict(amount=90.0),
+            forecasted_spend=dict(amount=0.0),
+        ),
+        'USD',
+    )
+    assert row['status'] == 'watch'
+    assert row['forecast'] is None
+    assert row['headroom'] is None
 
 
 @pytest.mark.parametrize('spent,limit', [(100, 100), (101, 100), (0, 0)])
@@ -972,11 +999,34 @@ def budget_service(budgets_get_budget):
     return InsightsService(context, sources=Mock())
 
 
+def test_a_project_with_budgets_turned_off_is_not_reported():
+    read = Mock(
+        return_value=Mock(
+            model_dump=Mock(
+                return_value=dict(
+                    budget_name='b',
+                    budget_limit=dict(amount=100.0, unit='USD'),
+                    actual_spend=dict(amount=10.0, unit='USD'),
+                    forecasted_spend=dict(amount=20.0, unit='USD'),
+                )
+            )
+        )
+    )
+    service = budget_service(read)
+    rows = service.budgets(
+        [dict(project_id='p', enable_budgets=False, budget=dict(budget_name='b'))],
+        'USD',
+        time.monotonic() + 60,
+    )
+    assert rows == []
+    read.assert_not_called()
+
+
 def test_one_budget_read_failure_does_not_take_the_report_down():
     service = budget_service(Mock(side_effect=RuntimeError('ThrottlingException')))
     result = SimpleNamespace(unavailable=[])
     rows = service.budgets(
-        [dict(project_id='p', budget=dict(budget_name='b'))],
+        [dict(project_id='p', enable_budgets=True, budget=dict(budget_name='b'))],
         'USD',
         time.monotonic() + 60,
         result,

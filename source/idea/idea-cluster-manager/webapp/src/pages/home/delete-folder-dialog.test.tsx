@@ -41,6 +41,20 @@ describe('delete folder dialog', () => {
         expect(getStorageUsage).toHaveBeenCalledWith({ folder: `${HOME}/runs`, refresh: true });
     });
 
+    it('waits while the server scans the folder, then shows its size', async () => {
+        const getStorageUsage = renderDialog({ state: 'computing', home: HOME });
+        expect(await screen.findByText('Computing storage usage...')).toBeInTheDocument();
+        getStorageUsage.mockResolvedValue({
+            state: 'ready', home: HOME, measured_at: 1,
+            folder: { identity: { inode: '2' }, bytes: 1, files: 1, newest_mtime: null, partial: false }
+        } as any);
+
+        expect(await screen.findByText(/Size:/, {}, { timeout: 4000 })).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).toBeNull();
+        // the scan is asked for once; the follow-up asks for its answer
+        expect(getStorageUsage.mock.calls.map(call => call[0])).toEqual([{ folder: `${HOME}/runs`, refresh: true }, { folder: `${HOME}/runs` }]);
+    });
+
     it('says a folder has not been measured yet, rather than too large', async () => {
         renderDialog({
             state: 'ready', home: HOME, measured_at: 1,

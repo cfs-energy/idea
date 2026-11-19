@@ -60,7 +60,8 @@ sed -i '/^AWS_INSTANCE_ID=/d; /^IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR=/d; /^IDEA_CO
 # Match the second fstab field exactly, and require the root entry to survive.
 {% for name, storage in context.config.get_config('shared-storage').items() %}
 {% if storage is mapping and storage.get('mount_dir') and context.eval_shared_storage_scope(shared_storage=storage) %}
-sed -i '\|^[^#[:space:]][^[:space:]]*[[:space:]]\{1,\}{{ storage.mount_dir.rstrip('/') }}/\{0,1\}[[:space:]]|d' /etc/fstab
+IDEA_SCRUB_DIR='{{ storage.mount_dir.rstrip('/') | default('', true) | string | replace("'", "'\\''") }}' awk '!($1 !~ /^#/ && ($2 == ENVIRON["IDEA_SCRUB_DIR"] || $2 == ENVIRON["IDEA_SCRUB_DIR"] "/"))' /etc/fstab > /etc/fstab.idea-scrub \
+  && cat /etc/fstab.idea-scrub > /etc/fstab && rm -f /etc/fstab.idea-scrub
 {% endif %}
 {% endfor %}
 grep -Eq '^[^#[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab

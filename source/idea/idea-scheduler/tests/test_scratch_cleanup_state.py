@@ -551,3 +551,31 @@ def test_an_old_record_with_no_disposition_is_on_the_failed_path():
     old.exit_status = 0
     context.job_cache.list_completed_jobs.return_value = [old]
     assert source.finished_records({'123'})[0].succeeded is False
+
+
+@pytest.mark.parametrize(
+    'response',
+    [
+        {'timed_out': True, 'hits': {'hits': []}},
+        {'_shards': {'failed': 1}, 'hits': {'hits': []}},
+        {'hits': {'hits': [{'_source': {'job_id': '123'}}] * 200}},
+    ],
+)
+def test_a_partial_index_answer_is_not_no_records(response, monkeypatch):
+    # DBL-28: a partial search was taken as the whole answer, and scratch of a reused job
+    # number could be removed early
+    from ideascheduler.app.documents.document_store import DocumentStore
+
+    store = DocumentStore.__new__(DocumentStore)
+    store._jobs_keyword_subfields = set()
+    monkeypatch.setattr(DocumentStore, '_jobs_alias', property(lambda self: 'jobs'))
+    store.opensearch_client = SimpleNamespace(
+        os_client=SimpleNamespace(search=lambda **_: response)
+    )
+    store.is_enabled = lambda: True
+    store.is_initialized = lambda: True
+    source, context = state()
+    context.job_cache.list_completed_jobs.return_value = []
+    context.document_store = store
+    with pytest.raises(StateUnavailable):
+        source.finished_records({'123'})

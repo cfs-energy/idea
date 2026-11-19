@@ -88,6 +88,11 @@ class RecordingService:
         return ListUserCostsResult(listing=[])
 
 
+def stored_costs():
+    # no head index yet: listing_heads answers None, as before the collector seeds it
+    return Mock(**{'listing_heads.return_value': None})
+
+
 def build_costs_api():
     api = CostsAPI(context=FakeAppContext())
     service = RecordingService()
@@ -204,7 +209,7 @@ def test_listing_storage_covers_the_same_30_days_as_jobs_and_desktops():
     """
     api, _ = build_costs_api()
     api.my_costs.list_user_costs = listing_for_window('2026-08-24', '2026-09-22')
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD',
         state='ready',
@@ -234,7 +239,7 @@ def test_listing_storage_covers_the_same_30_days_as_jobs_and_desktops():
 def test_list_user_costs_adds_cached_shared_storage_to_each_row(has_items):
     api, _ = build_costs_api()
     api.my_costs.list_user_costs = listing_for_window('2026-08-24', '2026-09-22')
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD',
         state='ready',
@@ -277,7 +282,7 @@ def test_disabled_storage_skips_reads_even_for_an_empty_listing(enabled, targets
     api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(listing=[])
     api.context.storage_metrics.is_enabled.return_value = enabled
     api.context.storage_metrics.targets.return_value = targets
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
 
     api.invoke(context)
@@ -294,7 +299,7 @@ def test_disabled_storage_preserves_history_and_labels_the_current_subtotal():
         listing=[historical]
     )
     api.context.storage_metrics.is_enabled.return_value = False
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
 
     api.invoke(context)
@@ -311,7 +316,7 @@ def test_enabled_storage_without_collected_data_is_not_a_read_failure():
     api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
         listing=[UserCosts(username='user-a', total_cost=4.0)]
     )
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD', state='collecting'
     )
@@ -331,7 +336,7 @@ def test_no_usage_data_is_missing_not_measured_zero():
     api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
         listing=[UserCosts(username='user-a', total_cost=4.0)]
     )
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD',
         state='ready',
@@ -362,7 +367,7 @@ def test_storage_read_failure_is_unavailable_not_zero():
     api.my_costs.list_user_costs = lambda heads=None: ListUserCostsResult(
         listing=[UserCosts(username='user-a', total_cost=4.0)]
     )
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.side_effect = RuntimeError('read failed')
     context = FakeApiInvocationContext('Costs.ListUserCosts', 'admin', elevated=True)
 
@@ -378,7 +383,7 @@ def test_storage_read_failure_is_unavailable_not_zero():
 def test_measured_storage_zero_remains_a_known_zero():
     api, _ = build_costs_api()
     api.my_costs.list_user_costs = listing_for_window('2026-08-24', '2026-09-22')
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD',
         state='ready',
@@ -399,7 +404,7 @@ def test_measured_storage_zero_remains_a_known_zero():
 
 def test_get_user_costs_uses_the_personal_billboard_service_for_the_named_user():
     api, _ = build_costs_api()
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult(
         currency='USD', state='ready'
     )
@@ -489,7 +494,7 @@ def test_monthly_costs_requires_authorized_membership():
 def test_collector_storage_estimate_is_available_when_amount_is_known(amount):
     api, _ = build_costs_api()
     api.my_costs.list_user_costs = listing_for_window('2026-08-04', '2026-09-02')
-    api.monthly_costs = Mock()
+    api.monthly_costs = stored_costs()
     api.monthly_costs.get_costs.return_value = GetMyCostsResult.model_validate(
         {
             'currency': 'USD',

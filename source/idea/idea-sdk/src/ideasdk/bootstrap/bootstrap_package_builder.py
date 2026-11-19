@@ -25,8 +25,10 @@ _BOOTSTRAP_BUILDER_LOCK = RLock()
 class BootstrapPackageBuilder:
     """
     Renders the bootstrap module and returns the path to the rendered bootstrap tar.gz file.
-    The final packaged tar.gz will be returned as string path by the build method
-    The caller is responsible to clean up the temporary package after uploading to S3.
+    The final packaged tar.gz will be returned as string path by the build method.
+    A package can carry secrets (a desktop's local administrator password), so tmp_dir is made
+    private to the service (0700) and the archive 0600, whatever the umask. The caller removes
+    tmp_dir once the archive is uploaded.
     """
 
     def __init__(
@@ -86,6 +88,7 @@ class BootstrapPackageBuilder:
                 tmp_dir = tempfile.mkdtemp()
             else:
                 os.makedirs(tmp_dir, exist_ok=True)
+            os.chmod(tmp_dir, 0o700)
 
             target_dir = os.path.join(tmp_dir, self.target_package_basename)
             if Utils.is_dir(target_dir):
@@ -103,6 +106,7 @@ class BootstrapPackageBuilder:
                     if Utils.is_file(target_archive):
                         os.remove(target_archive)
                     shutil.make_archive(target_dir, 'gztar', target_dir)
+                    os.chmod(target_archive, 0o600)
                     return target_archive
 
             env = Jinja2Utils.env_using_file_system_loader(self.source_directory)
@@ -141,4 +145,8 @@ class BootstrapPackageBuilder:
                             shutil.copy2(source_file, target_file)
 
             shutil.make_archive(target_dir, 'gztar', target_dir)
-            return os.path.join(tmp_dir, f'{self.target_package_basename}.tar.gz')
+            target_archive = os.path.join(
+                tmp_dir, f'{self.target_package_basename}.tar.gz'
+            )
+            os.chmod(target_archive, 0o600)
+            return target_archive

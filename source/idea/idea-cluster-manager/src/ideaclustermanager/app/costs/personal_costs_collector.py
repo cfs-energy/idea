@@ -1406,7 +1406,9 @@ class PersonalCostsCollector:
         # a leader that died mid-seed left its mark; no seed runs until this run starts one
         state.pop('seeding_since', None)
         state.pop('seed_seconds', None)
-        state['next_run'] = now.shift(minutes=15).isoformat()
+        # a refresh-only pass must not postpone the full pass
+        if due:
+            state['next_run'] = now.shift(minutes=15).isoformat()
         self.store.put(SYSTEM, 'state', state)
         timezone = self.context.config().get_string('cluster.timezone', 'UTC') or 'UTC'
         local = now.to(timezone)
@@ -1448,9 +1450,11 @@ class PersonalCostsCollector:
         state.pop('run_started', None)
         state.pop('seed_seconds', None)
         # At most half the time busy: a run longer than the period waits as long again.
-        state['next_run'] = max(
-            arrow.utcnow().shift(seconds=state['last_duration']), now.shift(minutes=15)
-        ).isoformat()
+        if due:
+            state['next_run'] = max(
+                arrow.utcnow().shift(seconds=state['last_duration']),
+                now.shift(minutes=15),
+            ).isoformat()
         self.logger.info(
             f'Personal costs collected for {len(selected)} users in '
             f'{state["last_duration"]}s: {self.calculator.computed_days} days computed, '

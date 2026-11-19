@@ -9,11 +9,14 @@ function install_cjson_devel () {
 
   log_info "Building cjson-devel from source"
 
-  # Clone the repository and checkout specific version
+  # Build the commit tagged v1.7.19, pinned by id: a tag can be moved, a commit id cannot
+  local CJSON_COMMIT=c859b25da02955fef659d658b8f324b5cde87be3
+  rm -rf cJSON
   git clone https://github.com/DaveGamble/cJSON.git
   cd cJSON || exit
-  # Use v1.7.18 for stability
-  git checkout v1.7.18
+  if ! git checkout --detach "${CJSON_COMMIT}" || [[ "$(git rev-parse HEAD)" != "${CJSON_COMMIT}" ]]; then
+    fail_bootstrap download-unverified "cJSON checkout of pinned commit ${CJSON_COMMIT} failed"
+  fi
 
   # Build and install
   mkdir build

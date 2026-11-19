@@ -981,6 +981,7 @@ class DesktopImagePipeline:
         record.status = S.RESOLVING.value
         record.checks = []
         record.image_id = None
+        record.ami_name = None
         record.instance_id = None
         record.validated_on = None
         record.error = None
@@ -1275,6 +1276,11 @@ class DesktopImagePipeline:
         result = ec2.describe_instances(
             Filters=[
                 {'Name': 'tag-key', 'Values': [IMAGE_BUILD_TAG]},
+                # the module id is the same on every cluster in the account
+                {
+                    'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
+                    'Values': [self.context.cluster_name()],
+                },
                 {
                     'Name': f'tag:{constants.IDEA_TAG_MODULE_ID}',
                     'Values': [self.context.module_id()],

@@ -829,6 +829,7 @@ export interface SocaQueueManagementParams {
   restricted_parameters?: string[];
   allowed_security_groups?: string[];
   allowed_instance_profiles?: string[];
+  allow_new_fsx_lustre?: boolean;
 }
 export interface SocaJobParams {
   nodes?: number;
@@ -948,6 +949,7 @@ export interface DeleteEmailTemplateRequest {
 export interface DeleteEmailTemplateResult {}
 export interface DeleteFilesRequest {
   files?: string[];
+  include_folders?: boolean;
 }
 export interface DeleteFilesResult {}
 export interface DeleteGroupRequest {
@@ -2008,6 +2010,7 @@ export interface ListFilesResult {
   listing?: FileData[];
   filters?: SocaFilter[];
   cwd?: string;
+  truncated?: boolean;
 }
 export interface ListGroupsRequest {
   paginator?: SocaPaginator;

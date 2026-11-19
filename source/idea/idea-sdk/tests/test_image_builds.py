@@ -20,6 +20,7 @@ from ideasdk.aws.image_builds import (
     check_builder_type_architecture,
     default_builder_instance_type,
     sanitize_aws_message,
+    terminate_old_stopped_builders,
     unique_build_version,
     BUILD_STATUS_COMPLETE,
     BUILD_STATUS_FAILED,
@@ -1254,3 +1255,99 @@ def test_a_missing_path_is_still_an_answer(tmp_path):
 
     assert path_answers(str(tmp_path)) is True
     assert path_answers(str(tmp_path / 'absent')) is True
+
+
+class TagFilteringEc2:
+    """applies describe_instances tag filters the way EC2 does, and records terminations"""
+
+    def __init__(self, instances):
+        self.instances = instances
+        self.terminated = []
+
+    def describe_instances(self, Filters):
+        found = self.instances
+
+        def tags(instance):
+            return {t['Key']: t['Value'] for t in instance.get('Tags', [])}
+
+        for f in Filters:
+            if f['Name'] == 'tag-key':
+                found = [i for i in found if f['Values'][0] in tags(i)]
+            elif f['Name'].startswith('tag:'):
+                key = f['Name'][len('tag:') :]
+                found = [i for i in found if tags(i).get(key) in f['Values']]
+        return {'Reservations': [{'Instances': found}]}
+
+    def terminate_instances(self, InstanceIds):
+        self.terminated.extend(InstanceIds)
+
+
+def test_the_stopped_builder_sweep_leaves_another_clusters_builder_alone():
+    import time as time_module
+
+    old = str(int(time_module.time() - 2 * 86400))
+
+    def stopped_builder(instance_id, cluster):
+        return {
+            'InstanceId': instance_id,
+            'Tags': [
+                {'Key': STOPPED_AT_TAG, 'Value': old},
+                {'Key': 'idea:ClusterName', 'Value': cluster},
+                {'Key': 'idea:ModuleId', 'Value': 'vdc'},
+            ],
+        }
+
+    ec2 = TagFilteringEc2(
+        [
+            stopped_builder('i-ours', 'idea-test'),
+            stopped_builder('i-theirs', 'idea-other'),
+        ]
+    )
+    context = MagicMock()
+    context.cluster_name.return_value = 'idea-test'
+    context.module_id.return_value = 'vdc'
+    context.aws().ec2.return_value = ec2
+
+    assert terminate_old_stopped_builders(context, Mock()) == ['i-ours']
+    assert ec2.terminated == ['i-ours']
+
+
+def test_a_custom_build_in_its_checking_phase_is_repaired_after_a_restart():
+    # SI-20: only 'building' was repaired, so a restart during 'checking' locked the slot
+    import socket
+
+    db = records_db()
+    context = MagicMock()
+    context.module_id.return_value = 'scheduler'
+    context.aws().ec2().describe_instances.return_value = {'Reservations': []}
+    db.context = context
+    db.put(
+        ImageBuildRecord(
+            base_os='rocky9',
+            architecture='arm64',
+            status='checking',
+            instance_id='i-checking',
+            host=socket.gethostname(),
+            started_on=datetime.now(tz=timezone.utc),
+        )
+    )
+    assert db.sweep_orphans(Mock()) == ['rocky9/arm64']
+    assert db.get('rocky9', 'arm64').status == BUILD_STATUS_FAILED
+    context.aws().ec2().stop_instances.assert_called_once_with(
+        InstanceIds=['i-checking']
+    )
+
+
+@pytest.mark.parametrize(
+    'region,host',
+    [
+        ('us-east-1', 'us-east-1.console.aws.amazon.com'),
+        ('us-gov-west-1', 'us-gov-west-1.console.amazonaws-us-gov.com'),
+        ('cn-north-1', 'console.amazonaws.cn'),
+    ],
+)
+def test_console_links_use_the_partitions_host(region, host):
+    # SI-25: GovCloud links pointed at the commercial console
+    from ideasdk.aws.image_builds import console_host
+
+    assert console_host(region) == host

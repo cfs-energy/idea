@@ -124,7 +124,7 @@ class ActiveDirectoryClient(AbstractLDAPClient):
 
     @property
     def ldap_sudoer_filterstr(self) -> str:
-        return f'(&(objectClass=user)(memberOf={self.ldap_sudoers_group_dn}))'
+        return f'(&(objectClass=user)(memberOf={escape_filter_chars(self.ldap_sudoers_group_dn)}))'
 
     def build_sudoer_filterstr(self, username: str) -> str:
         return (

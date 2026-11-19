@@ -1121,9 +1121,15 @@ def test_a_desktop_deleted_before_the_window_is_excluded():
     service.get_summary(USER)
 
     # the query itself excludes it: nothing that stopped before the window starts is
-    # asked for, so a long dead desktop never reaches the page
+    # asked for unless it is still live, so a long dead desktop never reaches the page
     _, body = next(query for query in os_client.queries if 'user_sessions' in query[0])
-    ranges = [entry for entry in body['query']['bool']['filter'] if 'range' in entry]
+    clause = body['query']['bool']
+    assert clause['minimum_should_match'] == 1
+    live = next(
+        entry['terms']['state.raw'] for entry in clause['should'] if 'terms' in entry
+    )
+    assert 'DELETED' not in live
+    ranges = [entry for entry in clause['should'] if 'range' in entry]
     updated_lower_bound = next(
         entry['range']['updated_on']['gte']
         for entry in ranges

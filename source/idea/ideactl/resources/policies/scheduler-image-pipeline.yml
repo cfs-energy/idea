@@ -4,26 +4,39 @@
 # inline size limit scheduler-read-only.yml describes.
 Version: '2012-10-17'
 Statement:
+  # Run Command reaches only this cluster's image builders and compute nodes (the scheduler role
+  # script asks compute nodes to re-read the server address after a restart). SSM checks the
+  # instance's tags for each node a tag-targeted command resolves to.
+  - Action:
+      - ssm:SendCommand
+    Resource:
+      - '{{ context.arns.get_arn("ssm", "document/AWS-RunPowerShellScript", aws_account_id="") }}'
+      - '{{ context.arns.get_arn("ssm", "document/AWS-RunShellScript", aws_account_id="") }}'
+    Effect: Allow
   - Action:
       - ssm:SendCommand
     Resource:
       - '{{ context.arns.get_arn("ec2", "instance/*") }}'
-      - '{{ context.arns.get_arn("ssm", "document/AWS-RunPowerShellScript", aws_account_id="") }}'
-      - '{{ context.arns.get_arn("ssm", "document/AWS-RunShellScript", aws_account_id="") }}'
+    Condition:
+      StringEquals:
+        ssm:resourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+        ssm:resourceTag/idea:ModuleId: '{{ context.module_id }}'
+        ssm:resourceTag/idea:NodeType: [ami-builder, compute-node]
     Effect: Allow
 
-  - Action:
-      - ssm:StartAutomationExecution
-    Resource:
-      - '{{ context.arns.get_ssm_arn("automation-definition/") }}'
-    Effect: Allow
-
-  - Action:
-      - ssm:StopAutomationExecution
-      - ssm:GetAutomationExecution
-    Resource:
-      - '{{ context.arns.get_ssm_arn("automation-execution/") }}'
-    Effect: Allow
+  # The identity tags the grants above and Run Command key on are written only at launch, so a
+  # role cannot bring another instance into its own reach by retagging it.
+  - Sid: IdentityTagsSetOnlyAtLaunch
+    Action:
+      - ec2:CreateTags
+      - ec2:DeleteTags
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      ForAnyValue:StringEquals:
+        aws:TagKeys: [idea:ClusterName, idea:NodeType, idea:ModuleId]
+      'Null':
+        ec2:CreateAction: 'true'
+    Effect: Deny
 
   - Effect: Allow
     Action:
@@ -113,4 +126,6 @@ Statement:
           - '{{ context.module_id }}.images.default_image_pinned'
           - '{{ context.module_id }}.images.image_refresh_last_run_on'
           - '{{ context.module_id }}.images.refreshed_release'
+          # the job metrics backfill's status row (ideasdk metrics/history_backfill.py)
+          - '{{ context.module_id }}.metrics.backfill.jobs'
     Sid: ComputeImageSettings

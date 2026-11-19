@@ -192,7 +192,8 @@ class SocaFSxLustreConfig(SocaBaseModel):
             result['fsx_lustre'] = fsx_lustre
         if self.deployment_type is not None:
             result['fsx_lustre_deployment_type'] = self.deployment_type
-            if self.deployment_type == 'persistent_1':
+            # both persistent types take a throughput (SCH-22)
+            if self.deployment_type in ('persistent_1', 'persistent_2'):
                 result['fsx_lustre_per_unit_throughput'] = self.per_unit_throughput
         if self.size is not None:
             result['fsx_lustre_size'] = int(self.size.value)
@@ -207,8 +208,22 @@ class SocaFSxLustreConfig(SocaBaseModel):
         return ['scratch_1', 'scratch_2', 'persistent_1', 'persistent_2']
 
     @staticmethod
-    def allowed_per_unit_throughputs():
+    def allowed_per_unit_throughputs(deployment_type: Optional[str] = None):
+        # SSD values from the AWS::FSx::FileSystem LustreConfiguration reference
+        if deployment_type is not None and deployment_type.lower() == 'persistent_2':
+            return [125, 250, 500, 1000]
         return [50, 100, 200]
+
+    @staticmethod
+    def default_per_unit_throughput(deployment_type: Optional[str]) -> Optional[int]:
+        if deployment_type is None:
+            return None
+        deployment_type = deployment_type.lower()
+        if deployment_type == 'persistent_1':
+            return 200
+        if deployment_type == 'persistent_2':
+            return 125
+        return None
 
     @staticmethod
     def allowed_sizes_gb():
@@ -227,8 +242,12 @@ class SocaFSxLustreConfig(SocaBaseModel):
         return value in SocaFSxLustreConfig.allowed_deployment_types()
 
     @staticmethod
-    def is_allowed_per_unit_throughput(value: int) -> bool:
-        return value in SocaFSxLustreConfig.allowed_per_unit_throughputs()
+    def is_allowed_per_unit_throughput(
+        value: int, deployment_type: Optional[str] = None
+    ) -> bool:
+        return value in SocaFSxLustreConfig.allowed_per_unit_throughputs(
+            deployment_type
+        )
 
     @staticmethod
     def is_allowed_size(value: int) -> bool:
@@ -807,6 +826,27 @@ class SocaJob(SocaBaseModel):
     def desired_capacity(self) -> int:
         if self.params is None:
             raise exceptions.invalid_job('params not found.')
+        # read back from PBS, cpus is Resource_List.ncpus, the job-wide total; nodes x
+        # cpus counted it once per node (SJP-13). the select says what each chunk asks.
+        select = (self.params.custom_params or {}).get('select')
+        if select:
+            total = 0
+            for chunk in str(select).split('+'):
+                parts = chunk.split(':')
+                count = int(parts[0]) if parts[0].isdigit() else 1
+                ncpus = next(
+                    (
+                        ModelUtils.get_as_int(part.split('=', 1)[1], None)
+                        for part in parts
+                        if part.startswith('ncpus=')
+                    ),
+                    None,
+                )
+                if ncpus is None:
+                    break
+                total += count * ncpus
+            else:
+                return total
         return self.desired_nodes() * ModelUtils.get_as_int(self.params.cpus, 1)
 
     def desired_nodes(self) -> int:
@@ -1487,6 +1527,11 @@ class SocaQueueManagementParams(SocaBaseModel):
     restricted_parameters: Optional[List[str]] = Field(default=None)
     allowed_security_groups: Optional[List[str]] = Field(default=None)
     allowed_instance_profiles: Optional[List[str]] = Field(default=None)
+    # None (profiles saved before 26.11.2) allows, as before; new profiles store False
+    allow_new_fsx_lustre: Optional[bool] = Field(default=None)
+
+    def allows_new_fsx_lustre(self) -> bool:
+        return self.allow_new_fsx_lustre is not False
 
     def instance_type_rules(self) -> str:
         """Describe the policy without expanding families into the EC2 catalog."""

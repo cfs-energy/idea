@@ -8,6 +8,7 @@
 import type { Command } from 'commander';
 
 import { CdkInvoker, type Deps } from '../cdk-invoker.ts';
+import { asBoolFlag } from './deploy.ts';
 
 interface CdkModuleOptions {
   clusterName: string;
@@ -42,7 +43,7 @@ export function cdkAppArgv(options: CdkAppCommandOptions): string[] {
     options.moduleName,
   ];
   if (options.deploymentId !== undefined) argv.push('--deployment-id', options.deploymentId);
-  argv.push('--termination-protection', options.terminationProtection ?? 'true');
+  argv.push('--termination-protection', String(asBoolFlag(options.terminationProtection, true)));
   if (options.awsProfile !== undefined) argv.push('--aws-profile', options.awsProfile);
   if (options.configFile !== undefined) argv.push('--config-file', options.configFile);
   if (options.synthReads !== undefined) argv.push('--synth-reads', options.synthReads);

@@ -61,7 +61,7 @@
     "data_type": "str",
     "validate": {
       "required": true,
-      "regex": "^([A-Za-z0-9_-]+){3,50}$"
+      "regex": "^[A-Za-z0-9_-]{3,50}$"
     }
   },
   {

@@ -3086,3 +3086,887 @@ def test_instance_type_refusal_reaches_qsub_hook(context, monkeypatch):
         'Instance types not allowed for queue "high": [t3.micro]. '
         'Allowed instance types: c5 (large, xlarge).'
     ) in result.formatted_user_message
+
+
+BASIC_PARAMS = {'nodes': 1, 'cpus': 1, 'instance_type': 't3.micro'}
+
+
+def test_existing_fsx_accepts_the_documented_dns_name(context):
+    dns_name = 'fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com'
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'fsx_lustre': dns_name}
+    )
+    assert result.success is True
+    assert result.job_params.fsx_lustre.existing_fsx == dns_name
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        'fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com$(true)',
+        'fs-0123456789abcdef0',
+        'fc-0123456789abcdef0.fsx.us-east-2.amazonaws.com',
+    ],
+)
+def test_existing_fsx_refuses_anything_but_a_file_system_dns_name(context, value):
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'fsx_lustre': value}
+    )
+    assert result.success is False
+    assert any(
+        'must be the DNS name of an existing FSx for Lustre file system' in m
+        for m in get_validation_messages(result)
+    )
+
+
+def test_job_group_accepts_its_documented_form(context):
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'job_group': 'custom-abc123'}
+    )
+    assert result.success is True
+    assert result.job_params.job_group == 'custom-abc123'
+
+
+@pytest.mark.parametrize(
+    'value', ['custom-abc$(true)', 'custom-abcdefghijk', 'xcustom-abc']
+)
+def test_job_group_must_match_its_whole_pattern(context, value):
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'job_group': value}
+    )
+    assert result.success is False
+    assert get_validation_messages(result) == [
+        f'job_group must be custom- followed by 1 to 10 lowercase letters or digits: ({value})'
+    ]
+
+
+def test_compute_stack_must_match_its_whole_pattern(context):
+    prefix = context.cluster_name().replace('-', '').replace('_', '')
+    accepted = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'compute_stack': f'{prefix}-abcde'}
+    )
+    assert accepted.success is True
+    refused = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'compute_stack': f'{prefix}-a{{5, 50}}$(true)'},
+    )
+    assert refused.success is False
+
+
+def _queue(**kwargs) -> HpcQueueProfile:
+    return HpcQueueProfile(
+        name='normal',
+        queues=['normal'],
+        queue_management_params=SocaQueueManagementParams(),
+        **kwargs,
+    )
+
+
+def test_keep_forever_is_refused_on_a_queue_that_is_not_always_on(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'keep_forever': 'true'},
+        queue_profile=_queue(keep_forever=False, terminate_when_idle=0),
+    )
+    assert result.success is False
+    assert get_validation_messages(result) == [
+        "Queue normal decides whether its compute nodes stay up, so jobs can't set "
+        'keep_forever. Remove it from your job script.'
+    ]
+
+
+def test_keep_forever_matching_an_always_on_queue_is_accepted(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'keep_forever': 'true'},
+        queue_profile=_queue(keep_forever=True, terminate_when_idle=0),
+    )
+    assert result.success is True
+    assert result.provisioning_options.keep_forever is True
+
+
+def test_terminate_when_idle_is_refused_on_a_queue_without_idle_nodes(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'terminate_when_idle': '100000'},
+        queue_profile=_queue(keep_forever=False, terminate_when_idle=0),
+    )
+    assert result.success is False
+    assert get_validation_messages(result) == [
+        "Queue normal doesn't keep idle compute nodes, so jobs can't set "
+        'terminate_when_idle. Remove it from your job script.'
+    ]
+
+
+def test_terminate_when_idle_is_accepted_on_a_queue_that_keeps_idle_nodes(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'terminate_when_idle': '5'},
+        queue_profile=_queue(keep_forever=False, terminate_when_idle=10),
+    )
+    assert result.success is True
+    assert result.provisioning_options.terminate_when_idle == 5
+
+
+def test_terminate_when_idle_cannot_exceed_the_queue_idle_time(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'terminate_when_idle': '30'},
+        queue_profile=_queue(keep_forever=False, terminate_when_idle=10),
+    )
+    assert result.success is False
+    assert get_validation_messages(result) == [
+        'Queue normal keeps idle compute nodes for at most 10 minutes, so '
+        'terminate_when_idle can be at most 10.'
+    ]
+
+
+@pytest.mark.parametrize('param', ['keep_forever', 'terminate_when_idle', 'tags'])
+def test_capacity_options_honour_restricted_parameters(context, param):
+    value = {'keep_forever': 'true', 'terminate_when_idle': '30'}.get(
+        param, "{'team': 'cfd'}"
+    )
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, param: value},
+        queue_profile=HpcQueueProfile(
+            name='normal',
+            keep_forever=True,
+            terminate_when_idle=10,
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=[param]
+            ),
+        ),
+    )
+    assert result.success is False
+    assert get_validation_messages(result) == [
+        f"Queue normal doesn't let jobs set {param}. Remove it from your job script."
+    ]
+
+
+@pytest.mark.parametrize('key', ['Name', 'idea:JobOwner', 'IDEA:FSx', 'aws:foo'])
+def test_tags_cannot_set_keys_the_product_relies_on(context, key):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'tags': repr({key: 'x', 'team': 'cfd'})},
+    )
+    assert result.success is False
+    assert key in get_validation_messages(result)[0]
+
+
+def test_tags_with_own_keys_are_accepted(context):
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'tags': "{'team': 'cfd'}"}
+    )
+    assert result.success is True
+    assert result.provisioning_options.tags == {'team': 'cfd'}
+
+
+def _serve_instance_profile(context, monkeypatch, arn: str):
+    from ideasdk.aws import AWSUtil
+
+    monkeypatch.setattr(
+        AWSUtil,
+        'get_instance_profile_arn',
+        lambda self, instance_profile_name: {'success': True, 'arn': arn},
+    )
+
+
+def test_another_projects_instance_profile_is_refused(context, monkeypatch):
+    cluster_name = context.cluster_name()
+    name = f'{cluster_name}-other-project'
+    _serve_instance_profile(
+        context,
+        monkeypatch,
+        f'arn:aws:iam::111122223333:instance-profile/idea/{cluster_name}/projects/{name}',
+    )
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'instance_profile': name}
+    )
+    assert result.success is False
+    assert get_validation_messages(result) == [
+        f'IAM instance profile: ({name}) belongs to a project, and a job runs under its '
+        'own project instance profile only. Submit the job without instance_profile.'
+    ]
+
+
+def test_an_instance_profile_outside_the_project_path_is_still_accepted(
+    context, monkeypatch
+):
+    _serve_instance_profile(
+        context,
+        monkeypatch,
+        'arn:aws:iam::111122223333:instance-profile/custom-compute-profile',
+    )
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'instance_profile': 'custom-compute-profile'},
+    )
+    assert result.success is True
+
+
+# every job_uid form a release has written or a submitter is likely to supply, and the
+# forms a shell or a path could misread; the read-back check uses the same pattern
+JOB_UID_ACCEPTED = [
+    'Fczh79mpvjXyZ3uLqKnR2a',  # shortuuid: the hook and SubmitJob, every release
+    '3f2b9c1e-7a4d-4e5f-9b2c-0d1e2f3a4b5c',  # uuid4: the always-on pool action
+    'batch_17',  # a submitter's own -l job_uid
+    'run-2026_11-a',
+]
+JOB_UID_REFUSED = ['abc$(true)', 'a.b', '..', 'a b', "a'b", 'a/b', 'x' * 65]
+
+
+@pytest.mark.parametrize(
+    'job_uid,accepted',
+    [(uid, True) for uid in JOB_UID_ACCEPTED]
+    + [(uid, False) for uid in JOB_UID_REFUSED],
+)
+def test_job_uid_carried_on_a_submission_keeps_a_safe_form(
+    context, monkeypatch, job_uid, accepted
+):
+    from test_job_project_default import _hook, _projects, _use_queue, _validate_hook
+
+    _use_queue(context, monkeypatch, _projects('project-a'))
+    monkeypatch.setattr(
+        context.projects_client,
+        'get_user_projects',
+        lambda username: _projects('project-a'),
+    )
+    from unittest.mock import Mock
+
+    # a supplied uid is checked against stored jobs too: none is taken here
+    monkeypatch.setattr(
+        context,
+        'job_cache',
+        Mock(is_job_uid_taken=lambda job_uid: False),
+        raising=False,
+    )
+    hook = _hook(context, project='project-a')
+    hook.event.job.Resource_List['job_uid'] = job_uid
+    result = _validate_hook(context, monkeypatch, hook)
+    refused = 'job_uid can only contain' in (result.formatted_user_message or '')
+    assert refused is not accepted, result.formatted_user_message
+    if not accepted:
+        assert result.accept is False
+
+
+def test_restricting_fsx_lustre_refuses_a_job_named_existing_fsx(context):
+    # the documented way for an administrator to stop jobs naming any existing FSx
+    result = build_and_validate(
+        context=context,
+        params={
+            **BASIC_PARAMS,
+            'fsx_lustre': 'fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com',
+        },
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=['fsx_lustre']
+            ),
+        ),
+    )
+    assert result.success is False
+    assert any(
+        "doesn't let jobs set fsx_lustre." in m for m in get_validation_messages(result)
+    )
+
+
+DEFAULT_FSX = 'fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com'
+JOB_FSX = 'fs-0fedcba9876543210.fsx.us-east-2.amazonaws.com'
+
+
+def fsx_queue(existing_fsx=DEFAULT_FSX, restricted=None) -> HpcQueueProfile:
+    from ideadatamodel import SocaFSxLustreConfig
+
+    # the shape the portal's queue profile form saves for "FSx for Lustre (Existing)"
+    return HpcQueueProfile(
+        name='mock-queue-profile',
+        default_job_params=SocaJobParams(
+            enable_scratch=True if existing_fsx else None,
+            scratch_provider='fsx-lustre-existing' if existing_fsx else None,
+            fsx_lustre=SocaFSxLustreConfig(enabled=True, existing_fsx=existing_fsx)
+            if existing_fsx
+            else None,
+        ),
+        queue_management_params=SocaQueueManagementParams(
+            restricted_parameters=restricted or []
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    'params,restricted,mounted',
+    [
+        ({}, None, DEFAULT_FSX),  # job sets nothing: queue default
+        ({'fsx_lustre': 'true'}, None, DEFAULT_FSX),  # job asks for FSx, names none
+        ({'fsx_lustre': JOB_FSX}, None, JOB_FSX),  # job value wins when not restricted
+        (
+            {},
+            ['fsx_lustre'],
+            DEFAULT_FSX,
+        ),  # restricted: the queue default still applies
+    ],
+)
+def test_queue_default_existing_fsx_reaches_the_job(
+    context, params, restricted, mounted
+):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, **params},
+        queue_profile=fsx_queue(restricted=restricted),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.enabled is True
+    assert result.job_params.fsx_lustre.existing_fsx == mounted
+    assert result.job_params.scratch_provider == 'fsx-lustre-existing'
+    assert result.job_params.enable_scratch is True
+
+
+def test_job_turning_fsx_off_wins_over_the_queue_default(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': 'false'},
+        queue_profile=fsx_queue(),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.enabled is False
+
+
+def test_restricted_with_no_default_gives_no_lustre(context):
+    result = build_and_validate(
+        context=context,
+        params=BASIC_PARAMS,
+        queue_profile=fsx_queue(existing_fsx=None, restricted=['fsx_lustre']),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.enabled is False
+    assert result.job_params.fsx_lustre.existing_fsx is None
+
+
+def test_a_stored_default_that_is_not_a_dns_name_is_refused(context):
+    result = build_and_validate(
+        context=context,
+        params=BASIC_PARAMS,
+        queue_profile=fsx_queue(existing_fsx='fs-1;reboot'),
+    )
+    assert result.success is False
+    assert any(
+        'is not a file system DNS name' in m for m in get_validation_messages(result)
+    )
+
+
+def new_fsx_queue(allow, default_existing_fsx=None) -> HpcQueueProfile:
+    from ideadatamodel import SocaFSxLustreConfig
+
+    return HpcQueueProfile(
+        name='mock-queue-profile',
+        default_job_params=SocaJobParams(
+            fsx_lustre=SocaFSxLustreConfig(
+                enabled=True, existing_fsx=default_existing_fsx
+            )
+            if default_existing_fsx
+            else None,
+        ),
+        queue_management_params=SocaQueueManagementParams(allow_new_fsx_lustre=allow),
+    )
+
+
+NEW_FSX_REQUESTS = [
+    {'fsx_lustre': 'true'},
+    {'fsx_lustre': 'true', 'fsx_lustre_size': '2400'},
+    {'fsx_lustre': {'enabled': True, 'size': {'value': 1200, 'unit': 'gb'}}},
+]
+
+
+@pytest.mark.parametrize('request_params', NEW_FSX_REQUESTS)
+@pytest.mark.parametrize('allow', [None, True])
+def test_new_fsx_is_created_when_the_queue_allows_it(context, request_params, allow):
+    # None: a profile stored before the setting existed allows it, as before
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, **request_params},
+        queue_profile=new_fsx_queue(allow),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.enabled is True
+    assert result.job_params.fsx_lustre.existing_fsx is None
+    assert result.job_params.scratch_provider == 'fsx-lustre-new'
+
+
+@pytest.mark.parametrize(
+    'request_params',
+    NEW_FSX_REQUESTS + [{'fsx_lustre': 's3://my-bucket'}],
+)
+def test_new_fsx_is_refused_when_the_queue_does_not_allow_it(context, request_params):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, **request_params},
+        queue_profile=new_fsx_queue(False),
+    )
+    assert result.success is False
+    assert (
+        "Queue mock-queue-profile doesn't let jobs create a new FSx for Lustre file "
+        'system. Ask an administrator to allow it on the queue, or set fsx_lustre to '
+        'the DNS name of an existing file system.'
+    ) in get_validation_messages(result)
+
+
+def test_not_allowed_still_mounts_an_existing_fsx_by_name(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': JOB_FSX},
+        queue_profile=new_fsx_queue(False),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.existing_fsx == JOB_FSX
+
+
+@pytest.mark.parametrize('params', [{}, {'fsx_lustre': 'true'}])
+def test_not_allowed_still_applies_the_queue_default_existing_fsx(context, params):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, **params},
+        queue_profile=new_fsx_queue(False, default_existing_fsx=DEFAULT_FSX),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.existing_fsx == DEFAULT_FSX
+    assert result.job_params.scratch_provider == 'fsx-lustre-existing'
+
+
+def queue_with_fsx_default(scratch_provider, existing_fsx=DEFAULT_FSX, **fsx):
+    from ideadatamodel import SocaFSxLustreConfig
+
+    return HpcQueueProfile(
+        name='mock-queue-profile',
+        default_job_params=SocaJobParams(
+            scratch_provider=scratch_provider,
+            fsx_lustre=SocaFSxLustreConfig(
+                enabled=True, existing_fsx=existing_fsx, **fsx
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    'scratch_provider,mounted',
+    [
+        ('fsx-lustre-existing', DEFAULT_FSX),
+        # written through the API, before the portal field worked: no provider
+        (None, DEFAULT_FSX),
+        # switched to EBS or a new FSx with the old value still stored: no default
+        ('ebs', None),
+        ('fsx-lustre-new', None),
+    ],
+)
+def test_the_existing_fsx_default_follows_the_scratch_provider(
+    context, scratch_provider, mounted
+):
+    result = build_and_validate(
+        context=context,
+        params=BASIC_PARAMS,
+        queue_profile=queue_with_fsx_default(scratch_provider),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.fsx_lustre.existing_fsx == mounted
+
+
+def test_a_malformed_stored_default_is_refused_when_the_job_asks_for_fsx(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': 'true'},
+        queue_profile=queue_with_fsx_default('fsx-lustre-existing', 'fs-1;reboot'),
+    )
+    assert result.success is False
+    assert any(
+        'is not a file system DNS name' in m for m in get_validation_messages(result)
+    )
+
+
+def test_a_bucket_on_a_queue_with_an_existing_default_creates_a_complete_new_fsx(
+    context, monkeypatch
+):
+    monkeypatch.setattr(
+        context.aws_util(), 's3_bucket_has_access', lambda **_: {'success': True}
+    )
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': 's3://my-bucket'},
+        queue_profile=queue_with_fsx_default('fsx-lustre-existing'),
+    )
+    assert result.success is True, get_validation_messages(result)
+    fsx = result.job_params.fsx_lustre
+    assert fsx.existing_fsx is None
+    assert fsx.s3_backend == 's3://my-bucket'
+    # every input the stack builder reads is set
+    assert fsx.size is not None and fsx.size.value == 1200
+    assert fsx.deployment_type == 'scratch_2'
+    assert result.job_params.scratch_provider == 'fsx-lustre-new'
+
+
+def test_persistent_2_with_a_bucket_is_refused_at_submission(context, monkeypatch):
+    monkeypatch.setattr(
+        context.aws_util(), 's3_bucket_has_access', lambda **_: {'success': True}
+    )
+    result = build_and_validate(
+        context=context,
+        params={
+            **BASIC_PARAMS,
+            'fsx_lustre': 's3://my-bucket',
+            'fsx_lustre_deployment_type': 'persistent_2',
+        },
+    )
+    assert result.success is False
+    assert any(
+        "PERSISTENT_2 can't be linked to an S3 bucket" in m
+        for m in get_validation_messages(result)
+    )
+
+
+def test_a_job_read_back_does_not_take_the_queue_default_again(context):
+    # a running job that asked for fsx_lustre=true created its own file system; a queue
+    # default added later must not turn it into "existing" when the job is read
+    builder = SocaJobBuilder(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': 'true'},
+        queue_profile=queue_with_fsx_default('fsx-lustre-existing'),
+        job_id='7',
+        at_submission=False,
+    )
+    job_params, _ = builder.build()
+    assert job_params.fsx_lustre.existing_fsx is None
+    assert job_params.scratch_provider == 'fsx-lustre-new'
+
+
+def test_restricting_instance_ami_refuses_a_job_that_names_an_image(context):
+    # SCH-01, owner decision: documented, not changed; this is the documented restriction
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'instance_ami': 'ami-0123456789abcdef0'},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=['instance_ami']
+            ),
+        ),
+    )
+    assert result.success is False
+    assert any(
+        "doesn't let jobs set instance_ami. Remove it from your job script." in m
+        for m in get_validation_messages(result)
+    )
+
+
+def test_a_pathed_instance_profile_arn_is_looked_up_by_its_name(context, monkeypatch):
+    # SCH-06: 'team/compute' was sent to IAM as the name, which IAM refuses
+    from ideasdk.aws import AWSUtil
+
+    arn = 'arn:aws:iam::111122223333:instance-profile/team/compute'
+    asked = []
+
+    def lookup(self, instance_profile_name):
+        asked.append(instance_profile_name)
+        return {'success': True, 'arn': arn}
+
+    monkeypatch.setattr(AWSUtil, 'get_instance_profile_arn', lookup)
+    result = build_and_validate(
+        context=context, params={**BASIC_PARAMS, 'instance_profile': arn}
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert asked == ['compute']
+    assert result.job_params.instance_profile == arn
+
+
+def test_an_arn_naming_another_path_of_the_same_name_is_not_accepted(
+    context, monkeypatch
+):
+    _serve_instance_profile(
+        context, monkeypatch, 'arn:aws:iam::111122223333:instance-profile/compute'
+    )
+    result = build_and_validate(
+        context=context,
+        params={
+            **BASIC_PARAMS,
+            'instance_profile': 'arn:aws:iam::111122223333:instance-profile/team/compute',
+        },
+    )
+    assert result.success is False
+    assert any('not found' in m for m in get_validation_messages(result))
+
+
+def test_a_stored_queue_default_project_profile_is_refused_for_another_project(
+    context, monkeypatch
+):
+    # SCH-05: a queue row written before the save-time check can hold a project profile
+    cluster_name = context.cluster_name()
+    arn = f'arn:aws:iam::111122223333:instance-profile/idea/{cluster_name}/projects/p-a'
+    _serve_instance_profile(context, monkeypatch, arn)
+    result = build_and_validate(
+        context=context,
+        params=BASIC_PARAMS,
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(instance_profile=arn),
+        ),
+    )
+    assert result.success is False
+    assert any(
+        'default instance profile of queue' in m
+        for m in get_validation_messages(result)
+    )
+
+
+def test_a_job_read_back_does_not_take_a_stored_default_of_another_project(
+    context, monkeypatch
+):
+    # verify-scheduler #2: a job queued before the save-time check is rebuilt from PBS
+    # with build() alone, so validate() never ran and the stored project profile applied
+    from ideascheduler.app.scheduler import SocaJobBuilder
+
+    cluster_name = context.cluster_name()
+    arn = f'arn:aws:iam::111122223333:instance-profile/idea/{cluster_name}/projects/p-a'
+    _serve_instance_profile(context, monkeypatch, arn)
+    builder = SocaJobBuilder(
+        context=context,
+        params=dict(BASIC_PARAMS),
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(instance_profile=arn),
+        ),
+    )
+    job_params, _ = builder.build()
+    assert job_params.instance_profile != arn
+    assert job_params.instance_profile == context.config().get_string(
+        'scheduler.compute_node_instance_profile_arn'
+    )
+
+
+@pytest.mark.parametrize(
+    'params,refused', [({}, False), ({'enable_scratch': 'true'}, True)]
+)
+def test_restricting_enable_scratch_refuses_only_a_job_that_sets_it(
+    context, params, refused
+):
+    # SCH-16: every job was refused for a parameter it did not set
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, **params},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=['enable_scratch']
+            ),
+        ),
+    )
+    assert result.success is (not refused), get_validation_messages(result)
+
+
+def test_several_subnets_with_a_new_fsx_are_refused(context):
+    # SCH-18: the single-subnet file system was given the whole list at stack creation
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': 'true', 'subnet_id': '2'},
+        # a job's own request, on a queue (A-S4 leaves a profile's defaults alone)
+        queue_profile=HpcQueueProfile(name='mock-queue-profile'),
+    )
+    assert result.success is False
+    assert any(
+        'creates an FSx for Lustre file system' in m
+        for m in get_validation_messages(result)
+    )
+
+
+def test_one_subnet_with_a_new_fsx_is_accepted(context):
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'fsx_lustre': 'true', 'subnet_id': '1'},
+    )
+    assert result.success is True, get_validation_messages(result)
+
+
+def test_a_persistent_2_submit_param_carries_its_throughput():
+    # SCH-22: the node attribute was written for persistent_1 only
+    from ideadatamodel import SocaFSxLustreConfig
+
+    params = SocaFSxLustreConfig(
+        enabled=True, deployment_type='persistent_2', per_unit_throughput=250
+    ).as_job_submit_params()
+    assert params['fsx_lustre_per_unit_throughput'] == 250
+
+
+def test_a_multi_node_job_on_a_multi_az_cluster_is_placed_in_a_zone_offering_its_type(
+    context, monkeypatch
+):
+    # SJP-17: the offering check tested one random subnet and the job was built on
+    # another, so honest multi-node jobs were refused at random
+    from ideasdk.aws import AWSUtil
+    from ideascheduler.app.scheduler import job_param_builder as module
+
+    subnets = context.config().get_list('cluster.network.private_subnets')
+    assert len(subnets) >= 2
+    offering_subnet = subnets[0]
+    monkeypatch.setattr(
+        AWSUtil,
+        'get_subnet_availability_zone',
+        lambda self, subnet_id: 'az-a' if subnet_id == offering_subnet else 'az-b',
+    )
+    monkeypatch.setattr(
+        AWSUtil,
+        'get_instance_types_offered',
+        lambda self, zone: {'t3.micro'} if zone == 'az-a' else {'c5.large'},
+    )
+    draws = iter(range(1000))
+    monkeypatch.setattr(
+        module.random, 'choice', lambda seq: seq[next(draws) % len(seq)]
+    )
+    for _ in range(6):
+        result = build_and_validate(
+            context=context, params={**BASIC_PARAMS, 'nodes': 2}
+        )
+        assert result.success is True, get_validation_messages(result)
+        assert result.job_params.subnet_ids == [offering_subnet]
+
+
+def test_an_fsx_job_on_a_multi_az_cluster_takes_a_subnet_offering_its_type(
+    context, monkeypatch
+):
+    # verify-scheduler #14 (SJP-17 remainder): a job with its own FSx took the first
+    # subnet without the offering check, and failed at launch on every retry
+    from ideasdk.aws import AWSUtil
+
+    subnets = context.config().get_list('cluster.network.private_subnets')
+    assert len(subnets) >= 2
+    offering_subnet = subnets[1]
+    monkeypatch.setattr(
+        AWSUtil,
+        'get_subnet_availability_zone',
+        lambda self, subnet_id: 'az-b' if subnet_id == offering_subnet else 'az-a',
+    )
+    monkeypatch.setattr(
+        AWSUtil,
+        'get_instance_types_offered',
+        lambda self, zone: {'t3.micro'} if zone == 'az-b' else {'c5.large'},
+    )
+    result = build_and_validate(
+        context=context,
+        params={
+            **BASIC_PARAMS,
+            'fsx_lustre': 'fs-0123456789abcdef0.fsx.us-east-1.amazonaws.com',
+        },
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.subnet_ids == [offering_subnet]
+
+
+def test_a_job_on_a_spot_queue_that_does_not_mention_spot_is_spot(context):
+    # SJP-16: the capacity type read only the request, so the job was on-demand on paper
+    # and the Spot template had no allocation strategy
+    result = build_and_validate(
+        context=context,
+        params=BASIC_PARAMS,
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(spot=True),
+        ),
+    )
+    assert result.success is True, get_validation_messages(result)
+    assert result.job_params.spot is True
+    assert result.job_params.spot_allocation_strategy is not None
+
+
+@pytest.mark.parametrize(
+    'params,refused',
+    [({}, False), ({'efa_support': 'true'}, True), ({'efa_support': 'false'}, True)],
+)
+def test_restricting_efa_support_refuses_only_a_job_that_sets_it(
+    context, params, refused
+):
+    # SJP-18
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, **params},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=['enable_efa_support', 'efa_support']
+            ),
+        ),
+    )
+    assert result.success is (not refused), get_validation_messages(result)
+
+
+@pytest.mark.parametrize(
+    'bucket,expected',
+    [(None, ('s3://data/in', 's3://data/out')), ('s3://other', (None, None))],
+)
+def test_an_inherited_new_fsx_keeps_the_queues_prefixes(
+    context, monkeypatch, bucket, expected
+):
+    # SJP-20 / DM-17: the queue's import and export paths were dropped
+    from ideadatamodel import SocaFSxLustreConfig
+
+    monkeypatch.setattr(
+        context.aws_util(), 's3_bucket_has_access', lambda **_: {'success': True}
+    )
+    params = {**BASIC_PARAMS, 'fsx_lustre': bucket or 'true'}
+    result = build_and_validate(
+        context=context,
+        params=params,
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                scratch_provider='fsx-lustre-new',
+                fsx_lustre=SocaFSxLustreConfig(
+                    enabled=True,
+                    s3_backend='s3://data',
+                    import_path='s3://data/in',
+                    export_path='s3://data/out',
+                ),
+            ),
+        ),
+    )
+    assert result.success is True, get_validation_messages(result)
+    fsx = result.job_params.fsx_lustre
+    assert (fsx.import_path, fsx.export_path) == expected
+
+
+def test_a_restriction_typed_with_the_pbs_name_matches(context):
+    # SJP-19: restricting ncpus did not restrict cpus
+    result = build_and_validate(
+        context=context,
+        params={**BASIC_PARAMS, 'cpus': 1},
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            queue_management_params=SocaQueueManagementParams(
+                restricted_parameters=['ncpus']
+            ),
+        ),
+    )
+    assert result.success is False
+    assert any(
+        "doesn't let jobs set ncpus" in m for m in get_validation_messages(result)
+    )
+
+
+def test_persistent_2_with_the_queues_bucket_is_refused(context):
+    # A-S5: the refusal tested only the job's own bucket
+    from ideadatamodel import SocaFSxLustreConfig
+
+    result = build_and_validate(
+        context=context,
+        params={
+            **BASIC_PARAMS,
+            'fsx_lustre': 'true',
+            'fsx_lustre_deployment_type': 'persistent_2',
+        },
+        queue_profile=HpcQueueProfile(
+            name='mock-queue-profile',
+            default_job_params=SocaJobParams(
+                scratch_provider='fsx-lustre-new',
+                fsx_lustre=SocaFSxLustreConfig(enabled=True, s3_backend='s3://data'),
+            ),
+        ),
+    )
+    assert result.success is False
+    assert any(
+        "can't be linked to an S3 bucket" in m for m in get_validation_messages(result)
+    )

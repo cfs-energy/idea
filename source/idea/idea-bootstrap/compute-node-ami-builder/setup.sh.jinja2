@@ -90,13 +90,18 @@ systemctl enable --now amazon-ssm-agent
 
 {% include '_templates/linux/epel_repo.jinja2' %}
 
+{# an image carries efs-utils whenever the cluster has an EFS share, whatever its scope: the
+   hosts it serves may be in a project or queue profile the bake is not #}
+{% with efs_image_bake = true %}
 {% include '_templates/linux/nfs_utils.jinja2' %}
+{% endwith %}
 
 {# a failed Lustre client install reports through the in-bake checks #}
 {% set compute_image_bake = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
-mkdir -p ${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}
+# the bootstrap trace lands on shared storage and carries host and job details: root only
+mkdir -p "${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}" && chmod 0700 "${IDEA_COMPUTE_NODE_AMI_BUILDER_LOGS_DIR}"
 touch /var/lib/idea/bake-setup.ok
 
 log_info "executing compute_node_ami_builder.sh ..."

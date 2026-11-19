@@ -491,32 +491,66 @@ function treeBytes(root) {
 }
 
 /**
+ * Digest of an extracted runtime tree: every directory and regular file by relative path, file
+ * bytes included, in sorted order. The launcher carries this same function's source, so the
+ * build and the check cannot drift. A link or any other entry type fails the digest.
+ *
+ * @param {string} root tree root
+ * @returns {string}
+ */
+function runtimeTreeDigest(root) {
+  const hash = createHash("sha256");
+  const visit = (relativePath) => {
+    const path = relativePath === "" ? root : join(root, ...relativePath.split("/"));
+    const stats = lstatSync(path);
+    if (stats.isDirectory()) {
+      hash.update(`d ${relativePath}\n`);
+      for (const name of readdirSync(path).sort()) {
+        if (relativePath === "" && name === ".complete") continue;
+        visit(relativePath === "" ? name : `${relativePath}/${name}`);
+      }
+    } else if (stats.isFile()) {
+      hash.update(`f ${relativePath} ${stats.size}\n`);
+      hash.update(readFileSync(path));
+    } else {
+      throw new Error(`unexpected entry in runtime tree: ${relativePath}`);
+    }
+  };
+  visit("");
+  return hash.digest("hex");
+}
+
+/**
  * Produces the injected CommonJS launcher.
  *
  * @param {string} runtimeHash support archive digest
+ * @param {string} treeHash digest of the extracted runtime tree
  * @returns {string}
  */
-function seaLauncher(runtimeHash) {
+function seaLauncher(runtimeHash, treeHash) {
   return `"use strict";
 const { createRequire } = require("node:module");
+const { createHash } = require("node:crypto");
 const {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } = require("node:fs");
 const { getAsset } = require("node:sea");
-const { tmpdir } = require("node:os");
+const { tmpdir, userInfo } = require("node:os");
 const { delimiter, dirname, join, resolve, sep } = require("node:path");
 const { gunzipSync } = require("node:zlib");
 
 const VERSION = ${JSON.stringify(VERSION)};
 const RUNTIME_HASH = ${JSON.stringify(runtimeHash)};
+const RUNTIME_TREE_HASH = ${JSON.stringify(treeHash)};
 const INTERNAL_CDK_ARGUMENT = ${JSON.stringify(INTERNAL_CDK_ARGUMENT)};
 const BLOCK_SIZE = 512;
 
@@ -564,28 +598,121 @@ function extractRuntime(destination) {
   }
 }
 
+${runtimeTreeDigest.toString()}
+
+const UID = typeof process.getuid === "function" ? process.getuid() : undefined;
+
+/**
+ * A directory only this user can change: created 0700, and on reuse refused unless it is a plain
+ * directory (not a link) owned by this user with mode 0700. Nothing is chmod-ed into shape, since
+ * a directory someone else made is not ours to adopt.
+ */
+function privateDirectory(path) {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+  const stats = lstatSync(path);
+  if (!stats.isDirectory()) throw new Error(\`refusing runtime directory that is not a plain directory: \${path}\`);
+  if (UID !== undefined && (stats.uid !== UID || (stats.mode & 0o777) !== 0o700)) {
+    throw new Error(\`refusing runtime directory \${path}: it must be owned by uid \${UID} with mode 0700. Remove it and re-run.\`);
+  }
+  return path;
+}
+
+/** A cache base this user owns and nobody else can write to. */
+function ownCacheBase(path) {
+  const stats = lstatSync(path, { throwIfNoEntry: false });
+  return stats !== undefined && stats.isDirectory() && stats.uid === UID && (stats.mode & 0o022) === 0;
+}
+
+/**
+ * The per-user cache: XDG_CACHE_HOME, else ~/.cache from the account database (not HOME, which
+ * sudo can keep), each used only when this user owns it; else a uid-named temp directory.
+ */
+function runtimeParent() {
+  if (UID === undefined) return privateDirectory(join(process.env.LOCALAPPDATA || tmpdir(), "ideactl"));
+  // A cache base the user owns but cannot write (a read-only or full home) falls through to the
+  // next; a directory that fails the ownership check still refuses, since that is not ours.
+  const unwritable = (error) => ["EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT"].includes(error?.code);
+  const attempt = (make) => {
+    try {
+      return make();
+    } catch (error) {
+      if (unwritable(error)) return undefined;
+      throw error;
+    }
+  };
+  const xdg = process.env.XDG_CACHE_HOME;
+  if (xdg !== undefined && xdg.startsWith("/") && ownCacheBase(xdg)) {
+    const found = attempt(() => privateDirectory(join(xdg, "ideactl")));
+    if (found !== undefined) return found;
+  }
+  let home = "";
+  try {
+    home = userInfo().homedir;
+  } catch {
+    home = "";
+  }
+  if (home !== "" && home !== "/" && ownCacheBase(home)) {
+    const cache = join(home, ".cache");
+    const found = attempt(() => {
+      try {
+        mkdirSync(cache, { mode: 0o700 });
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+      }
+      return ownCacheBase(cache) ? privateDirectory(join(cache, "ideactl")) : undefined;
+    });
+    if (found !== undefined) return found;
+  }
+  return privateDirectory(join(tmpdir(), \`ideactl-\${UID}\`));
+}
+
 function ensureRuntime() {
-  const uid = typeof process.getuid === "function" ? String(process.getuid()) : "user";
-  const parent = join(tmpdir(), \`ideactl-\${uid}\`);
+  const parent = runtimeParent();
+  let destination;
+  try {
+    destination = runtimeIn(parent);
+  } catch (error) {
+    // a cache base that existed but can no longer be written (read-only or full home) falls back
+    // to the private temp directory once
+    const temp = UID === undefined ? undefined : join(tmpdir(), \`ideactl-\${UID}\`);
+    // (ENOTEMPTY: an old tree there could not be removed)
+    if (temp === undefined || parent === temp || !["EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT", "ENOTEMPTY"].includes(error?.code)) throw error;
+    destination = runtimeIn(privateDirectory(temp));
+  }
+
+  process.env.IDEA_CDK_BIN = process.execPath;
+  process.env.IDEA_SEA = "1";
+  process.env.PATH = \`\${dirname(process.execPath)}\${delimiter}\${process.env.PATH ?? ""}\`;
+  return destination;
+}
+
+function runtimeIn(parent) {
   const destination = join(parent, \`\${VERSION}-\${RUNTIME_HASH.slice(0, 16)}\`);
   const marker = join(destination, ".complete");
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  chmodSync(parent, 0o700);
-  if (!existsSync(marker) || readFileSync(marker, "utf8") !== RUNTIME_HASH) {
-    if (existsSync(destination)) {
-      if (lstatSync(destination).isSymbolicLink()) {
-        throw new Error(\`refusing symbolic-link runtime directory: \${destination}\`);
-      }
-      rmSync(destination, { recursive: true, force: true });
+  const verified = () => {
+    if (!existsSync(marker) || readFileSync(marker, "utf8") !== RUNTIME_HASH) return false;
+    try {
+      return runtimeTreeDigest(destination) === RUNTIME_TREE_HASH;
+    } catch {
+      return false;
     }
+  };
+  if (!verified()) {
+    rmSync(destination, { recursive: true, force: true });
     const staging = mkdtempSync(join(parent, ".extract-"));
     try {
       extractRuntime(staging);
+      if (runtimeTreeDigest(staging) !== RUNTIME_TREE_HASH) throw new Error("extracted runtime does not match the digest built into this binary");
       writeFileSync(join(staging, ".complete"), RUNTIME_HASH, { mode: 0o600 });
       try {
         renameSync(staging, destination);
       } catch (error) {
-        if (!existsSync(marker) || readFileSync(marker, "utf8") !== RUNTIME_HASH) throw error;
+        // another launch finished first; its tree is used only once it verifies
+        if (!verified()) throw error;
         rmSync(staging, { recursive: true, force: true });
       }
     } catch (error) {
@@ -593,10 +720,6 @@ function ensureRuntime() {
       throw error;
     }
   }
-
-  process.env.IDEA_CDK_BIN = process.execPath;
-  process.env.IDEA_SEA = "1";
-  process.env.PATH = \`\${dirname(process.execPath)}\${delimiter}\${process.env.PATH ?? ""}\`;
   return destination;
 }
 
@@ -683,7 +806,7 @@ function main() {
     const runtimeBytes = createTarGz(runtimeRoot);
     writeFileSync(runtimeArchive, runtimeBytes);
     const runtimeHash = createHash("sha256").update(runtimeBytes).digest("hex");
-    writeFileSync(launcher, seaLauncher(runtimeHash));
+    writeFileSync(launcher, seaLauncher(runtimeHash, runtimeTreeDigest(runtimeRoot)));
 
     rmSync(targetDirectory, { recursive: true, force: true });
     mkdirSync(targetDirectory, { recursive: true });

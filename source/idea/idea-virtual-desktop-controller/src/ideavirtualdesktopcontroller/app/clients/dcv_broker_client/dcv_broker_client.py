@@ -9,11 +9,13 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from typing import Dict, List
+import os
+from typing import Dict, List, Set
 
 import ideavirtualdesktopcontroller
 import ideavirtualdesktopcontroller.app.clients.dcvssmswaggerclient as dcvssmswaggerclient
 from botocore.exceptions import ClientError
+from ideadatamodel import exceptions
 from ideadatamodel.virtual_desktop import (
     VirtualDesktopSession,
     VirtualDesktopSessionState,
@@ -67,6 +69,10 @@ from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_sessio
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+# path of the PEM the broker's certificate is verified against
+INTERNAL_CA_FILE_ENV = 'IDEA_INTERNAL_CA_FILE'
+
+
 class DCVBrokerClient(DCVClientProtocol):
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         self.context = context
@@ -93,7 +99,6 @@ class DCVBrokerClient(DCVClientProtocol):
             'virtual-desktop-controller.dcv_broker.client_communication_port',
             required=True,
         )
-        # self.__CERT_FILE_LOCATION = ''
         self._logger = context.logger('dcv-broker-client')
         self.DCV_SESSION_DELETE_ERROR_SESSION_DOESNT_EXIST = (
             'The requested dcvSession does not exist'
@@ -105,9 +110,15 @@ class DCVBrokerClient(DCVClientProtocol):
             f'{self.__INTERNAL_ALB_ENDPOINT}:{self.__BROKER_CLIENT_COMMUNICATION_PORT}'
         )
 
-        # this is made false because we have not yet installed these certificates on the machine.
-        configuration.verify_ssl = False
-        # configuration.ssl_ca_cert = self.__CERT_FILE_LOCATION
+        # the internal load balancer's certificate, once the deployment delivers it to the task
+        ca_file = os.environ.get(INTERNAL_CA_FILE_ENV)
+        if ca_file and os.path.isfile(ca_file):
+            configuration.ssl_ca_cert = ca_file
+            configuration.verify_ssl = True
+        else:
+            # shortcut: without that file the broker's certificate is not verified; remove this
+            # branch once every deployment delivers it
+            configuration.verify_ssl = False
         return configuration
 
     def _set_request_headers(self, api_client):
@@ -162,7 +173,19 @@ class DCVBrokerClient(DCVClientProtocol):
             owner=session.owner,
             permissions_file=permissions_content_base_64,
         )
-        _ = self._get_session_permissions_api().update_session_permissions([request])
+        response = self._get_session_permissions_api().update_session_permissions(
+            [request]
+        )
+        # the broker answers 200 with a refused update in unsuccessful_list
+        for refused in response.unsuccessful_list or []:
+            if refused.session_id == session.dcv_session_id:
+                self._logger.error(
+                    f'the broker refused the permissions of {session.idea_session_id}: '
+                    f'{refused.failure_reason}'
+                )
+                raise exceptions.general_exception(
+                    f'The permissions of {session.idea_session_id} were not applied'
+                )
 
     def _delete_sessions(
         self, sessions: List[VirtualDesktopSession], force=False
@@ -183,6 +206,9 @@ class DCVBrokerClient(DCVClientProtocol):
             body=delete_sessions_request
         )
         return api_response.to_dict()
+
+    def desktop_host_addresses(self, session: VirtualDesktopSession) -> Set[str]:
+        return self._dcv_broker_client_utils.desktop_host_addresses(session)
 
     def get_active_counts_for_sessions(
         self, sessions: List[VirtualDesktopSession]
@@ -231,6 +257,7 @@ class DCVBrokerClient(DCVClientProtocol):
     def describe_sessions_for_host(self, session: VirtualDesktopSession) -> List[Dict]:
         sessions = []
         token = None
+        host_addresses = self._dcv_broker_client_utils.desktop_host_addresses(session)
         while True:
             response = self._describe_sessions(owner=session.owner, next_token=token)
             for entry in response.get('sessions', []):
@@ -238,7 +265,10 @@ class DCVBrokerClient(DCVClientProtocol):
                     tag['key']: tag['value']
                     for tag in (entry.get('server') or {}).get('tags', [])
                 }
-                if tags.get('idea_session_id') == session.idea_session_id:
+                if (
+                    tags.get('idea_session_id') == session.idea_session_id
+                    and DCVBrokerClientUtils.runs_on_desktop_host(entry, host_addresses)
+                ):
                     sessions.append(entry)
             token = response.get('next_token')
             if not token:
@@ -249,13 +279,17 @@ class DCVBrokerClient(DCVClientProtocol):
             # Simplified Windows detection to match all Windows variations
             is_windows = 'windows' in str(session.software_stack.base_os).lower()
 
+            commands = self._dcv_broker_client_utils.get_commands_to_execute_for_resuming_session(
+                session
+            )
+            if not commands:
+                session.failure_reason = 'The desktop session could not be resumed.'
+                return session
             _ = self._ssm_commands_utils.submit_ssm_command_to_resume_session(
                 instance_id=session.server.instance_id,
                 idea_session_id=session.idea_session_id,
                 idea_session_owner=session.owner,
-                commands=self._dcv_broker_client_utils.get_commands_to_execute_for_resuming_session(
-                    session
-                ),
+                commands=commands,
                 document_name='AWS-RunPowerShellScript'
                 if is_windows
                 else 'AWS-RunShellScript',

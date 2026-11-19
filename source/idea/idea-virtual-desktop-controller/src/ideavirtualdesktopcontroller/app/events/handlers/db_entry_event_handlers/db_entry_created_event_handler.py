@@ -12,6 +12,9 @@
 from typing import Dict, Callable
 
 import ideavirtualdesktopcontroller
+from ideavirtualdesktopcontroller.app.session_permissions.constants import (
+    is_group_share,
+)
 from ideadatamodel import Notification
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
@@ -87,6 +90,9 @@ class DbEntryCreatedEventHandler(BaseDBEventHandler):
         )
         if not notifications_enabled:
             return
+        # a group share sends no email: its members change, and the actor is no user
+        if is_group_share(session_permission):
+            return
 
         self.context.notification_async_client.send_notification(
             Notification(
@@ -101,7 +107,9 @@ class DbEntryCreatedEventHandler(BaseDBEventHandler):
                     'url': f'{self.context.config().get_cluster_external_endpoint()}/#/home/shared-desktops',
                     'formatted_expiry_date': session_permission.expiry_date.strftime(
                         '%B %d, %Y at %I:%M %p'
-                    ),
+                    )
+                    if session_permission.expiry_date is not None
+                    else '',
                 },
             )
         )

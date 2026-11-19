@@ -265,3 +265,14 @@ describe('reporting access check', () => {
         expect(service.isReportingCheckFailed()).toBe(true);
     });
 });
+
+it('keeps a first-password challenge in this tab only, and removes the copy an earlier version left', async () => {
+    const LocalStorageService = (await import('./local-storage-service')).default;
+    localStorage.setItem('idea.challenge-session', 'marker-old-session');
+    client.initiateAuth.mockResolvedValue({challenge_name: 'NEW_PASSWORD_REQUIRED', session: 'marker-session', challenge_params: {USER_ID_FOR_SRP: 'marker-user'}});
+    const auth = new AuthService({...props, localStorage: new LocalStorageService({prefix: 'idea'})} as AuthServiceProps);
+    await expect(auth.login('marker-user', 'marker-password')).rejects.toMatchObject({errorCode: 'AUTH_LOGIN_CHALLENGE'});
+    expect(Object.keys(localStorage).filter(key => key.startsWith('idea.challenge'))).toEqual([]);
+    expect(auth.getChallengeParams()).toEqual({challenge_name: 'NEW_PASSWORD_REQUIRED', session: 'marker-session', params: {USER_ID_FOR_SRP: 'marker-user'}});
+    expect(sessionStorage.getItem('idea.challenge-session')).toBe('marker-session');
+});

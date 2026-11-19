@@ -13,7 +13,7 @@ import pathlib
 import re
 from ideascheduler.app.api import scheduler_api
 
-from ideadatamodel import errorcodes, exceptions, SocaJob
+from ideadatamodel import errorcodes, exceptions, Project, SocaJob
 from ideadatamodel.scheduler import DryRunOption, SubmitJobRequest, SubmitJobResult
 from ideascheduler.app.api.scheduler_api import (
     JobSubmissionDeduplicator,
@@ -39,6 +39,18 @@ def build_request(
         job_script=job_script,
         client_submission_id=client_submission_id,
     )
+
+
+@pytest.fixture(autouse=True)
+def member_of_mockproject(request, monkeypatch):
+    # submit_job checks the requested project against the owner's memberships
+    if 'context' in request.fixturenames:
+        context = request.getfixturevalue('context')
+        monkeypatch.setattr(
+            context.projects_client,
+            'get_user_projects',
+            lambda username: [Project(name='mockproject')],
+        )
 
 
 def build_result(accepted: bool, job_id: str = '1001') -> SubmitJobResult:

@@ -30,6 +30,8 @@ Administrators can view and manage all desktop sessions across users and project
 * **Enable Session Boot Script**: Set up a boot script to run when the instance starts
 * **Edit Permissions**: Configure session sharing
 
+Only cluster administrators can move a desktop to another project of its owner.
+
 ## Launching Sessions on Behalf of Users
 
 As an administrator, you can launch virtual desktop sessions on behalf of users. This is particularly useful when users need specialized instance types that aren't defined in the standard allowed lists.
@@ -60,6 +62,4 @@ The same setting places scheduler jobs, so one value covers both. Leaving it emp
 
 Every session action reaches the controller as a message on the `<cluster>-<module>-events.fifo` SQS queue. A message whose handler fails is left on the queue so it is retried, but a message that fails every time would be redelivered forever and hold up the events behind it.
 
-`virtual-desktop-controller.events.max_receive_count`, default `3`, bounds that. Below the bound the message is redelivered as before, so a transient failure still recovers on its own. On the bounding receive the controller logs the message ID, the event type and the session ID at error level, then deletes the message. Raise the setting to give slow-to-recover failures more attempts; it takes effect on the next controller restart and needs no redeploy.
-
-The queue also has a dead letter queue, `<cluster>-<module>-events-dlq.fifo`, with a redrive policy of 16 receives, which catches messages the controller never processes at all, such as a restart between handling and deleting. The controller-side bound fires first, so anything reaching the dead letter queue was not dropped by the controller. Search the virtual desktop controller log for `Deleting the message instead of blocking the queue` to find the events that were dropped.
+The queue's dead letter queue, `<cluster>-<module>-events-dlq.fifo`, bounds that with a redrive policy of 16 receives. Below the bound the message is redelivered, so a transient failure still recovers on its own; after 16 receives SQS moves it to the dead letter queue, where it is kept for review. From 26.11.2 the controller no longer deletes a failing message itself, and `virtual-desktop-controller.events.max_receive_count` is no longer read; a stored value has no effect.

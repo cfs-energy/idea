@@ -28,6 +28,18 @@ from ideascheduler.app.licenses.license_resources_dao import LicenseResourcesDAO
 from ideascheduler.app.provisioning import JobProvisioningUtil
 
 LICENSE_NAME = 'mock_lic_app'
+REAL_GETPWNAM = pwd.getpwnam
+SERVICE_ACCOUNT = pwd.struct_passwd(
+    (
+        'ideaserviceaccount',
+        'x',
+        990,
+        990,
+        '',
+        '/home/ideaserviceaccount',
+        '/sbin/nologin',
+    )
+)
 
 
 class MockShellResult:
@@ -53,7 +65,10 @@ class MockShell:
         self.invocations = []
 
     def invoke(self, cmd=None, timeout=None, **_):
-        self.invocations.append({'cmd': cmd, 'timeout': timeout})
+        return self.invoke_as_user(None, cmd, timeout=timeout)
+
+    def invoke_as_user(self, username, cmd, timeout=None, **_):
+        self.invocations.append({'user': username, 'cmd': cmd, 'timeout': timeout})
         if self.raises is not None:
             raise self.raises
         return MockShellResult(returncode=self.returncode, stdout=self.stdout)
@@ -80,6 +95,17 @@ def build_license_service(
 ) -> LicenseService:
     monkeypatch.setattr(LicenseResourcesDAO, '__init__', lambda self, context: None)
     monkeypatch.setattr(LicenseResourcesDAO, 'initialize', lambda self: None)
+    if pwd.getpwnam is REAL_GETPWNAM:
+        # the service account the check runs as; any other name is looked up for real
+        monkeypatch.setattr(
+            pwd,
+            'getpwnam',
+            lambda name: (
+                SERVICE_ACCOUNT
+                if name == SERVICE_ACCOUNT.pw_name
+                else REAL_GETPWNAM(name)
+            ),
+        )
 
     context.shell = shell
     service = LicenseService(context=context)
@@ -284,7 +310,7 @@ def test_enough_seats_passes_both_call_sites(context):
     util.check_licenses()
 
 
-@pytest.mark.parametrize('account_exists', [True, False])
+@pytest.mark.parametrize('account_exists', [True])
 def test_check_uses_host_account_only_when_present(
     context, monkeypatch, account_exists
 ):
@@ -294,26 +320,41 @@ def test_check_uses_host_account_only_when_present(
         assert name == constants.IDEA_SERVICE_ACCOUNT
         if not account_exists:
             raise KeyError(name)
-        return object()
+        return pwd.struct_passwd(
+            (name, 'x', 990, 990, '', '/home/ideaservice', '/sbin/nologin')
+        )
 
     monkeypatch.setattr(pwd, 'getpwnam', lookup)
     shell = MockShell(stdout='7')
     service = build_license_service(context, monkeypatch, shell)
     count, result, error = service._check_license_availability('printf 7')
     assert (count, result.returncode, error) == (7, 0, None)
-    command = shell.invocations[0]['cmd']
-    assert command == (
-        [
-            'su',
-            constants.IDEA_SERVICE_ACCOUNT,
-            '--shell',
-            '/bin/bash',
-            '--command',
-            'cd /tmp && printf 7',
-        ]
-        if account_exists
-        else ['/bin/bash', '-c', 'cd /tmp && printf 7']
+    invocation = shell.invocations[0]
+    assert invocation['user'] == (
+        constants.IDEA_SERVICE_ACCOUNT if account_exists else None
     )
+    assert invocation['cmd'] == ['/bin/bash', '-c', 'cd /tmp && printf 7']
+
+
+@pytest.mark.parametrize(
+    'cmd',
+    [
+        '/apps/check_lic.py -s server-1 --port=27000',
+        '/apps/lmstat -a | grep -c marker',
+        # a plain-words check that starts with a shell builtin (verify-scheduler #12)
+        'source /apps/lic.env',
+    ],
+)
+def test_every_check_command_runs_through_bash(context, monkeypatch, cmd):
+    monkeypatch.setattr(
+        pwd,
+        'getpwnam',
+        lambda name: pwd.struct_passwd((name, 'x', 990, 990, '', '/', '/sbin/nologin')),
+    )
+    shell = MockShell(stdout='3')
+    service = build_license_service(context, monkeypatch, shell)
+    service._check_license_availability(cmd)
+    assert shell.invocations[0]['cmd'] == ['/bin/bash', '-c', f'cd /tmp && {cmd}']
 
 
 def test_account_lookup_failure_does_not_run_check_as_current_identity(
@@ -342,3 +383,62 @@ def test_not_enough_seats_says_how_many_are_free(context):
         f'Not enough {LICENSE_NAME} licenses: this job needs 2, 1 are free right now. '
         'Try again when other jobs finish.'
     )
+
+
+def test_a_license_server_is_asked_once_per_attempt_for_a_whole_batch(context):
+    calls = []
+
+    class CountingLicenseService(MockLicenseService):
+        def get_license_availability(self, license_resource_name: str):
+            calls.append(license_resource_name)
+            return self.availability
+
+    context.license_service = CountingLicenseService(
+        LicenseAvailability(available_count=100, check_ok=True)
+    )
+    context.job_cache = MockJobCache(active_count=0)
+    jobs = [build_job() for _ in range(5)]
+    for number, job in enumerate(jobs):
+        job.job_id = str(number)
+    JobProvisioningUtil(context=context, jobs=jobs).check_licenses()
+    assert calls == [LICENSE_NAME]
+
+
+def test_a_stored_check_command_gets_the_service_environment_as_before(
+    context, monkeypatch, tmp_path
+):
+    # before 26.11.2 the check ran through `su <service account>` without a login, which
+    # kept this service's environment; stored commands read license server variables
+    import getpass
+
+    from ideadatamodel import constants
+    from ideasdk.shell import ShellInvoker
+
+    check = tmp_path / 'check'
+    check.write_text(
+        '#!/bin/sh\nif [ "$LM_LICENSE_FILE" = 27000@lic ]; then echo 4; else echo 0; fi\n'
+    )
+    check.chmod(0o755)
+    monkeypatch.setenv('LM_LICENSE_FILE', '27000@lic')
+    monkeypatch.setattr(constants, 'IDEA_SERVICE_ACCOUNT', getpass.getuser())
+    service = build_license_service(context, monkeypatch, MockShell())
+    context.shell = ShellInvoker()
+    count, result, error = service._check_license_availability(f'{check} | cat')
+    assert error is None, error
+    assert count == 4, result
+
+
+def test_a_check_is_not_run_as_root_when_the_service_account_is_missing(
+    context, monkeypatch
+):
+    # the container image runs the scheduler as root; before, a missing account meant
+    # the stored command ran as root with the service environment
+    monkeypatch.setattr(
+        pwd, 'getpwnam', lambda name: (_ for _ in ()).throw(KeyError(name))
+    )
+    shell = MockShell(stdout='7')
+    service = build_license_service(context, monkeypatch, shell)
+    count, result, error = service._check_license_availability('printf 7')
+    assert shell.invocations == []
+    assert count == 0 and result is None
+    assert 'does not exist' in str(error)

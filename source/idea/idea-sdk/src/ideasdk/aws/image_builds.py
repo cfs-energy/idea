@@ -35,6 +35,10 @@ from ideasdk.utils import Utils
 BUILD_STATUS_BUILDING = 'building'
 BUILD_STATUS_COMPLETE = 'complete'
 BUILD_STATUS_FAILED = 'failed'
+# a custom build's phase after the builder finished, while its image is checked: as much a
+# running build as 'building' for the restart and stale repairs (SI-20)
+BUILD_STATUS_CHECKING = 'checking'
+RUNNING_BUILD_STATUSES = (BUILD_STATUS_BUILDING, BUILD_STATUS_CHECKING)
 
 # a build takes about 20 minutes; a record still 'building' after this long belongs to a
 # thread that died with its process, and the page should say so instead of spinning
@@ -69,6 +73,15 @@ BAKE_FAILED_MARKER = 'IDEA_IMAGE_BAKE_FAILED'
 STOPPED_AT_TAG = 'idea:ImageBuilderStoppedAt'
 
 
+def console_host(region: str) -> str:
+    """the AWS console host of a region's partition: GovCloud and China have their own (SI-25)"""
+    if region.startswith('us-gov-'):
+        return f'{region}.console.amazonaws-us-gov.com'
+    if region.startswith('cn-'):
+        return 'console.amazonaws.cn'
+    return f'{region}.console.aws.amazon.com'
+
+
 def builder_log_link(context, instance_id: str) -> str:
     """
     CloudWatch console link to the builder's bootstrap_<instance id> stream, which carries
@@ -83,7 +96,7 @@ def builder_log_link(context, instance_id: str) -> str:
     group = escape(f'/{context.cluster_name()}/{context.module_id()}/ami-builder')
     stream = escape(f'bootstrap_{instance_id}')
     return (
-        f'https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}'
+        f'https://{console_host(region)}/cloudwatch/home?region={region}'
         f'#logsV2:log-groups/log-group/{group}/log-events/{stream}'
     )
 
@@ -554,8 +567,11 @@ def dispose_builder(context, instance_id: Optional[str], logger) -> None:
         if (
             IMAGE_BUILD_TAG not in tags
             or tags.get(constants.IDEA_TAG_MODULE_ID) != context.module_id()
+            or tags.get(constants.IDEA_TAG_CLUSTER_NAME) != context.cluster_name()
         ):
-            logger.warning(f'{instance_id} is not a builder of this module; left alone')
+            logger.warning(
+                f'{instance_id} is not a builder of this cluster and module; left alone'
+            )
             return
         ec2.terminate_instances(InstanceIds=[instance_id])
     except Exception as e:
@@ -571,6 +587,11 @@ def terminate_old_stopped_builders(context, logger) -> List[str]:
             Filters=[
                 {'Name': 'instance-state-name', 'Values': ['stopped']},
                 {'Name': 'tag-key', 'Values': [STOPPED_AT_TAG]},
+                # the module id is the same on every cluster in the account
+                {
+                    'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
+                    'Values': [context.cluster_name()],
+                },
                 {'Name': 'tag:idea:ModuleId', 'Values': [context.module_id()]},
             ]
         )
@@ -1254,7 +1275,7 @@ class ImageBuildRecordsDB:
                 if record.status in IMAGE_ROW_IN_FLIGHT:
                     orphaned.append(f'{record.base_os}/{record.architecture}')
                 continue
-            if record.status != BUILD_STATUS_BUILDING:
+            if record.status not in RUNNING_BUILD_STATUSES:
                 continue
             record.status = BUILD_STATUS_FAILED
             record.error = 'the module restarted during the build'
@@ -1612,7 +1633,7 @@ class ImageBuildRunner:
         a 'building' record older than STALE_AFTER whose thread is not alive in this
         process is marked failed, once, durably, and its builder instance is stopped
         """
-        if record.status != BUILD_STATUS_BUILDING or record.started_on is None:
+        if record.status not in RUNNING_BUILD_STATUSES or record.started_on is None:
             return record
         thread = self._live.get((record.base_os, record.architecture))
         if thread is not None and thread.is_alive():

@@ -94,7 +94,7 @@ class ProjectGroupsUpdatedTask(BaseTask):
             groups_removed = Utils.get_value_as_list('groups_removed', payload, [])
 
             for ldap_group_name in groups_removed:
-                self.context.projects.user_projects_dao.ldap_group_added(
+                self.context.projects.user_projects_dao.ldap_group_removed(
                     project_id=project_id, group_name=ldap_group_name
                 )
                 # perform full refresh to ensure if users existed in multiple groups, and one of the group

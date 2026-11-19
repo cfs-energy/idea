@@ -168,3 +168,28 @@ def test_get_project_nonexistent_denied_same_as_non_member():
             elevated=False,
         )
     assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+
+
+def test_a_member_cannot_read_a_disabled_project():
+    from unittest.mock import Mock
+
+    from ideadatamodel import GetProjectRequest, GetProjectResult, Project, exceptions
+    from ideaclustermanager.app.api.projects_api import ProjectsAPI
+
+    api = ProjectsAPI.__new__(ProjectsAPI)
+    api.context = Mock()
+    api.context.projects.get_project.return_value = GetProjectResult(
+        project=Project(project_id='p-marker', name='marker', enabled=False)
+    )
+    api.context.projects.is_project_member.return_value = True
+    invocation = Mock()
+    invocation.get_request_payload_as.return_value = GetProjectRequest(
+        project_id='p-marker'
+    )
+    invocation.get_username.return_value = 'member'
+    import pytest
+
+    with pytest.raises(exceptions.SocaException) as refused:
+        api.get_member_project(invocation)
+    assert refused.value.error_code == 'UNAUTHORIZED_ACCESS'
+    invocation.success.assert_not_called()

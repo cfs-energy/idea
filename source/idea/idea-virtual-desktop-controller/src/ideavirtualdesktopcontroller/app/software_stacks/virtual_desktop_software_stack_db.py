@@ -903,6 +903,72 @@ class VirtualDesktopSoftwareStackDB(VirtualDesktopNotifiableDB, OpenSearchableDB
         )
         return self.convert_db_dict_to_software_stack_object(new_db_entry)
 
+    def set_enabled(
+        self, software_stack: VirtualDesktopSoftwareStack, enabled: bool
+    ) -> VirtualDesktopSoftwareStack:
+        """writes only the status, so an edit or promotion made since the caller listed the
+        stack stays."""
+        k = software_stacks_constants
+        result = self._table.update_item(
+            Key={
+                k.SOFTWARE_STACK_DB_HASH_KEY: software_stack.base_os,
+                k.SOFTWARE_STACK_DB_RANGE_KEY: software_stack.stack_id,
+            },
+            UpdateExpression='SET #enabled = :enabled, #upd = :upd',
+            ConditionExpression='attribute_exists(#id)',
+            ExpressionAttributeNames={
+                '#enabled': k.SOFTWARE_STACK_DB_ENABLED_KEY,
+                '#upd': k.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
+                '#id': k.SOFTWARE_STACK_DB_RANGE_KEY,
+            },
+            ExpressionAttributeValues={
+                ':enabled': bool(enabled),
+                ':upd': Utils.current_time_ms(),
+            },
+            ReturnValues='ALL_NEW',
+        )
+        new_entry = result['Attributes']
+        self.trigger_update_event(
+            software_stack.base_os,
+            software_stack.stack_id,
+            old_entry=dict(new_entry),
+            new_entry=new_entry,
+        )
+        return self.convert_db_dict_to_software_stack_object(new_entry)
+
+    def set_base_ami(
+        self, software_stack: VirtualDesktopSoftwareStack, base_ami_id: str
+    ) -> VirtualDesktopSoftwareStack:
+        """writes only the base image, so a promotion, disable or edit made since the caller
+        read the stack stays."""
+        k = software_stacks_constants
+        result = self._table.update_item(
+            Key={
+                k.SOFTWARE_STACK_DB_HASH_KEY: software_stack.base_os,
+                k.SOFTWARE_STACK_DB_RANGE_KEY: software_stack.stack_id,
+            },
+            UpdateExpression='SET #base = :base, #upd = :upd',
+            ConditionExpression='attribute_exists(#id)',
+            ExpressionAttributeNames={
+                '#base': k.SOFTWARE_STACK_DB_BASE_AMI_ID_KEY,
+                '#upd': k.SOFTWARE_STACK_DB_UPDATED_ON_KEY,
+                '#id': k.SOFTWARE_STACK_DB_RANGE_KEY,
+            },
+            ExpressionAttributeValues={
+                ':base': base_ami_id,
+                ':upd': Utils.current_time_ms(),
+            },
+            ReturnValues='ALL_NEW',
+        )
+        new_entry = result['Attributes']
+        self.trigger_update_event(
+            software_stack.base_os,
+            software_stack.stack_id,
+            old_entry=dict(new_entry),
+            new_entry=new_entry,
+        )
+        return self.convert_db_dict_to_software_stack_object(new_entry)
+
     def set_expiry(
         self,
         software_stack: VirtualDesktopSoftwareStack,

@@ -175,7 +175,10 @@ function stackNameMatches(moduleName: string, stack: DeleteClusterStack, cluster
  */
 export function isMissingStackError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return /ValidationError|not found|does not exist/i.test(`${error.name}: ${error.message}`);
+  // the describe adapters answer an empty result with `stack not found: <name>`
+  if (error.message.startsWith("stack not found: ")) return true;
+  // any other validation failure (a bad name, a malformed request) is not a deleted stack
+  return error.name === "ValidationError" && /does not exist/i.test(error.message);
 }
 
 /**
@@ -324,7 +327,13 @@ async function failedResources(deps: DeleteClusterDeps, stackName: string): Prom
  * interfaces were gone.
  */
 async function deleteLambdaNetworkInterfaces(deps: DeleteClusterDeps, clusterName: string): Promise<void> {
-  const interfaces = await deps.describeLambdaNetworkInterfaces({ clusterName });
+  const others = await longerClusterNames(deps, clusterName);
+  if (others === undefined) {
+    deps.err("skipped deleting available Lambda network interfaces: other clusters could not be listed, so another cluster's interfaces cannot be told apart. Re-run delete-cluster once the listing succeeds.");
+    return;
+  }
+  const interfaces = (await deps.describeLambdaNetworkInterfaces({ clusterName }))
+    .filter((networkInterface) => !namedForOther(networkInterface.description, "AWS Lambda VPC ENI-", others));
   if (interfaces.length === 0) return;
   deps.out(`found ${interfaces.length} available Lambda network interface(s) for the cluster. deleting ...`);
   for (const networkInterface of interfaces) {
@@ -499,12 +508,56 @@ async function deleteDatabases(deps: DeleteClusterDeps, options: DeleteClusterOp
   }
 }
 
-async function deleteCloudwatchLogs(deps: DeleteClusterDeps, options: DeleteClusterOptions): Promise<void> {
-  const logs: Array<{ name: string; size: number }> = [];
-  for (const prefix of [options.clusterName, `/${options.clusterName}`, `/aws/lambda/${options.clusterName}`]) {
-    logs.push(...(await deps.listLogGroups(prefix)));
+/**
+ * Other clusters in this account and region whose names extend this one with a hyphen, read from
+ * their settings tables. A Lambda function is named `<cluster>-<name>`, so the Lambda names of
+ * `idea-dev-2` also start with `idea-dev-`; they are told apart by these names.
+ */
+async function longerClusterNames(deps: DeleteClusterDeps, clusterName: string): Promise<string[] | undefined> {
+  const suffix = ".cluster-settings";
+  const names: string[] = [];
+  let nextTableName: string | undefined;
+  try {
+    do {
+      const page = await deps.listTables(nextTableName);
+      nextTableName = page.nextTableName;
+      for (const table of page.tableNames) {
+        if (table.endsWith(suffix) && table.startsWith(`${clusterName}-`)) names.push(table.slice(0, -suffix.length));
+      }
+    } while (nextTableName !== undefined && nextTableName !== "");
+  } catch (error) {
+    // a partial list cannot tell a longer-named cluster's Lambda resources apart, so the callers skip their sweep
+    deps.err(`could not list cluster settings tables: ${error instanceof Error ? error.name : String(error)}`);
+    return undefined;
   }
+  return names;
+}
+
+/** True when a Lambda-derived name (`<prefix><cluster>-...`) belongs to one of `others`. */
+function namedForOther(name: string | undefined, prefix: string, others: string[]): boolean {
+  return others.some((other) => name?.startsWith(`${prefix}${other}-`) === true);
+}
+
+/**
+ * The cluster's log groups: every group under `/<cluster>/` (agents, tasks, analytics, exec),
+ * its Lambda groups, and the default VPC flow log group. Each prefix ends at a separator, so a
+ * cluster whose name extends this one keeps its groups.
+ */
+async function deleteCloudwatchLogs(deps: DeleteClusterDeps, options: DeleteClusterOptions): Promise<void> {
+  const others = await longerClusterNames(deps, options.clusterName);
+  const lambdaPrefix = "/aws/lambda/";
+  const flowLogGroup = `${options.clusterName}-vpc-flow-logs`;
+  if (others === undefined) {
+    deps.err(`skipped deleting ${lambdaPrefix}${options.clusterName}-* log groups: other clusters could not be listed, so another cluster's groups cannot be told apart. Re-run delete-cluster once the listing succeeds.`);
+  }
+  const logs = [
+    ...(await deps.listLogGroups(`/${options.clusterName}/`)),
+    ...(others === undefined ? [] : (await deps.listLogGroups(`${lambdaPrefix}${options.clusterName}-`)).filter((log) => !namedForOther(log.name, lambdaPrefix, others))),
+    ...(await deps.listLogGroups(flowLogGroup)).filter((log) => log.name === flowLogGroup),
+  ];
   if (logs.length === 0) return;
+  deps.out(`cloudwatch log groups of cluster ${options.clusterName}:`);
+  for (const log of logs) deps.out(`  ${log.name}`);
   if (options.force !== true) {
     const confirmed = await deps.prompt(`Are you sure you want to delete all cloudwatch logs associated with the cluster: ${options.clusterName}?`);
     if (!isConfirmed(confirmed)) return;

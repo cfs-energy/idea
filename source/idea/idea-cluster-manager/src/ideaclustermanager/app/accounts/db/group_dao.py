@@ -109,7 +109,10 @@ class GroupDAO:
     def get_group(self, group_name: str) -> Optional[Dict]:
         if Utils.is_empty(group_name):
             raise exceptions.invalid_params('group_name is required')
-        result = self.table.get_item(Key={'group_name': group_name})
+        # a group just disabled or renamed must read as it now is
+        result = self.table.get_item(
+            Key={'group_name': group_name}, ConsistentRead=True
+        )
         return Utils.get_value_as_dict('Item', result)
 
     def update_group(self, group: Dict) -> Optional[Dict]:

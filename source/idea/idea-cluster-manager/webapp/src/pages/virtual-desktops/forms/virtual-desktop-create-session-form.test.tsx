@@ -110,11 +110,17 @@ describe('create desktop form', () => {
         expect(screen.getByText('Your projects could not be loaded. Close this form and try again.')).toBeInTheDocument();
     });
 
-    it('rejects a short name in plain words', async () => {
-        await open([{project_id: 'p1', title: 'One'}, {project_id: 'p2', title: 'Two'}], {defaultName: 'ab'});
+    it('rejects a name longer than the server allows, in plain words', async () => {
+        await open([{project_id: 'p1', title: 'One'}, {project_id: 'p2', title: 'Two'}], {defaultName: 'x'.repeat(65)});
         await userEvent.setup().click(screen.getByRole('button', {name: 'Launch desktop'}));
-        expect(screen.getAllByText('Use 3 to 24 characters.').length).toBeGreaterThan(1);
+        expect(screen.getAllByText('Use 1 to 64 letters, digits, spaces, dots, underscores or hyphens.').length).toBeGreaterThan(1);
         expect(screen.queryByText(/regex/)).not.toBeInTheDocument();
+    });
+
+    it('refuses a name with characters outside the desktop name rule', async () => {
+        await open([{project_id: 'p1', title: 'One'}, {project_id: 'p2', title: 'Two'}], {defaultName: 'my$desk'});
+        await userEvent.setup().click(screen.getByRole('button', {name: 'Launch desktop'}));
+        expect(screen.getAllByText('Use 1 to 64 letters, digits, spaces, dots, underscores or hyphens.').length).toBeGreaterThan(1);
     });
 
     it('says what is happening during the slow submit', async () => {

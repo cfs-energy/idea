@@ -168,7 +168,7 @@ describe("installer parameters", () => {
       directory_service_root_password_secret_arn: "secret-password",
       storage_apps_provider: "efs",
       existing_apps_fs_id: "fs-11111111",
-      storage_data_provider: "fsx_lustre",
+      storage_data_provider: "efs",
       existing_data_fs_id: "fs-22222222",
       opensearch_domain_endpoint: "search.example.invalid",
       enabled_modules: ["scheduler", "virtual-desktop-controller"],
@@ -220,6 +220,22 @@ describe("installer parameters", () => {
 
       assert.deepEqual(written, values);
       assert.equal(values["cluster_name"], "idea-sample");
+    } finally {
+      rmSync(output, { recursive: true, force: true });
+    }
+  });
+
+  it("renders the account of the answered profile, not the ambient credentials", async () => {
+    const output = mkdtempSync(join(tmpdir(), "installer-account-"));
+    try {
+      const deps = { ...generateDeps(),
+        accountId: async () => "111111111111",
+        callerIdentity: async (input: { awsProfile?: string }) => ({ account: input.awsProfile === "default" ? "222222222222" : "111111111111", arn: "arn" }) };
+      const values = await configGenerate(deps as Deps, {
+        configDir: output, force: true,
+        installerDriver: new ScriptedPromptDriver(scriptedAnswers(newNetworkAnswers({ aws_profile: "default" }))),
+      });
+      assert.equal(values["aws_account_id"], "222222222222");
     } finally {
       rmSync(output, { recursive: true, force: true });
     }
@@ -285,7 +301,7 @@ describe("installer parameters", () => {
       directory_service_root_password_secret_arn: "secret-password",
       storage_apps_provider: "efs",
       existing_apps_fs_id: "fs-11111111",
-      storage_data_provider: "fsx_lustre",
+      storage_data_provider: "efs",
       existing_data_fs_id: "fs-22222222",
       opensearch_domain_endpoint: "search.example.invalid",
       enabled_modules: ["scheduler", "virtual-desktop-controller"],
@@ -345,4 +361,18 @@ describe("installer parameters", () => {
       assert.equal(typeof captured, "object", `${name} is a YAML map`);
     }
   });
+});
+
+it("the installer does not offer FSx for Lustre for the apps or data storage", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { load } = await import("js-yaml");
+  const params = load(readFileSync(new URL("../../resources/input_params/install_params.yml", import.meta.url), "utf8")) as any;
+  const find = (node: any, name: string): any => {
+    if (Array.isArray(node)) { for (const item of node) { const hit = find(item, name); if (hit) return hit; } }
+    else if (node && typeof node === "object") { if (node.name === name && Array.isArray(node.choices)) return node; for (const value of Object.values(node)) { const hit = find(value, name); if (hit) return hit; } }
+    return undefined;
+  };
+  for (const name of ["storage_apps_provider", "storage_data_provider"]) {
+    assert.deepEqual(find(params, name).choices.map((choice: any) => choice.value), ["efs"], name);
+  }
 });

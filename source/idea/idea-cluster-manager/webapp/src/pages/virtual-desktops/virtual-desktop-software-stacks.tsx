@@ -61,6 +61,11 @@ export function expiryDay(value: string): string {
 }
 
 /** A stack the monthly rebuild feeds, or whose image is exempt, has no date. */
+/** Base stacks are the stock images every build starts from; their ids are ss-base-<os>-<arch>. */
+export function isBaseStack(stack?: VirtualDesktopSoftwareStack): boolean {
+    return stack?.stack_id?.startsWith('ss-base-') ?? false
+}
+
 export function describeExpiry(stack: VirtualDesktopSoftwareStack) {
     if (!stack.effective_expires_on) {
         return 'Never'
@@ -171,9 +176,10 @@ const VIRTUAL_DESKTOP_SOFTWARE_STACKS_TABLE_COLUMN_DEFINITIONS: TableProps.Colum
     }
 ]
 
-class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStacksProps, VirtualDesktopSoftwareStacksState> {
+export class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStacksProps, VirtualDesktopSoftwareStacksState> {
 
     listing: RefObject<IdeaListView | null>
+    refreshTimer?: ReturnType<typeof setTimeout>
     createSoftwareStackForm: RefObject<IdeaForm | null>
     editSoftwareStackForm: RefObject<VirtualDesktopSoftwareStackEditForm | null>
     softwareStackActionConfirmModal: RefObject<IdeaConfirm | null>
@@ -265,6 +271,16 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
 
     getListing(): IdeaListView {
         return this.listing.current!
+    }
+
+    /** Reloads the list once the change has reached it. Nothing runs after the page is left. */
+    refreshSoon() {
+        clearTimeout(this.refreshTimer)
+        this.refreshTimer = setTimeout(() => this.listing.current?.fetchRecords(), 3000)
+    }
+
+    componentWillUnmount() {
+        clearTimeout(this.refreshTimer)
     }
 
     isSelected(): boolean {
@@ -387,9 +403,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         softwareStackSelected: false,
                         clonedSoftwareStack: undefined
                     }, () => {
-                        setTimeout(() => {
-                            this.getListing().fetchRecords();
-                        }, 3000); // Wait 3 seconds before refreshing
+                        this.refreshSoon();
                     });
                 }).catch(error => {
                     this.getCreateSoftwareStackForm().setError(error.errorCode, error.message)
@@ -412,8 +426,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     data_type: 'str',
                     param_type: 'text',
                     validate: {
-                        required: true,
-                        regex: '^.{3,24}$'
+                        required: true
                     }
                 },
                 {
@@ -714,9 +727,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                                 this.setState({
                                     softwareStackSelected: false
                                 }, () => {
-                                    setTimeout(() => {
-                                        this.getListing().fetchRecords();
-                                    }, 3000); // Wait 3 seconds before refreshing
+                                    this.refreshSoon();
                                 });
                             } else {
                                 this.setFlashMessage(
@@ -822,9 +833,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                         this.setState({
                             softwareStackSelected: false
                         }, () => {
-                            setTimeout(() => {
-                                this.getListing().fetchRecords();
-                            }, 3000); // Wait 3 seconds before refreshing
+                            this.refreshSoon();
                         });
                         return Promise.resolve(true)
                     }).catch(error => {
@@ -845,9 +854,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     this.setState({
                         softwareStackSelected: false
                     }, () => {
-                        setTimeout(() => {
-                            this.getListing().fetchRecords();
-                        }, 3000); // Wait 3 seconds before refreshing
+                        this.refreshSoon();
                     });
                 }}
             />
@@ -914,7 +921,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     {
                         id: 'delete-software-stack',
                         text: this.getDeleteActionText(),
-                        disabled: !this.isSelected() || (this.getSelectedSoftwareStack()?.stack_id?.startsWith('base-') ?? false),
+                        disabled: !this.isSelected() || isBaseStack(this.getSelectedSoftwareStack()),
                         onClick: this.deleteSoftwareStack
                     }
                 ]}
@@ -1060,8 +1067,10 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                     // Process each stack individually
                     const promises = selectedSoftwareStacks.map(softwareStack => {
                         return this.getVirtualDesktopAdminClient().updateSoftwareStack({
+                            // status only: the controller changes nothing else, so a stale row cannot overwrite the stack
                             software_stack: {
-                                ...softwareStack,
+                                stack_id: softwareStack.stack_id,
+                                base_os: softwareStack.base_os,
                                 enabled: newEnabledState
                             }
                         });
@@ -1077,9 +1086,7 @@ class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwareStack
                             this.setState({
                                 softwareStackSelected: false
                             }, () => {
-                                setTimeout(() => {
-                                    this.getListing().fetchRecords();
-                                }, 3000); // Wait 3 seconds before refreshing
+                                this.refreshSoon();
                             });
                         })
                         .catch(error => {

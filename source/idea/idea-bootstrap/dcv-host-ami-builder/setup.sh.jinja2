@@ -72,7 +72,11 @@ systemctl enable --now amazon-ssm-agent
 
 {% include '_templates/linux/epel_repo.jinja2' %}
 
+{# an image carries efs-utils whenever the cluster has an EFS share, whatever its scope: the
+   hosts it serves may be in a project or queue profile the bake is not #}
+{% with efs_image_bake = true %}
 {% include '_templates/linux/nfs_utils.jinja2' %}
+{% endwith %}
 
 {% set ubuntu_desktop_bake = context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 {% if ubuntu_desktop_bake %}
@@ -83,7 +87,8 @@ systemctl enable --now amazon-ssm-agent
 {% set lustre_required = true %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
-mkdir -p ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}
+# the bootstrap trace lands on shared storage and carries host and job details: root only
+mkdir -p "${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}" && chmod 0700 "${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}"
 touch /var/lib/idea/bake-setup.ok
 log_info "executing dcv_host_ami_builder.sh ..."
 /bin/bash ${SCRIPT_DIR}/dcv_host_ami_builder.sh >> "${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/dcv_host_ami_builder_bootstrap.log" 2>&1

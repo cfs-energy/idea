@@ -62,8 +62,11 @@ source venv/bin/activate
 ## Install Dev Requirements
 
 ```bash
-pip install -r requirements/dev.txt
+pip install --require-hashes -r requirements/dev.txt
 ```
+
+Both locks carry a SHA-256 hash for every pinned file, so pip refuses any file whose
+bytes differ from the ones that were locked.
 
 ## Run checks
 
@@ -126,7 +129,7 @@ directory and fails on any byte difference or orphan lock. The compiler remains
 mise-pinned pip-tools to preserve the existing lock format; macOS uses the pinned
 Python Linux container, so Docker must be running. `--container` forces the same
 path on Linux. Renovate uses this task too. Install dependencies directly with
-`uv pip install -r requirements/dev.txt` in the active virtual environment.
+`uv pip install --require-hashes -r requirements/dev.txt` in the active virtual environment.
 
 Invoke's unused remote workstation helpers, release-export wrappers and encoded
 service CLI wrappers were removed. Use SSH/rsync directly for remote work and
@@ -165,6 +168,14 @@ export IDEA_DEV_MODE=true
 `npm ci` has to have been run at least once; developer mode fails with an explicit
 message if `node_modules` is missing.
 
+Outside developer mode the wrapper runs the control-plane image with your AWS
+credentials, so it runs the image by digest: from `IDEA_IMAGE_DIGEST`, the digest stamped into
+the `idea-admin.sh` attached to a release, a copy of `<repository>:<revision>` already pulled,
+or the release's `candidate.json` on GitHub, in that order (operator detail: upgrade guide,
+"Mirrored registries and offline hosts"). To run an image you built yourself, tag it
+`idea-control-plane:<revision>` and set `IDEA_LOCAL_IMAGE=true`; a local build is never used
+without it.
+
 ## Dependency updates
 
 Renovate runs once a week, early Monday, from `.github/renovate.json`:
@@ -175,7 +186,7 @@ Renovate runs once a week, early Monday, from `.github/renovate.json`:
 * Vulnerability alerts open immediately, outside the schedule.
 * OpenPBS is pinned with a checksum in the control-plane Dockerfile and moves by hand.
 
-Renovate's hosted app cannot regenerate this repository's lock files in its sandbox, so a Renovate pull request arrives with its manifests updated and its lock files stale until they are regenerated on the branch.
+Renovate's hosted app cannot regenerate this repository's lock files in its sandbox, so a Renovate pull request arrives with its manifests updated and its lock files stale until they are regenerated on the branch. The `renovate locks` workflow does that for Renovate branches of this repository: one job regenerates the locks with a read-only token and no secrets, and a second job, which runs no dependency tooling, takes only the lock files from it and pushes them as the repository's app.
 
 ## Publishing the container image
 
@@ -196,19 +207,28 @@ cluster, then unchanged as the release.
 
    It runs the checks and tests, builds and smoke-tests the ideactl executables for
    every platform (including a synthesis of every module with the packaged executable
-   that must match a build from source), and builds and smoke-tests the control-plane
-   image. It then publishes the GitHub prerelease `v<version>-rc.1` with the
-   executables, their checksums and `candidate.json`, and tags the image digest
-   `<version>-rc.1`. A candidate never receives a release tag.
+   that must match a build from source), and builds, smoke-tests and scans the
+   control-plane image in a job that has no cloud credentials. A separate job in the
+   `release` environment checks the image archive against the digests the build
+   recorded, pushes it unchanged and tags the image digest `<version>-rc.1` with an
+   exact copy of its manifest, read back as that digest. The run then keeps
+   `candidate.json`, `SHA256SUMS` and the release's `idea-admin.sh` (stamped with the
+   image digest) as its `release-record-attempt-<n>` artifact, and publishes the GitHub
+   prerelease `v<version>-rc.1` with the executables, their checksums, `candidate.json`
+   and that `idea-admin.sh`. A candidate never receives a release tag. Re-running a run
+   whose candidate is published is refused; dispatch the next number instead.
 2. Prove the candidate on a development cluster with only its files: download the
    prerelease's ideactl, set `ecs.image` to `<repository>:<version>-rc.1`, and upgrade.
 3. If anything needs fixing, fix it on the branch and dispatch the next number
    (`release_candidate=2`). A number is never reused.
 4. Merge the release pull request. On `main` the workflow builds nothing: it finds the
    highest candidate for this version whose `candidate.json` records the exact source
-   tree being merged, tags that candidate's image digest `<version>`, `v<version>` and
+   tree being merged, and checks the prerelease's files against the
+   `release-record-attempt-<n>` of the run attempt named in it, which must be a
+   successful dispatch of this workflow on the same tree. It then tags that candidate's image digest `<version>`, `v<version>` and
    `latest`, and publishes the release with the candidate's files. If no candidate
-   matches the merged tree, nothing is released; cut a candidate from that source.
+   matches the merged tree, or its record is missing or differs, nothing is released;
+   cut a candidate from that source. The record is kept for 90 days.
 
 A squash merge keeps the source tree identical to the branch, so the candidate built
 from the branch head matches. A merge that changes the tree, such as one picking up a
@@ -247,7 +267,30 @@ itself cannot run, fix the workflow.
 
 ### The publishing role
 
-The role named by `ECR_ROLE` trusts any ref of this repository, because a release
-candidate is pushed from its branch. The dispatch guards are the only control that
-stops a branch from writing release tags: a dispatch writes only a candidate tag or a
-private repository, and release tags are written only by the promotion on `main`.
+Only the `publish_image` and `promote_release` jobs can assume the role named by
+`ECR_ROLE`. Both run in the `release` GitHub environment and need nothing from the
+build, which runs in jobs without an OIDC token. The role's trust policy accepts only
+tokens whose `sub` is `repo:cfs-energy/idea:environment:release` (audience
+`sts.amazonaws.com`), so a job outside that environment cannot assume it. The
+environment's deployment branch rule decides which refs can use it: `main` and the
+release branches that candidates are dispatched from. A dispatch writes only a
+candidate tag or a private repository, and release tags are written only by the
+promotion on `main`.
+
+### The image scan
+
+The control-plane image is built, smoke-tested and scanned by one composite action,
+`.github/actions/build_control_plane_image`. The release build and the `Image checks`
+workflow both call it, so a pull request sees the same findings a release dispatch
+would. `Image checks` runs on every pull request that changes something that goes
+into the image, and on pushes to `main` and release branches. It publishes nothing
+and has no credentials. It is skipped for a pull request that changes only docs, and
+a new push to a pull request cancels the older run.
+
+The scan is blocking: it fails on HIGH or CRITICAL findings that have a fixed package
+version. A "Scanner unavailable", "Scanner checksum mismatch" or "Scanner failed"
+error means the image was not scanned (an outage, not a finding), so rerun the job.
+To triage a "Vulnerabilities found" failure, follow the steps at the top of
+`.github/image-scan-allowlist`: fix the package if you can, and accept it only with a
+reason and an `exp:YYYY-MM-DD` expiry at most 90 days out, in a pull request the
+release owner approves.

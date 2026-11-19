@@ -529,3 +529,34 @@ def test_start_drops_licenses_a_restored_cache_holds_for_a_job_that_holds_no_cap
 
     assert restored.get_active_license_count('comsol') == 0
     restored.stop()
+
+
+def test_one_queue_that_cannot_be_read_does_not_end_the_sync_of_the_others():
+    # NM-14
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from ideascheduler.app.provisioning.job_monitor.job_monitor import JobMonitor
+
+    synced = []
+    monitor = JobMonitor.__new__(JobMonitor)
+    monitor._logger = Mock()
+    profile = SimpleNamespace(enabled=True, name='p', queues=['broken', 'fine'])
+
+    def list_jobs(queue):
+        if queue == 'broken':
+            raise Exception('qstat failed')
+        return []
+
+    monitor._context = SimpleNamespace(
+        queue_profiles=SimpleNamespace(
+            list_queue_profiles=lambda: [profile],
+            get_provisioning_queue=lambda queue_profile_name: Mock(),
+        ),
+        scheduler=SimpleNamespace(list_jobs=list_jobs),
+        job_cache=SimpleNamespace(
+            sync=lambda jobs: synced.append(jobs), add_active_licenses=lambda jobs: None
+        ),
+    )
+    monitor._sync_all_jobs()
+    assert synced == [[]]

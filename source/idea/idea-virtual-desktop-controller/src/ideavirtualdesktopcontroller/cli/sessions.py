@@ -32,7 +32,8 @@ from ideavirtualdesktopcontroller.cli import build_cli_context
 
 import click
 import csv
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 from rich.table import Table
 from rich.console import Console
 
@@ -410,19 +411,13 @@ def cleanup_orphaned_schedules(dry_run: bool, force: bool):
 
                 except ClientError as e:
                     if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                        # Session doesn't exist
-                        orphaned_schedules.append(
-                            {
-                                'day_of_week': day.value,
-                                'schedule_id': schedule_id,
-                                'idea_session_id': idea_session_id,
-                                'idea_session_owner': idea_session_owner,
-                                'schedule_type': schedule_item.get(
-                                    'schedule_type', 'unknown'
-                                ),
-                                'raw_item': schedule_item,
-                            }
+                        # the sessions table is missing, not the session: nothing can
+                        # be called orphaned, so nothing is listed or deleted
+                        click.echo(
+                            f'❌ The sessions table {sessions_table_name} does not exist; '
+                            f'no schedule is treated as orphaned. Stopping.'
                         )
+                        return
                     else:
                         click.echo(
                             f'❌ Error checking session {idea_session_id}: {str(e)}'
@@ -519,6 +514,35 @@ def cleanup_orphaned_schedules(dry_run: bool, force: bool):
         )
 
 
+def _read_all_pages(read, **kwargs) -> list:
+    """every item of a table scan or query, not only its first 1 MB page"""
+    items = []
+    while True:
+        response = read(**kwargs)
+        items.extend(response.get('Items', []))
+        last_key = response.get('LastEvaluatedKey')
+        if not last_key:
+            return items
+        kwargs['ExclusiveStartKey'] = last_key
+
+
+def _created_on(value) -> Optional[datetime]:
+    """a stored created_on: ISO text as written, epoch seconds or milliseconds in host local time"""
+    # an absent or zero creation time is no date, so --created-before never selects it
+    if not value:
+        return None
+    try:
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+        timestamp = float(value)
+        # anything past 1e10 seconds is a millisecond value
+        if timestamp > 1e10:
+            timestamp = timestamp / 1000.0
+        return datetime.fromtimestamp(timestamp)
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
 @click.command(
     context_settings=constants.CLICK_SETTINGS,
     short_help='Terminate virtual desktop sessions',
@@ -533,7 +557,7 @@ def cleanup_orphaned_schedules(dry_run: bool, force: bool):
 )
 @click.option(
     '--created-before',
-    help='Terminate all sessions created before this date (YYYY-MM-DD format)',
+    help="Terminate all sessions created before this date (YYYY-MM-DD format, compared in this host's local time). Sessions with no creation time are never selected",
 )
 @click.option(
     '--dry-run',
@@ -598,7 +622,6 @@ def terminate_sessions(
 
     import boto3
     from ideasdk.utils import EnvironmentUtils
-    from datetime import datetime
 
     # Validate input - session-id must be used alone, but username and created-before can be combined
     if not any([session_id, username, created_before]):
@@ -645,16 +668,21 @@ def terminate_sessions(
         return
 
     sessions_to_terminate = []
+    owner_query = {
+        'KeyConditionExpression': '#owner_attr = :owner',
+        'ExpressionAttributeNames': {'#owner_attr': 'owner'},
+        'ExpressionAttributeValues': {':owner': username},
+    }
 
     if session_id:
         # Find session by ID - need to scan since session ID is not the hash key
         click.echo(f'🔍 Looking for session with ID: {session_id}')
         try:
-            response = sessions_table.scan(
+            items = _read_all_pages(
+                sessions_table.scan,
                 FilterExpression='idea_session_id = :sid',
                 ExpressionAttributeValues={':sid': session_id},
             )
-            items = response.get('Items', [])
             if items:
                 sessions_to_terminate.extend(items)
                 click.echo(f'✅ Found session: {session_id}')
@@ -666,124 +694,34 @@ def terminate_sessions(
             return
 
     else:
-        # Handle username and/or created_before filters
-        if username and created_before:
-            # Combined filters: query by username first, then filter by date
-            click.echo(
-                f'🔍 Looking for sessions for user "{username}" created before {created_before}...'
-            )
-            try:
-                response = sessions_table.query(
-                    KeyConditionExpression='#owner_attr = :owner',
-                    ExpressionAttributeNames={'#owner_attr': 'owner'},
-                    ExpressionAttributeValues={':owner': username},
-                )
-                user_sessions = response.get('Items', [])
-                click.echo(
-                    f'✅ Found {len(user_sessions)} total sessions for user: {username}'
-                )
-
-                # Filter by creation date
-                for item in user_sessions:
-                    created_on_value = item.get('created_on')
-                    if created_on_value:
-                        try:
-                            # Handle both string (ISO format) and numeric (epoch timestamp) formats
-                            if isinstance(created_on_value, str):
-                                # Parse the ISO datetime string
-                                created_on = datetime.fromisoformat(
-                                    created_on_value.replace('Z', '+00:00')
-                                )
-                            else:
-                                # Handle epoch timestamp (Decimal from DynamoDB)
-                                # Convert to float and handle both seconds and milliseconds
-                                timestamp_value = float(created_on_value)
-                                # If the timestamp is too large, it's likely in milliseconds
-                                if (
-                                    timestamp_value > 1e10
-                                ):  # Greater than year 2001 in seconds
-                                    timestamp_value = timestamp_value / 1000.0
-                                created_on = datetime.fromtimestamp(timestamp_value)
-
-                            if created_on.date() < cutoff_date.date():
-                                sessions_to_terminate.append(item)
-                        except (ValueError, TypeError, OSError):
-                            # Skip sessions with invalid date formats
-                            continue
-
-                click.echo(
-                    f'✅ Found {len(sessions_to_terminate)} sessions for user "{username}" created before {created_before}'
-                )
-
-            except Exception as e:
-                click.echo(
-                    f'❌ Error searching for sessions for user {username}: {str(e)}'
-                )
-                return
-
-        elif username:
-            # Query sessions by username only (owner is the hash key)
+        # owner is the hash key; without a username every row is read
+        if username:
             click.echo(f'🔍 Looking for all sessions for user: {username}')
-            try:
-                response = sessions_table.query(
-                    KeyConditionExpression='#owner_attr = :owner',
-                    ExpressionAttributeNames={'#owner_attr': 'owner'},
-                    ExpressionAttributeValues={':owner': username},
-                )
-                sessions_to_terminate.extend(response.get('Items', []))
-                click.echo(
-                    f'✅ Found {len(sessions_to_terminate)} sessions for user: {username}'
-                )
-            except Exception as e:
-                click.echo(
-                    f'❌ Error searching for sessions for user {username}: {str(e)}'
-                )
-                return
-
-        elif created_before:
-            # Scan all sessions and filter by creation date only
+        else:
             click.echo(
                 f'🔍 Scanning all sessions for those created before {created_before}...'
             )
-            try:
-                # Use scan with pagination to handle large tables
-                paginator = sessions_table.meta.client.get_paginator('scan')
-                page_iterator = paginator.paginate(TableName=sessions_table_name)
-
-                for page in page_iterator:
-                    for item in page.get('Items', []):
-                        created_on_value = item.get('created_on')
-                        if created_on_value:
-                            try:
-                                # Handle both string (ISO format) and numeric (epoch timestamp) formats
-                                if isinstance(created_on_value, str):
-                                    # Parse the ISO datetime string
-                                    created_on = datetime.fromisoformat(
-                                        created_on_value.replace('Z', '+00:00')
-                                    )
-                                else:
-                                    # Handle epoch timestamp (Decimal from DynamoDB)
-                                    # Convert to float and handle both seconds and milliseconds
-                                    timestamp_value = float(created_on_value)
-                                    # If the timestamp is too large, it's likely in milliseconds
-                                    if (
-                                        timestamp_value > 1e10
-                                    ):  # Greater than year 2001 in seconds
-                                        timestamp_value = timestamp_value / 1000.0
-                                    created_on = datetime.fromtimestamp(timestamp_value)
-
-                                if created_on.date() < cutoff_date.date():
-                                    sessions_to_terminate.append(item)
-                            except (ValueError, TypeError, OSError):
-                                # Skip sessions with invalid date formats
-                                continue
-
+        try:
+            if username:
+                items = _read_all_pages(sessions_table.query, **owner_query)
+                click.echo(f'✅ Found {len(items)} total sessions for user: {username}')
+            else:
+                items = _read_all_pages(sessions_table.scan)
+            for item in items:
+                if cutoff_date is None:
+                    sessions_to_terminate.append(item)
+                    continue
+                created_on = _created_on(item.get('created_on'))
+                # rows with no or an unreadable creation date are skipped
+                if created_on is not None and created_on.date() < cutoff_date.date():
+                    sessions_to_terminate.append(item)
+            if cutoff_date is not None:
                 click.echo(
                     f'✅ Found {len(sessions_to_terminate)} sessions created before {created_before}'
                 )
-            except Exception as e:
-                click.echo(f'❌ Error scanning sessions by date: {str(e)}')
-                return
+        except Exception as e:
+            click.echo(f'❌ Error reading sessions: {str(e)}')
+            return
 
     if not sessions_to_terminate:
         click.echo('✅ No sessions found matching the criteria!')
@@ -820,25 +758,12 @@ def terminate_sessions(
     table.add_column('Instance Type', justify='left', no_wrap=False)
 
     for session_item in terminable_sessions:
-        created_on_value = session_item.get('created_on', 'N/A')
-        if created_on_value and created_on_value != 'N/A':
-            try:
-                # Handle both string (ISO format) and numeric (epoch timestamp) formats
-                if isinstance(created_on_value, str):
-                    created_on = datetime.fromisoformat(
-                        created_on_value.replace('Z', '+00:00')
-                    )
-                else:
-                    # Handle epoch timestamp (Decimal from DynamoDB)
-                    # Convert to float and handle both seconds and milliseconds
-                    timestamp_value = float(created_on_value)
-                    # If the timestamp is too large, it's likely in milliseconds
-                    if timestamp_value > 1e10:  # Greater than year 2001 in seconds
-                        timestamp_value = timestamp_value / 1000.0
-                    created_on = datetime.fromtimestamp(timestamp_value)
-                created_on_display = created_on.strftime('%Y-%m-%d %H:%M')
-            except (ValueError, TypeError, OSError):
-                created_on_display = str(created_on_value)
+        created_on_value = session_item.get('created_on')
+        created_on = _created_on(created_on_value)
+        if created_on is not None:
+            created_on_display = created_on.strftime('%Y-%m-%d %H:%M')
+        elif created_on_value:
+            created_on_display = str(created_on_value)
         else:
             created_on_display = 'N/A'
 
@@ -899,6 +824,8 @@ def terminate_sessions(
         session = VirtualDesktopSession(
             idea_session_id=session_item.get('idea_session_id'),
             owner=session_item.get('owner'),
+            # --force promises termination with connections open, as the help says
+            force=force,
         )
         sessions_for_api.append(session)
 
@@ -946,10 +873,13 @@ def terminate_sessions(
             click.echo(
                 '   Note: Sessions are being terminated asynchronously. Check their status after a few minutes.'
             )
+        if failed_sessions:
+            # a script running this sees that some terminations did not happen
+            raise SystemExit(1)
 
     except Exception as e:
         click.echo(f'\n❌ Error calling DeleteSessions API: {str(e)}')
         click.echo(
             '   This could be due to authentication issues or service unavailability.'
         )
-        return
+        raise SystemExit(1)

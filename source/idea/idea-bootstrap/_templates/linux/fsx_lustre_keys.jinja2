@@ -1,0 +1,21 @@
+# The FSx for Lustre repository signing keys are carried in this bundle; none is fetched at boot.
+# Primary fingerprints: fsx-rpm-public-key 1FF9 E84A 5264 AF85 F528 861F 6D68 E4B6 C3FA D391,
+# fsx-rpm-public-key-2 033A DF1F B9A3 62FB 19A7 2EC9 E216 2C13 D7C7 B2CE,
+# fsx-ubuntu-public-key 9C36 DD9C 515F 10DB C3AA 835C 5D5C CC33 83A9 62E1.
+function fsx_lustre_key () {
+  case "${1}" in
+    fsx-rpm-public-key) cat <<'FSX_RPM_PUBLIC_KEY'
+{% include '_templates/linux/FSX-LUSTRE-RPM-KEY' %}
+FSX_RPM_PUBLIC_KEY
+      ;;
+    fsx-rpm-public-key-2) cat <<'FSX_RPM_PUBLIC_KEY_2'
+{% include '_templates/linux/FSX-LUSTRE-RPM-KEY-2' %}
+FSX_RPM_PUBLIC_KEY_2
+      ;;
+    fsx-ubuntu-public-key) cat <<'FSX_UBUNTU_PUBLIC_KEY'
+{% include '_templates/linux/FSX-LUSTRE-UBUNTU-KEY' %}
+FSX_UBUNTU_PUBLIC_KEY
+      ;;
+    *) return 1 ;;
+  esac
+}

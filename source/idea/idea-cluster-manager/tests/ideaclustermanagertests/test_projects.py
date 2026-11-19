@@ -52,7 +52,9 @@ def enable_project(context: AppContext, project: Project):
 
 
 def disable_project(context: AppContext, project: Project):
-    context.projects.enable_project(EnableProjectRequest(project_id=project.project_id))
+    context.projects.disable_project(
+        DisableProjectRequest(project_id=project.project_id)
+    )
     task = ProjectDisabledTask(context=context)
     task.invoke({'project_id': project.project_id})
 
@@ -486,3 +488,330 @@ def test_projects_get_user_projects(context, membership):
         username=membership.user_3.username,
         project_ids=[membership.project_a.project_id, membership.project_b.project_id],
     )
+
+
+@pytest.fixture
+def two_group_project(context: AppContext):
+
+    groups = [
+        context.accounts.create_group(
+            Group(
+                title=f'two groups {n}',
+                name=f'twogroups-{n}-project-group',
+                group_type=constants.GROUP_TYPE_PROJECT,
+            )
+        )
+        for n in (1, 2)
+    ]
+    project = context.projects.create_project(
+        CreateProjectRequest(
+            project=Project(
+                name='two-groups',
+                title='Two Groups',
+                ldap_groups=[g.name for g in groups],
+            )
+        )
+    ).project
+    enable_project(context=context, project=project)
+    user = context.accounts.create_user(
+        user=User(username='twogroups_user', email='twogroups_user@example.com')
+    )
+    for group in groups:
+        context.accounts.add_users_to_group([user.username], group.name)
+        GroupMembershipUpdatedTask(context=context).invoke(
+            payload={
+                'group_name': group.name,
+                'username': user.username,
+                'operation': 'add',
+            }
+        )
+    yield SocaAnyPayload(groups=groups, project=project, user=user)
+    context.accounts.delete_user(user.username)
+    context.projects.projects_dao.delete_project(project.project_id)
+    for group in groups:
+        context.accounts.delete_group(group.name, force=True)
+
+
+def test_a_project_stays_while_another_of_its_groups_grants_it(
+    context, two_group_project
+):
+    t = two_group_project
+    assert is_memberof(context, t.user, t.project)
+    context.accounts.remove_users_from_group([t.user.username], t.groups[0].name)
+    GroupMembershipUpdatedTask(context=context).invoke(
+        payload={
+            'group_name': t.groups[0].name,
+            'username': t.user.username,
+            'operation': 'remove',
+        }
+    )
+    assert is_memberof(context, t.user, t.project)
+    context.accounts.remove_users_from_group([t.user.username], t.groups[1].name)
+    GroupMembershipUpdatedTask(context=context).invoke(
+        payload={
+            'group_name': t.groups[1].name,
+            'username': t.user.username,
+            'operation': 'remove',
+        }
+    )
+    assert not is_memberof(context, t.user, t.project)
+
+
+def test_removing_a_group_from_a_project_removes_what_only_it_granted(
+    context, two_group_project
+):
+    from ideaclustermanager.app.projects.project_tasks import ProjectGroupsUpdatedTask
+
+    t = two_group_project
+    only = context.accounts.create_user(
+        user=User(username='onegroup_user', email='onegroup_user@example.com')
+    )
+    try:
+        context.accounts.add_users_to_group([only.username], t.groups[0].name)
+        GroupMembershipUpdatedTask(context=context).invoke(
+            payload={
+                'group_name': t.groups[0].name,
+                'username': only.username,
+                'operation': 'add',
+            }
+        )
+        assert is_memberof(context, only, t.project)
+        context.projects.projects_dao.update_project(
+            {'project_id': t.project.project_id, 'ldap_groups': [t.groups[1].name]}
+        )
+        ProjectGroupsUpdatedTask(context).invoke(
+            {
+                'project_id': t.project.project_id,
+                'groups_added': [],
+                'groups_removed': [t.groups[0].name],
+            }
+        )
+        assert not is_memberof(context, only, t.project)
+        # still granted through the group that stays
+        assert is_memberof(context, t.user, t.project)
+    finally:
+        context.accounts.delete_user(only.username)
+
+
+def queued_group_update(context, monkeypatch, project_id, ldap_groups):
+    """update a project's groups and run the task it queues, sent as the queue sends it"""
+    from ideadatamodel import UpdateProjectRequest
+    from ideaclustermanager.app.projects.project_tasks import ProjectGroupsUpdatedTask
+    from ideasdk.utils import Utils
+
+    sent = []
+    monkeypatch.setattr(
+        context.projects.task_manager,
+        'send',
+        lambda task_name, payload, **_: sent.append((task_name, payload)),
+    )
+    context.projects.update_project(
+        UpdateProjectRequest(
+            project=Project(project_id=project_id, ldap_groups=ldap_groups)
+        )
+    )
+    for task_name, payload in sent:
+        if task_name == 'projects.project-groups-updated':
+            # the queue body is JSON: what the worker reads is what survives it
+            ProjectGroupsUpdatedTask(context).invoke(
+                Utils.from_json(Utils.to_json(payload))
+            )
+    return [name for name, _ in sent]
+
+
+def test_a_project_group_edit_reaches_the_members_through_the_queue(
+    context, two_group_project, monkeypatch
+):
+    t = two_group_project
+    only = context.accounts.create_user(
+        user=User(username='queued_user', email='queued_user@example.com')
+    )
+    try:
+        context.accounts.add_users_to_group([only.username], t.groups[0].name)
+        GroupMembershipUpdatedTask(context=context).invoke(
+            payload={
+                'group_name': t.groups[0].name,
+                'username': only.username,
+                'operation': 'add',
+            }
+        )
+        assert is_memberof(context, only, t.project)
+        # the first group leaves: its only member loses the project, the overlapping
+        # member keeps it through the second group
+        queued_group_update(
+            context, monkeypatch, t.project.project_id, [t.groups[1].name]
+        )
+        assert not is_memberof(context, only, t.project)
+        assert is_memberof(context, t.user, t.project)
+        # the last group leaves: no one keeps it
+        names = queued_group_update(context, monkeypatch, t.project.project_id, [])
+        assert 'projects.project-groups-updated' in names
+        assert not is_memberof(context, t.user, t.project)
+        # the first group comes back: its member gets the project again
+        queued_group_update(
+            context, monkeypatch, t.project.project_id, [t.groups[0].name]
+        )
+        assert is_memberof(context, only, t.project)
+    finally:
+        context.accounts.delete_user(only.username)
+
+
+def test_a_disabled_group_grants_none_of_its_projects_until_enabled(
+    context, two_group_project
+):
+    t = two_group_project
+    only = context.accounts.create_user(
+        user=User(username='disabled_group_user', email='dgu@example.com')
+    )
+    try:
+        context.accounts.add_users_to_group([only.username], t.groups[0].name)
+        GroupMembershipUpdatedTask(context=context).invoke(
+            payload={
+                'group_name': t.groups[0].name,
+                'username': only.username,
+                'operation': 'add',
+            }
+        )
+        context.accounts.disable_group(t.groups[0].name)
+        assert not is_memberof(context, only, t.project)
+        # still granted through the other, enabled group
+        assert is_memberof(context, t.user, t.project)
+        context.accounts.enable_group(t.groups[0].name)
+        assert is_memberof(context, only, t.project)
+    finally:
+        context.accounts.delete_user(only.username)
+
+
+def join_group(context, username, group_name):
+    context.accounts.add_users_to_group([username], group_name)
+    GroupMembershipUpdatedTask(context=context).invoke(
+        payload={'group_name': group_name, 'username': username, 'operation': 'add'}
+    )
+
+
+def test_a_group_left_on_a_project_by_an_earlier_release_grants_nothing_after_an_edit(
+    context, two_group_project, monkeypatch
+):
+    t = two_group_project
+    dao = context.projects.user_projects_dao
+    stray = context.accounts.create_group(
+        Group(name='stray-project-group', title='stray', group_type='project')
+    )
+    newcomer = context.accounts.create_user(
+        user=User(username='stray_member', email='stray_member@example.com')
+    )
+    try:
+        # an earlier release left this group's index row on the project
+        dao.project_groups_table.put_item(
+            Item={'group_name': stray.name, 'project_id': t.project.project_id}
+        )
+        # any edit of the project through the queue repairs the index
+        queued_group_update(
+            context, monkeypatch, t.project.project_id, [t.groups[1].name]
+        )
+        join_group(context, newcomer.username, stray.name)
+        assert not is_memberof(context, newcomer, t.project)
+    finally:
+        context.accounts.delete_user(newcomer.username)
+        context.accounts.delete_group(stray.name, force=True)
+
+
+def test_a_group_disabled_after_an_edit_revokes_its_project_without_a_restart(
+    context, two_group_project, monkeypatch
+):
+    t = two_group_project
+    dao = context.projects.user_projects_dao
+    only = context.accounts.create_user(
+        user=User(username='index_member', email='index_member@example.com')
+    )
+    try:
+        # an earlier release added the first group by an edit that never wrote its
+        # index row
+        dao.project_groups_table.delete_item(
+            Key={'group_name': t.groups[0].name, 'project_id': t.project.project_id}
+        )
+        join_group(context, only.username, t.groups[0].name)
+        # an edit adding a third group, through the queue, repairs the index
+        third = context.accounts.create_group(
+            Group(name='third-project-group', title='third', group_type='project')
+        )
+        queued_group_update(
+            context,
+            monkeypatch,
+            t.project.project_id,
+            [t.groups[0].name, t.groups[1].name, third.name],
+        )
+        assert is_memberof(context, only, t.project)
+        context.accounts.disable_group(t.groups[0].name)
+        assert not is_memberof(context, only, t.project)
+        context.accounts.delete_group(third.name, force=True)
+    finally:
+        context.accounts.delete_user(only.username)
+
+
+def test_the_start_time_refresh_repairs_every_projects_rows_and_index(
+    context, two_group_project
+):
+    t = two_group_project
+    dao = context.projects.user_projects_dao
+    # what earlier releases left: a row no group grants, a granted row missing, an index
+    # row for a group not on the project and none for one that is
+    dao.create_user_project(project_id=t.project.project_id, username='stale_marker')
+    dao.delete_user_project(project_id=t.project.project_id, username=t.user.username)
+    dao.project_groups_table.put_item(
+        Item={'group_name': 'gone-marker-group', 'project_id': t.project.project_id}
+    )
+    dao.project_groups_table.delete_item(
+        Key={'group_name': t.groups[1].name, 'project_id': t.project.project_id}
+    )
+    # the start path calls this once, inside the defaults lock
+    dao.refresh_all_projects()
+    assert not dao.is_user_in_project('stale_marker', t.project.project_id)
+    assert dao.is_user_in_project(t.user.username, t.project.project_id)
+    assert t.project.project_id not in dao.get_projects_by_group_name(
+        'gone-marker-group'
+    )
+    assert t.project.project_id in dao.get_projects_by_group_name(t.groups[1].name)
+
+
+def test_remove_add_remove_of_a_group_each_reach_the_worker(
+    context, two_group_project, monkeypatch
+):
+    from ideadatamodel import UpdateProjectRequest
+    from ideaclustermanager.app.projects.project_tasks import ProjectGroupsUpdatedTask
+    from ideasdk.utils import Utils
+
+    t = two_group_project
+    seen = set()
+    delivered = []
+
+    def fifo_send(task_name, payload, message_dedupe_id=None, **_):
+        # the queue drops a repeated de-duplication id for five minutes
+        dedupe = message_dedupe_id or Utils.sha256(Utils.to_json(payload))
+        if dedupe in seen:
+            return
+        seen.add(dedupe)
+        delivered.append((task_name, Utils.from_json(Utils.to_json(payload))))
+
+    only = context.accounts.create_user(
+        user=User(username='rar_member', email='rar_member@example.com')
+    )
+    join_group(context, only.username, t.groups[0].name)
+    assert is_memberof(context, only, t.project)
+    monkeypatch.setattr(context.projects.task_manager, 'send', fifo_send)
+    one, both = [t.groups[1].name], [t.groups[0].name, t.groups[1].name]
+    for groups in (one, both, one):
+        context.projects.update_project(
+            UpdateProjectRequest(
+                project=Project(project_id=t.project.project_id, ldap_groups=groups)
+            )
+        )
+        while delivered:
+            name, payload = delivered.pop(0)
+            if name == 'projects.project-groups-updated':
+                ProjectGroupsUpdatedTask(context).invoke(payload)
+    try:
+        # the group left last: its only member keeps no grant
+        assert not is_memberof(context, only, t.project)
+    finally:
+        context.accounts.delete_user(only.username)

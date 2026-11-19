@@ -57,6 +57,9 @@ export function templateDigest(template: any): string {
 // The cluster manager application policy carries the two password secret statements.
 // The cluster manager tasks queue states its retention, the 4 days it already had by default.
 // The cluster manager can write scratch cleanup delivery receipts, the `delivered` rows only.
+// Host and task roles hold only what their callers use: the gateway task no rendered policy, the
+// broker its tables and metrics, and the controller's instance and command grants this cluster's tag.
+// OpenSearch admits the analytics sink and the three control-plane services, not the VPC range.
 // Keep hashing every field except the three validated random values above.
 test('all eleven ECS module templates match the reviewed v26.11.1 baseline', async () => {
   const baseline = JSON.parse(readFileSync(new URL('./ecs-sunset-digests.json', import.meta.url), 'utf8'));
@@ -83,7 +86,9 @@ test('bootstrap and the standalone cost collector match the pre-sunset v26.10.9 
     clusterName: 'idea-test1', awsDnsSuffix: 'amazonaws.com',
     awsElbAccountId: elbAccountIdForRegion('us-east-2'), inputPermissionsBoundary: '',
   }));
-  assert.equal(templateDigest(bootstrap), 'ac702e4f32c3df9c5a12f9e5ead68cb73dd078ae4822ff4bf1514e7961ec3e02');
+  // 26.11.2: load balancer log writes are limited to this account's AWSLogs path, and the bucket
+  // no longer carries a backup plan tag no plan selects.
+  assert.equal(templateDigest(bootstrap), '7c9e19f6ea4c8c0ac3bf0567c240af460476b7ae10de360bbc364cc0189ba143');
   const collector = new CostCollectorStack(new App(), 'cost-collector', {
     env: { account: '123456789012', region: 'us-east-1' }, clusterName: 'gov-cluster',
     controlPlaneImage: '123456789012.dkr.ecr.us-east-1.amazonaws.com/control:release',

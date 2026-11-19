@@ -12,7 +12,7 @@
  */
 
 import {IdeaFormValidate} from "../../components/form-field/form-field";
-import {GROUP_OR_PROJECT_NAME_PATTERN, PROJECT_TITLE_PATTERN} from "../../common/form-patterns";
+import {GROUP_OR_PROJECT_NAME_PATTERN, patternOrUnchanged, PROJECT_TITLE_PATTERN} from "../../common/form-patterns";
 import React, {Component, RefObject} from "react";
 
 import {TableProps} from "@cloudscape-design/components/table";
@@ -469,7 +469,8 @@ class Projects extends Component<ProjectsProps, ProjectsState> {
                               readonly: isUpdate,
                               validate: {
                                   required: true,
-                                  regex: GROUP_OR_PROJECT_NAME_PATTERN,
+                                  // the code cannot change on edit, so a stored code the rule would refuse is kept
+                                  regex: patternOrUnchanged(GROUP_OR_PROJECT_NAME_PATTERN, isUpdate ? this.getSelected()?.name : undefined),
                                   message: 'Use at least 3 lowercase letters, digits or hyphens.'
                               } as IdeaFormValidate
                           },

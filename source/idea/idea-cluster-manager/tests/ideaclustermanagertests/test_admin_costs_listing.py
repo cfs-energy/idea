@@ -183,8 +183,10 @@ def month(start, end, amount):
 
 
 def costs_for(username):
-    # one user with storage and one known zero; the others have no stored amount
-    amount = {'settled-user': 0.25, 'live-user': 0.0}.get(username)
+    # users with storage and one known zero; the others have no stored amount
+    amount = {'settled-user': 0.25, 'live-user': 0.0, 'storage-only-user': 1.0}.get(
+        username
+    )
     return GetMyCostsResult(
         currency='USD',
         state='ready',
@@ -843,3 +845,40 @@ def test_a_failed_history_read_leaves_readers_on_the_full_read(monkeypatch):
     monkeypatch.setattr(arrow, 'utcnow', lambda: NOW.shift(minutes=16))
     worker.check()
     assert 'history-only' in store.head_subjects()
+
+
+def test_a_desktop_running_since_before_the_window_is_in_both_views(monkeypatch):
+    docs, history = world()
+    started = NOW.shift(days=-45)
+    # running throughout: nothing has written its document since it started
+    docs.append(session('long', 'long-user', 'READY', started, started))
+    history.append(run('long', 'long-user', started))
+    context, store, _, _ = build(monkeypatch, docs, history)
+
+    summary = MyCostsService(context).get_summary('long-user')
+    assert summary.desktops.session_count == 1
+    assert summary.desktops.hours == pytest.approx(30 * 24, abs=24)
+
+    # no head yet: the stored view finds this owner only through the change search
+    collect(context, store, COLLECTED)
+    expected = rows(view(context, heads=None))
+    assert rows(view(context)) == expected
+    long = [r for r in expected['listing'] if r['username'] == 'long-user']
+    assert len(long) == 1
+    assert long[0]['desktop_session_count'] == 1
+    assert long[0]['desktop_hours'] == pytest.approx(summary.desktops.hours)
+
+
+def test_an_owner_with_only_stored_data_is_listed_in_total_order(monkeypatch):
+    docs, history = world()
+    context, store, _, _ = build(monkeypatch, docs, history)
+    collect(context, store, COLLECTED + ('storage-only-user',))
+
+    listing = view(context).listing
+    assert listing[0].username == 'storage-only-user'
+    assert listing[0].storage_cost == pytest.approx(30 * 1.0)
+    assert listing[0].total_cost == pytest.approx(30 * 1.0)
+    totals = [row.total_cost for row in listing]
+    assert totals == sorted(totals, reverse=True)
+    # a head with nothing stored and no activity still has no row
+    assert 'idle-user' not in {row.username for row in listing}

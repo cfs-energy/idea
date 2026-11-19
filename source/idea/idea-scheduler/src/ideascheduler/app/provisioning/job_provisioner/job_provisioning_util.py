@@ -52,6 +52,8 @@ from ideascheduler.app.provisioning.job_provisioner.batch_capacity_helper import
 from pydantic import Field
 from botocore.exceptions import ClientError
 from typing import Dict, Optional, List
+
+from ideascheduler.app.app_protocols import LicenseAvailability
 import arrow
 import os
 import logging
@@ -849,11 +851,33 @@ class JobProvisioningUtil:
         result += f'{message}'
         return result
 
-    def check_budgets(self):
+    def check_budgets(self) -> List[SocaJob]:
+        """
+        each job is checked against its own project's budget: jobs of several projects
+        can share a batch, and one project's spend must not stop another's jobs.
+        :return: the jobs whose project is over its budget, for the caller to hold back
+        :raises SocaException the first refusal, when no job may proceed
+        """
+        refused = []
+        first_error = None
         for job in self.jobs:
-            return AwsBudgetsHelper(
-                context=self.context, job=job
-            ).check_budget_availability()
+            try:
+                AwsBudgetsHelper(
+                    context=self.context, job=job
+                ).check_budget_availability()
+            except exceptions.SocaException as e:
+                # a project whose budget is gone holds back its own jobs, not the batch
+                # its jobs share with other projects (SCH-31)
+                if e.error_code not in (
+                    errorcodes.BUDGETS_LIMIT_EXCEEDED,
+                    errorcodes.BUDGET_NOT_FOUND,
+                ):
+                    raise e
+                refused.append(job)
+                first_error = first_error or e
+        if len(refused) > 0 and len(refused) == len(self.jobs):
+            raise first_error
+        return refused
 
     def check_bedrock(self, reject_when_check_fails: bool = True):
         """
@@ -928,41 +952,83 @@ class JobProvisioningUtil:
         :param reject_when_check_fails: what an unusable license server check means. True
         (provisioning) counts zero available, so the job stays queued and is retried. False
         (submission) skips the license check, so an unhealthy server cannot reject the job.
+
+        the seats asked by earlier jobs of the batch count against later ones, so a batch is
+        never provisioned for more seats than are free.
+        :return: the jobs that do not fit, for the caller to hold back
+        :raises SocaException the first job's shortfall, when no job fits
         """
+        # seats taken by the jobs of this batch that fit, per license
+        batch_seats: Dict[str, int] = {}
+        # each license server is asked once per attempt, however many jobs ask for it
+        availability_by_license: Dict[str, LicenseAvailability] = {}
+        waiting = []
+        first_error = None
         for job in self.jobs:
             if job.params.licenses is None or len(job.params.licenses) == 0:
                 continue
+            try:
+                self._check_job_licenses(
+                    job, batch_seats, reject_when_check_fails, availability_by_license
+                )
+            except exceptions.SocaException as e:
+                if e.error_code != errorcodes.NOT_ENOUGH_LICENSES:
+                    raise e
+                waiting.append(job)
+                first_error = first_error or e
+                continue
             for license_ask in job.params.licenses:
+                batch_seats[license_ask.name] = (
+                    batch_seats.get(license_ask.name, 0) + license_ask.count
+                )
+        if len(waiting) > 0 and len(waiting) == len(self.jobs):
+            raise first_error
+        return waiting
+
+    def _check_job_licenses(
+        self,
+        job: SocaJob,
+        batch_seats: Dict[str, int],
+        reject_when_check_fails: bool,
+        availability_by_license: Optional[Dict[str, LicenseAvailability]] = None,
+    ):
+        if availability_by_license is None:
+            availability_by_license = {}
+        for license_ask in job.params.licenses:
+            availability = availability_by_license.get(license_ask.name)
+            if availability is None:
                 availability = self.context.license_service.get_license_availability(
                     license_resource_name=license_ask.name
                 )
-                if not availability.check_ok and not reject_when_check_fails:
-                    self._logger.warning(
-                        f'{job.log_tag} - {license_ask.name} - license availability is '
-                        f'unknown, skipping the license check: {availability.error}'
-                    )
-                    continue
-                available = availability.available_count
-                active_license_usage_count = (
-                    self.context.job_cache.get_active_license_count(
-                        license_name=license_ask.name
-                    )
+                availability_by_license[license_ask.name] = availability
+            if not availability.check_ok and not reject_when_check_fails:
+                self._logger.warning(
+                    f'{job.log_tag} - {license_ask.name} - license availability is '
+                    f'unknown, skipping the license check: {availability.error}'
                 )
-                total_required = active_license_usage_count + license_ask.count
-                if available < total_required:
-                    raise exceptions.SocaException(
-                        error_code=errorcodes.NOT_ENOUGH_LICENSES,
-                        message=f'Not enough {license_ask.name} licenses: this job needs '
-                        f'{license_ask.count}, {max(available - active_license_usage_count, 0)} '
-                        f'are free right now. Try again when other jobs finish.',
-                    )
-                else:
-                    self._logger.info(
-                        f'{job.log_tag} - {license_ask.name} - '
-                        f'licenses available: {available}, '
-                        f'total required: {total_required}, '
-                        f'job required: {license_ask.count}'
-                    )
+                continue
+            available = availability.available_count
+            active_license_usage_count = (
+                self.context.job_cache.get_active_license_count(
+                    license_name=license_ask.name
+                )
+            )
+            taken = active_license_usage_count + batch_seats.get(license_ask.name, 0)
+            total_required = taken + license_ask.count
+            if available < total_required:
+                raise exceptions.SocaException(
+                    error_code=errorcodes.NOT_ENOUGH_LICENSES,
+                    message=f'Not enough {license_ask.name} licenses: this job needs '
+                    f'{license_ask.count}, {max(available - taken, 0)} '
+                    f'are free right now. Try again when other jobs finish.',
+                )
+            else:
+                self._logger.info(
+                    f'{job.log_tag} - {license_ask.name} - '
+                    f'licenses available: {available}, '
+                    f'total required: {total_required}, '
+                    f'job required: {license_ask.count}'
+                )
 
     def check_acls(self) -> bool:
         user_projects = self.context.projects_client.get_user_projects(
@@ -970,22 +1036,18 @@ class JobProvisioningUtil:
         )
         project_name = self.job.project
 
-        current_project = None
-        for project in user_projects:
-            if project.name == project_name:
-                current_project = project
-                break
-
-        if current_project is None:
-            # a missing queue profile must not hide the rejection; the list is then empty
+        # the project must be one the user belongs to and one the queue allows: the
+        # same list a job with no project takes its default from.
+        # a missing queue profile must not hide the rejection; the list is then empty
+        try:
+            allowed = projects_allowed_on_queue(
+                user_projects,
+                self.queue_profile.projects,
+            )
+        except exceptions.SocaException:
             allowed = []
-            try:
-                allowed = projects_allowed_on_queue(
-                    user_projects,
-                    self.queue_profile.projects,
-                )
-            except exceptions.SocaException:
-                allowed = []
+
+        if project_name not in allowed:
             if len(allowed) == 0:
                 message = (
                     f"You aren't in a project allowed on queue {self.job.queue}. "

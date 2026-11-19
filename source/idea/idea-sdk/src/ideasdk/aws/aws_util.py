@@ -772,10 +772,11 @@ class AWSUtil(AWSUtilProtocol):
                 instance_count = Utils.get_value_as_int(
                     'InstanceCount', reservation, default=0
                 )
-                if instance_type in instance_types:
-                    response[instance_type] += instance_count
-                else:
-                    response[instance_type] = instance_count
+                # the request list always holds the type, so += met a missing key on the
+                # first matching reservation (SP-16, SDK-18)
+                response[instance_type] = (
+                    response.get(instance_type, 0) + instance_count
+                )
 
         self._context.cache().short_term().set(key=cache_key, value=response)
 
@@ -1141,6 +1142,14 @@ class AWSUtil(AWSUtilProtocol):
                                     reserved = float(
                                         instance_data['pricePerUnit']['USD']
                                     )
+
+        if ondemand <= 0.0:
+            # no on-demand rate matched: the same as a failed lookup, not a free instance
+            # (SLP-19)
+            self._context.cache().long_term().set(
+                key=cache_key, value=PRICING_UNAVAILABLE, ttl=PRICING_CACHE_TTL_SECS
+            )
+            return self._price_list_unit_price(instance_type)
 
         pricing = EC2InstanceUnitPrice(ondemand=ondemand, reserved=reserved)
         self._context.cache().long_term().set(key=cache_key, value=pricing)

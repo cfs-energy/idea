@@ -67,6 +67,8 @@ class IDEASessionScheduledResumeEventHandler(BaseVirtualDesktopControllerEventHa
             VirtualDesktopSessionState.INITIALIZING,
             VirtualDesktopSessionState.DELETED,
             VirtualDesktopSessionState.DELETING,
+            # a failed desktop is not started by a schedule; its owner or an admin acts
+            VirtualDesktopSessionState.ERROR,
         }:
             self.log_info(
                 message_id=message_id,

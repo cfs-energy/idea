@@ -2205,8 +2205,8 @@ def test_a_dry_run_records_dates_and_going_live_still_gives_both_notices(world):
     outcome = run(world)
     assert outcome['status'] == 'dry_run' and outcome['would_remove_folders'] == 1
     assert folder.exists() and world.sent == []
+    # the same moment, so still the digest day whatever the hour
     world.switches['dry_run'] = False
-    world.now += timedelta(hours=1)
     outcome = run(world)
     assert outcome['noticed_folders'] == 1 and outcome['removed_folders'] == 0
     assert digests(world)[0].params['first_count'] == 1

@@ -11,6 +11,8 @@
  * only order a fresh install can satisfy: those rows do not exist until the module stack runs.
  */
 
+import { createHash } from "node:crypto";
+import type { ClusterConfig } from "../../config/cluster-config.ts";
 import { Aws, CustomResource, Duration, RemovalPolicy } from "aws-cdk-lib";
 import type { StackBuildProps } from "../app.ts";
 import { IdeaBaseStack } from "../base-stack.ts";
@@ -63,6 +65,71 @@ function cpuArchitecture(architecture: ec2.InstanceArchitecture): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The shared file systems a container host mounts: the control-plane-scoped FSx shares, as fstab
+ * lines. The hosts mount them from user data; the deploy compares a host's recorded digest with
+ * the current one (host-pool.ts), so a host that predates a new or moved share is not used.
+ */
+export function hostStorageEntries(config: ClusterConfig): { entries: Array<{ directory: string; line: string }>; lustre: boolean } {
+  const entries: Array<{ directory: string; line: string }> = [];
+  let lustre = false;
+  for (const mount of storageMounts(config)) {
+    if (mount.hostPath === undefined) continue;
+    const storage = config.getConfig(`shared-storage.${mount.name}`, {});
+    if (!isRecord(storage)) continue;
+    const provider = storage["provider"];
+    const configured = storage["mount_options"];
+    const options = typeof configured === "string" && configured.trim() !== "" ? configured.trim() : undefined;
+    let source: string | undefined;
+    let fallback = NFS_MOUNT_OPTIONS;
+    if (provider === "fsx_lustre") {
+      const lustreConfig = storage["fsx_lustre"];
+      if (isRecord(lustreConfig) && typeof lustreConfig["dns"] === "string" && typeof lustreConfig["mount_name"] === "string") {
+        source = `${lustreConfig["dns"]}@tcp:/${lustreConfig["mount_name"]}`;
+        fallback = LUSTRE_MOUNT_OPTIONS;
+        lustre = true;
+      }
+    } else if (provider === "fsx_netapp_ontap") {
+      const ontap = storage["fsx_netapp_ontap"];
+      const svm = isRecord(ontap) ? ontap["svm"] : undefined;
+      const volume = isRecord(ontap) ? ontap["volume"] : undefined;
+      if (isRecord(svm) && typeof svm["nfs_dns"] === "string" && isRecord(volume) && typeof volume["volume_path"] === "string") {
+        source = `${svm["nfs_dns"]}:${volume["volume_path"]}`;
+      }
+    } else if (provider === "fsx_openzfs") {
+      const openzfs = storage["fsx_openzfs"];
+      if (isRecord(openzfs) && typeof openzfs["dns"] === "string" && typeof openzfs["volume_path"] === "string") {
+        source = `${openzfs["dns"]}:${openzfs["volume_path"]}`;
+      }
+    }
+    if (source === undefined) {
+      throw new Error(
+        `shared-storage.${mount.name}: ${String(provider)} needs its endpoint and path before the container hosts can mount it`,
+      );
+    }
+    // These go into root's user data, so a value the shell or fstab would split is refused rather
+    // than quoted (fstab has no quoting either). The rule the portal applies on save.
+    const fields = (options ?? fallback).split(/\s+/);
+    for (const [what, value] of [["mount_dir", mount.hostPath], ["endpoint", source], ...fields.map((field) => ["mount_options", field])] as const) {
+      if (!/^[A-Za-z0-9_.,:=@/+-]+$/.test(value)) {
+        throw new Error(`shared-storage.${mount.name}: ${what} ${JSON.stringify(value)} has a character the host mount cannot take`);
+      }
+    }
+    if (fields.length !== 4) throw new Error(`shared-storage.${mount.name}: mount_options needs the four fstab fields: type, options, dump, pass`);
+    // a shared file system carries no device files a host needs: nodev unless the operator named dev
+    const flags = fields[1]!.split(",");
+    if (!flags.includes("dev") && !flags.includes("nodev")) fields[1] = `${fields[1]},nodev`;
+    entries.push({ directory: mount.hostPath, line: `${source} ${mount.hostPath}/ ${fields.join(" ")}` });
+  }
+  return { entries, lustre };
+}
+
+/** A short digest of the host mount set, recorded on each host as the `idea.storage` attribute. */
+export function hostStorageDigest(config: ClusterConfig): string {
+  const { entries } = hostStorageEntries(config);
+  return createHash("sha256").update(entries.map((entry) => entry.line).sort().join("\n")).digest("hex").slice(0, 16);
 }
 
 export class EcsStack extends IdeaBaseStack {
@@ -240,7 +307,17 @@ export class EcsStack extends IdeaBaseStack {
       ["vdc-controller-logs-ensure", `/${this.clusterName}/${vdcId}/controller`],
       ["dcv-broker-logs-ensure", `/${this.clusterName}/${vdcId}/dcv-broker`],
       ["dcv-gateway-logs-ensure", `/${this.clusterName}/${vdcId}/dcv-connection-gateway`],
+      // Host groups get their retention here, from the deploy, so hosts hold no retention grant: a
+      // host role cannot tell its own group from another host's. Job groups (one per job) get
+      // theirs from the scheduler when it provisions the job.
+      ["dcv-host-logs-ensure", `/${this.clusterName}/${vdcId}/dcv-host`],
+      ["dcv-host-ami-builder-logs-ensure", `/${this.clusterName}/${vdcId}/ami-builder`],
+      ["compute-ami-builder-logs-ensure", `/${this.clusterName}/${schedulerId}/ami-builder`],
     ];
+    const directoryId = config.getString(`global-settings.module_sets.${config.moduleSet}.directoryservice.module_id`);
+    if (directoryId && config.getString("directoryservice.provider") === "openldap") {
+      groups.push(["openldap-server-logs-ensure", `/${this.clusterName}/${directoryId}/openldap-server`]);
+    }
     for (const [constructId, logGroupName] of groups) this.ensureAgentLogGroup(constructId, logGroupName);
   }
 
@@ -472,13 +549,16 @@ export class EcsStack extends IdeaBaseStack {
       "mkdir -p /etc/ecs",
       `echo ECS_CLUSTER=${this.ecsCluster.clusterName} >> /etc/ecs/ecs.config`,
       "echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config",
+      // the mount set this host was built with, which the deploy checks before it places tasks
+      `echo 'ECS_INSTANCE_ATTRIBUTES={"idea.storage":"${hostStorageDigest(this.context.config)}"}' >> /etc/ecs/ecs.config`,
       "install -d -o root -g root -m 0755 /var/run/datadog",
       // Tasks inherit the host's resolver file, and the container-optimised image's
       // systemd-resolved stub carries no search domain. The desktop agents advertise their hosts by
       // short name, which the gateway then cannot resolve, so the VPC's domain is made a search
       // domain here. (An IDEA host gets it from DHCP; this image does not apply it.)
       "mkdir -p /etc/systemd/resolved.conf.d",
-      `printf '[Resolve]\\nDomains=%s\\n' "${Aws.REGION}.compute.internal" > /etc/systemd/resolved.conf.d/idea-search-domain.conf`,
+      // us-east-1's VPC domain is ec2.internal; every other region's is <region>.compute.internal
+      `printf '[Resolve]\\nDomains=%s\\n' "${this.stack.region === "us-east-1" ? "ec2.internal" : `${this.stack.region}.compute.internal`}" > /etc/systemd/resolved.conf.d/idea-search-domain.conf`,
       "systemctl restart systemd-resolved",
     );
     const provider = this.directoryProvider();
@@ -531,44 +611,7 @@ export class EcsStack extends IdeaBaseStack {
    * into an empty local directory that dies with the host.
    */
   private hostStorageCommands(): string[] {
-    const entries: Array<{ directory: string; line: string }> = [];
-    let lustre = false;
-    for (const mount of storageMounts(this.context.config)) {
-      if (mount.hostPath === undefined) continue;
-      const storage = this.context.config.getConfig(`shared-storage.${mount.name}`, {});
-      if (!isRecord(storage)) continue;
-      const provider = storage["provider"];
-      const configured = storage["mount_options"];
-      const options = typeof configured === "string" && configured.trim() !== "" ? configured.trim() : undefined;
-      let source: string | undefined;
-      let fallback = NFS_MOUNT_OPTIONS;
-      if (provider === "fsx_lustre") {
-        const lustreConfig = storage["fsx_lustre"];
-        if (isRecord(lustreConfig) && typeof lustreConfig["dns"] === "string" && typeof lustreConfig["mount_name"] === "string") {
-          source = `${lustreConfig["dns"]}@tcp:/${lustreConfig["mount_name"]}`;
-          fallback = LUSTRE_MOUNT_OPTIONS;
-          lustre = true;
-        }
-      } else if (provider === "fsx_netapp_ontap") {
-        const ontap = storage["fsx_netapp_ontap"];
-        const svm = isRecord(ontap) ? ontap["svm"] : undefined;
-        const volume = isRecord(ontap) ? ontap["volume"] : undefined;
-        if (isRecord(svm) && typeof svm["nfs_dns"] === "string" && isRecord(volume) && typeof volume["volume_path"] === "string") {
-          source = `${svm["nfs_dns"]}:${volume["volume_path"]}`;
-        }
-      } else if (provider === "fsx_openzfs") {
-        const openzfs = storage["fsx_openzfs"];
-        if (isRecord(openzfs) && typeof openzfs["dns"] === "string" && typeof openzfs["volume_path"] === "string") {
-          source = `${openzfs["dns"]}:${openzfs["volume_path"]}`;
-        }
-      }
-      if (source === undefined) {
-        throw new Error(
-          `shared-storage.${mount.name}: ${String(provider)} needs its endpoint and path before the container hosts can mount it`,
-        );
-      }
-      entries.push({ directory: mount.hostPath, line: `${source} ${mount.hostPath}/ ${options ?? fallback}` });
-    }
+    const { entries, lustre } = hostStorageEntries(this.context.config);
     if (entries.length === 0) return [];
     return [
       ...(lustre ? ["dnf install -y lustre-client"] : []),

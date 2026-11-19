@@ -1,36 +1,13 @@
 # Begin: Instance Storage Configuration for Linux Virtual Desktops
 function setup_instance_storage() {
-  local SCRATCH_MOUNTPOINT="{{ context.config.get_string('virtual-desktop-controller.instance_storage.mount_point', '/scratch') }}"
+  local SCRATCH_MOUNTPOINT='{{ context.config.get_string('virtual-desktop-controller.instance_storage.mount_point', '/scratch') | replace("'", "'\\''") }}'
   echo "Starting instance storage setup for ${SCRATCH_MOUNTPOINT}"
   echo "Current user: $(whoami), IDEA_SESSION_OWNER: '${IDEA_SESSION_OWNER}'"
   {% raw %}
-  # Use Instance Store if possible.
-  local DEVICES=()
-  if [[ ! -z $(ls /dev/nvme[0-9]n1 2>/dev/null) ]]; then
-      echo 'Detected Instance Store: NVME'
-      DEVICES=$(ls /dev/nvme[0-9]n1)
-  elif [[ ! -z $(ls /dev/xvdc[a-z] 2>/dev/null) ]]; then
-      echo 'Detected Instance Store: SSD'
-      DEVICES=$(ls /dev/xvdc[a-z])
-  fi
-
-  if [[ -z ${DEVICES} ]]; then
-      echo 'No instance store detected on this machine.'
-      return 0
-  fi
-
-  echo "Detected Instance Store with devices: ${DEVICES}"
-
-  # Clear Devices which are already mounted (eg: when customer import their own AMI)
+  # Instance store disks only, and only blank ones: an image's data volume is never formatted
   local VOLUME_LIST=()
-  for device in ${DEVICES};
-  do
-    local CHECK_IF_PARTITION_EXIST=$(lsblk -b ${device} | grep part | wc -l)
-    if [[ ${CHECK_IF_PARTITION_EXIST} -eq 0 ]]; then
-        echo "${device} is free and can be used"
-        VOLUME_LIST+=(${device})
-    fi
-  done
+  mapfile -t VOLUME_LIST < <(free_instance_store_devices)
+  echo "Free instance store devices: ${VOLUME_LIST[*]:-none}"
 
   local VOLUME_COUNT=${#VOLUME_LIST[@]}
   if [[ ${VOLUME_COUNT} -eq 0 ]]; then
@@ -50,18 +27,28 @@ function setup_instance_storage() {
       chmod 755 ${SCRATCH_MOUNTPOINT}
 
       # Check for existing fstab entries for this mount point and remove them
-      if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+      if fstab_has_mount_dir "${SCRATCH_MOUNTPOINT}"; then
         echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
         remove_from_fstab "${SCRATCH_MOUNTPOINT}"
       fi
 
       echo "${VOLUME_LIST} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail 0 0" >> /etc/fstab
+      # a baked image does not reboot before the desktop is used: mount it now
+      mount "${SCRATCH_MOUNTPOINT}" || true
+      if [[ "$(findmnt -n -o SOURCE --mountpoint "${SCRATCH_MOUNTPOINT}" 2>/dev/null | tail -n 1)" != "${VOLUME_LIST}" ]]; then
+        log_error "instance store scratch ${VOLUME_LIST} is not mounted at ${SCRATCH_MOUNTPOINT}"
+      fi
 
   elif [[ ${VOLUME_COUNT} -gt 1 ]]; then
 
     # When instance has more than 1 instance store, raid + mount them as /scratch
     echo "Detected more than 1 instance store device available, creating RAID 0 with ext4 fs ..."
     local DEVICE_NAME="md0"
+    # an array the image already carries is not this host's scratch: nothing is overwritten
+    if [[ -e /dev/${DEVICE_NAME} ]]; then
+      log_error "/dev/${DEVICE_NAME} already exists; instance store scratch is not set up"
+      return 1
+    fi
     for dev in "${VOLUME_LIST[@]}";
     do
       dd if=/dev/zero of=${dev} bs=1M count=1
@@ -70,7 +57,8 @@ function setup_instance_storage() {
                      --force \
                      --verbose \
                      --level=0 \
-                     --raid-devices=${VOLUME_COUNT} /dev/${DEVICE_NAME} "${VOLUME_LIST[@]}"
+                     --raid-devices=${VOLUME_COUNT} /dev/${DEVICE_NAME} "${VOLUME_LIST[@]}" \
+      || { log_error "mdadm could not create /dev/${DEVICE_NAME}; instance store scratch is not set up"; return 1; }
     mkfs -t ext4 -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 /dev/${DEVICE_NAME}
     mdadm --detail --scan | tee -a /etc/mdadm.conf
     mkdir -p ${SCRATCH_MOUNTPOINT}
@@ -78,12 +66,17 @@ function setup_instance_storage() {
     chmod 755 ${SCRATCH_MOUNTPOINT}
 
     # Check for existing fstab entries for this mount point and remove them
-    if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+    if fstab_has_mount_dir "${SCRATCH_MOUNTPOINT}"; then
       echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
       remove_from_fstab "${SCRATCH_MOUNTPOINT}"
     fi
 
     echo "/dev/${DEVICE_NAME} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail 0 0" >> /etc/fstab
+    # a baked image does not reboot before the desktop is used: mount it now
+    mount "${SCRATCH_MOUNTPOINT}" || true
+    if [[ "$(findmnt -n -o SOURCE --mountpoint "${SCRATCH_MOUNTPOINT}" 2>/dev/null | tail -n 1)" != "/dev/${DEVICE_NAME}" ]]; then
+      log_error "instance store scratch /dev/${DEVICE_NAME} is not mounted at ${SCRATCH_MOUNTPOINT}"
+    fi
   fi
 
   echo "Instance storage setup completed. Available at ${SCRATCH_MOUNTPOINT}"
@@ -92,7 +85,7 @@ function setup_instance_storage() {
   echo "Checking IDEA_SESSION_OWNER: '${IDEA_SESSION_OWNER}'"
   if [[ -n "${IDEA_SESSION_OWNER}" ]] && [[ "${IDEA_SESSION_OWNER}" != "root" ]]; then
     echo "Setting ownership to ${IDEA_SESSION_OWNER}"
-    chown ${IDEA_SESSION_OWNER} ${SCRATCH_MOUNTPOINT}
+    chown "${IDEA_SESSION_OWNER}" "${SCRATCH_MOUNTPOINT}"
   else
     echo "WARNING: IDEA_SESSION_OWNER not set or is root - skipping ownership change"
   fi
@@ -100,20 +93,20 @@ function setup_instance_storage() {
   # Create script to restore ownership on every boot (handles stop/start cycles)
   mkdir -p /opt/idea/.services
   {% endraw %}
-  cat > /opt/idea/.services/restore-scratch-ownership.sh << EOF
+  cat > /opt/idea/.services/restore-scratch-ownership.sh << 'EOF'
 #!/bin/bash
 source /etc/environment
-SCRATCH_MOUNTPOINT="{{ context.config.get_string('virtual-desktop-controller.instance_storage.mount_point', '/scratch') }}"
-if [[ -d "\${SCRATCH_MOUNTPOINT}" ]] && [[ -n "\${IDEA_SESSION_OWNER}" ]] && [[ "\${IDEA_SESSION_OWNER}" != "root" ]]; then
-  if id "\${IDEA_SESSION_OWNER}" &>/dev/null; then
-    echo "\$(date): Restoring ownership of \${SCRATCH_MOUNTPOINT} to \${IDEA_SESSION_OWNER}"
-    chown "\${IDEA_SESSION_OWNER}" "\${SCRATCH_MOUNTPOINT}"
-    chmod 755 "\${SCRATCH_MOUNTPOINT}"
+SCRATCH_MOUNTPOINT='{{ context.config.get_string('virtual-desktop-controller.instance_storage.mount_point', '/scratch') | replace("'", "'\\''") }}'
+if [[ -d "${SCRATCH_MOUNTPOINT}" ]] && [[ -n "${IDEA_SESSION_OWNER}" ]] && [[ "${IDEA_SESSION_OWNER}" != "root" ]]; then
+  if id "${IDEA_SESSION_OWNER}" &>/dev/null; then
+    echo "$(date): Restoring ownership of ${SCRATCH_MOUNTPOINT} to ${IDEA_SESSION_OWNER}"
+    chown "${IDEA_SESSION_OWNER}" "${SCRATCH_MOUNTPOINT}"
+    chmod 755 "${SCRATCH_MOUNTPOINT}"
   else
-    echo "\$(date): User \${IDEA_SESSION_OWNER} does not exist yet, skipping ownership change"
+    echo "$(date): User ${IDEA_SESSION_OWNER} does not exist yet, skipping ownership change"
   fi
 else
-  echo "\$(date): Scratch mountpoint not found or IDEA_SESSION_OWNER not set"
+  echo "$(date): Scratch mountpoint not found or IDEA_SESSION_OWNER not set"
 fi
 EOF
   {% raw %}

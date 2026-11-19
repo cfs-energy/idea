@@ -98,6 +98,21 @@ from ideascheduler.app.provisioning.job_provisioner.job_provisioning_util import
 from typing import Optional
 
 
+def refuse_validation_names(queue_profile) -> None:
+    """the iv- prefix is the image canary's own; an administrator profile or queue is never given it"""
+    from ideascheduler.app.images.compute_image_canary import VALIDATION_QUEUE_PREFIX
+
+    if queue_profile is None:
+        # the service refuses a missing profile with its own message
+        return
+    names = [queue_profile.name or ''] + list(queue_profile.queues or [])
+    if any(name.startswith(VALIDATION_QUEUE_PREFIX) for name in names):
+        raise exceptions.invalid_params(
+            f'Queue profile and queue names cannot start with {VALIDATION_QUEUE_PREFIX}: '
+            f'it is kept for the image validation queues IDEA creates and removes.'
+        )
+
+
 class SchedulerAdminAPI(BaseAPI):
     def __init__(self, context: ideascheduler.AppContext):
         self.context = context
@@ -209,8 +224,10 @@ class SchedulerAdminAPI(BaseAPI):
                 'scope': self.SCOPE_WRITE,
                 'method': self.provision_always_on_nodes,
             },
+            # no scope: the availability command runs on the scheduler, so only an
+            # administrator sets it, never an application token
             'SchedulerAdmin.CreateHpcLicenseResource': {
-                'scope': self.SCOPE_READ,
+                'scope': None,
                 'method': self.create_license_resource,
             },
             'SchedulerAdmin.GetHpcLicenseResource': {
@@ -218,11 +235,11 @@ class SchedulerAdminAPI(BaseAPI):
                 'method': self.get_license_resource,
             },
             'SchedulerAdmin.UpdateHpcLicenseResource': {
-                'scope': self.SCOPE_WRITE,
+                'scope': None,
                 'method': self.update_license_resource,
             },
             'SchedulerAdmin.DeleteHpcLicenseResource': {
-                'scope': self.SCOPE_WRITE,
+                'scope': None,
                 'method': self.delete_license_resource,
             },
             'SchedulerAdmin.ListHpcLicenseResources': {
@@ -281,7 +298,12 @@ class SchedulerAdminAPI(BaseAPI):
     def list_active_jobs(self, context: ApiInvocationContext):
         payload = context.get_request_payload_as(ListJobsRequest)
         entries, total = list_active_job_page(self.context, payload)
-        apply_waiting_signals(context=self.context, jobs=entries)
+        # the administrator's view of waiting jobs needs the caller's role (SCHED-24)
+        apply_waiting_signals(
+            context=self.context,
+            jobs=entries,
+            is_administrator=context.is_administrator(),
+        )
 
         context.success(
             ListJobsResult(
@@ -331,6 +353,7 @@ class SchedulerAdminAPI(BaseAPI):
         try:
             payload = context.get_request_payload_as(CreateQueueProfileRequest)
             queue_profile = payload.queue_profile
+            refuse_validation_names(queue_profile)
             created = self.context.queue_profiles.create_queue_profile(queue_profile)
             context.success(CreateQueueProfileResult(queue_profile=created))
         except exceptions.SocaException as e:
@@ -347,6 +370,7 @@ class SchedulerAdminAPI(BaseAPI):
         try:
             payload = context.get_request_payload_as(UpdateQueueProfileRequest)
             queue_profile = payload.queue_profile
+            refuse_validation_names(queue_profile)
             created = self.context.queue_profiles.update_queue_profile(queue_profile)
             context.success(UpdateQueueProfileResult(queue_profile=created))
         except exceptions.SocaException as e:
@@ -572,6 +596,7 @@ class SchedulerAdminAPI(BaseAPI):
             raise e
 
     def create_license_resource(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
         request = context.get_request_payload_as(CreateHpcLicenseResourceRequest)
         result = self.context.license_service.create_license_resource(request)
         context.success(result)
@@ -582,11 +607,13 @@ class SchedulerAdminAPI(BaseAPI):
         context.success(result)
 
     def update_license_resource(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
         request = context.get_request_payload_as(UpdateHpcLicenseResourceRequest)
         result = self.context.license_service.update_license_resource(request)
         context.success(result)
 
     def delete_license_resource(self, context: ApiInvocationContext):
+        self._require_cluster_administrator(context)
         request = context.get_request_payload_as(DeleteHpcLicenseResourceRequest)
         result = self.context.license_service.delete_license_resource(request)
         context.success(result)
@@ -751,7 +778,8 @@ class SchedulerAdminAPI(BaseAPI):
 
     @staticmethod
     def _require_cluster_administrator(context: ApiInvocationContext):
-        # these walk every owner's job folders and put them on the record, as the settings do
+        # scratch cleanup walks every owner's job folders; a license check runs a command on
+        # the scheduler. both are for administrators only, as the settings are
         if not context.is_administrator():
             raise exceptions.unauthorized_access()
 

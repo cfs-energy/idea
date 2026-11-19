@@ -204,6 +204,7 @@ def context(ddb_local):
     mock_cognito_idp.admin_set_user_password = mock_function
     mock_cognito_idp.admin_update_user_attributes = mock_function
     mock_cognito_idp.admin_enable_user = mock_function
+    mock_cognito_idp.admin_reset_user_password = mock_function
     mock_cognito_idp.admin_disable_user = mock_function
     mock_cognito_idp.admin_delete_user = mock_function
 

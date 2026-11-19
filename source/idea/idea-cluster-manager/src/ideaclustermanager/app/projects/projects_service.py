@@ -487,7 +487,8 @@ class ProjectsService:
 
         groups_added = None
         groups_removed = None
-        if Utils.is_not_empty(project.ldap_groups):
+        # an empty list clears the project's groups; only a missing one leaves them
+        if project.ldap_groups is not None:
             existing_ldap_groups = set(
                 Utils.get_value_as_list('ldap_groups', existing, [])
             )
@@ -510,15 +511,19 @@ class ProjectsService:
         updated_project = self.projects_dao.convert_from_db(db_updated)
 
         if updated_project.enabled:
-            if groups_added is not None or groups_removed is not None:
+            if groups_added or groups_removed:
                 self.task_manager.send(
                     task_name='projects.project-groups-updated',
                     payload={
                         'project_id': updated_project.project_id,
-                        'groups_added': groups_added,
-                        'groups_removed': groups_removed,
+                        # lists: the queue body is JSON, which has no sets
+                        'groups_added': sorted(groups_added),
+                        'groups_removed': sorted(groups_removed),
                     },
                     message_group_id=updated_project.project_id,
+                    # each edit its own message: remove, add, remove within the queue's
+                    # five minutes would otherwise send the third as the first's repeat
+                    message_dedupe_id=Utils.short_uuid(),
                 )
 
         self.send_bedrock_reconcile(updated_project.project_id, stored=db_updated)

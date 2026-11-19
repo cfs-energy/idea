@@ -1,6 +1,12 @@
 # Begin: Tag EBS Volumes
 function tag_ebs_volumes () {
-  local TAGS='{{ context.utils.to_json(ebs_volume_tags + context.get_custom_aws_tags()) }}'
+  # Tag values (job owner, email, project) are data, never shell: they go to the CLI in a
+  # root-only file written from a quoted here-document, which the shell does not expand.
+  local TAGS
+  TAGS=$(mktemp) || { log_warning "no temporary file for the tag list; tags not applied"; return 0; }
+  cat > "${TAGS}" <<'IDEA_EBS_VOLUME_TAGS'
+{{ context.utils.to_json(ebs_volume_tags + context.get_custom_aws_tags()) }}
+IDEA_EBS_VOLUME_TAGS
   local AWS=$(command -v aws)
   local AWS_INSTANCE_ID=$(instance_id)
   local VOLUMES=$($AWS ec2 describe-volumes \
@@ -18,24 +24,24 @@ function tag_ebs_volumes () {
   $AWS ec2 create-tags \
       --resources ${EBS_IDS} \
       --region "{{ context.aws_region }}" \
-      --tags "${TAGS}"
-  # Read the status into a variable straight away: any declaration or assignment in between
-  # would replace $? with its own status and the loop below would never run.
-  TAG_STATUS=$?
+      --tags "file://${TAGS}" \
+      && TAG_STATUS=0 || TAG_STATUS=$?
+  # the status is taken inside the list, so an inherited ERR trap does not count a retried failure
 
   while [[ ${TAG_STATUS} -ne 0 ]] && [[ ${RETRY_COUNT} -lt ${MAX_RETRIES} ]]
   do
     local SLEEP_TIME=$(( RANDOM % 33 + 8 ))  # Minimum of 8 seconds sleeping
     log_info "(${RETRY_COUNT}/${MAX_RETRIES}) ec2 tag failed due to EC2 API error, retrying in ${SLEEP_TIME} seconds ..."
     sleep ${SLEEP_TIME}
-    ((RETRY_COUNT++))
+    RETRY_COUNT=$((RETRY_COUNT + 1))
     $AWS ec2 create-tags \
         --resources ${EBS_IDS} \
         --region "{{ context.aws_region }}" \
-        --tags "${TAGS}"
-    TAG_STATUS=$?
+        --tags "file://${TAGS}" \
+        && TAG_STATUS=0 || TAG_STATUS=$?
   done
 
+  rm -f "${TAGS}"
   # untagged volumes must not fail the boot: warn so the gap is visible in the bootstrap log.
   if [[ ${TAG_STATUS} -ne 0 ]]; then
     log_warning "ec2 tag failed after ${MAX_RETRIES} retries, EBS volumes are left untagged"

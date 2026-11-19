@@ -148,7 +148,8 @@ test('sshd exempts the SSH allowlist the bastion prefix list holds', () => {
 test('the image takes the newest OpenSSH past its base release, and the release proves it', () => {
   const root = new URL('../../../../../', import.meta.url);
   const dockerfile = readFileSync(new URL('deployment/ecr/idea-control-plane/Dockerfile', root), 'utf8');
-  const workflow = readFileSync(new URL('.github/workflows/build_push.yaml', root), 'utf8');
+  // the image build both the release and the pull request check run
+  const workflow = readFileSync(new URL('.github/actions/build_control_plane_image/action.yml', root), 'utf8');
   const finalStage = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
   assert.match(finalStage, /ARG IDEA_PACKAGE_REFRESH=[^]*?\$\{IDEA_PACKAGE_REFRESH\}[^]*?dnf upgrade -y --releasever=latest 'openssh\*'/);
   assert.match(finalStage, /dnf upgrade -y --releasever=latest --security/);
@@ -162,7 +163,10 @@ test('ideactl in a task shell is the documented CLI, and the scheduler commands 
   const dockerfile = readFileSync(new URL('deployment/ecr/idea-control-plane/Dockerfile', root), 'utf8');
   const finalStage = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
   // after the module install, whose console script of the same name it replaces
-  assert.ok(finalStage.indexOf('COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl') > finalStage.indexOf('pip install --no-cache-dir "${PKG}"'));
+  const wrapper = finalStage.indexOf('COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl');
+  const modules = finalStage.indexOf('pip install --no-cache-dir --no-deps --no-build-isolation --check-build-dependencies "${PKG}"');
+  assert.ok(wrapper >= 0 && modules >= 0, 'both steps are in the final stage');
+  assert.ok(wrapper > modules);
   const bin = mkdtempSync(join(tmpdir(), 'ideactl-'));
   try {
     for (const name of ['node', 'idea-scheduler-cli', 'idea-cluster-manager-cli', 'idea-vdc-cli']) {
@@ -211,3 +215,34 @@ test('ideactl in a task shell is the documented CLI, and the scheduler commands 
     rmSync(bin, { recursive: true, force: true });
   }
 });
+
+for (const [what, keys] of [
+  ['separate table and queue keys', { 'cluster.dynamodb.kms_key_id': 'table-key-id', 'cluster.sqs.kms_key_id': 'queue-key-id' }],
+  ['a queue key alone', { 'cluster.sqs.kms_key_id': 'queue-key-id' }],
+] as const) {
+  test(`an AD bastion can send its join request to a queue with ${what}`, () => {
+    const resources = resourcesOf(synthBastion({ 'directoryservice.provider': 'activedirectory', ...keys }));
+    const role = byType(resources, 'AWS::IAM::Role').find(([, resource]) => resource.Properties.RoleName.includes('bastion-host-task-role'))!;
+    const statements = byType(resources, 'AWS::IAM::Policy').filter(([, policy]) => policy.Properties.Roles.some((entry: any) => entry.Ref === role[0]))
+      .flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement);
+    const queueKey = statements.filter((entry: any) => JSON.stringify(entry.Resource).includes('queue-key-id'));
+    assert.equal(queueKey.length, 1, JSON.stringify(statements));
+    assert.deepEqual(queueKey[0].Action, ['kms:Decrypt', 'kms:GenerateDataKey']);
+    assert.match(JSON.stringify(queueKey[0].Condition), /kms:ViaService/);
+  });
+}
+
+for (const digest of [undefined, 'a'.repeat(64)]) {
+  test(`the bastion task carries the configured site hook digest (${digest === undefined ? 'unset' : 'set'})`, () => {
+    const resources = resourcesOf(synthBastion(digest === undefined ? {} : { 'bastion-host.site_hook_sha256': digest }));
+    const container = one(resources, 'AWS::ECS::TaskDefinition')[1].Properties.ContainerDefinitions[0];
+    const value = (container.Environment as Array<{ Name: string; Value: string }>).find((entry) => entry.Name === 'IDEA_SITE_HOOK_SHA256')?.Value;
+    assert.equal(value, digest ?? '');
+  });
+}
+
+for (const digest of ['not-a-digest', 'a'.repeat(63)]) {
+  test(`a site hook checksum that is not 64 hex characters stops the bastion synth (${digest.length} characters)`, () => {
+    assert.throws(() => synthBastion({ 'bastion-host.site_hook_sha256': digest }), /must be empty or a 64-character hex SHA-256/);
+  });
+}

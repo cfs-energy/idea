@@ -42,18 +42,9 @@ export function regionElbAccountIdPath(): string {
 
 /**
  * `region_elb_account_id.yml` is a flat `region: account-id` mapping, one entry per line, `#`
- * comments allowed. Values with leading-zero octal syntax normalize to decimal. Other values,
- * including leading-zero values containing an 8 or 9, remain strings.
+ * comments allowed. An account id is twelve digits kept as written: a leading zero is part of it
+ * (me-south-1's starts with 0), never an octal number as the old YAML reader made it.
  */
-function pyyamlOctalNormalize(value: string): string {
-  if (/^[-+]?0[0-7_]+$/.test(value)) {
-    const negative = value.startsWith('-');
-    const digits = value.replace(/^[-+]/, '').replace(/_/g, '');
-    return String(parseInt(digits, 8) * (negative ? -1 : 1));
-  }
-  return value;
-}
-
 function parseRegionElbAccountIdFile(text: string): Record<string, string> {
   const result: Record<string, string> = {};
   for (const rawLine of text.split('\n')) {
@@ -63,7 +54,10 @@ function parseRegionElbAccountIdFile(text: string): Record<string, string> {
     if (separator === -1) continue;
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    if (key !== '') result[key] = pyyamlOctalNormalize(value);
+    if (key === '') continue;
+    const id = value.replace(/^(['"])(.*)\1$/, '$2');
+    if (!/^\d{12}$/.test(id)) throw new Error(`region_elb_account_id.yml: ${key} has ${JSON.stringify(value)}, not a twelve-digit account id`);
+    result[key] = id;
   }
   return result;
 }

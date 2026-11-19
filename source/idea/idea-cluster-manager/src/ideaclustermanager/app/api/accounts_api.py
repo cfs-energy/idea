@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 from ideaclustermanager.app.accounts.account_reconciler import ReconcileUsersRequest
+from ideaclustermanager.app.accounts.auth_utils import AuthUtils
 from ideaclustermanager.app.accounts.user_home_directory import UserHomeDirectory
 from ideasdk.api import BaseAPI, ApiInvocationContext
 from ideadatamodel.auth import (
@@ -55,9 +56,16 @@ from ideadatamodel.auth import (
     GlobalSignOutResult,
 )
 from ideadatamodel import exceptions
+from ideasdk.auth.token_service import ApiAuthorizationType
 from ideasdk.utils import Utils, GroupNameHelper
 
+import re
+
 import ideaclustermanager
+
+# a group name IDEA writes to the directory: the portal's set, with the dot and
+# underscore that personal group names carry from usernames
+GROUP_NAME_PATTERN = r'[a-z0-9][a-z0-9._-]{2,}'
 
 
 class AccountsAPI(BaseAPI):
@@ -215,6 +223,22 @@ class AccountsAPI(BaseAPI):
             raise exceptions.invalid_params('user is required')
 
         email_verified = Utils.get_as_bool(request.email_verified, False)
+        # joining a privileged group at creation is joining it, and needs the same right
+        for group_name in Utils.get_as_list(request.user.additional_groups, default=[]):
+            self.check_group_membership_authorization(context, group_name)
+        self.check_explicit_ids(context, request.user.uid, request.user.gid)
+        username = AuthUtils.sanitize_username(request.user.username)
+        if (
+            not context.is_administrator()
+            and Utils.is_not_empty(username)
+            and not self.context.ldap_client.is_readonly()
+            and self.context.ldap_client.is_existing_user(username)
+        ):
+            # creating takes the entry over: its password and ids are rewritten
+            raise exceptions.unauthorized_access(
+                f'{username} already exists in the directory. Only an administrator '
+                'can create an account for an existing directory entry.'
+            )
 
         created_user = self.context.accounts.create_user(request.user, email_verified)
         context.success(CreateUserResult(user=created_user))
@@ -264,26 +288,44 @@ class AccountsAPI(BaseAPI):
 
     def create_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(CreateGroupRequest)
+        if request.group is not None:
+            # the directory names the group after it: a comma, a case variant or any
+            # character outside the portal's set reaches another entry or fails sync
+            if not isinstance(request.group.name, str) or not re.fullmatch(
+                GROUP_NAME_PATTERN, request.group.name
+            ):
+                raise exceptions.invalid_params(
+                    'group.name must be lowercase letters, digits, ".", "_" and "-", '
+                    'at least 3 characters'
+                )
+            # a row under a privileged group's name would let later calls reach it
+            self.check_group_membership_authorization(context, request.group.name)
+            self.check_explicit_ids(context, None, request.group.gid)
         created_group = self.context.accounts.create_group(request.group)
         context.success(CreateGroupResult(group=created_group))
 
     def modify_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(ModifyGroupRequest)
+        if request.group is not None:
+            self.check_group_membership_authorization(context, request.group.name)
         modified_group = self.context.accounts.modify_group(request.group)
         context.success(ModifyGroupResult(group=modified_group))
 
     def enable_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(EnableGroupRequest)
+        self.check_group_membership_authorization(context, request.group_name)
         self.context.accounts.enable_group(request.group_name)
         context.success(EnableGroupResult())
 
     def disable_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(DisableGroupRequest)
+        self.check_group_membership_authorization(context, request.group_name)
         self.context.accounts.disable_group(request.group_name)
         context.success(DisableGroupResult())
 
     def delete_group(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(DeleteGroupRequest)
+        self.check_group_membership_authorization(context, request.group_name)
         self.context.accounts.delete_group(request.group_name)
         context.success(DeleteGroupResult())
 
@@ -298,13 +340,55 @@ class AccountsAPI(BaseAPI):
         context.success(result)
 
     def check_group_membership_authorization(self, context, group_name):
+        """
+        who may change a group's members or the group itself: a privileged group
+        only an administrator, another module's administrators group only an
+        administrator or a cluster manager
+        """
+        if context.is_administrator():
+            return
         names = GroupNameHelper(self.context)
+        sudoers = self.context.config().get_string(
+            'directoryservice.sudoers.group_name', default=None
+        )
+        # compared as the directory compares names: without case
         privileged = {
-            names.get_cluster_administrators_group(),
-            names.get_cluster_managers_group(),
-            names.get_cluster_operations_leads_group(),
+            name.strip().lower()
+            for name in (
+                names.get_cluster_administrators_group(),
+                names.get_cluster_managers_group(),
+                names.get_cluster_operations_leads_group(),
+                sudoers,
+            )
+            if name
         }
-        if group_name in privileged and not context.is_administrator():
+        asked = (group_name or '').strip().lower()
+        if asked in privileged:
+            raise exceptions.unauthorized_access()
+        own_module = names.get_module_administrators_group(
+            module_id=self.context.module_id()
+        ).lower()
+        if (
+            asked.endswith('-administrators-module-group')
+            and asked != own_module
+            and context.get_authorization().type != ApiAuthorizationType.MANAGER
+        ):
+            # a module administrator of this module is not one of every module
+            raise exceptions.unauthorized_access()
+
+    def check_explicit_ids(self, context: ApiInvocationContext, uid, gid):
+        # an id decides whose files an account opens on every host: others are given
+        # the next ones in sequence (or the directory's own), and only an administrator
+        # names a uid, on every directory. A read-only directory keeps its own group
+        # ids, which a group mapped onto it may name.
+        if context.is_administrator():
+            return
+        if uid is not None:
+            raise exceptions.unauthorized_access(
+                'Only an administrator can choose a user id (uid). Leave it out, or ask '
+                'an administrator to create the account.'
+            )
+        if gid is not None and not self.context.ldap_client.is_readonly():
             raise exceptions.unauthorized_access()
 
     def add_user_to_group(self, context: ApiInvocationContext):

@@ -1,7 +1,7 @@
 # Uninstall IDEA
 
 {% hint style="warning" %}
-Make sure to have removed all backups from AWS Backup (if applicable).  Read more at [backup-idea-environment.md](../../best-practices/security/backup-idea-environment.md "mention")
+Decide whether to keep AWS Backup recovery points. They are deleted only with `--delete-backups`. Read more at [backup-idea-environment.md](../../best-practices/security/backup-idea-environment.md "mention")
 {% endhint %}
 
 To uninstall IDEA, run `idea-admin.sh delete-cluster` command with the following arguments:

@@ -1,6 +1,7 @@
 """Run the one secret scan the way hk and CI do, against planted and clean trees."""
 
 import hashlib
+import os
 import json
 from pathlib import Path
 import re
@@ -83,13 +84,23 @@ class PositiveControlTests(unittest.TestCase):
             shutil.copy(ROOT / path, self.root / path)
         (self.root / 'clean.py').write_text('timeout = 30\nname = "cluster"\n')
 
-    def scan(self):
+    def scan(self, env=None):
+        clean = {k: v for k, v in os.environ.items() if k != 'GITHUB_ACTIONS'}
         return subprocess.run(
             ['bash', str(ROOT / 'scripts/trufflehog-scan.sh'), str(self.root)],
             capture_output=True,
             text=True,
             timeout=300,
+            env={**clean, **(env or {})},
         )
+
+    def test_actions_output_names_the_file_without_the_secret(self):
+        value = hashlib.sha256(b'actions-format').hexdigest()
+        (self.root / 'deploy.env').write_text(f'SECRET_KEY="{value}"\n')
+        result = self.scan({'GITHUB_ACTIONS': 'true'})
+        self.assertEqual(result.returncode, 183, result.stdout + result.stderr)
+        self.assertIn('deploy.env', result.stdout)
+        self.assertNotIn(value, result.stdout + result.stderr)
 
     def test_clean_tree_passes(self):
         result = self.scan()

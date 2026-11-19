@@ -269,3 +269,15 @@ def refresh_app(monkeypatch, refresh_loop):
     app._bootstrap_thread = Mock()
     app._bootstrap_exit = Mock()
     return app
+
+
+@pytest.fixture(autouse=True)
+def _fresh_owner_project_cache():
+    # the controller keeps each owner's project membership for 30 s; a test starts empty
+    from ideavirtualdesktopcontroller.app.sessions import (
+        virtual_desktop_session_utils as session_utils,
+    )
+
+    session_utils._OWNER_PROJECTS_CACHE.clear()
+    yield
+    session_utils._OWNER_PROJECTS_CACHE.clear()

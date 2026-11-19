@@ -183,6 +183,11 @@ class ADAutomationAgent(SocaService):
         # Credentials are re-read from Secrets Manager only after a rejected bind.
         if not self.is_password_expired():
             return
+        if self.ldap_client.ds_provider == constants.DIRECTORYSERVICE_ACTIVE_DIRECTORY:
+            # the change is a no-op on a self-managed directory, and would only
+            # replace the bind password this process holds; a rejected bind above
+            # still raises for the operator
+            return
 
         lock_acquired = False
         try:
@@ -481,7 +486,7 @@ class ADAutomationAgent(SocaService):
     def _update_ttl(self, instance_id: str, nonce: str, new_ttl: int) -> bool:
         # Update the TTL in the dynamo DB table
         self.logger.debug(
-            f'Updating DynamoDB TTL for instance_id/nonce: {instance_id}/{nonce} TO {new_ttl}'
+            f'Updating DynamoDB TTL for instance_id: {instance_id} TO {new_ttl}'
         )
         try:
             result = (
@@ -499,14 +504,14 @@ class ADAutomationAgent(SocaService):
             _res_status = result.get('ResponseMetadata', {}).get('HTTPStatusCode', None)
             if _res_status != 200:
                 self.logger.warning(
-                    f'TTL Update error {instance_id}/{nonce} - HTTPStatusCode({_res_status}) - {result}'
+                    f'TTL Update error {instance_id} - HTTPStatusCode({_res_status})'
                 )
                 return False
 
             return True
         except Exception as e:
             self.logger.error(
-                f'Failed to update TTL for instance_id/nonce: {instance_id}/{nonce} - {e}'
+                f'Failed to update TTL for instance_id: {instance_id} - {type(e).__name__}'
             )
 
     def _sanity_check(self):

@@ -8,6 +8,7 @@ import type {
 import {
     errorMessage,
     sendCfnResponse,
+    eventForLog,
 } from "../commons/cfn-response.ts";
 
 const CLOUDWATCH_LOGS_CLIENT_PACKAGE = "@aws-sdk/client-cloudwatch-logs";
@@ -177,7 +178,7 @@ export function createHandler(
     ): Promise<void> => {
         const logGroupName = event.ResourceProperties.LogGroupName;
         try {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
             let data: Record<string, JsonValue> = {};
 
             if (event.RequestType === "Delete") {

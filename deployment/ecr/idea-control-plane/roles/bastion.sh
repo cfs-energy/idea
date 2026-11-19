@@ -4,8 +4,12 @@ set -euo pipefail
 node /opt/idea/ideactl/dist/src/container/bastion.js
 unset IDEA_LDAP_CERTIFICATE
 install -d -m 0755 /run/sshd
-# Container sessions have no host audit login UID to set.
-sed -i '/pam_loginuid.so/d' /etc/pam.d/sshd
+/opt/idea/roles/bastion_pam.sh /etc/pam.d/sshd
+# Each user's tmux directory sits under a parent only root writes (TMUX_TMPDIR below), made at
+# login by the session hook, so no user can take another's name first as under the shared /tmp.
+# The wrapper falls back to tmux's default location, with a warning, if the hook could not.
+install -d -m 0755 -o root -g root /run/idea-tmux
+install -m 0755 /opt/idea/roles/tmux.sh /usr/local/bin/tmux
 cat > /etc/ssh/sshd_config <<'EOF'
 Port 22
 HostKey /etc/ssh/ssh_host_rsa_key
@@ -28,6 +32,7 @@ UseDNS no
 ClientAliveInterval 60
 ClientAliveCountMax 3
 Subsystem sftp internal-sftp
+SetEnv TMUX_TMPDIR=/run/idea-tmux
 # Per-source limits stand in for the EC2 host's fail2ban, set so only brute force reaches them:
 # many users can share one NAT address. No PerSourceMaxStartups: it refused the health check's
 # own loopback connections, and the failed checks killed the task. Penalties add up per address
@@ -102,8 +107,9 @@ if [[ -n "${IDEA_PBS_SERVER:-}" ]]; then
   if [[ "${PRIVATE_ZONE}" != "${IDEA_PBS_SERVER}" ]] && ! grep -q "^search .*${PRIVATE_ZONE}" /etc/resolv.conf; then
     # rewritten in place: the runtime bind-mounts resolv.conf, so sed -i cannot rename over it
     RESOLV="$(cat /etc/resolv.conf)"
-    SEARCH="$(grep -m1 '^search ' <<< "${RESOLV}" | cut -d' ' -f2-)"
-    { grep -v '^search ' <<< "${RESOLV}"; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
+    # a file with no search line is normal (a DHCP option set without a domain name)
+    SEARCH="$(sed -n 's/^search //p' <<< "${RESOLV}" | head -n 1)"
+    { grep -v '^search ' <<< "${RESOLV}" || true; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
   fi
   # the server's own server_name (roles/scheduler.sh): qsub completes a short job id with it,
   # and the server releases a dependency only on that exact id
@@ -121,19 +127,54 @@ EOF
   echo 'export PATH=/opt/pbs/bin:/opt/pbs/sbin:$PATH' > /etc/profile.d/pbs.sh
 fi
 # Site customizations, as compute nodes and desktops run theirs from the shared /apps file
-# system: tools users expect on the login node. It runs as root, so only a file root owns and
-# no one else can write (a desktop user with sudo can write to /apps); it gets two minutes,
-# its output goes to the task log, and sshd starts whatever it did.
+# system: tools users expect on the login node. It runs as root, so only a file root owns and no
+# one else can write (a desktop user with sudo can write to /apps). Any client of that file system
+# that has root can still replace it, so a site can pin it: with bastion-host.site_hook_sha256
+# configured (given to this task as IDEA_SITE_HOOK_SHA256) it runs only when its SHA-256 matches,
+# and what runs is the checked task-local copy. Without one it runs as before, with a warning
+# that prints the value to set. It gets two minutes, its output goes to the task log, and sshd
+# starts whatever it did.
 SITE_HOOK="${IDEA_CLUSTER_HOME:-}/${IDEA_MODULE_ID:-bastion-host}/userdata_customizations.sh"
 if [[ -n "${IDEA_CLUSTER_HOME:-}" && -f "${SITE_HOOK}" ]]; then
   # stat -L: the file the hook path leads to is the one that runs
   read -r HOOK_UID HOOK_MODE < <(stat -L -c '%u %a' "${SITE_HOOK}") || HOOK_UID=
-  if [[ "${HOOK_UID}" != 0 ]] || (( 8#${HOOK_MODE:-777} & 8#022 )); then
-    echo "skipping site hook ${SITE_HOOK}: it must be owned by root and writable by no one else (owner ${HOOK_UID:-unknown}, mode ${HOOK_MODE:-unknown})"
-  else
-    echo "running site hook ${SITE_HOOK}"
-    timeout 120 /bin/bash "${SITE_HOOK}" || echo "site hook failed with status $?; continuing"
+  # trimmed of surrounding whitespace (a pasted value may carry spaces or a newline), any case
+  HOOK_WANT="${IDEA_SITE_HOOK_SHA256:-}"
+  HOOK_WANT="${HOOK_WANT#"${HOOK_WANT%%[![:space:]]*}"}"
+  HOOK_WANT="${HOOK_WANT%"${HOOK_WANT##*[![:space:]]}"}"
+  HOOK_WANT="$(tr 'A-F' 'a-f' <<< "${HOOK_WANT}")"
+  # task-local, readable only by root; a hook that cannot be read in 30 seconds is skipped
+  HOOK_COPY="$(mktemp)"
+  HOOK_GOT=
+  if timeout 30 cat "${SITE_HOOK}" > "${HOOK_COPY}"; then
+    HOOK_GOT="$(sha256sum "${HOOK_COPY}" | cut -d' ' -f1)"
   fi
+  HOOK_RUN=
+  if [[ -z "${HOOK_GOT}" ]]; then
+    echo "skipping site hook ${SITE_HOOK}: it cannot be read"
+  elif [[ "${HOOK_UID}" != 0 ]] || (( 8#${HOOK_MODE:-777} & 8#022 )); then
+    echo "skipping site hook ${SITE_HOOK}: it must be owned by root and writable by no one else (owner ${HOOK_UID:-unknown}, mode ${HOOK_MODE:-unknown})"
+  elif [[ -z "${HOOK_WANT}" ]]; then
+    echo "WARNING: site hook ${SITE_HOOK} runs without a checksum; set bastion-host.site_hook_sha256 to ${HOOK_GOT} so only this content runs (set it again after each edit)"
+    echo "running site hook ${SITE_HOOK}"
+    HOOK_RUN="${SITE_HOOK}"
+  elif [[ "${HOOK_GOT}" != "${HOOK_WANT}" ]]; then
+    echo "skipping site hook ${SITE_HOOK}: its SHA-256 ${HOOK_GOT} is not the configured ${HOOK_WANT}"
+  else
+    echo "running site hook ${SITE_HOOK} (sha256 ${HOOK_GOT})"
+    HOOK_RUN="${HOOK_COPY}"
+  fi
+  if [[ -n "${HOOK_RUN}" ]]; then
+    timeout 120 /bin/bash "${HOOK_RUN}" || echo "site hook failed with status $?; continuing"
+    # A package update by the hook can put back a bit the image build cleared; only those files
+    # are cleared again, so a tool the hook installs keeps its modes. A hook may install in the
+    # background, so the same check repeats every minute while the task runs.
+    echo "clearing set-id bits the site hook may have restored on image files"
+    /opt/idea/roles/setid_strip.sh --image-list || echo "set-id strip failed; continuing"
+    ( while sleep "${IDEA_SETID_RECHECK_INTERVAL:-60}"; do /opt/idea/roles/setid_strip.sh --image-list || true; done ) &
+    setid_recheck_pid=$!
+  fi
+  rm -f "${HOOK_COPY}"
 fi
 /usr/sbin/sshd -t
 /usr/sbin/sssd -i --logger=stderr &
@@ -209,9 +250,18 @@ SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exit
 sshd_drop_phrases() {
   grep --line-buffered -ioE "${SSHD_DROP_SOURCES}" | grep --line-buffered -ioE "${SSHD_DROP_LINES}"
 }
+# Each kept line is written as it arrives: the program calls fflush() after every print, which
+# gawk, BSD awk and mawk all have. mawk alone also fills a whole input block before it runs the
+# program, so a quiet sshd's lines would wait for more; -W interactive makes it read line by line.
+# gawk and BSD awk handle each line as the pipe delivers it and are given no extra option.
+sshd_health_check_filter() {
+  local interactive=()
+  if awk -W version </dev/null 2>&1 | grep -q '^mawk'; then interactive=(-W interactive); fi
+  LC_ALL=C awk ${interactive[@]+"${interactive[@]}"} -v networks="${IDEA_VPC_CIDRS:-}" "${SSHD_HEALTH_CHECK_LINES}"
+}
 sshd_log_filter() {
   tee -p >(sshd_drop_phrases >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
-    | LC_ALL=C awk -v networks="${IDEA_VPC_CIDRS:-}" "${SSHD_HEALTH_CHECK_LINES}" >&2 || true
+    | sshd_health_check_filter >&2 || true
 }
 metrics_pid=
 if [[ "${IDEA_BASTION_METRICS:-false}" == true ]]; then
@@ -246,7 +296,7 @@ sshd_pid=$!
   fi
 ) &
 trust_pid=$!
-trap 'kill "$trust_pid" "$sshd_pid" "$sssd_pid" ${metrics_pid} 2>/dev/null || true; wait || true' EXIT
+trap 'kill "$trust_pid" "$sshd_pid" "$sssd_pid" ${metrics_pid} ${setid_recheck_pid:-} 2>/dev/null || true; wait || true' EXIT
 trap 'exit 0' TERM INT
 # Losing directory authentication is a service failure, even if port 22 still answers.
 wait -n "$sshd_pid" "$sssd_pid"

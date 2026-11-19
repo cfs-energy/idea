@@ -185,6 +185,11 @@ class FakeEc2:
         for f in Filters or []:
             if f['Name'] == 'image-id':
                 found = [i for i in found if i.get('ImageId') in f['Values']]
+            if f['Name'] == 'tag-key':
+                found = [i for i in found if f['Values'][0] in tags_of(i)]
+            if f['Name'].startswith('tag:'):
+                key = f['Name'][len('tag:') :]
+                found = [i for i in found if tags_of(i).get(key) in f['Values']]
         return {'Reservations': [{'Instances': found}]}
 
     def deregister_image(self, ImageId):
@@ -202,6 +207,10 @@ class FakeEc2:
 
     def create_tags(self, **kwargs):
         pass
+
+
+def tags_of(instance):
+    return {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
 
 
 class FakeStackDb:
@@ -763,15 +772,7 @@ def test_a_resumed_row_terminates_its_builder_once_the_image_is_available():
 
 def test_a_restart_before_the_snapshot_removes_the_builder_and_retries_once():
     h = Harness()
-    h.ec2.instances = [
-        {
-            'InstanceId': 'i-builder',
-            'Tags': [
-                {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
-                {'Key': 'idea:ModuleId', 'Value': 'vdc'},
-            ],
-        }
-    ]
+    h.ec2.instances = [tagged_builder()]
     h.pipeline._start = lambda record, blocking: True
     for attempt, expected in ((None, 'queued'), (1, 'failed')):
         h.records.put(
@@ -1106,11 +1107,22 @@ def test_cleanup_reaps_leftover_builders_but_not_a_running_bake():
         )
     )
     h.ec2.instances = [
-        {'InstanceId': 'i-busy', 'LaunchTime': old},
-        {'InstanceId': 'i-left', 'LaunchTime': old},
-        {'InstanceId': 'i-young', 'LaunchTime': datetime.now(tz=timezone.utc)},
+        tagged_builder('i-busy', launched=old),
+        tagged_builder('i-left', launched=old),
+        tagged_builder('i-young', launched=datetime.now(tz=timezone.utc)),
     ]
     assert h.pipeline._reap_builders() == ['i-left']
+
+
+def test_the_builder_sweep_leaves_another_clusters_builder_alone():
+    h = Harness()
+    old = T0 - timedelta(hours=3)
+    h.ec2.instances = [
+        tagged_builder('i-ours', launched=old),
+        tagged_builder('i-theirs', cluster='idea-other', launched=old),
+    ]
+    assert h.pipeline._reap_builders() == ['i-ours']
+    assert h.ec2.terminated == ['i-ours']
 
 
 # triggers
@@ -2154,11 +2166,15 @@ def test_a_row_stuck_from_an_earlier_release_fails_and_the_release_bakes_it_agai
 # failing disposes what the bake made
 
 
-def tagged_builder(instance_id='i-builder', module_id='vdc'):
+def tagged_builder(
+    instance_id='i-builder', module_id='vdc', cluster='idea-test', launched=None
+):
     return {
         'InstanceId': instance_id,
+        'LaunchTime': launched,
         'Tags': [
             {'Key': 'idea:ImageBuild', 'Value': 'rocky9/x86_64'},
+            {'Key': 'idea:ClusterName', 'Value': cluster},
             {'Key': 'idea:ModuleId', 'Value': module_id},
         ],
     }
@@ -2193,6 +2209,7 @@ def test_a_failed_bake_terminates_its_builder_now_and_brings_cleanup_forward():
     [
         {'InstanceId': 'i-builder', 'Tags': []},
         tagged_builder(module_id='another-module'),
+        tagged_builder(cluster='another-cluster'),
     ],
 )
 def test_a_failed_bake_leaves_an_instance_it_cannot_prove_is_its_builder(instance):

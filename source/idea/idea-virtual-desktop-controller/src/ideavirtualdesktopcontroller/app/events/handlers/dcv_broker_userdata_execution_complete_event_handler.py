@@ -210,6 +210,14 @@ class DCVBrokerUserdataExecutionCompleteEventHandler(
                 f'Corrupted sender_id: {sender_id}. Ignoring message'
             )
 
+        self.settle_tables(message_id)
+
+    def settle_tables(self, message_id: str) -> int:
+        """
+        billing or autoscaling, and tags, on every broker table; idempotent. the scheduled
+        tick calls it too, because the broker may create its tables after the controller
+        started and a broker in a container sends no boot event. returns the tables seen.
+        """
         table_names = self.dcv_broker_client_utils.get_broker_dynamodb_table_names()
         on_demand = self.context.config().get_bool(
             'virtual-desktop-controller.dcv_broker.dynamodb_table.on_demand',
@@ -232,3 +240,4 @@ class DCVBrokerUserdataExecutionCompleteEventHandler(
                     message_id, table_name
                 )
             self._add_tags_to_table(message_id, table_name)
+        return len(table_names)

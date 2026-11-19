@@ -1164,7 +1164,9 @@ test("a scoped upgrade preserves ECS when cluster-manager completed the target r
       { ...moduleRow("ecs", "ecs"), version: ideaVersion() },
       { ...moduleRow("cluster-manager", "cluster-manager"), version: ideaVersion() },
     );
-    rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.module_sets.default.ecs.module_id", "ecs"));
+    rows[`${clusterName}.cluster-settings`]!.push(setting("global-settings.module_sets.default.ecs.module_id", "ecs"),
+      // the services hold their own OpenSearch rules, so analytics may be upgraded alone
+      ...["cluster-manager", "scheduler", "vdc"].map((id) => ({ ...setting(`${id}.opensearch_ingress_rule`, `sgr-${id}`), source: "stack" })));
     await upgradeCluster(deps, { ...containerOptions, modules: ["analytics"] });
     assert.ok(rows[`${clusterName}.cluster-settings`]!.some((row) => row["key"] === "global-settings.module_sets.default.ecs.module_id"));
     assert.ok(!events.includes("set:cluster-manager.maintenance.enabled=true"));
@@ -1476,18 +1478,15 @@ for (const stillPublished of [false, true]) {
 test("the cleared-protection warning names only instances that still exist", async () => {
   // The deployment replaces the instances it cleared, and a warning naming a terminated instance
   // sends the operator after a ghost.
-  await withFixture(async ({ deps, rows, events, protection }) => {
-    rows[`${clusterName}.cluster-settings`]!.push({ ...setting("scheduler.published", "old"), source: "stack" });
+  // A failed deployment leaves protection cleared on purpose, so the warning is real there; after
+  // a restore it must not appear at all (the convergence test checks that).
+  await withFixture(async ({ deps, events, protection }) => {
     protection.add("i-survivor");
     protection.add("i-replaced");
     deps.cloudFormation.listStackResources = async (input) => ({ instanceIds: input.stackName.endsWith("-scheduler") ? ["i-survivor", "i-replaced"] : [] });
     deps.ec2.describeLiveInstances = async (input) => input.instanceIds.filter((id) => id === "i-survivor");
-    const deploy = deps.deploy;
-    deps.deploy = async (input) => {
-      await deploy(input);
-      rows[`${clusterName}.cluster-settings`] = rows[`${clusterName}.cluster-settings`]!.filter((row) => row["key"] !== "scheduler.published");
-    };
-    await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true }), /Completion verification failed/);
+    deps.deploy = async () => { throw new Error("simulated deployment failure"); };
+    await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, moduleSet: "default", force: true, acceptConfigDrift: true }), /simulated deployment failure/);
     const warning = events.find((event) => event.startsWith("warning: termination protection is still cleared"));
     assert.ok(warning, events.filter((event) => event.startsWith("warning")).join(" | "));
     assert.ok(warning.includes("i-survivor") && !warning.includes("i-replaced"), warning);
@@ -1546,6 +1545,54 @@ test("a global row this release no longer generates is removed after every stack
     assert.ok(events.some((event) => event.includes("global-settings.retired_option is no longer generated but prefixes another row")));
   });
 });
+
+for (const [state, extra, kept, removed] of [
+  ["only the default module set", [], [], []],
+  ["a second module set", ["secondary.cluster-manager", "secondary.scheduler"], ["secondary.cluster-manager", "secondary.scheduler"], []],
+  ["a module the release dropped, in every set", ["secondary.cluster-manager", "secondary.retired-module", "default.retired-module"], ["secondary.cluster-manager"], ["secondary.retired-module", "default.retired-module"]],
+] as const) {
+  test(`the end-of-upgrade cleanup keeps the cluster's module sets: ${state}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      const key = (row: string) => `global-settings.module_sets.${row}.module_id`;
+      rows[`${clusterName}.cluster-settings`]!.push(...extra.map((row) => setting(key(row), row.split(".")[1]!)));
+      await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+      const keys = new Set(rows[`${clusterName}.cluster-settings`]!.map((row) => String(row["key"])));
+      for (const row of kept) assert.ok(keys.has(key(row)), `${row} kept`);
+      for (const row of removed) assert.ok(!keys.has(key(row)), `${row} removed`);
+      assert.ok(keys.has(key("default.cluster-manager")), "the default set stays");
+      assert.equal(events.some((event) => event.startsWith("Module set rows kept")), kept.length > 0);
+    });
+  });
+}
+
+for (const [state, stored, phase3, refused] of [
+  ["No to the image and settings, an older image stored", "26.11.1", false, true],
+  ["Yes to the image and settings, an older image stored", "26.11.1", true, false],
+  ["No to the image and settings, this release's image already stored", "current", false, false],
+] as const) {
+  test(`an interactive upgrade deploys only on this release's image: ${state}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      const repository = "public.ecr.aws/s5o2b4m0/idea-control-plane";
+      rows[`${clusterName}.cluster-settings`]!.push(
+        setting("ecs.image_repositories.aws", repository),
+        setting("ecs.image", `${repository}:${stored === "current" ? ideaVersion() : stored}`),
+      );
+      deps.prompt = async (choice) => {
+        events.push(`prompt:${choice.message}`);
+        return choice.message === "Continue with AMI and settings updates?" ? phase3 : true;
+      };
+      const run = upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", acceptConfigDrift: true });
+      if (refused) {
+        await assert.rejects(run, /Phase 3 \(AMI and settings updates\) was skipped.*26\.11\.1.*Nothing was deployed/);
+        assert.ok(!events.includes("prompt:Proceed with deploying all modules?"));
+        assert.ok(!events.some((event) => event.startsWith("deploy")), events.filter((event) => event.startsWith("deploy")).join(" | "));
+      } else {
+        await run;
+        assert.ok(events.some((event) => event.startsWith("deploy")));
+      }
+    });
+  });
+}
 
 test("the image row follows the release only when it names the release repository at an older release tag", () => {
   const repository = "public.ecr.aws/s5o2b4m0/idea-control-plane";
@@ -2084,4 +2131,171 @@ test("an explicit GovCloud repository never advances an image from the public re
     { key: "ecs.image_repositories.aws-us-gov", value: "registry.example/control-plane" },
     { key: "ecs.image", value: "public.example/control-plane:26.09.0" },
   ], "26.10.9"), []);
+});
+
+for (const [state, publishes, narrows] of [
+  ["the controller stack publishes its broker listener rules", true, true],
+  ["the controller stack fails or rolls back and publishes nothing", false, true],
+  ["the second cluster pass leaves the wide rule in place", true, false],
+] as const) {
+  test(`an upgrade converges the broker listener rules: ${state}`, async () => {
+    await withFixture(async ({ deps, events, rows }) => {
+      const settings = rows[`${clusterName}.cluster-settings`]!;
+      settings.push(setting("global-settings.module_sets.default.virtual-desktop-controller.module_id", "vdc"));
+      let clusterDeploys = 0;
+      const deploy = deps.deploy;
+      deps.deploy = async (input) => {
+        await deploy(input);
+        if (input.moduleIds === undefined || input.moduleIds.includes("cluster")) clusterDeploys += 1;
+        if (publishes && input.moduleIds === undefined) settings.push({ ...setting("vdc.dcv_broker.listener_ingress_rules", ["sgr-0a", "sgr-0b"]), source: "stack" });
+      };
+      // the first cluster deploy keeps the wide rule (the controller stack had none yet); a later one removes it
+      deps.cfn.getTemplate = async (stackName) => JSON.stringify({ Resources: stackName.endsWith("-cluster")
+        && (clusterDeploys < 2 || !narrows) ? { wide: { Type: "AWS::EC2::SecurityGroup", Properties: { SecurityGroupIngress: [{ Description: "Allow HTTPS traffic from DCV Clients to DCV Broker" }] } } } : {} });
+      const run = upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+      if (publishes && !narrows) {
+        await assert.rejects(run, /still admits the whole VPC to the broker listeners.*re-run upgrade-cluster/);
+        // the rest of the upgrade still ran: termination protection, read-back, values save
+        assert.ok(events.includes("save-values"), events.join(" | "));
+        assert.ok(!events.includes("All upgrade phases completed successfully"));
+        // protection was restored, so the failure must not report it as still cleared
+        assert.ok(events.includes("clear:i-sample") && events.includes("restore:i-sample"), events.join(" | "));
+        assert.ok(!events.some((event) => event.startsWith("warning: termination protection is still cleared")), events.join(" | "));
+        return;
+      }
+      await run;
+      const deploys = events.filter((event) => event.startsWith("deploy:"));
+      assert.deepEqual(deploys, publishes ? ["deploy:all", "deploy:cluster"] : ["deploy:all"]);
+    });
+  });
+}
+
+test("an analytics upgrade a service cannot follow is refused before anything is written", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    for (const row of rows[`${clusterName}.modules`]!) row["status"] = "deployed";
+    const writes: string[] = [];
+    const configWriter = deps.configWriter;
+    deps.configWriter = async (input) => { writes.push("configWriter"); return configWriter(input); };
+    await assert.rejects(
+      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules: ["analytics"] }),
+      /do(es)? not have (its|their) own rule/,
+    );
+    assert.deepEqual(writes, []);
+    assert.ok(!events.some((event) => event.startsWith("clear:") || event.startsWith("deploy")), events.join(" | "));
+  });
+});
+
+test("the post-deploy cleanup keeps operator rows the template does not generate, over a live-shaped table", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    const settings = rows[`${clusterName}.cluster-settings`]!;
+    const operator = (key: string, value: unknown) => ({ ...setting(key, value), source: "cli" });
+    const template = (key: string, value: unknown) => ({ ...setting(key, value), source: "template" });
+    settings.push(
+      // pins an operator sets before upgrading (fix-bootstrap-linux.md, "Before upgrading")
+      operator("global-settings.package_config.efs_utils.commit", "0123456789abcdef0123456789abcdef01234567"),
+      operator("global-settings.package_config.amazon_cloudwatch_agent.sha256", "a".repeat(64)),
+      operator("global-settings.package_config.prometheus.installer.linux.x86_64_sha256", "b".repeat(64)),
+      operator("global-settings.package_config.prometheus.exporters.node_exporter.linux.aarch64_sha256", "c".repeat(64)),
+      // as live tables hold them: a per-cluster OpenPBS commit, and a null link beside its pattern
+      template("global-settings.package_config.openpbs.commit", "8b5e2b5f0f1c3c9d0e9a6a0d1b2c3d4e5f607182"),
+      template("global-settings.package_config.amazon_cloudwatch_agent.download_link", null),
+      template("global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern", "https://s3.%region%.amazonaws.com/amazoncloudwatch-agent-%region%/%os%/%architecture%/latest/amazon-cloudwatch-agent.%ext%"),
+      // a template row this release no longer generates still goes
+      template("global-settings.retired_template_row", "old"),
+    );
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    const keys = new Set(rows[`${clusterName}.cluster-settings`]!.map((row) => String(row["key"])));
+    for (const key of [
+      "global-settings.package_config.efs_utils.commit",
+      "global-settings.package_config.amazon_cloudwatch_agent.sha256",
+      "global-settings.package_config.prometheus.installer.linux.x86_64_sha256",
+      "global-settings.package_config.prometheus.exporters.node_exporter.linux.aarch64_sha256",
+      "global-settings.package_config.openpbs.commit",
+      "global-settings.package_config.amazon_cloudwatch_agent.download_link_pattern",
+    ]) assert.ok(keys.has(key), `${key} survives the upgrade`);
+    assert.ok(events.includes("delete:global-settings.retired_template_row"));
+    assert.ok(!events.some((event) => event.startsWith("delete:global-settings.package_config.")), events.filter((event) => event.startsWith("delete:")).join(" | "));
+  });
+});
+
+
+test("an upgrade of a cluster whose stored apps storage names FSx for Lustre is refused before anything is written", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    rows[`${clusterName}.cluster-settings`]!.push(setting("shared-storage.apps.provider", "fsx_lustre"));
+    const writes: string[] = [];
+    const configWriter = deps.configWriter;
+    deps.configWriter = async (input) => { writes.push("configWriter"); return configWriter(input); };
+    await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
+      /shared-storage.apps.provider is fsx_lustre/);
+    assert.deepEqual(writes, []);
+    assert.ok(!events.some((event) => event.startsWith("deploy")));
+  });
+});
+
+test("without --force, an end-of-life stack is deleted only after the operator agrees", async () => {
+  for (const answer of [false, true]) {
+    await withFixture(async ({ deps, events, rows }) => {
+      rows[`${clusterName}.vdc.controller.software-stacks`]?.push({ stack_id: "stack-unused", base_os: "amazonlinux2", name: "unused", architecture: "x86_64" });
+      const prompt = deps.prompt;
+      deps.prompt = async (choice) => {
+        await prompt(choice);
+        return choice.message.startsWith("Apply the end-of-life") ? answer : true;
+      };
+      const run = upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", acceptConfigDrift: true, modules: ["scheduler"] });
+      if (answer) await run; else await assert.rejects(run, (error: unknown) => (error as { code?: number }).code === 0 || /ExitWithCode/.test(String((error as Error).constructor?.name)));
+      assert.equal(events.includes("delete-eol"), answer);
+    });
+  }
+});
+
+test("an upgrade naming a module the cluster does not have is refused before anything is written", async () => {
+  for (const modules of [["no-such-module"], ["scheduler", "no-such-module"]]) {
+    await withFixture(async ({ deps, events }) => {
+      const writes: string[] = [];
+      const configWriter = deps.configWriter;
+      deps.configWriter = async (input) => { writes.push("configWriter"); return configWriter(input); };
+      await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules }),
+        /Unknown module no-such-module/);
+      assert.deepEqual(writes, []);
+      assert.ok(!events.some((event) => event.startsWith("deploy")));
+    });
+  }
+});
+
+test("a bad termination protection value fails before anything is written", async () => {
+  await withFixture(async ({ deps, events }) => {
+    const writes: string[] = [];
+    const configWriter = deps.configWriter;
+    deps.configWriter = async (input) => { writes.push("configWriter"); return configWriter(input); };
+    await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, terminationProtection: "maybe" }),
+      /expected true or false/);
+    assert.deepEqual(writes, []);
+  });
+});
+
+test("operator-set site hook checksums survive an upgrade", async () => {
+  await withFixture(async ({ deps, rows }) => {
+    const digest = "a".repeat(64);
+    const keys = ["bastion-host.site_hook_sha256", "scheduler.compute_node_site_hook_sha256", "scheduler.ami_builder_site_hook_sha256",
+      "vdc.dcv_host_site_hook_sha256", "vdc.ami_builder_site_hook_sha256"];
+    rows[`${clusterName}.cluster-settings`]!.push(...keys.map((key) => ({ ...setting(key, digest), source: "cli" })));
+    await upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true });
+    for (const key of keys) {
+      assert.equal(rows[`${clusterName}.cluster-settings`]!.find((row) => row["key"] === key)?.["value"], digest, key);
+    }
+  });
+});
+
+test("a values file naming FSx for Lustre for apps storage stops the upgrade before anything is written", async () => {
+  await withFixture(async ({ deps, events }) => {
+    const path = join(process.env.IDEA_USER_HOME!, "clusters", clusterName, awsRegion, "values.yml");
+    writeFileSync(path, readFileSync(path, "utf8").replace(/^storage_apps_provider:.*$/m, "") + "\nstorage_apps_provider: fsx_lustre\n");
+    const writes: string[] = [];
+    const configWriter = deps.configWriter;
+    deps.configWriter = async (input) => { writes.push("configWriter"); return configWriter(input); };
+    await assert.rejects(upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
+      /FSx for Lustre is not supported for the apps storage/);
+    assert.deepEqual(writes, []);
+    assert.ok(!events.some((event) => event.startsWith("deploy") || event === "delete-eol"));
+  });
 });

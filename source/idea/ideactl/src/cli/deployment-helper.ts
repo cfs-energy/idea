@@ -7,7 +7,7 @@
  * module metadata table in `config/cluster-config.ts`, so there is one copy of them.
  */
 
-import { refreshHostPool, waitForDirectoryJoin } from "./host-pool.ts";
+import { refreshHostPool, refuseHostsWithStaleMounts, waitForDirectoryJoin } from "./host-pool.ts";
 
 import { ClusterConfig, GeneralException, MODULE_METADATA, isEmpty, type ModuleInfo } from '../config/cluster-config.ts';
 import { buildBootstrapContext } from './bootstrap-context.ts';
@@ -49,6 +49,67 @@ export function deploymentPriority(moduleName: string): number {
   return priority;
 }
 
+/**
+ * Where a module sorts in one run. A deployed analytics module redeploys after the control-plane
+ * services: its OpenSearch group admits only them and the analytics sink, and each service stack
+ * adds its own rule, so redeploying analytics first would leave the services unable to reach the
+ * domain until their stacks caught up. Nothing in those stacks reads an analytics setting that a
+ * redeploy changes (domain endpoint, stream and group id are fixed by the first deploy). On a fresh
+ * install analytics keeps its place, ahead of the services that read those settings.
+ */
+function runPriority(module: ModuleInfo, upgrade: boolean): number {
+  if (upgrade && module.name === 'analytics' && module.status === 'deployed') return 6.5;
+  return deploymentPriority(module.name);
+}
+
+/**
+ * Whether a deployed service stack holds its own OpenSearch rule: the stack publishes the rule's id
+ * as `<module>.opensearch_ingress_rule` once the rule exists, and a rollback removes the row. A
+ * release string cannot tell, since a release candidate reports the final release.
+ */
+export type HoldsOpenSearchRule = (module: ModuleInfo) => boolean;
+const OPENSEARCH_CLIENTS = ['cluster-manager', 'scheduler', 'virtual-desktop-controller'];
+
+/**
+ * An analytics upgrade drops the VPC-wide OpenSearch rule. A deployed service whose stack predates
+ * its own rule and is not in this run would lose the domain until it is upgraded, so the run is
+ * refused and names the modules to add.
+ */
+export function refuseAnalyticsAheadOfServices(modules: readonly ModuleInfo[], selectedIds: readonly string[], upgrade: boolean, holdsRule: HoldsOpenSearchRule): void {
+  if (!upgrade) return;
+  const analytics = modules.find((module) => module.name === 'analytics' && module.status === 'deployed' && selectedIds.includes(module.module_id));
+  if (analytics === undefined) return;
+  const missing = modules.filter((module) => OPENSEARCH_CLIENTS.includes(module.name) && module.status === 'deployed'
+    && !selectedIds.includes(module.module_id)
+    && !holdsRule(module));
+  if (missing.length === 0) return;
+  const ids = missing.map((module) => module.module_id);
+  throw new GeneralException(
+    `upgrading ${analytics.module_id} removes the VPC-wide OpenSearch rule, and ${ids.join(', ')} ` +
+      `${ids.length === 1 ? 'does' : 'do'} not have ${ids.length === 1 ? 'its' : 'their'} own rule yet. ` +
+      `Add ${ids.join(' ')} to the modules of this upgrade, or upgrade ${ids.length === 1 ? 'it' : 'them'} first.`,
+  );
+}
+
+/**
+ * Config generation refuses FSx for Lustre for the apps and data storage (owner decision). A
+ * stored Lustre apps or data entry the generator wrote has no `fsx_lustre.mount_name`, so the
+ * container stack cannot mount it and no host joins: that entry is refused before a deploy or
+ * upgrade changes anything. One completed by hand or by `shared-storage attach-file-system` (with
+ * `dns` and `mount_name`) mounts, and is left alone.
+ */
+export function refuseLustreAppsOrData(read: (key: string) => string | undefined): void {
+  for (const name of ['apps', 'data'] as const) {
+    if (read(`shared-storage.${name}.provider`) !== 'fsx_lustre') continue;
+    if (read(`shared-storage.${name}.fsx_lustre.dns`) && read(`shared-storage.${name}.fsx_lustre.mount_name`)) continue;
+    throw new GeneralException(
+      `shared-storage.${name}.provider is fsx_lustre with no fsx_lustre.dns and fsx_lustre.mount_name, so the control-plane hosts cannot mount it and no cluster can run in this state. ` +
+        `Point the ${name} storage at an EFS file system (shared-storage.${name}.provider and its settings) and deploy again. ` +
+        'FSx for Lustre remains available for job scratch storage.',
+    );
+  }
+}
+
 export interface DeploymentHelperOptions {
   refreshHosts?: boolean;
   hostPoolRerunCommand?: string;
@@ -78,6 +139,8 @@ export function deploymentOrder(
   modules: ModuleInfo[],
   moduleIds: readonly string[],
   upgrade: boolean,
+  // without the settings, no service is known to hold its rule
+  holdsRule: HoldsOpenSearchRule = () => false,
 ): string[] {
   const byId = new Map(modules.map((module) => [module.module_id, module]));
   const selected: Array<{ moduleId: string; priority: number }> = [];
@@ -86,8 +149,9 @@ export function deploymentOrder(
     if (module === undefined) continue;
     if (module.type === MODULE_TYPE_CONFIG) continue;
     if (module.status === 'deployed' && !upgrade) continue;
-    selected.push({ moduleId, priority: deploymentPriority(module.name) });
+    selected.push({ moduleId, priority: runPriority(module, upgrade) });
   }
+  refuseAnalyticsAheadOfServices(modules, selected.map((entry) => entry.moduleId), upgrade, holdsRule);
   // Python's list.sort is stable, so equal priorities keep the modules-table order.
   selected.sort((a, b) => a.priority - b.priority);
   return selected.map((entry) => entry.moduleId);
@@ -98,13 +162,14 @@ export function optimizedDeploymentOrder(
   modules: ModuleInfo[],
   moduleIds: readonly string[],
   upgrade: boolean,
+  holdsRule: HoldsOpenSearchRule = () => false,
 ): string[][] {
   const byId = new Map(modules.map((module) => [module.module_id, module]));
   const groups = new Map<number, string[]>();
-  for (const moduleId of deploymentOrder(modules, moduleIds, upgrade)) {
-    const moduleName = byId.get(moduleId)?.name;
-    if (moduleName === undefined) continue;
-    const priority = deploymentPriority(moduleName);
+  for (const moduleId of deploymentOrder(modules, moduleIds, upgrade, holdsRule)) {
+    const module = byId.get(moduleId);
+    if (module === undefined) continue;
+    const priority = runPriority(module, upgrade);
     const group = groups.get(priority);
     if (group === undefined) groups.set(priority, [moduleId]);
     else group.push(moduleId);
@@ -264,8 +329,11 @@ export class DeploymentHelper {
   }
 
   getDeploymentOrder(): string[] {
-    return deploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade);
+    return deploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade, this.holdsOpenSearchRule);
   }
+
+  private readonly holdsOpenSearchRule: HoldsOpenSearchRule = (module) =>
+    !isEmpty(this.config.getString(`${module.module_id}.opensearch_ingress_rule`));
 
   /** Module names resolved from the same selected deployment order used for invocation. */
   getDeploymentModuleNames(): string[] {
@@ -276,7 +344,7 @@ export class DeploymentHelper {
   }
 
   getOptimizedDeploymentOrder(): string[][] {
-    return optimizedDeploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade);
+    return optimizedDeploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade, this.holdsOpenSearchRule);
   }
 
   private printNoOpMessage(): void {
@@ -315,6 +383,9 @@ export class DeploymentHelper {
       allowReplacementOfType: this.options.allowReplacementOfType,
       deps: this.deps,
     });
+    if (["bastion-host", "cluster-manager", "scheduler", "virtual-desktop-controller"].includes(moduleInfo.name)) {
+      await refuseHostsWithStaleMounts(this.deps, this.options);
+    }
     if (moduleInfo.name === "bastion-host") await waitForDirectoryJoin(this.deps, this.options);
     await invoker.invoke({ forceBuildBootstrap: this.options.forceBuildBootstrap });
     if (moduleInfo.name === "ecs") await refreshHostPool(this.deps, this.options);
@@ -400,6 +471,7 @@ export class DeploymentHelper {
   }
 
   async invoke(): Promise<void> {
+    refuseLustreAppsOrData((key) => this.config.getString(key));
     if (this.options.optimizeDeployment === true && this.moduleIds().length > 1) {
       const groups = this.getOptimizedDeploymentOrder();
       if (groups.length === 0) {

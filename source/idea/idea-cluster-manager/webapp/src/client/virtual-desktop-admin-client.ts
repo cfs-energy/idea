@@ -105,6 +105,14 @@ class VirtualDesktopAdminClient extends IdeaBaseClient<VirtualDesktopAdminClient
         )
     }
 
+    /** Moves a stopped desktop to another project the owner belongs to; refusals come back in plain words. */
+    moveSessionToProject(req: UpdateSessionRequest): Promise<UpdateSessionResponse> {
+        return this.apiInvoker.invoke_alt<UpdateSessionRequest, UpdateSessionResponse>(
+            'VirtualDesktopAdmin.MoveSessionToProject',
+            req
+        )
+    }
+
     setSessionCleanupExemption(req: SetSessionCleanupExemptionRequest): Promise<SetSessionCleanupExemptionResponse> {
         return this.apiInvoker.invoke_alt<SetSessionCleanupExemptionRequest, SetSessionCleanupExemptionResponse>(
             'VirtualDesktopAdmin.SetSessionCleanupExemption',

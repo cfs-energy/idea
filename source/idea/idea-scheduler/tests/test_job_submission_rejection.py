@@ -7,7 +7,6 @@ the same refusal - still returns its report.
 """
 
 import os
-import shutil
 
 import pytest
 
@@ -42,7 +41,7 @@ class MockShell:
         self.result.stdout = stdout
         self.result.stderr = stderr
 
-    def invoke(self, *_args, **_kwargs):
+    def invoke_as_user(self, *_args, **_kwargs):
         return self.result
 
 
@@ -74,7 +73,8 @@ def build_api(context, monkeypatch, tmp_path, returncode, stdout, recorded, stde
         api.group_name_helper, 'get_user_group', lambda _user: 'mockgroup'
     )
     # the tests do not run as root and ownership is not what is under test
-    monkeypatch.setattr(shutil, 'chown', lambda *_a, **_k: None)
+    monkeypatch.setattr(scheduler_api_module, 'account_uid', lambda _u: os.geteuid())
+    os.makedirs(os.path.join(mount_dir, 'home', 'mockuser'), exist_ok=True)
     monkeypatch.setattr(scheduler_api_module, 'chown_fd', lambda *_a, **_k: None)
     return api
 

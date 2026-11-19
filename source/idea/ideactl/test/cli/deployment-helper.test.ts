@@ -72,6 +72,36 @@ describe('deploymentOrder', () => {
     assert.ok(deploymentOrder(modules as never, ALL_IDS, true).includes('cluster'));
   });
 
+  it('an upgrade redeploys analytics after the services that admit themselves to OpenSearch', () => {
+    // analytics drops the VPC-wide rule; the services must have added theirs first, or the portal,
+    // scheduler and desktop controller lose the domain until their own stacks deploy
+    const deployed = MODULES.map((module) => ({ ...module, status: 'deployed' }));
+    const order = deploymentOrder(deployed as never, ALL_IDS, true);
+    for (const service of ['cluster-manager', 'scheduler', 'vdc']) {
+      assert.ok(order.indexOf('analytics') > order.indexOf(service), `analytics after ${service}: ${order.join(',')}`);
+    }
+    const groups = optimizedDeploymentOrder(deployed as never, ALL_IDS, true);
+    const groupOf = (id: string) => groups.findIndex((group) => group.includes(id));
+    assert.ok(groupOf('analytics') > groupOf('scheduler') && groupOf('analytics') > groupOf('vdc'));
+  });
+
+  it('refuses an analytics upgrade that leaves out a service without its own OpenSearch rule', () => {
+    // a release candidate reports the final release, so the version says nothing about the rule
+    const candidate = MODULES.map((module) => ({ ...module, status: 'deployed', version: '26.11.2' }));
+    assert.throws(() => deploymentOrder(candidate as never, ['analytics', 'cluster-manager'], true), /vdc, scheduler do not have their own rule/);
+    // with every service in the run
+    assert.ok(deploymentOrder(candidate as never, ['analytics', 'cluster-manager', 'scheduler', 'vdc'], true).includes('analytics'));
+    // or once each service stack has published its rule
+    const published = new Set(['cluster-manager', 'scheduler', 'vdc']);
+    assert.deepEqual(deploymentOrder(candidate as never, ['analytics'], true, (module) => published.has(module.module_id)), ['analytics']);
+    assert.throws(() => deploymentOrder(candidate as never, ['analytics'], true, (module) => module.module_id !== 'vdc'), /vdc does not have its own rule/);
+  });
+
+  it('a fresh install still deploys analytics before the services that read its settings', () => {
+    const order = deploymentOrder(MODULES as never, ALL_IDS, true);
+    assert.ok(order.indexOf('analytics') < order.indexOf('cluster-manager'));
+  });
+
   it('ignores a module id the modules table does not hold', () => {
     assert.deepEqual(deploymentOrder(MODULES as never, ['nosuchmodule'], false), []);
   });

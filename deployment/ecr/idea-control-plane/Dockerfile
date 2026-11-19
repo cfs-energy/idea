@@ -47,7 +47,8 @@ RUN set -eux; \
     make -j"$(nproc)"; \
     make install; \
     /opt/pbs/libexec/pbs_postinstall; \
-    chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
+    chmod 4755 /opt/pbs/sbin/pbs_iff; \
+    chmod 0755 /opt/pbs/sbin/pbs_rcp
 
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:8272aee6146a36222baaf71d72ab6799770957414ac63b1e940cec58c9197188 AS dcv-runtime
 
@@ -68,8 +69,8 @@ RUN dnf install -y --setopt=install_weak_deps=False \
       expat libedit tcl tk libical hwloc-libs \
       adcli krb5-workstation sssd-ad sssd-ldap sssd-tools realmd authselect openssh-server openssh-clients \
       java-11-amazon-corretto-headless \
-      nginx openssl nmap-ncat \
-      glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux jq tar gzip which awscli-2 curl-minimal \
+      nginx openssl nmap-ncat libcap \
+      glibc-langpack-en libatomic shadow-utils procps-ng iproute hostname sudo util-linux findutils jq tar gzip which awscli-2 curl-minimal \
       rsync git vim-minimal vim-enhanced nano tmux \
   && dnf clean all
 
@@ -116,8 +117,14 @@ COPY --from=pbs /opt/pbs /opt/pbs
 # site hook). uv comes as a pinned wheel for the build architecture; AL2023 packages no
 # hdf5 (h5dump) for either.
 ARG UV_VERSION=0.13.8
+# PyPI's SHA-256 of that version's manylinux wheel for each build architecture; a new
+# UV_VERSION needs both, or the install fails.
+ARG UV_SHA256_AARCH64=5337c30bb893b4f9ce0ceb921ba2da0d13f649da644f40ad3bef84083bef0203
+ARG UV_SHA256_X86_64=e18a57b8b352eb7c8feb317b9f6f533c8f0ad9673fd6cf34bbe3cf1a9f6a8984
 RUN set -eux; \
-    python3.13 -m pip install --no-cache-dir "uv==${UV_VERSION}"; \
+    printf 'uv==%s --hash=sha256:%s --hash=sha256:%s\n' "${UV_VERSION}" "${UV_SHA256_AARCH64}" "${UV_SHA256_X86_64}" > /tmp/uv.txt; \
+    python3.13 -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/uv.txt; \
+    rm /tmp/uv.txt; \
     test -x /usr/local/bin/uv || ln -s "$(command -v uv)" /usr/local/bin/uv; \
     /usr/local/bin/uv --version
 
@@ -163,6 +170,12 @@ ENV CDK_DISABLE_CLI_TELEMETRY=true
 # Keep runtime tools cached when only the application bundle changes.
 ARG IDEA_VERSION
 # Install all module packages from the release bundle. The selected role runs at startup.
+# Third-party packages come only from the lock: every pin hashed, nothing resolved beyond it. The
+# lock's setuptools (hashed) goes in first; every source archive, the lock's source-only pins and
+# the module archives, is then built with it and no isolated build environment, so pip fetches
+# nothing the lock does not name. A source pin whose build needs anything the image lacks fails
+# the build (--check-build-dependencies) rather than fetch it. pip check fails the build if the
+# lock misses a runtime requirement.
 RUN --mount=type=bind,source=deployment/ecr/idea-control-plane/all-${IDEA_VERSION}.tar.gz,target=/tmp/release.tar.gz \
     set -eux; \
     mkdir -p /tmp/release; \
@@ -172,14 +185,18 @@ RUN --mount=type=bind,source=deployment/ecr/idea-control-plane/all-${IDEA_VERSIO
       PKG="/tmp/idea/${MODULE}"; \
       mkdir -p "${PKG}"; \
       tar -xf "/tmp/release/${MODULE}-${IDEA_VERSION}.tar.gz" -C "${PKG}"; \
-      python3.13 -m pip install --no-cache-dir -r "${PKG}/requirements.txt"; \
-      python3.13 -m pip install --no-cache-dir "${PKG}"/*-lib.tar.gz; \
+      awk '/^setuptools==/{p=1} p{print; if ($0 !~ /\\$/) exit}' "${PKG}/requirements.txt" > /tmp/setuptools.txt; \
+      grep -q -- '--hash=sha256:' /tmp/setuptools.txt; \
+      python3.13 -m pip install --no-cache-dir --require-hashes --no-deps -r /tmp/setuptools.txt; \
+      python3.13 -m pip install --no-cache-dir --require-hashes --no-deps --no-build-isolation --check-build-dependencies -r "${PKG}/requirements.txt"; \
+      python3.13 -m pip install --no-cache-dir --no-deps --no-build-isolation --check-build-dependencies "${PKG}"/*-lib.tar.gz; \
       mkdir -p "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}"; \
       cp -r "${PKG}/resources" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; \
       if [ -d "${PKG}/webapp" ]; then cp -r "${PKG}/webapp" "${IDEA_APP_DEPLOY_DIR}/${APP_NAME}/"; fi; \
     done; \
-    rm -rf /tmp/release /tmp/idea /root/.cache/pip; \
-    mkdir -p "${IDEA_APP_DEPLOY_DIR}/logs"
+    python3.13 -m pip check; \
+    rm -rf /tmp/release /tmp/idea /tmp/setuptools.txt /root/.cache/pip; \
+    install -d -m 0750 "${IDEA_APP_DEPLOY_DIR}/logs"
 
 # Overlay the gateway web resources.
 ADD deployment/ecr/idea-control-plane/idea-dcv-connection-gateway-${IDEA_VERSION}.tar.gz /tmp/idea-gateway/
@@ -210,19 +227,27 @@ COPY deployment/ecr/idea-control-plane/entrypoint.sh /opt/idea/entrypoint.sh
 COPY deployment/ecr/idea-control-plane/roles /opt/idea/roles
 COPY source/idea/idea-bootstrap/common/terminal_host.py /opt/idea/roles/terminal_host.py
 COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl
-RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh /usr/local/bin/ideactl
+# The scheduler runs license checks as this account, as hosts do (idea_service_account.jinja2);
+# a system id, so the user sync keeps it.
+RUN chmod +x /opt/idea/entrypoint.sh /opt/idea/roles/*.sh /usr/local/bin/ideactl \
+  && useradd --system --no-create-home --shell /sbin/nologin ideaserviceaccount
 
 # The base image pins dnf to its AL2023 release, so a package fixed in a later release stays out
 # until the digest moves, and sshd on this image faces the internet. Take the newest OpenSSH and
 # every security update from the latest release. A build passes a new value each run: the
 # layer cache would otherwise keep the first answer. The release workflow then fails an image
 # whose OpenSSH is behind.
+# The same layer then clears every set-id bit except pbs_iff's and sudo's (roles/setid_strip.sh).
+# It comes after the upgrade, which reinstalls packages with their packaged modes.
 ARG IDEA_PACKAGE_REFRESH=local
 RUN set -eux; \
     echo "package refresh ${IDEA_PACKAGE_REFRESH}"; \
     dnf upgrade -y --releasever=latest 'openssh*'; \
     dnf upgrade -y --releasever=latest --security; \
-    dnf clean all
+    dnf clean all; \
+    /opt/idea/roles/setid_strip.sh --build /; \
+    test -u /usr/bin/sudo; \
+    test -u /opt/pbs/sbin/pbs_iff
 
 # module 8443; broker 8444/8445/8446 client/agent/gateway and 47100/47500 between brokers;
 # gateway 8443 web and QUIC and 8989 health.

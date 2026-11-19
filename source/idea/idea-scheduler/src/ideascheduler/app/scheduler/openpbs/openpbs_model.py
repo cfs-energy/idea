@@ -643,6 +643,7 @@ class OpenPBSJob(SocaBaseModel):
                 queue_profile=queue_profile,
                 project=project,
                 job_id=job_id,
+                at_submission=False,
             )
 
         job_params, provisioning_options = job_builder.build()
@@ -674,9 +675,9 @@ class OpenPBSJob(SocaBaseModel):
 
         notifications = self.get_notifications()
 
-        cluster_name = Utils.get_as_string(
-            self.get_cluster_name(), context.cluster_name()
-        )
+        # always this cluster's name: a job_uid-like resource the submitter can set must
+        # not name the stack and tag of another cluster (SJP-09)
+        cluster_name = context.cluster_name()
 
         # capacity_added
         capacity_added = self.capacity_added()

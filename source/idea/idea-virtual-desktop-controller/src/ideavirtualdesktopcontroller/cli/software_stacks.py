@@ -31,6 +31,7 @@ from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_s
 )
 from ideasdk.aws.opensearch.aws_opensearch_client import AwsOpenSearchClient
 
+from botocore.exceptions import ClientError
 import click
 import yaml
 import os
@@ -102,8 +103,15 @@ def create_software_stack(table, stack, logger):
 
         logger.debug(f'Creating software stack in DynamoDB: {stack.stack_id}')
 
-        # Save to DynamoDB
-        table.put_item(Item=db_entry)
+        # Save to DynamoDB; a stack written meanwhile by someone else is left as it is
+        try:
+            table.put_item(
+                Item=db_entry, ConditionExpression='attribute_not_exists(stack_id)'
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                return None
+            raise
         return db_entry
     except Exception as e:
         # Check if it's a permissions error
@@ -473,7 +481,10 @@ def merge_software_stacks(file, dry_run, **kwargs):
                 else:
                     try:
                         # Create the stack in the database
-                        create_software_stack(table, new_stack, logger)
+                        if create_software_stack(table, new_stack, logger) is None:
+                            click.echo(f'Exists: {software_stack_id}')
+                            stats['existing'] += 1
+                            continue
                         logger.info(f'Created software stack: {software_stack_id}')
                         click.echo(f'Created: {software_stack_id}')
                         stats['new'] += 1

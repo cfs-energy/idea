@@ -105,11 +105,17 @@ class HandshakeTimeout(Exception):
     pass
 
 
-def peer(request):
-    # The ALB appends the client address as the last X-Forwarded-For hop.
-    return (request.headers.get('x-forwarded-for') or '').split(',')[
-        -1
-    ].strip() or getattr(request, 'ip', '')
+def peer(request, server=None):
+    """
+    the caller's address by the server's rule: the forwarded-for hop only from the
+    public load balancer's subnets, the socket address from anywhere else
+    """
+    resolve = getattr(server, 'client_address', None)
+    if callable(resolve):
+        # None when the server cannot tell who is calling: behind the load balancer the
+        # socket address is the node's, shared by every user
+        return resolve(request) or None
+    return getattr(request, 'ip', '') or None
 
 
 def check_origin(origin, endpoint):
@@ -301,6 +307,12 @@ class TerminalService:
             raise TerminalDenied('Account conflicts with a system user') from None
         return user
 
+    def signed_in_since(self, username, opened_ms):
+        # global sign-out and password reset record when the account's sessions ended
+        row = self.context.accounts.user_dao.get_user(username) or {}
+        if int(row.get('sessions_revoked_on') or 0) > opened_ms:
+            raise TerminalDenied('Account sessions were ended')
+
     def desktops(self):
         if not self.context.config().is_module_enabled('virtual-desktop-controller'):
             raise TerminalDenied('Desktops are unavailable')
@@ -476,12 +488,12 @@ class TerminalService:
         except asyncssh.KeyImportError:
             raise TerminalMisconfigured('Target SSH identity is invalid') from None
 
-    def create_ticket(self, username, target, client):
+    def create_ticket(self, username, target, client, signed_in_ms=None):
         if not isinstance(client, str) or not re.fullmatch(r'[a-f0-9]{64}', client):
             raise TerminalDenied('Invalid client binding')
         self.target(username, target)
         return {
-            'ticket': self.store.issue(username, target, client),
+            'ticket': self.store.issue(username, target, client, signed_in_ms),
             'username': username,
             'expires_in': 30,
         }
@@ -514,6 +526,7 @@ class TerminalService:
                             {'error': 'Terminal unavailable'}, status=403
                         )
 
+            self._server = server
             server.http_app.register_middleware(origin_guard, 'request')
             server.http_app.add_websocket_route(
                 self.websocket, path, name='terminal-' + prefix
@@ -540,9 +553,13 @@ class TerminalService:
         if self.stopping:
             await ws.close(code=1012, reason='server-shutdown')
             return
-        source = peer(request)
+        source = peer(request, getattr(self, '_server', None))
         if (
-            self._pre_auth.get(source, 0) >= PRE_AUTH_PER_SOURCE
+            # an unknown caller is held only by the bound on everyone together
+            (
+                source is not None
+                and self._pre_auth.get(source, 0) >= PRE_AUTH_PER_SOURCE
+            )
             or sum(self._pre_auth.values()) >= PRE_AUTH_TOTAL
         ):
             self.reject(source, 'pre-auth-limit')
@@ -598,6 +615,7 @@ class TerminalService:
         slot = None
         username = target = ''
         started = time.monotonic()
+        opened_ms = int(time.time() * 1000)
         reason = 'connection-failed'
         error_type = None
         tasks = []
@@ -626,7 +644,7 @@ class TerminalService:
                 ):
                     raise TerminalDenied('Invalid handshake')
                 username, target = hello['username'], hello['target']
-                await asyncio.wait_for(
+                signed_in_ms = await asyncio.wait_for(
                     asyncio.to_thread(
                         self.store.consume,
                         hello['ticket'],
@@ -635,6 +653,13 @@ class TerminalService:
                         hello['client'],
                     ),
                     10,
+                )
+                # the session's sign-in, not the socket's opening: a session ended between
+                # the ticket and now is caught at once, and later at the next check
+                if signed_in_ms is not None:
+                    opened_ms = signed_in_ms
+                await asyncio.wait_for(
+                    asyncio.to_thread(self.signed_in_since, username, opened_ms), 10
                 )
                 authenticated = True
                 on_authenticated()
@@ -735,7 +760,8 @@ class TerminalService:
                         and isinstance(frame.get('data'), str)
                         and len(frame['data'].encode('utf-8', 'replace')) <= CHUNK_SIZE
                     ):
-                        activity[0] = time.monotonic()
+                        if frame['data']:
+                            activity[0] = time.monotonic()
                         process.stdin.write(frame['data'].encode('utf-8', 'replace'))
                         await asyncio.wait_for(process.stdin.drain(), WRITE_TIMEOUT)
                     elif (
@@ -778,6 +804,10 @@ class TerminalService:
                         10,
                     )
                     await asyncio.wait_for(asyncio.to_thread(self.user, username), 10)
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self.signed_in_since, username, opened_ms),
+                        10,
+                    )
 
             tasks = [asyncio.create_task(f()) for f in (output, input_frames, watchdog)]
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -785,7 +815,7 @@ class TerminalService:
             reason = 'disconnected' if finished.cancelled() else finished.result()
         except HandshakeTimeout:
             reason = 'handshake-timeout'
-            self.reject(peer(request), reason)
+            self.reject(peer(request, getattr(self, '_server', None)), reason)
         except TicketRejected as error:
             error_type = type(error).__name__
             reason = 'ticket-rejected'
@@ -840,7 +870,7 @@ class TerminalService:
                     username,
                     'target' if authenticated else 'claimed_target',
                     target,
-                    peer(request),
+                    peer(request, getattr(self, '_server', None)),
                     session_id,
                     reason,
                     error_type,

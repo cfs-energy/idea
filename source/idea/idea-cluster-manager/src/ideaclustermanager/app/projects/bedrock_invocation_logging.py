@@ -108,6 +108,21 @@ class BedrockInvocationLogging:
         if logging_config is not None:
             configured_log_group = self.get_configured_log_group(logging_config)
             if configured_log_group == log_group_name:
+                wanted = self.build_logging_config(log_group_name, role_arn)
+                flags = {
+                    k: v for k, v in wanted.items() if k.endswith('DeliveryEnabled')
+                }
+                if self.is_configuration_managed() and any(
+                    logging_config.get(k) != v for k, v in flags.items()
+                ):
+                    self.bedrock.put_model_invocation_logging_configuration(
+                        loggingConfig={**logging_config, **flags}
+                    )
+                    self.logger.info(
+                        f'model invocation logging to {log_group_name} now has '
+                        f'request and response data delivery set to '
+                        f'{self.is_request_response_data_included()}.'
+                    )
                 return STATE_ADOPTED_ALREADY
             self.logger.warning(
                 f'model invocation logging is already configured for this account and '

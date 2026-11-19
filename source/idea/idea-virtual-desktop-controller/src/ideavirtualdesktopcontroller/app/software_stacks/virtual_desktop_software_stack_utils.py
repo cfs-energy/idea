@@ -130,13 +130,14 @@ class VirtualDesktopSoftwareStackUtils:
                         result.status = 'up_to_date'
                         result.message = f'base {latest_ami_id} is already the newest'
                         continue
-                    software_stack.base_ami_id = latest_ami_id
-                    updated_stack = self._software_stack_db.update(software_stack)
+                    updated_stack = self._software_stack_db.set_base_ami(
+                        software_stack, latest_ami_id
+                    )
                     result.new_base_ami = latest_ami_id
                     result.status = 'base_updated'
                     result.message = (
                         f'base image updated to {latest_ami_id}; desktops keep launching from '
-                        f'{software_stack.ami_id} because {latest_ami_id} has not been validated. '
+                        f'{updated_stack.ami_id} because {latest_ami_id} has not been validated. '
                         f'run Refresh and validate on the Images page to bake and promote it'
                     )
                     try:

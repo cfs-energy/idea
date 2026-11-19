@@ -12,12 +12,14 @@
  */
 
 import React, {Component, RefObject} from "react";
+import {DESKTOP_NAME_PATTERN, DESKTOP_NAME_RULE} from "../../../common/form-patterns";
 import IdeaForm from "../../../components/form";
 import {Project, SocaMemory, SocaUserInputChoice, SocaUserInputParamMetadata, User, VirtualDesktopArchitecture, VirtualDesktopBaseOS, VirtualDesktopGPU, VirtualDesktopSessionType, VirtualDesktopSoftwareStack} from "../../../client/data-model";
 import Utils from "../../../common/utils";
 import {AuthClient, ProjectsClient, VirtualDesktopClient} from "../../../client";
 import {AppContext} from "../../../common";
 import {Constants} from "../../../common/constants";
+import {listAllUsersInGroups} from "../../../common/paging";
 import VirtualDesktopUtilsClient from "../../../client/virtual-desktop-utils-client";
 import {IdeaFormValidate} from "../../../components/form-field/form-field";
 
@@ -154,14 +156,9 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
         // We'll only load them after both OS and software stack are selected
 
         let groups: string[] = [Utils.getUserGroupName(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)), Utils.getAdministratorGroup(Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER))]
-        this.getAuthClient().listUsersInGroup({
-            group_names: groups,
-            paginator: {
-                page_size: 1000
-            }
-        }).then(group_response => {
+        listAllUsersInGroups(request => this.getAuthClient().listUsersInGroup(request), groups).then(users => {
             this.setState({
-                eVDIUsers: group_response.listing!
+                eVDIUsers: users
             }, () => {
                 this.getForm()?.getFormField('user_name')?.setOptions({
                     listing: Utils.generateUserSelectionChoices(this.state.eVDIUsers)
@@ -499,13 +496,13 @@ class VirtualDesktopCreateSessionForm extends Component<VirtualDesktopCreateSess
             title: 'Desktop name',
             data_type: 'str',
             param_type: 'text',
-            help_text: 'Use 3 to 24 characters.',
+            help_text: DESKTOP_NAME_RULE,
             default: this.props.defaultName!,
             auto_focus: true,
             validate: {
                 required: true,
-                regex: '^.{3,24}$',
-                message: 'Use 3 to 24 characters.'
+                regex: DESKTOP_NAME_PATTERN,
+                message: DESKTOP_NAME_RULE
             } as IdeaFormValidate
         })
 

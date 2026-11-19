@@ -1,5 +1,6 @@
 import {createContext, ReactNode, useContext, useState} from 'react';
 import {useCollection} from '@cloudscape-design/collection-hooks';
+import {csvCell, downloadCsv} from '../../common/csv';
 import {Box, Button, CollectionPreferences, Header, Pagination, Table, TableProps, TextFilter, Select, SpaceBetween} from '@cloudscape-design/components';
 
 export const ReportLoading = createContext(false);
@@ -10,13 +11,6 @@ export interface InsightColumn<T> extends TableProps.ColumnDefinition<T> {
     label: string;
     value: (row: T) => string | number | null | undefined;
 }
-export function downloadCsv(filename: string, content: string, type = 'text/csv;charset=utf-8') {
-    const url = URL.createObjectURL(new Blob([content], {type}));
-    const link = document.createElement('a');
-    try {link.href = url; link.download = filename; document.body.appendChild(link); link.click();}
-    finally {link.remove(); URL.revokeObjectURL(url);}
-}
-export const csvCell = (value: unknown) => `"${(typeof value === 'string' ? value.replace(/^(\s*[=+@-])/, "'$1") : String(value ?? '')).replaceAll('"', '""')}"`;
 export function readPreferences<T>(key: string, fallback: T): T {
     try {return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback;} catch {return fallback;}
 }

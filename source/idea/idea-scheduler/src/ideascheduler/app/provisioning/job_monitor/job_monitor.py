@@ -17,6 +17,7 @@ from ideascheduler.app.accounts_guard import (
 import ideascheduler
 
 from ideadatamodel import (
+    constants,
     exceptions,
     SocaJob,
     SocaJobState,
@@ -269,7 +270,15 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     if provisioning_queue is None:
                         continue
 
-                    jobs = self._context.scheduler.list_jobs(queue=queue)
+                    # one queue that cannot be read must not end the sync of the others
+                    # (NM-14): the cache is marked ready after this either way
+                    try:
+                        jobs = self._context.scheduler.list_jobs(queue=queue)
+                    except Exception as e:
+                        self._logger.exception(
+                            f'sync of queue {queue} failed, other queues go on: {e}'
+                        )
+                        continue
 
                     self._context.job_cache.sync(jobs=jobs)
                     # a restored cache can predate a job's provisioning, and only that
@@ -576,6 +585,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         QueueUrl=self._job_status_queue_url,
                         MaxNumberOfMessages=10,
                         WaitTimeSeconds=5,
+                        AttributeNames=['SenderId'],
                     )
                 )
                 messages = Utils.get_value_as_list('Messages', result)
@@ -604,6 +614,18 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             context=self._context, queue_profile=queue_profile
                         )
 
+                        sender_id = Utils.get_value_as_string(
+                            'SenderId', sqs_message.get('Attributes') or {}, ''
+                        )
+                        if not self._is_job_status_sender(
+                            sender_id, pbs_event.instance_id, job.job_id
+                        ):
+                            self._logger.warning(
+                                f'{job.log_tag} ignoring {pbs_event.type} from {sender_id}: '
+                                f'the sender is not a compute node of this job'
+                            )
+                            continue
+
                         self._logger.info(
                             f'{job.log_tag} {pbs_event.type} on host: {pbs_event.requestor_host}'
                         )
@@ -631,6 +653,61 @@ class JobMonitor(SocaService, JobMonitorProtocol):
 
             except Exception as e:
                 self._logger.exception(f'failed to process job execution event: {e}')
+
+    def _is_job_status_sender(
+        self, sender_id: str, instance_id: Optional[str], job_id: str
+    ) -> bool:
+        """
+        a job status event is accepted from the scheduler task, or from a compute node of the
+        job: the SQS SenderId of an instance's own credentials ends in its instance id, which
+        must be the instance the event names, a compute node of this cluster provisioned for
+        the job, or a shared-capacity node of the job group a shared-capacity job runs in. an
+        ephemeral node reports only its own job: the computed group leaves out the owner.
+        """
+        role_id, _, session = sender_id.partition(':')
+        if role_id and role_id == self._context.config().get_string(
+            'scheduler.task_role_id'
+        ):
+            return True
+        if not session.startswith('i-') or session != instance_id:
+            return False
+        instance = self._context.instance_cache.get_instance(session)
+        if instance is None:
+            # a node that started after the last cache sync
+            instance = next(
+                iter(
+                    self._context.aws_util().ec2_describe_instances(
+                        filters=[{'Name': 'instance-id', 'Values': [session]}]
+                    )
+                    or []
+                ),
+                None,
+            )
+        if (
+            instance is None
+            or instance.instance_id != session
+            or instance.soca_cluster_name != self._context.cluster_name()
+            or instance.soca_node_type != constants.NODE_TYPE_COMPUTE
+        ):
+            return False
+        job_id = ModelUtils.array_parent_id(job_id) or job_id
+        if instance.soca_job_id == job_id:
+            return True
+        cached = self._context.job_cache.get_job(job_id)
+        if (
+            cached is None
+            or not cached.is_shared_capacity()
+            or instance.is_soca_ephemeral_capacity
+        ):
+            return False
+        job_group = getattr(getattr(cached, 'params', None), 'job_group', None)
+        # a group name can be reused in another shared profile: the node must be of the
+        # job's own queue too (SCH-33)
+        return (
+            job_group is not None
+            and instance.soca_job_group == job_group
+            and instance.soca_job_queue == cached.queue
+        )
 
     def job_queued(self, job: SocaJob):
         """

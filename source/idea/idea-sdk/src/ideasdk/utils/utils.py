@@ -253,7 +253,7 @@ class Utils:
     @staticmethod
     def from_yaml(data: str, loader: yaml.Loader = None) -> Union[Dict, List]:
         if loader is not None:
-            yaml.load(data, loader)
+            return yaml.load(data, loader)
         else:
             return yaml.safe_load(data)
 
@@ -644,7 +644,6 @@ class Utils:
                         updated_list.append(float(string_val))
                     else:
                         updated_list.append(int(string_val))
-                    updated_list.append(value)
                 updated_value = updated_list
         if updated_value is None:
             return value

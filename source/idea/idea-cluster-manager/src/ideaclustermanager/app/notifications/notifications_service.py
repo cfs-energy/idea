@@ -11,15 +11,22 @@
 
 from ideasdk.context import SocaContext
 from ideasdk.service import SocaService
-from ideasdk.utils import Utils, Jinja2Utils
-from ideadatamodel import GetEmailTemplateRequest, Notification, constants
+from ideasdk.utils import Utils
+from ideadatamodel import (
+    GetEmailTemplateRequest,
+    Notification,
+    constants,
+    errorcodes,
+    exceptions,
+)
 
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.email_templates.email_templates_service import (
     EmailTemplatesService,
+    render_email,
 )
 
-from typing import Dict
+from typing import Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import re
@@ -29,6 +36,21 @@ import time
 MAX_WORKERS = 1  # must be between 1 and 10
 # scratch cleanup counts a notice as given only once SES has taken its digest
 DELIVERY_RECEIPT_TEMPLATES = 'scheduler.scratch-cleanup-'
+# the templates whose sender waits for a receipt before deleting anything, and the
+# module table the receipt goes to: the cleanup goes ahead only after the warning went
+RECEIPT_TABLES = {
+    DELIVERY_RECEIPT_TEMPLATES: (constants.MODULE_SCHEDULER, 'scratch-cleanup'),
+}
+# the desktop controller's cleanup warning, under the template its settings name; the
+# controller owns <cluster>.<its module id>.desktop-cleanup and reads pk 'delivered'
+DESKTOP_CLEANUP_TABLE = (constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER, 'desktop-cleanup')
+# a desktop's notice is looked up when its warning window ends, which an
+# administrator may set past 30 days: its receipt is kept longer
+DESKTOP_RECEIPT_SECONDS = 400 * 24 * 3600
+DESKTOP_CLEANUP_TEMPLATE_KEY = (
+    'dcv_session.notifications.cleanup_warning.email_template'
+)
+DESKTOP_CLEANUP_TEMPLATE_DEFAULT = 'virtual-desktop-controller.session-cleanup-warning'
 DELIVERY_RECEIPT_SECONDS = 30 * 24 * 3600
 
 
@@ -58,7 +80,6 @@ class NotificationsService(SocaService):
         self.notifications_executors = ThreadPoolExecutor(
             max_workers=MAX_WORKERS, thread_name_prefix='notifications-executor'
         )
-        self.jinja2_env = Jinja2Utils.env_using_base_loader()
 
     def send_email(self, notification: Notification):
         """
@@ -75,6 +96,7 @@ class NotificationsService(SocaService):
             ses_enabled = self.context.config().get_bool('cluster.ses.enabled', False)
             if not ses_enabled:
                 self.logger.debug('ses is disabled. skip.')
+                self._cannot_notify(notification, 'email-off')
                 return
 
             sender_email = self.context.config().get_string(
@@ -90,6 +112,7 @@ class NotificationsService(SocaService):
             )
             if not email_notifications_enabled:
                 self.logger.debug('email notifications are disabled. skip.')
+                self._cannot_notify(notification, 'notifications-off')
                 return
 
             ses_region = self.context.config().get_string(
@@ -99,11 +122,19 @@ class NotificationsService(SocaService):
             ses = self.context.aws().ses(region_name=ses_region)
 
             username = notification.username
-            user = self.accounts.get_user(username=username)
+            try:
+                user = self.accounts.get_user(username=username)
+            except exceptions.SocaException as error:
+                if error.error_code != errorcodes.AUTH_USER_NOT_FOUND:
+                    raise
+                self.logger.info(f'user: {username} not found. skip email notification')
+                self._cannot_notify(notification, 'owner-not-found')
+                return
             if Utils.is_false(user.enabled):
                 self.logger.info(
                     f'user: {username} has been disabled. skip email notification'
                 )
+                self._cannot_notify(notification, 'owner-disabled')
                 return
 
             email = user.email
@@ -111,6 +142,7 @@ class NotificationsService(SocaService):
                 self.logger.warning(
                     f'email address not found for user: {username}. skip email notification'
                 )
+                self._cannot_notify(notification, 'no-address')
                 return
 
             template_name = notification.template_name
@@ -123,10 +155,8 @@ class NotificationsService(SocaService):
 
             params = Utils.get_as_dict(notification.params, {})
 
-            subject_template = self.jinja2_env.from_string(subject_template)
-            message_template = self.jinja2_env.from_string(body_template)
-            subject = subject_template.render(**params)
-            body = message_template.render(**params)
+            # a template the sandbox refuses fails this one email, logged below
+            subject, body = render_email(subject_template, body_template, params)
 
             ses.send_email(
                 Source=sender_email,
@@ -136,7 +166,7 @@ class NotificationsService(SocaService):
                     'Body': {'Html': {'Data': body}},
                 },
             )
-            self.record_delivery(template_name, params)
+            self.record_delivery(template_name, params, outcome='sent')
 
             delay = float(1 / max_sending_rate)
             time.sleep(delay)
@@ -144,28 +174,85 @@ class NotificationsService(SocaService):
         except Exception as e:
             self.logger.exception(f'failed to send email notification: {e}')
 
-    def record_delivery(self, template_name: str, params: Dict):
+    def _desktop_cleanup_template(self) -> str:
+        try:
+            config = self.context.config()
+            module_id = config.get_module_id(
+                constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER
+            )
+            return config.get_string(
+                f'{module_id}.{DESKTOP_CLEANUP_TEMPLATE_KEY}',
+                default=DESKTOP_CLEANUP_TEMPLATE_DEFAULT,
+            )
+        except Exception:
+            # no desktop module: no desktop receipts to record
+            return None
+
+    def _cannot_notify(self, notification: Notification, reason: str):
+        """
+        a desktop cleanup warning that can never be sent for this reason is recorded
+        as such, so the cleanup goes ahead once its window has passed; a failure that
+        may pass (the mail service refusing or timing out) records nothing
+        """
+        template_name = notification.template_name
+        if template_name != self._desktop_cleanup_template():
+            return
+        self.record_delivery(
+            template_name,
+            Utils.get_as_dict(notification.params, {}),
+            outcome='cannot-notify',
+            reason=reason,
+        )
+
+    def record_delivery(
+        self,
+        template_name: str,
+        params: Dict,
+        outcome: str = 'sent',
+        reason: Optional[str] = None,
+    ):
         receipt = params.get('delivery_receipt')
+        # the desktop template by its exact name first, whatever prefix it was given
+        if template_name == self._desktop_cleanup_template():
+            table = DESKTOP_CLEANUP_TABLE
+        else:
+            table = next(
+                (
+                    target
+                    for prefix, target in RECEIPT_TABLES.items()
+                    if str(template_name).startswith(prefix)
+                ),
+                None,
+            )
         if not (
-            str(template_name).startswith(DELIVERY_RECEIPT_TEMPLATES)
+            table is not None
             and isinstance(receipt, str)
             and re.fullmatch(r'[0-9a-f]{32}', receipt)
         ):
             return
         try:
-            scheduler = self.context.config().get_module_id(constants.MODULE_SCHEDULER)
+            module, name = table
+            module_id = self.context.config().get_module_id(module)
             self.context.aws().dynamodb_table().Table(
-                f'{self.context.cluster_name()}.{scheduler}.scratch-cleanup'
+                f'{self.context.cluster_name()}.{module_id}.{name}'
             ).put_item(
                 Item={
                     'pk': 'delivered',
                     'sk': receipt,
                     'at': datetime.now(timezone.utc).isoformat(),
-                    'expires_at': int(time.time()) + DELIVERY_RECEIPT_SECONDS,
+                    # sent, or cannot-notify with the reason it never can be
+                    'outcome': outcome,
+                    **({'reason': reason} if reason else {}),
+                    'expires_at': int(time.time())
+                    + (
+                        DESKTOP_RECEIPT_SECONDS
+                        if table == DESKTOP_CLEANUP_TABLE
+                        else DELIVERY_RECEIPT_SECONDS
+                    ),
                 }
             )
         except Exception as e:
-            # the email went; scratch cleanup treats it as not sent and says so
+            # the email went; the cleanup treats it as not sent and waits
             self.logger.exception(f'could not record delivery of {template_name}: {e}')
 
     def execute_notifications(self, sqs_message: Dict):

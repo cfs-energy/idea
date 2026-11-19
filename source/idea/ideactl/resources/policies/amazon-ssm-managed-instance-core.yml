@@ -7,8 +7,6 @@ Statement:
       - ssm:GetDocument
       - ssm:DescribeDocument
       - ssm:GetManifest
-      - ssm:GetParameter
-      - ssm:GetParameters
       - ssm:ListAssociations
       - ssm:ListInstanceAssociations
       - ssm:PutInventory
@@ -18,6 +16,13 @@ Statement:
       - ssm:UpdateInstanceAssociationStatus
       - ssm:UpdateInstanceInformation
     Resource: '*'
+  # Hosts and tasks read no parameter of their own; the agent reads only the public AWS parameters
+  # (latest images and versions). A workload's own parameters are not readable from a host shell.
+  - Effect: Allow
+    Action:
+      - ssm:GetParameter
+      - ssm:GetParameters
+    Resource: '{{ context.arns.get_arn("ssm", "parameter/aws/*", aws_account_id="", aws_region="*") }}'
   - Effect: Allow
     Action:
       - ssmmessages:CreateControlChannel

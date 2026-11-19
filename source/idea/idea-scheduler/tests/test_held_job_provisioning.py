@@ -7,6 +7,7 @@ the state read at the provisioning chokepoint every job passes through.
 """
 
 from threading import Event
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 import pytest
@@ -108,6 +109,10 @@ def mock_job(state: SocaJobState = SocaJobState.QUEUED) -> SocaJob:
         params=SocaJobParams(
             nodes=1,
             cpus=1,
+            instance_types=['c5.large'],
+            instance_ami='ami-mock',
+            base_os='amazonlinux2023',
+            enable_ht_support=False,
             compute_stack=f'idea-mock-compute-ondemand-{job_id}',
             stack_id='tbd',
         ),
@@ -187,9 +192,11 @@ def test_deleted_job_is_not_provisioned(context, mock_scheduler, provisioned_bat
 
 
 class _BatchQueue(MockProvisioningQueue):
-    def __init__(self, jobs: List[SocaJob]):
+    def __init__(self, jobs: List[SocaJob], queues=('normal',)):
         super().__init__()
         self._jobs = list(jobs)
+        self.queue_profile = SocaAnyPayload()
+        self.queue_profile.queues = list(queues)
 
     def get(self, timeout: float = 1) -> SocaJob:
         if len(self._jobs) > 0:
@@ -219,7 +226,11 @@ def test_held_job_does_not_block_the_batch(context, mock_scheduler, monkeypatch)
     )
     mock_scheduler.live_jobs[queued_job.job_id] = queued_job
     # what qselect counts for the group: the one queued job
-    monkeypatch.setattr(OpenPBSQSelect, 'get_count', lambda _self: 1)
+    monkeypatch.setattr(
+        OpenPBSQSelect,
+        'list_jobs_ids',
+        lambda _self, raise_on_error=False: ['job'] * 1,
+    )
     synced: List[SocaJob] = []
     context.job_cache = SocaAnyPayload()
     context.job_cache.sync = lambda jobs: synced.extend(jobs)
@@ -230,10 +241,14 @@ def test_held_job_does_not_block_the_batch(context, mock_scheduler, monkeypatch)
 
     batches = provisioner._drain_batch_queue()
 
-    assert [job.job_id for job in batches['g-batch']] == [queued_job.job_id]
-    # the cache learns the live state, so the job monitor stops re-queueing the held job
+    assert [[job.job_id for job in batch] for batch in batches.values()] == [
+        [queued_job.job_id]
+    ]
+    # the cache learns the live state, so the job monitor stops re-queueing the held job;
+    # the queued one is cached as PBS holds it too, so its placement uses any edit (SJ-36)
     assert [(job.job_id, job.state) for job in synced] == [
-        (held_job.job_id, SocaJobState.HELD)
+        (held_job.job_id, SocaJobState.HELD),
+        (queued_job.job_id, SocaJobState.QUEUED),
     ]
     assert mock_scheduler.list_jobs_calls == [[held_job.job_id, queued_job.job_id]]
 
@@ -253,3 +268,370 @@ def test_unreadable_job_state_does_not_provision(
 
     assert result.status is True
     assert provisioned_batches == []
+
+
+def test_jobs_sharing_a_group_but_not_a_signature_are_separate_batches(
+    context, mock_scheduler, monkeypatch
+):
+    # SCH-02: a custom group put another project's job on a stack built with this one's role
+    first, second = mock_job(), mock_job()
+    for job, profile in ((first, 'project-a-profile'), (second, 'project-b-profile')):
+        job.params.job_group = 'custom-shared'
+        job.params.instance_profile = profile
+        mock_scheduler.live_jobs[job.job_id] = job
+    monkeypatch.setattr(
+        OpenPBSQSelect,
+        'list_jobs_ids',
+        lambda _self, raise_on_error=False: ['job'] * 2,
+    )
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: None
+
+    provisioner = make_provisioner(context)
+    provisioner._queue = _BatchQueue([first, second])
+    provisioner._exit = _StopAtFirstWait()
+
+    batches = list(provisioner._drain_batch_queue().values())
+    assert sorted([job.job_id for job in batch] for batch in batches) == sorted(
+        [[first.job_id], [second.job_id]]
+    )
+
+
+def test_a_job_whose_signature_differs_from_the_stack_is_held_back(context):
+    from ideascheduler.app.provisioning.job_provisioner.job_provisioner import (
+        ProvisionJobs,
+    )
+
+    first, second = mock_job(), mock_job()
+    first.params.instance_profile = 'project-a-profile'
+    second.params.instance_profile = 'project-b-profile'
+    provision = ProvisionJobs(
+        context=context, jobs=[first, second], logger=context.logger('test')
+    )
+    stack = SocaAnyPayload()
+    stack.soca_capacity_signature = first.get_capacity_signature()
+    provision.provisioning_util._stack = stack
+    provision.raise_if_capacity_signature_differs()
+    assert [job.job_id for job in provision.jobs] == [first.job_id]
+    assert [job.job_id for job in provision._held_back] == [second.job_id]
+
+
+def test_the_expected_batch_counts_only_this_profiles_queues_and_the_wait_is_bounded(
+    context, mock_scheduler, monkeypatch
+):
+    # SCH-25: the same group queued in another profile's queue was waited for forever
+    job = mock_job()
+    job.params.job_group = 'custom-shared'
+    mock_scheduler.live_jobs[job.job_id] = job
+    asked = []
+
+    def get_count(qselect):
+        asked.append(qselect.queue)
+        # the profile's own queue holds this job; a queue elsewhere would add a second
+        return 1 if qselect.queue == 'normal' else 1
+
+    monkeypatch.setattr(
+        OpenPBSQSelect,
+        'list_jobs_ids',
+        lambda qselect, raise_on_error=False: ['job'] * get_count(qselect),
+    )
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: None
+    provisioner = make_provisioner(context)
+    provisioner._queue = _BatchQueue([job], queues=('normal',))
+    provisioner._exit = Event()
+    batches = provisioner._drain_batch_queue()
+    assert set(asked) == {'normal'}
+    assert [[j.job_id for j in b] for b in batches.values()] == [[job.job_id]]
+
+
+def test_a_batch_that_never_fills_goes_after_the_bounded_wait(
+    context, mock_scheduler, monkeypatch
+):
+    from ideascheduler.app.provisioning.job_provisioner import job_provisioner
+
+    job = mock_job()
+    job.params.job_group = 'custom-shared'
+    mock_scheduler.live_jobs[job.job_id] = job
+    monkeypatch.setattr(
+        OpenPBSQSelect,
+        'list_jobs_ids',
+        lambda _self, raise_on_error=False: ['job'] * 2,
+    )
+    monkeypatch.setattr(job_provisioner, 'BATCH_DRAIN_MAX_ROUNDS', 3)
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: None
+    waits = []
+
+    class CountingExit(Event):
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return False
+
+    provisioner = make_provisioner(context)
+    provisioner._queue = _BatchQueue([job])
+    provisioner._exit = CountingExit()
+    batches = provisioner._drain_batch_queue()
+    assert len(waits) == 2
+    assert [[j.job_id for j in b] for b in batches.values()] == [[job.job_id]]
+
+
+def test_a_retry_places_only_the_jobs_left_unprovisioned(
+    context, mock_scheduler, monkeypatch
+):
+    # SP-11: the retry re-ran the whole batch, placing placed jobs again
+    from ideadatamodel import errorcodes
+
+    placed, held = mock_job(), mock_job()
+    for job in (placed, held):
+        mock_scheduler.live_jobs[job.job_id] = job
+    attempts = []
+
+    def invoke(self):
+        attempts.append([job.job_id for job in self.jobs])
+        if len(attempts) == 1:
+            return ProvisionJobsResult(
+                status=False,
+                unprovisioned_jobs=[held],
+                error_code=errorcodes.RETRY_JOB_PROVISIONING,
+            )
+        return ProvisionJobsResult(status=True)
+
+    monkeypatch.setattr(ProvisionJobs, 'invoke', invoke)
+    provisioner = make_provisioner(context)
+    provisioner._exit = SimpleNamespace(
+        is_set=lambda: False, wait=lambda timeout=None: None
+    )
+    result = provisioner._provision_with_retry_backoff(jobs=[placed, held])
+    assert result.status is True
+    assert attempts == [[placed.job_id, held.job_id], [held.job_id]]
+
+
+def test_a_later_failed_round_names_only_the_jobs_still_unplaced(
+    context, mock_scheduler, monkeypatch
+):
+    # B-S1: round 2 failed without naming jobs, and the caller charged the whole batch,
+    # including the job round 1 had placed
+    from ideadatamodel import errorcodes
+
+    placed, held = mock_job(), mock_job()
+    for job in (placed, held):
+        mock_scheduler.live_jobs[job.job_id] = job
+    rounds = []
+
+    def invoke(self):
+        rounds.append([job.job_id for job in self.jobs])
+        if len(rounds) == 1:
+            return ProvisionJobsResult(
+                status=False,
+                unprovisioned_jobs=[held],
+                error_code=errorcodes.RETRY_JOB_PROVISIONING,
+            )
+        return ProvisionJobsResult(
+            status=False, error_code=errorcodes.GENERAL_ERROR, message='quota'
+        )
+
+    monkeypatch.setattr(ProvisionJobs, 'invoke', invoke)
+    provisioner = make_provisioner(context)
+    provisioner._exit = SimpleNamespace(
+        is_set=lambda: False, wait=lambda timeout=None: None
+    )
+    result = provisioner._provision_with_retry_backoff(jobs=[placed, held])
+    assert result.status is False
+    assert [job.job_id for job in result.unprovisioned_jobs] == [held.job_id]
+
+
+def test_an_edit_of_a_job_with_no_capacity_yet_is_what_placement_uses(
+    context, mock_scheduler, monkeypatch
+):
+    # SJ-36: an accepted qalter of an unbound job only signals its queue; the cache kept
+    # the request from before the edit and placement and license seats used it
+    from ideadatamodel import SocaJobLicenseAsk
+
+    placed: List[SocaJob] = []
+
+    def invoke(_self) -> ProvisionJobsResult:
+        placed.extend(_self.jobs)
+        return ProvisionJobsResult(status=True)
+
+    monkeypatch.setattr(ProvisionJobs, 'invoke', invoke)
+    cached = mock_job()
+    cached.params.licenses = [SocaJobLicenseAsk(name='lic', count=1)]
+    edited = cached.model_copy(deep=True)
+    edited.params.licenses = [SocaJobLicenseAsk(name='lic', count=3)]
+    edited.params.nodes = 2
+    mock_scheduler.live_jobs[cached.job_id] = edited
+    store = {}
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: store.update({j.job_id: j for j in jobs})
+    context.job_cache.get_job = lambda job_id: store.get(job_id)
+
+    make_provisioner(context)._provision_with_retry_backoff(jobs=[cached])
+
+    [job] = placed
+    assert job.params.licenses[0].count == 3
+    assert job.params.nodes == 2
+    assert store[cached.job_id].params.licenses[0].count == 3
+
+
+def test_a_batch_is_placed_as_pbs_holds_its_jobs_now(
+    context, mock_scheduler, monkeypatch
+):
+    first, second = mock_job(), mock_job()
+    for job in (first, second):
+        job.params.job_group = 'g-batch'
+        mock_scheduler.live_jobs[job.job_id] = job
+    edited = second.model_copy(deep=True)
+    edited.params.nodes = 4
+    mock_scheduler.live_jobs[second.job_id] = edited
+    monkeypatch.setattr(
+        OpenPBSQSelect, 'list_jobs_ids', lambda _self, raise_on_error=False: ['j'] * 2
+    )
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: None
+    context.job_cache.get_job = lambda job_id: None
+    provisioner = make_provisioner(context)
+    provisioner._queue = _BatchQueue([first, second])
+    provisioner._exit = _StopAtFirstWait()
+
+    [batch] = provisioner._drain_batch_queue().values()
+    assert {job.job_id: job.params.nodes for job in batch}[second.job_id] == 4
+
+
+def _edited_instance_type(job: SocaJob) -> SocaJob:
+    edited = job.model_copy(deep=True)
+    edited.params.instance_types = ['m5.large']
+    assert edited.get_capacity_signature() != job.get_capacity_signature()
+    return edited
+
+
+def test_a_job_edited_after_batching_is_requeued_not_placed_with_the_others(
+    context, mock_scheduler, monkeypatch
+):
+    # signoff2 B1: the SJ-36 refresh put a job whose signature changed into a batch
+    # grouped under its old one, and the new stack was built from one job for all
+    jobs = [mock_job(), mock_job(), mock_job()]
+    for job in jobs:
+        job.params.job_group = 'custom-batch'
+        mock_scheduler.live_jobs[job.job_id] = job
+    edited = _edited_instance_type(jobs[1])
+    mock_scheduler.live_jobs[jobs[1].job_id] = edited
+    monkeypatch.setattr(
+        OpenPBSQSelect, 'list_jobs_ids', lambda _self, raise_on_error=False: ['j'] * 3
+    )
+    store = {}
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: store.update({j.job_id: j for j in jobs})
+    context.job_cache.get_job = lambda job_id: store.get(job_id)
+    provisioner = make_provisioner(context)
+    queue = _BatchQueue(jobs)
+    provisioner._queue = queue
+    provisioner._exit = _StopAtFirstWait()
+
+    batches = provisioner._drain_batch_queue()
+
+    placed = [job for batch in batches.values() for job in batch]
+    assert sorted(job.job_id for job in placed) == sorted(
+        [jobs[0].job_id, jobs[2].job_id]
+    )
+    assert all(job.params.instance_types == ['c5.large'] for job in placed)
+    assert queue.put_job_ids == [jobs[1].job_id]
+
+    # next cycle: the edited job is batched as it is now, on its own
+    queue._jobs = [store[jobs[1].job_id]]
+    provisioner._exit = _StopAtFirstWait()
+    [[next_job]] = provisioner._drain_batch_queue().values()
+    assert next_job.job_id == jobs[1].job_id
+    assert next_job.params.instance_types == ['m5.large']
+
+
+def test_a_first_job_edited_before_its_attempt_is_requeued_and_the_rest_placed(
+    context, mock_scheduler, monkeypatch
+):
+    placed: List[List[str]] = []
+
+    def invoke(_self) -> ProvisionJobsResult:
+        placed.append([job.job_id for job in _self.jobs])
+        return ProvisionJobsResult(status=True)
+
+    monkeypatch.setattr(ProvisionJobs, 'invoke', invoke)
+    jobs = [mock_job(), mock_job(), mock_job()]
+    for job in jobs:
+        job.params.job_group = 'custom-batch'
+        mock_scheduler.live_jobs[job.job_id] = job
+    mock_scheduler.live_jobs[jobs[0].job_id] = _edited_instance_type(jobs[0])
+    context.job_cache = SocaAnyPayload()
+    context.job_cache.sync = lambda jobs: None
+    context.job_cache.get_job = lambda job_id: None
+    provisioner = make_provisioner(context)
+
+    provisioner._provision_with_retry_backoff(jobs=list(jobs))
+
+    assert placed == [[jobs[1].job_id, jobs[2].job_id]]
+    assert provisioner._queue.put_job_ids == [jobs[0].job_id]
+
+
+def test_a_new_batch_stack_is_built_only_for_jobs_of_the_first_jobs_signature(
+    context, monkeypatch
+):
+    from ideadatamodel import SocaScalingMode
+    from ideascheduler.app.provisioning.job_provisioner import job_provisioner
+    from ideascheduler.app.provisioning import JobProvisioningUtil
+
+    first, second = mock_job(), mock_job()
+    other = _edited_instance_type(mock_job())
+    batch = [first, other, second]
+    for job in batch:
+        job.scaling_mode = SocaScalingMode.BATCH
+    for check in (
+        'check_bedrock',
+        'ec2_dry_run',
+        'check_service_quota',
+        'check_reserved_instance_usage',
+    ):
+        monkeypatch.setattr(JobProvisioningUtil, check, lambda self: None)
+    monkeypatch.setattr(JobProvisioningUtil, 'check_budgets', lambda self: [])
+    monkeypatch.setattr(JobProvisioningUtil, 'check_licenses', lambda self: [])
+    monkeypatch.setattr(JobProvisioningUtil, 'provisioned_capacity', 0)
+    helper_jobs = []
+    monkeypatch.setattr(
+        job_provisioner,
+        'BatchCapacityHelper',
+        lambda context, jobs, provisioned_capacity: (
+            helper_jobs.extend(jobs)
+            or SimpleNamespace(
+                invoke=lambda: SimpleNamespace(
+                    provisioned_jobs=jobs,
+                    unprovisioned_jobs=[],
+                    capacity_info=SimpleNamespace(
+                        target_capacity=len(jobs), comment=''
+                    ),
+                )
+            )
+        ),
+    )
+    built_for = []
+    monkeypatch.setattr(
+        job_provisioner,
+        'CloudFormationStackBuilder',
+        lambda context, job, **_: (
+            built_for.append(job.job_id) or SimpleNamespace(build=lambda: 'stack-id')
+        ),
+    )
+    bound = []
+    monkeypatch.setattr(
+        ProvisionJobs,
+        'provision_job_in_scheduler',
+        lambda self, job, stack_id: bound.append(job.job_id),
+    )
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(context, 'metrics', Mock(), raising=False)
+    monkeypatch.setattr(context, 'lifecycle_events', None, raising=False)
+    provision = ProvisionJobs(context=context, jobs=batch, logger=context.logger('t'))
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        provision.create_new_stack()
+    assert exc_info.value.error_code == errorcodes.RETRY_JOB_PROVISIONING
+    assert [job.job_id for job in exc_info.value.ref] == [other.job_id]
+    assert built_for == [first.job_id]
+    assert bound == [first.job_id, second.job_id]

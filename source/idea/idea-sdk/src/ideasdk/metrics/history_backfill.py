@@ -66,6 +66,35 @@ class CapturingPublisher:
         self.entries.extend(DatadogFormat.complete_entries(metric_data))
 
 
+class ProcessLock:
+    """
+    the backfill lock for a service with no distributed lock: the scheduler runs as one
+    task, so one process holding the key is the whole cluster holding it (CM-MET-18)
+    """
+
+    def __init__(self):
+        self._held = set()
+        self._guard = threading.Lock()
+
+    def acquire(self, key: str):
+        with self._guard:
+            if key in self._held:
+                raise RuntimeError(f'{key} is held')
+            self._held.add(key)
+
+    def assert_held(self, key: str):
+        with self._guard:
+            if key not in self._held:
+                raise RuntimeError(f'{key} is not held')
+
+    def release(self, key: str):
+        with self._guard:
+            self._held.discard(key)
+
+
+PROCESS_LOCK = ProcessLock()
+
+
 class MetricsHistoryBackfill:
     LEASE_SECONDS = 60
     HEARTBEAT_SECONDS = 10
@@ -104,6 +133,11 @@ class MetricsHistoryBackfill:
             lease_expires_at=None,
         )
 
+    def backfill_lock(self):
+        """the context's distributed lock, or this process's when the service has none"""
+        lock = self.context.distributed_lock()
+        return lock if lock is not None else PROCESS_LOCK
+
     def status(self):
         with self.lock:
             if self.db is not None:
@@ -129,7 +163,7 @@ class MetricsHistoryBackfill:
             if self.thread is not None and self.thread.is_alive():
                 raise exceptions.invalid_params('A metrics backfill is already running')
             try:
-                self.context.distributed_lock().acquire(key=self.key)
+                self.backfill_lock().acquire(key=self.key)
             except Exception:
                 raise exceptions.invalid_params(
                     'A metrics backfill is already running or its lock is unavailable'
@@ -155,12 +189,12 @@ class MetricsHistoryBackfill:
                 self.thread.start()
                 return result
             except Exception:
-                self.context.distributed_lock().release(key=self.key)
+                self.backfill_lock().release(key=self.key)
                 raise
 
     def progress(self, **counts):
         with self.lock:
-            self.context.distributed_lock().assert_held(key=self.key)
+            self.backfill_lock().assert_held(key=self.key)
             for name, count in counts.items():
                 self._status[name] += count
             self.save()
@@ -175,7 +209,7 @@ class MetricsHistoryBackfill:
             points_built=len(entries),
             points_skipped=len(capture.entries) - len(entries),
         )
-        self.context.distributed_lock().assert_held(key=self.key)
+        self.backfill_lock().assert_held(key=self.key)
         if not dry_run:
             transport.log(
                 entries, on_sent=lambda count: self.progress(points_sent=count)
@@ -186,7 +220,7 @@ class MetricsHistoryBackfill:
         while not stopped.wait(self.HEARTBEAT_SECONDS):
             try:
                 with self.lock:
-                    self.context.distributed_lock().assert_held(key=self.key)
+                    self.backfill_lock().assert_held(key=self.key)
                     self._status.update(
                         heartbeat_at=int(time.time()),
                         lease_expires_at=int(time.time()) + self.LEASE_SECONDS,
@@ -204,7 +238,7 @@ class MetricsHistoryBackfill:
         try:
             transport = None if dry_run else DatadogAPI.from_context(self.context)
             self.collect(transport, dry_run, **options)
-            self.context.distributed_lock().assert_held(key=self.key)
+            self.backfill_lock().assert_held(key=self.key)
             with self.lock:
                 self._status['state'] = 'completed'
         except Exception as error:
@@ -221,7 +255,7 @@ class MetricsHistoryBackfill:
             try:
                 with self.lock:
                     self._status['finished_at'] = arrow.utcnow().isoformat()
-                    self.context.distributed_lock().assert_held(key=self.key)
+                    self.backfill_lock().assert_held(key=self.key)
                     self.save()
             except Exception as error:
                 self.context.logger().warning(
@@ -231,7 +265,7 @@ class MetricsHistoryBackfill:
                 self.context.logger().info(
                     f'{self.kind} metrics backfill: {self._status}'
                 )
-                self.context.distributed_lock().release(key=self.key)
+                self.backfill_lock().release(key=self.key)
 
     def collect(self, transport, dry_run, **options):
         raise NotImplementedError

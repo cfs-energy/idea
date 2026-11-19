@@ -1118,6 +1118,39 @@ _ROWS = [
     ),
     ('cluster.network.client_ip', 'list', 'deployment', 'network', False, False),
     ('cluster.network.ssh_client_ip', 'list', 'deployment', 'network', False, False),
+    ('bastion-host.site_hook_sha256', 'string', 'deployment', 'network', True, False),
+    (
+        'scheduler.compute_node_site_hook_sha256',
+        'string',
+        'runtime',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
+        'scheduler.ami_builder_site_hook_sha256',
+        'string',
+        'runtime',
+        'job-placement',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.dcv_host_site_hook_sha256',
+        'string',
+        'runtime',
+        'desktop-lifecycle',
+        True,
+        False,
+    ),
+    (
+        'virtual-desktop-controller.ami_builder_site_hook_sha256',
+        'string',
+        'runtime',
+        'desktop-lifecycle',
+        True,
+        False,
+    ),
     (
         'cluster.network.cluster_prefix_list_max_entries',
         'integer',
@@ -5524,6 +5557,11 @@ _LABELS = {
     'metrics.health.enabled': 'All cluster health collectors',
     'metrics.health.ad_automation.enabled': 'Directory automation',
     'metrics.health.bastion.enabled': 'Bastion',
+    'bastion-host.site_hook_sha256': 'Bastion site hook SHA-256',
+    'scheduler.compute_node_site_hook_sha256': 'Compute node site hook SHA-256',
+    'scheduler.ami_builder_site_hook_sha256': 'Compute image bake site hook SHA-256',
+    'virtual-desktop-controller.dcv_host_site_hook_sha256': 'Desktop site hook SHA-256',
+    'virtual-desktop-controller.ami_builder_site_hook_sha256': 'Desktop image bake site hook SHA-256',
     'metrics.health.certificates.enabled': 'Certificate expiry',
     'metrics.health.directory.enabled': 'File server and directory',
     'metrics.health.ecs.enabled': 'Control plane tasks',
@@ -5794,6 +5832,11 @@ _DESCRIPTIONS = {
     'metrics.health.drift_checks.enabled': 'Once a day, reads the settings that must hold on every cluster, such as file server signing and DNS, and reports any that differ. Changes nothing.',
     'metrics.health.enabled': 'Off stops every cluster health collector below. Each also has its own switch. Health metrics are sent only with the dogstatsd metrics provider.',
     'metrics.health.ad_automation.enabled': "Directory automation queue depth, requests and errors, and days until the admin account's password expires.",
+    'scheduler.compute_node_site_hook_sha256': "The SHA-256 of the site hook each compute node runs at bootstrap, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'scheduler.ami_builder_site_hook_sha256': "The SHA-256 of the site hook a compute node image bake runs, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'virtual-desktop-controller.dcv_host_site_hook_sha256': "The SHA-256 of the site hook each desktop runs at bootstrap, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'virtual-desktop-controller.ami_builder_site_hook_sha256': "The SHA-256 of the site hook a desktop image bake runs, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; a mismatch stops that host's bootstrap, so update the value after every edit of the hook.",
+    'bastion-host.site_hook_sha256': 'The SHA-256 of the site hook the bastion runs at start, as 64 hexadecimal characters. Empty: the hook runs unchecked and a warning is logged. Set: the hook runs only if the file matches; on a mismatch the bastion skips the hook and starts without it. Read when the bastion stack deploys.',
     'metrics.health.bastion.enabled': 'Once a minute on each bastion task: whether sshd answers, sessions and refused connections. Read when the bastion stack deploys.',
     'metrics.health.certificates.enabled': 'Every hour, days left on the load balancer certificates and on the certificates IDEA reads itself.',
     'metrics.health.directory.enabled': "Every five minutes, each file server's LDAP, CIFS signing and DNS settings, and the domain controller addresses. Reads settings only.",
@@ -5912,6 +5955,9 @@ _HIDDEN_KEYS = {
     'analytics.opensearch.domain_vpc_endpoint_url',
     'scheduler.retain_dns_record',
     'scheduler.use_stable_server_name',
+    # cluster-manager sets the mode of this directory and file at start
+    'cluster-manager.logging.logs_directory',
+    'cluster-manager.logging.default_log_file_name',
     'cluster-manager.web_portal.copyright_text',
     'cluster-manager.web_portal.default_log_level',
     'scheduler.provider',
@@ -5957,6 +6003,10 @@ _READ_ONLY_PREFIXES = (
     'virtual-desktop-controller.server',
 )
 _READ_ONLY_KEYS = {
+    # every running module keeps the name it read at start, and nothing renames the
+    # user pool group or moves its members: not a setting to change at runtime
+    'identity-provider.cognito.administrators_group_name',
+    'identity-provider.cognito.managers_group_name',
     'analytics.kinesis.kms_key_id',
     'analytics.kinesis.removal_policy',
     'analytics.opensearch.default_number_of_shards',
@@ -6024,6 +6074,33 @@ _IMMUTABLE_STORAGE_LEAVES = {
     'storage_type',
 }
 _PRIVILEGED_GROUP_KEYS = (*_DEFAULTS, 'directoryservice.sudoers.group_name')
+MOUNT_DIR_PATTERN = r'^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$'
+MOUNT_OPTIONS_PATTERN = (
+    r'^[A-Za-z0-9_][A-Za-z0-9=,._:/+@-]*( [A-Za-z0-9=,._:/+@-]+){1,3}$'
+)
+# shared storage mounted in one of these would put user-writable files where the
+# operating system reads its programs and configuration as root; the last three only
+# as the directory itself, so /opt/<software> stays usable
+_SYSTEM_MOUNT_ROOTS = frozenset(
+    {
+        'bin',
+        'boot',
+        'dev',
+        'etc',
+        'lib',
+        'lib32',
+        'lib64',
+        'libx32',
+        'proc',
+        'root',
+        'run',
+        'sbin',
+        'sys',
+        'usr',
+        'var',
+    }
+)
+_SYSTEM_MOUNT_DIRS = frozenset({'/opt', '/srv', '/tmp'})
 
 
 def _words(value):
@@ -6202,6 +6279,13 @@ def _definition(row):
                 validation['maximum'] = 10
         if key == 'cluster-manager.accounts.reconcile.interval_minutes':
             validation.update(minimum=1, maximum=1440)
+        if key == (
+            'virtual-desktop-controller.dcv_session.stopped_session_cleanup.'
+            'warn_days_before'
+        ):
+            # the warning's delivery receipt is kept 400 days: a window within that
+            # still finds it when the cleanup looks
+            validation['maximum'] = 365
         if leaf == 'sqs_wait_time':
             validation.update(maximum=20)
         if leaf == 'polling_messages_max':
@@ -6241,10 +6325,29 @@ def _definition(row):
         validation['pattern'] = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
     if key == 'cluster-manager.web_portal.custom_dashboard.url':
         validation['pattern'] = r'^https?://[^\s]+$'
+    # proxy settings are written into a quoted shell file that every host's root bootstrap sources
+    if key == 'cluster.network.https_proxy':
+        validation['pattern'] = r'^https?://[A-Za-z0-9._~%:@\[\]-]+/?$'
+    if key == 'cluster.network.no_proxy':
+        validation['pattern'] = r'^[A-Za-z0-9._*:/\[\]-]+(,[A-Za-z0-9._*:/\[\]-]+)*$'
+    # Mount settings are written into the root bootstrap of every host: plain path
+    # characters for a directory, the fstab option grammar (the file system type, then up
+    # to three fields of option characters, one space apart) for options, one letter for a
+    # Windows drive.
     if leaf in ('mount_dir', 'mount_point'):
-        validation['pattern'] = r'^/[^\x00]*$'
+        validation['pattern'] = MOUNT_DIR_PATTERN
+    if leaf == 'mount_options':
+        validation['pattern'] = MOUNT_OPTIONS_PATTERN
+    if leaf == 'mount_drive':
+        validation['pattern'] = r'^[A-Za-z]$'
     if key in _PRIVILEGED_GROUP_KEYS:
         validation['pattern'] = r'^[A-Za-z0-9][A-Za-z0-9_-]*$'
+    if key.endswith('site_hook_sha256'):
+        validation['pattern'] = r'^[0-9a-f]{64}$'
+    if key == 'directoryservice.sudoers.group_name':
+        # single spaces between plain words: the shipped AWS Managed Microsoft AD value
+        # is "AWS Delegated Administrators", which the join script quotes and escapes
+        validation['pattern'] = r'^[A-Za-z0-9][A-Za-z0-9_-]*( [A-Za-z0-9_-]+)*$'
     if leaf == 'provider' or key in (
         'cluster-manager.web_portal.title',
         'cluster.timezone',
@@ -6432,9 +6535,67 @@ def coerce_value(setting, value):
         value = 'my-costs'
     if kind == 'enum' and value not in setting['choices']:
         invalid('must be one of: ' + ', '.join(setting['choices']))
+    if key.endswith('site_hook_sha256') and isinstance(value, str):
+        # every reader lower-cases it; surrounding space is a paste, not a digest
+        value = value.strip().lower()
     if value and 'pattern' in rule and not re.fullmatch(rule['pattern'], value):
         invalid('does not match the required format')
+    if value and rule.get('pattern') == MOUNT_DIR_PATTERN:
+        if value.split('/')[1] in _SYSTEM_MOUNT_ROOTS or value in _SYSTEM_MOUNT_DIRS:
+            invalid('must not be a system directory')
     return value
+
+
+def _mount_points(values, prefix=''):
+    for name, value in values.items():
+        path = f'{prefix}.{name}' if prefix else name
+        if isinstance(value, dict):
+            yield from _mount_points(value, path)
+        elif name == 'mount_point' and isinstance(value, str) and value:
+            yield path, value
+
+
+def _refuse_scratch_on_shared_storage(module, values, config):
+    """a scratch mount on a shared file system's directory takes its fstab entry"""
+    storage = config.get_config('shared-storage', default={}) or {}
+    shared = [
+        entry.get('mount_dir', None)
+        for entry in storage.values()
+        if hasattr(entry, 'get') and isinstance(entry.get('mount_dir', None), str)
+    ]
+    for path, point in _mount_points(values):
+        for directory in shared:
+            directory = directory.rstrip('/')
+            if directory and (point == directory or point.startswith(directory + '/')):
+                raise exceptions.invalid_params(
+                    f'{module}.{path} must not be a shared storage mount directory '
+                    f'or under one ({directory})'
+                )
+
+
+def stored_storage_refusals(config, catalog=CATALOG):
+    """
+    the stored shared-storage mount values the catalog would refuse if saved now. They
+    stay in service until corrected, so this only names them.
+    """
+    definitions = {
+        item['key']: item for item in catalog if item['module'] == 'shared-storage'
+    }
+    storage = config.get_config('shared-storage', default={}) or {}
+    refused = []
+    for name, entry in storage.items():
+        if not hasattr(entry, 'get'):
+            continue
+        for leaf in ('mount_dir', 'mount_options', 'mount_drive'):
+            value = entry.get(leaf, None)
+            key = f'shared-storage.{name}.{leaf}'
+            if value is None or key not in definitions:
+                continue
+            try:
+                coerce_value(definitions[key], value)
+            except exceptions.SocaException as error:
+                refused.append((key, error.message))
+    return refused
 
 
 def coerce_settings(
@@ -6469,6 +6630,8 @@ def coerce_settings(
         return result
 
     values = visit(settings)
+    if config is not None and module != 'shared-storage':
+        _refuse_scratch_on_shared_storage(module, values, config)
     retention = (
         values.get('log_archive', {}).get('s3_retention_days')
         if module == 'scheduler'

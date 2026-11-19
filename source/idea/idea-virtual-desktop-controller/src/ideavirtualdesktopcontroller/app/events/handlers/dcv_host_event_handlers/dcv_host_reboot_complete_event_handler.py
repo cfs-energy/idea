@@ -22,6 +22,9 @@ from ideavirtualdesktopcontroller.app.clients.events_client.events_client import
 from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import (
     BaseVirtualDesktopControllerEventHandler,
 )
+from ideavirtualdesktopcontroller.app.events.handlers.dcv_host_event_handlers.dcv_host_ready_event_handler import (
+    DCVHostReadyEventHandler,
+)
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_db import (
     VirtualDesktopSessionCounterType,
 )
@@ -29,6 +32,8 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_
 
 class DCVHostRebootCompleteEventHandler(BaseVirtualDesktopControllerEventHandler):
     RESUME_REQUEST_COUNT_THRESHOLD = 6
+    # built on first use: only a host that never had a DCV session needs it
+    _host_ready = None
 
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context, 'dcv-host-reboot-complete-handler')
@@ -65,9 +70,22 @@ class DCVHostRebootCompleteEventHandler(BaseVirtualDesktopControllerEventHandler
             self.log_error(message_id=message_id, message='Invalid IDEA SESSION ID.')
             return
 
-        # Validation removed here as it breaks resume from hibernation. In these instances, session.server.instance_id is the hibernated evdi node and sender_instance_id is the vdc controller.
-        # if session.server.instance_id != sender_instance_id:
-        #    raise self.message_source_validation_failed(f'Corrupted sender_id: {sender_id}. Ignoring message')
+        # the host reports only its own desktop. the controller sends this event too, for a
+        # desktop resuming from hibernation, so its role is accepted for any session.
+        if (
+            session.server is None or session.server.instance_id != sender_instance_id
+        ) and not self.is_sender_controller_role(sender_id):
+            raise self.message_source_validation_failed(
+                f'Sender {sender_id} is not the host of session {idea_session_id}. Ignoring message'
+            )
+
+        if Utils.is_empty(session.dcv_session_id) and session.state in {
+            VirtualDesktopSessionState.RESUMING,
+            VirtualDesktopSessionState.ERROR,
+            VirtualDesktopSessionState.CREATING,
+        }:
+            self._create_missing_session(message_id, sender_id, event, session)
+            return
 
         # if session is RESUMING/READY/STOPPED/ERROR continue, else ignore
         if session.state not in {
@@ -198,3 +216,33 @@ class DCVHostRebootCompleteEventHandler(BaseVirtualDesktopControllerEventHandler
         if server.state != 'CREATED':
             server.state = 'CREATED'
             self.server_db.update(server)
+
+    def _create_missing_session(
+        self,
+        message_id: str,
+        sender_id: str,
+        event: VirtualDesktopEvent,
+        session,
+    ):
+        """
+        the host never had a DCV session, so there is none to resume: it gets the creation the
+        host-ready event would have started. a redelivery finds the desktop in CREATING and
+        retries the creation without resetting its attempt count.
+        """
+        if session.state != VirtualDesktopSessionState.CREATING:
+            create_counter = self.session_counter_db.get(
+                session.idea_session_id,
+                VirtualDesktopSessionCounterType.DCV_SESSION_CREATION_REQUEST_ACCEPTED_COUNTER,
+            )
+            create_counter.counter = 0
+            self.session_counter_db.create_or_update(create_counter)
+            session.state = VirtualDesktopSessionState.CREATING
+            session.reboot_deadline = 0
+            self.session_db.update(session)
+            self.log_info(
+                message_id=message_id,
+                message=f'Idea session {session.idea_session_id}:{session.name} has no DCV session; creating one',
+            )
+        if self._host_ready is None:
+            self._host_ready = DCVHostReadyEventHandler(self.context)
+        self._host_ready.handle_event(message_id, sender_id, event)

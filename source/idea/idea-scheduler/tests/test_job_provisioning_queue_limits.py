@@ -256,3 +256,114 @@ def test_get_skips_job_that_left_queued_state():
     with pytest.raises(JobProvisioningQueueEmpty):
         provisioning_queue.get(timeout=0)
     assert provisioning_queue.get_queue_size() == 0
+
+
+def test_queue_order_follows_the_profiles_queue_list():
+    # SCH-28: the loop variable shadowed the argument, so every queue was order 1
+    _, provisioning_queue = build()
+    provisioning_queue.queue_profile.queues = ['high', 'normal', 'low']
+    assert [
+        provisioning_queue.get_queue_order(queue_name=name)
+        for name in ('high', 'normal', 'low', 'removed')
+    ] == [1, 2, 3, 4]
+
+
+def test_a_group_past_ten_thousand_jobs_does_not_stop_provisioning():
+    # SP-08: the 10,001st put blocked inside the lock the consumer needs, cluster-wide
+    import threading
+
+    from ideadatamodel import QueuedJob
+    from ideascheduler.app.provisioning.job_provisioning_queue.job_provisioning_queue import (
+        RoundRobinPriorityQueue,
+    )
+
+    rr = RoundRobinPriorityQueue()
+    done = threading.Event()
+
+    def fill():
+        for number in range(10_001):
+            rr.put(QueuedJob(priority=number, job_id=str(number), job_group='big'))
+        rr.put(QueuedJob(priority=0, job_id='other', job_group='small'))
+        done.set()
+
+    threading.Thread(target=fill, daemon=True).start()
+    assert done.wait(timeout=30)
+    taken = {rr.get(timeout=0).job_group, rr.get(timeout=0).job_group}
+    assert taken == {'big', 'small'}
+
+
+def test_a_shared_job_at_the_instance_limit_is_taken(monkeypatch):
+    # B-B1: idle shared nodes the job would reuse counted against it; the job was never
+    # taken and its waiting kept those nodes up
+    from ideadatamodel.scheduler.scheduler_model import SocaJobProvisioningOptions
+
+    context, provisioning_queue = build(max_provisioned_instances=2)
+    context.instance_cache.count = 2  # two idle shared nodes up
+    job = make_job(nodes=1)
+    job.scaling_mode = SocaScalingMode.BATCH
+    job.provisioning_options = SocaJobProvisioningOptions(terminate_when_idle=3)
+    assert job.is_shared_capacity()
+    context.job_cache.jobs[job.job_id] = job
+    provisioning_queue.put(job=job)
+    assert provisioning_queue.get(timeout=0).job_id == job.job_id
+    assert provisioning_queue.is_queue_blocked_by_limits() is False
+
+
+def test_a_keep_forever_job_at_the_instance_limit_is_taken():
+    # S2: the gate lets it through to reuse the pool; a new stack past the limit is
+    # refused in ProvisionJobs (test_job_provisioning_util.py)
+    from ideadatamodel.scheduler.scheduler_model import SocaJobProvisioningOptions
+
+    context, provisioning_queue = build(max_provisioned_instances=2)
+    context.instance_cache.count = 2
+    job = make_job(nodes=1)
+    job.scaling_mode = None
+    job.provisioning_options = SocaJobProvisioningOptions(keep_forever=True)
+    context.job_cache.jobs[job.job_id] = job
+    provisioning_queue.put(job=job)
+    assert provisioning_queue.get(timeout=0).job_id == job.job_id
+
+
+def test_an_ephemeral_job_at_the_instance_limit_still_waits():
+    from ideadatamodel.scheduler.scheduler_model import SocaJobProvisioningOptions
+
+    context, provisioning_queue = build(max_provisioned_instances=2)
+    context.instance_cache.count = 2
+    job = make_job(nodes=1)
+    job.provisioning_options = SocaJobProvisioningOptions(terminate_when_idle=0)
+    assert not job.is_shared_capacity()
+    context.job_cache.jobs[job.job_id] = job
+    provisioning_queue.put(job=job)
+    with pytest.raises(JobProvisioningQueueEmpty):
+        provisioning_queue.get(timeout=0)
+
+
+@pytest.mark.parametrize('mode', ['fifo', 'fairshare'])
+def test_jobs_of_the_first_queue_pop_first(mode, monkeypatch):
+    # SCH-28 / B-S2: order across queues, in FIFO and in fair-share with negative scores
+    from datetime import timedelta
+
+    context, provisioning_queue = build()
+    provisioning_queue.queue_profile.queues = ['high', 'normal', 'low']
+    provisioning_queue._applicable_queues = {'high', 'normal', 'low'}
+    provisioning_queue.queue_profile.queue_mode = SocaQueueMode(mode)
+    monkeypatch.setattr(
+        provisioning_queue,
+        '_compute_fairshare_score',
+        lambda job: -20 if job.queue == 'low' else -60,
+    )
+    low = make_job(job_id='10')
+    low.queue = 'low'
+    high = make_job(job_id='11')
+    high.queue = 'high'
+    high.queue_time = low.queue_time + timedelta(hours=1)  # later, still first
+    from ideadatamodel.scheduler.scheduler_model import SocaJobProvisioningOptions
+
+    for job in (low, high):
+        # ephemeral jobs share the profile's one priority queue; shared-capacity groups
+        # are taken round robin, and order applies within a group
+        job.provisioning_options = SocaJobProvisioningOptions(terminate_when_idle=0)
+        context.job_cache.jobs[job.job_id] = job
+        provisioning_queue.put(job=job)
+    assert provisioning_queue.get(timeout=0).job_id == '11'
+    assert provisioning_queue.get(timeout=0).job_id == '10'

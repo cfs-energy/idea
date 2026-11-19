@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describeExpiry, expiryDay } from './virtual-desktop-software-stacks';
+import { describeExpiry, expiryDay, isBaseStack, VirtualDesktopSoftwareStacks } from './virtual-desktop-software-stacks';
 import { expiryChange } from './forms/virtual-desktop-software-stack-edit-form';
 
 describe('the expiry column', () => {
@@ -54,4 +54,57 @@ describe('the expiry date on the edit form', () => {
     it('says nothing when there was none and is none', () => {
         expect(expiryChange('', undefined)).toEqual({});
     });
+});
+
+describe('the delayed list refresh after a change', () => {
+    afterEach(() => vi.useRealTimers());
+    const page = () => {
+        const stacks = new VirtualDesktopSoftwareStacks({} as any);
+        const fetchRecords = vi.fn();
+        (stacks as any).listing = {current: {fetchRecords}};
+        return {stacks, fetchRecords};
+    };
+
+    it('reloads the list once, a few seconds after the last change', () => {
+        vi.useFakeTimers();
+        const {stacks, fetchRecords} = page();
+        stacks.refreshSoon();
+        stacks.refreshSoon();
+        vi.advanceTimersByTime(3000);
+        expect(fetchRecords).toHaveBeenCalledTimes(1);
+    });
+
+    it('does nothing once the page is left', () => {
+        vi.useFakeTimers();
+        const {stacks, fetchRecords} = page();
+        stacks.refreshSoon();
+        stacks.componentWillUnmount();
+        (stacks as any).listing = {current: null};
+        expect(() => vi.advanceTimersByTime(3000)).not.toThrow();
+        expect(fetchRecords).not.toHaveBeenCalled();
+    });
+});
+
+it('knows a base stack by the id the controller gives it', () => {
+    expect(isBaseStack({stack_id: 'ss-base-amazonlinux2023-x86-64'})).toBe(true);
+    expect(isBaseStack({stack_id: 'ss-marker'})).toBe(false);
+    expect(isBaseStack(undefined)).toBe(false);
+});
+
+it('enables or disables a stack by sending only its id, OS and status', async () => {
+    const {initTestAppContext} = await import('../../test-support');
+    const context = initTestAppContext();
+    const update = vi.spyOn(context.client().virtualDesktopAdmin(), 'updateSoftwareStack').mockResolvedValue({software_stack: {}} as any);
+    const stacks = new VirtualDesktopSoftwareStacks({onFlashbarChange: () => {}} as any);
+    const stale = {stack_id: 'ss-marker', base_os: 'amazonlinux2023', name: 'marker', description: 'stale', ami_id: 'ami-stale', enabled: true} as any;
+    vi.spyOn(stacks, 'getSelectedSoftwareStacks').mockReturnValue([stale]);
+    let state: any = {};
+    (stacks as any).setState = (next: any, callback?: () => void) => {state = {...state, ...next}; callback?.();};
+    (stacks as any).getActionConfirmModal = () => ({show: () => {}});
+    (stacks as any).refreshSoon = () => {};
+    (stacks as any).setFlashMessage = () => {};
+    stacks.toggleSoftwareStackEnabled();
+    state.confirmAction.onConfirm();
+    await vi.waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update.mock.calls[0][0]).toEqual({software_stack: {stack_id: 'ss-marker', base_os: 'amazonlinux2023', enabled: false}});
 });

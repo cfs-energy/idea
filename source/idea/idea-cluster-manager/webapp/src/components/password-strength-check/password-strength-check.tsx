@@ -43,7 +43,8 @@ export class PasswordStrengthCheck extends Component<PasswordStrengthCheckProps,
         const hasUpper = /(?=.*[A-Z])/.test(password)
         const hasLower = /(?=.*[a-z])/.test(password)
         const lengthOk = password.trim().length >= 8
-        const hasSpecialChar = /(?=.*[-+_!@#$%^&*.,?=])/.test(password)
+        // the symbols accounts_service.py PASSWORD_SYMBOLS accepts, the backslash among them (the user pool's set)
+        const hasSpecialChar = /[\^$*.[\]{}()?"!@#%&/\\,><':;|_~`=+-]/.test(password)
         this.setState({
             length: (lengthOk) ? 'success' : 'error',
             special_char: (hasSpecialChar) ? 'success' : 'error',

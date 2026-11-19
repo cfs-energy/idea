@@ -422,3 +422,21 @@ def test_a_desktop_at_20_gb_with_a_20_gb_image_stays_20():
 
 def test_the_launch_guard_never_lowers_a_desktop_size():
     assert launch_desktop(50, 20) == 50
+
+
+def test_requested_security_groups_and_key_pair_do_not_reach_run_instances():
+    requested = build_session(None)
+    requested.server.security_groups = ['sg-0000000000000000f']
+    requested.server.key_pair_name = 'some-other-key-pair'
+    session = build_api().complete_create_session_request(
+        requested, MockApiInvocationContext()
+    )
+
+    ec2_client = RecordingEc2Client()
+    build_controller_utils(ec2_client).provision_dcv_host_for_session(session)
+
+    run_instances_kwargs = ec2_client.run_instances_kwargs
+    assert run_instances_kwargs['NetworkInterfaces'][0]['Groups'] == [
+        'sg-00000000000000001'
+    ]
+    assert run_instances_kwargs['KeyName'] == 'idea-test-key-pair'

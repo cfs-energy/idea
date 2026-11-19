@@ -837,6 +837,13 @@ class JobsDB:
             entry = self.db[FINISHED_JOBS_TABLE].find_one(job_uid=job_uid)
             return self.convert_db_entry_to_job(entry)
 
+    def get_active_job_by_uid(self, job_uid: str) -> Optional[SocaJob]:
+        if Utils.is_empty(job_uid):
+            return None
+        with self._db_lock:
+            entry = self.db[JOBS_TABLE].find_one(job_uid=job_uid)
+            return self.convert_db_entry_to_job(entry)
+
     def add_license_ask(self, jobs: List[SocaJob]):
         if Utils.is_empty(jobs):
             return
@@ -1117,6 +1124,13 @@ class JobCache(JobCacheProtocol):
     def get_completed_job_by_uid(self, job_uid: str) -> Optional[SocaJob]:
         return self._jobs_db.get_finished_job_by_uid(job_uid)
 
+    def is_job_uid_taken(self, job_uid: str) -> bool:
+        """a queued, running or recorded job already carries this job_uid"""
+        return (
+            self._jobs_db.get_active_job_by_uid(job_uid) is not None
+            or self._jobs_db.get_finished_job_by_uid(job_uid) is not None
+        )
+
     def delete_jobs(self, job_ids: List[str]):
         self._jobs_db.delete_many(job_ids=job_ids)
 
@@ -1191,11 +1205,26 @@ class JobCache(JobCacheProtocol):
     def is_ready(self) -> bool:
         return self._is_ready.is_set()
 
-    def get_desired_capacity(self, job_group: str) -> int:
+    def get_desired_capacity(
+        self,
+        job_group: str,
+        queue_profile: Optional[str] = None,
+        provisioned_only: bool = False,
+    ) -> int:
+        """
+        the capacity the group's cached jobs want. queue_profile scopes it to one profile
+        (a group name can be reused in another); provisioned_only counts only jobs already
+        given capacity, so jobs held back or still waiting add nothing (SCH-23).
+        """
+        where = 'where job_group = :job_group'
+        if queue_profile is not None:
+            where += ' and queue_profile = :queue_profile'
+        if provisioned_only:
+            where += ' and provisioned = 1'
         result = self._jobs_db.db.query(
-            'select sum(desired_capacity) as desired_capacity from jobs '
-            'where job_group = :job_group',
+            f'select sum(desired_capacity) as desired_capacity from jobs {where}',
             job_group=job_group,
+            queue_profile=queue_profile,
         )
         for entry in result:
             return Utils.get_value_as_int('desired_capacity', entry, 0)
@@ -1221,9 +1250,17 @@ class JobCache(JobCacheProtocol):
         return self._jobs_db.db[FINISHED_JOBS_TABLE].count(**kwargs)
 
     def get_active_license_count(self, license_name: str) -> int:
+        """
+        the seats reserved for jobs that have capacity but have not started. a running job
+        has checked its seats out, so the license server already counts them as in use;
+        counting its reservation too took them twice (SCH-29). a reservation whose job row
+        is not cached is counted, as before.
+        """
         result = self._jobs_db.db.query(
-            'select sum(count) as active_count from active_job_licenses '
-            'where license_name = :license_name',
+            'select sum(l.count) as active_count from active_job_licenses l '
+            'left join jobs j on j.job_id = l.job_id '
+            'where l.license_name = :license_name '
+            "and (j.state is null or j.state not in ('running', 'exit', 'subjob_begun'))",
             license_name=license_name,
         )
         for entry in result:

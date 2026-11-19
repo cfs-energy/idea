@@ -14,12 +14,12 @@
  * `AWS::Cognito::UserPoolDomain`. The `Custom::ClusterSettings` row writes both keys together.
  */
 
-import { RemovalPolicy } from 'aws-cdk-lib';
 
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
 import { isEmpty } from '../../config/cluster-config.ts';
+import { removalPolicyByName } from '../constructs/base.ts';
 import { LambdaFunction, Policy, Role } from '../constructs/common.ts';
 import { UserPool } from '../constructs/directory-service.ts';
 import { ExistingSocaCluster } from '../constructs/existing-resources.ts';
@@ -34,14 +34,6 @@ const LOG_RETENTION_ROLE_NAME = 'log-retention';
 
 /** `constants.CAVEATS['COGNITO_REQUIRE_FIPS_ENDPOINT_REGION_LIST']`. */
 export const COGNITO_REQUIRE_FIPS_ENDPOINT_REGION_LIST = ['us-gov-east-1', 'us-gov-west-1'];
-
-/** `RemovalPolicy` lookup uses member names, not enum values. */
-function removalPolicyByName(name: string): RemovalPolicy {
-  if (!Object.prototype.hasOwnProperty.call(RemovalPolicy, name)) {
-    throw new Error(`'${name}' is not a valid RemovalPolicy`);
-  }
-  return RemovalPolicy[name as keyof typeof RemovalPolicy];
-}
 
 /** The invitation email for a cluster that has no user pool yet, `os.linesep`-joined. */
 export function generatedInvitationEmailBody(clusterName: string, externalEndpoint: string): string {

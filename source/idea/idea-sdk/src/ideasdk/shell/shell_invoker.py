@@ -13,12 +13,39 @@ from ideasdk.utils import Utils
 
 from typing import List, Optional, Dict, Callable, AnyStr, Union
 from subprocess import CompletedProcess
+import os
+import pwd
 import subprocess
 import signal
 from threading import RLock
 import time
 
 StreamOutputCallback = Callable[[AnyStr], None]
+
+# what a command run for a user keeps from this process: the search path, locale, time zone
+# and the batch client's settings (PBS_CONF_FILE, PBS_EXEC, PBS_HOME, PBS_SERVER and the rest)
+USER_ENVIRONMENT_NAMES = ('PATH', 'LANG', 'TZ')
+USER_ENVIRONMENT_PREFIXES = ('LC_', 'PBS_')
+
+
+def user_environment(account: pwd.struct_passwd) -> Dict[str, str]:
+    """
+    the environment a command run for a user starts with. nothing else of this process
+    reaches it, so the service's credentials and settings stay with the service.
+    """
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name in USER_ENVIRONMENT_NAMES or name.startswith(USER_ENVIRONMENT_PREFIXES)
+    }
+    env.setdefault('PATH', os.defpath)
+    env.update(
+        HOME=account.pw_dir,
+        USER=account.pw_name,
+        LOGNAME=account.pw_name,
+        SHELL=account.pw_shell or '/bin/bash',
+    )
+    return env
 
 
 class ShellInvocationResult:
@@ -183,18 +210,83 @@ class ShellInvoker:
         timeout is in seconds; on expiry the child is killed and subprocess.TimeoutExpired
         is raised. timeout=None waits forever.
         """
-        start_time = Utils.current_time_ms()
-
-        result = subprocess.run(
+        return self._run(
+            cmd,
+            skip_error_logging,
             input=cmd_input,
-            args=cmd,
             shell=shell,
-            capture_output=True,
             text=text,
             cwd=self.cwd,
             env=env,
             timeout=timeout,
         )
+
+    def invoke_as_user(
+        self,
+        username: str,
+        cmd: List[str],
+        cwd: Optional[str] = None,
+        skip_error_logging=False,
+        timeout: Optional[float] = None,
+        env: Optional[Dict[str, str]] = None,
+        capture_stdout: bool = True,
+        output_fd: Optional[int] = None,
+    ) -> ShellInvocationResult:
+        """
+        run cmd, an argument list run without a shell, as the named user with that user's
+        groups and the environment user_environment() builds. every command the service
+        runs for a user goes through here.
+        env replaces user_environment() for a command the service runs as its own account;
+        never pass the service environment for a person's account.
+        capture_stdout False discards standard output (standard error is still kept).
+        output_fd sends both streams to that open file instead; nothing is captured.
+        cwd is entered by the command itself after the identity change, so a folder the
+        user cannot reach is refused rather than entered with the service's access.
+        """
+        if not isinstance(cmd, list):
+            raise ValueError('cmd must be a list of arguments')
+        account = pwd.getpwnam(username)
+        if account.pw_uid == 0:
+            raise PermissionError('commands are not run for the superuser')
+        identity = {}
+        if os.geteuid() == 0:
+            identity = dict(
+                user=account.pw_uid,
+                group=account.pw_gid,
+                extra_groups=os.getgrouplist(account.pw_name, account.pw_gid),
+            )
+        elif os.geteuid() != account.pw_uid:
+            raise PermissionError(f'cannot run a command as {username}')
+        if cwd is not None:
+            # subprocess changes directory before it drops the identity; env does it after
+            cmd = ['/usr/bin/env', '-C', cwd, '--', *cmd]
+        if output_fd is not None:
+            output = dict(stdout=output_fd, stderr=subprocess.STDOUT)
+        elif capture_stdout:
+            output = {}
+        else:
+            output = dict(stdout=subprocess.DEVNULL)
+        return self._run(
+            cmd,
+            skip_error_logging,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=user_environment(account) if env is None else env,
+            **output,
+            timeout=timeout,
+            **identity,
+        )
+
+    def _run(
+        self, cmd, skip_error_logging, text=True, **kwargs
+    ) -> ShellInvocationResult:
+        start_time = Utils.current_time_ms()
+
+        if 'stdout' in kwargs:
+            kwargs.setdefault('stderr', subprocess.PIPE)
+        else:
+            kwargs['capture_output'] = True
+        result = subprocess.run(args=cmd, text=text, **kwargs)
 
         total_time = Utils.current_time_ms() - start_time
 

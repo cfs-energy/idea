@@ -31,13 +31,15 @@ import re
 import time
 from collections import OrderedDict
 from boto3.dynamodb.conditions import Key, Attr
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from threading import RLock
 from enum import Enum
 
 DEFAULT_JWK_CACHE_KEYS = True
 DEFAULT_JWK_MAX_CACHED_KEYS = 16
 DEFAULT_KEY_ALGORITHM = 'RS256'
+# connect and read: a user pool endpoint that stops answering does not hold the caller
+HTTP_TIMEOUT_SECONDS = (5, 15)
 API_TOKEN_AUTHORIZATION_TTL = 30
 API_TOKEN_NEGATIVE_TTL = 5
 
@@ -152,7 +154,12 @@ class TokenService(TokenServiceProtocol):
                 wait=True,
             )
 
-    def create_api_token(self, username, request):
+    def create_api_token(self, username, request, signed_in_at=None):
+        """
+        :param signed_in_at: when the caller's session token was issued, in seconds. A
+            session from before the account was created, signed out everywhere or had
+            its password reset mints nothing: those end every token of the account.
+        """
         from ideadatamodel import CreateApiTokenResult
 
         if not username:
@@ -168,6 +175,13 @@ class TokenService(TokenServiceProtocol):
         )
         if not user or not user.get('enabled') or user.get('created_on') is None:
             raise exceptions.unauthorized_access()
+        if signed_in_at is not None:
+            # the record keeps both in milliseconds
+            since = max(
+                int(user['created_on']), int(user.get('sessions_revoked_on') or 0)
+            )
+            if int(signed_in_at) * 1000 < since:
+                raise exceptions.unauthorized_access()
         token = 'idea_' + secrets.token_urlsafe(32)
         now = int(time.time())
         row = dict(
@@ -309,6 +323,10 @@ class TokenService(TokenServiceProtocol):
             or not user.get('enabled')
             or row.get('owner_created_on') is None
             or row['owner_created_on'] != user.get('created_on')
+            # minted before the account's sessions ended: revoked, whether or not the
+            # deletion of the account's tokens reached this row
+            or int(row.get('created_on') or 0) * 1000
+            < int(user.get('sessions_revoked_on') or 0)
         ):
             raise exceptions.unauthorized_access()
         request = {
@@ -347,8 +365,15 @@ class TokenService(TokenServiceProtocol):
                     },
                 )
             except ClientError as error:
-                if error.response['Error']['Code'] != 'ConditionalCheckFailedException':
-                    raise
+                code = error.response['Error']['Code']
+                if code != 'ConditionalCheckFailedException':
+                    # a bookkeeping write: a refused or failed one must not fail the
+                    # request, or a policy mismatch would stop every API token
+                    self._logger.warning(f'api token last use not recorded: {code}')
+            except BotoCoreError as error:
+                self._logger.warning(
+                    f'api token last use not recorded: {type(error).__name__}'
+                )
             row['last_used_on'] = now
         decoded = {
             'username': username,
@@ -472,6 +497,7 @@ class TokenService(TokenServiceProtocol):
                     'Authorization': f'Basic {basic_auth}',
                 },
                 data={'grant_type': 'client_credentials', 'scope': scope},
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
             result = response.json()
 
@@ -523,6 +549,7 @@ class TokenService(TokenServiceProtocol):
                     'grant_type': 'refresh_token',
                     'refresh_token': self.options.refresh_token,
                 },
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
             result = response.json()
 
@@ -561,6 +588,10 @@ class TokenService(TokenServiceProtocol):
                 algorithms=[self.key_algorithm],
                 options={'verify_exp': verify_exp},
             )
+            # an id token carries 'aud' and is refused above; whatever else the pool
+            # signs, only its access tokens carry authority here
+            if decoded_token.get('token_use') != 'access':
+                raise jwt.InvalidTokenError('not an access token')
             return decoded_token
         except jwt.ExpiredSignatureError:
             # these are normal errors, and will occur during everyday operations
@@ -715,6 +746,7 @@ class TokenService(TokenServiceProtocol):
                 'client_id': self._sso_client_id,
                 'redirect_uri': redirect_uri,
             },
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
         result = response.json()
 
@@ -770,6 +802,7 @@ class TokenService(TokenServiceProtocol):
                 'Authorization': f'Basic {basic_auth}',
             },
             data={'token': refresh_token, 'client_id': client_id},
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
 
         if result.status_code != 200:

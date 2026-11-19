@@ -340,6 +340,9 @@ const STATUS_TABLES = {
     { key: 'bastion-host.public_ip', value: '192.0.2.10' },
     { key: 'bastion-host.base_os', value: 'amazonlinux2023' },
     { key: 'bastion-host.instance_id', value: 'i-0123456789abcdef0' },
+    // the services hold their own OpenSearch rules, so an analytics upgrade may run alone
+    { key: 'cluster-manager.opensearch_ingress_rule', value: 'sgr-0123456789abcdef0' },
+    { key: 'scheduler.opensearch_ingress_rule', value: 'sgr-0123456789abcdef1' },
   ],
 };
 
@@ -565,4 +568,21 @@ it('asBoolFlag maps commander strings the way deploy and upgrade pass them', () 
   assert.equal(asBoolFlag('false', true), false);
   assert.equal(asBoolFlag('no', true), false);
   assert.equal(asBoolFlag(false, true), false);
+  assert.equal(asBoolFlag('OFF', true), false);
+  // a mistyped value is refused rather than read as false
+  assert.throws(() => asBoolFlag('maybe', true), /expected true or false, got: "maybe"/);
+});
+
+it('a choice prompt asks again on an answer that matches no choice instead of taking the default', async () => {
+  const { resolveChoiceAnswer } = await import('../../src/cli/main.ts');
+  const choice = { choices: ['Yes', 'Reload Changes', 'Exit'], default: 'Yes' };
+  assert.equal(resolveChoiceAnswer(choice, 'no'), undefined);
+  assert.equal(resolveChoiceAnswer(choice, 'n'), undefined);
+  assert.equal(resolveChoiceAnswer(choice, 'exit'), 'Exit');
+  assert.equal(resolveChoiceAnswer(choice, ''), 'Yes');
+  // a unique prefix names its choice; an ambiguous or unknown one does not
+  assert.equal(resolveChoiceAnswer(choice, 'y'), 'Yes');
+  assert.equal(resolveChoiceAnswer(choice, 'r'), 'Reload Changes');
+  assert.equal(resolveChoiceAnswer({ choices: ['Yes', 'Yesterday'] }, 'yes'), 'Yes');
+  assert.equal(resolveChoiceAnswer({ choices: ['Yes', 'Yesterday'] }, 'ye'), undefined);
 });

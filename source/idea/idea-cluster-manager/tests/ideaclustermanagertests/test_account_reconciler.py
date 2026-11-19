@@ -1,3 +1,4 @@
+from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from unittest.mock import MagicMock, Mock
 
 import ldap
@@ -34,6 +35,10 @@ def build(values=None, records=None, users=None):
     )
     accounts = Mock()
     accounts.user_dao.get_user.return_value = {}
+    # rows convert as the table's own conversion does
+    accounts.user_dao.convert_from_db.side_effect = lambda row: UserDAO.convert_from_db(
+        None, row
+    )
     accounts.ldap_client.ldap_root_username = 'bind-service'
     accounts.ldap_client.get_user.side_effect = lambda username, **kw: records.get(
         username, {'user_account_control': 512}
@@ -235,6 +240,7 @@ def test_metrics_have_all_families_on_both_providers(provider):
             'reenabled',
             'missing',
             'errors',
+            'home_errors',
             'refused',
             'homes_converged',
             'trees_queued',
@@ -996,7 +1002,8 @@ def test_home_tree_enqueue_failure_keeps_snapshot_for_next_pass(monkeypatch, tmp
     )
     context.accounts.task_manager.send.side_effect = RuntimeError('queue unavailable')
     first = service.run_once(dry_run=False)
-    assert first['errors'] == 1
+    # a home failure is not an upstream read error: the safety cap does not count it
+    assert (first['home_errors'], first['errors']) == (1, 0)
     assert owners[helper.home_dir] == (12001, 12002)
     assert metadata['home_ownership_stale_uid'] == 11001
     context.accounts.task_manager.send.side_effect = None
@@ -1078,3 +1085,138 @@ def test_home_reconcile_uses_current_account_ids(monkeypatch, tmp_path):
     report = service.run_once(dry_run=False)
     assert report['homes_converged'] == 1
     assert all(owners[path] == (14001, 14002) for path in changes)
+
+
+def decimal_row(**values):
+    from decimal import Decimal
+
+    # what the table returns: every number is a Decimal
+    return {
+        key: Decimal(value)
+        if isinstance(value, int) and not isinstance(value, bool)
+        else value
+        for key, value in values.items()
+    }
+
+
+def test_an_applied_run_converges_homes_from_rows_as_the_table_returns_them(
+    monkeypatch, tmp_path
+):
+    import os
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    service, context = build(records={}, users=[helper.user])
+    context.accounts.user_dao.get_user.return_value = decimal_row(
+        username=helper.user.username,
+        enabled=True,
+        uid=14001,
+        gid=14002,
+        home_dir=helper.home_dir,
+        home_ownership_stale_uid=11001,
+    )
+    real_chown = os.chown
+
+    def strict(path, uid, gid, *args, **kwargs):
+        # os.chown refuses a Decimal, as the real call does
+        if type(uid) is not int or type(gid) is not int:
+            raise TypeError('uid should be integer')
+        return real_chown(path, uid, gid, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'chown', strict)
+    report = service.run_once(dry_run=False)
+    assert report['refused'] == 0
+    assert report['homes_converged'] == 1
+    assert all(owners[path] == (14001, 14002) for path in changes)
+    payload = context.accounts.task_manager.send.call_args.kwargs['payload']
+    assert type(payload['stale_uid']) is int
+
+
+def test_one_accounts_home_failure_does_not_stop_the_run(monkeypatch, tmp_path):
+    from ideaclustermanager.app.accounts import account_reconciler
+
+    users = [
+        User(username=f'user{n}', enabled=True, home_dir='/marker') for n in range(3)
+    ]
+    service, context = build(records={}, users=users)
+    calls = []
+
+    class Home:
+        def __init__(self, _, user):
+            self.user = user
+
+        def converge_login_paths(self, **_):
+            calls.append(self.user.username)
+            if self.user.username == 'user1':
+                raise TypeError('marker')
+            from ideadatamodel.auth import RepairHomeOwnershipResult
+
+            return RepairHomeOwnershipResult(username=self.user.username, dry_run=False)
+
+    monkeypatch.setattr(account_reconciler, 'UserHomeDirectory', Home)
+    report = service.run_once(dry_run=False)
+    assert calls == ['user0', 'user1', 'user2']
+    assert (report['home_errors'], report['refused']) == (1, 0)
+    assert report['checked'] == 3
+
+
+def test_the_old_owner_stays_recorded_until_a_repair_finishes(monkeypatch, tmp_path):
+    from ideaclustermanagertests.test_user_home_directory import ownership_tree
+    from ideaclustermanager.app.accounts.account_tasks import RepairHomeOwnershipTask
+
+    helper, owners, changes = ownership_tree(monkeypatch, tmp_path)
+    helper.user.enabled = True
+    service, context = build(records={}, users=[helper.user])
+    metadata = {}
+    context.accounts.user_dao.get_user.side_effect = lambda username: dict(metadata)
+    context.accounts.user_dao.update_user.side_effect = lambda values: metadata.update(
+        values
+    )
+    assert service.run_once(dry_run=False)['trees_queued'] == 1
+    # queued is not done: a task that gives up leaves the owner for the next attempt
+    assert metadata['home_ownership_stale_uid'] == 11001
+    context.accounts.get_user.return_value = helper.user
+    # a repair asked for by hand carries no owner and finds the recorded one
+    RepairHomeOwnershipTask(context).invoke({'username': helper.user.username})
+    assert owners[str(tmp_path / 'home/nested/data')] == (12001, 12002)
+    assert metadata['home_ownership_stale_uid'] is None
+
+
+def test_a_botocore_error_on_one_upstream_read_counts_one_error():
+    import botocore.exceptions
+
+    # enough accounts that one error stays under the upstream error fraction
+    users = [User(username=f'user{n}', enabled=True) for n in range(20)]
+    service, context = build(records={}, users=users)
+    real = context.accounts.ldap_client.get_user.side_effect
+
+    def read(username, **kwargs):
+        if username == 'user1':
+            raise botocore.exceptions.ClientError(
+                {'Error': {'Code': 'TooManyRequestsException', 'Message': 'marker'}},
+                'AdminGetUser',
+            )
+        return real(username, **kwargs)
+
+    context.accounts.ldap_client.get_user.side_effect = read
+    report = service.run_once(dry_run=True)
+    assert (report['errors'], report['refused']) == (1, 0), report.get('reason')
+
+
+def test_a_disable_made_during_the_run_is_not_undone():
+    service, context = build(
+        {PREFIX + 'reenable': True, PREFIX + 'check_cognito': True},
+        records={},
+        users=[User(username='user0', enabled=False)],
+    )
+    # read for the decision: disabled by the reconciler; read again at apply: an
+    # administrator disabled it meanwhile, which leaves no reconcile source
+    # (the home pass and the decision each read it once before the apply)
+    reads = iter([{'reconcile_sources': ['directory']}] * 2)
+    context.accounts.user_dao.get_user.side_effect = lambda username: next(
+        reads, {'reconcile_sources': []}
+    )
+    report = service.run_once(dry_run=False)
+    context.accounts.enable_user.assert_not_called()
+    assert report['reenabled'] == 0

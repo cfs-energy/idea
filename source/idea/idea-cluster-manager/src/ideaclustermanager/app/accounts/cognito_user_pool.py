@@ -282,7 +282,7 @@ class CognitoUserPool:
         cluster_administrator = self._context.config().get_string(
             'cluster.administrator_username', required=True
         )
-        if username in cluster_administrator or username.startswith('clusteradmin'):
+        if username == cluster_administrator:
             self._logger.info(
                 f'system administration user found: {username}. skip linking with IDP.'
             )
@@ -332,6 +332,18 @@ class CognitoUserPool:
         )
 
     def password_updated(self, username: str):
+        """
+        records when the password was set, after the user pool has taken it: a failure
+        here is logged, never raised, so the caller does not undo a change that happened
+        """
+        try:
+            self._record_password_set(username)
+        except Exception as error:
+            self._logger.error(
+                f'password set time not recorded for {username}: {type(error).__name__}'
+            )
+
+    def _record_password_set(self, username: str):
         if not self.is_activedirectory():
             return
 
@@ -432,9 +444,8 @@ class CognitoUserPool:
             self._logger.error(
                 f'Ignoring local authentication request with SSO enabled. Username: {username}'
             )
-            raise exceptions.unauthorized_access(
-                f'Ignoring local authentication request with SSO enabled. Username: {username}'
-            )
+            # the answer a wrong password gets, so it does not tell which name signs in locally
+            raise exceptions.unauthorized_access('Invalid username or password')
         try:
             cognito_result = (
                 self._context.aws()
@@ -452,8 +463,18 @@ class CognitoUserPool:
             )
         except botocore.exceptions.ClientError as e:
             error_code = e.response['Error']['Code']
-            if error_code in ('NotAuthorizedException', 'UserNotFoundException'):
+            # an unconfirmed account is answered as a wrong password: only an
+            # existing account can be unconfirmed
+            if error_code in (
+                'NotAuthorizedException',
+                'UserNotFoundException',
+                'UserNotConfirmedException',
+            ):
                 raise exceptions.unauthorized_access('Invalid username or password')
+            elif error_code == 'TooManyRequestsException':
+                raise exceptions.general_exception(
+                    'Sign-in is busy. Try again in a minute.'
+                )
             elif error_code == 'PasswordResetRequiredException':
                 raise exceptions.soca_exception(
                     error_code=errorcodes.AUTH_PASSWORD_RESET_REQUIRED,
@@ -520,7 +541,14 @@ class CognitoUserPool:
             )
             session = Utils.get_value_as_string('Session', cognito_result)
         else:
-            self.admin_set_email_verified(request.username)
+            try:
+                self.admin_set_email_verified(request.username)
+            except Exception as error:
+                # the pool took the password: the directory must still get it
+                self._logger.error(
+                    f'email not marked verified for {request.username}: '
+                    f'{type(error).__name__}'
+                )
             self.password_updated(request.username)
             auth_result = self.build_auth_result(cognito_auth_result)
             self._context.cache().short_term().delete(
@@ -561,14 +589,28 @@ class CognitoUserPool:
             error_code = e.response['Error']['Code']
             if error_code == 'NotAuthorizedException':
                 raise exceptions.unauthorized_access('Refresh token invalid or expired')
-            else:
-                raise e
+            if error_code in ('TooManyRequestsException', 'InternalErrorException'):
+                # the refresh token is still good: a client must not sign out over this
+                raise exceptions.general_exception(
+                    'Sign-in is busy. Try again in a minute.'
+                ) from None
+            raise e
 
         cognito_auth_result = Utils.get_value_as_dict(
             'AuthenticationResult', cognito_result
         )
         auth_result = self.build_auth_result(cognito_auth_result)
         return RespondToAuthChallengeResult(auth=auth_result)
+
+    # the forgot-password refusals that concern one account, not every user
+    FORGOT_PASSWORD_ACCOUNT_REFUSALS = frozenset(
+        {
+            'UserNotFoundException',
+            'InvalidParameterException',
+            'LimitExceededException',
+            'NotAuthorizedException',
+        }
+    )
 
     def forgot_password(self, username: str):
         try:
@@ -578,11 +620,20 @@ class CognitoUserPool:
                 Username=username,
             )
         except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'UserNotFoundException':
-                # return success response even for user not found failures to mitigate user enumeration risks
-                pass
+            code = e.response['Error']['Code']
+            if code == 'TooManyRequestsException':
+                # a busy user pool says nothing of the account
+                raise exceptions.general_exception(
+                    'Password reset is busy. Try again in a minute.'
+                )
+            # every other refusal is answered as success, as an unknown account is.
+            # One that concerns a single account is a warning; one that stops the code
+            # reaching anyone (delivery, access, a service fault) is an error, so an
+            # outage shows. Neither names the account.
+            if code in self.FORGOT_PASSWORD_ACCOUNT_REFUSALS:
+                self._logger.warning(f'forgot password not sent: {code}')
             else:
-                raise e
+                self._logger.error(f'forgot password not sent for any user: {code}')
 
     def confirm_forgot_password(
         self, username: str, password: str, confirmation_code: str

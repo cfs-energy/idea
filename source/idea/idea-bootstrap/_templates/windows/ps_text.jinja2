@@ -1,0 +1,5 @@
+{# ps_text renders a value for the inside of a PowerShell single-quoted literal: each character
+   PowerShell accepts as a single quote (ASCII and U+2018 to U+201B) is doubled, so the value is
+   text and never code. The macro is one line so it renders no line breaks around the value
+   (whitespace control is not used in these templates). j2lint: disable=single-statement-per-line #}
+{% macro ps_text(value) %}{{ value | replace("'", "''") | replace("\u2018", "\u2018\u2018") | replace("\u2019", "\u2019\u2019") | replace("\u201a", "\u201a\u201a") | replace("\u201b", "\u201b\u201b") }}{% endmacro %}

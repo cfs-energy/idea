@@ -221,12 +221,19 @@ describe('script workbench', () => {
         expect(screen.queryByText(/\$0/)).toBeNull();
     });
 
-    it('says a budget is missing instead of showing $0.00 of $0.00', async () => {
-        await checkWithEstimate({
+    it('says a budget is missing instead of showing placeholder spend', async () => {
+        // the scheduler's answer for a project whose budget is gone: placeholder figures plus an incidental
+        const context = initTestAppContext();
+        vi.spyOn(context.client().scheduler(), 'submitJob').mockResolvedValue({...DRY_RUN_ACCEPTED,
             estimated_bom_cost: {line_items: [], line_items_total: {amount: 5, unit: 'USD'}},
-            budget_usage: {budget_name: 'fusion', is_missing: true} as any
+            budget_usage: {budget_name: 'marker-budget', budget_limit: {amount: 100, unit: 'USD'}, actual_spend: {amount: 200, unit: 'USD'}},
+            incidentals: {results: [{error_code: 'Budgets.LimitExceeded', message: 'Budget not found: marker-budget'}]}
         });
-        expect(screen.getByText(/Budget not found/)).toBeInTheDocument();
+        const user = userEvent.setup();
+        renderScriptWorkbench();
+        await user.click(await screen.findByRole('button', {name: /Insert sample script/i}));
+        await user.click(await screen.findByRole('button', {name: /Check script/i}));
+        expect(await screen.findByText('Budget not found: marker-budget')).toBeInTheDocument();
         expect(screen.queryByText(/spent of/)).toBeNull();
     });
 

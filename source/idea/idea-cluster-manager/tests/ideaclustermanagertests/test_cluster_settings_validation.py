@@ -58,6 +58,12 @@ class FakeApiInvocationContext:
     def is_authorized(self, elevated_access=False, scopes=None):
         return True
 
+    def get_authorization(self):
+        from types import SimpleNamespace
+        from ideasdk.auth import ApiAuthorizationType
+
+        return SimpleNamespace(type=ApiAuthorizationType.ADMINISTRATOR, groups=[])
+
     def get_request_payload_as(self, payload_type):
         return self.request
 
@@ -662,7 +668,8 @@ def test_operations_group_catalog_rejects_normalized_collisions(
 ):
     from ideaclustermanager.app.settings_catalog import coerce_settings
 
-    with pytest.raises(exceptions.SocaException, match='privileged group'):
+    # the administrators and managers names are not changed at runtime
+    with pytest.raises(exceptions.SocaException, match='is not editable'):
         coerce_settings(
             'identity-provider',
             {
@@ -671,6 +678,18 @@ def test_operations_group_catalog_rejects_normalized_collisions(
                     'operations_leads_group_name': operations_name,
                 }
             },
+        )
+    # and the operations leads name cannot take theirs, in either spelling
+    default = {
+        'administrators_group_name': 'administrators',
+        'managers_group_name': 'managers',
+    }[privileged_name]
+    taken = (
+        default if operations_name.endswith('readers') else f'{default}-cluster-group'
+    )
+    with pytest.raises(exceptions.SocaException, match='privileged group'):
+        coerce_settings(
+            'identity-provider', {'cognito': {'operations_leads_group_name': taken}}
         )
 
 
@@ -717,7 +736,13 @@ def test_partial_group_edit_rejects_saved_privileged_collision(saved_key, update
         else {}
     )
     api.context.get_cluster_modules = lambda: [{'module_id': 'compute'}]
-    with pytest.raises(exceptions.SocaException, match='privileged group'):
+    # only the operations leads name is edited at runtime
+    expected = (
+        'privileged group'
+        if updated_key == 'operations_leads_group_name'
+        else 'is not editable'
+    )
+    with pytest.raises(exceptions.SocaException, match=expected):
         api.update_module_settings(
             FakeApiInvocationContext(
                 UpdateModuleSettingsRequest(
@@ -758,11 +783,11 @@ def test_sequential_group_saves_validate_against_committed_settings():
         )
         api.update_module_settings(invocation)
 
-    save('administrators_group_name')
-    assert 'identity-provider.cognito.administrators_group_name' not in config.values
+    # the administrators name as deployment wrote it; it is not editable here
+    committed['identity-provider.cognito.administrators_group_name'] = 'custom-readers'
     with pytest.raises(exceptions.SocaException, match='privileged group'):
         save('operations_leads_group_name')
-    config.db.sync_cluster_settings_in_db.assert_called_once()
+    config.db.sync_cluster_settings_in_db.assert_not_called()
 
 
 def test_partial_group_edit_rejects_actual_module_id_collision():

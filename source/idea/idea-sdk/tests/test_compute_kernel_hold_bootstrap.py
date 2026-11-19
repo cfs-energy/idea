@@ -25,10 +25,11 @@ NODE = 'compute-node/compute_node.sh.jinja2'
 EL = ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10')
 
 # the image boots BASE; Red Hat's repository also has a newer kernel of that series and the
-# first kernel of the next one, which FSx has no client for
+# first kernel of the next one, which FSx has no client for (741 had none until 2026-11-13, so
+# the next series here is one no release has shipped)
 BASE = '5.14.0-687.59.1.el9_8.x86_64'
 SERIES_NEWEST = '5.14.0-687.66.1.el9_8.x86_64'
-NEXT_SERIES = '5.14.0-741.14.1.el9_9.x86_64'
+NEXT_SERIES = '5.14.0-800.1.1.el9_10.x86_64'
 
 STUBS = r"""
 sleep() { :; }

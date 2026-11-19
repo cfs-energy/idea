@@ -366,16 +366,11 @@ function cloudWatchAgentConfig(
     logs.log_stream_name = `${moduleId}_default_{ip_address}`;
     logs.force_flush_interval =
       config.getInt("cluster.cloudwatch_logs.force_flush_interval", 5) || 5;
-    const retention = config.getInt(
-      "cluster.cloudwatch_logs.retention_in_days",
-      90,
-    );
+    // No retention_in_days: hosts may not set retention. The deploy creates this host's group
+    // with it (ecs.ts ensureApplicationLogGroups), as the SDK rendering does for the others.
     logs.logs_collected = {
       files: {
-        collect_list: role.logFiles.map((file) => ({
-          ...file,
-          retention_in_days: retention,
-        })),
+        collect_list: role.logFiles.map((file) => ({ ...file })),
       },
     };
     result.logs = logs;
@@ -582,10 +577,8 @@ function sharedStorageApplies(
   if (!isRecord(storage)) return false;
   const scope = Array.isArray(storage.scope) ? storage.scope : [];
   if (scope.length === 0 || scope.includes("cluster")) return true;
-  if (scope.includes("module") && scope.includes("project")) return false;
-  if (scope.includes("project") && scope.includes("scheduler:queue-profile")) {
-    return false;
-  }
+  // every scope named must match; a deployment host has no project or queue profile
+  if (scope.includes("project") || scope.includes("scheduler:queue-profile")) return false;
   if (scope.includes("module")) {
     const modules = Array.isArray(storage.modules) ? storage.modules : [];
     return modules.length === 0 || modules.includes(moduleName);

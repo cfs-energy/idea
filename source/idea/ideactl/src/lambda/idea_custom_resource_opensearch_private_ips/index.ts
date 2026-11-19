@@ -15,6 +15,7 @@ import type {
 import {
     errorMessage,
     sendCfnResponse,
+    eventForLog,
 } from "../commons/cfn-response.ts";
 
 export const PHYSICAL_RESOURCE_ID = "opensearch-private-ip-addresses";
@@ -134,7 +135,7 @@ export function createHandler(
         let domainNameValue: JsonValue = null;
 
         try {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
 
             // Delete deliberately performs no EC2 operation.
             if (event.RequestType === "Delete") {

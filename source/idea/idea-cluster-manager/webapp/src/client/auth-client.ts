@@ -99,10 +99,6 @@ class AuthClient extends IdeaBaseClient<AuthClientProps>{
         return this.apiInvoker.getAccessToken()
     }
 
-    debug() {
-        return this.apiInvoker.debug()
-    }
-
     getClaims(): Promise<JwtTokenClaims> {
         return this.apiInvoker.getClaims()
     }

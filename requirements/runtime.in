@@ -23,7 +23,9 @@ troposphere
 # (measured +21MB unzipped) for a gRPC transport this codebase never constructs;
 # aws_opensearch_client.py uses only the HTTP client and helpers.bulk.
 opensearch-py<3.1
-Jinja2
+# >=3.1.6: admin-edited email templates render in the Jinja sandbox, whose earlier
+# releases let a template reach attributes the sandbox is meant to block
+Jinja2>=3.1.6
 certifi
 cryptography
 PyJWT
@@ -37,4 +39,5 @@ python-ldap
 ldappool
 passlib
 prettytable
+# exact: the browser terminal's SSH client, so it changes only in its own reviewed update
 asyncssh==2.24.1

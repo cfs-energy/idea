@@ -393,8 +393,9 @@ class Jobs extends Component<JobsProps, JobsState> {
                 onExportAllRecords={this.isCompletedJobs() ? async () => {
                     try {
                         // Get current filters and date range, with fallbacks
-                        const filters = this.getListing()?.getFilters() || [];
-                        const dateRange = this.getListing()?.getDateRange();
+                        // the export holds what the listing shows, including a job opened from a link
+                        const filters = this.linkedJobId ? [{key: 'job_id', value: this.linkedJobId}] : (this.getListing()?.getFilters() || []);
+                        const dateRange = this.linkedJobId ? undefined : this.getListing()?.getDateRange();
 
                         const requestParams = {
                             filters: filters,

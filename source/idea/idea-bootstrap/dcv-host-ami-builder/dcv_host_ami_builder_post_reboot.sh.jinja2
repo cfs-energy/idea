@@ -80,10 +80,10 @@ else
   ensure_boot_kernel_bootable
 
   # user data customizations
-  if [[ -f ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh ]]; then
-    /bin/bash ${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1 || exit 1
-  else
-    log_info "no userdata customizations"
+  if prepare_site_hook "${IDEA_CLUSTER_HOME}/${IDEA_MODULE_ID}/ami_builder/userdata_customizations.sh" \
+      '{{ context.config.get_string('virtual-desktop-controller.ami_builder_site_hook_sha256', default='') | default('', true) | string | trim | replace("'", "'\\''") }}' '{{ context.module_id | replace("'", "'\\''") }}.ami_builder_site_hook_sha256'; then
+    /bin/bash "${SITE_HOOK_RUN}" >> ${IDEA_DCV_HOST_AMI_BUILDER_LOGS_DIR}/userdata_customizations.log 2>&1 || exit 1
+    finish_site_hook
   fi
 
   touch /var/lib/idea/bake-dcv.ok

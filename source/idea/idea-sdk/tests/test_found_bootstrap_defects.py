@@ -43,7 +43,7 @@ def test_the_compute_bake_lets_kdump_finish_before_clearing_var_tmp():
         'rhel8',
         variables={'image_kind': 'compute'},
     )
-    clear = script.index('find /var/tmp /tmp ')
+    clear = script.index('for cleanup_root in /var/tmp /tmp')
     assert script.index('systemctl start kdump.service') < clear
     assert 'rm -rf /var/tmp/*' not in script
 

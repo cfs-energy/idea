@@ -990,3 +990,17 @@ def test_stop_saves_what_the_hourly_copy_had_not_reached(tmp_path, monkeypatch):
     )
     assert finished_job_ids(replacement) == {'before', 'after'}
     replacement.stop()
+
+
+def test_a_running_jobs_seats_are_not_reserved_on_top_of_the_servers_count(job_cache):
+    # SCH-29: the license server counts a running job's seats; its reservation took them again
+    asks = [SocaJobLicenseAsk(name='app', count=4)]
+    running = build_job(
+        '10.host', state=SocaJobState.RUNNING, provisioned=True, licenses=asks
+    )
+    starting = build_job(
+        '11.host', state=SocaJobState.QUEUED, provisioned=True, licenses=asks
+    )
+    job_cache.sync([running, starting])
+    job_cache.add_active_licenses([running, starting])
+    assert job_cache.get_active_license_count(license_name='app') == 4

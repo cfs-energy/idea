@@ -588,18 +588,17 @@ describe('directoryservice stack, openldap', () => {
     assert.equal((instance.Properties.NetworkInterfaces as Json[])[0]?.AssociatePublicIpAddress, true);
   });
 
-  test('root_credentials_provided cannot synth: the settings read the secrets Python never made', async () => {
-    // `build_openldap_cluster_settings` dereferences `self.openldap_credentials.admin_username.ref`
-    // (directoryservice_stack.py:521-522), and `DirectoryServiceCredentials.__init__` returns at
-    // directory_service.py:67 without assigning it. Python raises AttributeError; the port raises
-    // TypeError reading `.ref` of the missing secret resource.
-    await assert.rejects(
-      synthRejects(configWith({ ...OPENLDAP_CONFIG, 'directoryservice.root_credentials_provided': { BOOL: true } })),
-      {
-        name: 'TypeError',
-        message: "Cannot read properties of undefined (reading 'ref')",
-      },
-    );
+  test('root_credentials_provided synthesizes and publishes the supplied secret ARNs', async () => {
+    const usernameArn = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:root-username-abcdef';
+    const passwordArn = 'arn:aws:secretsmanager:us-east-2:123456789012:secret:root-password-abcdef';
+    const { template } = await synth(configWith({
+      ...OPENLDAP_CONFIG,
+      'directoryservice.root_credentials_provided': { BOOL: true },
+      'directoryservice.root_username_secret_arn': { S: usernameArn },
+      'directoryservice.root_password_secret_arn': { S: passwordArn },
+    }));
+    assert.equal(settingsOf(template).root_username_secret_arn, usernameArn);
+    assert.equal(settingsOf(template).root_password_secret_arn, passwordArn);
   });
 
   test('the cdk_nag suppressions match Python, in Python order', async () => {

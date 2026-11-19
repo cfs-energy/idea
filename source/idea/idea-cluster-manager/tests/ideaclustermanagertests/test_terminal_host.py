@@ -635,12 +635,13 @@ def test_desktop_site_hook_runs_under_the_trust_lock(helper, tmp_path):
     body = block[1]
     lock = re.search(r'exec 9>>(\S+) && flock -w \d+ 9', body)
     assert lock and lock[1] == '/' + helper.LOCK
-    assert 'userdata_customizations.sh 9>&-' in body
+    # the hook (or its checked copy) runs without the lock descriptor
+    assert '/bin/bash "${SITE_HOOK_RUN}" 9>&-' in body
     # An unopenable or stuck lock must delay, never skip, the site hook.
     hook = tmp_path / 'hook.sh'
     hook.write_text('echo ran-hook\n')
     body = body.replace('/' + helper.LOCK, str(tmp_path / 'missing/lock'))
-    body = re.sub(r'/bin/bash \S+userdata_customizations.sh', f'/bin/bash {hook}', body)
+    body = body.replace('/bin/bash "${SITE_HOOK_RUN}"', f'/bin/bash {hook}')
     body = re.sub(r'>> \S+ 2>&1', '', body)
     result = subprocess.run(
         ['bash', '-c', 'log_warning() { echo "warning: $*"; }\n' + body],

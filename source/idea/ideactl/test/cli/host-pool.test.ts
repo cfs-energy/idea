@@ -95,3 +95,92 @@ test("a host still launching cannot be omitted from the join gate", async (t) =>
 test("rerun retains boolean termination protection as a valued option", () => {
   assert.match(refreshHostsCommand("upgrade-cluster", { terminationProtection: true }), /--termination-protection 'true' --refresh-hosts$/);
 });
+
+test("an application deploy refuses a host built before the current shared storage mounts", async (t) => {
+  const { refuseHostsWithStaleMounts } = await import("../../src/cli/host-pool.ts");
+  const { hostStorageDigest } = await import("../../src/cdk/stacks/ecs.ts");
+  const { ClusterConfig } = await import("../../src/config/cluster-config.ts");
+  const share = [
+    { key: "shared-storage.projects.provider", value: "fsx_netapp_ontap" },
+    { key: "shared-storage.projects.mount_dir", value: "/projects" },
+    { key: "shared-storage.projects.scope", value: ["cluster"] },
+    { key: "shared-storage.projects.fsx_netapp_ontap.svm.nfs_dns", value: "svm.example.invalid" },
+    { key: "shared-storage.projects.fsx_netapp_ontap.volume.volume_path", value: "/projects" },
+  ];
+  const before = hostStorageDigest(new ClusterConfig([]));
+  const after = hostStorageDigest(new ClusterConfig(share));
+  assert.notEqual(before, after);
+  const { hostStorageEntries } = await import("../../src/cdk/stacks/ecs.ts");
+  const line = hostStorageEntries(new ClusterConfig(share)).entries[0]!.line;
+  // [recorded digest, the fstab lines of the host's launch template version, refused]
+  const cases: Array<[string | undefined, string[] | undefined, boolean, string]> = [
+    [before, [], true, "a record from before the share"],
+    [after, [], false, "a record of the current shares"],
+    // a host built before 26.11.2 carries no record: its launch template version decides
+    [undefined, [line.replace(",nodev", "")], false, "no record, same shares (options aside): proceeds as before"],
+    [undefined, [], true, "no record, the share was added since the host was built"],
+    [undefined, undefined, true, "no record, launch template unreadable"],
+  ];
+  for (const [recorded, lines, refused, label] of cases) {
+    for (const refreshHosts of [false, true]) {
+      const { deps, api, settings, state } = fixture();
+      (settings as Array<{ key: string; value: unknown }>).push(...share);
+      state.mountLines = lines;
+      t.mock.method(api, "containerInstances", async () => [
+        { instanceId: "i-host", arn: "arn:host", status: "ACTIVE", attributes: recorded === undefined ? {} : { "idea.storage": recorded } },
+        // a draining host with an old mount set takes no task, so it does not stop the deploy
+        { instanceId: "i-draining", arn: "arn:draining", status: "DRAINING", attributes: { "idea.storage": before } },
+      ]);
+      // --refresh-hosts no longer skips the check: it runs on the hosts running after the refresh step
+      const run = refuseHostsWithStaleMounts(deps, { ...options, refreshHosts, hostPoolRerunCommand: undefined });
+      if (refused) await assert.rejects(run, (error: Error) => /i-host were built before/.test(error.message) && !error.message.includes("i-draining"), `${label}, refreshHosts=${refreshHosts}`);
+      else await run;
+    }
+  }
+});
+
+test("a container instance record that can take no task is named, not a stop; a connected host without a record still is", async (t) => {
+  const { refuseHostsWithStaleMounts } = await import("../../src/cli/host-pool.ts");
+  const { hostStorageDigest } = await import("../../src/cdk/stacks/ecs.ts");
+  const { ClusterConfig } = await import("../../src/config/cluster-config.ts");
+  const share = [
+    { key: "shared-storage.projects.provider", value: "fsx_netapp_ontap" },
+    { key: "shared-storage.projects.mount_dir", value: "/projects" },
+    { key: "shared-storage.projects.scope", value: ["cluster"] },
+    { key: "shared-storage.projects.fsx_netapp_ontap.svm.nfs_dns", value: "svm.example.invalid" },
+    { key: "shared-storage.projects.fsx_netapp_ontap.volume.volume_path", value: "/projects" },
+  ];
+  const current = hostStorageDigest(new ClusterConfig(share));
+  {
+    // the connected host is current; a disconnected record and a record the group no longer has carry none
+    const { deps, api, settings, state } = fixture();
+    (settings as Array<{ key: string; value: unknown }>).push(...share);
+    state.mountLines = [];
+    t.mock.method(api, "containerInstances", async () => [
+      { instanceId: "i-host", arn: "arn:host", status: "ACTIVE", agentConnected: true, attributes: { "idea.storage": current } },
+      { instanceId: "i-gone", arn: "arn:gone", status: "ACTIVE", agentConnected: false, attributes: {} },
+      { instanceId: "i-replaced", arn: "arn:replaced", status: "ACTIVE", agentConnected: true, attributes: {} },
+    ]);
+    await refuseHostsWithStaleMounts(deps, { ...options, refreshHosts: false });
+    const out = deps.stdout.join("\n");
+    for (const arn of ["arn:gone", "arn:replaced"]) {
+      assert.match(out, new RegExp(`note: container instance i-\\w+ is registered but can take no task[^\\n]*deregister-container-instance --cluster fixture --container-instance ${arn} --force`));
+    }
+  }
+  {
+    // a connected host of the group with no record, built before the share was added
+    const { deps, api, settings, state } = fixture();
+    (settings as Array<{ key: string; value: unknown }>).push(...share);
+    state.mountLines = [];
+    t.mock.method(api, "containerInstances", async () => [
+      { instanceId: "i-host", arn: "arn:host", status: "ACTIVE", agentConnected: true, attributes: {} },
+    ]);
+    await assert.rejects(refuseHostsWithStaleMounts(deps, { ...options, refreshHosts: false }), /i-host were built before/);
+  }
+});
+
+test("the stale-mount refusal's re-run command replaces hosts: a scoped deploy gains the ecs module", () => {
+  assert.match(refreshHostsCommand("deploy", { ...options, refreshHosts: false }, ["scheduler"]), /^ideactl deploy 'ecs' 'scheduler' .*--upgrade --refresh-hosts$/);
+  assert.match(refreshHostsCommand("deploy", { ...options, refreshHosts: false }, ["ecs", "scheduler"]), /^ideactl deploy 'ecs' 'scheduler' /);
+  assert.match(refreshHostsCommand("deploy", { ...options, refreshHosts: false }, ["all"]), /^ideactl deploy 'all' /);
+});

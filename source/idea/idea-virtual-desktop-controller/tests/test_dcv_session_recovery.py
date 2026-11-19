@@ -81,6 +81,7 @@ def recovery(monkeypatch):
     handler._logger = Mock()
     handler.context.dcv_broker_client.describe_sessions.return_value = {'sessions': {}}
     handler.context.dcv_broker_client.describe_sessions_for_host.return_value = []
+    handler.context.dcv_broker_client.desktop_host_addresses.return_value = {'10.0.0.5'}
     handler.context.dcv_broker_client.create_session.return_value = (
         VirtualDesktopSession(dcv_session_id='new-dcv')
     )
@@ -634,6 +635,8 @@ def test_broker_discovery_is_paginated_and_scoped_to_the_host(recovery):
     )
 
     client = DCVBrokerClient.__new__(DCVBrokerClient)
+    client._dcv_broker_client_utils = Mock()
+    client._dcv_broker_client_utils.desktop_host_addresses.return_value = {'10.0.0.5'}
     client._describe_sessions = Mock(
         side_effect=[
             {
@@ -654,7 +657,8 @@ def test_broker_discovery_is_paginated_and_scoped_to_the_host(recovery):
                     {
                         'id': 'accepted',
                         'server': {
-                            'tags': [{'key': 'idea_session_id', 'value': 'desktop'}]
+                            'ip': '10.0.0.5',
+                            'tags': [{'key': 'idea_session_id', 'value': 'desktop'}],
                         },
                     }
                 ]
@@ -695,7 +699,6 @@ def test_stopping_clears_recovery_message_state(recovery):
 
 
 def test_create_request_cannot_supply_recovery_state():
-    api = VirtualDesktopAPI.__new__(VirtualDesktopAPI)
     session = VirtualDesktopSession(
         recovering=True,
         recovery_attempts=99,
@@ -706,7 +709,7 @@ def test_create_request_cannot_supply_recovery_state():
         recovery_unready_observed=True,
         reboot_deadline=9999999,
     )
-    api.validate_create_session_request(session)
+    session = VirtualDesktopAPI.creatable_session(session)
     assert not session.recovering
     assert (
         session.recovery_attempts
@@ -755,26 +758,32 @@ def persisted_recovery(recovery):
 
     def update_item(**request):
         values = request['ExpressionAttributeValues']
-        if (
-            request.get('ConditionExpression')
-            and values[':expected_updated_on'] != row['updated_on']
-        ):
+        names = request['ExpressionAttributeNames']
+
+        def holds(clause):
+            if clause.startswith('attribute_exists('):
+                return True
+            if clause.startswith('(attribute_not_exists('):
+                name = clause[len('(attribute_not_exists(') :].split(')')[0]
+                return row.get(names[name]) is None
+            name, value = [part.strip() for part in clause.split('=')]
+            return row.get(names[name]) == values[value]
+
+        condition = request.get('ConditionExpression')
+        if condition and not all(holds(c) for c in condition.split(' AND ')):
             raise ClientError(
                 {
                     'Error': {
                         'Code': 'ConditionalCheckFailedException',
-                        'Message': f'stored {row["updated_on"]} != expected {values[":expected_updated_on"]}',
+                        'Message': f'stored {row["updated_on"]}: {condition}',
                     }
                 },
                 'UpdateItem',
             )
         old = deepcopy(row)
-        row.update(
-            {
-                name: values[':' + name]
-                for name in request['ExpressionAttributeNames'].values()
-            }
-        )
+        for assignment in request['UpdateExpression'][len('SET ') :].split(', '):
+            name, value = [part.strip() for part in assignment.split('=')]
+            row[names[name]] = values[value]
         return {'Attributes': old}
 
     table.update_item.side_effect = update_item
@@ -862,7 +871,7 @@ def test_planned_reboot_completes_through_normal_resume_and_validation(
     assert not recovery.row['recovering']
     recovery.handler.session_counter_db = handler.session_counter_db
     recovery.broker.describe_sessions.return_value = {
-        'sessions': {'old-dcv': {'state': 'READY'}}
+        'sessions': {'old-dcv': {'state': 'READY', 'server': {'ip': '10.0.0.5'}}}
     }
     recovery.handler.handle_event('validation', 'controller', event)
     assert recovery.row['state'] == 'READY'

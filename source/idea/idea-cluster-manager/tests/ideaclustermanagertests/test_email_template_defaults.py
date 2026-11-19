@@ -148,3 +148,63 @@ def test_the_superseded_lists_are_hashes_of_earlier_texts_only():
         for value in template.get('superseded') or []:
             assert re.fullmatch('[0-9a-f]{64}', value), name
             assert value != default_text_hash(template['subject'], template['body'])
+
+
+class Ordinary(str):
+    """an ordinary value: plain text, with any field of it plain text too"""
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return Ordinary(f'{self}-{name}')
+
+
+@pytest.mark.parametrize('name', sorted(shipped()))
+def test_every_default_template_renders_as_before_for_ordinary_values(name):
+    from jinja2 import Environment, meta
+
+    from ideaclustermanager.app.email_templates.email_templates_service import (
+        render_email,
+    )
+
+    template = shipped()[name]
+    before = Environment()
+    names = set()
+    for text in (template['subject'], template['body']):
+        names |= meta.find_undeclared_variables(before.parse(text))
+    params = {variable: Ordinary(variable) for variable in names}
+    expected = tuple(
+        before.from_string(text).render(**params)
+        for text in (template['subject'], template['body'])
+    )
+    assert render_email(template['subject'], template['body'], params) == expected
+
+
+@pytest.mark.parametrize(
+    'subject,body,reason',
+    [
+        ('{{ cluster_name.__class__ }}', 'body', 'may not'),
+        ('subject', '{% for x in y %}', 'does not compile'),
+    ],
+)
+def test_a_template_that_would_fail_is_refused_when_saved(
+    service, subject, body, reason
+):
+    from ideadatamodel import exceptions
+    from ideadatamodel.email_templates import (
+        CreateEmailTemplateRequest,
+        EmailTemplate,
+        UpdateEmailTemplateRequest,
+    )
+
+    service, table = service([stored_row()])
+    template = EmailTemplate(
+        name=NAME, template_type='jinja2', subject=subject, body=body
+    )
+    for save, request in (
+        (service.create_email_template, CreateEmailTemplateRequest),
+        (service.update_email_template, UpdateEmailTemplateRequest),
+    ):
+        with pytest.raises(exceptions.SocaException, match=reason):
+            save(request(template=template))
+    assert table.rows[NAME]['body'] == STORED_BODY

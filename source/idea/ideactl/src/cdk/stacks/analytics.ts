@@ -15,7 +15,6 @@ import {
   CfnOutput,
   CustomResource as CdkCustomResource,
   Fn,
-  RemovalPolicy,
 } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
@@ -30,7 +29,7 @@ import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
 import { OpenSearch } from '../constructs/analytics.ts';
-import { kmsKeyArn } from '../constructs/base.ts';
+import { kmsKeyArn, removalPolicyByName } from '../constructs/base.ts';
 import {
   CustomResourceProvider,
   KinesisStream,
@@ -45,14 +44,6 @@ export const MODULE_ANALYTICS = 'analytics';
 
 /** `constants.CAVEATS['KINESIS_STREAMS_CLOUDFORMATION_UNSUPPORTED_STREAMMODEDETAILS_REGION_LIST']`. */
 export const KINESIS_STREAM_MODE_UNSUPPORTED_REGIONS = ['us-gov-east-1', 'us-gov-west-1'];
-
-/** `RemovalPolicy` lookup uses member names, not enum values. */
-function removalPolicyByName(name: string): RemovalPolicy {
-  if (!Object.prototype.hasOwnProperty.call(RemovalPolicy, name)) {
-    throw new Error(`'${name}' is not a valid RemovalPolicy`);
-  }
-  return RemovalPolicy[name as keyof typeof RemovalPolicy];
-}
 
 export class AnalyticsStack extends IdeaBaseStack {
   readonly cluster: ExistingSocaCluster;
@@ -152,6 +143,14 @@ export class AnalyticsStack extends IdeaBaseStack {
       this.stack,
       this.cluster.vpc,
     );
+    // The dashboard route forwards from the external load balancer to the domain's addresses.
+    if (this.dashboardsPublished()) {
+      this.securityGroup.addIngressRule(
+        this.cluster.getSecurityGroup('external-load-balancer') as ec2.ISecurityGroup,
+        ec2.Port.tcp(443),
+        'Allow HTTPS from the external load balancer to the OpenSearch dashboards',
+      );
+    }
   }
 
   buildOpenSearch(createServiceLinkedRole: boolean): void {

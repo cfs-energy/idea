@@ -10,6 +10,8 @@
 #  and limitations under the License.
 
 from ideaclustermanager.app.accounts.account_reconciler import AccountReconciler
+import threading
+
 import ideasdk.app
 from ideasdk.auth import TokenService, TokenServiceOptions
 from ideadatamodel import constants
@@ -282,14 +284,59 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         if self.health_collectors is not None:
             self.health_collectors.start()
 
+        self.report_stored_storage_refusals()
+
         try:
             self.context.distributed_lock().acquire(key='initialize-defaults')
             self.context.accounts.create_defaults()
             self.context.projects.create_defaults()
+            self.refresh_project_memberships()
             self.context.email_templates.create_defaults()
         finally:
             self.context.distributed_lock().release(key='initialize-defaults')
         self.personal_costs.start()
+        # home file system work, off the start path so the API listens at once
+        threading.Thread(
+            target=self.set_aside_keys_of_disabled_users,
+            name='disabled-accounts-keys',
+            daemon=True,
+        ).start()
+
+    def set_aside_keys_of_disabled_users(self):
+        try:
+            self.context.accounts.set_aside_keys_of_disabled_users()
+        except Exception as error:
+            self.logger.error(
+                f"disabled users' keys not checked: {type(error).__name__}"
+            )
+
+    def refresh_project_memberships(self):
+        # project rows follow each project's enabled groups: repairs rows left by
+        # group edits that earlier releases never applied
+        try:
+            self.context.projects.user_projects_dao.refresh_all_projects()
+        except Exception as error:
+            self.logger.error(
+                f'project memberships not refreshed: {type(error).__name__}'
+            )
+
+    def report_stored_storage_refusals(self):
+        # values saved before the mount rules existed stay in service; an operator
+        # learns of them here and corrects them through settings
+        from ideaclustermanager.app.settings_catalog import stored_storage_refusals
+
+        try:
+            refused = stored_storage_refusals(self.context.config())
+        except Exception as error:
+            self.logger.warning(
+                f'stored storage settings not checked: {type(error).__name__}'
+            )
+            return
+        for key, reason in refused:
+            self.logger.error(
+                f'stored setting {key} would be refused if saved now ({reason}); it '
+                'stays in service until it is corrected'
+            )
 
     def app_stop(self):
         if self.personal_costs is not None:

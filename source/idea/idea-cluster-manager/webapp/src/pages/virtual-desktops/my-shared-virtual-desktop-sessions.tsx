@@ -133,9 +133,7 @@ class MySharedVirtualDesktopSessions extends Component<MySharedVirtualDesktopPro
     }
 
     onDownloadDcvSessionFile = (permission: VirtualDesktopSessionPermission) => {
-        this.getInfo(permission).then(info => {
-            downloadDcvFile(info, `Shared_Desktop_${permission.idea_session_name}`)
-        }).catch(error => {
+        this.getInfo(permission).then(info => downloadDcvFile(info, `Shared_Desktop_${permission.idea_session_name}`)).catch(error => {
             this.showError(`Could not download the DCV client file for ${permission.idea_session_name}: ${error?.message ?? 'Try again, or ask the owner.'}`)
         })
     }

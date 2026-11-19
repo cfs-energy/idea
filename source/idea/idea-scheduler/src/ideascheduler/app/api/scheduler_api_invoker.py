@@ -30,6 +30,73 @@ class SchedulerApiInvoker(ApiInvokerProtocol):
         self.file_browser_api = FileBrowserAPI(context)
         self.app_api = SocaAppAPI(context)
 
+    # every namespace a handler answers here: each has its own metric series
+    NAMESPACES = (
+        frozenset(
+            {
+                'OpenPBSHook.InstanceTypeInfo',
+                # the server hooks' events, sent as OpenPBSHook.<event> over the local socket
+                # (the execjob_* events go through the job status queue, not this server)
+                'OpenPBSHook.modifyjob',
+                'OpenPBSHook.movejob',
+                'OpenPBSHook.queuejob',
+                'OpenPBSHook.runjob',
+                'Scheduler.DeleteJob',
+                'Scheduler.GetActiveJob',
+                'Scheduler.GetCompletedJob',
+                'Scheduler.GetInstanceTypeOptions',
+                'Scheduler.GetUserApplications',
+                'Scheduler.ListActiveJobs',
+                'Scheduler.ListCompletedJobs',
+                'Scheduler.ListQueues',
+                'Scheduler.SubmitJob',
+                'SchedulerAdmin.BackfillJobMetrics',
+                'SchedulerAdmin.BackfillScratchCleanup',
+                'SchedulerAdmin.BuildComputeImage',
+                'SchedulerAdmin.CheckHpcLicenseResourceAvailability',
+                'SchedulerAdmin.CreateHpcApplication',
+                'SchedulerAdmin.CreateHpcLicenseResource',
+                'SchedulerAdmin.CreateQueueProfile',
+                'SchedulerAdmin.DeleteHpcApplication',
+                'SchedulerAdmin.DeleteHpcLicenseResource',
+                'SchedulerAdmin.DeleteJob',
+                'SchedulerAdmin.DeleteQueueProfile',
+                'SchedulerAdmin.DisableQueueProfile',
+                'SchedulerAdmin.EnableQueueProfile',
+                'SchedulerAdmin.GetHpcApplication',
+                'SchedulerAdmin.GetHpcLicenseResource',
+                'SchedulerAdmin.GetImageSchedule',
+                'SchedulerAdmin.GetJobMetricsBackfill',
+                'SchedulerAdmin.GetQueueProfile',
+                'SchedulerAdmin.GetScratchCleanupStatus',
+                'SchedulerAdmin.GetUserApplications',
+                'SchedulerAdmin.ListActiveJobs',
+                'SchedulerAdmin.ListCompletedJobs',
+                'SchedulerAdmin.ListComputeImages',
+                'SchedulerAdmin.ListHpcApplications',
+                'SchedulerAdmin.ListHpcLicenseResources',
+                'SchedulerAdmin.ListImageRows',
+                'SchedulerAdmin.ListNodes',
+                'SchedulerAdmin.ListQueueProfiles',
+                'SchedulerAdmin.ListScratchCleanupAudit',
+                'SchedulerAdmin.ListScratchCleanupPreview',
+                'SchedulerAdmin.ListScratchCleanupUpcoming',
+                'SchedulerAdmin.PreviewScratchCleanup',
+                'SchedulerAdmin.ProvisionAlwaysOnNodes',
+                'SchedulerAdmin.RefreshImages',
+                'SchedulerAdmin.RollbackImage',
+                'SchedulerAdmin.SetImagePinned',
+                'SchedulerAdmin.UpdateHpcApplication',
+                'SchedulerAdmin.UpdateHpcLicenseResource',
+                'SchedulerAdmin.UpdateQueueProfile',
+            }
+        )
+        | SocaAppAPI.NAMESPACES
+    )
+
+    def get_namespaces(self):
+        return self.NAMESPACES
+
     def get_token_service(self) -> TokenService:
         return self._context.token_service
 

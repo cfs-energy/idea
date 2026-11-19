@@ -1316,7 +1316,8 @@ class BedrockProvisioner:
             'enabled': Utils.get_value_as_bool(
                 'enabled', stored, project.is_bedrock_enabled()
             ),
-            'model_ids': Utils.get_value_as_list('model_ids', stored, model_ids),
+            # get_value_as_list treats a stored [] as missing, which would restore cleared models
+            'model_ids': stored['model_ids'] if 'model_ids' in stored else model_ids,
         }
         if Utils.is_not_empty(role_arn):
             bedrock['role_arn'] = role_arn

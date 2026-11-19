@@ -247,6 +247,8 @@ export interface Deps {
   configWriter(options: ConfigWriterOptions): Promise<ConfigWriter>;
   /** `sts:GetCallerIdentity`, only for the cluster-bucket name fallback. */
   accountId(): Promise<string>;
+  /** An informational line for stderr (the resolved identity); falls back to `err`. */
+  notice?(line: string): void;
   /** Identity used by a command, resolved before the command touches its account. */
   callerIdentity?(options: {
     awsRegion: string;

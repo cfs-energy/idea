@@ -71,7 +71,8 @@ dcv_connection_gateway:
     private_key_secret_arn: {{ dcv_connection_gateway_custom_certificate_private_key_secret_arn if dcv_connection_gateway_custom_certificate_private_key_secret_arn else '~' }}
 
 external_nlb:
-  # external NLB access logs are enabled by default
+  # Network Load Balancer access logs record TLS listeners only. The DCV gateway listeners are TCP
+  # (and UDP for QUIC) and TLS ends in the gateway, so this writes no records today.
   access_logs: true
 
 opensearch:
@@ -296,3 +297,16 @@ vdi_host_backup:
         schedule_expression: "cron(0 5 * * ? *)"
         start_window_minutes: 60 # 1 hour
         completion_window_minutes: 480 # 8 hours
+
+# SHA-256 of <cluster home>/dcv_host/userdata_customizations.sh (sha256sum of the file).
+# The hook runs once, while a new desktop is provisioned; resumed or rebooted desktops do not re-check it.
+# Set, the hook runs only when it matches (case and surrounding spaces ignored); a mismatch STOPS the new
+# desktop before its owner can connect and fails the session with site-hook-mismatch. Empty, the hook runs as before with a logged warning naming the value to set.
+# Recommended; set it again after every edit of the hook.
+dcv_host_site_hook_sha256: ~
+
+# SHA-256 of <cluster home>/<module id>/ami_builder/userdata_customizations.sh (sha256sum of the file).
+# Set, desktop image bakes run the hook only when it matches; a mismatch STOPS that host's bootstrap with
+# site-hook-mismatch. Empty, the hook runs as before with a logged warning naming the value to set.
+# Recommended; set it again after every edit of the hook.
+ami_builder_site_hook_sha256: ~

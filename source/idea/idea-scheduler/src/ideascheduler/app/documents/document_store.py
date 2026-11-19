@@ -662,11 +662,22 @@ class DocumentStore(DocumentStoreProtocol):
             from_=0,
             body={'query': {'terms': {self._term_key('job_id', subfields): job_ids}}},
         )
+        # scratch cleanup decides from this what may be deleted: a partial answer is no
+        # answer (DBL-28). a timed-out or partly failed search, or one that filled the
+        # page, raises, and the caller defers the folder.
+        if Utils.get_value_as_bool('timed_out', results, False):
+            raise exceptions.general_exception('job search timed out')
+        shards = Utils.get_value_as_dict('_shards', results) or {}
+        if Utils.get_value_as_int('failed', shards, 0) > 0:
+            raise exceptions.general_exception('job search failed on some shards')
         hits = Utils.get_value_as_dict('hits', results)
+        entries = Utils.get_value_as_list('hits', hits, [])
+        if len(entries) >= limit:
+            raise exceptions.general_exception(
+                f'job search returned its limit of {limit}; the answer may be partial'
+            )
         return [
-            SocaJob(**entry['_source'])
-            for entry in Utils.get_value_as_list('hits', hits, [])
-            if entry.get('_source')
+            SocaJob(**entry['_source']) for entry in entries if entry.get('_source')
         ]
 
     def search_nodes(self, options: ListNodesRequest, **kwargs) -> ListNodesResult:

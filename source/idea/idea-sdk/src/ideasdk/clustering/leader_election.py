@@ -56,8 +56,16 @@ class LeaderElection(SocaService):
     def loop(self):
         while not self._exit.is_set():
             try:
-                if self.is_leader():
-                    continue
+                if self._is_leader.is_set():
+                    if self.context.distributed_lock().is_held(
+                        self.LEADER_ELECTION_KEY
+                    ):
+                        continue
+                    # the lease lapsed (a long pause, the store out of reach) and may be
+                    # another task's by now: stop leading, then try for it again
+                    self.logger.warning('leader lease lost')
+                    self.context.distributed_lock().release(self.LEADER_ELECTION_KEY)
+                    self._unset_leader()
 
                 self.context.distributed_lock().acquire(key=self.LEADER_ELECTION_KEY)
                 hostname = self.shell.invoke('hostname -s', shell=True)
@@ -75,7 +83,10 @@ class LeaderElection(SocaService):
                 self._exit.wait(self.leader_election_interval)
 
     def is_leader(self) -> bool:
-        return self._is_leader.is_set()
+        # the flag alone stays set after the lease is gone, until the loop next looks
+        return self._is_leader.is_set() and self.context.distributed_lock().is_held(
+            self.LEADER_ELECTION_KEY
+        )
 
     def start(self):
         pass

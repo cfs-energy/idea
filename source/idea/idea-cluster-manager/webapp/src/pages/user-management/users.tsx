@@ -13,6 +13,7 @@
 
 import {IdeaFormValidate} from "../../components/form-field/form-field";
 import React, {Component, RefObject} from "react";
+import {USERNAME_PATTERN, USERNAME_RULE} from "../../common/form-patterns";
 
 import {AppContext} from "../../common";
 import IdeaForm from "../../components/form";
@@ -327,8 +328,8 @@ class Users extends Component<UsersProps, UsersState> {
                               param_type: 'text',
                               validate: {
                                   required: true,
-                                  regex: '^(?=.{3,32}$)(?![_.])(?!.*[_.]{2})[a-z0-9._]+(?<![_.])$',
-                                  message: 'Use 3 to 32 lowercase letters, digits, dots or underscores. Start and end with a letter or digit.'
+                                  regex: USERNAME_PATTERN,
+                                  message: USERNAME_RULE
                               } as IdeaFormValidate
                           },
                           {

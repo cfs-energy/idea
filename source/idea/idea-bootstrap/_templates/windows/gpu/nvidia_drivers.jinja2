@@ -44,6 +44,8 @@ function Install-NvidiaGpuDrivers {
             $installerFolderPrefix = "nvidia_grid_driver"
             Write-ToLog -Message "Downloading Nvidia Drivers from S3"
             $env:Path += ";C:\Program Files\Amazon\AWSCLIV2\"
+            # setup.exe runs from this folder: nothing from an earlier copy or extraction may remain
+            Remove-Item "C:\IDEA\Assets\${installerFolderPrefix}" -Recurse -Force -ErrorAction SilentlyContinue
 
             aws s3 cp --region $bucketRegion --quiet $s3Path "C:\IDEA\Assets\${installerFolderPrefix}" --recursive --exclude "*" --include "$keyPrefix*"
 
@@ -68,6 +70,11 @@ function Install-NvidiaGpuDrivers {
 
             $env:Path += ";C:\Program Files\7-Zip\"
             7z x $driverFile.FullName -o"C:\IDEA\Assets\${installerFolderPrefix}" -y
+            # 7-Zip: 0 is success, 1 a warning; 2 and above mean the archive was not extracted
+            if ($LASTEXITCODE -gt 1 -or -not (Test-Path "C:\IDEA\Assets\${installerFolderPrefix}\setup.exe")) {
+                Write-ToLog -Message "Extracting $($driverFile.Name) failed (7-Zip exit code $LASTEXITCODE), cannot install NVIDIA drivers" -Level 'Error'
+                exit 1
+            }
 
             # Install Driver
             Write-ToLog -Message "About to execute C:\IDEA\Assets\${installerFolderPrefix}\setup.exe with Arguments -n -s"

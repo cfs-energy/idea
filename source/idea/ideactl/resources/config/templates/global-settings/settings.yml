@@ -35,6 +35,9 @@ package_config:
     # if download_link is empty, download_link_pattern below is used instead.
     # CN and GovCloud partitions need to adjust download_link_pattern accordingly.
     download_link_pattern: https://s3.%region%.amazonaws.com/amazoncloudwatch-agent-%region%/%os%/%architecture%/latest/amazon-cloudwatch-agent.%ext%
+    # SHA-256 digests (space or comma separated) of versioned packages, one per OS family and
+    # architecture the hosts resolve; when set, they are checked instead of the package's .sig.
+    sha256: ~
 
   aws_ssm:
     x86_64: https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
@@ -386,6 +389,9 @@ package_config:
       linux:
         x86_64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.linux-amd64.tar.gz
         aarch64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.linux-arm64.tar.gz
+        # SHA-256 of an archive at another URL (a mirror or version); shipped releases need none
+        x86_64_sha256: ~
+        aarch64_sha256: ~
       windows:
         x86_64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.windows-amd64.zip
         aarch64: https://github.com/prometheus/prometheus/releases/download/v2.53.5/prometheus-2.53.5.windows-arm64.zip
@@ -394,11 +400,15 @@ package_config:
         linux:
           x86_64: https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz
           aarch64: https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-arm64.tar.gz
+          x86_64_sha256: ~
+          aarch64_sha256: ~
   {% endif %}
 
   # git tag of https://github.com/aws/efs-utils built from source on RHEL, Rocky and Ubuntu hosts.
   efs_utils:
     version: v3.3.0
+    # commit the version's tag names, for a version other than v3.3.0
+    commit: ~
 
   {% if 'scheduler' in enabled_modules %}
   # version is documentation only (efa.jinja2 reads url/checksum); keep all three aligned.

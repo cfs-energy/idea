@@ -208,3 +208,12 @@ def test_the_pricing_client_is_built_with_that_config():
     # explorer
     assert 'AWS_CLIENT_COST_EXPLORER, AWS_CLIENT_PRICING' in source
     assert 'config = REPORTING_CLIENT_CONFIG' in source
+
+
+def test_an_answer_with_no_on_demand_rate_is_unavailable_not_free(price_list):
+    # SLP-19: an empty answer was cached as a price of 0.00
+    pricing = StubPricing()  # answers PriceList: []
+    aws_util = StubAWSUtil(pricing)
+    assert aws_util.get_ec2_instance_type_unit_price(INSTANCE_TYPE) is None
+    assert aws_util.get_ec2_instance_type_unit_price(INSTANCE_TYPE) is None
+    assert len(pricing.requests) == 1

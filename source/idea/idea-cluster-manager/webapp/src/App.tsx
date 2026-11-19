@@ -55,7 +55,7 @@ import HpcLicenses from "./pages/hpc/hpc-licenses";
 import HpcCustomAmis from "./pages/hpc/hpc-custom-amis";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
+import {HELP_REHYPE_PLUGINS} from "./common/help-markdown";
 import {applyDensity, applyMode, Density, Mode} from "@cloudscape-design/global-styles";
 import UpdateHpcLicense from "./pages/hpc/update-hpc-license";
 import VirtualDesktopPermissionProfiles from "./pages/virtual-desktops/virtual-desktop-permission-profiles";
@@ -220,6 +220,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
     onLogout = (): Promise<boolean> => {
         // Every session end reaches this hook: sign-out, expiry, refresh failure and expired-token API responses.
         shellStore.endSession()
+        AppContext.get().getClusterSettingsService().reset()
         return new Promise((resolve, _) => {
             this.setState({
                 isLoggedIn: false,
@@ -269,7 +270,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                         this.setState({
                             tools: (<HelpPanel
                                 header={<ReactMarkdown children={header}/>}
-                                children={<ReactMarkdown children={children} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}/>}
+                                children={<ReactMarkdown children={children} remarkPlugins={[remarkGfm]} rehypePlugins={HELP_REHYPE_PLUGINS}/>}
                                 footer={<SpaceBetween size="m">
                                     <Header variant="h3">API reference</Header>
                                     {([
@@ -284,7 +285,7 @@ class IdeaWebPortalApp extends Component<IdeaWebPortalAppProps, IdeaWebPortalApp
                                         </SpaceBetween>
                                     })}
                                     <Link href="#/">Introduction</Link>
-                                    <ReactMarkdown children={footerContent} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}/>
+                                    <ReactMarkdown children={footerContent} remarkPlugins={[remarkGfm]} rehypePlugins={HELP_REHYPE_PLUGINS}/>
                                 </SpaceBetween>}
                             />)
                         })

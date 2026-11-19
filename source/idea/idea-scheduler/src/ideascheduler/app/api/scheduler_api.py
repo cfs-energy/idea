@@ -55,11 +55,14 @@ from threading import BoundedSemaphore, Event, RLock, Thread
 from typing import Optional
 
 import ideascheduler
+import errno
 import grp
 import os
 import pwd
 import re
-import shutil
+import shlex
+import stat
+import subprocess
 
 QSUB_DIRECTIVE_ERROR = 'qsub: directive error:'
 
@@ -84,6 +87,11 @@ def qsub_directive_refusal(stderr: Optional[str]) -> Optional[str]:
 # how long a completed submission can be replayed for: must be at least
 # SERVICE_WORKER_REPLY_TIMEOUT (660s), the delay before the webapp shows a client timeout.
 JOB_SUBMISSION_DEDUPE_TTL_SECONDS = 900
+# the SDK server's default request worker count when scheduler.server.max_workers is unset
+DEFAULT_SERVER_WORKERS = 16
+# shortcut: a fixed bound on a bash submission script, not a setting; make it a
+# scheduler setting if a site's submission scripts legitimately need longer
+BASH_SUBMISSION_TIMEOUT_SECONDS = 300
 JOB_SUBMISSION_DEDUPE_MAX_ENTRIES = 512
 # same shape as the api envelope's request_id: the value is used as a cache key and is logged.
 PATTERN_CLIENT_SUBMISSION_ID = r'^[0-9a-zA-Z-_]{1,64}$'
@@ -219,6 +227,68 @@ def chown_fd(fd: int, user: str, group: str):
     os.fchown(fd, pwd.getpwnam(user).pw_uid, grp.getgrnam(group).gr_gid)
 
 
+def account_uid(user: str) -> int:
+    return pwd.getpwnam(user).pw_uid
+
+
+def open_jobs_dir(jobs_dir: str, user: str, group: str) -> int:
+    """
+    open the owner's jobs folder, creating it when missing. it is created and opened
+    relative to the opened home folder, and a new one is handed to the owner through its
+    descriptor. a link there is used only when the folder it reaches already belongs to the
+    owner. the caller works through the returned descriptor and closes it.
+    """
+    home, name = os.path.split(jobs_dir)
+    try:
+        home_fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        raise exceptions.general_exception(
+            f'the home folder {home} does not exist. ask an administrator to create it.'
+        )
+    try:
+        try:
+            os.mkdir(name, dir_fd=home_fd)
+            created = True
+        except FileExistsError:
+            created = False
+        try:
+            fd = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home_fd
+            )
+            linked = False
+        except OSError as e:
+            if e.errno not in (errno.ELOOP, errno.ENOTDIR):
+                raise
+            # a link to a folder elsewhere (scratch, to save home quota) is followed only to
+            # the descriptor, which is then checked below; it is never handed over
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=home_fd)
+            except OSError:
+                raise exceptions.general_exception(
+                    f'{jobs_dir} is not a folder or a link to one. remove it and try again.'
+                )
+            linked = True
+    finally:
+        os.close(home_fd)
+    try:
+        info = os.fstat(fd)
+        # a folder made here a moment ago belongs to this process and is still empty
+        fresh = created and not linked and info.st_uid == os.geteuid()
+        fresh = fresh and not os.listdir(fd)
+        if not stat.S_ISDIR(info.st_mode) or (
+            info.st_uid != account_uid(user) and not fresh
+        ):
+            raise exceptions.general_exception(
+                f'{jobs_dir} does not belong to {user}. ask an administrator to fix its owner.'
+            )
+        if fresh:
+            chown_fd(fd, user=user, group=group)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 class JobSubmissionEntry:
     def __init__(self, fingerprint: str, result: Optional[SubmitJobResult] = None):
         self.fingerprint = fingerprint
@@ -301,6 +371,14 @@ class SchedulerAPI(BaseAPI):
         self.logger = context.logger('scheduler-api')
         self.group_name_helper = GroupNameHelper(context)
         self.job_submission_deduplicator = JobSubmissionDeduplicator()
+        # a submission holds a request worker inside qsub while qsub waits for the PBS
+        # hook, whose answer needs a worker from the same pool; past half the pool, a
+        # submission is refused as busy instead of starving the hooks (SCHED-14)
+        workers = self.context.config().get_int(
+            'scheduler.server.max_workers', default=DEFAULT_SERVER_WORKERS
+        )
+        workers = workers if isinstance(workers, int) else DEFAULT_SERVER_WORKERS
+        self.submission_slots = BoundedSemaphore(max(1, workers // 2))
 
         self.SCOPE_WRITE = f'{self.context.module_id()}/write'
         self.SCOPE_READ = f'{self.context.module_id()}/read'
@@ -484,6 +562,17 @@ class SchedulerAPI(BaseAPI):
                 'job_script_interpreter must be one of [pbs, bash]'
             )
 
+        # the project names one the owner belongs to, the same list the submit hook checks
+        if Utils.is_not_empty(request.project) and request.project not in {
+            project.name
+            for project in self.context.projects_client.get_user_projects(
+                username=job_owner
+            )
+        }:
+            raise exceptions.invalid_params(
+                f'You are not a member of project {request.project!r}.'
+            )
+
         if Utils.is_not_empty(client_submission_id) and not re.match(
             PATTERN_CLIENT_SUBMISSION_ID, client_submission_id
         ):
@@ -540,6 +629,23 @@ class SchedulerAPI(BaseAPI):
         job_owner: str,
         dry_run: Optional[DryRunOption],
     ) -> SubmitJobResult:
+        if not self.submission_slots.acquire(blocking=False):
+            raise exceptions.soca_exception(
+                errorcodes.SCHEDULER_QUEUE_BUSY,
+                'The scheduler is busy with other job submissions. Try again in a few '
+                'seconds.',
+            )
+        try:
+            return self._submit_job_in_slot(request, job_owner, dry_run)
+        finally:
+            self.submission_slots.release()
+
+    def _submit_job_in_slot(
+        self,
+        request: SubmitJobRequest,
+        job_owner: str,
+        dry_run: Optional[DryRunOption],
+    ) -> SubmitJobResult:
         job_script = request.job_script
         job_script_interpreter = request.job_script_interpreter
 
@@ -547,16 +653,6 @@ class SchedulerAPI(BaseAPI):
             'shared-storage.data.mount_dir', required=True
         )
         job_submission_dir = os.path.join(data_dir, 'home', job_owner, 'jobs')
-
-        if Utils.is_symlink(job_submission_dir):
-            raise exceptions.general_exception(
-                f'a symbolic link exists at location: {job_submission_dir}. delete the symbolic link and try again.'
-            )
-
-        if not Utils.is_dir(job_submission_dir):
-            os.makedirs(job_submission_dir)
-            group_name = self.group_name_helper.get_user_group(job_owner)
-            shutil.chown(job_submission_dir, user=job_owner, group=group_name)
 
         job_uid = Utils.short_uuid()
         # Try to extract job name from PBS script if present
@@ -586,37 +682,36 @@ class SchedulerAPI(BaseAPI):
             )
 
         group_name = self.group_name_helper.get_user_group(job_owner)
-        # the script is created relative to the opened jobs dir and chowned through its fd,
-        # so nothing swapped in between the checks above and the write can redirect it.
-        dir_fd = os.open(
-            job_submission_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        )
+        # the script is created relative to the jobs dir opened and checked here and chowned
+        # through its fd, so nothing swapped in at the path can redirect it.
+        dir_fd = open_jobs_dir(job_submission_dir, user=job_owner, group=group_name)
+
+        # the script stays in the owner's jobs dir, where the owner and an administrator read
+        # it afterwards, when the job was queued or a dry run passed; the result then names it.
+        # a refusal, a failed dry run or an exception leaves no file behind. it is written and
+        # removed only through dir_fd, never by its path, which the owner can change.
+        keep_script = False
+        # a bash script's output: kept for the owner only when the script failed
+        log_name = None
+        keep_log = False
         try:
             with open_new_job_script(script_name, dir_fd=dir_fd) as f:
                 f.write(Utils.base64_decode(job_script))
                 f.write('\n')
                 chown_fd(f.fileno(), user=job_owner, group=group_name)
-        finally:
-            os.close(dir_fd)
 
-        # the script stays in the owner's jobs dir, where the owner and an administrator read
-        # it afterwards, when the job was queued or a dry run passed; the result then names it.
-        # a refusal, a failed dry run or an exception leaves no file behind.
-        keep_script = False
-        try:
             if job_script_interpreter == 'pbs':
-                job_submit_command = ['cd', job_submission_dir, '&&', 'qsub']
+                command = ['qsub']
                 if dry_run is not None:
-                    job_submit_command += ['-l', f'dry_run={dry_run}']
+                    command += ['-l', f'dry_run={dry_run.value}']
                 if Utils.is_not_empty(request.project):
-                    job_submit_command += ['-P', f'"{request.project}"']
+                    command += ['-P', request.project]
+                command += ['-l', f'job_uid={job_uid}', job_submit_script]
 
-                job_submit_command += ['-l', f'job_uid={job_uid}', job_submit_script]
-                job_submit_command_str = ' '.join(job_submit_command)
-                command = ['su', job_owner, '-c', f'{job_submit_command_str}']
-
-                self.logger.info(' '.join(command))
-                result = self.context.shell.invoke(command)
+                self.logger.info(f'as {job_owner}: {shlex.join(command)}')
+                result = self.context.shell.invoke_as_user(
+                    job_owner, command, cwd=job_submission_dir
+                )
 
                 job_id = None
                 if result.returncode == 0:
@@ -649,7 +744,7 @@ class SchedulerAPI(BaseAPI):
                     submission_result.job.job_id = job_id
 
                 # a refused submission is a failure, not a success with accepted=False. use the
-                # hook's own message text - the shell repr leaks the su command line and home path.
+                # hook's own message text - the shell repr leaks the command line and home path.
                 if dry_run is None and result.returncode != 0:
                     self.logger.error(f'Failed to submit job: {result}')
                     reason = (
@@ -680,19 +775,41 @@ class SchedulerAPI(BaseAPI):
                 return submission_result
 
             elif job_script_interpreter == 'bash':
-                job_submit_command = [
-                    'cd',
-                    job_submission_dir,
-                    '&&',
-                    'bash',
-                    job_submit_script,
-                ]
+                # a bash script is run, not validated: a dry run would submit for real
+                if dry_run is not None:
+                    raise exceptions.invalid_params(
+                        'A dry run is not available for bash scripts. Submit the job, '
+                        'or use a PBS script to check it first.'
+                    )
+                command = ['bash', job_submit_script]
 
-                job_submit_command_str = ' '.join(job_submit_command)
-                command = ['su', job_owner, '-c', f'{job_submit_command_str}']
-
-                self.logger.info(' '.join(command))
-                result = self.context.shell.invoke(command)
+                # the script's output goes to <script>.log in the owner's jobs folder,
+                # never into this service's memory or log; it is kept when the script fails
+                log_name = f'{script_name}.log'
+                with open_new_job_script(log_name, dir_fd=dir_fd) as log:
+                    chown_fd(log.fileno(), user=job_owner, group=group_name)
+                    self.logger.info(f'as {job_owner}: {shlex.join(command)}')
+                    try:
+                        result = self.context.shell.invoke_as_user(
+                            job_owner,
+                            command,
+                            cwd=job_submission_dir,
+                            timeout=BASH_SUBMISSION_TIMEOUT_SECONDS,
+                            output_fd=log.fileno(),
+                        )
+                    except subprocess.TimeoutExpired:
+                        keep_log = True
+                        self.logger.error(
+                            f'bash submission did not finish in '
+                            f'{BASH_SUBMISSION_TIMEOUT_SECONDS} s: {shlex.join(command)}'
+                        )
+                        raise exceptions.soca_exception(
+                            errorcodes.JOB_SUBMISSION_FAILED,
+                            f'The submission script did not finish within '
+                            f'{BASH_SUBMISSION_TIMEOUT_SECONDS} seconds. A submission '
+                            f'script should submit the job and end; run long work inside '
+                            f'the job. Its output is in {job_submit_script}.log.',
+                        )
 
                 if result.returncode == 0:
                     keep_script = True
@@ -700,17 +817,27 @@ class SchedulerAPI(BaseAPI):
                         accepted=True, job_script_path=job_submit_script
                     )
                 else:
-                    self.logger.error(f'Failed to submit job: {result}')
+                    keep_log = True
+                    self.logger.error(
+                        f'bash submission as {job_owner} exited {result.returncode}'
+                    )
                     raise exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
-                        JOB_INTERNAL_ERROR_MESSAGE,
+                        f'The submission script exited with status {result.returncode}. '
+                        f'Its output is in {job_submit_script}.log.',
                     )
         finally:
             if not keep_script:
                 try:
-                    os.remove(job_submit_script)
+                    os.unlink(script_name, dir_fd=dir_fd)
                 except OSError:
                     pass
+            if log_name is not None and not keep_log:
+                try:
+                    os.unlink(log_name, dir_fd=dir_fd)
+                except OSError:
+                    pass
+            os.close(dir_fd)
 
     def list_queues(self, context: ApiInvocationContext):
         """

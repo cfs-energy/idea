@@ -136,6 +136,31 @@ def _round(value: float) -> float:
     return round(Utils.get_as_float(value, 0.0), 4)
 
 
+def empty_user_costs(username: str) -> UserCosts:
+    return UserCosts(
+        username=username,
+        ai_requests=0,
+        ai_tokens=0,
+        ai_cost=0.0,
+        desktop_session_count=0,
+        desktop_hours=0.0,
+        desktop_cost=0.0,
+        desktop_unpriced_sessions=0,
+        job_count=0,
+        job_cost=0.0,
+        job_unpriced_jobs=0,
+        total_cost=0.0,
+    )
+
+
+def _overlapping_sessions(start_ms: int) -> List[Dict]:
+    # VDC writes updated_on only on a change, so a desktop running all window has none in it
+    return [
+        {'range': {'updated_on': {'gte': start_ms}}},
+        {'terms': {'state.raw': sorted(LIVE_SESSION_STATES)}},
+    ]
+
+
 class MyCostsService:
     def __init__(self, context):
         self.context = context
@@ -512,11 +537,9 @@ class MyCostsService:
                 'sort': [{'created_on': {'order': 'desc'}}],
                 'query': {
                     'bool': {
-                        'filter': owner
-                        + [
-                            {'range': {'created_on': {'lte': end_ms}}},
-                            {'range': {'updated_on': {'gte': start_ms}}},
-                        ]
+                        'filter': owner + [{'range': {'created_on': {'lte': end_ms}}}],
+                        'should': _overlapping_sessions(start_ms),
+                        'minimum_should_match': 1,
                     }
                 },
             },
@@ -1086,23 +1109,7 @@ class MyCostsService:
         rows: Dict[str, UserCosts] = {}
 
         def row_for(username: str) -> UserCosts:
-            return rows.setdefault(
-                username,
-                UserCosts(
-                    username=username,
-                    ai_requests=0,
-                    ai_tokens=0,
-                    ai_cost=0.0,
-                    desktop_session_count=0,
-                    desktop_hours=0.0,
-                    desktop_cost=0.0,
-                    desktop_unpriced_sessions=0,
-                    job_count=0,
-                    job_cost=0.0,
-                    job_unpriced_jobs=0,
-                    total_cost=0.0,
-                ),
-            )
+            return rows.setdefault(username, empty_user_costs(username))
 
         ai_unavailable = self._ai_by_user(row_for)
         jobs_unavailable = self._jobs_by_user(row_for, window_start, window_end)
@@ -1313,10 +1320,9 @@ class MyCostsService:
                     'size': 0,
                     'query': {
                         'bool': {
-                            'filter': [
-                                {'range': {'created_on': {'lte': end_ms}}},
-                                {'range': {'updated_on': {'gte': start_ms}}},
-                            ]
+                            'filter': [{'range': {'created_on': {'lte': end_ms}}}],
+                            'should': _overlapping_sessions(start_ms),
+                            'minimum_should_match': 1,
                         }
                     },
                     'aggs': {

@@ -120,3 +120,46 @@ def test_nothing_else_writes_to_the_cleanup_table(mail, template, receipt):
     mail.ses.verify_email_identity(EmailAddress=SENDER)
     send(mail, template, receipt)
     assert receipts(mail) == []
+
+
+def mail_with(mail, subject, body, params):
+    mail.service.email_templates = SimpleNamespace(
+        get_email_template=lambda request: SimpleNamespace(
+            template=SimpleNamespace(subject=subject, body=body)
+        )
+    )
+    sent = []
+    mail.service.context.aws = lambda: SimpleNamespace(
+        ses=lambda region_name: SimpleNamespace(
+            send_email=lambda **kwargs: sent.append(kwargs['Message'])
+        )
+    )
+    mail.service.send_email(
+        Notification(
+            username='alice',
+            template_name='virtual-desktop-controller.x',
+            params=params,
+        )
+    )
+    return sent
+
+
+def test_a_value_with_markup_arrives_as_text_in_the_html_body(mail):
+    sent = mail_with(
+        mail,
+        'Desktop {{session.name}}',
+        '<b>{{session.name}}</b> is ready',
+        {'session': {'name': '<i>mine</i> & yours'}},
+    )
+    assert sent[0]['Subject']['Data'] == 'Desktop <i>mine</i> & yours'
+    assert sent[0]['Body']['Html']['Data'] == (
+        '<b>&lt;i&gt;mine&lt;/i&gt; &amp; yours</b> is ready'
+    )
+
+
+def test_a_template_reaching_past_its_values_fails_only_its_email(mail):
+    sent = mail_with(
+        mail, 'subject', '{{ cluster_name.__class__ }}', {'cluster_name': 'c'}
+    )
+    assert sent == []
+    mail.service.logger.exception.assert_called_once()

@@ -26,17 +26,10 @@ import {
   buildServicePrincipal,
   constructId,
   isDsActivedirectory,
+  removalPolicyByName,
   resourceName,
 } from './base.ts';
 import { LOG_RETENTION_DAYS } from './common.ts';
-
-/** `RemovalPolicy` lookup uses member names, not enum values. */
-function removalPolicyByName(name: string): RemovalPolicy {
-  if (!Object.prototype.hasOwnProperty.call(RemovalPolicy, name)) {
-    throw new Error(`'${name}' is not a valid RemovalPolicy`);
-  }
-  return RemovalPolicy[name as keyof typeof RemovalPolicy];
-}
 
 /** `config.get_int(key, required=True)`: a missing or NULL value raises. */
 function requiredInt(ctx: IdeaContext, key: string): number {
@@ -569,6 +562,8 @@ export class VirtualDesktopPublicLoadBalancerAccessSecurityGroup extends Securit
 
 export interface VirtualDesktopBrokerSecurityGroupProps {
   bastionHostSecurityGroup: ec2.ISecurityGroup;
+  /** The internal load balancer, the only path the controller and the gateway take to the broker. */
+  internalLoadBalancerSecurityGroup: ec2.ISecurityGroup;
   description: string;
   componentName: string;
   publicLoadbalancerSecurityGroup: ec2.ISecurityGroup;
@@ -578,6 +573,7 @@ export class VirtualDesktopBrokerSecurityGroup extends SecurityGroup {
   readonly componentName: string;
   readonly publicLoadbalancerSecurityGroup: ec2.ISecurityGroup;
   readonly bastionHostSecurityGroup: ec2.ISecurityGroup;
+  readonly internalLoadBalancerSecurityGroup: ec2.ISecurityGroup;
 
   constructor(
     ctx: IdeaContext,
@@ -590,6 +586,7 @@ export class VirtualDesktopBrokerSecurityGroup extends SecurityGroup {
     this.componentName = props.componentName;
     this.publicLoadbalancerSecurityGroup = props.publicLoadbalancerSecurityGroup;
     this.bastionHostSecurityGroup = props.bastionHostSecurityGroup;
+    this.internalLoadBalancerSecurityGroup = props.internalLoadBalancerSecurityGroup;
     this.setupIngress();
     this.setupEgress();
   }
@@ -602,22 +599,17 @@ export class VirtualDesktopBrokerSecurityGroup extends SecurityGroup {
       'virtual-desktop-controller.dcv_broker.gateway_communication_port',
     );
 
-    const brokerPortList = [brokerClientPort, brokerAgentPort, brokerGatewayPort].sort((a, b) => a - b);
-    const minPort = brokerPortList[0] as number;
-    const maxPort = brokerPortList[brokerPortList.length - 1] as number;
+    // The client API answers any token the user pool signs and the gateway port resolves sessions,
+    // so both are reached only through the internal load balancer, whose listeners admit the
+    // controller and the gateway. Desktop agents keep the VPC rule.
     const vpcCidr = ec2.Peer.ipv4(this.vpc.vpcCidrBlock);
-
-    // one range rule when the three ports are consecutive (`sorted == range(min, max + 1)`)
-    if (brokerPortList.every((port, index) => port === minPort + index)) {
+    this.addIngressRule(vpcCidr, ec2.Port.tcp(brokerAgentPort), `Allow VPC to broker port ${brokerAgentPort}`);
+    for (const port of [brokerClientPort, brokerGatewayPort]) {
       this.addIngressRule(
-        vpcCidr,
-        ec2.Port.tcpRange(minPort, maxPort),
-        `Allow VPC to broker ports ${minPort}-${maxPort}`,
+        this.internalLoadBalancerSecurityGroup,
+        ec2.Port.tcp(port),
+        `Allow the internal load balancer to broker port ${port}`,
       );
-    } else {
-      for (const port of brokerPortList) {
-        this.addIngressRule(vpcCidr, ec2.Port.tcp(port), `Allow VPC to broker port ${port}`);
-      }
     }
 
     // broker to broker communications; hard-coded in the templates too
@@ -648,17 +640,37 @@ export class OpenSearchSecurityGroup extends SecurityGroup {
     this.setupEgress();
   }
 
+  /**
+   * The domain answers unsigned requests, so who can reach it is the access control. The analytics
+   * sink runs in this group; the control-plane services add their own rules from their stacks
+   * (`admitToOpenSearch`). A fresh install creates this group first; an upgrade redeploys it last
+   * (deployment-helper `runPriority`), so the services hold their rules before the VPC-wide one goes.
+   */
   setupIngress(): void {
-    this.addIngressRule(
-      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
-      ec2.Port.tcp(443),
-      'Allow HTTPS traffic from all VPC nodes to OpenSearch',
-    );
+    this.addIngressRule(this, ec2.Port.tcp(443), 'Allow HTTPS from the analytics sink to OpenSearch');
   }
 
   setupEgress(): void {
     this.addOutboundTrafficRule();
   }
+}
+
+/**
+ * Lets a control-plane service's security group reach the cluster's OpenSearch domain on 443. The
+ * rule lives in the service's stack, which deploys after analytics, and is skipped on a cluster
+ * with no analytics group.
+ */
+export function admitToOpenSearch(ctx: IdeaContext, scope: Construct, source: ec2.ISecurityGroup, service: string): ec2.CfnSecurityGroupIngress | undefined {
+  const groupId = ctx.config.getString('analytics.opensearch.security_group_id');
+  if (isEmpty(groupId)) return undefined;
+  return new ec2.CfnSecurityGroupIngress(scope, 'opensearch-ingress', {
+    groupId: groupId as string,
+    sourceSecurityGroupId: source.securityGroupId,
+    ipProtocol: 'tcp',
+    fromPort: 443,
+    toPort: 443,
+    description: `Allow HTTPS from ${service} to OpenSearch`,
+  });
 }
 
 /** No rules at all, so the L2 emits its "Disallow all traffic" placeholder egress. */
@@ -793,6 +805,13 @@ export class WebAcl {
         cloudWatchMetricsEnabled: true,
         metricName: `${clusterName}-${name}`,
         sampledRequestsEnabled: true,
+      },
+      // A signed-in user's bearer token and cookies never reach the WAF log or the sampled requests.
+      dataProtectionConfig: {
+        dataProtections: ['authorization', 'cookie'].map((header) => ({
+          action: 'SUBSTITUTION',
+          field: { fieldType: 'SINGLE_HEADER', fieldKeys: [header] },
+        })),
       },
       tags: [
         { key: 'Name', value: `${clusterName}-${name}` },
@@ -956,6 +975,7 @@ export class WebAcl {
         logDestinationConfigs: [this.logGroup.logGroupArn],
         resourceArn: this.webAcl.attrArn,
         loggingFilter,
+        redactedFields: [{ singleHeader: { Name: 'authorization' } }, { singleHeader: { Name: 'cookie' } }],
       },
     );
 

@@ -80,7 +80,7 @@ runs:
       run: |
         python -m venv venv
         source venv/bin/activate
-        python -m pip install -r requirements/dev.txt
+        python -m pip install --require-hashes -r requirements/dev.txt
     - name: Activate virtual environment
       shell: bash
       run: |

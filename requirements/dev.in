@@ -1,6 +1,6 @@
 -r runtime.in
 openapi-pydantic
 pytest
-pytest-mock
 pytest-cov
+# exact: mock_aws behaviour shifts between releases; move it in its own reviewed update
 moto==5.2.5

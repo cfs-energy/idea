@@ -18,8 +18,11 @@ Tokens also work with the scheduler and virtual desktop controller API endpoints
 They act as your user, with your current groups and permissions checked on every
 call. An administrator token has administrator rights. Group removal removes that
 access on the next call, and disabled or deleted accounts cannot use tokens.
-Tokens cannot grant permissions beyond those of their owner. They cannot open the
-web terminal; that needs a signed-in session.
+Tokens cannot grant permissions beyond those of their owner.
+
+A token can do anything your account can do through the API, including submitting
+jobs, starting desktops that run as you, and fetching your SSH key. It cannot open
+the web terminal; that needs a signed-in session. Keep a token as safe as a password.
 
 Choose **Revoke** beside a token to delete it. Revocation takes effect across services
 within 60 seconds. Expired tokens are refused even while cached. Create a replacement

@@ -25,6 +25,9 @@ from ideasdk.auth import TokenService, TokenServiceOptions
 from ideasdk.server import SocaServerOptions
 
 import ideavirtualdesktopcontroller
+from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
+    initialize_desktop_cleanup_table,
+)
 from ideavirtualdesktopcontroller.app.api import VirtualDesktopApiInvoker
 from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     preferred_subnet_pin_warning,
@@ -157,6 +160,13 @@ class VirtualDesktopControllerApp(ideasdk.app.SocaApp):
             self._session_permissions_db,
         ):
             db.initialize()
+        try:
+            initialize_desktop_cleanup_table(self.context)
+        except Exception as e:
+            # without it no warned desktop is deleted, which is the safe side
+            self.context.logger('virtual-desktop-controller-app').error(
+                f'the desktop cleanup receipt table could not be initialized: {e}'
+            )
         self._initialize_image_builds()
 
     def _initialize_image_builds(self):

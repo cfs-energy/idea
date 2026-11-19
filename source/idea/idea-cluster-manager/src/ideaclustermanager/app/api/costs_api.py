@@ -4,7 +4,10 @@ from ideasdk.api import ApiInvocationContext, BaseAPI
 from ideadatamodel import exceptions, GetUserCostsSummaryRequest
 from ideasdk.utils import Utils
 
-from ideaclustermanager.app.costs.my_costs_service import MyCostsService
+from ideaclustermanager.app.costs.my_costs_service import (
+    MyCostsService,
+    empty_user_costs,
+)
 from ideaclustermanager.app.costs.personal_costs_store import (
     StoredPersonalCostsService,
     window_storage,
@@ -93,7 +96,14 @@ class CostsAPI(BaseAPI):
             return
 
         storage_unavailable = False
-        for row in result.listing or []:
+        listed = {row.username for row in result.listing or []}
+        # an owner with stored data and no activity in the window has no row yet
+        result.listing = (result.listing or []) + [
+            empty_user_costs(username)
+            for username in sorted(heads or {})
+            if username not in listed
+        ]
+        for row in result.listing:
             try:
                 cost, gigabytes = self._stored_storage(
                     row, heads, result.start_date, result.end_date
@@ -115,6 +125,10 @@ class CostsAPI(BaseAPI):
             row.storage_gb = gigabytes
             row.storage_cost_period = f'{result.start_date} through {result.end_date}'
             row.total_cost = round((row.total_cost or 0) + (row.storage_cost or 0), 2)
+        result.listing = [
+            row for row in result.listing if row.username in listed or row.storage_cost
+        ]
+        result.listing.sort(key=lambda row: row.total_cost or 0, reverse=True)
         result.storage_unavailable = storage_unavailable
         context.success(result)
 

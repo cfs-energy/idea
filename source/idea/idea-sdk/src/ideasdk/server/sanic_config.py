@@ -62,6 +62,8 @@ SANIC_LOGGING_CONFIG = dict(
     },
 )
 
+REQUEST_MAX_SIZE = 10 * 1024 * 1024  # 10 MiB
+
 SANIC_APP_CONFIG = sanic.config.Config(
     {
         'ACCESS_LOG': False,
@@ -82,7 +84,10 @@ SANIC_APP_CONFIG = sanic.config.Config(
         'REQUEST_BUFFER_SIZE': 65536,  # 64 KiB
         'REQUEST_MAX_HEADER_SIZE': 8192,  # 8 KiB, but cannot exceed 16384
         'REQUEST_ID_HEADER': 'X-Request-ID',
-        'REQUEST_MAX_SIZE': 10_000_000_000,  # 10 Gigabytes
+        # every API body is read whole before the handler, so before the caller is known: the
+        # largest is a file saved from the editor (5 MiB at most, about 7 MiB as base64).
+        # Uploads stream, and Sanic lifts this limit for a streaming handler.
+        'REQUEST_MAX_SIZE': REQUEST_MAX_SIZE,
         'REQUEST_TIMEOUT': 600,  # 10-min - large uploads over slow connections
         'RESPONSE_TIMEOUT': 600,  # 10-min - large uploads over slow connections
         'USE_UVLOOP': True,

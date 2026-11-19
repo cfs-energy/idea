@@ -1,7 +1,8 @@
 {# Compute, where the cluster uses FSx for Lustre: keep the kernel series the image boots, as
    desktops do. The package list names `kernel`, which installs the newest one of any series, and
-   the FSx repository has no client for a series Red Hat has only just shipped (5.14.0-741 and
-   6.12.0-264 in 2026-11): the host then boots a kernel with no Lustre module. set_kernel.jinja2
+   the FSx repository has no client for a series Red Hat has only just shipped (6.12.0-264 in
+   2026-11, and 5.14.0-741 until el/9.9 on 2026-11-13): the host then boots a kernel with no
+   Lustre module. set_kernel.jinja2
    installs the newest kernel of the running series that the client has a module for and locks
    it, so the package list cannot move it. Include before system_packages.jinja2; a compute
    node passes lustre_scratch, whether its job asked for an FSx for Lustre scratch.

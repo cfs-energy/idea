@@ -121,6 +121,15 @@ class VirtualDesktopScheduleUtils:
             return True
 
         if (
+            schedule_a.schedule_type == schedule_b.schedule_type
+            and schedule_a.schedule_type == VirtualDesktopScheduleType.CUSTOM_SCHEDULE
+        ):
+            return (schedule_a.start_up_time, schedule_a.shut_down_time) == (
+                schedule_b.start_up_time,
+                schedule_b.shut_down_time,
+            )
+
+        if (
             schedule_a.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE
             or schedule_b.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE
         ):
@@ -132,7 +141,7 @@ class VirtualDesktopScheduleUtils:
 
         return False
 
-    def _delete_schedule(self, schedule: VirtualDesktopSchedule):
+    def _delete_schedule(self, schedule: VirtualDesktopSchedule, idea_session_id: str):
         if (
             Utils.is_empty(schedule)
             or schedule.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE
@@ -143,7 +152,7 @@ class VirtualDesktopScheduleUtils:
         if Utils.is_any_empty(schedule.schedule_id, schedule.day_of_week):
             return
 
-        self._schedule_db.delete(schedule)
+        self._schedule_db.delete(schedule, idea_session_id)
 
     def _create_schedule_for_day_of_week(
         self,
@@ -203,6 +212,8 @@ class VirtualDesktopScheduleUtils:
         elif (
             Utils.is_empty(current_schedule)
             or current_schedule.schedule_type != new_schedule.schedule_type
+            # custom hours that changed: the old row goes and one with the new hours is made
+            or new_schedule.schedule_type == VirtualDesktopScheduleType.CUSTOM_SCHEDULE
         ):
             self._logger.info(
                 f'schedule types mismatch. Delete old, create new for {day_of_week}'
@@ -213,7 +224,7 @@ class VirtualDesktopScheduleUtils:
             current_schedule.schedule_type != VirtualDesktopScheduleType.NO_SCHEDULE
             or Utils.is_not_empty(current_schedule.schedule_id)
         ):
-            self._delete_schedule(current_schedule)
+            self._delete_schedule(current_schedule, idea_session_id)
 
         if create_new:
             new_schedule = self._create_schedule_for_day_of_week(
@@ -304,13 +315,13 @@ class VirtualDesktopScheduleUtils:
         if Utils.is_empty(session.schedule):
             return
 
-        self._delete_schedule(schedule=session.schedule.monday)
-        self._delete_schedule(schedule=session.schedule.tuesday)
-        self._delete_schedule(schedule=session.schedule.wednesday)
-        self._delete_schedule(schedule=session.schedule.thursday)
-        self._delete_schedule(schedule=session.schedule.friday)
-        self._delete_schedule(schedule=session.schedule.saturday)
-        self._delete_schedule(schedule=session.schedule.sunday)
+        self._delete_schedule(session.schedule.monday, session.idea_session_id)
+        self._delete_schedule(session.schedule.tuesday, session.idea_session_id)
+        self._delete_schedule(session.schedule.wednesday, session.idea_session_id)
+        self._delete_schedule(session.schedule.thursday, session.idea_session_id)
+        self._delete_schedule(session.schedule.friday, session.idea_session_id)
+        self._delete_schedule(session.schedule.saturday, session.idea_session_id)
+        self._delete_schedule(session.schedule.sunday, session.idea_session_id)
 
     def trigger_schedule(self, event_time: time, schedule: VirtualDesktopSchedule):
         should_resume = False

@@ -130,6 +130,153 @@ class SshdConfig(unittest.TestCase):
             self.assertEqual(settings[key], value)
 
 
+class TmuxDirectory(unittest.TestCase):
+    """each login gets its own tmux directory under a parent only root writes"""
+
+    HOOK = ROLES / 'user_runtime_dir.sh'
+
+    def run_hook(self, base, user, pam_type='open_session'):
+        env = {
+            'PAM_TYPE': pam_type,
+            'PAM_USER': user,
+            'IDEA_USER_TMUX_BASE': str(base),
+        }
+        subprocess.run(['bash', str(self.HOOK)], env=env, check=True)
+
+    def account(self):
+        """an account the hook can give a directory to: the caller, or nobody when run as root"""
+        import getpass
+        import os
+        import pwd
+
+        if os.getuid() != 0:
+            return getpass.getuser(), os.getuid()
+        # root may give a directory to any account; nobody exists on every CI image
+        return 'nobody', pwd.getpwnam('nobody').pw_uid
+
+    def test_the_session_hook_makes_a_private_directory_for_the_user(self):
+        import stat
+
+        user, uid = self.account()
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_hook(tmp, user)
+            made = Path(tmp) / f'tmux-{uid}'
+            info = made.lstat()
+            self.assertTrue(stat.S_ISDIR(info.st_mode))
+            self.assertEqual(info.st_uid, uid)
+            self.assertEqual(stat.S_IMODE(info.st_mode), 0o700)
+            # a mode loosened since is put back at the next login
+            made.chmod(0o755)
+            self.run_hook(tmp, user)
+            self.assertEqual(stat.S_IMODE(made.lstat().st_mode), 0o700)
+
+    def test_root_gets_no_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_hook(tmp, 'root')
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_only_a_session_open_makes_one(self):
+        user, _ = self.account()
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_hook(tmp, user, 'close_session')
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_the_pam_edit_adds_the_hook_once_and_drops_the_login_uid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pam = Path(tmp) / 'sshd'
+            pam.write_text(
+                'auth       include      postlogin\n'
+                'session    required     pam_loginuid.so\n'
+                'session    include      postlogin\n'
+            )
+            for _ in range(2):
+                subprocess.run(
+                    ['bash', str(ROLES / 'bastion_pam.sh'), str(pam)], check=True
+                )
+            lines = pam.read_text().splitlines()
+        self.assertNotIn('pam_loginuid.so', '\n'.join(lines))
+        hook = 'session optional pam_exec.so quiet /opt/idea/roles/user_runtime_dir.sh'
+        self.assertEqual(lines.count(hook), 1)
+        self.assertEqual(lines[-1], hook)
+
+    def run_tmux(self, tmpdir):
+        """the bastion's tmux wrapper, with a stand-in tmux that reports what it was given"""
+        with tempfile.TemporaryDirectory() as bin_dir:
+            fake = Path(bin_dir) / 'tmux'
+            fake.write_text('#!/bin/bash\necho "dir=${TMUX_TMPDIR-unset} args=$*"\n')
+            fake.chmod(0o755)
+            env = {'PATH': '/usr/bin:/bin', 'IDEA_TMUX_BIN': str(fake)}
+            if tmpdir is not None:
+                env['TMUX_TMPDIR'] = str(tmpdir)
+            return subprocess.run(
+                ['bash', str(ROLES / 'tmux.sh'), 'new', '-A', '-s', 'web'],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+    def test_tmux_uses_the_private_directory_when_the_hook_made_it(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / f'tmux-{os.getuid()}').mkdir(mode=0o700)
+            run = self.run_tmux(tmp)
+        self.assertEqual(run.stdout.strip(), f'dir={tmp} args=new -A -s web')
+        self.assertEqual(run.stderr, '')
+
+    def test_tmux_falls_back_with_a_warning_when_the_directory_is_missing_or_a_link(
+        self,
+    ):
+        import os
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as other,
+        ):
+            missing = self.run_tmux(tmp)
+            (Path(tmp) / f'tmux-{os.getuid()}').symlink_to(other)
+            linked = self.run_tmux(tmp)
+        for run in (missing, linked):
+            self.assertEqual(run.stdout.strip(), 'dir=unset args=new -A -s web')
+            self.assertIn('tmux uses its default location for this session', run.stderr)
+        # without TMUX_TMPDIR it is plain tmux
+        plain = self.run_tmux(None)
+        self.assertEqual(plain.stdout.strip(), 'dir=unset args=new -A -s web')
+        self.assertEqual(plain.stderr, '')
+
+    def test_sshd_points_tmux_at_the_parent_the_role_creates_and_runs_the_hook(self):
+        text = (ROLES / 'bastion.sh').read_text()
+        block = text.split("cat > /etc/ssh/sshd_config <<'EOF'")[1].split('\nEOF')[0]
+        self.assertIn('SetEnv TMUX_TMPDIR=/run/idea-tmux', block.splitlines())
+        lines = text.splitlines()
+        self.assertIn('/opt/idea/roles/bastion_pam.sh /etc/pam.d/sshd', lines)
+        self.assertIn('install -d -m 0755 -o root -g root /run/idea-tmux', lines)
+        self.assertIn(
+            'install -m 0755 /opt/idea/roles/tmux.sh /usr/local/bin/tmux', lines
+        )
+        # all of it before sshd starts
+        self.assertLess(
+            text.index('/opt/idea/roles/bastion_pam.sh'),
+            text.index('/usr/sbin/sshd -t'),
+        )
+        self.assertIn(
+            'BASE="${IDEA_USER_TMUX_BASE:-/run/idea-tmux}"', self.HOOK.read_text()
+        )
+
+    def test_set_id_bits_are_cleared_again_after_the_site_hook(self):
+        text = (ROLES / 'bastion.sh').read_text()
+        hook = text.index('timeout 120 /bin/bash "${HOOK_RUN}"')
+        self.assertLess(hook, text.index('/opt/idea/roles/setid_strip.sh', hook))
+        self.assertLess(
+            text.index('/opt/idea/roles/setid_strip.sh'),
+            text.index('/usr/sbin/sshd -t'),
+        )
+        sched = (ROLES / 'scheduler.sh').read_text()
+        start = sched.index('/opt/pbs/libexec/pbs_init.d start')
+        self.assertLess(start, sched.index('/opt/idea/roles/setid_strip.sh', start))
+
+
 class SshdSourceLimits(unittest.TestCase):
     """brute force is refused per source; health checks and a shared NAT address are not"""
 
@@ -279,7 +426,10 @@ class PbsServerSuffix(unittest.TestCase):
                 'PATH': '/usr/bin:/bin',
             }
             for _ in range(2):  # a restart must not add the zone twice
-                subprocess.run(['bash', '-c', block], env=env, check=True)
+                # as the role runs it
+                subprocess.run(
+                    ['bash', '-c', 'set -euo pipefail\n' + block], env=env, check=True
+                )
             return path.read_text()
 
     def test_job_id_suffix_resolves_through_the_private_zone(self):
@@ -298,7 +448,9 @@ class PbsServerSuffix(unittest.TestCase):
 class SiteHook(unittest.TestCase):
     """the login node runs the site's hook before sshd accepts; a failure never stops the start"""
 
-    def run_block(self, cluster_home, owner_uid=0):
+    def run_block(self, cluster_home, owner_uid=0, digest='match', unreadable=False):
+        """digest: 'match' configures the hook's own SHA-256, None none, anything else that value"""
+        import hashlib
         import subprocess
 
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
@@ -317,13 +469,111 @@ class SiteHook(unittest.TestCase):
             + ' "${@: -1}"; }\n'
             'timeout() { shift; "$@"; }\n'
         )
-        block = 'set -euo pipefail\n' + stub + text[start:end] + 'echo reached-sshd\n'
-        env = {'PATH': '/usr/bin:/bin', 'IDEA_MODULE_ID': 'bastion-host'}
+        if unreadable:
+            # root reads any mode here, so the read failure is stood in
+            stub += 'cat() { [[ "$1" != */userdata_customizations.sh ]] && command cat "$@"; }\n'
+        # the set-id strip changes the machine it runs on; SetIdStripModes and the image check
+        # run the real one. The minute-by-minute recheck runs for the task's life; its line is
+        # checked as text.
+        body = text[start:end]
+        loop = body[
+            body.index('    ( while sleep') : body.index('setid_recheck_pid=$!')
+        ]
+        body = body.replace(loop, '    ( : ) &\n    ')
+        body = body.replace('/opt/idea/roles/setid_strip.sh', 'echo strip-ran')
+        block = 'set -euo pipefail\n' + stub + body + 'echo reached-sshd\n'
+        env = {'PATH': '/usr/bin:/bin:/sbin', 'IDEA_MODULE_ID': 'bastion-host'}
         if cluster_home is not None:
             env['IDEA_CLUSTER_HOME'] = str(cluster_home)
+            hook = Path(cluster_home) / 'bastion-host' / 'userdata_customizations.sh'
+            if digest == 'match' and hook.exists():
+                # upper case, as an operator may paste it
+                env['IDEA_SITE_HOOK_SHA256'] = (
+                    hashlib.sha256(hook.read_bytes()).hexdigest().upper()
+                )
+            elif digest not in (None, 'match'):
+                env['IDEA_SITE_HOOK_SHA256'] = digest
         return subprocess.run(
             ['bash', '-c', block], env=env, capture_output=True, text=True
         )
+
+    @staticmethod
+    def digest(path):
+        import hashlib
+
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    def test_a_configured_digest_is_trimmed_and_compared_in_any_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = self.write_hook(tmp, 'echo ran\n')
+            digest = self.digest(hook)
+            result = self.run_block(tmp, digest=f' \t{digest.upper()} \n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertIn(f'running site hook {hook} (sha256 {digest})', lines)
+        self.assertIn('ran', lines)
+
+    def test_a_configured_digest_that_differs_skips_the_hook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_hook(tmp, 'echo ran\n')
+            result = self.run_block(tmp, digest='0' * 64)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertNotIn('ran', lines)
+        self.assertNotIn('strip-ran --image-list', lines)
+        self.assertIn(f'is not the configured {"0" * 64}', result.stdout)
+        self.assertEqual(lines[-1], 'reached-sshd')
+
+    def test_without_a_digest_the_hook_runs_as_before_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = self.write_hook(tmp, 'echo "ran $0"\n')
+            digest = self.digest(hook)
+            result = self.run_block(tmp, digest=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                f'WARNING: site hook {hook} runs without a checksum; set'
+                f' bastion-host.site_hook_sha256 to {digest} so only this content runs'
+                ' (set it again after each edit)',
+                f'running site hook {hook}',
+                # the shared file itself, as before this release
+                f'ran {hook}',
+                'clearing set-id bits the site hook may have restored on image files',
+                'strip-ran --image-list',
+                'reached-sshd',
+            ],
+        )
+
+    def test_the_checked_copy_runs_not_the_shared_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = self.write_hook(tmp, 'echo "running $0"\n')
+            result = self.run_block(tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ran = [
+            line for line in result.stdout.splitlines() if line.startswith('running /')
+        ]
+        self.assertEqual(len(ran), 1, result.stdout)
+        self.assertNotEqual(ran[0], f'running {hook}')
+
+    def test_a_hook_that_cannot_be_read_is_skipped_and_the_start_goes_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = self.write_hook(tmp, 'echo ran\n')
+            result = self.run_block(tmp, digest=None, unreadable=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [f'skipping site hook {hook}: it cannot be read', 'reached-sshd'],
+        )
+
+    def test_the_image_file_recheck_repeats_while_the_task_runs_and_stops_with_it(self):
+        text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        self.assertIn(
+            '( while sleep "${IDEA_SETID_RECHECK_INTERVAL:-60}"; do'
+            ' /opt/idea/roles/setid_strip.sh --image-list || true; done ) &',
+            text,
+        )
+        self.assertRegex(text, r"trap 'kill [^']*\$\{setid_recheck_pid:-\}")
 
     def write_hook(self, root, body, mode=0o755):
         hook = Path(root) / 'bastion-host' / 'userdata_customizations.sh'
@@ -335,11 +585,18 @@ class SiteHook(unittest.TestCase):
     def test_the_hook_runs_before_sshd_and_its_output_reaches_the_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             hook = self.write_hook(tmp, 'echo tool installed\n')
+            digest = self.digest(hook)
             result = self.run_block(tmp)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),
-            [f'running site hook {hook}', 'tool installed', 'reached-sshd'],
+            [
+                f'running site hook {hook} (sha256 {digest})',
+                'tool installed',
+                'clearing set-id bits the site hook may have restored on image files',
+                'strip-ran --image-list',
+                'reached-sshd',
+            ],
         )
 
     def test_a_missing_hook_or_cluster_home_is_skipped(self):
@@ -354,7 +611,13 @@ class SiteHook(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines()[1:],
-            ['partial', 'site hook failed with status 3; continuing', 'reached-sshd'],
+            [
+                'partial',
+                'site hook failed with status 3; continuing',
+                'clearing set-id bits the site hook may have restored on image files',
+                'strip-ran --image-list',
+                'reached-sshd',
+            ],
         )
 
     def test_a_hook_others_could_write_is_skipped(self):
@@ -373,7 +636,7 @@ class SiteHook(unittest.TestCase):
 
     def test_the_hook_runs_under_a_time_limit(self):
         text = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
-        self.assertIn('timeout 120 /bin/bash "${SITE_HOOK}"', text)
+        self.assertIn('timeout 120 /bin/bash "${HOOK_RUN}"', text)
         self.assertLess(
             text.index('timeout 120 /bin/bash'), text.index('/usr/sbin/sshd -t')
         )
@@ -1098,6 +1361,242 @@ class CiInterpreter(unittest.TestCase):
         self.assertRegex(job, rf'dnf install -y .*\b{re.escape(python)}\b')
         runs = re.findall(r'(\S+) test_bastion_shell\.py', job)
         self.assertEqual(runs, [python, python])
+
+
+class SetIdStrip(unittest.TestCase):
+    """the real strip script clears set-id bits under the directories it is given, keeps none else"""
+
+    def test_bits_under_the_given_directory_are_cleared_and_reported(self):
+        import stat
+
+        if sys.platform != 'linux':
+            self.skipTest(
+                'the script uses GNU stat; it runs on Linux CI and in the image check'
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            setuid, setgid, plain = (Path(tmp) / name for name in ('a', 'b', 'c'))
+            for path in (setuid, setgid, plain):
+                path.write_text('#!/bin/sh\n')
+            setuid.chmod(0o4755)
+            setgid.chmod(0o2755)
+            plain.chmod(0o755)
+            # the caller owns these files, so this holds as root and as a normal user
+            self.assertTrue(setuid.stat().st_mode & stat.S_ISUID)
+            run = subprocess.run(
+                ['bash', str(ROLES / 'setid_strip.sh'), tmp],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            for path in (setuid, setgid, plain):
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755, path)
+            self.assertIn(str(setuid), run.stdout)
+            self.assertIn(str(setgid), run.stdout)
+            self.assertNotIn(str(plain), run.stdout)
+
+
+class SetIdStripModes(unittest.TestCase):
+    """the build fails loudly where it cannot walk, and after a site hook only image files change"""
+
+    SCRIPT = ROLES / 'setid_strip.sh'
+
+    def files(self, tmp):
+        made = []
+        for name, mode in (('a', 0o4755), ('b', 0o2755)):
+            path = Path(tmp) / name
+            path.write_text('#!/bin/sh\n')
+            path.chmod(mode)
+            made.append(path)
+        # the caller owns these files, so this holds as root and as a normal user
+        self.assertEqual(made[0].stat().st_mode & 0o7777, 0o4755)
+        return made
+
+    def run_with_stat(self, stat_body, *args, env=None):
+        # an exported function wins over the script's own PATH
+        script = (
+            f'stat() {{ {stat_body}; }}\nexport -f stat\n'
+            f'exec bash {shlex.quote(str(self.SCRIPT))} "$@"'
+        )
+        return subprocess.run(
+            ['bash', '-c', script, 'strip', *args],
+            capture_output=True,
+            text=True,
+            env={'PATH': '/usr/bin:/bin', **(env or {})},
+        )
+
+    def test_without_a_mode_it_refuses_to_guess(self):
+        run = subprocess.run(['bash', str(self.SCRIPT)], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2)
+        self.assertIn('usage:', run.stderr)
+
+    def test_the_build_walks_a_fuse_root_that_start_time_skips(self):
+        if sys.platform != 'linux':
+            self.skipTest('GNU find; runs on Linux CI and in the image check')
+        with tempfile.TemporaryDirectory() as tmp:
+            setuid, setgid = self.files(tmp)
+            listing = Path(tmp) / 'cleared.list'
+            start = self.run_with_stat('echo fuse.fuse-overlayfs', tmp)
+            self.assertEqual(start.returncode, 0, start.stderr)
+            self.assertIn('it is on shared storage', start.stdout)
+            self.assertEqual(setuid.stat().st_mode & 0o7777, 0o4755)
+            build = self.run_with_stat(
+                'echo fuse.fuse-overlayfs',
+                '--build',
+                tmp,
+                env={'IDEA_SETID_IMAGE_LIST': str(listing)},
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            self.assertEqual(setuid.stat().st_mode & 0o7777, 0o755)
+            self.assertEqual(setgid.stat().st_mode & 0o7777, 0o755)
+            self.assertEqual(
+                sorted(listing.read_text().split()), [str(setuid), str(setgid)]
+            )
+
+    def test_the_build_fails_where_it_cannot_name_the_file_system(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.run_with_stat('return 1', '--build', tmp)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn('cannot name the file system', run.stderr)
+
+    def test_after_a_hook_only_files_the_image_shipped_set_id_are_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_file, hook_tool = self.files(tmp)
+            listing = Path(tmp) / 'cleared.list'
+            listing.write_text(f'{image_file}\n{Path(tmp) / "gone"}\n')
+            run = subprocess.run(
+                ['bash', str(self.SCRIPT), '--image-list'],
+                capture_output=True,
+                text=True,
+                env={'PATH': '/usr/bin:/bin', 'IDEA_SETID_IMAGE_LIST': str(listing)},
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(image_file.stat().st_mode & 0o7777, 0o755)
+            # a tool the hook installed keeps its mode
+            self.assertEqual(hook_tool.stat().st_mode & 0o7777, 0o2755)
+            self.assertEqual(run.stdout, f'cleared set-id bits again: {image_file}\n')
+
+
+class ImageCheckSshdPath(unittest.TestCase):
+    """the image check finds sshd's session PATH in whichever server binary holds it"""
+
+    def run_check(self, layout):
+        script = (ROOT / 'deployment/ecr/idea-control-plane/image_check.sh').read_text()
+        start = script.index('sshd_session_path_check() {')
+        function = script[start : script.index('\n}\n', start) + 3]
+        with tempfile.TemporaryDirectory() as tmp:
+            names = ('sshd', 'sshd-session', 'sshd-auth')
+            for name, body in layout.items():
+                (Path(tmp) / name).write_bytes(body)
+            binaries = ' '.join(str(Path(tmp) / name) for name in names)
+            run = subprocess.run(
+                [
+                    'bash',
+                    '-c',
+                    'set -uo pipefail\nfailed=0\n'
+                    'fail() { echo "FAIL: $*"; failed=1; }\npass() { echo "ok: $*"; }\n'
+                    + function
+                    + 'sshd_session_path_check\nexit "${failed}"\n',
+                ],
+                env={'PATH': '/usr/bin:/bin', 'IDEA_CHECK_SSHD_BINARIES': binaries},
+                capture_output=True,
+                text=True,
+            )
+            return run, tmp
+
+    PATH_LITERAL = b'\0/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin\0'
+
+    def test_the_single_binary_layout_passes(self):
+        run, tmp = self.run_check({'sshd': b'ELF' + self.PATH_LITERAL})
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertIn(f'found in {tmp}/sshd)', run.stdout)
+
+    def test_the_split_layout_passes_on_the_session_binary(self):
+        run, tmp = self.run_check(
+            {
+                'sshd': b'ELF listener only',
+                'sshd-session': b'ELF' + self.PATH_LITERAL,
+                'sshd-auth': b'ELF auth only',
+            }
+        )
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertIn(f'found in {tmp}/sshd-session)', run.stdout)
+
+    def test_no_binary_with_the_path_fails_naming_what_was_searched(self):
+        run, tmp = self.run_check(
+            {'sshd': b'ELF', 'sshd-session': b'ELF /usr/bin:/bin'}
+        )
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn(f'searched {tmp}/sshd {tmp}/sshd-session.', run.stdout)
+
+    def test_no_sshd_at_all_fails_naming_where_it_looked(self):
+        run, tmp = self.run_check({})
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn(f'no sshd binary found; looked for {tmp}/sshd', run.stdout)
+
+
+class SshdFilterLatency(unittest.TestCase):
+    """a kept sshd line reaches the log while sshd runs, under every awk the filter can meet"""
+
+    def awks(self):
+        import shutil
+
+        found = {}
+        for name in ('mawk', 'gawk', 'original-awk', 'nawk', 'awk'):
+            path = shutil.which(name)
+            if path:
+                found.setdefault(Path(path).resolve(), path)
+        for path in (
+            '/usr/bin/awk',
+            '/opt/homebrew/bin/mawk',
+            '/opt/homebrew/bin/gawk',
+        ):
+            if Path(path).exists():
+                found.setdefault(Path(path).resolve(), path)
+        # at least the system awk; mawk and gawk where installed (mawk on Ubuntu runners)
+        self.assertTrue(found)
+        return sorted(found.values())
+
+    def test_a_line_is_written_before_more_input_arrives(self):
+        import select
+
+        role = (ROOT / 'deployment/ecr/idea-control-plane/roles/bastion.sh').read_text()
+        start = role.index('SSHD_HEALTH_CHECK_LINES=')
+        program = role[start : role.index("}'\n", start) + 3]
+        filter_start = role.index('sshd_health_check_filter() {')
+        function = role[filter_start : role.index('\n}\n', filter_start) + 3]
+        for awk in self.awks():
+            with self.subTest(awk=awk), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / 'awk').symlink_to(awk)
+                run = subprocess.Popen(
+                    [
+                        'bash',
+                        '-c',
+                        'set -euo pipefail\n'
+                        + program
+                        + function
+                        + 'sshd_health_check_filter',
+                    ],
+                    env={
+                        'PATH': f'{tmp}:/usr/bin:/bin',
+                        'IDEA_VPC_CIDRS': '10.0.0.0/16',
+                    },
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                )
+                try:
+                    run.stdin.write(b'Connection closed by 10.0.1.2 port 4000\r\n')
+                    run.stdin.write(b'Server listening on 127.0.0.1 port 22.\r\n')
+                    run.stdin.flush()
+                    ready, _, _ = select.select([run.stdout], [], [], 5)
+                    self.assertTrue(ready, f'{awk} held the line until more input came')
+                    self.assertEqual(
+                        run.stdout.readline(),
+                        b'Server listening on 127.0.0.1 port 22.\r\n',
+                    )
+                finally:
+                    run.stdin.close()
+                    run.wait(10)
+                self.assertEqual(run.returncode, 0)
 
 
 class RealSshd(unittest.TestCase):

@@ -29,8 +29,54 @@ from ideasdk.context import SocaContext
 from ideaclustermanager.app.email_templates.email_templates_dao import EmailTemplatesDAO
 from ideaclustermanager.app.app_utils import ClusterManagerUtils
 
-from typing import Optional
+from typing import Optional, Tuple
 import hashlib
+
+from jinja2 import TemplateSyntaxError
+from jinja2.sandbox import SandboxedEnvironment, SecurityError
+
+
+# A template is written by an operator and filled with values other people chose (a desktop
+# name, a job name): it renders in a sandbox that keeps it to its values, and the HTML body
+# escapes what is put into it. The subject is plain text and is not escaped.
+class EmailSandbox(SandboxedEnvironment):
+    # refused outright rather than rendered as blank, so the template fails where it is wrong
+    def unsafe_undefined(self, obj, attribute):
+        raise SecurityError(f'{attribute!r} is not available to a template')
+
+
+SUBJECT_ENVIRONMENT = EmailSandbox(autoescape=False)
+BODY_ENVIRONMENT = EmailSandbox(autoescape=True)
+
+
+def render_email(subject: str, body: str, params: dict) -> Tuple[str, str]:
+    return (
+        SUBJECT_ENVIRONMENT.from_string(subject or '').render(**params),
+        BODY_ENVIRONMENT.from_string(body or '').render(**params),
+    )
+
+
+def check_email_template(template: EmailTemplate):
+    """refuses a template that does not compile, or that reaches past its values"""
+    for part, environment, text in (
+        ('subject', SUBJECT_ENVIRONMENT, template.subject),
+        ('body', BODY_ENVIRONMENT, template.body),
+    ):
+        try:
+            compiled = environment.from_string(text or '')
+        except TemplateSyntaxError as e:
+            raise exceptions.invalid_params(
+                f'the {part} does not compile, line {e.lineno}: {e.message}'
+            )
+        try:
+            compiled.render()
+        except SecurityError as e:
+            raise exceptions.invalid_params(
+                f'the {part} uses something an email template may not: {e}'
+            )
+        except Exception:  # noqa
+            # a value missing at save time is filled in when the email is sent
+            pass
 
 
 def default_text_hash(subject: Optional[str], body: Optional[str]) -> str:
@@ -65,6 +111,8 @@ class EmailTemplatesService:
             raise exceptions.invalid_params('template.name is required')
         if Utils.are_empty(request.template.template_type):
             raise exceptions.invalid_params('template.template_type is required')
+
+        check_email_template(email_template)
 
         existing = self.email_templates_dao.get_email_template(email_template.name)
         if existing is not None:
@@ -125,6 +173,8 @@ class EmailTemplatesService:
             raise exceptions.invalid_params('template.name is required')
         if Utils.are_empty(request.template.template_type):
             raise exceptions.invalid_params('template.template_type is required')
+
+        check_email_template(request.template)
 
         db_email_template = self.email_templates_dao.get_email_template(
             request.template.name

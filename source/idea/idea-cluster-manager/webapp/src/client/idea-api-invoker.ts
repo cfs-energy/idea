@@ -107,9 +107,8 @@ export class IdeaApiInvoker {
 
         let url = `${this.props.url}/${request.header!.namespace}`
 
-        if(this.logger.isTrace() && !request.header?.namespace?.startsWith('Terminal.')) {
-            this.logger.trace(`(req) ${JSON.stringify(request, null, 2)}`)
-        }
+        // request and response bodies carry passwords, tokens and keys: only the operation and its outcome are logged
+        this.logger.trace(`(req) ${request.header?.namespace}`)
 
         let response
         if(this.props.serviceWorkerRegistration) {
@@ -131,9 +130,7 @@ export class IdeaApiInvoker {
             }
         }
 
-        if(this.logger.isTrace() && request.header?.namespace !== 'Auth.CreateApiToken' && !request.header?.namespace?.startsWith('Terminal.')) {
-            this.logger.trace(`(res) ${JSON.stringify(response, null, 2)}`)
-        }
+        this.logger.trace(`(res) ${request.header?.namespace} ${response?.success ? 'ok' : `failed ${response?.error_code ?? ''}`}`)
 
         if(!quiet && typeof response.success !== 'undefined' && !response.success && response.error_code === AUTH_TOKEN_EXPIRED) {
             this.logout().then(() => {
@@ -160,7 +157,8 @@ export class IdeaApiInvoker {
         if (result.success) {
             return result.payload!
         } else {
-            console.error(result)
+            // the envelope can carry the request back: only what identifies the failure is logged
+            console.error(`${namespace} failed: ${result.error_code} (request ${envelope.header.request_id})`)
             const error = new IdeaException({
                 errorCode: result.error_code!,
                 message: result.message,
@@ -213,16 +211,6 @@ export class IdeaApiInvoker {
             return result.accessToken
         } else {
             return await this.props.authContext!.getAccessToken()
-        }
-    }
-
-    debug() {
-        if(this.props.serviceWorkerRegistration) {
-            this.props.serviceWorkerRegistration!.active!.postMessage({
-                type: Constants.ServiceWorker.IDEA_AUTH_DEBUG
-            })
-        } else {
-            this.props.authContext!.printDebugInfo()
         }
     }
 

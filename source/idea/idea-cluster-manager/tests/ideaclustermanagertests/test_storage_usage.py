@@ -27,6 +27,16 @@ def account_context():
     return Mock(accounts=accounts)
 
 
+def ready(service, *args, **kwargs):
+    """asks again while the answer is computing, as the portal does"""
+    for _ in range(500):
+        result = service.get_usage(*args, **kwargs)
+        if result.get('state') != 'computing':
+            return result
+        time.sleep(0.01)
+    raise AssertionError('still computing')
+
+
 @pytest.fixture
 def tree(tmp_path):
     import tempfile
@@ -204,7 +214,7 @@ def test_first_call_computes_then_cache_serves_user_and_nested_folder(
         assert service.get_usage('alice')['state'] == 'computing'
         future = service._cache[('alice', tree)]['future']
         future.result(timeout=5)
-        result = service.get_usage('alice', tree + '/reports/nested')
+        result = ready(service, 'alice', tree + '/reports/nested')
         assert result['state'] == 'ready'
         assert result['folder']['bytes'] == 10
         assert 'directories' not in result
@@ -297,7 +307,7 @@ def test_delete_is_bound_to_measured_directory(
     service, helper, _ = make_service(monkeypatch, tree)
     path = tree + '/reports/nested'
     try:
-        measured = service.get_usage('alice', path)['folder']
+        measured = ready(service, 'alice', path)['folder']
         assert measured['identity'] == storage_usage.directory_identity(os.stat(path))
         if replacement == 'symlink_ancestor':
             os.rename(tree + '/reports', tree + '/original')
@@ -313,6 +323,8 @@ def test_delete_is_bound_to_measured_directory(
             assert helper.delete_files.call_args.args[0].files == [
                 os.path.realpath(path)
             ]
+            # a folder, which FileBrowser.DeleteFiles alone refuses
+            assert helper.delete_files.call_args.kwargs == {'allow_directories': True}
         else:
             with pytest.raises(Exception):
                 service.delete_folder('alice', path, measured['identity'])
@@ -331,7 +343,7 @@ def test_delete_with_dotdot_after_a_symlink_deletes_the_folder_it_checked(
     os.symlink(elsewhere / 'sub', tree + '/x')
     os.mkdir(tree + '/y')
     try:
-        measured = service.get_usage('alice', tree + '/y')['folder']
+        measured = ready(service, 'alice', tree + '/y')['folder']
         service.delete_folder('alice', tree + '/x/../y', measured['identity'])
         assert helper.delete_files.call_args.args[0].files == [
             os.path.realpath(tree + '/y')
@@ -349,13 +361,13 @@ def test_new_folder_is_measured_fresh_and_can_be_deleted(monkeypatch, tree):
         os.mkdir(path)
         with open(path + '/file', 'wb') as stream:
             stream.write(b'new bytes')
-        result = service.get_usage('alice', path)
+        result = ready(service, 'alice', path)
         assert result['folder']['bytes'] == 9
         service.delete_folder('alice', path, result['folder']['identity'])
         helper.delete_files.assert_called_once()
         with open(path + '/file', 'ab') as stream:
             stream.write(b'!')
-        assert service.get_usage('alice', path)['folder']['bytes'] == 10
+        assert ready(service, 'alice', path)['folder']['bytes'] == 10
     finally:
         service._workers.shutdown()
 
@@ -393,7 +405,7 @@ def test_delete_runs_binding_and_removal_as_user(monkeypatch, tree):
 
     monkeypatch.setattr(os, 'open', child_open)
     try:
-        measured = service.get_usage('alice', path)['folder']
+        measured = ready(service, 'alice', path)['folder']
         service.delete_folder('alice', path, measured['identity'])
         assert not os.path.exists(path)
     finally:
@@ -442,7 +454,7 @@ def test_delete_accepts_an_identity_measured_by_another_task(monkeypatch, tree):
     service, helper, _ = make_service(monkeypatch, tree)
     path = tree + '/reports/nested'
     try:
-        measured = service.get_usage('alice', path)['folder']['identity']
+        measured = ready(service, 'alice', path)['folder']['identity']
         assert set(measured) == {'inode'}
         service.delete_folder(
             'alice', path, {'device': '999', 'inode': measured['inode']}
@@ -2174,6 +2186,59 @@ def test_a_folder_that_cannot_be_opened_is_a_plain_message(monkeypatch, tree, er
     monkeypatch.setattr(storage_usage, 'scan_as_user', Mock(side_effect=error))
     try:
         with pytest.raises(exceptions.SocaException, match='no longer exists'):
-            service.get_usage('alice', tree + '/reports')
+            ready(service, 'alice', tree + '/reports')
     finally:
+        service._workers.shutdown()
+
+
+def test_a_folder_scan_never_holds_the_request_that_asked_for_it(monkeypatch, tree):
+    import threading
+
+    service, _, _ = make_service(monkeypatch, tree)
+    release = threading.Event()
+    real = storage_usage.scan_as_user
+
+    def held(*args):
+        release.wait(10)
+        return real(*args)
+
+    monkeypatch.setattr(storage_usage, 'scan_as_user', held)
+    try:
+        started = time.monotonic()
+        answer = service.get_usage('alice', tree + '/reports')
+        # the scan waits on the scan pool; the API worker answers at once
+        assert answer['state'] == 'computing'
+        assert time.monotonic() - started < 2
+        release.set()
+        assert ready(service, 'alice', tree + '/reports')['folder']['bytes'] > 0
+    finally:
+        release.set()
+        service._workers.shutdown()
+
+
+def test_a_user_measures_one_folder_at_a_time(monkeypatch, tree):
+    import threading
+
+    service, _, _ = make_service(monkeypatch, tree)
+    release = threading.Event()
+    started = []
+    real = storage_usage.scan_as_user
+
+    def held(identity, home, target):
+        started.append(target)
+        release.wait(10)
+        return real(identity, home, target)
+
+    monkeypatch.setattr(storage_usage, 'scan_as_user', held)
+    try:
+        assert service.get_usage('alice', tree + '/reports')['state'] == 'computing'
+        assert service.get_usage('alice', tree + '/empty')['state'] == 'computing'
+        time.sleep(0.2)
+        # the second waits its turn instead of joining the queue
+        assert started == [tree + '/reports']
+        release.set()
+        assert ready(service, 'alice', tree + '/reports')['folder']['bytes'] > 0
+        assert ready(service, 'alice', tree + '/empty')['state'] != 'computing'
+    finally:
+        release.set()
         service._workers.shutdown()

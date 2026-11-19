@@ -451,6 +451,10 @@ class FinishedJobProcessor:
     # a pass stops asking the index after a lookup fails or once its lookups took this
     # long in all: the default wait between passes
     INDEX_LOOKUP_BUDGET_SECS = 30.0
+    # a record the index refused is left out of this many passes, so a few it keeps
+    # refusing at the head of the oldest-first page cannot hold every later one (SJ-28)
+    INDEX_REJECTED_SKIP_PASSES = 20
+    INDEX_PAGE = 500
     _index_lookup_secs_left = INDEX_LOOKUP_BUDGET_SECS
 
     def __init__(self, context: ideascheduler.AppContext):
@@ -515,6 +519,26 @@ class FinishedJobProcessor:
             self._context.job_cache.mark_job_indexed(indexed)
             self._record_scratch_outcome(indexed)
         return indexed
+
+    def _uid_holds_another_job(self, job: SocaJob, stored: Optional[SocaJob]) -> bool:
+        """
+        whether the record under this job's job_uid is another job's and must be kept. Only
+        a subjob row an earlier build filed there, under the same owner, is replaced by its
+        array's record; job_uid can be set by a submitter, and a reused one must not erase
+        another job's history and cost.
+        """
+        if stored is None or Utils.is_empty(job.job_uid) or stored.job_id == job.job_id:
+            return False
+        if (
+            ModelUtils.array_parent_id(stored.job_id) == job.job_id
+            and stored.owner == job.owner
+        ):
+            return False
+        self._logger.error(
+            f'{job.log_tag} job_uid {job.job_uid} already holds the record of job '
+            f'{stored.job_id}; that record is kept and this job is not recorded'
+        )
+        return True
 
     def _record_scratch_outcome(self, job: SocaJob):
         record_scratch_outcome(self._context, self._logger, job)
@@ -601,10 +625,15 @@ class FinishedJobProcessor:
                     continue
                 from_history = cached.job_id in history
                 finished_job = history.get(cached.job_id, cached)
-                # a record under this job_uid from another id is not this job's: an earlier
-                # build could file an array's subjob there. This job's own replaces it.
+                # a record under this job_uid from another id is not this job's. An earlier
+                # build could file an array's subjob there, and the array's own record
+                # replaces that. Any other job's record is kept: job_uid can be chosen by a
+                # submitter, and a reused one must not erase that job's history and cost.
                 stored = self._recorded_job(cached.job_uid)
                 if stored is not None and stored.job_id == cached.job_id:
+                    recorded_ids.append(cached.job_id)
+                    continue
+                if self._uid_holds_another_job(cached, stored):
                     recorded_ids.append(cached.job_id)
                     continue
                 # Preserve the reason alongside the scheduler's execution timestamps.
@@ -708,21 +737,64 @@ class FinishedJobProcessor:
                 f'{cached.log_tag} instance cache not ready; left in the job cache'
             )
             return False
-        if instance_cache.list_compute_instances(
-            job_id=cached.job_id, states=['pending', 'running']
+        stack_name = cached.get_compute_stack()
+        # the cached job is rebuilt from the queue's current settings, so a queue changed
+        # from shared to single-job reads as single-job while its jobs still share the
+        # stack; and a shared stack's instances carry the id of the job that made it. the
+        # stack's own tags and what is on it now decide (NM-02 / SCH-38)
+        if any(
+            instance.soca_compute_stack == stack_name
+            for instance in instance_cache.list_compute_instances(
+                states=['pending', 'running']
+            )
         ):
             return True
-        stack_name = cached.get_compute_stack()
+        try:
+            stack = self._context.aws_util().cloudformation_describe_stack(
+                stack_name=stack_name
+            )
+        except Exception as e:
+            self._logger.warning(
+                f'{cached.log_tag} stack {stack_name} not read, left for the next pass: {e}'
+            )
+            return False
+        if stack is not None and self._stack_is_shared(stack):
+            return True
+        if self._other_jobs_bound_to(cached, stack_name):
+            return True
         self._logger.info(
             f'{cached.log_tag} never started; deleting stack {stack_name}'
         )
         try:
             self._context.aws_util().cloudformation_delete_stack(stack_name=stack_name)
         except Exception as e:
+            # the job stays tracked so the delete is asked again next pass: once it is
+            # recorded nothing else revisits a stack with no instance (SCH-38)
             self._logger.error(
-                f'{cached.log_tag} failed to delete stack {stack_name}: {e}'
+                f'{cached.log_tag} failed to delete stack {stack_name}, retried next '
+                f'pass: {e}'
             )
+            return False
         return True
+
+    @staticmethod
+    def _stack_is_shared(stack) -> bool:
+        keep_forever = getattr(stack, 'soca_keep_forever', False)
+        idle = getattr(stack, 'soca_terminate_when_idle', 0)
+        return keep_forever is True or (isinstance(idle, int) and idle > 0)
+
+    def _other_jobs_bound_to(self, cached: SocaJob, stack_name: str) -> bool:
+        jobs_table = self._context.job_cache.get_jobs_table()
+        for entry in jobs_table.find(provisioned=True):
+            job = self._context.job_cache.convert_db_entry_to_job(entry)
+            if (
+                job is not None
+                and job.job_id != cached.job_id
+                and job.is_provisioned()
+                and job.get_compute_stack() == stack_name
+            ):
+                return True
+        return False
 
     def _process_unprovisioned_jobs(self, jobs: List[SocaJob]):
         """
@@ -745,6 +817,9 @@ class FinishedJobProcessor:
                     continue
                 stored = self._recorded_job(job.job_uid)
                 if stored is not None and stored.job_id == job.job_id:
+                    recorded_ids.append(job.job_id)
+                    continue
+                if self._uid_holds_another_job(job, stored):
                     recorded_ids.append(job.job_id)
                     continue
                 if ModelUtils.is_array_job_id(job.job_id):
@@ -803,7 +878,18 @@ class FinishedJobProcessor:
     def _index_pending_jobs(self):
         if not self._context.document_store.is_enabled():
             return
-        jobs = self._context.job_cache.list_pending_index_jobs()
+        rejected = self.__dict__.setdefault('_index_rejected', {})
+        for key in list(rejected):
+            rejected[key] -= 1
+            if rejected[key] <= 0:
+                del rejected[key]
+        jobs = [
+            job
+            for job in self._context.job_cache.list_pending_index_jobs(
+                limit=self.INDEX_PAGE + len(rejected)
+            )
+            if (job.job_uid or job.job_id) not in rejected
+        ][: self.INDEX_PAGE]
         if not jobs:
             return
 
@@ -836,6 +922,7 @@ class FinishedJobProcessor:
                 failures = 0
                 continue
             self._logger.warning(f'{job.log_tag} job index write pending')
+            rejected[job.job_uid or job.job_id] = self.INDEX_REJECTED_SKIP_PASSES
             failures += 1
             if failures >= 3:
                 self._logger.warning(

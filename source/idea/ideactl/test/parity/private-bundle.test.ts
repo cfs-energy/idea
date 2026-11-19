@@ -64,7 +64,7 @@ test("a failed private fetch fails closed, removes data and never prints diagnos
     const script = fileURLToPath(new URL("../../scripts/private-parity.sh", import.meta.url));
     const result = spawnSync("bash", [script], {
       cwd: scratch,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: scratch, IDEACTL_PARITY_SHA256: "a".repeat(64) },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: scratch, IDEACTL_PARITY_SHA256: "a".repeat(64), IDEACTL_PARITY_BUCKET: "test-bucket" },
       encoding: "utf8",
     });
     assert.equal(result.status, 1);

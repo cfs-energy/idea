@@ -177,10 +177,12 @@ class ModelUtils:
     ) -> Optional[Decimal]:
         if value is None:
             return None if default is None else float(default)
+        # Decimal(0.1) carries the float's 55 binary digits, which DynamoDB's serializer
+        # refuses as inexact; the value as written is what is stored (DM-20)
         if isinstance(value, float):
-            return Decimal(value)
+            return Decimal(str(value))
         if isinstance(value, int):
-            return Decimal(float(value))
+            return Decimal(value)
         if isinstance(value, Decimal):
             return value
         if isinstance(value, str):
@@ -287,7 +289,7 @@ class ModelUtils:
             return default
         result = []
         for entry in entries:
-            entry_ = ModelUtils.get_as_int(entry)
+            entry_ = ModelUtils.get_as_float(entry)
             if entry_ is None:
                 continue
             result.append(entry_)

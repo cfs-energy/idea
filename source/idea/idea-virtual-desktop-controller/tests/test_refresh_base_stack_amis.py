@@ -30,6 +30,12 @@ class FakeStackDb:
         self.updated.append(software_stack)
         return software_stack
 
+    def set_base_ami(self, software_stack, base_ami_id):
+        # the real call writes only the base image
+        updated = software_stack.model_copy(update={'base_ami_id': base_ami_id})
+        self.updated.append(updated)
+        return updated
+
 
 class FakeEc2Meta:
     region_name = 'us-east-2'

@@ -12,6 +12,7 @@
  */
 
 import React, {Component} from "react";
+import {csvCell, downloadCsv} from "../../common/csv";
 import {
     Alert,
     Box,
@@ -940,21 +941,21 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
 
             // Create CSV header row
             const headers = exportableColumns
-                .map(col => col.header)
+                .map(col => csvCell(col.header))
                 .join(',');
 
             // Create CSV data rows
             const rows = allRecords.map(item => {
                 return exportableColumns.map(col => {
                     // Get raw cell value
-                    let cellValue = '';
+                    let cellValue: unknown = '';
 
                     // A column whose cell is not plain text says what to export. Otherwise a
                     // sortingField is the raw data value.
                     if ((col as IdeaListViewColumn).exportValue) {
                         cellValue = (col as IdeaListViewColumn).exportValue!(item);
                     } else if ((col as any).sortingField && (item as any)[(col as any).sortingField] !== undefined) {
-                        cellValue = String((item as any)[(col as any).sortingField] ?? '');
+                        cellValue = (item as any)[(col as any).sortingField];
                     } else if (typeof col.cell === 'function') {
                         // If cell is a React component, try to extract text
                         const cellContent = col.cell(item);
@@ -965,33 +966,21 @@ class IdeaListView extends Component<IdeaListViewProps, IdeaListViewState> {
                             cellValue = String(cellContent ?? '');
                         }
                     } else if (col.id && (item as any)[col.id] !== undefined) {
-                        cellValue = String((item as any)[col.id] ?? '');
+                        cellValue = (item as any)[col.id];
                     }
 
-                    // Escape CSV value: wrap in quotes and escape existing quotes
-                    return '"' + cellValue.replace(/"/g, '""') + '"';
+                    return csvCell(cellValue);
                 }).join(',');
             }).join('\n');
 
             // Combine headers and rows
             const csvContent = headers + '\n' + rows;
 
-            // Create download link
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-
             // Handle both string and function types for csvFilename
             const filename = typeof this.props.csvFilename === 'function'
                 ? this.props.csvFilename()
                 : (this.props.csvFilename || `${this.props.title || 'export'}.csv`);
-
-            link.setAttribute('download', filename);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            downloadCsv(filename, csvContent);
 
         } catch (error) {
             console.error('CSV Export failed:', error);

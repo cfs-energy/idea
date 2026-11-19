@@ -349,6 +349,26 @@ def test_collector_visits_every_page_and_both_calendar_months(setup, monkeypatch
     assert setup[1].get('user-b', 'refresh') is None
 
 
+def test_a_refresh_only_pass_does_not_postpone_the_full_pass(setup, monkeypatch):
+    worker, calculator = collector(setup, monkeypatch)
+    _, store, _ = setup
+    at(monkeypatch, '2026-09-02T12:00:00Z')
+    worker.check()
+    assert calculator.month.call_count == 4
+    at(monkeypatch, '2026-09-02T12:14:00Z')
+    store.request_refresh('user-b')
+    worker.check()
+    assert calculator.month.call_count == 6
+    at(monkeypatch, '2026-09-02T12:15:00Z')
+    worker.check()
+    assert [c.args[0] for c in calculator.month.call_args_list[6:]] == [
+        'user-a',
+        'user-a',
+        'user-b',
+        'user-b',
+    ]
+
+
 def test_nonleader_does_no_work_and_lost_leader_cannot_publish(setup, monkeypatch):
     worker, calculator = collector(setup, monkeypatch)
     context, store, _ = setup

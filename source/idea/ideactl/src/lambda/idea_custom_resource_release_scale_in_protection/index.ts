@@ -5,7 +5,7 @@ import type {
     CfnResponseSender,
     JsonValue,
 } from "../commons/cfn-response.ts";
-import { errorMessage, sendCfnResponse } from "../commons/cfn-response.ts";
+import { errorMessage, sendCfnResponse, eventForLog } from "../commons/cfn-response.ts";
 
 type ReleaseScaleInProtectionProperties = Record<string, JsonValue> & {
     AutoScalingGroupName: string;
@@ -113,7 +113,7 @@ export function createHandler(
         const name = event.ResourceProperties.AutoScalingGroupName;
         const physicalResourceId = `scale-in-protection-${name}`;
         try {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
             // Only a delete releases anything: the flag is what protects a running task from a
             // scale-in, and it has to go only when the group itself is going.
             if (event.RequestType === "Delete") {

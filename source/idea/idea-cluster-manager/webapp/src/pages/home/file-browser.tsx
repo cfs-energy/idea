@@ -78,6 +78,8 @@ export interface IdeaFileBrowserState {
     filePermissions: Map<string, any>
     homeDir: string
     listError: string | null
+    // the server lists at most 10,000 entries of a folder and says when it stopped there
+    truncated: boolean
     listingLoaded?: boolean
     cannotOpen: {file: FileBrowserEntry, reason: 'large' | 'binary'} | null
 }
@@ -280,9 +282,37 @@ export function describeUploadOutcome(payload?: {
         parts.push(`Saved ${shown}${more > 0 ? `, and ${more} more under new names` : ''}.`)
     }
     if (skipped.length > 0) {
-        parts.push(`Skipped ${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ''}: no usable characters in the name.`)
+        const shown = skipped.slice(0, 10).join(', ')
+        // the server skips a name with no usable characters, and a folder path it will not create
+        parts.push(`Not saved: ${shown}${skipped.length > 10 ? `, and ${skipped.length - 10} more` : ''}. The name or folder path could not be used: rename it and upload it again.`)
     }
     return parts.length > 0 ? parts.join(' ') : null
+}
+
+/**
+ * The name a file is sent under. A file chosen inside a folder (picked or dropped) goes as its path from that folder
+ * down, e.g. photos/2024/a.jpg, so the server recreates the tree under the destination; a plain file keeps its name.
+ */
+export function uploadName(name: string, relativePath?: unknown): string {
+    if (typeof relativePath !== 'string') return name
+    const path = relativePath.replace(/^\/+/, '')
+    return path.includes('/') ? path : name
+}
+
+/** The uploader the upload dialog drives: one bundled PUT, each file named by uploadName. */
+export function createUploader(endpoint: string, accessToken: string): Uppy {
+    return new Uppy({
+        onBeforeFileAdded: (file) => ({...file, name: uploadName(file.name ?? '', file.meta?.relativePath)})
+    }).use(XHRUpload, {
+        endpoint: endpoint,
+        headers: {
+            'Authorization': `Bearer ${accessToken}`
+        },
+        formData: true,
+        fieldName: 'files[]',
+        method: 'PUT',
+        bundle: true
+    })
 }
 
 /** A path for a query string: names can hold & # + and the like, slashes read better as they are. */
@@ -362,6 +392,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
             filePermissions: new Map<string, any>(),
             homeDir: '',
             listError: null,
+            truncated: false,
             cannotOpen: null
         }
         this._fileBrowserClient = AppContext.get().client().fileBrowser()
@@ -462,7 +493,9 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                 selectedFiles: [],
                 listing: false,
                 listError: null,
-                listingLoaded: true
+                listingLoaded: true,
+                // generated from the server's model (cm-server adds truncated); read here before that lands
+                truncated: (result as ListFilesResult & {truncated?: boolean}).truncated === true
             })
             return true
         }).catch(error => {
@@ -777,7 +810,7 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
     showUploadModal() {
         AppContext.get().auth().getAccessToken().then(accessToken => {
             const httpEndpoint = AppContext.get().getHttpEndpoint()
-            const uppy = new Uppy()
+            const uppy = createUploader(`${httpEndpoint}${FILE_BROWSER_API_PATH}/upload?cwd=${encodePath(this.getCwd())}`, accessToken)
                 .use(Dashboard, {
                     animateOpenClose: false,
                     closeModalOnClickOutside: false,
@@ -785,16 +818,6 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                     proudlyDisplayPoweredByUppy: false,
                     fileManagerSelectionType: 'both',
                     theme: (AppContext.get().isDarkMode() ? 'dark' : 'light')
-                })
-                .use(XHRUpload, {
-                    endpoint: `${httpEndpoint}${FILE_BROWSER_API_PATH}/upload?cwd=${encodePath(this.getCwd())}`,
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`
-                    },
-                    formData: true,
-                    fieldName: 'files[]',
-                    method: 'PUT',
-                    bundle: true
                 })
             const dashboard = uppy.getPlugin('Dashboard')!
             dashboard.openModal()
@@ -1503,6 +1526,13 @@ class IdeaFileBrowser extends Component<IdeaFileBrowserProps, IdeaFileBrowserSta
                         {this.state.listError && (
                             <Alert type="error" dismissible={true} onDismiss={() => this.setState({listError: null})}>
                                 {this.state.listError}
+                            </Alert>
+                        )}
+                        {this.state.truncated && (
+                            <Alert type="info" header="This folder has more items than are shown">
+                                Showing the first 10,000 items. {AppContext.get().getClusterSettingsService().isBastionHostDeployed()
+                                    ? <>To see the rest, open the folder over <Link href="#/home/ssh-access">SSH access</Link>.</>
+                                    : <>To see the rest, open the folder from a desktop or a terminal.</>}
                             </Alert>
                         )}
                         <Tabs

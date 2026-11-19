@@ -39,8 +39,9 @@ def _primary_fingerprint(armored):
 
 
 class ImageCiTests(unittest.TestCase):
-    def test_both_smokes_import_services_in_the_image(self):
-        for path in ('scripts/ci-smoke-images.sh', '.github/workflows/build_push.yaml'):
+    def test_the_smoke_imports_services_in_the_image(self):
+        # one smoke, in the action both the release build and the pull request check call
+        for path in ('.github/actions/build_control_plane_image/action.yml',):
             lines = (ROOT / path).read_text().splitlines()
             commands = [line for line in lines if '--entrypoint python3.13' in line]
             self.assertEqual(len(commands), 1, path)
@@ -84,7 +85,11 @@ class ImageCiTests(unittest.TestCase):
             _primary_fingerprint((image / 'NICE-GPG-KEY').read_text()),
             '5B9EEBC864449701F6CE566A11B5C70A170C6114',
         )
-        for path in ('scripts/ci-stage-images.sh', '.github/workflows/build_push.yaml'):
+        for path in (
+            'scripts/ci-stage-images.sh',
+            '.github/workflows/build_push.yaml',
+            '.github/actions/build_control_plane_image/action.yml',
+        ):
             self.assertNotIn('/NICE-GPG-KEY"', (ROOT / path).read_text(), path)
         text = (image / 'Dockerfile').read_text()
         self.assertIn(

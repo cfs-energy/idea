@@ -416,6 +416,7 @@ describe('csv export', () => {
     const exportedCsv = async (columns: any[], rows: any[]) => {
         const createObjectURL = vi.fn((_blob: Blob) => 'blob:csv');
         (URL as any).createObjectURL = createObjectURL;
+        (URL as any).revokeObjectURL = vi.fn();
         render(<IdeaListView title="Jobs" columnDefinitions={columns} enableExportToCsv
                              onExportAllRecords={() => Promise.resolve(rows)}
                              onFetchRecords={() => Promise.resolve({listing: []})}/>);
@@ -444,8 +445,17 @@ describe('csv export', () => {
         expect(csv.split('\n')[1]).toBe('"Failed (exit 271)"');
     });
 
+    it('writes user text that starts like a formula as text, and keeps numbers as numbers', async () => {
+        const csv = await exportedCsv([
+            {id: 'name', header: 'Name', cell: (j: any) => j.name, sortingField: 'name'},
+            {id: 'cost', header: 'Cost', cell: (j: any) => j.cost, sortingField: 'cost'},
+        ], [{name: '=marker()', cost: -2.5}, {name: '@marker', cost: '-'}]);
+        expect(csv.split('\n')).toEqual(['"Name","Cost"', '"\'=marker()","-2.5"', '"\'@marker","-"']);
+    });
+
     it('shows progress and takes one export at a time', async () => {
         (URL as any).createObjectURL = vi.fn(() => 'blob:csv');
+        (URL as any).revokeObjectURL = vi.fn();
         let finish: (rows: any[]) => void = () => {};
         const onExportAllRecords = vi.fn(() => new Promise<any[]>(resolve => { finish = resolve; }));
         render(<IdeaListView title="Jobs" columnDefinitions={COLUMNS} enableExportToCsv

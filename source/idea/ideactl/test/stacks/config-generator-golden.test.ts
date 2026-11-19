@@ -532,6 +532,11 @@ describe('synthetic branches render', () => {
   for (const caseFile of syntheticCases(syntheticDir)) {
     it(caseFile, () => {
       const outDir = tempDir();
+      if (caseFile === 'fsx-lustre-apps.yml') {
+        // Lustre for apps or data is refused at generation; it remains for job scratch
+        assert.throws(() => generateConfigFromTemplates(syntheticValues(join(syntheticDir, caseFile)), outDir), /not supported for the apps storage/);
+        return;
+      }
       const modules = generateConfigFromTemplates(
         syntheticValues(join(syntheticDir, caseFile)),
         outDir,

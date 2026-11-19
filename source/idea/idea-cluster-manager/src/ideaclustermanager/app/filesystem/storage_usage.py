@@ -569,7 +569,11 @@ class StorageUsageService:
             folder = os.path.normpath(folder)
             if os.path.commonpath([mount, folder]) != mount or folder in (home, mount):
                 raise exceptions.unauthorized_access()
-        identity = UserIdentity(self.context.accounts, username)
+        # the cost scan only measures, and a disabled account's bytes still count in the
+        # total; a person's own request keeps the refusal
+        identity = UserIdentity(
+            self.context.accounts, username, allow_disabled=scan_only
+        )
         from_analytics = (
             None
             if scan_only
@@ -590,16 +594,10 @@ class StorageUsageService:
                     'Sizes for folders outside your home folder need storage analytics, which is not on for this volume.',
                 ),
             )
-        if folder is not None:
-            try:
-                result = scan_as_user(identity, home, folder)
-            except OSError:
-                raise exceptions.invalid_params(CANNOT_OPEN)
-            result['folder'] = result['total']
-            result['home'] = home
-            result['source'] = 'scan'
-            return {k: v for k, v in result.items() if k != 'directories'}
-        key = (username, home)
+        # a folder is scanned on the scan pool as the home is, never on an API worker:
+        # the first request answers computing and the portal asks again
+        target = folder if folder is not None else home
+        key = (username, target)
         with self._lock:
             now = time.monotonic()
             self._cache = {
@@ -615,10 +613,20 @@ class StorageUsageService:
                 and now - cached['created'] >= REFRESH_SECONDS
             ):
                 cached = None
+            if (
+                cached is None
+                and folder is not None
+                and any(
+                    k[0] == username and k[1] != home and not v['future'].done()
+                    for k, v in self._cache.items()
+                )
+            ):
+                # one folder of a user's measured at a time: the rest wait their turn
+                return dict(state='computing', home=home)
             if cached is None:
                 self._cache[key] = dict(
                     created=now,
-                    future=self._workers.submit(scan_as_user, identity, home, home),
+                    future=self._workers.submit(scan_as_user, identity, home, target),
                 )
                 return dict(state='computing', home=home)
             future = cached['future']
@@ -626,6 +634,16 @@ class StorageUsageService:
             return dict(state='computing', home=home)
         try:
             result = future.result()
+        except OSError:
+            with self._lock:
+                if self._cache.get(key) is cached:
+                    del self._cache[key]
+            if folder is not None:
+                raise exceptions.invalid_params(CANNOT_OPEN)
+            self.context.logger('storage-usage').exception('Storage usage scan failed')
+            return dict(
+                state='error', home=home, message='Storage usage could not be read.'
+            )
         except Exception:
             with self._lock:
                 if self._cache.get(key) is cached:
@@ -636,6 +654,14 @@ class StorageUsageService:
             )
         response = {k: v for k, v in result.items() if k != 'directories'}
         response['source'] = 'scan'
+        if folder is not None:
+            # answered once: the next look at the folder measures it afresh
+            with self._lock:
+                if self._cache.get(key) is cached:
+                    del self._cache[key]
+            response['folder'] = response['total']
+            response['home'] = home
+            return response
         analytics = self._analytics()
         status = analytics.status(home) if analytics is not None else {}
         if status.get('state') == 'initializing':
@@ -674,7 +700,8 @@ class StorageUsageService:
                         'Folder changed since it was measured'
                     )
                 return helper.delete_files(
-                    DeleteFilesRequest(files=[os.path.realpath(path)])
+                    DeleteFilesRequest(files=[os.path.realpath(path)]),
+                    allow_directories=True,
                 )
 
         return helper.run_as_user(delete)

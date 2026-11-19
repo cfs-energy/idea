@@ -79,11 +79,8 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
     }
 
     showModal() {
-        console.log('VirtualDesktopSoftwareStackEditForm.showModal called');
         this.setState({
             showModal: true
-        }, () => {
-            console.log('Form modal state updated to:', this.state.showModal);
         });
     }
 
@@ -96,14 +93,12 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
     }
 
     componentDidMount() {
-        console.log('VirtualDesktopSoftwareStackEditForm.componentDidMount');
         // Automatically show the modal when component mounts
         this.setState({
             showModal: true
         }, () => {
             // Call showModal on the IdeaForm ref after our own state is updated
             if (this.form.current) {
-                console.log('Calling showModal on IdeaForm ref');
                 this.form.current.showModal();
 
                 // Explicitly set field values after form has mounted
@@ -189,8 +184,6 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
             });
             return projectIds;
         };
-
-        console.log('Rendering VirtualDesktopSoftwareStackEditForm, showModal:', this.state.showModal);
 
         return (
             <IdeaForm
@@ -281,8 +274,7 @@ class VirtualDesktopSoftwareStackEditForm extends Component<VirtualDesktopSoftwa
                         param_type: 'text',
                         default: this.props.softwareStack?.name,
                         validate: {
-                            required: true,
-                            regex: '^.{3,50}$'
+                            required: true
                         }
                     },
                     {

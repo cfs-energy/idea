@@ -23,10 +23,10 @@ TEMPLATES = (
 
 def _search_domain_block(script):
     # the compute node applies it before writing pbs.conf, the client after (shared with the refresh)
-    start = script.index('if [[ -L /etc/resolv.conf')
+    start = script.index('if [ -L /etc/resolv.conf')
     ends = [
         script.find(m, start)
-        for m in ('echo -e "PBS_SERVER=', '\nif [[ -f /etc/pbs.conf')
+        for m in ('echo -e "PBS_SERVER=', '\nif [ -f /etc/pbs.conf')
     ]
     return script[start : min(i for i in ends if i > 0)]
 

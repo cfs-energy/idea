@@ -1302,6 +1302,8 @@ def test_an_idle_node_of_a_begun_array_is_kept_between_subjobs(context, world):
     world.cache.sync([array_job('7[]', SocaJobState.SUBJOB_BEGUN)])
     assert can_terminate(context) is False
     world.cache.delete_jobs(['7[]'])
+    # a job missing from the cache is asked of PBS first (NM-14); PBS no longer has it
+    context.scheduler = SimpleNamespace(is_job_active=lambda job_id: False)
     assert can_terminate(context) is True
 
 
@@ -1312,7 +1314,11 @@ def test_a_batch_node_waits_for_the_rest_of_a_begun_array(context, monkeypatch):
         asked.append(select.get_queue_select_state_filter())
         return 1
 
-    monkeypatch.setattr(OpenPBSQSelect, 'get_count', count)
+    monkeypatch.setattr(
+        OpenPBSQSelect,
+        'list_jobs_ids',
+        lambda select, raise_on_error=False: ['job'] * count(select),
+    )
     session = NodeHouseKeepingSession(context=context, logger=LOGGER)
     assert not session._can_terminate(
         instance=array_instance(terminate_when_idle=5), node=idle_node()
@@ -1511,3 +1517,26 @@ def test_an_array_record_with_no_subjob_outcomes_is_never_a_success():
     plain = finished_array(exit_status=0, disposition='ran', subjobs=None)
     plain.job_id = '7'
     assert job_succeeded(plain)
+
+
+def test_a_reused_job_uid_does_not_replace_another_jobs_record(world):
+    # SCH-09: job_uid is a resource the submitter can set; the record is stored under it
+    earlier = array_job('5', SocaJobState.FINISHED, owner='alice', provisioned=False)
+    world.cache.add_finished_job(earlier)
+    later = array_job('6', SocaJobState.QUEUED, owner='mallory', provisioned=False)
+    world.cache.sync([later])
+    world.pbs.active = []
+    world.pbs.jobs['6'] = array_job('6', SocaJobState.FINISHED, owner='mallory')
+    poll(world)
+    [record] = records(world)
+    assert (record.job_id, record.owner) == ('5', 'alice')
+
+
+def test_a_job_uid_in_use_is_reported_taken(world):
+    world.cache.sync([array_job('8', SocaJobState.QUEUED, job_uid='uid-active')])
+    world.cache.add_finished_job(
+        array_job('9', SocaJobState.FINISHED, job_uid='uid-done')
+    )
+    assert world.cache.is_job_uid_taken('uid-active')
+    assert world.cache.is_job_uid_taken('uid-done')
+    assert not world.cache.is_job_uid_taken('uid-free')

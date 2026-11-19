@@ -8,7 +8,10 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import re
 from abc import abstractmethod
+
+from botocore.exceptions import ClientError
 from typing import List, Optional
 
 from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
@@ -39,6 +42,9 @@ from ideadatamodel import (
     VirtualDesktopSessionPermissionActorType,
     GetUserRequest,
     GetProjectRequest,
+    DayOfWeek,
+    VirtualDesktopScheduleType,
+    VirtualDesktopWeekSchedule,
 )
 from ideadatamodel import exceptions
 from ideadatamodel import constants
@@ -61,14 +67,27 @@ from ideavirtualdesktopcontroller.app.servers.virtual_desktop_server_utils impor
     VirtualDesktopServerUtils,
 )
 from ideavirtualdesktopcontroller.app.session_permissions.constants import (
+    ACTOR_NAME_PATTERN,
+    GROUP_ACTOR_PREFIX,
+    MAX_GROUP_SHARE_MEMBERS,
+    bare_actor_name,
+    share_actor_key,
+    ACTOR_NAME_RULE,
     SESSION_PERMISSIONS_FILTER_SESSION_ID_KEY,
     SESSION_PERMISSIONS_FILTER_ACTOR_KEY,
+)
+from ideavirtualdesktopcontroller.app.sessions.constants import (
+    SESSION_NAME_PATTERN,
+    SESSION_NAME_RULE,
 )
 from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_session_permission_db import (
     VirtualDesktopSessionPermissionDB,
 )
 from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_session_permission_utils import (
     VirtualDesktopSessionPermissionUtils,
+    group_enabled,
+    group_state,
+    group_members,
 )
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
@@ -93,6 +112,18 @@ from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
     VirtualDesktopControllerUtils,
     resolve_project_instance_profile_arn,
 )
+
+
+STACK_DISABLED_MESSAGE = (
+    'This software stack has been disabled by an administrator. Choose another one.'
+)
+# the groups of one user whose shares are listed for them
+MAX_LISTED_GROUPS = 50
+SESSION_CHANGED_MESSAGE = (
+    'This desktop changed while it was being edited. Refresh and try again.'
+)
+# a custom schedule's start or stop time
+SCHEDULE_TIME_PATTERN = re.compile(r'([01][0-9]|2[0-3]):[0-5][0-9]')
 
 
 class VirtualDesktopAPI(BaseAPI):
@@ -234,31 +265,14 @@ class VirtualDesktopAPI(BaseAPI):
             permission.failure_reason = message
             return permission, False
 
-        # Additional validation: Check if actor is valid user and belongs to project
-        if permission.actor_type == VirtualDesktopSessionPermissionActorType.USER:
-            is_valid, message = self._validate_user_and_project_membership(
-                username=permission.actor_name,
-                session_project_id=self._get_session_project_id(
-                    permission.idea_session_id, permission.idea_session_owner
-                ),
+        # the profile id becomes an alias name in the host's permissions file
+        if (
+            self.permission_profile_db.get(
+                profile_id=permission.permission_profile.profile_id
             )
-            if not is_valid:
-                permission.failure_reason = message
-                return permission, False
-
-        return permission, True
-
-    def _validate_session_permission_update_request_comprehensive(
-        self, permission: VirtualDesktopSessionPermission
-    ) -> tuple[VirtualDesktopSessionPermission, bool]:
-        """
-        Comprehensive validation for update session permission requests.
-        Validates that the actor (user/group) is valid and belongs to the same project.
-        """
-        # First validate the basic fields using the same logic as create
-        is_valid, message = self.validate_create_session_permission_request(permission)
-        if not is_valid:
-            permission.failure_reason = message
+            is None
+        ):
+            permission.failure_reason = f'Permission profile "{permission.permission_profile.profile_id}" was not found.'
             return permission, False
 
         # Additional validation: Check if actor is valid user and belongs to project
@@ -272,8 +286,57 @@ class VirtualDesktopAPI(BaseAPI):
             if not is_valid:
                 permission.failure_reason = message
                 return permission, False
+        else:
+            failure_reason = self._group_share_refusal(
+                bare_actor_name(permission.actor_name)
+            )
+            if failure_reason is not None:
+                permission.failure_reason = failure_reason
+                return permission, False
 
         return permission, True
+
+    @staticmethod
+    def _describe_permission_from_session(
+        permission: VirtualDesktopSessionPermission, session: VirtualDesktopSession
+    ):
+        """a share shows the stored desktop's details, never what the request said about it"""
+        permission.idea_session_owner = session.owner
+        permission.idea_session_name = session.name
+        permission.idea_session_instance_type = (
+            session.server.instance_type if session.server else None
+        )
+        permission.idea_session_state = session.state
+        permission.idea_session_base_os = session.base_os
+        permission.idea_session_created_on = session.created_on
+        permission.idea_session_hibernation_enabled = session.hibernation_enabled
+        permission.idea_session_type = session.type
+
+    def _group_share_refusal(self, group_name: str) -> Optional[str]:
+        """
+        a group may be shared with when it exists and is no larger than the share admits;
+        each member is held to the desktop's project and desktop access when connecting
+        """
+        state = group_state(self.context, group_name)
+        if state == 'unreadable':
+            return f'Group "{group_name}" could not be checked with the accounts service. Try again.'
+        if state == 'missing':
+            return f'Group "{group_name}" was not found in the system.'
+        members = group_members(self.context, group_name, MAX_GROUP_SHARE_MEMBERS + 1)
+        if members is None:
+            return f'The members of group "{group_name}" could not be read. Try again.'
+        if len(members) > MAX_GROUP_SHARE_MEMBERS:
+            return (
+                f'Group "{group_name}" has more than {MAX_GROUP_SHARE_MEMBERS} members; '
+                f'share with a smaller group or with users.'
+            )
+        return None
+
+    def _validate_session_permission_update_request_comprehensive(
+        self, permission: VirtualDesktopSessionPermission
+    ) -> tuple[VirtualDesktopSessionPermission, bool]:
+        """an update carries the same fields as a create and is checked the same way"""
+        return self._validate_session_permission_create_request(permission)
 
     def _validate_session_permission_delete_request(
         self, permission: VirtualDesktopSessionPermission
@@ -287,6 +350,15 @@ class VirtualDesktopAPI(BaseAPI):
             is_valid = False
         if Utils.is_empty(permission.actor_name):
             permission.failure_reason = 'Username is required. Unable to identify which user permission to delete.'
+            is_valid = False
+        # the entry is removed by (session id, actor), so the named owner must own that session
+        if is_valid and Utils.is_empty(
+            self.get_session_if_owner(
+                username=permission.idea_session_owner,
+                idea_session_id=permission.idea_session_id,
+            )
+        ):
+            permission.failure_reason = 'Invalid session'
             is_valid = False
         return permission, is_valid
 
@@ -321,12 +393,7 @@ class VirtualDesktopAPI(BaseAPI):
             )
 
         # Check if user is cluster administrator (bypass VDI group validation)
-        cluster_administrator = self.context.config().get_string(
-            'cluster.administrator_username', required=True
-        )
-        is_cluster_admin = username in cluster_administrator or username.startswith(
-            'clusteradmin'
-        )
+        is_cluster_admin = self.is_cluster_administrator_username(username)
 
         # Validate user is authorized to use VDI (admin or member of VDI groups)
         if not is_cluster_admin:
@@ -398,6 +465,16 @@ class VirtualDesktopAPI(BaseAPI):
     def validate_update_session_permission_request(
         self, request: UpdateSessionPermissionRequest
     ) -> tuple[bool, UpdateSessionPermissionRequest]:
+        # one form for every request: a group share named with or without its prefix is
+        # keyed as a group, so it is never taken for a user of the same name
+        for permission in request.create + request.update + request.delete:
+            if isinstance(
+                permission.actor_name, str
+            ) and permission.actor_name.startswith(GROUP_ACTOR_PREFIX):
+                permission.actor_type = VirtualDesktopSessionPermissionActorType.GROUP
+            permission.actor_name = share_actor_key(
+                permission.actor_type, permission.actor_name
+            )
         is_valid_request = True
         if Utils.is_not_empty(request.create):
             for permission in request.create:
@@ -414,6 +491,8 @@ class VirtualDesktopAPI(BaseAPI):
                     )
                     if not is_valid:
                         permission.failure_reason = message
+                    else:
+                        self._describe_permission_from_session(permission, session)
                 is_valid_request = is_valid_request and is_valid
 
         if Utils.is_not_empty(request.update):
@@ -433,6 +512,8 @@ class VirtualDesktopAPI(BaseAPI):
                     )
                     if not is_valid:
                         permission.failure_reason = message
+                    else:
+                        self._describe_permission_from_session(permission, session)
                 is_valid_request = is_valid_request and is_valid
 
         if Utils.is_not_empty(request.delete):
@@ -526,6 +607,11 @@ class VirtualDesktopAPI(BaseAPI):
                 False,
                 'Username is required. Please specify who to share the session with.',
             )
+        failure_reason = VirtualDesktopAPI.validate_actor_name(
+            bare_actor_name(permission.actor_name)
+        )
+        if Utils.is_not_empty(failure_reason):
+            return False, failure_reason
         if Utils.is_empty(permission.expiry_date):
             return (
                 False,
@@ -579,6 +665,23 @@ class VirtualDesktopAPI(BaseAPI):
         return None
 
     @staticmethod
+    def validate_session_name(name: Optional[str]) -> Optional[str]:
+        """
+        A new or changed desktop name. Returns the failure reason, or None when acceptable.
+        An empty name is left to the caller (create picks one, update keeps the old one).
+        """
+        if Utils.is_empty(name) or SESSION_NAME_PATTERN.fullmatch(name):
+            return None
+        return SESSION_NAME_RULE
+
+    @staticmethod
+    def validate_actor_name(name: Optional[str]) -> Optional[str]:
+        """A user or group a desktop is shared with. Returns the failure reason, or None."""
+        if Utils.is_not_empty(name) and ACTOR_NAME_PATTERN.fullmatch(name):
+            return None
+        return ACTOR_NAME_RULE
+
+    @staticmethod
     def validate_base_os(base_os) -> Optional[str]:
         """
         Check a requested base os against the end-of-life list.
@@ -592,20 +695,41 @@ class VirtualDesktopAPI(BaseAPI):
             )
         return None
 
+    @staticmethod
+    def validate_schedule(week: VirtualDesktopWeekSchedule) -> Optional[str]:
+        """a custom day needs both times as HH:MM. Returns the failure reason, or None."""
+        for day in DayOfWeek:
+            schedule = getattr(week, day.value, None)
+            if (
+                schedule is None
+                or schedule.schedule_type != VirtualDesktopScheduleType.CUSTOM_SCHEDULE
+            ):
+                continue
+            for value in (schedule.start_up_time, schedule.shut_down_time):
+                if not SCHEDULE_TIME_PATTERN.fullmatch(value or ''):
+                    return f'A custom schedule for {day.value} needs a start and stop time as HH:MM (00:00 to 23:59).'
+        return None
+
+    def is_cluster_administrator_username(self, username: str) -> bool:
+        # the setting holds one username: compare it whole, not as a substring
+        return username == self.context.config().get_string(
+            'cluster.administrator_username', required=True
+        )
+
     def validate_create_session_request(
-        self, session: VirtualDesktopSession
+        self, session: VirtualDesktopSession, custom_instance_type: bool = False
     ) -> tuple[VirtualDesktopSession, bool]:
-        # admin-only, set through VirtualDesktopAdmin.SetSessionCleanupExemption
-        session.cleanup_exempt = None
-        session.cleanup_exempt_reason = None
-        session.recovering = False
-        session.recovery_attempts = 0
-        session.recovery_next_attempt_at = 0
-        session.recovery_deadline = 0
-        session.recovery_pending_create = False
-        session.recovery_health_deadline = 0
-        session.recovery_unready_observed = False
-        session.reboot_deadline = 0
+        """
+        every check a new desktop passes. custom_instance_type, for an administrator's
+        custom size, skips only the allowed-size rejection; the hardware checks still run.
+        """
+        # fields a caller may not choose are dropped by creatable_session, which every
+        # create passes through in complete_create_session_request
+        failure_reason = self.validate_session_name(session.name)
+        if Utils.is_not_empty(failure_reason):
+            session.failure_reason = failure_reason
+            return session, False
+
         if Utils.is_empty(session.project) or Utils.is_empty(
             session.project.project_id
         ):
@@ -624,13 +748,8 @@ class VirtualDesktopAPI(BaseAPI):
                 break
 
         # Relax the check for clusteradmin
-        cluster_administrator = self.context.config().get_string(
-            'cluster.administrator_username', required=True
-        )
-        if (
-            not is_user_part_of_project
-            and (session.owner not in cluster_administrator)
-            and not session.owner.startswith('clusteradmin')
+        if not is_user_part_of_project and not self.is_cluster_administrator_username(
+            session.owner
         ):
             session.failure_reason = "You aren't a member of this project."
             self._logger.info(
@@ -700,6 +819,10 @@ class VirtualDesktopAPI(BaseAPI):
         if Utils.is_empty(software_stack):
             session.failure_reason = f'Invalid session.software_stack.stack_id: {session.software_stack.stack_id} and/or session.software_stack.base_os: {session.software_stack.base_os}'
             return session, False
+        # an administrator withdrew it; a legacy row without the flag stays usable
+        if software_stack.enabled is False:
+            session.failure_reason = STACK_DISABLED_MESSAGE
+            return session, False
 
         # validate software stack part of the same project
         is_software_stack_part_of_project = False
@@ -731,15 +854,16 @@ class VirtualDesktopAPI(BaseAPI):
             session.failure_reason = 'missing session.server.instance_type'
             return session, False
 
-        failure_reason = self.controller_utils.get_instance_type_rejection_reason(
-            instance_type_name=session.server.instance_type,
-            hibernation_support=session.hibernation_enabled,
-            software_stack=session.software_stack,
-            username=session.owner,
-        )
-        if Utils.is_not_empty(failure_reason):
-            session.failure_reason = failure_reason
-            return session, False
+        if not custom_instance_type:
+            failure_reason = self.controller_utils.get_instance_type_rejection_reason(
+                instance_type_name=session.server.instance_type,
+                hibernation_support=session.hibernation_enabled,
+                software_stack=session.software_stack,
+                username=session.owner,
+            )
+            if Utils.is_not_empty(failure_reason):
+                session.failure_reason = failure_reason
+                return session, False
 
         # Technical Validation for Hibernation.
         # Simplified Windows detection to match all Windows variations
@@ -1017,9 +1141,39 @@ class VirtualDesktopAPI(BaseAPI):
 
         return project_instance_profile_arn
 
+    @staticmethod
+    def creatable_session(request: VirtualDesktopSession) -> VirtualDesktopSession:
+        """
+        A new desktop holds only what a caller chooses for it. The request is the whole stored
+        session model, so every other field (broker session id, schedules, locks, recovery and
+        cleanup state, host state) starts from its default instead of the request's value.
+        """
+        server = request.server or VirtualDesktopServer()
+        return VirtualDesktopSession(
+            name=request.name,
+            description=request.description,
+            owner=request.owner,
+            type=request.type,
+            project=request.project,
+            software_stack=request.software_stack,
+            hibernation_enabled=request.hibernation_enabled,
+            idle_autostop_delay=request.idle_autostop_delay,
+            server=VirtualDesktopServer(
+                instance_type=server.instance_type,
+                root_volume_size=server.root_volume_size,
+                root_volume_iops=server.root_volume_iops,
+                subnet_id=server.subnet_id,
+                # replaced below; kept so a supplied value is logged as ignored
+                instance_profile_arn=server.instance_profile_arn,
+                key_pair_name=server.key_pair_name,
+                security_groups=server.security_groups,
+            ),
+        )
+
     def complete_create_session_request(
         self, session: VirtualDesktopSession, context: ApiInvocationContext
     ) -> VirtualDesktopSession:
+        session = self.creatable_session(session)
         if Utils.is_empty(session.name):
             session.name = Utils.uuid()
 
@@ -1038,9 +1192,6 @@ class VirtualDesktopAPI(BaseAPI):
         if Utils.is_empty(session.owner):
             session.owner = context.get_username()
 
-        if Utils.is_empty(session.server):
-            session.server = VirtualDesktopServer()
-
         if Utils.is_empty(session.server.root_volume_iops):
             session.server.root_volume_iops = self.DEFAULT_ROOT_VOL_IOPS
 
@@ -1058,16 +1209,19 @@ class VirtualDesktopAPI(BaseAPI):
                 f'ignoring instance_profile_arn supplied in create session request: {requested_instance_profile_arn}'
             )
 
-        if Utils.is_empty(session.server.key_pair_name):
-            session.server.key_pair_name = self.context.config().get_string(
-                'cluster.network.ssh_key_pair', required=True
+        # the key pair and security groups come from cluster configuration only. nothing in
+        # the product sets them on a request, so a value supplied by the caller is discarded.
+        if Utils.is_not_empty(session.server.key_pair_name) or Utils.is_not_empty(
+            session.server.security_groups
+        ):
+            self._logger.warning(
+                'ignoring key_pair_name/security_groups supplied in create session request'
             )
-
-        if Utils.is_empty(session.server.security_groups):
-            session.server.security_groups = []
+        session.server.key_pair_name = self.context.config().get_string(
+            'cluster.network.ssh_key_pair', required=True
+        )
 
         security_group_ids = set()
-        security_group_ids.update(session.server.security_groups)
         security_group_ids.add(
             self.context.config().get_string(
                 'virtual-desktop-controller.dcv_host_security_group_id', required=True
@@ -1105,7 +1259,11 @@ class VirtualDesktopAPI(BaseAPI):
                     failed_requests.append(screenshot)
                     continue
 
-                if Utils.is_empty(session.dcv_session_id):
+                # the stored broker id names this desktop's session only once it is READY
+                if (
+                    Utils.is_empty(session.dcv_session_id)
+                    or session.state != VirtualDesktopSessionState.READY
+                ):
                     screenshot.failure_reason = f'DCV session does not yet exist for IDEA session id: {screenshot.idea_session_id} for user: {screenshot.idea_session_owner}'
                     self._logger.error(screenshot.failure_reason)
                     failed_requests.append(screenshot)
@@ -1151,15 +1309,35 @@ class VirtualDesktopAPI(BaseAPI):
                 )
                 return new_session
 
+        # every refusal comes before EC2 is touched, so a refused edit changes nothing
+        if Utils.is_not_empty(new_session.idle_autostop_delay):
+            failure_reason = self.validate_idle_autostop_delay(
+                new_session.idle_autostop_delay
+            )
+            if Utils.is_not_empty(failure_reason):
+                new_session.failure_reason = failure_reason
+                self._logger.error(failure_reason)
+                return new_session
+        if Utils.is_not_empty(new_session.schedule):
+            failure_reason = self.validate_schedule(new_session.schedule)
+            if Utils.is_not_empty(failure_reason):
+                new_session.failure_reason = failure_reason
+                return new_session
+
         operation_failed = False
         is_session_updated = False
         is_server_updated = False
 
         if (
-            not operation_failed
-            and Utils.is_not_empty(new_session.name)
+            Utils.is_not_empty(new_session.name)
             and new_session.name != old_session.name
         ):
+            # only a rename is checked, so a desktop whose stored name predates the rule
+            # can still be edited while it keeps that name
+            failure_reason = self.validate_session_name(new_session.name)
+            if Utils.is_not_empty(failure_reason):
+                new_session.failure_reason = failure_reason
+                return new_session
             is_session_updated = True
             old_session.name = new_session.name
 
@@ -1201,20 +1379,12 @@ class VirtualDesktopAPI(BaseAPI):
                     is_session_updated = True
 
         if not operation_failed and Utils.is_not_empty(new_session.idle_autostop_delay):
-            failure_reason = self.validate_idle_autostop_delay(
+            old_session.idle_autostop_delay = (
                 new_session.idle_autostop_delay
+                if new_session.idle_autostop_delay > 0
+                else None
             )
-            if Utils.is_not_empty(failure_reason):
-                new_session.failure_reason = failure_reason
-                self._logger.error(failure_reason)
-                operation_failed = True
-            else:
-                old_session.idle_autostop_delay = (
-                    new_session.idle_autostop_delay
-                    if new_session.idle_autostop_delay > 0
-                    else None
-                )
-                is_session_updated = True
+            is_session_updated = True
 
         if not operation_failed and Utils.is_not_empty(new_session.schedule):
             old_session = self.schedule_utils.update_schedule_for_session(
@@ -1226,7 +1396,14 @@ class VirtualDesktopAPI(BaseAPI):
             _ = self.server_db.update(old_session.server)
 
         if not operation_failed and is_session_updated:
-            new_session = self.session_db.update(old_session)
+            # a stop, delete or other change since the read keeps its result
+            try:
+                new_session = self.session_db.update(old_session, check_version=True)
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                    raise
+                new_session.failure_reason = SESSION_CHANGED_MESSAGE
+                return new_session
             self.controller_utils.create_tag(
                 new_session.server.instance_id,
                 constants.IDEA_TAG_NAME,
@@ -1257,12 +1434,12 @@ class VirtualDesktopAPI(BaseAPI):
         return self.session_utils.stop_sessions(sessions)
 
     def _resume_sessions(
-        self, sessions: List[VirtualDesktopSession]
+        self, sessions: List[VirtualDesktopSession], by_admin: bool = False
     ) -> tuple[List[VirtualDesktopSession], List[VirtualDesktopSession]]:
         if Utils.is_empty(sessions):
             return [], []
 
-        return self.session_utils.resume_sessions(sessions)
+        return self.session_utils.resume_sessions(sessions, by_admin=by_admin)
 
     def _create_software_stack(
         self, software_stack: VirtualDesktopSoftwareStack
@@ -1401,17 +1578,48 @@ class VirtualDesktopAPI(BaseAPI):
         if Utils.is_empty(request.filters):
             request.filters = []
 
+        # the caller's own shares and those with the groups the caller is in now, in one
+        # index query: the request's filters, sort and paging apply to both, and the total
+        # is the index's
+        try:
+            user = self.context.accounts_client.get_user(
+                GetUserRequest(username=username)
+            ).user
+            groups = sorted(
+                Utils.get_as_list(user.additional_groups, []) if user else []
+            )
+        except Exception as e:
+            self._logger.warning(f'could not read the groups of {username}: {e}')
+            groups = []
+        actors = [username] + [
+            share_actor_key('GROUP', group)
+            for group in groups[:MAX_LISTED_GROUPS]
+            # a disabled group's share admits nobody, so it is not offered either
+            if group_enabled(self.context, group)
+        ]
+
         for listing_filter in request.filters:
             if listing_filter.key == SESSION_PERMISSIONS_FILTER_ACTOR_KEY:
-                listing_filter.value = username
+                listing_filter.value = actors
                 actor_filter_found = True
 
         if not actor_filter_found:
             request.add_filter(
-                SocaFilter(key=SESSION_PERMISSIONS_FILTER_ACTOR_KEY, value=username)
+                SocaFilter(key=SESSION_PERMISSIONS_FILTER_ACTOR_KEY, value=actors)
             )
 
-        return self.session_permissions_db.list_from_index(request)
+        response = self.session_permissions_db.list_from_index(request)
+        # a row under the caller's name is a user share and a group key's row a group share;
+        # a bare-named group row is nobody's.
+        # shortcut: such a row still counts in the total (it exists only where a user name
+        # equals a group name shared before typed group keys); filter it in the index if not rare
+        response.listing = [
+            p
+            for p in (response.listing or [])
+            if (p.actor_type == VirtualDesktopSessionPermissionActorType.GROUP)
+            == (p.actor_name != username)
+        ]
+        return response
 
     def _list_software_stacks(
         self, request: ListSoftwareStackRequest

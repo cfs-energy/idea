@@ -1,0 +1,56 @@
+name: Image checks
+# Builds, smoke-tests and scans the control-plane image through the same composite action as the
+# release build (build_push.yaml), and publishes nothing. Every job has a read-only token, no
+# secrets and no OIDC token, so a pull request from any branch or fork runs it safely.
+#
+# Pull requests read the build cache and never write it: a pull request's cache entries are
+# usable only by later runs of that pull request, and the image cache is large enough to evict
+# the main-branch entries every pull request reads. Pushes to main and release branches write
+# it, so pull requests start warm.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'release-*'
+    paths-ignore:
+      - 'docs/**'
+permissions:
+  contents: read
+concurrency:
+  # A new push to a pull request cancels its older run; branch runs queue.
+  group: image-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      images: ${{ steps.inputs.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect image inputs
+        id: inputs
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-inputs.sh
+  control_plane_image:
+    # Skipped (which a required check counts as passed) when nothing that goes into the image
+    # changed, such as a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Development Environment
+        uses: ./.github/actions/setup_dev_environment
+      - name: Build Modules
+        uses: ./.github/actions/build_modules
+      - name: Build, test and scan the image
+        uses: ./.github/actions/build_control_plane_image
+        with:
+          cache-write: ${{ github.event_name == 'push' }}

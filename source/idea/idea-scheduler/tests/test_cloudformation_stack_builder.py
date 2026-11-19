@@ -74,7 +74,8 @@ def build_template(
     mock_job = SocaJob(
         name=job_name,
         job_id=job_id,
-        job_uid=f'{job_name}-{job_id}',
+        # a uid as the hook makes one: letters digits and dashes (U03 checks it again)
+        job_uid=f'{job_name}-{job_id}'.replace('[]', ''),
         owner='mockuser',
         project='default',
         cluster_name='idea-mock',
@@ -321,6 +322,7 @@ def test_cfn_stack_builder_spotfleet_basic(context):
     )
     instance_tags = None
     volume_tags = None
+    interface_tags = None
     spot_instances_request = None
     for aws_tags in aws_tag_specs:
         resource_type = aws_tags['ResourceType']
@@ -328,6 +330,8 @@ def test_cfn_stack_builder_spotfleet_basic(context):
             instance_tags = aws_tags['Tags']
         elif resource_type == 'volume':
             volume_tags = aws_tags['Tags']
+        elif resource_type == 'network-interface':
+            interface_tags = aws_tags['Tags']
         elif resource_type == 'spot-instances-request':
             spot_instances_request = aws_tags['Tags']
 
@@ -337,8 +341,13 @@ def test_cfn_stack_builder_spotfleet_basic(context):
     assert volume_tags is not None
     check_tags(volume_tags)
 
+    # interfaces carry the same tags from launch, as instances and volumes do
+    assert interface_tags is not None
+    check_tags(interface_tags)
+
     assert spot_instances_request is not None
-    check_tags(instance_tags)
+    # SP-34: this checked the instance tags a second time
+    check_tags(spot_instances_request)
 
     spot_fleet = result.template.get('Resources.SpotFleet')
     assert spot_fleet.get_string('Type') == 'AWS::EC2::SpotFleet'
@@ -822,3 +831,255 @@ def test_an_ebs_scratch_job_builds_its_launch_template(context, iops, volume_typ
     assert scratch['Ebs']['Encrypted'] is True
     if iops > 0:
         assert scratch['Ebs']['Iops'] == iops
+
+
+@pytest.mark.parametrize(
+    'email, tagged',
+    [
+        ('first.last+hpc@example.invalid', 'first.last+hpc@example.invalid'),
+        ("first.o'last@example.invalid", None),
+        ('first last@example.invalid', None),
+    ],
+)
+def test_only_a_plain_owner_email_reaches_the_node_tagging(
+    context, monkeypatch, email, tagged
+):
+    from ideadatamodel import GetUserResult, User
+
+    queue_profile = HpcQueueProfile(
+        name='test',
+        queues=['test'],
+        default_job_params=SocaJobParams(instance_types=['c5.large']),
+    )
+    job_params, provisioning_options = SocaJobBuilder(
+        context=context, params={'nodes': 1, 'cpus': 1}, queue_profile=queue_profile
+    ).build()
+    job = SocaJob(
+        name='tags',
+        job_id='42',
+        job_uid='tags-42',
+        owner='mockuser',
+        project='default',
+        cluster_name='idea-mock',
+        params=job_params,
+        queue='test',
+        queue_type='test',
+        provisioning_options=provisioning_options,
+    )
+    job.job_group = job.get_job_group()
+    monkeypatch.setattr(
+        context.accounts_client,
+        'get_user',
+        lambda _request: GetUserResult(user=User(username='mockuser', email=email)),
+    )
+
+    class Captured(Exception):
+        pass
+
+    def capture(**_kwargs):
+        raise Captured
+
+    monkeypatch.setattr(
+        stack_builder_module.BootstrapUtils,
+        'check_and_attach_cloudwatch_logging_and_metrics',
+        capture,
+    )
+    with pytest.raises(Captured):
+        CloudFormationStackBuilder(context=context, job=job).build_user_data()
+    assert job.owner_email == tagged
+
+
+def fsx_template(context, params: Dict, fsx_default=None) -> BuildTemplateResult:
+    return build_template(
+        context=context,
+        job_name='fsx-default',
+        params={'nodes': 1, 'cpus': 1, 'fsx_lustre': 'true', **params},
+        queue_profile=HpcQueueProfile(
+            name='normal',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(
+                instance_types=['c5.large'], fsx_lustre=fsx_default
+            ),
+        ),
+    )
+
+
+def fsx_resource_text(template_yml: str) -> str:
+    lines, inside = [], False
+    for line in template_yml.splitlines(keepends=True):
+        if line.startswith('  FSxForLustre:'):
+            inside = True
+        elif inside and re.match(r'^  [A-Za-z]', line):
+            break
+        if inside:
+            lines.append(line)
+    return ''.join(lines)
+
+
+def test_default_scratch_2_fsx_renders_as_before(context):
+    # data/: the FSxForLustre resource rendered for this job at the branch base (1a077ec7)
+    import pathlib
+
+    expected = (
+        pathlib.Path(__file__).parent
+        / 'data'
+        / 'fsx_lustre_scratch_2_default_resource.txt'
+    ).read_text()
+    assert fsx_resource_text(fsx_template(context, {}).template_yml) == expected
+
+
+@pytest.mark.parametrize(
+    'queue_default,job_params,deployment_type,throughput',
+    [
+        # the queue's per-unit throughput is used, not a fixed 200
+        (('persistent_1', 100), {}, 'PERSISTENT_1', 100),
+        (('persistent_1', None), {}, 'PERSISTENT_1', 200),
+        # PERSISTENT_2 needs a throughput of its own range: 125, 250, 500, 1000
+        (('persistent_2', 500), {}, 'PERSISTENT_2', 500),
+        (('persistent_2', None), {}, 'PERSISTENT_2', 125),
+        # the job picks PERSISTENT_2 on a PERSISTENT_1 queue: its throughput doesn't fit
+        (
+            ('persistent_1', 200),
+            {'fsx_lustre_deployment_type': 'persistent_2'},
+            'PERSISTENT_2',
+            125,
+        ),
+        (
+            ('persistent_2', 250),
+            {'fsx_lustre_per_unit_throughput': '1000'},
+            'PERSISTENT_2',
+            1000,
+        ),
+    ],
+)
+def test_persistent_fsx_gets_a_per_unit_throughput(
+    context, queue_default, job_params, deployment_type, throughput
+):
+    from ideadatamodel import SocaFSxLustreConfig
+
+    deployment, per_unit = queue_default
+    result = fsx_template(
+        context,
+        job_params,
+        fsx_default=SocaFSxLustreConfig(
+            enabled=True, deployment_type=deployment, per_unit_throughput=per_unit
+        ),
+    )
+    lustre = result.template.get(
+        'Resources.FSxForLustre.Properties.LustreConfiguration'
+    )
+    assert lustre.get('DeploymentType') == deployment_type
+    assert lustre.get('PerUnitStorageThroughput') == throughput
+
+
+def test_a_persistent_2_throughput_from_the_persistent_1_range_is_refused(context):
+    with pytest.raises(exceptions.SocaException):
+        fsx_template(
+            context,
+            {
+                'fsx_lustre_deployment_type': 'persistent_2',
+                'fsx_lustre_per_unit_throughput': '200',
+            },
+        )
+
+
+@pytest.mark.parametrize('keep_forever', [False, True])
+def test_a_persistent_pool_records_its_instance_profile(context, keep_forever):
+    # SCH-03: the hook checks a keep-forever job against the pool's profile
+    queue_profile = HpcQueueProfile(
+        name='pool',
+        queues=['pool'],
+        scaling_mode=SocaScalingMode.BATCH if not keep_forever else None,
+        keep_forever=keep_forever,
+        terminate_when_idle=3 if not keep_forever else 0,
+        stack_uuid='pool-stack',
+        default_job_params=SocaJobParams(instance_types=['c5.large']),
+    )
+    builder = SocaJobBuilder(
+        context=context, params={'nodes': 1, 'cpus': 1}, queue_profile=queue_profile
+    )
+    job_params, provisioning_options = builder.build()
+    job = SocaJob(
+        name='pool',
+        job_id='1',
+        job_uid='pool-1',
+        owner='mockuser',
+        project='default',
+        cluster_name='idea-mock',
+        params=job_params,
+        queue='pool',
+        queue_type='pool',
+        provisioning_options=provisioning_options,
+    )
+    job.job_group = job.get_job_group()
+    tags = CloudFormationStackBuilder(context=context, job=job).build_cfn_stack_tags()
+    value = get_tag_value('idea:InstanceProfile', tags)
+    assert value == (job_params.instance_profile if keep_forever else None)
+
+
+def test_the_scheduler_creates_the_job_log_group_with_its_retention(
+    context, monkeypatch
+):
+    # H04: retention is set by the scheduler, not by the compute node role
+    from unittest.mock import Mock
+
+    logs = Mock()
+    logs.exceptions.ResourceAlreadyExistsException = type('Exists', (Exception,), {})
+    monkeypatch.setattr(type(context.aws()), 'logs', lambda self: logs)
+    context.config().put('cluster.cloudwatch_logs.enabled', True)
+    context.config().put('scheduler.cloudwatch_logs.enabled', True)
+    context.config().put('cluster.cloudwatch_logs.retention_in_days', 30)
+    fsx_template(context, {'fsx_lustre': 'false'})
+    [created] = logs.create_log_group.call_args_list
+    group = created.kwargs['logGroupName']
+    assert group.startswith(f'/{context.cluster_name()}/') and '/job-' in group
+    logs.put_retention_policy.assert_called_once_with(
+        logGroupName=group, retentionInDays=30
+    )
+
+
+def test_a_project_tag_cannot_replace_the_schedulers_own_tags(context, monkeypatch):
+    # NM-01: a project tag with a scheduler key named another stack, and clean-up acted on it
+    from ideadatamodel import SocaKeyValue
+
+    project = context.projects_client.get_project_by_name('default')
+    real_get_project = type(context.projects_client).get_project
+
+    def get_project(self, request):
+        result = real_get_project(self, request)
+        result.project.tags = (result.project.tags or []) + [
+            SocaKeyValue(key='idea:StackId', value='someone-elses-stack'),
+            SocaKeyValue(key='idea:ClusterName', value='other-cluster'),
+            SocaKeyValue(key='team', value='cfd'),
+        ]
+        return result
+
+    monkeypatch.setattr(type(context.projects_client), 'get_project', get_project)
+    result = fsx_template(context, {'fsx_lustre': 'false'})
+    tags = result.template.get('Resources.AutoScalingComputeGroup.Properties.Tags')
+    assert get_tag_value('idea:StackId', tags) != 'someone-elses-stack'
+    assert get_tag_value('idea:ClusterName', tags) == 'idea-mock'
+    assert get_tag_value('team', tags) == 'cfd'
+    assert project is not None
+
+
+def test_an_efa_spot_fleet_is_given_the_jobs_subnet(context):
+    # SP-19: the EFA overrides carried no subnet, while the dry run used the job's
+    result = build_template(
+        context=context,
+        job_name='efa-spot',
+        params={'nodes': 1, 'cpus': 1, 'efa_support': 'true', 'spot_price': 'auto'},
+        queue_profile=HpcQueueProfile(
+            name='compute',
+            queues=['normal'],
+            scaling_mode=SocaScalingMode.SINGLE_JOB,
+            default_job_params=SocaJobParams(instance_types=['c5n.18xlarge']),
+        ),
+    )
+    configs = result.template.get(
+        'Resources.SpotFleet.Properties.SpotFleetRequestConfigData.LaunchTemplateConfigs'
+    )
+    overrides = configs[0]['Overrides']
+    subnet = context.config().get_list('cluster.network.private_subnets')[0]
+    assert overrides and all(o['SubnetId'] == subnet for o in overrides)

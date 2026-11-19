@@ -63,6 +63,10 @@ PROVISIONING_WAIT_ERROR_CODES = (
 JOB_COMMENT_PROVISIONING = 'IDEA: provisioning compute capacity for this job'
 
 
+# the rounds a batch waits for jobs counted as queued but not yet arrived (SCH-25)
+BATCH_DRAIN_MAX_ROUNDS = 10
+
+
 class ProvisionJobsResult(SocaBaseModel):
     error_code: Optional[str] = Field(default=None)
     message: Optional[str] = Field(default=None)
@@ -125,9 +129,26 @@ class ProvisionJobs:
 
         self._provisioning_status: Optional[ProvisioningStatus] = None
 
+        # jobs a check refused this cycle, retried with the ones not provisioned
+        self._held_back: List[SocaJob] = []
+
     @property
     def job(self) -> SocaJob:
         return self.jobs[0]
+
+    def hold_back(self, jobs: List[SocaJob]):
+        """
+        take the jobs a budget or license check refused out of this cycle, so the rest of
+        the batch is provisioned. a check raises instead when it refuses every job.
+        """
+        if not jobs:
+            return
+        held = {job.job_id for job in jobs}
+        self.jobs = [job for job in self.jobs if job.job_id not in held]
+        self._held_back += jobs
+        self.provisioning_util = JobProvisioningUtil(
+            context=self._context, jobs=self.jobs, logger=self._logger
+        )
 
     @property
     def is_batch(self) -> bool:
@@ -187,19 +208,36 @@ class ProvisionJobs:
             duration_secs=int(pending_duration.total_seconds()),
         )
 
+    @staticmethod
+    def _signature(job: SocaJob) -> Optional[str]:
+        # a job whose signature cannot be computed is not one the stack builder can take
+        # either; it fails there with the reason, as before
+        try:
+            return job.get_capacity_signature()
+        except exceptions.SocaException:
+            return None
+
     def raise_if_capacity_signature_differs(self):
         """
         job_group alone can collide across jobs with differing params; capacity_signature covers the
         full set. A stack provisioned before signatures existed has none and is matched by job_group.
         """
-        capacity_signature = self.job.get_capacity_signature()
         provisioned_capacity_signature = (
             self.provisioning_util.stack.soca_capacity_signature
         )
-        if (
-            provisioned_capacity_signature is not None
-            and capacity_signature != provisioned_capacity_signature
-        ):
+        if provisioned_capacity_signature is None:
+            return
+        # every job of the batch is placed on this stack, so every job is compared
+        differing = [
+            job
+            for job in self.jobs
+            if job.get_capacity_signature() != provisioned_capacity_signature
+        ]
+        if 0 < len(differing) < len(self.jobs):
+            self.hold_back(differing)
+            return
+        capacity_signature = self.job.get_capacity_signature()
+        if differing:
             raise exceptions.SocaException(
                 error_code=errorcodes.SHARED_CAPACITY_MISMATCH,
                 message=f'Provisioned capacity does not match the desired capacity requirements.'
@@ -215,7 +253,7 @@ class ProvisionJobs:
 
         self.raise_if_capacity_signature_differs()
 
-        self.provisioning_util.check_budgets()
+        self.hold_back(self.provisioning_util.check_budgets())
 
         self.provisioning_util.check_bedrock()
 
@@ -223,12 +261,12 @@ class ProvisionJobs:
 
         self.provisioning_util.check_reserved_instance_usage()
 
-        self.provisioning_util.check_licenses()
+        self.hold_back(self.provisioning_util.check_licenses())
 
         result = self.provisioning_util.update_capacity()
 
         provisioned_jobs = result.provisioned_jobs
-        unprovisioned_jobs = result.unprovisioned_jobs
+        unprovisioned_jobs = (result.unprovisioned_jobs or []) + self._held_back
         capacity_info = result.capacity_info
 
         if self.job.is_spot_capacity():
@@ -248,9 +286,44 @@ class ProvisionJobs:
         if len(unprovisioned_jobs) > 0:
             raise exceptions.SocaException(
                 error_code=errorcodes.RETRY_JOB_PROVISIONING,
-                message=f'{len(unprovisioned_jobs)} of {len(self.jobs)} could not be provisioned at this time. '
+                message=f'{len(unprovisioned_jobs)} of {len(self.jobs) + len(self._held_back)} could not be provisioned at this time. '
                 f'Provisioning will be retried for these jobs',
                 ref=unprovisioned_jobs,
+            )
+
+    def raise_if_past_instance_limit(self):
+        """
+        the queue gate skips shared jobs so idle nodes they would reuse do not block them
+        (B-B1). batch capacity is limited in BatchCapacityHelper; shared capacity that is
+        not batch (keep forever, terminate when idle) is limited here, where a new stack
+        would add nodes (S2), and so is a single-job stack, built from the refreshed
+        request the queue gate never saw (#2a). a job placed on an existing stack never
+        reaches this.
+        """
+        params = None
+        try:
+            profile = self._context.queue_profiles.get_queue_profile(
+                queue_profile_name=self.job.queue_type
+            )
+            params = profile.queue_management_params if profile else None
+        except Exception as e:
+            # as BatchCapacityHelper.admit_within_queue_limits: an unread profile does not
+            # stop provisioning
+            self._logger.warning(f'{self.job.log_tag} queue limits not read: {e}')
+        max_instances = Utils.get_as_int(
+            params.max_provisioned_instances if params else None, 0
+        )
+        if max_instances <= 0:
+            return
+        count = self._context.instance_cache.get_queue_profile_instance_count(
+            self.job.queue_type
+        )
+        if count + self.job.desired_nodes() > max_instances:
+            raise exceptions.SocaException(
+                error_code=errorcodes.MAX_PROVISIONED_INSTANCES_LIMIT,
+                message=f'Queue profile {self.job.queue_type} has {count} of its '
+                f'{max_instances} instances up; this job needs {self.job.desired_nodes()} '
+                f'more. Provisioning will be retried when instances free up.',
             )
 
     def create_new_stack(self):
@@ -259,7 +332,7 @@ class ProvisionJobs:
         :return: List of SocaJobs that could not be provisioned due to limits
         """
 
-        self.provisioning_util.check_budgets()
+        self.hold_back(self.provisioning_util.check_budgets())
 
         self.provisioning_util.check_bedrock()
 
@@ -269,14 +342,28 @@ class ProvisionJobs:
 
         self.provisioning_util.check_reserved_instance_usage()
 
-        self.provisioning_util.check_licenses()
+        self.hold_back(self.provisioning_util.check_licenses())
 
         if self.is_batch:
+            # a new stack is built from the first job's parameters: a job whose capacity
+            # signature differs waits for its own (signoff2 B1)
+            first_key = ProvisionJobs._signature(self.job)
+            self.hold_back(
+                [job for job in self.jobs if ProvisionJobs._signature(job) != first_key]
+            )
             result = BatchCapacityHelper(
                 context=self._context,
                 jobs=self.jobs,
                 provisioned_capacity=self.provisioning_util.provisioned_capacity,
             ).invoke()
+            if not result.provisioned_jobs:
+                # every job is past a queue limit: no stack is built for none of them
+                raise exceptions.SocaException(
+                    error_code=errorcodes.RETRY_JOB_PROVISIONING,
+                    message=f'{len(self.jobs)} jobs wait for the queue limit to clear. '
+                    f'Provisioning will be retried for these jobs',
+                    ref=result.unprovisioned_jobs + self._held_back,
+                )
 
             stack_builder = CloudFormationStackBuilder(
                 context=self._context,
@@ -297,12 +384,17 @@ class ProvisionJobs:
             unprovisioned_jobs = result.unprovisioned_jobs
 
         else:
+            # an ephemeral job passed the queue gate on its cached request; the stack is
+            # built from the refreshed one, so the limit is checked again on what is built
+            # (signoff2 verify-scheduler #2a)
+            self.raise_if_past_instance_limit()
             stack_builder = CloudFormationStackBuilder(
                 context=self._context, job=self.job
             )
             stack_id = stack_builder.build()
             self.provision_job_in_scheduler(job=self.job, stack_id=stack_id)
             unprovisioned_jobs = []
+        unprovisioned_jobs = unprovisioned_jobs + self._held_back
 
         if self._lifecycle_events is not None:
             self._lifecycle_events.stack_created(
@@ -324,7 +416,7 @@ class ProvisionJobs:
         if len(unprovisioned_jobs) > 0:
             raise exceptions.SocaException(
                 error_code=errorcodes.RETRY_JOB_PROVISIONING,
-                message=f'{len(unprovisioned_jobs)} of {len(self.jobs)} could not be provisioned at this time. '
+                message=f'{len(unprovisioned_jobs)} of {len(self.jobs) + len(self._held_back)} could not be provisioned at this time. '
                 f'Provisioning will be retried for these jobs',
                 ref=unprovisioned_jobs,
             )
@@ -370,9 +462,22 @@ class ProvisionJobs:
                 f'desired: {desired_capacity}, provisioned: {provisioned_capacity}',
             )
 
+        # capacity that is already up costs the job's project and holds license seats the
+        # same as a new stack, so the same per-job checks apply before it is handed out
+        self.hold_back(self.provisioning_util.check_budgets())
+        self.hold_back(self.provisioning_util.check_licenses())
+
         for job in self.jobs:
             self.provision_job_in_scheduler(
                 job=job, stack_id=self.provisioning_util.stack.stack_id
+            )
+
+        if len(self._held_back) > 0:
+            raise exceptions.SocaException(
+                error_code=errorcodes.RETRY_JOB_PROVISIONING,
+                message=f'{len(self._held_back)} of {len(self.jobs) + len(self._held_back)} could not be provisioned at this time. '
+                f'Provisioning will be retried for these jobs',
+                ref=self._held_back,
             )
 
     def handle_completed(self):
@@ -736,6 +841,34 @@ class JobProvisioner(SocaService):
             self._logger.debug(f'{job.log_tag} could not check the AMI age: {e}')
         return ''
 
+    @staticmethod
+    def _batch_key(job: SocaJob):
+        """what a batch is keyed on: a stack is built from one job's parameters"""
+        try:
+            return job.get_job_group(), job.get_capacity_signature()
+        except Exception:
+            return job.job_id, None
+
+    def _refreshed(self, job: SocaJob) -> SocaJob:
+        """
+        the job as PBS holds it now, through the cache. an accepted edit of a job with no
+        capacity yet only signals its queue, and the cache answered with the request from
+        before the edit: placement, license seats and the selector written back used it
+        (SJ-36). the live read made for the state check is stored and used.
+        """
+        live_job = getattr(self, '_live_job', None)
+        self._live_job = None
+        if live_job is None or live_job.job_id != job.job_id:
+            return job
+        try:
+            self._context.job_cache.sync(jobs=[live_job])
+            return self._context.job_cache.get_job(job_id=job.job_id) or live_job
+        except Exception as e:
+            self._logger.warning(
+                f'{job.log_tag} live job not cached, placed as read: {e}'
+            )
+            return live_job
+
     def _is_job_provisionable(self, job: SocaJob) -> bool:
         """
         read the job's live state from the scheduler, before any capacity is launched.
@@ -761,6 +894,7 @@ class JobProvisioner(SocaService):
                 f'{job.log_tag} Job state: {live_job.state}, skip provisioning.'
             )
             return False
+        self._live_job = live_job
 
         try:
             if not user_enabled(self._context, live_job.owner):
@@ -770,6 +904,40 @@ class JobProvisioner(SocaService):
             self._logger.warning('Account state unavailable, skip provisioning')
             return False
         return True
+
+    def _hold_jobs_with_unchecked_identity(self, jobs: List[SocaJob]) -> List[SocaJob]:
+        """
+        a job queued before the submission check (an earlier release) can carry a job_uid
+        or job_group that would be rendered into the node's root bootstrap (U03). such a
+        job is held with the reason and never provisioned; the other jobs go on.
+        """
+        from ideascheduler.app.scheduler.job_param_builder import (
+            stored_job_identity_error,
+        )
+
+        kept = []
+        for job in jobs:
+            error = stored_job_identity_error(job)
+            if error is None:
+                kept.append(job)
+                continue
+            self._logger.error(
+                f'{job.log_tag} not provisioned, held: {error} '
+                f'(job_uid {job.job_uid!r}, job_group {job.job_group!r})'
+            )
+            try:
+                self._context.job_cache.set_job_provisioning_error(
+                    job_id=job.job_id,
+                    error_code=errorcodes.SOCA_SCHEDULER_INVALID_JOB,
+                    message=f'Job held: {error}.',
+                )
+                self._context.scheduler.hold_job(job_id=job.job_id)
+                job.state = SocaJobState.HELD
+                self._context.job_cache.sync(jobs=[job])
+            except Exception as e:
+                # still never provisioned: the next cycle tries the hold again
+                self._logger.error(f'{job.log_tag} failed to hold job: {e}')
+        return kept
 
     def _provision_with_retry_backoff(
         self, jobs: List[SocaJob], max_retries: int = 5
@@ -788,6 +956,11 @@ class JobProvisioner(SocaService):
             else None
         )
         comments_applied: Dict[str, str] = {}
+        narrowed = False
+
+        jobs = self._hold_jobs_with_unchecked_identity(jobs)
+        if len(jobs) == 0:
+            return ProvisionJobsResult(status=True)
 
         while not self._exit.is_set():
             active_jobs = []
@@ -798,6 +971,17 @@ class JobProvisioner(SocaService):
             # dispatch it (deleted, held), skip the entire batch
             job = jobs[0]
             if self._is_job_provisionable(job=job):
+                refreshed = self._refreshed(job)
+                if len(jobs) > 1 and self._batch_key(refreshed) != self._batch_key(job):
+                    # the first job of a batch changed since it was batched: the stack
+                    # would be built from its new parameters for the others (signoff2 B1)
+                    self._queue.put(job=refreshed)
+                    self._logger.info(
+                        f'{refreshed.log_tag} changed since it was batched; re-queued'
+                    )
+                    jobs = jobs[1:]
+                    continue
+                jobs[0] = refreshed
                 active_jobs = jobs
 
             total_ms = Utils.current_time_ms() - start
@@ -839,6 +1023,12 @@ class JobProvisioner(SocaService):
 
             if not result.status:
                 last_error_code = result.get_error_code()
+                # jobs placed in this attempt are done: only the ones held back or past a
+                # limit are tried again. re-running the whole list placed the placed jobs
+                # again and charged them the later failure (SP-11)
+                if result.unprovisioned_jobs:
+                    jobs = list(result.unprovisioned_jobs)
+                    narrowed = True
 
             retry_count += 1
 
@@ -880,6 +1070,10 @@ class JobProvisioner(SocaService):
                 return ProvisionJobsResult(status=True)
 
             if retry_count > max_retries or result.status:
+                # a later round that failed without naming its jobs failed for the ones
+                # still unplaced: the caller must not charge jobs placed earlier (B-S1)
+                if narrowed and not result.status and not result.unprovisioned_jobs:
+                    result.unprovisioned_jobs = jobs
                 return result
 
             self._exit.wait(timeout=sleep)
@@ -907,6 +1101,19 @@ class JobProvisioner(SocaService):
         for job_id in list(jobs.keys()):
             live_job = live_by_id.get(job_id)
             if live_job is not None and live_job.state == SocaJobState.QUEUED:
+                # placed as PBS holds it now: an edit may have changed it (SJ-36)
+                self._live_job = live_job
+                refreshed = self._refreshed(jobs[job_id])
+                if self._batch_key(refreshed) != self._batch_key(jobs[job_id]):
+                    # grouped under its old group or signature: back to the queue, so the
+                    # next drain groups it as it is now (signoff2 B1)
+                    del jobs[job_id]
+                    self._queue.put(job=refreshed)
+                    self._logger.info(
+                        f'{refreshed.log_tag} changed since it was batched; re-queued'
+                    )
+                    continue
+                jobs[job_id] = refreshed
                 continue
             if live_job is not None:
                 self._context.job_cache.sync(jobs=[live_job])
@@ -916,6 +1123,33 @@ class JobProvisioner(SocaService):
             )
             del jobs[job_id]
 
+    def _expected_batch_size(self, job_group: str) -> Optional[int]:
+        """
+        the queued, unprovisioned jobs of this group in this profile's own queues. a group
+        name can be used in another profile's queues too, and those jobs never reach this
+        worker, so counting them cluster-wide would make it wait for them forever.
+        """
+        # a failed qselect is not an empty queue (NM-16 / PBS-28): None, and the batch
+        # neither waits nor is reset on it
+        try:
+            return sum(
+                len(
+                    OpenPBSQSelect(
+                        context=self._context,
+                        logger=self._logger,
+                        log_tag=f'JobGroup: {job_group}',
+                        job_group=job_group,
+                        stack_id='tbd',
+                        queue=queue,
+                        job_state=[SocaJobState.QUEUED],
+                    ).list_jobs_ids(raise_on_error=True)
+                )
+                for queue in self._queue.queue_profile.queues or []
+            )
+        except Exception as e:
+            self._logger.warning(f'JobGroup: {job_group} queued count not read: {e}')
+            return None
+
     def _drain_batch_queue(self) -> Dict[str, List[SocaJob]]:
         """
         Drain the batch queue to fetch all Jobs.
@@ -923,10 +1157,22 @@ class JobProvisioner(SocaService):
         Implementation waits for 3 seconds before returning the result. This means, jobs submitted within 3 seconds intervals
         will be processed in a single batch.
 
-        :return: a mapping of jobs group -> list of jobs in the group
+        a batch is the jobs of one group with the same capacity signature: the stack is built
+        from one job's parameters (instance profile, image, storage), so jobs that share a
+        group name but differ in those never share a stack.
+
+        :return: a mapping of batch key (job group and capacity signature) -> list of jobs
         """
-        # job_group -> (job_id, job)
-        batches: Dict[str, Dict[str, SocaJob]] = {}
+        # job_group -> capacity signature -> (job_id, job)
+        batches: Dict[str, Dict[str, Dict[str, SocaJob]]] = {}
+
+        wait_interval = self._context.config().get_int(
+            'scheduler.job_provisioning.batch_provisioning_wait_interval_seconds',
+            default=3,
+        )
+        # a job counted as expected can still be missing (moved, held or deleted between
+        # the count and the drain); after this many rounds the batch goes with what it has
+        rounds_left = BATCH_DRAIN_MAX_ROUNDS
 
         more_jobs_available = True
 
@@ -934,7 +1180,6 @@ class JobProvisioner(SocaService):
             if self._exit.is_set():
                 break
 
-            iterations = 0
             while True:
                 try:
                     job = self._queue.get(timeout=1)
@@ -942,63 +1187,53 @@ class JobProvisioner(SocaService):
                     if job.is_provisioned():
                         continue
 
-                    job_group = job.get_job_group()
-                    if job_group in batches:
-                        jobs = batches[job_group]
-                    else:
-                        jobs: Dict[str, SocaJob] = OrderedDict()
-                        batches[job_group] = jobs
-
+                    signatures = batches.setdefault(job.get_job_group(), {})
+                    jobs = signatures.setdefault(
+                        job.get_capacity_signature(), OrderedDict()
+                    )
                     jobs[job.job_id] = job
-
-                    iterations += 1
 
                 except JobProvisioningQueueEmpty:
                     break
 
-            jobs_to_be_provisioned = 0
-            for job_group, jobs in batches.items():
-                self._drop_undispatchable_jobs(jobs)
-                # count only QUEUED jobs: held and waiting jobs share job_group/stack_id=tbd
-                # but never reach the provisioning queue, and counting them wedges this loop.
-                expected_batch_size = OpenPBSQSelect(
-                    context=self._context,
-                    logger=self._logger,
-                    log_tag=f'JobGroup: {job_group}',
-                    job_group=job_group,
-                    stack_id='tbd',
-                    job_state=[SocaJobState.QUEUED],
-                ).get_count()
-                current_batch_size = len(jobs)
+            more_jobs_available = False
+            for job_group, signatures in batches.items():
+                for jobs in signatures.values():
+                    self._drop_undispatchable_jobs(jobs)
+                expected_batch_size = self._expected_batch_size(job_group)
+                current_batch_size = sum(len(jobs) for jobs in signatures.values())
+                if expected_batch_size is None:
+                    continue
                 self._logger.info(
-                    f'JobGroup: {job_group}, ExpectedBatchSize: {expected_batch_size}, CurrentBatchSize: {len(jobs)}'
+                    f'JobGroup: {job_group}, ExpectedBatchSize: {expected_batch_size}, '
+                    f'CurrentBatchSize: {current_batch_size}'
                 )
                 if expected_batch_size < current_batch_size:
                     # if expected_batch_size less than current batch size, there is a mismatch in expectation.
                     # reset the batch to start clean in the next refresh cycle
-                    batches[job_group] = OrderedDict()
+                    batches[job_group] = {}
                     self._logger.warning(
-                        f'ExpectedBatchSize ({expected_batch_size}) < CurrentBatchSize ({len(jobs)}). '
+                        f'ExpectedBatchSize ({expected_batch_size}) < CurrentBatchSize ({current_batch_size}). '
                         f'Possible job update or deletion. Resetting batch.'
                     )
-                jobs_to_be_provisioned += expected_batch_size
+                elif current_batch_size < expected_batch_size:
+                    more_jobs_available = True
 
-            total_jobs = 0
-            for jobs in batches.values():
-                total_jobs += len(jobs)
-
-            more_jobs_available = total_jobs < jobs_to_be_provisioned
             if more_jobs_available:
-                self._exit.wait(
-                    timeout=self._context.config().get_int(
-                        'scheduler.job_provisioning.batch_provisioning_wait_interval_seconds',
-                        default=3,
+                rounds_left -= 1
+                if rounds_left <= 0:
+                    self._logger.warning(
+                        f'batch still short of its expected jobs after '
+                        f'{BATCH_DRAIN_MAX_ROUNDS} rounds; provisioning what has arrived'
                     )
-                )
+                    break
+                self._exit.wait(timeout=wait_interval)
 
         result = {}
-        for job_group in batches:
-            result[job_group] = list(batches[job_group].values())
+        for job_group, signatures in batches.items():
+            for signature, jobs in signatures.items():
+                if jobs:
+                    result[f'{job_group}:{signature}'] = list(jobs.values())
 
         return result
 

@@ -43,6 +43,16 @@ import shutil
 import time
 
 
+# the directory not answering, as opposed to refusing one request
+DIRECTORY_UNREACHABLE = (
+    ldap.SERVER_DOWN,
+    ldap.CONNECT_ERROR,
+    ldap.TIMEOUT,
+    ldap.UNAVAILABLE,
+    ldap.BUSY,
+)
+
+
 class PasswordSecretUnavailable(Exception):
     """Secrets Manager failed a password task. Says so without the role or the secret."""
 
@@ -72,9 +82,44 @@ class SyncGroupInDirectoryServiceTask(BaseTask):
         if group is not None:
             if group['enabled']:
                 self.logger.info(f'sync group: {group_name} directory service ...')
-                self.context.ldap_client.sync_group(
-                    group_name=group['group_name'], gid=group['gid']
+                directory = self.context.ldap_client
+                accounts = self.context.accounts
+                recreated = not directory.is_existing_group(group['group_name'])
+                if recreated:
+                    # recorded before the group exists again, so a retry after an
+                    # outage still restores the members the first attempt did not reach
+                    accounts.group_dao.update_group(
+                        {'group_name': group['group_name'], 'members_pending': True}
+                    )
+                directory.sync_group(
+                    group_name=group['group_name'], gid=Utils.get_as_int(group['gid'])
                 )
+                if recreated or group.get('members_pending'):
+                    # disabling deleted the directory group: an enabled one gets its
+                    # members back, one at a time since a batch fails whole on one
+                    # member already present
+                    for username in accounts.group_members_dao.get_usernames_in_group(
+                        group['group_name']
+                    ):
+                        member = accounts.user_dao.get_user(username) or {}
+                        # a disabled member has no directory account to add
+                        if not Utils.get_value_as_bool('enabled', member, False):
+                            continue
+                        try:
+                            directory.add_user_to_group([username], group['group_name'])
+                        except DIRECTORY_UNREACHABLE:
+                            # stop and leave it to the retry, which finds the restore
+                            # still pending
+                            raise
+                        except ldap.LDAPError as error:
+                            # the directory refused this member: the rest still go in
+                            self.logger.warning(
+                                f'sync group: {username} not added to '
+                                f'{group["group_name"]}: {type(error).__name__}'
+                            )
+                    accounts.group_dao.update_group(
+                        {'group_name': group['group_name'], 'members_pending': False}
+                    )
             else:
                 delete_group = True
         else:
@@ -143,9 +188,18 @@ class GroupMembershipUpdatedTask(BaseTask):
                     self.logger.info(
                         f'remove member: {username} from group: {group_name} in directory service ...'
                     )
-                    self.context.ldap_client.remove_user_from_group(
-                        [username], group_name
-                    )
+                    try:
+                        self.context.ldap_client.remove_user_from_group(
+                            [username], group_name
+                        )
+                    except (
+                        ldap.NO_SUCH_ATTRIBUTE,
+                        ldap.NO_SUCH_OBJECT,
+                        # Active Directory's answer for a member it does not have
+                        ldap.UNWILLING_TO_PERFORM,
+                    ):
+                        # already not a member there, which is what removal wants
+                        pass
 
                 # update membership in user projects
                 self.context.projects.user_projects_dao.group_member_removed(
@@ -296,10 +350,10 @@ class SyncUserInDirectoryServiceTask(BaseTask):
             # before the add: the retry of an attempt that fails after it must wait too
             self._record_in_directory(user, True)
             self.logger.info(f'sync user: {username} TO directory service ...')
-            self.context.ldap_client.sync_group(
-                group_name=user['group_name'], gid=user['gid']
-            )
-            self.context.ldap_client.sync_user(
+            directory = self.context.ldap_client
+            recreated = not directory.is_existing_user(username)
+            directory.sync_group(group_name=user['group_name'], gid=user['gid'])
+            directory.sync_user(
                 uid=user['uid'],
                 gid=user['gid'],
                 username=user['username'],
@@ -307,6 +361,13 @@ class SyncUserInDirectoryServiceTask(BaseTask):
                 login_shell=user['login_shell'],
                 home_dir=user['home_dir'],
             )
+            if recreated:
+                # disabling deleted the account and its memberships with it: an
+                # enabled account gets those of its enabled groups back
+                for name in Utils.get_value_as_list('additional_groups', user, []):
+                    group = self.context.accounts.group_dao.get_group(name)
+                    if group is not None and group.get('enabled'):
+                        directory.add_user_to_group([username], name)
 
             if sudo:
                 if not self.context.ldap_client.is_sudo_user(username):
@@ -547,12 +608,22 @@ class RepairHomeOwnershipTask(BaseTask):
 
     def invoke(self, payload: Dict):
         user = self.context.accounts.get_user(payload['username'])
+        dry_run = payload.get('dry_run', False)
+        stale_uid = Utils.get_value_as_int('stale_uid', payload)
+        if stale_uid is None:
+            # a repair asked for by hand finds the owner the reconciler recorded
+            stored = self.context.accounts.user_dao.get_user(user.username) or {}
+            stale_uid = Utils.get_value_as_int('home_ownership_stale_uid', stored)
         result = UserHomeDirectory(self.context, user).repair_ownership(
-            dry_run=payload.get('dry_run', False),
-            stale_uid=payload.get('stale_uid'),
+            dry_run=dry_run, stale_uid=stale_uid
         )
         if result.failed:
+            # the recorded owner stays, so the next run or a repair by hand finds it
             raise exceptions.general_exception(
                 f'Home ownership repair failed for {result.failed} paths'
+            )
+        if not dry_run and stale_uid is not None:
+            self.context.accounts.user_dao.update_user(
+                {'username': user.username, 'home_ownership_stale_uid': None}
             )
         return result

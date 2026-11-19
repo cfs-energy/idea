@@ -89,18 +89,18 @@ class Utils {
         return result
     }
 
-    static asNumberArray(val?: any): number[] {
+    static asNumberArray(val?: any, decimal: boolean = false): number[] {
         if (val == null) {
             return []
         }
         if (!Array.isArray(val)) {
-            return [Utils.asNumber(val)]
+            return [Utils.asNumber(val, 0, decimal)]
         }
 
         const array: any[] = val
         const result: number[] = []
         array.forEach((entry) => {
-            result.push(Utils.asNumber(entry))
+            result.push(Utils.asNumber(entry, 0, decimal))
         })
 
         return result
@@ -260,14 +260,8 @@ class Utils {
             return true
         }
 
-        const getParamMeta = (param: string): SocaUserInputParamMetadata | null => {
-            fieldRegistry.list().forEach(field => {
-                if (field.getParamName() === param) {
-                    return field.getParamMeta()
-                }
-            })
-            return null
-        }
+        const getParamMeta = (param: string): SocaUserInputParamMetadata | null =>
+            fieldRegistry.list().find(field => field.getParamName() === param)?.getParamMeta() ?? null
 
         if (Utils.isNotEmpty(when.param)) {
             const paramName = when.param!

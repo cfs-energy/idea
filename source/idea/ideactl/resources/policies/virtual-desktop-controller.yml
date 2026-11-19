@@ -9,10 +9,18 @@ Statement:
     Action:
       - dynamodb:GetItem
       - dynamodb:Query
-      - dynamodb:UpdateItem
     Resource:
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}/index/*'
+
+  # A token's use is recorded; its owner, scope and expiry are written only by the cluster manager.
+  - Effect: Allow
+    Action:
+      - dynamodb:UpdateItem
+    Resource: '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:Attributes: [token_id, last_used_on]
 
   - Effect: Allow
     Action:
@@ -20,36 +28,18 @@ Statement:
     Resource: '{{ context.arns.user_pool_arn }}'
 
   - Action:
-      - events:PutTargets
-      - events:PutRule
-      - events:PutEvents
-      - events:DeleteRule
-      - events:RemoveTargets
       - ec2:DescribeVolumes
+      - ec2:DescribeSubnets
       - ec2:DescribeNetworkInterfaces
       - ec2:DescribeImageAttribute
       - ec2:DescribeImages
       - ec2:DescribeLaunchTemplates
       - ec2:DescribeLaunchTemplateVersions
-      - ec2:ModifyInstanceAttribute
-      - ec2:CreateImage
-      - ec2:StartInstances
-      - ec2:TerminateInstances
-      - ec2:StopInstances
-      - ec2:RebootInstances
       - ec2:DescribeInstances
       - ec2:DescribeInstanceStatus
       - ec2:DescribeInstanceTypes
-      - ec2:CreateTags
-      - ec2:DeleteTags
-      - ec2:RegisterImage
       - ec2:DeregisterImage
-      - ec2:RunInstances
-      - fsx:CreateDataRepositoryTask
       - fsx:DescribeFileSystems
-      - tag:GetResources
-      - tag:GetTagValues
-      - tag:GetTagKeys
       - ssm:ListDocuments
       - ssm:ListDocumentVersions
       - ssm:DescribeDocument
@@ -58,7 +48,6 @@ Statement:
       - ssm:DescribeDocumentParameters
       - ssm:DescribeInstanceProperties
       - ssm:ListCommands
-      - ssm:SendCommand
       - ssm:GetCommandInvocation
       - ssm:DescribeAutomationExecutions
       - dynamodb:ListTables
@@ -76,17 +65,96 @@ Statement:
       - autoscaling:DescribeScalingActivities
       - autoscaling:DescribeTags
       - autoscaling:DescribeWarmPool
-      - autoscaling:DetachInstances
     Resource: '*'
+    Effect: Allow
+
+  # Desktops and desktop image builders: only instances carrying this cluster's and this module's
+  # tags are started, stopped, rebooted, resized, retagged, imaged or terminated. Compute nodes,
+  # the directory server and container hosts carry another module id or none.
+  - Action:
+      - ec2:StartInstances
+      - ec2:StopInstances
+      - ec2:RebootInstances
+      - ec2:TerminateInstances
+      - ec2:ModifyInstanceAttribute
+      - ec2:CreateTags
+      - ec2:DeleteTags
+      - ec2:CreateImage
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      StringEquals:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+        aws:ResourceTag/idea:ModuleId: '{{ context.config.get_module_id('virtual-desktop-controller') }}'
+    Effect: Allow
+  # The identity tags the grants above and Run Command key on are written only at launch, so a
+  # role cannot bring another instance into its own reach by retagging it.
+  - Sid: IdentityTagsSetOnlyAtLaunch
+    Action:
+      - ec2:CreateTags
+      - ec2:DeleteTags
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      ForAnyValue:StringEquals:
+        aws:TagKeys: [idea:ClusterName, idea:NodeType, idea:ModuleId]
+      'Null':
+        ec2:CreateAction: 'true'
+    Effect: Deny
+
+  # A launch must tag the new instance with this cluster's name, which is what the statement above
+  # matches afterwards. The image, subnet, interface, groups, volumes and key a launch or an image
+  # names carry no such tag, so they are allowed by every resource that is not an instance.
+  - Action: ec2:RunInstances
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      StringEquals:
+        aws:RequestTag/idea:ClusterName: '{{ context.cluster_name }}'
+    Effect: Allow
+  - Action:
+      - ec2:RunInstances
+      - ec2:CreateImage
+    NotResource: '{{ context.arns.get_arn("ec2", "instance/*", aws_account_id="*", aws_region="*") }}'
+    Effect: Allow
+
+  # The tags a launch or an image request writes on what it creates.
+  - Action: ec2:CreateTags
+    Resource:
+      - '{{ context.arns.get_arn("ec2", "instance/*") }}'
+      - '{{ context.arns.get_arn("ec2", "image/*", aws_account_id="*") }}'
+      - '{{ context.arns.get_arn("ec2", "snapshot/*", aws_account_id="*") }}'
+    Condition:
+      StringEquals:
+        ec2:CreateAction:
+          - RunInstances
+          - CreateImage
+    Effect: Allow
+
+  # Run Command: the controller sends only the two AWS shell documents, and only to this cluster's
+  # desktops and desktop image builders.
+  - Action: ssm:SendCommand
+    Resource:
+      - '{{ context.arns.get_arn("ssm", "document/AWS-RunShellScript", aws_account_id="") }}'
+      - '{{ context.arns.get_arn("ssm", "document/AWS-RunPowerShellScript", aws_account_id="") }}'
+    Effect: Allow
+  - Action: ssm:SendCommand
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      StringEquals:
+        ssm:resourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+        ssm:resourceTag/idea:ModuleId: '{{ context.config.get_module_id('virtual-desktop-controller') }}'
     Effect: Allow
 
   - Action:
       - s3:GetObject
       - s3:ListBucket
-      - s3:PutObject
       - s3:GetBucketAcl
     Resource:
       {{ context.utils.to_yaml(context.arns.s3_bucket_arns) | indent(6) }}
+    Effect: Allow
+  # The controller writes its own host packages (desktops, image builds), nothing else in the bucket.
+  - Action: s3:PutObject
+    Resource:
+      - '{{ context.arns.s3_bucket_arns[1] }}/idea/{{ context.config.get_module_id('virtual-desktop-controller') }}/bootstrap/*'
+      - '{{ context.arns.s3_bucket_arns[1] }}/idea/{{ context.config.get_module_id('virtual-desktop-controller') }}/dcv-host-bootstrap/*'
     Effect: Allow
 
   - Effect: Allow
@@ -99,9 +167,6 @@ Statement:
       - '{{ context.arns.get_sqs_arn(context.config.get_module_id("virtual-desktop-controller") + "-events.fifo") }}'
       - '{{ context.arns.get_sqs_arn(context.config.get_module_id("virtual-desktop-controller") + "-controller") }}'
 
-  - Effect: Allow
-    Action: route53:ChangeResourceRecordSets
-    Resource: '{{ context.arns.get_route53_hostedzone_arn() }}'
 
   - Action:
       - dynamodb:GetItem
@@ -219,7 +284,7 @@ Statement:
 
   - Action:
       - logs:PutRetentionPolicy
-    Resource: '*'
+    Resource: '{{ context.arns.get_log_group_arn("/*") }}'
     Effect: Allow
 
   - Action:
@@ -237,39 +302,8 @@ Statement:
       StringLike:
         iam:AWSServiceName: 'dynamodb.application-autoscaling.amazonaws.com'
 
-  {% if context.config.get_bool(context.config.get_module_id('cluster-manager') + '.bedrock.enabled', False) %}
-  # scoped to roles under the per-project IAM path, passed only to ec2; enabling bedrock requires redeploying this module along with cluster-manager.
-  - Condition:
-      StringEquals:
-        iam:PassedToService:
-          - ec2.{{ context.aws_dns_suffix }}
-    Action:
-      - iam:PassRole
-    Resource:
-      - '{{ context.arns.get_project_role_arn() }}'
-    Effect: Allow
-    Sid: PassProjectRoles
-
-  # Moving a desktop that launched before its project's instance profile existed onto
-  # that profile. Only this cluster's desktop hosts, and only to the roles above.
-  - Action:
-      - ec2:DescribeIamInstanceProfileAssociations
-    Resource: '*'
-    Effect: Allow
-    Sid: ReadInstanceProfileAssociations
-
-  - Condition:
-      StringEquals:
-        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
-        aws:ResourceTag/idea:NodeType: 'virtual-desktop-dcv-host'
-    Action:
-      - ec2:AssociateIamInstanceProfile
-      - ec2:ReplaceIamInstanceProfileAssociation
-    Resource:
-      - '{{ context.arns.get_arn("ec2", "instance/*") }}'
-    Effect: Allow
-    Sid: RepairProjectInstanceProfiles
-  {% endif %}
+  # The desktop project move's grants are in vdc.ts (desktop-move policy): this template is at
+  # its size limit.
 
 
   {% include '_templates/aws-managed-ad.yml' %}

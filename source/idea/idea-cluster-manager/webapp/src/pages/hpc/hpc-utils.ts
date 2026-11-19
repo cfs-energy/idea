@@ -12,9 +12,10 @@
  */
 
 import {
-    HpcQueueProfile, ListProjectsRequest, ListProjectsResult, Project, SocaJobParams, SocaJob, SocaCapacityType, SocaInstanceTypeOptions
+    HpcQueueProfile, ListProjectsRequest, SocaFSxLustreConfig, ListProjectsResult, Project, SocaJobParams, SocaJob, SocaCapacityType, SocaInstanceTypeOptions
 } from "../../client/data-model";
 import Utils from "../../common/utils";
+import dot from "dot-object";
 
 export type JobElapsedState = 'not-started' | 'no-walltime' | 'within-limit' | 'near-limit' | 'over-limit'
 
@@ -33,6 +34,176 @@ const TERMINAL_JOB_STATES = ['finished', 'exit']
 
 /** Parses an HH:MM:SS walltime into seconds, matching the server's ModelUtils.walltime_to_seconds.
  * Returns null for anything it cannot parse. */
+/**
+ * the "jobs may create a new FSx for Lustre" box: a new profile starts unchecked; a
+ * profile saved before the setting existed has no value and allows it, so it shows checked
+ */
+export function allowNewFsxLustreInitialValue(isCreate: boolean, queueProfile?: HpcQueueProfile): boolean {
+    if (isCreate) {
+        return false
+    }
+    const stored = queueProfile?.queue_management_params?.allow_new_fsx_lustre
+    return stored !== false
+}
+
+const FSX_THROUGHPUT: {[deployment: string]: {values: number[], default: number}} = {
+    persistent_1: {values: [50, 100, 200], default: 200},
+    persistent_2: {values: [125, 250, 500, 1000], default: 125}
+}
+
+// the form's notices that this edit clears stored defaults; never sent
+export const SCRATCH_OFF_NOTICE = 'scratch_off_notice'
+export const SCRATCH_PROVIDER_NOTICE = 'scratch_provider_notice'
+export const SPOT_OFF_NOTICE = 'spot_off_notice'
+
+/** a deep, frozen copy of a profile, to compare a form's edits against */
+export function snapshotQueueProfile(queueProfile: any): any {
+    const freeze = (value: any): any => {
+        if (value != null && typeof value === 'object') {
+            Object.values(value).forEach(freeze)
+            Object.freeze(value)
+        }
+        return value
+    }
+    return freeze(JSON.parse(JSON.stringify(queueProfile ?? {})))
+}
+
+/** the stored profile had scratch on and the form now has it off */
+export function scratchTurnedOff(stored: any, queueProfile: any): boolean {
+    return dot.pick('default_job_params.enable_scratch', stored || {}) === true
+        && dot.pick('default_job_params.enable_scratch', queueProfile) !== true
+}
+
+/** the stored profile had Spot on and the form now has it off */
+export function spotTurnedOff(stored: any, queueProfile: any): boolean {
+    return dot.pick('default_job_params.spot', stored || {}) === true
+        && dot.pick('default_job_params.spot', queueProfile) !== true
+}
+
+/** the provider the form shows for a profile: EBS when none is stored, as the form does */
+export function scratchProviderShown(profile: any): string {
+    return dot.pick('default_job_params.scratch_provider', profile || {}) ?? 'ebs'
+}
+
+/**
+ * scratch is on in the form, and was off or had another provider when loaded: the other
+ * provider's stored settings are this edit's to clear. an untouched profile keeps them
+ */
+export function scratchProviderChanged(stored: any, queueProfile: any): boolean {
+    return dot.pick('default_job_params.enable_scratch', stored || {}) !== true
+        || scratchProviderShown(stored) !== scratchProviderShown(queueProfile)
+}
+
+// the queue default FSx settings, each sent as null to clear it when scratch is turned off
+const FSX_LUSTRE_CLEARED = {
+    existing_fsx: null,
+    s3_backend: null,
+    import_path: null,
+    export_path: null,
+    deployment_type: null,
+    per_unit_throughput: null,
+    size: null,
+}
+
+/**
+ * what the queue profile form sends on save: the stored profile plus the form's edits,
+ * with the defaults the chosen scratch and Spot settings no longer use sent as null so the
+ * server removes them, and everything else left as stored
+ */
+export function prepareQueueProfileForSave(queueProfile: any, stored: any = {}): any {
+    dot.del(SCRATCH_OFF_NOTICE, queueProfile)
+    dot.del(SCRATCH_PROVIDER_NOTICE, queueProfile)
+    dot.del(SPOT_OFF_NOTICE, queueProfile)
+    const project_ids = dot.pick('project_ids', queueProfile, true) || []
+    queueProfile.projects = project_ids.map((project_id: string) => ({project_id: project_id}))
+    applyFsxThroughputForSave(queueProfile)
+    const utils = new QueueUtils(queueProfile)
+
+    const keep_forever = Utils.asBoolean(dot.pick('keep_forever', queueProfile), false)
+    if (keep_forever) {
+        dot.del('scaling_mode', queueProfile)
+    } else if (dot.pick('scaling_mode', queueProfile) === 'single-job') {
+        queueProfile.terminate_when_idle = 0
+    }
+
+    if (utils.isScratchStorageEnabled() && !scratchProviderChanged(stored, queueProfile)) {
+        // the provider this profile already had: its stored settings go back as stored
+    } else if (utils.isScratchStorageEnabled()) {
+        if (utils.isScratchEBS()) {
+            clearQueueDefault(queueProfile, 'fsx_lustre')
+        } else if (utils.isScratchFsxLustre()) {
+            clearQueueDefault(queueProfile, 'scratch_storage_size')
+            clearQueueDefault(queueProfile, 'scratch_storage_iops')
+            dot.str('default_job_params.fsx_lustre.enabled', true, queueProfile)
+            if (utils.isScratchNewFsxLustre()) {
+                // a new file system per job: an existing one stored earlier no longer applies
+                dot.str('default_job_params.fsx_lustre.existing_fsx', null, queueProfile)
+            }
+        }
+    } else if (scratchTurnedOff(stored, queueProfile)) {
+        // only when this edit turns scratch off: a profile stored with scratch off (one
+        // written through the API can still carry FSx defaults) goes back as stored
+        clearQueueDefault(queueProfile, 'scratch_provider')
+        clearQueueDefault(queueProfile, 'scratch_storage_size')
+        clearQueueDefault(queueProfile, 'scratch_storage_iops')
+        // every stored FSx setting is sent as null so the server removes it: kept, a job
+        // asking fsx_lustre=true on this queue got the old bucket and type, and a later
+        // re-enable started from them
+        clearQueueDefault(queueProfile, 'fsx_lustre')
+        dot.str('default_job_params.fsx_lustre', {...FSX_LUSTRE_CLEARED, enabled: false}, queueProfile)
+    }
+    if (spotTurnedOff(stored, queueProfile)) {
+        // only when this edit turns Spot off: a profile stored with Spot off keeps its
+        // stored price, count and strategy, as the published release kept them
+        clearQueueDefault(queueProfile, 'spot_price')
+        clearQueueDefault(queueProfile, 'spot_allocation_count')
+        clearQueueDefault(queueProfile, 'spot_allocation_strategy')
+    }
+    return queueProfile
+}
+
+/**
+ * a default the form clears is sent as null: the server removes a default sent as null and
+ * keeps one that is left out, so an API client that sends part of the defaults loses nothing
+ */
+export function clearQueueDefault(queueProfile: any, name: string) {
+    queueProfile.default_job_params = queueProfile.default_job_params || {}
+    queueProfile.default_job_params[name] = null
+}
+
+/**
+ * the queue form has one throughput field per persistent deployment type, so each offers
+ * only its own values; a stored value fills the field of its type
+ */
+export function fsxThroughputFormValues(fsx?: SocaFSxLustreConfig): {[deployment: string]: string} {
+    const result: {[deployment: string]: string} = {}
+    for (const [deployment, rule] of Object.entries(FSX_THROUGHPUT)) {
+        const stored = fsx?.deployment_type === deployment ? fsx?.per_unit_throughput : undefined
+        result[deployment] = String(stored != null && rule.values.includes(stored) ? stored : rule.default)
+    }
+    return result
+}
+
+/**
+ * moves the throughput of the chosen deployment type into the saved profile, and drops it
+ * for scratch types, which take none
+ */
+export function applyFsxThroughputForSave(queueProfile: any) {
+    const choices = queueProfile.fsx_lustre_throughput || {}
+    delete queueProfile.fsx_lustre_throughput
+    const fsx = queueProfile.default_job_params?.fsx_lustre
+    if (!fsx) {
+        return
+    }
+    const rule = FSX_THROUGHPUT[fsx.deployment_type]
+    if (!rule) {
+        delete fsx.per_unit_throughput
+        return
+    }
+    const chosen = Number(choices[fsx.deployment_type])
+    fsx.per_unit_throughput = rule.values.includes(chosen) ? chosen : rule.default
+}
+
 export function parseWalltimeSeconds(walltime?: string): number | null {
     if (Utils.isEmpty(walltime)) {
         return null

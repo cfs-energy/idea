@@ -61,6 +61,12 @@ export interface IdeaFormFieldCustomActionProvider {
 }
 
 
+// stored application forms written before 26.11.2 carry this job name pattern, whose repeated group takes
+// exponential time on a name that fails near its end; the flat class accepts the same names and enforces the 50 limit
+export const LEGACY_PATTERNS: Record<string, string> = {
+    '^([A-Za-z0-9_-]+){3,50}$': '^[A-Za-z0-9_-]{3,50}$',
+}
+
 export interface IdeaFormFieldProps {
     module: string
     param: SocaUserInputParamMetadata
@@ -106,13 +112,13 @@ export interface IdeaFormFieldState {
 
     booleanVal(): boolean
 
-    numberVal(): number
+    numberVal(decimal?: boolean): number
 
     stringArrayVal(): string[]
 
     booleanArrayVal(): boolean[]
 
-    numberArrayVal(): number[]
+    numberArrayVal(decimal?: boolean): number[]
 
     amountVal(): string
 
@@ -264,9 +270,9 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
                 }
                 return 0
             },
-            numberArrayVal(): number[] {
+            numberArrayVal(decimal: boolean = false): number[] {
                 if (this.value != null) {
-                    return Utils.asNumberArray(this.value)
+                    return Utils.asNumberArray(this.value, decimal)
                 }
                 return []
             },
@@ -342,7 +348,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
             switch (dataType) {
                 case 'int':
                 case 'float':
-                    return this.state.numberArrayVal()
+                    return this.state.numberArrayVal(dataType === 'float')
                 case 'bool':
                     return this.state.booleanArrayVal()
                 default:
@@ -353,7 +359,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
             switch (dataType) {
                 case 'int':
                 case 'float':
-                    return this.state.numberVal()
+                    return this.state.numberVal(dataType === 'float')
                 case 'bool':
                     return this.state.booleanVal()
                 case 'amount':
@@ -698,6 +704,11 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
     }
 
     validate(): string {
+        // the form holds the last pair that matched, so a pair that no longer matches must stop the submit
+        if (this.props.param.param_type === 'new-password' && this.state.stringVal() !== this.state.stringVal2()
+            && !(Utils.isEmpty(this.state.stringVal()) && Utils.isEmpty(this.state.stringVal2()))) {
+            return 'MISMATCH'
+        }
         const validate = this.props.param.validate
         if (validate == null) {
             return 'OK'
@@ -710,7 +721,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
         if (validate.min != null || validate.max != null) {
             const dataType = this.props.param.data_type!
             const decimal = (dataType === 'float')
-            const numberVal = this.state.numberVal()
+            const numberVal = this.state.numberVal(decimal)
             const min = Utils.asNumber(validate.min, 0, decimal)
             const max = Utils.asNumber(validate.max, 0, decimal)
             if (validate.min != null && validate.max != null) {
@@ -780,6 +791,9 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
             switch (result) {
                 case 'REQUIRED':
                     errorMessage = `${displayTitle} is required.`
+                    break
+                case 'MISMATCH':
+                    errorMessage = 'Passwords do not match'
                     break
                 case 'NUMBER_RANGE':
                     errorMessage = `${displayTitle} must be between ${this.props.param.validate?.min}
@@ -956,7 +970,7 @@ class IdeaFormField extends Component<IdeaFormFieldProps, IdeaFormFieldState> {
         if (regex == null || Utils.isEmpty(regex)) {
             return true
         }
-        const re = RegExp(regex)
+        const re = RegExp(LEGACY_PATTERNS[regex] ?? regex)
         let token = value
         if (token == null) {
             token = this.state.stringVal()

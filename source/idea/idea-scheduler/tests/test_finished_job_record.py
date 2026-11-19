@@ -51,6 +51,19 @@ class FakeJobCache:
     def __init__(self):
         self.finished_jobs: List[SocaJob] = []
         self.pending_jobs: List[SocaJob] = []
+        # jobs still queued or running, as the jobs table holds them
+        self.active_jobs: List[SocaJob] = []
+
+    def get_jobs_table(self):
+        return SocaAnyPayload(
+            find=lambda provisioned: [
+                job for job in self.active_jobs if job.is_provisioned() == provisioned
+            ]
+        )
+
+    @staticmethod
+    def convert_db_entry_to_job(entry):
+        return entry
 
     @staticmethod
     def get_job_execution_hosts(job_id: str) -> Optional[List[SocaJobExecutionHost]]:
@@ -66,7 +79,7 @@ class FakeJobCache:
         self.finished_jobs.append(job)
         self.pending_jobs.append(job)
 
-    def list_pending_index_jobs(self):
+    def list_pending_index_jobs(self, limit=500):
         return list(self.pending_jobs)
 
     def mark_job_indexed(self, job):
@@ -837,8 +850,10 @@ def test_a_job_deleted_before_any_instance_came_up_deletes_its_own_stack_once(
         queued('482', terminate_when_idle=3),
         queued('483'),
     )
-    fake_context.instance_cache.list_compute_instances = lambda job_id, states: (
-        [Mock()] if job_id == '483' and 'running' in states else []
+    fake_context.instance_cache.list_compute_instances = lambda states, **_: (
+        [SocaAnyPayload(soca_compute_stack='idea-dev-test-spot-483')]
+        if 'running' in states
+        else []
     )
 
     build_poller(fake_context)._process_finished_jobs([unused, array, batch, launched])
@@ -854,6 +869,77 @@ def test_a_job_deleted_before_any_instance_came_up_deletes_its_own_stack_once(
         '482',
         '483',
     ]
+
+
+@pytest.mark.parametrize('on_the_stack', ['instance', 'bound job', 'shared tags'])
+def test_a_queue_changed_to_single_job_keeps_the_shared_stack_its_other_jobs_use(
+    fake_context, pricing_spy, on_the_stack
+):
+    """
+    NM-02 / SCH-38: the cached job is rebuilt from the queue's current settings, so after
+    a queue is changed from shared to single-job a never-started member reads as
+    single-job, and a shared stack's instances carry the id of the job that made it.
+    the stack and its other job must survive the member's end.
+    """
+    stack = 'idea-dev-test-shared-g1'
+
+    def member(job_id):
+        return make_job(
+            job_id=job_id,
+            provisioned=True,
+            cluster_name='idea-dev',
+            queue_type='test',
+            params=SocaJobParams(
+                walltime=WALLTIME,
+                nodes=1,
+                cpus=1,
+                job_group='custom-g1',
+                compute_stack=stack,
+                stack_id='arn:stack',
+            ),
+            provisioning_options=SocaJobProvisioningOptions(
+                keep_forever=False, terminate_when_idle=0
+            ),
+        )
+
+    first, second = member('490'), member('491')
+    assert not first.is_shared_capacity() and first.get_compute_stack() == stack
+    if on_the_stack == 'instance':
+        # the node carries the id of the job that made the stack (the second), and the
+        # cache filters on it as the real one does
+        node = SocaAnyPayload(soca_compute_stack=stack, soca_job_id='491')
+        fake_context.instance_cache.list_compute_instances = lambda states, **kw: [
+            n for n in [node] if kw.get('job_id') in (None, n.soca_job_id)
+        ]
+    elif on_the_stack == 'bound job':
+        fake_context.job_cache.active_jobs = [second]
+    else:
+        fake_context.aws_util().cloudformation_describe_stack.return_value = (
+            SocaAnyPayload(soca_keep_forever=False, soca_terminate_when_idle=3)
+        )
+
+    build_poller(fake_context)._process_finished_jobs([first])
+
+    assert fake_context.aws_util().cloudformation_delete_stack.mock_calls == []
+    assert [job.job_id for job in fake_context.job_cache.finished_jobs] == ['490']
+
+
+def test_a_stack_that_cannot_be_read_is_left_and_the_job_stays_tracked(
+    fake_context, pricing_spy
+):
+    job = make_job(
+        job_id='492',
+        provisioned=True,
+        cluster_name='idea-dev',
+        queue_type='test',
+        params=SocaJobParams(walltime=WALLTIME, nodes=1, cpus=1, stack_id='arn:stack'),
+        provisioning_options=SocaJobProvisioningOptions(terminate_when_idle=0),
+    )
+    fake_context.aws_util().cloudformation_describe_stack.side_effect = RuntimeError(
+        'throttled'
+    )
+    build_poller(fake_context)._process_finished_jobs([job])
+    assert fake_context.aws_util().cloudformation_delete_stack.mock_calls == []
 
 
 # ------------------------------------------------ what a job that never ran is worth
@@ -1284,6 +1370,7 @@ def test_poisoned_document_does_not_block_other_finished_jobs(
     fake_context.document_store.is_enabled = Mock(return_value=True)
     fake_context.document_store.add_jobs = Mock(side_effect=index)
     poller = build_poller(fake_context)
+    poller.INDEX_REJECTED_SKIP_PASSES = 2
     poller._exit = CycleExit()
     poller._poll_finished_jobs()
 
@@ -1291,7 +1378,11 @@ def test_poisoned_document_does_not_block_other_finished_jobs(
     assert accepted == {'0', '2'}
     assert [job.job_id for job in cache.list_pending_index_jobs()] == ['1']
     assert len([r for r in caplog.records if 'pending' in r.message]) == 1
+    # the refused record sits out a pass (SJ-28), then is asked again
     fake_context.document_store.add_jobs.reset_mock()
+    poller._exit = CycleExit()
+    poller._poll_finished_jobs()
+    fake_context.document_store.add_jobs.assert_not_called()
     poller._exit = CycleExit()
     poller._poll_finished_jobs()
     fake_context.document_store.add_jobs.assert_called_once()
@@ -1783,3 +1874,58 @@ def test_a_record_names_the_image_and_type_the_job_launched_not_its_queues_curre
     cache.sync(jobs=[again])
     assert cache.get_job(job_id).params.instance_types == ['t3.micro']
     cache.delete_jobs(job_ids=[job_id])
+
+
+def test_a_failed_stack_delete_keeps_the_job_tracked_for_a_retry(fake_context):
+    # SCH-38: the job was recorded and dropped with its stack left in place
+    job = make_job(
+        job_id='490',
+        provisioned=True,
+        cluster_name='idea-dev',
+        queue_type='test',
+        params=SocaJobParams(
+            walltime=WALLTIME, nodes=1, cpus=1, spot=True, stack_id='arn:stack'
+        ),
+        provisioning_options=SocaJobProvisioningOptions(
+            keep_forever=False, terminate_when_idle=0
+        ),
+    )
+    fake_context.instance_cache.list_compute_instances = lambda job_id, states: []
+    fake_context.aws_util().cloudformation_delete_stack.side_effect = Exception(
+        'Throttling'
+    )
+    recorded = build_poller(fake_context)._process_finished_jobs([job])
+    assert recorded == []
+    assert fake_context.job_cache.finished_jobs == []
+
+
+def test_records_the_index_keeps_refusing_do_not_hold_back_later_ones(
+    tmp_path, fake_context
+):
+    # SJ-28: three refused records at the head of the oldest-first page ended every pass
+    from test_job_cache import FakeSchedulerContext
+    from ideascheduler.app.provisioning.job_monitor.job_cache import JobCache
+
+    cache = JobCache(FakeSchedulerContext(str(tmp_path)))
+    fake_context.job_cache = cache
+    for number in range(4):
+        cache.add_finished_job(
+            make_job(
+                job_id=str(600 + number),
+                job_uid=f'uid-{number}',
+                state=SocaJobState.FINISHED,
+            )
+        )
+    bad = {'uid-0', 'uid-1', 'uid-2'}
+
+    def add_jobs(jobs):
+        return not any(job.job_uid in bad for job in jobs)
+
+    fake_context.document_store.is_enabled = lambda: True
+    fake_context.document_store.add_jobs = add_jobs
+    poller = build_poller(fake_context)
+    poller.INDEX_PAGE = 3  # the head of the page is all refused records
+    poller._index_pending_jobs()
+    poller._index_pending_jobs()
+    assert [job.job_uid for job in cache.list_pending_index_jobs()] == sorted(bad)
+    cache.stop()

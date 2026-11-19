@@ -109,6 +109,11 @@ USER_VISIBLE_MODULE_SETTINGS: Dict[str, List[str]] = {
         # per-session idle autostop (schedule modal + session card render these)
         'dcv_session.idle_autostop_delay',
         'dcv_session.idle_autostop_delay_max',
+        # the boolean only: the connection file accepts an untrusted gateway
+        # certificate unless one is provided. Its secret names stay hidden.
+        'dcv_connection_gateway.certificate.provided',
+        # the index name the desktop overview charts query (Analytics.OpenSearchQuery)
+        'opensearch.dcv_session.alias',
     ],
 }
 
@@ -139,6 +144,19 @@ class ClusterSettingsAPI(BaseAPI):
             module_id=module_id
         )
         return group in (authorization.groups or [])
+
+    def settings_access(self, context, module_name, access):
+        """
+        Administrators, cluster managers and scoped apps reach every module's settings; a module
+        administrator reaches only the settings of the module they administer.
+        """
+        if context.get_authorization().type == ApiAuthorizationType.USER:
+            return module_name in (
+                constants.MODULE_CLUSTER_MANAGER,
+                constants.MODULE_SCHEDULER,
+                constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER,
+            ) and self.module_administrator(context, module_name)
+        return context.is_authorized(elevated_access=True, scopes=[self._scope(access)])
 
     def service_capabilities(self, context):
         global_access = context.is_administrator() or (
@@ -223,7 +241,9 @@ class ClusterSettingsAPI(BaseAPI):
             raise exceptions.invalid_params('module_id is required')
 
         module_config = self.context.config().get_config(module_id, module_id=module_id)
-        settings = module_config.as_plain_ordered_dict()
+        settings = (
+            module_config.as_plain_ordered_dict() if module_config is not None else {}
+        )
 
         if (
             context.is_administrator()
@@ -236,18 +256,15 @@ class ClusterSettingsAPI(BaseAPI):
             reconcile.setdefault('okta', {}).update(fresh.pop('okta'))
             reconcile.update(fresh)
 
-        elevated = context.is_authorized(
-            elevated_access=True, scopes=[self._scope('read')]
+        elevated = self.settings_access(
+            context, self.catalog_module_name(module_id), 'read'
         )
         if self.get_module_name(module_id) == 'ecs' and self.service_capabilities(
             context
         ):
             capability = {'container_enabled': bool(settings.get('cluster_name'))}
             settings = {**settings, **capability} if elevated else capability
-        elif not elevated and not (
-            self.get_module_name(module_id) == constants.MODULE_SCHEDULER
-            and self.module_administrator(context, constants.MODULE_SCHEDULER)
-        ):
+        elif not elevated:
             settings = self.build_user_module_settings(
                 module_name=self.get_module_name(module_id), settings=settings
             )
@@ -325,18 +342,15 @@ class ClusterSettingsAPI(BaseAPI):
         return settings_catalog(names, rules)
 
     def describe_settings_catalog(self, context):
-        elevated = context.is_authorized(
-            elevated_access=True, scopes=[self._scope('read')]
-        )
-        if not elevated and not self.module_administrator(
-            context, constants.MODULE_SCHEDULER
-        ):
-            raise exceptions.unauthorized_access()
         catalog = self.settings_catalog()
-        if not elevated:
-            catalog = [
-                item for item in catalog if item['module'] == constants.MODULE_SCHEDULER
-            ]
+        allowed = {
+            module
+            for module in {item['module'] for item in catalog}
+            if self.settings_access(context, module, 'read')
+        }
+        if not allowed:
+            raise exceptions.unauthorized_access()
+        catalog = [item for item in catalog if item['module'] in allowed]
         context.success(DescribeSettingsCatalogResult(settings=catalog))
 
     def fetch_pricing_rates(self, context):
@@ -497,10 +511,41 @@ class ClusterSettingsAPI(BaseAPI):
         """
         admin_only = {
             'identity-provider': ('cognito',),
-            'cluster': ('iam',),
+            # proxy and launch key settings are read by every host's root bootstrap
+            'cluster': ('iam', 'network'),
             'directoryservice': (),
+            # what the bastion runs as root at start
+            'bastion-host': (),
             'scheduler': ('scratch_cleanup',),
+            # the logo key is signed into the public sign-in page
+            'cluster-manager': ('web_portal.logo',),
         }
+
+        def paths(values, prefix=''):
+            for key, value in values.items():
+                path = f'{prefix}.{key}' if prefix else str(key)
+                if isinstance(value, dict):
+                    yield from paths(value, path)
+                else:
+                    yield path
+
+        def leaves(values):
+            return (path.rsplit('.', 1)[-1] for path in paths(values))
+
+        # where scratch storage mounts on job and desktop hosts is decided in their
+        # root bootstrap, which replaces an fstab entry for that path
+        if any(leaf == 'mount_point' for leaf in leaves(settings)):
+            return True
+        # which site hook a host's root bootstrap runs, and whether it runs at all
+        if any(leaf.endswith('site_hook_sha256') for leaf in leaves(settings)):
+            return True
+        if module_name == 'shared-storage':
+            # where and how storage mounts on every host is decided in its root
+            # bootstrap: moving a user-writable file system there is administrator work
+            return any(
+                leaf in ('mount_dir', 'mount_options', 'mount_drive')
+                for leaf in leaves(settings)
+            )
         if module_name not in admin_only:
             return False
         if module_name == 'scheduler' and settings == {
@@ -511,17 +556,14 @@ class ClusterSettingsAPI(BaseAPI):
         # the paths check reads a dotted key as a nested one, so this has to as well
         return not names or any(
             key == name or key.startswith(f'{name}.')
-            for key in settings
+            for key in (*settings, *paths(settings))
             for name in names
         )
 
     def update_module_settings(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(UpdateModuleSettingsRequest)
-        if not context.is_authorized(
-            elevated_access=True, scopes=[self._scope('write')]
-        ) and not (
-            self.get_module_name(request.module_id) == constants.MODULE_SCHEDULER
-            and self.module_administrator(context, constants.MODULE_SCHEDULER)
+        if not self.settings_access(
+            context, self.catalog_module_name(request.module_id), 'write'
         ):
             raise exceptions.unauthorized_access()
 
@@ -684,6 +726,8 @@ class ClusterSettingsAPI(BaseAPI):
                 module_id
                 if item['module'] == module
                 else config.get_module_id(item['module'])
+                if config.is_module_enabled(item['module'])
+                else None
             )
             if not source_module_id:
                 continue

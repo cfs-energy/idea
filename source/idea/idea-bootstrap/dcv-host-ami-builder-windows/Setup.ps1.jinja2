@@ -17,6 +17,14 @@ $Published = $false
 $Installed = $false
 $Started = Get-Date
 
+function Assert-CleanImageSource {
+    # A desktop's local storage and profile belong to its owner, and every later owner of an image
+    # is a local administrator. The builder never deletes user data: it refuses such a source.
+    $Owners = @(Get-ChildItem -Path 'C:\session-storage' -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+    if ($Owners.Count -gt 0) {
+        throw "The source image holds desktop user data in C:\session-storage ($($Owners -join ', ')). Build from an AMI that was never used as a desktop, or on the source instance delete C:\session-storage\<owner> and C:\Users\<owner> for each listed owner and create a new source AMI."
+    }
+}
 function Add-ImageCheck([string]$Name, [bool]$Ok, [string]$Detail) {
     $Checks.Add(@{name=$Name; ok=$Ok; detail=$Detail; seconds=[int]((Get-Date) - $Started).TotalSeconds})
 }
@@ -51,10 +59,17 @@ $InstanceId = Invoke-RestMethod -Uri 'http://169.254.169.254/latest/meta-data/in
 # The backend invokes this phase over SSM only after it has persisted the checks JSON.
 # This avoids losing the read-back to sysprep shutdown; no extra tag protocol is needed.
 if ($Finalize) {
-    $Saved = Get-Content "$State\image-checks.json" -Raw | ConvertFrom-Json
+    try {
+        $Saved = Get-Content "$State\image-checks.json" -Raw | ConvertFrom-Json
+        $BakedRelease = Get-Content "$State\baked-release" -Raw
+    } catch {
+        # a missing or unreadable file must end the backend's wait now, not at its timeout
+        New-EC2Tag -Resource $InstanceId -Tag @{Key='idea:AmiBuilderStatus'; Value='failed:finalize'} -Region $Region
+        throw "Refusing to generalize: the saved image checks cannot be read ($($_.Exception.Message))"
+    }
     if ($Saved.release -ne $Release -or -not $Saved.checks -or
         ($Saved.checks | Where-Object { -not $_.ok }) -or
-        (Get-Content "$State\baked-release" -Raw) -ne $Release) {
+        $BakedRelease -ne $Release) {
         # the backend waits for a stop; a failed tag ends that wait now
         New-EC2Tag -Resource $InstanceId -Tag @{Key='idea:AmiBuilderStatus'; Value='failed:finalize'} -Region $Region
         throw 'Refusing to generalize an unchecked image'
@@ -73,7 +88,12 @@ if ($Finalize) {
 }
 
 try {
+    $FailureCheck = 'source'
+    Assert-CleanImageSource
+    $FailureCheck = 'bootstrap'
     Remove-Item "$State\baked-release" -Force -ErrorAction SilentlyContinue
+    # the base image can carry this log from an earlier bake: only lines written by this bake count
+    $LogStart = if (Test-Path $LogFile) { @(Get-Content -LiteralPath $LogFile).Count } else { 0 }
     Install-WindowsEC2Instance -Update -ModuleVersion $Release
     # GPU packages are part of host configuration, so include the same installers here.
 {% if context.is_nvidia_gpu() %}
@@ -89,7 +109,7 @@ try {
     if (Test-Path $LogFile) {
         # Write-ToLog lines are '<date> <time> ERROR: ...'; an INFO line that mentions an
         # error (or an 'ErrorAction' parameter) is not a failure
-        $LogErrors = @(Select-String -Path $LogFile -CaseSensitive -Pattern '^\S+ \S+ (ERROR|FATAL):' | Select-Object -First 1)
+        $LogErrors = @(Select-String -Path $LogFile -CaseSensitive -Pattern '^\S+ \S+ (ERROR|FATAL):' | Where-Object { $_.LineNumber -gt $LogStart } | Select-Object -First 1)
         $LogDetail = if ($LogErrors) { "bootstrap log line $($LogErrors[0].LineNumber): $($LogErrors[0].Line.Trim())" } else { 'Host installer finished and bootstrap log contains no ERROR/FATAL' }
     } else {
         $LogDetail = "the host installer wrote no log at $LogFile"
@@ -156,7 +176,7 @@ try {
     if (-not $Published) {
         if (-not ($Checks | Where-Object { -not $_.ok })) {
             # an installer that calls exit logged why: name that line, not just the exit
-            $LastError = if (Test-Path $LogFile) { Select-String -Path $LogFile -CaseSensitive -Pattern '^\S+ \S+ (ERROR|FATAL):' | Select-Object -Last 1 }
+            $LastError = if (Test-Path $LogFile) { Select-String -Path $LogFile -CaseSensitive -Pattern '^\S+ \S+ (ERROR|FATAL):' | Where-Object { $_.LineNumber -gt $LogStart } | Select-Object -Last 1 }
             Add-ImageCheck 'bootstrap' $false ("Installer exited before checks finished" + $(if ($LastError) { ": $($LastError.Line.Trim())" } else { '' }))
         }
         Publish-ImageChecks

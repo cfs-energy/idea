@@ -23,13 +23,16 @@ from ideasdk.server.sanic_config import SANIC_LOGGING_CONFIG, SANIC_APP_CONFIG
 from ideasdk.server.cors import add_cors_headers
 from ideasdk.server.options import setup_options
 from ideasdk.filesystem.filesystem_helper import FileSystemHelper
+from ideasdk.filesystem.user_identity import os_refusal
 
-from typing import Optional, Dict, List, Iterable
+from typing import BinaryIO, Optional, Dict, List, Iterable, Tuple
 import asyncio
+import ipaddress
 from concurrent.futures import ThreadPoolExecutor, Future
 from threading import Thread, Event
 import pathlib
 import os
+from stat import S_ISGID, S_ISREG
 import ssl
 import sanic
 import logging
@@ -45,6 +48,9 @@ from prometheus_client import generate_latest
 import time
 import jwt
 
+# how long the download link signing secret is kept before it is read again
+JWT_SECRET_CACHE_SECONDS = 300
+
 DEFAULT_ENABLE_HTTP = True
 DEFAULT_ENABLE_HTTP_FILE_UPLOAD = False
 DEFAULT_ENABLE_OPENAPI_SPEC = True
@@ -56,9 +62,25 @@ DEFAULT_HTTPS_PORT = 8443
 DEFAULT_METRICS_PORT = 8081
 DEFAULT_UNIX_SOCKET_FILE = '/run/idea.sock'
 DEFAULT_MAX_WORKERS = 16
+# workers for requests on the local socket, apart from the DEFAULT_MAX_WORKERS of the network
+LOCAL_SOCKET_WORKERS = 4
+# how often the public load balancer's subnets are read again, and retried after a failure
+LOAD_BALANCER_SUBNETS_REFRESH_SECONDS = 3600
+LOAD_BALANCER_SUBNETS_RETRY_SECONDS = 300
 DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT = 10
 DEFAULT_ENABLE_AUDIT_LOGS = True
 
+
+# A part's own headers (name, file name, type): file bytes are never capped, these are
+MAX_UPLOAD_PART_HEADER_BYTES = 8 * 1024
+# How many folders deep a file in a folder upload may be, below the destination
+MAX_UPLOAD_FOLDER_DEPTH = 32
+
+# what a caller is told about a failure the product did not expect: the detail is logged
+UNEXPECTED_ERROR_MESSAGE = 'The server could not complete this request. Try again.'
+
+# the api metric dimension for every namespace no handler is registered for
+UNREGISTERED_NAMESPACE_DIMENSION = 'unknown'
 
 # these are never used to serve content but used to serve http content over Unix Domain Sockets
 DUMMY_HOSTNAME = 'localhost'
@@ -410,6 +432,48 @@ class ServerOptionsProvider:
                 raise exceptions.file_not_found(openapi_spec_file)
 
 
+class _Upload:
+    """
+    An uploaded file being written: the open file, and the folder it was created in, held
+    open with what the file is, for removing it through that folder if it is cut short.
+    """
+
+    def __init__(self, file: BinaryIO, path: str, dir_fd: int, dev: int, ino: int):
+        self.file = file
+        self.path = path
+        self.name = os.path.basename(path)
+        self.dir_fd = dir_fd
+        self.dev = dev
+        self.ino = ino
+
+    def finish(self):
+        # closing writes what is still buffered: a full disk can refuse it here. The
+        # folder stays open: close_folder is its one place to close
+        self.file.close()
+
+    def close_folder(self):
+        # the folder descriptor is closed here and nowhere else, once: a number closed
+        # twice can be another request's descriptor by the second time
+        if self.dir_fd is not None:
+            dir_fd, self.dir_fd = self.dir_fd, None
+            os.close(dir_fd)
+
+
+class _UploadFolders(list):
+    """
+    One upload's folders: the list of those it made (for removing those left empty if it
+    is cut short), and what it already checked as the user, so each destination and each
+    folder costs one check per upload rather than one per file.
+    """
+
+    def __init__(self):
+        super().__init__()
+        # destination path -> (device, inode) of the folder checked as the user
+        self.destinations = {}
+        # (destination, folders) -> (device, inode) of the folder checked writable
+        self.checked = {}
+
+
 class ApiInvocationHandler:
     def __init__(
         self,
@@ -423,6 +487,9 @@ class ApiInvocationHandler:
         self.api_invoker = api_invoker
         self.server = server
         self.group_name_helper = group_name_helper
+        self._registered_namespaces = frozenset(
+            getattr(api_invoker, 'get_namespaces', tuple)() or ()
+        )
 
     @staticmethod
     def get_namespace(payload: Dict) -> str:
@@ -443,8 +510,11 @@ class ApiInvocationHandler:
         if Utils.is_empty(metrics_provider):
             return
 
-        namespace = context.namespace
         success = context.is_success()
+        namespace = context.namespace
+        # any other name, sent by anyone, would be a new metric series each time
+        if namespace not in self._registered_namespaces:
+            namespace = UNREGISTERED_NAMESPACE_DIMENSION
 
         BaseMetrics(context=self.context).with_required_dimension(
             name='api', value=namespace
@@ -506,6 +576,28 @@ class ApiInvocationHandler:
         except Exception:  # noqa
             return None
 
+    def get_file_username(self, http_request) -> Optional[str]:
+        """
+        The person behind a request to the upload and download routes, held to the rule
+        FileBrowser.* applies: a member of the module's users group, a manager or an
+        administrator. Anyone else signed in gets None, as a request with no session does.
+        """
+        try:
+            context = ApiInvocationContext(
+                context=self.context,
+                request={'header': {}},
+                invocation_source=constants.API_INVOCATION_SOURCE_HTTP,
+                group_name_helper=self.group_name_helper,
+                logger=self.logger,
+                token=self.get_token(http_request),
+                token_service=self.api_invoker.get_token_service(),
+            )
+            if context.is_authorized_user():
+                return context.get_username()
+        except Exception:  # noqa
+            pass
+        return None
+
     def _invoke(self, http_request) -> Dict:
         request = http_request.json
         request_logged = False
@@ -540,6 +632,11 @@ class ApiInvocationHandler:
                 logger=self.logger,
                 token=self.get_token(http_request),
                 token_service=self.api_invoker.get_token_service(),
+                client_address=(
+                    None
+                    if invocation_source == constants.API_INVOCATION_SOURCE_UNIX_SOCKET
+                    else self.server.client_address(http_request)
+                ),
             )
 
             # validate request prior to logging
@@ -567,21 +664,28 @@ class ApiInvocationHandler:
                 )
 
         except exceptions.SocaException as e:
-            message = e.message
+            # the product's own refusal reaches the caller; what caused it stays in the log
             if e.ref is not None and isinstance(e.ref, Exception):
-                message += f' (RootCause: {str(e.ref)})'
-            invocation_context.fail(error_code=e.error_code, message=message)
+                self.logger.warning(
+                    f'{invocation_context.loggable_namespace} failed with {e.error_code}, '
+                    f'request_id: {invocation_context.request_id}, RootCause: {e.ref}'
+                )
+            invocation_context.fail(error_code=e.error_code, message=e.message)
 
-        except Exception as e:
-            message = f'{e}'
-            self.logger.exception(message)
+        except Exception:
+            if invocation_context is None:
+                raise  # not even the request could be read: answered as a server fault
+            self.logger.exception(
+                f'{invocation_context.loggable_namespace} failed, '
+                f'request_id: {invocation_context.request_id}'
+            )
             invocation_context.fail(
-                error_code=errorcodes.GENERAL_ERROR, message=message
+                error_code=errorcodes.GENERAL_ERROR, message=UNEXPECTED_ERROR_MESSAGE
             )
 
         finally:
-            if not request_logged:
-                invocation_context.log_request()
+            if invocation_context is not None and not request_logged:
+                invocation_context.log_refused_request()
 
             tracing_response = self.api_invoker.get_response_logging_payload(
                 invocation_context
@@ -596,13 +700,12 @@ class ApiInvocationHandler:
     def invoke(self, http_request) -> Dict:
         try:
             return self._invoke(http_request)
-        except BaseException as e:
-            message = f'Critical exception: {e}'
-            self.logger.exception(message)
+        except BaseException:
+            self.logger.exception('Critical exception')
             return {
                 'header': {'namespace': 'ErrorResponse', 'request_id': Utils.uuid()},
                 'success': False,
-                'message': message,
+                'message': UNEXPECTED_ERROR_MESSAGE,
             }
 
 
@@ -641,7 +744,16 @@ class SocaServer(SocaService):
             max_workers=self.options.max_workers,
             thread_name_prefix=f'{self._context.module_id()}-server-worker',
         )
+        # The local socket's own workers: the batch system's admission hook calls back on
+        # it while a job submission waits for that hook on a general worker, so the two
+        # must never share a pool. Local callers only (root on the host, ideactl).
+        self._local_executor = ThreadPoolExecutor(
+            max_workers=LOCAL_SOCKET_WORKERS,
+            thread_name_prefix=f'{self._context.module_id()}-local-worker',
+        )
         self._is_running = Event()
+        # read in the background from start: no request waits on it
+        self._load_balancer_networks_stop = Event()
 
         self._sanic_config: Optional[sanic.config.Config] = None
         self._sanic_router: Optional[sanic.router.Router] = None
@@ -723,6 +835,99 @@ class SocaServer(SocaService):
                 self.unix_app.add_route(
                     handler, f'{path_prefix}{uri}', methods, name=_name
                 )
+
+    def client_address(self, http_request) -> Optional[str]:
+        """
+        The address a request over the network came from, for limits counted per address.
+        Port 8443 is open to the whole VPC, so X-Forwarded-For is anyone's to write; it is
+        read only when the connection comes from the public load balancer's subnets, and
+        then only its last entry, the one the load balancer appended. Never waits: the
+        subnets are read in the background.
+        - through the public load balancer, with an address appended: that address
+        - through it with none appended: None
+        - any other peer, once the subnets are known: its socket address
+        - the subnets not known (not read yet, the read refused or failing) or the
+          external load balancer not public, so a node cannot be told from a client: None,
+          which the limits treat as "address unknown"
+        """
+        networks = self._load_balancer_networks()
+        if networks is None:
+            return None
+        try:
+            peer = ipaddress.ip_address(http_request.ip)
+        except (ValueError, TypeError):
+            return None
+        if any(peer in network for network in networks):
+            hops = ','.join(http_request.headers.getall('x-forwarded-for', []))
+            try:
+                return str(ipaddress.ip_address(hops.split(',')[-1].strip()))
+            except ValueError:
+                return None  # no address appended: the load balancer node itself
+        return str(peer)
+
+    def _load_balancer_networks(self) -> Optional[list]:
+        """the public load balancer's subnets as last read, or None while they are not known"""
+        return getattr(self, '_load_balancer_networks_value', None)
+
+    def _read_load_balancer_networks(self) -> Optional[list]:
+        """
+        The public subnets, which the external load balancer connects from when it is
+        internet facing; desktops and compute are placed in the private ones. None when
+        the external load balancer is internal (it shares its subnets with them) or no
+        public subnet is configured. Raises when the subnets cannot be read.
+        """
+        config = self._context.config()
+        subnet_ids = config.get_list('cluster.network.public_subnets', default=[])
+        if not subnet_ids or not config.get_bool(
+            'cluster.load_balancers.external_alb.public', default=True
+        ):
+            return None
+        networks = []
+        subnets = (
+            self._context.aws().ec2().describe_subnets(SubnetIds=subnet_ids)['Subnets']
+        )
+        for subnet in subnets:
+            networks.append(ipaddress.ip_network(subnet['CidrBlock']))
+            for block in subnet.get('Ipv6CidrBlockAssociationSet', []):
+                networks.append(ipaddress.ip_network(block['Ipv6CidrBlock']))
+        return networks
+
+    def _refresh_load_balancer_networks(self) -> bool:
+        """one read; a failure keeps the last good value and is logged once per run of failures"""
+        try:
+            networks = self._read_load_balancer_networks()
+        except Exception as e:
+            if not getattr(self, '_load_balancer_networks_failing', False):
+                self._load_balancer_networks_failing = True
+                self._logger.error(
+                    'The public load balancer subnets could not be read, so client '
+                    'addresses are not recorded and per-address limits fall back to '
+                    'per-username ones. The task role needs ec2:DescribeSubnets. '
+                    f'Retrying every {LOAD_BALANCER_SUBNETS_RETRY_SECONDS} s: {e}'
+                )
+            return False
+        if getattr(self, '_load_balancer_networks_failing', False):
+            self._logger.info('The public load balancer subnets are read again')
+        self._load_balancer_networks_failing = False
+        self._load_balancer_networks_value = networks
+        if networks is None and not getattr(
+            self, '_load_balancer_untrusted_logged', False
+        ):
+            self._load_balancer_untrusted_logged = True
+            self._logger.info(
+                'The external load balancer is not public: client addresses are not '
+                'recorded, and per-address limits fall back to per-username ones'
+            )
+        return True
+
+    def _load_balancer_networks_loop(self):
+        while not self._load_balancer_networks_stop.is_set():
+            read = self._refresh_load_balancer_networks()
+            self._load_balancer_networks_stop.wait(
+                LOAD_BALANCER_SUBNETS_REFRESH_SECONDS
+                if read
+                else LOAD_BALANCER_SUBNETS_RETRY_SECONDS
+            )
 
     def initialize(self):
         if self.options.enable_http:
@@ -822,8 +1027,19 @@ class SocaServer(SocaService):
             handler=self.api_route, uri='/api/v1/<namespace:str>', methods=['POST']
         )
 
+    def _is_local_socket_request(self, http_request) -> bool:
+        # as _invoke tells the source: no socket, or the unix app
+        return http_request.socket is None or (
+            self._unix_app is not None and http_request.app == self._unix_app
+        )
+
     async def invoke_api_task(self, http_request):
-        result = self._executor.submit(
+        executor = (
+            self._local_executor
+            if self._is_local_socket_request(http_request)
+            else self._executor
+        )
+        result = executor.submit(
             lambda http_request_: self._api_invocation_handler.invoke(http_request_),
             http_request,
         )
@@ -925,7 +1141,7 @@ class SocaServer(SocaService):
         username = None
         cwd = None
         try:
-            username = self._api_invocation_handler.get_username(http_request)
+            username = await self._get_username_off_loop(http_request)
             if Utils.is_empty(username):
                 raise exceptions.unauthorized_access()
 
@@ -940,30 +1156,49 @@ class SocaServer(SocaService):
 
             # Validate directory access before processing upload
             helper = FileSystemHelper(self._context, username=username)
-            helper.check_access(cwd, check_dir=True, check_read=True, check_write=True)
+            await self._off_loop(
+                lambda: helper.check_access(
+                    cwd, check_dir=True, check_read=True, check_write=True
+                )
+            )
 
             # Parse multipart data in streaming fashion
             result = await self._process_streaming_upload(
                 http_request, helper, cwd, username
             )
-            return sanic.response.json(result, dumps=Utils.to_json)
-
-        except exceptions.SocaException as e:
-            self._logger.error(f'Streaming file upload failed: {e.error_code}')
             # a 200 would read as a finished upload in the browser
             return sanic.response.json(
-                {'error_code': e.error_code, 'message': e.message, 'success': False},
-                status=403 if e.error_code == errorcodes.UNAUTHORIZED_ACCESS else 400,
-                dumps=Utils.to_json,
+                result, status=200 if result['success'] else 400, dumps=Utils.to_json
             )
+
         except Exception as e:
+            # the disk filling up or a quota reached while writing is the person's to act on
+            refusal = e if isinstance(e, exceptions.SocaException) else os_refusal(e)
+            if refusal is not None:
+                self._logger.error(
+                    f'Streaming file upload failed: {refusal.error_code}'
+                )
+                # a 200 would read as a finished upload in the browser
+                return sanic.response.json(
+                    {
+                        'error_code': refusal.error_code,
+                        'message': refusal.message,
+                        'success': False,
+                    },
+                    status=(
+                        403
+                        if refusal.error_code == errorcodes.UNAUTHORIZED_ACCESS
+                        else 400
+                    ),
+                    dumps=Utils.to_json,
+                )
             self._logger.error(
                 f'Streaming file upload error - User: {username}, Directory: {cwd}, Error: {str(e)}'
             )
             return sanic.response.json(
                 {
                     'error_code': errorcodes.GENERAL_ERROR,
-                    'message': str(e),
+                    'message': UNEXPECTED_ERROR_MESSAGE,
                     'success': False,
                 },
                 status=500,
@@ -977,8 +1212,9 @@ class SocaServer(SocaService):
         Process streaming multipart upload without loading files into memory.
         """
         import re
-        import aiofiles
         import os
+
+        loop = asyncio.get_running_loop()
 
         # Get Content-Type header to extract boundary
         content_type = http_request.headers.get('content-type', '')
@@ -998,10 +1234,18 @@ class SocaServer(SocaService):
 
         # Buffer for parsing multipart data
         buffer = b''
-        current_file = None
-        current_file_handle = None
+        # the file being written, and the write still running on it
+        upload: Optional[_Upload] = None
+        writing = None
         current_headers = {}
         parsing_headers = False
+        # how far the part header being read has been searched for its end
+        header_scanned = 0
+        # the closing delimiter was read: what follows it is read and ignored
+        finished = False
+        # folders this upload made, for removing those left empty if it is cut short
+        made_folders = _UploadFolders()
+        completed = False
 
         try:
             # Stream the request body
@@ -1009,12 +1253,14 @@ class SocaServer(SocaService):
                 chunk = await http_request.stream.read()
                 if chunk is None:
                     break
+                if finished:
+                    continue
 
                 buffer += chunk
 
                 # Process buffer for multipart boundaries and data
                 while True:
-                    if current_file is None and not parsing_headers:
+                    if upload is None and not parsing_headers:
                         # Look for start of new part
                         boundary_pos = buffer.find(boundary_bytes)
                         if boundary_pos == -1:
@@ -1026,6 +1272,7 @@ class SocaServer(SocaService):
                         # Check if this is the end boundary
                         if buffer.find(end_boundary_bytes) == boundary_pos:
                             # End of all parts
+                            finished = True
                             buffer = b''
                             break
 
@@ -1034,16 +1281,37 @@ class SocaServer(SocaService):
                         if buffer.startswith(b'\r\n'):
                             buffer = buffer[2:]
                         parsing_headers = True
+                        header_scanned = 0
                         current_headers = {}
                         continue
 
                     if parsing_headers:
-                        # Parse headers until we find double CRLF
-                        headers_end = buffer.find(b'\r\n\r\n')
-                        if headers_end == -1:
+                        if len(buffer) < 2:
+                            break  # Need more data
+                        if buffer.startswith(b'--'):
+                            # the closing delimiter, its -- read apart from its boundary
+                            finished = True
+                            buffer = b''
+                            break
+                        # Parse headers until we find double CRLF, searching only what
+                        # arrived since the last search, and only so far: file bytes are
+                        # never capped, a part's header is
+                        headers_end = buffer.find(b'\r\n\r\n', header_scanned)
+                        if (
+                            headers_end == -1
+                            or headers_end > MAX_UPLOAD_PART_HEADER_BYTES
+                        ):
+                            if len(buffer) > MAX_UPLOAD_PART_HEADER_BYTES:
+                                raise exceptions.invalid_params(
+                                    'The upload could not be read: a part header is '
+                                    'too large.'
+                                )
+                            header_scanned = max(0, len(buffer) - 3)
                             break  # Need more data
 
-                        headers_data = buffer[:headers_end].decode('utf-8')
+                        headers_data = buffer[:headers_end].decode(
+                            'utf-8', errors='replace'
+                        )
                         buffer = buffer[headers_end + 4 :]  # Skip \r\n\r\n
 
                         # Parse individual headers
@@ -1056,36 +1324,55 @@ class SocaServer(SocaService):
                         content_disposition = current_headers.get(
                             'content-disposition', ''
                         )
-                        filename_match = re.search(
-                            r'filename="([^"]*)"', content_disposition
+                        filename = self._part_filename(content_disposition)
+
+                        parts = (
+                            None
+                            if filename is None
+                            else self._upload_path_parts(filename)
                         )
-
-                        if filename_match:
-                            filename = filename_match.group(1)
-                            secure_filename = Utils.to_secure_filename(filename)
-
-                            if Utils.is_empty(secure_filename):
+                        if filename is not None:
+                            # a file in a folder being uploaded names its path in the
+                            # destination: each part cleaned up as a file name is
+                            secure_parts = (
+                                [Utils.to_secure_filename(part) for part in parts]
+                                if parts is not None
+                                else None
+                            )
+                            if secure_parts is None or not all(secure_parts):
                                 files_skipped.append(filename)
                                 parsing_headers = False
                                 continue
+                            *folders, secure_filename = secure_parts
 
                             # the user's file, created exclusively and handed over before
-                            # a byte is written; a taken name becomes the next free name(n)
-                            fd, file_path, was_renamed = self._create_upload(
-                                helper, cwd, secure_filename, username
+                            # a byte is written; a taken name becomes the next free name(n).
+                            # Cut short while it is being created, it is removed once created.
+                            upload, was_renamed = await self._off_loop_or_clean_up(
+                                lambda created: self._discard_upload(
+                                    helper, created[0], made_folders
+                                ),
+                                self._create_upload,
+                                helper,
+                                cwd,
+                                secure_filename,
+                                username,
+                                tuple(folders),
+                                made_folders,
                             )
-                            current_file = file_path
+                            file_path = upload.path
 
                             # Track renamed files, by the name clash or by the name clean-up
-                            if was_renamed or secure_filename != filename:
+                            final_name = '/'.join(
+                                [*folders, os.path.basename(file_path)]
+                            )
+                            if was_renamed or final_name != filename:
                                 files_renamed.append(
                                     {
                                         'original_name': filename,
-                                        'final_name': os.path.basename(file_path),
+                                        'final_name': final_name,
                                     }
                                 )
-
-                            current_file_handle = await aiofiles.open(fd, 'wb')
 
                             if self._logger.isEnabledFor(logging.DEBUG):
                                 self._logger.debug(
@@ -1095,7 +1382,7 @@ class SocaServer(SocaService):
                         parsing_headers = False
                         continue
 
-                    if current_file is not None and current_file_handle is not None:
+                    if upload is not None:
                         # Look for next boundary in the data
                         next_boundary = buffer.find(b'\r\n--' + boundary.encode())
 
@@ -1104,26 +1391,34 @@ class SocaServer(SocaService):
                             if len(buffer) > len(boundary_bytes) + 10:
                                 write_data = buffer[: -len(boundary_bytes) - 10]
                                 buffer = buffer[-len(boundary_bytes) - 10 :]
-                                await current_file_handle.write(write_data)
+                                writing = loop.run_in_executor(
+                                    None, upload.file.write, write_data
+                                )
+                                await writing
                             break
                         else:
                             # Found boundary, write data up to boundary
                             write_data = buffer[:next_boundary]
-                            await current_file_handle.write(write_data)
+                            writing = loop.run_in_executor(
+                                None, upload.file.write, write_data
+                            )
+                            await writing
 
-                            # Close current file
-                            await current_file_handle.close()
-                            current_file_handle = None
-
-                            files_uploaded.append(current_file)
+                            # raises if the last bytes could not be written: the file is
+                            # then removed below like any upload cut short
+                            await self._off_loop(upload.finish)
+                            # on the loop, with no await before upload is cleared: a
+                            # cancel during the finish above leaves the folder to the
+                            # clean-up, which closes it once
+                            upload.close_folder()
+                            files_uploaded.append(upload.path)
 
                             if self._logger.isEnabledFor(logging.DEBUG):
-                                file_size = os.path.getsize(current_file)
                                 self._logger.debug(
-                                    f'Completed streaming upload - User: {username}, File: {os.path.basename(current_file)}, Size: {file_size} bytes'
+                                    f'Completed streaming upload - User: {username}, File: {upload.name}'
                                 )
 
-                            current_file = None
+                            upload = None
 
                             # Move buffer past the CRLF before boundary
                             buffer = buffer[next_boundary + 2 :]  # Skip \r\n
@@ -1132,13 +1427,34 @@ class SocaServer(SocaService):
                     # If we get here, we need more data
                     break
 
+            completed = finished
         finally:
-            # Clean up any open file handle
-            if current_file_handle is not None:
-                await current_file_handle.close()
-                # Remove incomplete file
-                if current_file and os.path.exists(current_file):
-                    os.remove(current_file)
+            if upload is not None:
+                # an upload cut short, by an error or by the browser going away at any await
+                # above: shielded, so being cancelled again cannot stop the clean up halfway
+                await asyncio.shield(
+                    self._abandon_upload(helper, upload, writing, made_folders)
+                )
+            elif made_folders and not completed:
+                await asyncio.shield(
+                    self._off_loop(self._remove_empty_folders, helper, made_folders)
+                )
+
+        payload = {
+            'files_uploaded': files_uploaded,
+            'files_skipped': files_skipped,
+            'files_renamed': files_renamed,
+        }
+        if not finished:
+            # the body ended inside a part: whatever was in it is not saved, the parts that
+            # completed before it are
+            return {
+                'success': False,
+                'error_code': errorcodes.INVALID_PARAMS,
+                'message': 'The upload ended before it was complete, and the file it was '
+                'sending was not saved. Try again.',
+                'payload': payload,
+            }
 
         if self._logger.isEnabledFor(logging.DEBUG):
             self._logger.debug(
@@ -1146,14 +1462,17 @@ class SocaServer(SocaService):
                 f'Uploaded: {len(files_uploaded)}, Skipped: {len(files_skipped)}, Renamed: {len(files_renamed)}'
             )
 
-        return {
-            'success': True,
-            'payload': {
-                'files_uploaded': files_uploaded,
-                'files_skipped': files_skipped,
-                'files_renamed': files_renamed,
-            },
-        }
+        return {'success': True, 'payload': payload}
+
+    @staticmethod
+    def _part_filename(content_disposition: str) -> Optional[str]:
+        # the first filename="..." value, as the pattern it replaces read it, by two finds
+        start = content_disposition.find('filename="')
+        if start == -1:
+            return None
+        start += len('filename="')
+        end = content_disposition.find('"', start)
+        return None if end == -1 else content_disposition[start:end]
 
     def _candidate_upload_paths(self, directory: str, filename: str):
         """
@@ -1184,15 +1503,224 @@ class SocaServer(SocaService):
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                     dir_fd=fd,
                 )
-                os.close(fd)
-                fd = next_fd
+                # the new one is the one to close from here: never the old one twice
+                previous, fd = fd, next_fd
+                os.close(previous)
         except OSError:
             os.close(fd)
             raise exceptions.unauthorized_access()
         return fd
 
+    def _discard_upload(
+        self, helper: FileSystemHelper, upload: '_Upload', made_folders=None
+    ):
+        """
+        Closes an upload cut short and removes what was written of it, then the folders
+        the upload made that are left empty.
+        """
+        try:
+            upload.file.close()
+        except OSError:
+            pass  # what could not be written is removed with the rest
+        try:
+            if upload.dir_fd is not None:
+                self._remove_created_upload(
+                    helper, upload.dir_fd, upload.name, upload.dev, upload.ino
+                )
+        finally:
+            upload.close_folder()
+        if made_folders:
+            self._remove_empty_folders(helper, made_folders)
+
+    async def _abandon_upload(
+        self, helper: FileSystemHelper, upload: '_Upload', writing, made_folders=None
+    ):
+        if writing is not None:
+            # a write cancelled on the loop still runs on its thread: let it end first
+            await asyncio.wait([writing])
+        await self._off_loop(self._discard_upload, helper, upload, made_folders)
+
+    @staticmethod
+    def _upload_path_parts(raw: str) -> Optional[List[str]]:
+        """
+        A file's path inside the upload's destination, as the browser sends it for a folder
+        upload (photos/2024/a.jpg), split into its names; None for any other form: absolute,
+        an empty, . or .. part, a backslash or control character, a part over 255 bytes, or
+        deeper than MAX_UPLOAD_FOLDER_DEPTH folders.
+        """
+        # a backslash is a separator only to some clients: refused in a folder path, and
+        # in a plain name cleaned away as before
+        if len(raw) > 4096 or raw.startswith('/') or ('/' in raw and '\\' in raw):
+            return None
+        if any(ord(c) < 32 or ord(c) == 127 for c in raw):
+            return None
+        parts = raw.split('/')
+        if len(parts) > MAX_UPLOAD_FOLDER_DEPTH + 1:
+            return None
+        for part in parts:
+            if part in ('', '.', '..') or len(part.encode('utf-8')) > 255:
+                return None
+        return parts
+
+    def _open_upload_folders(
+        self,
+        helper: FileSystemHelper,
+        dir_fd: int,
+        resolved: str,
+        folders: tuple,
+        made_folders: list,
+    ) -> int:
+        """
+        Opens the folders below the destination one level at a time from its descriptor,
+        never following a link, making a missing one as the user. An existing folder is
+        used only if it is a real folder the user may write and enter. Returns the deepest
+        one's descriptor and closes dir_fd.
+        """
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        for depth, name in enumerate(folders):
+            try:
+                try:
+                    next_fd = os.open(name, flags, dir_fd=dir_fd)
+                except FileNotFoundError:
+                    try:
+                        helper.run_as_user(
+                            lambda name=name, dir_fd=dir_fd: os.mkdir(
+                                name, 0o777, dir_fd=dir_fd
+                            )
+                        )
+                        made = True
+                    except FileExistsError:
+                        made = False  # another part of this upload, or someone, just made it
+                    next_fd = os.open(name, flags, dir_fd=dir_fd)
+                    if made:
+                        info = os.fstat(next_fd)
+                        made_folders.append(
+                            (resolved, folders[: depth + 1], info.st_dev, info.st_ino)
+                        )
+            except OSError:
+                if os.path.islink(os.path.join(resolved, *folders[: depth + 1])):
+                    raise exceptions.unauthorized_access(
+                        'A link is where a folder of the upload belongs'
+                    )
+                raise exceptions.invalid_params(
+                    f'A file is in the way of the folder: {name}'
+                )
+            finally:
+                os.close(dir_fd)
+            dir_fd = next_fd
+
+            # checked already in this upload, and still the same folder: no new check
+            info = os.fstat(dir_fd)
+            key = (resolved, folders[: depth + 1])
+            checked = getattr(made_folders, 'checked', None)
+            if checked is not None and checked.get(key) == (info.st_dev, info.st_ino):
+                continue
+
+            def may_write(fd=dir_fd):
+                os.fchdir(fd)
+                return os.access('.', os.W_OK | os.X_OK)
+
+            try:
+                if not helper.run_as_user(may_write):
+                    raise exceptions.unauthorized_access()
+            except BaseException:
+                os.close(dir_fd)
+                raise
+            if checked is not None:
+                checked[key] = (info.st_dev, info.st_ino)
+        return dir_fd
+
+    def _remove_empty_folders(self, helper: FileSystemHelper, made_folders: list):
+        """
+        Removes, as the user, the folders an upload cut short made and left empty, deepest
+        first, each only while its name is still the folder that was made; reached from
+        the destination again without following links.
+        """
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        for resolved, path, dev, ino in sorted(made_folders, key=lambda m: -len(m[1])):
+            try:
+                fd = self._open_directory_nofollow(resolved)
+            except exceptions.SocaException:
+                continue
+            try:
+                for name in path[:-1]:
+                    next_fd = os.open(name, flags, dir_fd=fd)
+                    previous, fd = fd, next_fd
+                    os.close(previous)
+
+                def remove(fd=fd, name=path[-1]):
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    if (info.st_dev, info.st_ino) == (dev, ino):
+                        os.rmdir(name, dir_fd=fd)
+
+                helper.run_as_user(remove)
+            except (OSError, exceptions.SocaException):
+                pass  # not empty, or no longer the folder made: it stays
+            finally:
+                os.close(fd)
+
+    async def _off_loop_or_clean_up(self, clean_up, function, *args):
+        """
+        _off_loop for work that returns something to release: if the request is cancelled
+        while the work runs, the work still finishes on its thread, and what it returns is
+        handed to clean_up on a worker instead of being dropped.
+        """
+        work = self._executor.submit(function, *args)
+        try:
+            # cancelling stops the work if it has not started, and cannot once it has
+            return await asyncio.wrap_future(work)
+        except asyncio.CancelledError:
+
+            def abandoned(done):
+                if done.cancelled() or done.exception() is not None:
+                    return
+                try:
+                    self._executor.submit(clean_up, done.result())
+                except RuntimeError:
+                    clean_up(
+                        done.result()
+                    )  # shutting down: no worker left to hand it to
+
+            # on the work's own future, so it runs whatever the loop is doing by then
+            work.add_done_callback(abandoned)
+            raise
+
+    @staticmethod
+    def _unlink_if_created(dir_fd: int, name: str, dev: int, ino: int):
+        # only while the name is still the file that was created
+        try:
+            info = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+            if (info.st_dev, info.st_ino) == (dev, ino):
+                os.unlink(name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+
+    def _remove_created_upload(
+        self, helper: FileSystemHelper, dir_fd: int, name: str, dev: int, ino: int
+    ):
+        """
+        Removes an upload cut short, as the uploading user, from the folder descriptor it was
+        created through: the entry is checked and unlinked only while it is still the file
+        that was created, and with the user's own rights, so a file put in its place by
+        someone else is never theirs to remove.
+        """
+
+        try:
+            helper.run_as_user(lambda: self._unlink_if_created(dir_fd, name, dev, ino))
+        except exceptions.SocaException as e:
+            # what is left is the user's partial upload, under the name they gave it
+            self._logger.warning(
+                f'An interrupted upload could not be removed - File: {name}, Error: {e.error_code}'
+            )
+
     def _create_upload(
-        self, helper: FileSystemHelper, directory: str, filename: str, username: str
+        self,
+        helper: FileSystemHelper,
+        directory: str,
+        filename: str,
+        username: str,
+        folders: tuple = (),
+        made_folders: Optional[list] = None,
     ) -> tuple:
         """
         Creates the upload's file exclusively and gives it to the user by descriptor before
@@ -1201,13 +1729,37 @@ class SocaServer(SocaService):
         component without following links, and the file is created relative to it. A name
         that exists, a link planted at it (dangling or not) included, is neither opened nor
         followed: the next free name is taken. No path is chowned after the fact.
-        Returns (fd, file_path, was_renamed).
+        Returns (upload, was_renamed): the upload holds the file open for writing and its
+        folder open, for removing the file through it if the upload is cut short.
+        folders are the file's folders below directory, for a folder upload: made as the
+        user where missing (see _open_upload_folders) and listed in made_folders.
         """
         resolved = os.path.realpath(directory)
-        helper.check_access(
-            resolved, check_dir=True, check_read=False, check_write=True
-        )
-        dir_fd = self._open_directory_nofollow(resolved)
+        destinations = getattr(made_folders, 'destinations', None)
+        dir_fd = None
+        if destinations is not None and resolved in destinations:
+            # checked earlier in this upload: still the same folder, or checked again
+            dir_fd = self._open_directory_nofollow(resolved)
+            info = os.fstat(dir_fd)
+            if destinations[resolved] != (info.st_dev, info.st_ino):
+                os.close(dir_fd)
+                dir_fd = None
+        if dir_fd is None:
+            helper.check_access(
+                resolved, check_dir=True, check_read=False, check_write=True
+            )
+            dir_fd = self._open_directory_nofollow(resolved)
+            if destinations is not None:
+                info = os.fstat(dir_fd)
+                destinations[resolved] = (info.st_dev, info.st_ino)
+        if folders:
+            dir_fd = self._open_upload_folders(
+                helper,
+                dir_fd,
+                resolved,
+                folders,
+                made_folders if made_folders is not None else [],
+            )
         try:
             for file_path, was_renamed in self._candidate_upload_paths(
                 resolved, filename
@@ -1227,18 +1779,34 @@ class SocaServer(SocaService):
                 except FileExistsError:
                     continue
                 try:
-                    helper.own(fd)
+                    helper.own(fd, keep_group=bool(os.fstat(dir_fd).st_mode & S_ISGID))
                 except Exception:
+                    info = os.fstat(fd)
                     os.close(fd)
-                    os.unlink(name, dir_fd=dir_fd)
+                    self._remove_created_upload(
+                        helper, dir_fd, name, info.st_dev, info.st_ino
+                    )
+                    # never handed over, so the server's own: in a sticky folder the user
+                    # may not remove it, and an empty file would hold the name
+                    self._unlink_if_created(dir_fd, name, info.st_dev, info.st_ino)
                     raise
                 if was_renamed and self._logger.isEnabledFor(logging.DEBUG):
                     self._logger.debug(
                         f'File conflict resolved - User: {username}, Original: {filename}, Renamed: {name}'
                     )
-                return fd, os.path.join(directory, name), was_renamed
-        finally:
+                info = os.fstat(fd)
+                upload = _Upload(
+                    os.fdopen(fd, 'wb'),
+                    os.path.join(directory, *folders, name),
+                    dir_fd,
+                    info.st_dev,
+                    info.st_ino,
+                )
+                return upload, was_renamed
+        except BaseException:
             os.close(dir_fd)
+            raise
+        os.close(dir_fd)
         raise exceptions.general_exception(f'no free name for upload: {filename}')
 
     async def generate_download_url_route(self, http_request, **_):
@@ -1246,7 +1814,7 @@ class SocaServer(SocaService):
         # set before anything can raise: the handlers below name both in their log line
         username = file_path = None
         try:
-            username = self._api_invocation_handler.get_username(http_request)
+            username = await self._get_username_off_loop(http_request)
             if Utils.is_empty(username):
                 # no session: the same answer /download gives, and nothing to log
                 return sanic.response.json(
@@ -1276,14 +1844,18 @@ class SocaServer(SocaService):
 
             # Validate file/directory access
             helper = FileSystemHelper(self._context, username=username)
-            if os.path.isdir(file_path):
-                helper.check_access(
-                    file_path, check_dir=True, check_read=True, check_write=False
+            await self._off_loop(
+                lambda: helper.check_access(
+                    file_path,
+                    check_dir=os.path.isdir(file_path),
+                    check_read=True,
+                    check_write=False,
                 )
-            else:
-                helper.check_access(
-                    file_path, check_dir=False, check_read=True, check_write=False
-                )
+            )
+
+            # Use the dedicated JWT signing secret from cluster settings: read first, so
+            # the time it takes is not taken from the link's five seconds
+            jwt_secret = await self._get_jwt_signing_secret_off_loop()
 
             # Generate a temporary token valid for 5 seconds
             payload = {
@@ -1293,9 +1865,6 @@ class SocaServer(SocaService):
                 'iat': int(time.time()),
                 'purpose': 'file_download',
             }
-
-            # Use the dedicated JWT signing secret from cluster settings
-            jwt_secret = self._get_jwt_signing_secret()
             temp_token = jwt.encode(payload, jwt_secret, algorithm='HS256')
 
             # Generate the download URL with the temporary token
@@ -1333,7 +1902,7 @@ class SocaServer(SocaService):
             return sanic.response.json(
                 {
                     'error_code': errorcodes.GENERAL_ERROR,
-                    'message': str(e),
+                    'message': UNEXPECTED_ERROR_MESSAGE,
                     'success': False,
                 },
                 dumps=Utils.to_json,
@@ -1344,7 +1913,7 @@ class SocaServer(SocaService):
         username = None
 
         # Try Bearer token first (for API calls)
-        username = self._api_invocation_handler.get_username(http_request)
+        username = await self._get_username_off_loop(http_request)
 
         # If no Bearer token, try temporary download token (for direct downloads)
         if Utils.is_empty(username):
@@ -1354,7 +1923,7 @@ class SocaServer(SocaService):
                     import jwt
 
                     # Decode the temporary token using the same secret
-                    jwt_secret = self._get_jwt_signing_secret()
+                    jwt_secret = await self._get_jwt_signing_secret_off_loop()
                     payload = jwt.decode(temp_token, jwt_secret, algorithms=['HS256'])
 
                     # Validate the token purpose
@@ -1427,34 +1996,21 @@ class SocaServer(SocaService):
                 self._logger.debug(
                     f'File download access check - User: {username}, File: {download_file}'
                 )
-            helper.check_access(download_file, check_read=True, check_write=False)
+            is_dir, *identity = await self._off_loop(
+                helper.identify_download, download_file
+            )
         except exceptions.SocaException as e:
             self._logger.error(
                 f'File download access denied - User: {username}, File: {download_file}, Error: {e.message}'
             )
             return sanic.response.json(
                 {'error_code': e.error_code, 'message': e.message, 'success': False},
-                status=403,
-                dumps=Utils.to_json,
-            )
-
-        # Get file info for proper headers
-        if not os.path.exists(download_file):
-            self._logger.error(
-                f'File download failed - User: {username}, File: {download_file}, Error: File not found'
-            )
-            return sanic.response.json(
-                {
-                    'error_code': errorcodes.FILE_NOT_FOUND,
-                    'message': f'File not found: {download_file}',
-                    'success': False,
-                },
-                status=404,
+                status=404 if e.error_code == errorcodes.FILE_NOT_FOUND else 403,
                 dumps=Utils.to_json,
             )
 
         # Check if the requested item is a directory
-        if os.path.isdir(download_file):
+        if is_dir:
             self._logger.info(
                 f'Directory download requested - User: {username}, Directory: {download_file}'
             )
@@ -1465,10 +2021,19 @@ class SocaServer(SocaService):
 
                 # Use the FileSystemHelper to create a zip archive
                 download_request = DownloadFilesRequest(files=[download_file])
-                zip_file_path = helper.download_files(download_request)
+                # building the archive holds a server worker: it counts towards the limits
+                zip_file_path = await self._off_loop(
+                    helper.download_files, download_request
+                )
+                _, *identity = await self._off_loop(
+                    helper.identify_download, zip_file_path
+                )
+                # opening can wait on the mount: not on the loop
+                source, zip_size = await self._off_loop(
+                    self._open_checked_download, zip_file_path, identity
+                )
 
                 # Stream the zip file
-                zip_size = os.path.getsize(zip_file_path)
                 zip_filename = os.path.basename(zip_file_path)
 
                 self._logger.info(
@@ -1484,7 +2049,7 @@ class SocaServer(SocaService):
                     )
 
                 return await self._stream_file_download(
-                    zip_file_path,
+                    source,
                     zip_filename,
                     zip_size,
                     username,
@@ -1493,6 +2058,19 @@ class SocaServer(SocaService):
                     ),
                 )
 
+            except exceptions.SocaException as e:
+                self._logger.error(
+                    f'Directory download refused - User: {username}, Directory: {download_file}, Error: {e.message}'
+                )
+                return sanic.response.json(
+                    {
+                        'error_code': e.error_code,
+                        'message': e.message,
+                        'success': False,
+                    },
+                    status=403,
+                    dumps=Utils.to_json,
+                )
             except Exception as e:
                 self._logger.error(
                     f'Directory zip creation failed - User: {username}, Directory: {download_file}, Error: {str(e)}'
@@ -1500,7 +2078,7 @@ class SocaServer(SocaService):
                 return sanic.response.json(
                     {
                         'error_code': errorcodes.GENERAL_ERROR,
-                        'message': f'Failed to create directory archive: {str(e)}',
+                        'message': UNEXPECTED_ERROR_MESSAGE,
                         'success': False,
                     },
                     status=500,
@@ -1508,7 +2086,26 @@ class SocaServer(SocaService):
                 )
         else:
             # Handle regular file download
-            file_size = os.path.getsize(download_file)
+            try:
+                source, file_size = await self._off_loop(
+                    self._open_checked_download, download_file, identity
+                )
+                generated = await self._off_loop(
+                    helper.is_generated_archive, download_file
+                )
+            except exceptions.SocaException as e:
+                self._logger.error(
+                    f'File download refused - User: {username}, File: {download_file}, Error: {e.message}'
+                )
+                return sanic.response.json(
+                    {
+                        'error_code': e.error_code,
+                        'message': e.message,
+                        'success': False,
+                    },
+                    status=403,
+                    dumps=Utils.to_json,
+                )
             filename = os.path.basename(download_file)
             self._logger.info(
                 f'File download started - User: {username}, File: {download_file}, Size: {file_size} bytes'
@@ -1525,16 +2122,38 @@ class SocaServer(SocaService):
             # This ensures users always get download progress regardless of file size
             # an archive built for this download: it has done its job once it has been sent
             return await self._stream_file_download(
-                download_file,
+                source,
                 filename,
                 file_size,
                 username,
                 after_streamed=(
                     (lambda: helper.remove_generated_archive(download_file))
-                    if helper.is_generated_archive(download_file)
+                    if generated
                     else None
                 ),
             )
+
+    @staticmethod
+    def _open_checked_download(path: str, identity) -> Tuple[BinaryIO, int]:
+        """
+        Opens, with the server's rights, the file the user's own check identified and no
+        other: a path that names a different file by now, through a link swapped in after
+        the check for example, is refused. Returns the open file and its size.
+        """
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError:
+            raise exceptions.unauthorized_access()
+        try:
+            info = os.fstat(fd)
+            if not S_ISREG(info.st_mode) or [info.st_dev, info.st_ino] != list(
+                identity
+            ):
+                raise exceptions.unauthorized_access()
+            return os.fdopen(fd, 'rb'), info.st_size
+        except BaseException:
+            os.close(fd)
+            raise
 
     def _get_adaptive_chunk_size(self, file_size: int) -> int:
         """
@@ -1569,55 +2188,74 @@ class SocaServer(SocaService):
 
     async def _stream_file_download(
         self,
-        file_path: str,
+        source: BinaryIO,
         filename: str,
         file_size: int,
         username: str = None,
         after_streamed=None,
     ):
         """
-        Stream file downloads using Sanic's file_stream with proper headers for browser progress.
+        Stream file downloads with proper headers for browser progress.
         This enables native browser download progress bars for all file sizes.
         Uses adaptive chunk sizing optimized for ALB and high-bandwidth connections.
+        Sends from the open file it is given, and closes it once sent.
         """
         import mimetypes
         import urllib.parse
 
         # Determine content type
-        content_type, _ = mimetypes.guess_type(file_path)
+        content_type, _ = mimetypes.guess_type(filename)
         if not content_type:
             content_type = 'application/octet-stream'
 
         # Properly encode filename for Content-Disposition header
         # Use RFC 6266 encoding for international characters
         encoded_filename = urllib.parse.quote(filename)
+        # the quoted form is for old clients only: a quote, backslash or control character
+        # in a legal file name would end it or the header early
+        plain_filename = ''.join(
+            c if 32 <= ord(c) < 127 and c not in '"\\' else '_' for c in filename
+        )
 
         # Calculate optimal chunk size based on file size
         chunk_size = self._get_adaptive_chunk_size(file_size)
 
         # Set up headers that enable browser progress bars
         headers = {
-            'Content-Disposition': f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            'Content-Disposition': f'attachment; filename="{plain_filename}"; filename*=UTF-8\'\'{encoded_filename}',
             'Content-Length': str(file_size),  # Critical for browser progress
             'Content-Type': content_type,
-            'Accept-Ranges': 'bytes',  # Enable resume capability
             'Cache-Control': 'no-cache',  # Prevent caching of potentially sensitive files
+            # a user's file comes from the portal's own origin: never run it as a page there
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': 'sandbox',
         }
 
         if self._logger.isEnabledFor(logging.DEBUG):
             user_context = f'User: {username}, ' if username else ''
             chunk_size_mb = chunk_size / (1024 * 1024)
             self._logger.debug(
-                f'File download streaming - {user_context}File: {file_path}, Size: {file_size} bytes, '
+                f'File download streaming - {user_context}File: {filename}, Size: {file_size} bytes, '
                 f'Chunk size: {chunk_size_mb:.1f}MB'
             )
 
-        # Use Sanic's built-in file_stream which handles chunking efficiently
+        # from the descriptor that was checked: a path would be looked up again
         # Adding Content-Length header automatically disables chunked encoding
-        response = await sanic.response.file_stream(
-            file_path,
-            chunk_size=chunk_size,  # Adaptive chunk size for optimal throughput
-            headers=headers,
+        async def send_source(stream):
+            # what Content-Length said and no more: a log still being written grows past it
+            with source:
+                loop = asyncio.get_running_loop()
+                remaining = file_size
+                while remaining > 0 and (
+                    chunk := await loop.run_in_executor(
+                        None, source.read, min(chunk_size, remaining)
+                    )
+                ):
+                    remaining -= len(chunk)
+                    await stream.write(chunk)
+
+        response = sanic.response.ResponseStream(
+            send_source, headers=headers, content_type=content_type
         )
         if after_streamed is not None:
             send = response.streaming_fn
@@ -1626,19 +2264,47 @@ class SocaServer(SocaService):
             async def send_then_clean_up(stream):
                 await send(stream)
                 try:
-                    after_streamed()
+                    # removing as the user forks a worker: not on the loop
+                    await self._off_loop(after_streamed)
                 except Exception as e:
                     self._logger.warning(
-                        f'Clean up after download failed - File: {file_path}, Error: {e}'
+                        f'Clean up after download failed - File: {filename}, Error: {e}'
                     )
 
             response.streaming_fn = send_then_clean_up
         return response
 
+    async def _off_loop(self, function, *args):
+        # work done as the user forks and waits for the worker: on a server worker, with the
+        # API calls, not on the loop that serves every request and the health check
+        return await asyncio.get_running_loop().run_in_executor(
+            self._executor, function, *args
+        )
+
+    async def _get_username_off_loop(self, http_request) -> Optional[str]:
+        # an api token is looked up in the database: not on the loop that serves every request
+        return await asyncio.get_running_loop().run_in_executor(
+            None, self._api_invocation_handler.get_file_username, http_request
+        )
+
+    async def _get_jwt_signing_secret_off_loop(self) -> str:
+        cached = getattr(self, '_jwt_signing_secret', None)
+        if (
+            cached is not None
+            and time.monotonic() - cached[1] < JWT_SECRET_CACHE_SECONDS
+        ):
+            return cached[0]
+        secret = await asyncio.get_running_loop().run_in_executor(
+            None, self._get_jwt_signing_secret
+        )
+        self._jwt_signing_secret = (secret, time.monotonic())
+        return secret
+
     def _get_jwt_signing_secret(self) -> str:
         """
         Get the JWT signing secret for secure download URLs.
         The secret is created by the cluster-manager CDK stack and its ARN is stored in cluster settings.
+        Read through _get_jwt_signing_secret_off_loop, which keeps it for a few minutes.
         """
         # Get the secret ARN from cluster settings
         secret_arn = self._context.config().get_string(
@@ -1747,6 +2413,13 @@ class SocaServer(SocaService):
 
         self._is_running.set()
 
+        if self.options.enable_http:
+            Thread(
+                target=self._load_balancer_networks_loop,
+                name=f'{self._context.module_id()}-load-balancer-subnets',
+                daemon=True,
+            ).start()
+
         self._server_thread = Thread(
             target=self._run_server, name=f'{self._context.module_id()}-run-server'
         )
@@ -1762,6 +2435,7 @@ class SocaServer(SocaService):
 
         # clear _is_running, so that no new client connections will be queued
         self._is_running.clear()
+        self._load_balancer_networks_stop.set()
 
         # Run application cleanup on the serving loop before closing its transports.
         deadline = time.monotonic() + 30
@@ -1781,6 +2455,7 @@ class SocaServer(SocaService):
 
         # shutdown executor and wait for current pending requests to complete and allow to respond back
         self._executor.shutdown(wait=True, cancel_futures=True)
+        self._local_executor.shutdown(wait=True, cancel_futures=True)
 
         # we are in main thread now...
         mainloop = asyncio.get_event_loop()

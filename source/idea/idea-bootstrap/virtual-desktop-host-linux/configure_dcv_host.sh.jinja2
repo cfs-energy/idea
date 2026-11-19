@@ -103,13 +103,16 @@ function configure_dcv_host() {
   fi
 
   local DCV_STORAGE_ROOT="/data/home/${IDEA_SESSION_OWNER}/storage-root"
-  if [[ -L ${DCV_STORAGE_ROOT} ]]; then
-    echo "something fishy is going on here. a sym-link should not exist. check with the session owner for bad actor or unwarranted usage of system."
-    exit 1
+  # the owner can write in their home, so the path is checked again after it is made and
+  # ownership is changed on the path itself, never through a link
+  local DCV_STORAGE_ROOT_CREATED=false
+  if [[ ! -L "${DCV_STORAGE_ROOT}" && ! -e "${DCV_STORAGE_ROOT}" ]]; then
+    mkdir -p "${DCV_STORAGE_ROOT}" && DCV_STORAGE_ROOT_CREATED=true
   fi
-  if [[ ! -d ${DCV_STORAGE_ROOT} ]]; then
-    mkdir -p ${DCV_STORAGE_ROOT} # Create the storage root location if needed
-    chown ${IDEA_SESSION_OWNER} ${DCV_STORAGE_ROOT}
+  if [[ -L "${DCV_STORAGE_ROOT}" || ! -d "${DCV_STORAGE_ROOT}" ]]; then
+    log_warning "DCV storage root ${DCV_STORAGE_ROOT} is a symbolic link or not a directory; leaving it alone. Check with the session owner."
+  elif [[ "${DCV_STORAGE_ROOT_CREATED}" == "true" ]]; then
+    chown -h "${IDEA_SESSION_OWNER}" "${DCV_STORAGE_ROOT}"
   fi
   local GL_DISPLAYS_VALUE=":0.0"
   echo -e "[license]
@@ -345,6 +348,12 @@ function verify_x_server_is_up() {
   echo "x server is up and running...."
 }
 
+# The site hook is checked before DCV starts: a pinned hook that does not match stops the
+# desktop before the owner can connect to it. The checked copy runs at the end, as before.
+SITE_HOOK_RUN=""
+prepare_site_hook "${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh" \
+    '{{ context.config.get_string('virtual-desktop-controller.dcv_host_site_hook_sha256', default='') | default('', true) | string | trim | replace("'", "'\\''") }}' '{{ context.module_id | replace("'", "'\\''") }}.dcv_host_site_hook_sha256' || true
+
 ## -- DCV RELATED EXECUTION BEGINS HERE -- ##
 
 {% include '_templates/linux/dcv_server.jinja2' %}
@@ -372,17 +381,16 @@ start_and_configure_dcv_agent_service
 ## -- DCV RELATED EXECUTION ENDS HERE -- ##
 
 # run user customizations if available
-if [[ -f ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh ]]; then
+if [[ -n "${SITE_HOOK_RUN}" ]]; then
   # Terminal trust edits sshd_config in the background under this lock; take it so
   # neither side overwrites the other's edit. A stuck holder must not skip the hook, and
   # the hook gets no copy of the lock, so processes it leaves running cannot hold it.
   (
     { exec 9>>/run/idea-terminal-trust.lock && flock -w 120 9; } 2>/dev/null \
       || log_warning "terminal trust lock unavailable; running userdata customizations anyway"
-    /bin/bash ${IDEA_CLUSTER_HOME}/dcv_host/userdata_customizations.sh 9>&- >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
+    /bin/bash "${SITE_HOOK_RUN}" 9>&- >> ${BOOTSTRAP_DIR}/logs/userdata_customizations.log 2>&1
   ) || log_warning "userdata customizations failed; continuing host bootstrap"
-else
-  log_info "no userdata customizations"
+  finish_site_hook
 fi
 
 if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
@@ -399,8 +407,9 @@ fi
 {% if context.base_os == 'ubuntu2204' %}
 cp /etc/netplan/50-cloud-init.yaml /etc/netplan/50-cloud-init.yaml.bak
 
-# Create a small Python script
-cat > /tmp/update_netplan.py << 'PYEND'
+# Set NetworkManager as the renderer. The program comes on stdin and runs isolated (-I): no
+# file in a shared directory, and neither the working directory nor user paths are importable.
+/usr/bin/python3 -I - << 'PYEND'
 import yaml
 
 # Read the current configuration
@@ -414,12 +423,6 @@ config['network']['renderer'] = 'NetworkManager'
 with open('/etc/netplan/50-cloud-init.yaml', 'w') as f:
     yaml.dump(config, f, default_flow_style=False)
 PYEND
-
-# Run the Python script
-python3 /tmp/update_netplan.py
-
-# Clean up
-rm /tmp/update_netplan.py
 
 # Apply the new configuration
 netplan apply

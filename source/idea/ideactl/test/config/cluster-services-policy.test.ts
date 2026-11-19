@@ -114,12 +114,8 @@ it('grants no read or write of a waiting password through the tags of the module
   assert.equal(matches(statements[0]!, own), true);
 });
 
-it('lets the cluster manager write only scratch cleanup delivery receipts, and only with a scheduler', () => {
-  const receipts = (extra: Record<string, string>) => policy(false, extra, true).filter(s => s.Action.includes('dynamodb:PutItem') && String(s.Resource).includes('scratch-cleanup'));
-  assert.deepEqual(receipts({}), []);
-  const [statement, ...rest] = receipts({'global-settings.module_sets.default.scheduler.module_id': 'scheduler'});
-  assert.deepEqual(rest, []);
-  assert.deepEqual(statement!.Action, ['dynamodb:PutItem']);
-  assert.equal(statement!.Resource, `arn:aws:dynamodb:us-east-1:${'0'.repeat(12)}:table/example.scheduler.scratch-cleanup`);
-  assert.deepEqual(statement!.Condition, {'ForAllValues:StringEquals': {'dynamodb:LeadingKeys': ['delivered']}});
+it('grants no delivery receipt write in the template: cluster-manager.ts grants it, outside the size limit', () => {
+  const receipts = policy(false, {'global-settings.module_sets.default.scheduler.module_id': 'scheduler'}, true)
+    .filter(s => s.Action.includes('dynamodb:PutItem') && /scratch-cleanup|desktop-cleanup/.test(JSON.stringify(s.Resource)));
+  assert.deepEqual(receipts, []);
 });

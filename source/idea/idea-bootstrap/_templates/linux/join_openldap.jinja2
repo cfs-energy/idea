@@ -1,7 +1,7 @@
 # Begin: Join OpenLDAP
 
 IDEA_DS_TLS_CERTIFICATE_SECRET_ARN="{{ context.config.get_string('directoryservice.tls_certificate_secret_arn', required=True) }}"
-IDEA_CLUSTER_DATA_DIR="{{ context.config.get_string('shared-storage.data.mount_dir', required=True) }}"
+IDEA_CLUSTER_DATA_DIR='{{ context.config.get_string('shared-storage.data.mount_dir', required=True) | default('', true) | string | replace("'", "'\\''") }}'
 IDEA_DS_LDAP_BASE="{{ context.config.get_string('directoryservice.ldap_base', required=True) }}"
 IDEA_DS_LDAP_HOST="{{ context.config.get_string('directoryservice.hostname', required=True) }}"
 
@@ -65,7 +65,7 @@ homedir_substring = ${IDEA_CLUSTER_DATA_DIR}/home
 chmod 600 /etc/sssd/sssd.conf
 
 mkdir -p /etc/openldap/cacerts/
-DS_TLS_CERTIFICATE=$(get_secret "${IDEA_DS_TLS_CERTIFICATE_SECRET_ARN}")
+DS_TLS_CERTIFICATE=$(get_secret "${IDEA_DS_TLS_CERTIFICATE_SECRET_ARN}") || exit_fail "directory TLS certificate secret could not be read"
 echo -n "${DS_TLS_CERTIFICATE}" > /etc/openldap/cacerts/openldap-server.pem
 
 {% if context.base_os == 'amazonlinux2023' %}

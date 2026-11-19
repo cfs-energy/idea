@@ -68,3 +68,31 @@ runpy.run_path(str(setup))
     assert.ok(registration.includes(`${command}=${target}.cli.cli_main:main`), registration);
   }
 });
+
+test('a key left without its certificate is cleared, and the next start publishes a new pair', async () => {
+  const { readFileSync, existsSync, mkdirSync } = await import('node:fs');
+  const source = readFileSync(entrypoint, 'utf8');
+  const start = source.indexOf('ensure_app_certs() {');
+  const body = source.slice(start, source.indexOf('\n}\n', start) + 3);
+  const home = mkdtempSync(join(tmpdir(), 'ideactl-certs-'));
+  mkdirSync(join(home, 'certs'), { mode: 0o700 });
+  // an earlier writer published its key and stopped before its certificate
+  writeFileSync(join(home, 'certs/idea.key'), 'stale key');
+  const script = `set -euo pipefail
+setting() { case "$1" in cluster.home_dir) echo "$HOME_DIR";; *) echo example.invalid;; esac; }
+openssl() { while (( $# )); do case "$1" in -keyout) echo key > "$2"; shift;; -out) echo crt > "$2"; shift;; esac; shift; done; }
+sleep() { :; }
+${body}
+ensure_app_certs`;
+  const once = () => {
+    try {
+      execFileSync('bash', ['-c', script], { env: { PATH: '/usr/bin:/bin', HOME_DIR: home }, encoding: 'utf8', stdio: 'pipe' });
+      return 0;
+    } catch (e) { return (e as { status: number }).status; }
+  };
+  assert.notEqual(once(), 0);
+  assert.ok(!existsSync(join(home, 'certs/idea.key')), 'the orphaned key is removed');
+  assert.equal(once(), 0);
+  assert.equal(readFileSync(join(home, 'certs/idea.key'), 'utf8'), 'key\n');
+  assert.equal(readFileSync(join(home, 'certs/idea.crt'), 'utf8'), 'crt\n');
+});

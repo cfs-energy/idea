@@ -76,6 +76,9 @@ def budget_row(project, budget, currency):
     forecast = amount(budget.get('forecasted_spend'), currency)
     if limit is None or spent is None or not budget.get('budget_name'):
         return None
+    # the budget read reports a missing forecast as 0, and a real forecast is never below spend
+    if forecast == 0 and spent > 0:
+        forecast = None
     pct = float(100 * forecast / limit) if forecast is not None and limit > 0 else None
     # no forecast yet: what has been spent is the best signal there is
     near = pct if pct is not None else float(100 * spent / limit) if limit > 0 else None
@@ -179,7 +182,12 @@ class InsightsService:
             check_deadline(deadline)
             reference = project.get('budget') or {}
             name = reference.get('budget_name')
-            if not name or reference.get('is_missing'):
+            # turning budgets off keeps the budget reference on the project
+            if (
+                not project.get('enable_budgets')
+                or not name
+                or reference.get('is_missing')
+            ):
                 continue
             if name not in fetched:
                 try:

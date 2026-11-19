@@ -106,6 +106,11 @@ export interface RoleSizing {
 export interface StorageMount {
   readonly hostPath?: string;
   readonly fileSystemId?: string;
+  /** The EFS mount helper options the hosts use (`tls`, `iam` in `mount_options`), for the task volume too. */
+  readonly tls?: boolean;
+  readonly iam?: boolean;
+  /** `ro` in the share's mount options: the tasks mount it read-only too, as the hosts do. */
+  readonly readOnly?: boolean;
   readonly mountPath: string;
   readonly name: string;
 }
@@ -202,6 +207,24 @@ export interface TaskRoleInput {
  * account-scoped task principal.
  */
 export function buildTaskRole(scope: ContainerScope, input: TaskRoleInput): { role: iam.Role; policy: Policy } {
+  const role = buildManagedOnlyTaskRole(scope, input);
+  const policy = new Policy(scope.ctx, input.policyConstructId, scope.stack, {
+    moduleId: input.policyModuleId,
+    policyTemplateName: input.policyTemplateName,
+    vars: { role_arn: role.roleArn, ...input.policyVars?.(role) },
+  });
+  role.attachInlinePolicy(policy);
+  return { role, policy };
+}
+
+/**
+ * A task identity holding only the instance managed policies (command sessions and the metrics
+ * agent), for a task whose own process makes no AWS call.
+ */
+export function buildManagedOnlyTaskRole(
+  scope: ContainerScope,
+  input: Pick<TaskRoleInput, "constructId" | "name" | "description" | "managedPolicyArns">,
+): iam.Role {
   const role = new iam.Role(scope.stack, input.constructId, {
     assumedBy: ecsTasksPrincipal(scope),
     description: input.description,
@@ -210,12 +233,6 @@ export function buildTaskRole(scope: ContainerScope, input: TaskRoleInput): { ro
     ),
     roleName: taskRoleName(scope, input.name),
   });
-  const policy = new Policy(scope.ctx, input.policyConstructId, scope.stack, {
-    moduleId: input.policyModuleId,
-    policyTemplateName: input.policyTemplateName,
-    vars: { role_arn: role.roleArn, ...input.policyVars?.(role) },
-  });
-  role.attachInlinePolicy(policy);
   addCommonTags(scope.ctx, role, scope.ctx.moduleId);
   // The inline policy carries its own suppression; the default policy holds the CDK grants the
   // stack adds for the task's queues, streams and log groups.
@@ -224,7 +241,7 @@ export function buildTaskRole(scope: ContainerScope, input: TaskRoleInput): { ro
     [{ rule_id: "AwsSolutions-IAM5", reason: "The default policy holds the CDK grants for the task's queues, streams and log groups, which are per-resource wildcards." }],
     true,
   );
-  return { role, policy };
+  return role;
 }
 
 /**
@@ -310,31 +327,37 @@ export function roleSizing(scope: ContainerScope, role: ContainerRole): RoleSizi
 
 // Hosts serve all control plane modules, with no project or queue context.
 // Apply the bootstrap's scope precedence so combined scopes retain their restrictions.
-export function inControlPlaneScope(storage: Record<string, unknown>): boolean {
+// A task passes its own module, so module-scoped storage reaches only that module's task.
+export function inControlPlaneScope(storage: Record<string, unknown>, moduleName?: string): boolean {
   const scope = Array.isArray(storage["scope"]) ? storage["scope"] : [];
   const modules = Array.isArray(storage["modules"]) ? storage["modules"] : [];
   if (scope.length === 0 || scope.includes("cluster")) return true;
   if (scope.includes("project")) return false;
   if (scope.includes("module")) {
-    return modules.length === 0 || modules.some((name) =>
-      ["cluster-manager", "scheduler", "virtual-desktop-controller", "bastion-host"].includes(String(name)));
+    return modules.length === 0 || modules.some((name) => moduleName === undefined
+      ? ["cluster-manager", "scheduler", "virtual-desktop-controller", "bastion-host"].includes(String(name))
+      : String(name) === moduleName);
   }
   return false;
 }
 
-export function storageMounts(config: IdeaContext["config"]): StorageMount[] {
+export function storageMounts(config: IdeaContext["config"], moduleName?: string): StorageMount[] {
   const mounts: StorageMount[] = [];
   const storageRoot = config.getConfig("shared-storage", {}) ?? {};
   for (const [name, storage] of Object.entries(storageRoot)) {
     if (!isRecord(storage) || typeof storage["mount_dir"] !== "string" || typeof storage["provider"] !== "string") {
       continue;
     }
-    if (!inControlPlaneScope(storage)) continue;
+    if (!inControlPlaneScope(storage, moduleName)) continue;
     const mountPath = storage["mount_dir"];
     if (storage["provider"] === "efs") {
       const efs = storage["efs"];
       if (isRecord(efs) && typeof efs["file_system_id"] === "string") {
-        mounts.push({ fileSystemId: efs["file_system_id"], mountPath, name });
+        // `efs _netdev,noresvport,tls,iam 0 0`: the second field holds the helper's options
+        const options = String(storage["mount_options"] ?? "").trim().split(/\s+/)[1]?.split(",") ?? [];
+        const iam = options.includes("iam");
+        // IAM authorization needs an encrypted connection, as the mount helper requires too
+        mounts.push({ fileSystemId: efs["file_system_id"], mountPath, name, tls: iam || options.includes("tls"), iam, readOnly: options.includes("ro") });
       }
     }
     if (
@@ -353,12 +376,18 @@ export function addStorageMounts(
   scope: ContainerScope,
   taskDefinition: ecs.Ec2TaskDefinition,
   container: ecs.ContainerDefinition,
+  /** The task's own module: module-scoped storage is mounted only into a module it names. */
+  moduleName: "bastion-host" | "cluster-manager" | "scheduler" | "virtual-desktop-controller",
 ): void {
-  for (const mount of storageMounts(scope.ctx.config)) {
+  for (const mount of storageMounts(scope.ctx.config, moduleName)) {
     const volumeName = `storage-${mount.name}`;
     if (mount.fileSystemId !== undefined) {
       taskDefinition.addVolume({
-        efsVolumeConfiguration: { fileSystemId: mount.fileSystemId },
+        efsVolumeConfiguration: {
+          fileSystemId: mount.fileSystemId,
+          ...(mount.tls ? { transitEncryption: "ENABLED" } : {}),
+          ...(mount.iam ? { authorizationConfig: { iam: "ENABLED" } } : {}),
+        },
         name: volumeName,
       });
     } else if (mount.hostPath !== undefined) {
@@ -366,7 +395,7 @@ export function addStorageMounts(
     } else {
       continue;
     }
-    container.addMountPoints({ containerPath: mount.mountPath, readOnly: false, sourceVolume: volumeName });
+    container.addMountPoints({ containerPath: mount.mountPath, readOnly: mount.readOnly === true, sourceVolume: volumeName });
   }
   if (scope.ctx.config.getBool("ecs.datadog.enabled", false)) {
     taskDefinition.addVolume({ host: { sourcePath: "/var/run/datadog" }, name: "datadog" });

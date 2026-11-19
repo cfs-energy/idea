@@ -31,6 +31,7 @@ from ideascheduler.app.images.compute_image_canary import (
     ComputeImageCanary,
     PIPELINE_SETTINGS,
     VALIDATION_QUEUE_PREFIX,
+    is_validation_profile,
 )
 
 
@@ -38,10 +39,12 @@ from ideadatamodel import (
     BuildComputeImageRequest,
     ImageBuildRecord,
     ImageInventoryRow,
+    constants,
     exceptions,
 )
 from ideasdk.aws.image_builds import (
     BUILD_STATUS_BUILDING,
+    console_host,
     COMPUTE_IMAGE_PREFIX,
     bake_overdue,
     needs_attempt_clock,
@@ -711,7 +714,7 @@ class ComputeImageService:
                     f'/{self.context.cluster_name()}/{self.context.module_id()}/ami-builder',
                     safe='',
                 )
-                record.log_link = f'https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}#logsV2:log-groups/log-group/{group}'
+                record.log_link = f'https://{console_host(region)}/cloudwatch/home?region={region}#logsV2:log-groups/log-group/{group}'
                 progress({'status': 'building'})
                 image_id = builder.build(progress)
                 progress({'image_id': image_id})
@@ -747,11 +750,15 @@ class ComputeImageService:
                 return  # The new leader resumes the persisted row.
             if self._moved(record):
                 return  # the time limit already read the builder and counted the failure
-            self._logger.exception('Compute image validation failed')
             reason = (
                 getattr(error, 'message', None)
                 or str(error)
                 or 'Compute image validation failed.'
+            )
+            # a classified failure is one line; only an unexpected error keeps its traceback
+            self._logger.error(
+                f'{record.base_os}/{record.architecture}: compute image validation failed: {reason}',
+                exc_info=not isinstance(error, exceptions.SocaException),
             )
             record.error = with_cause(
                 reason,
@@ -1082,7 +1089,7 @@ class ComputeImageService:
         left = set()
         for profile in self.context.queue_profiles.list_queue_profiles():
             params = profile.default_job_params
-            if (profile.name or '').startswith(VALIDATION_QUEUE_PREFIX) and (
+            if is_validation_profile(profile) and (
                 params is None or params.instance_ami not in candidates
             ):
                 # no waiting here: this thread also enforces the bake time limit, and a
@@ -1106,6 +1113,11 @@ class ComputeImageService:
             .describe_instances(
                 Filters=[
                     {'Name': 'tag-key', 'Values': [IMAGE_BUILD_TAG]},
+                    # the module id is the same on every cluster in the account
+                    {
+                        'Name': f'tag:{constants.IDEA_TAG_CLUSTER_NAME}',
+                        'Values': [self.context.cluster_name()],
+                    },
                     {'Name': 'tag:idea:ModuleId', 'Values': [self.context.module_id()]},
                     {'Name': 'instance-state-name', 'Values': ['pending', 'running']},
                 ]

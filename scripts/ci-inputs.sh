@@ -2,14 +2,15 @@
 set -euo pipefail
 # Compare with the PR base, including both sides of renames; manual and push runs prove everything.
 if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
-  git diff --no-renames --name-only "$PR_BASE_SHA" HEAD > "$RUNNER_TEMP/ci-changed-paths"
+  # core.quotePath=false: a non-ASCII path stays as written, so the prefixes below still match it
+  git -c core.quotePath=false diff --no-renames --name-only "$PR_BASE_SHA" HEAD > "$RUNNER_TEMP/ci-changed-paths"
 else
   printf '%s\n' source/idea/ideactl/ > "$RUNNER_TEMP/ci-changed-paths"
 fi
 images=false
 release=false
 runtimes=false
-if grep -Eq '(^|/)([^/]*Dockerfile[^/]*|docker-bake[^/]*)$|^(deployment/ecr/|requirements/|software_versions.yml$|mise(\.[^/]+)?\.toml$|hk\.pkl$|source/idea/|scripts/|IDEA_VERSION.txt$|\.dockerignore$|\.github/)' "$RUNNER_TEMP/ci-changed-paths"; then
+if grep -Eq '(^|/)([^/]*Dockerfile[^/]*|docker-bake[^/]*)$|^(deployment/ecr/|requirements/|software_versions.yml$|mise(\.[^/]+)?\.toml$|hk\.pkl$|source/idea/|scripts/|IDEA_VERSION.txt$|idea-admin\.sh$|\.dockerignore$|\.github/)' "$RUNNER_TEMP/ci-changed-paths"; then
   images=true
 fi
 if grep -Eq '^(source/idea/(ideactl/|idea-bootstrap/)|software_versions.yml$|mise(\.[^/]+)?\.toml$|hk\.pkl$|IDEA_VERSION.txt$|scripts/|\.github/)' "$RUNNER_TEMP/ci-changed-paths"; then

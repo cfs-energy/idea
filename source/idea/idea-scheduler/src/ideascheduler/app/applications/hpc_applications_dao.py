@@ -25,6 +25,11 @@ from ideadatamodel import (
 )
 
 
+STOCK_JOB_NAME_PATTERN = '^[A-Za-z0-9_-]{3,50}$'
+# as it appears inside the stored JSON text of a form template
+STOCK_JOB_NAME_PATTERN_OLD = '^([A-Za-z0-9_-]+){3,50}$'
+
+
 class HpcApplicationsDAO:
     def __init__(self, context: ideascheduler.AppContext, logger=None):
         self.context = context
@@ -85,6 +90,12 @@ class HpcApplicationsDAO:
         if not lite:
             form_template = Utils.get_value_as_string('form_template', db_application)
             if form_template is not None:
+                # the stock job-name pattern shipped before 26.11.2 nests a repetition,
+                # so a long name with one bad character froze the user's tab, and it never
+                # enforced the 50 character limit (HPC-26). stored copies are read fixed.
+                form_template = form_template.replace(
+                    STOCK_JOB_NAME_PATTERN_OLD, STOCK_JOB_NAME_PATTERN
+                )
                 application.form_template = SocaUserInputModuleMetadata(
                     **Utils.from_json(form_template)
                 )

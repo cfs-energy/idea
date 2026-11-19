@@ -8,7 +8,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { vi } from 'vitest';
 import { ToastContainer } from 'react-toastify';
 import Uppy from '@uppy/core';
-import FileBrowser, { describeUploadFailure, describeUploadOutcome } from './file-browser';
+import FileBrowser, { createUploader, describeUploadFailure, describeUploadOutcome } from './file-browser';
 import { decodeFileContent, encodeFileContent } from '../../common/utils';
 import { FILE_BROWSER_PAGE_SIZE } from './file-browser-table';
 import { initTestAppContext } from '../../test-support';
@@ -90,6 +90,8 @@ interface HarnessOptions {
     listFailure?: any;
     /** The signed-in user's home directory. Unknown by default, which leaves the trail starting at root. */
     home?: string;
+    /** The listing was cut short by the server. */
+    truncated?: boolean;
 }
 
 /** Renders the page with every backend call stubbed. Returns the API spies, the flashbar spy and a
@@ -111,7 +113,7 @@ function renderFileBrowser(options: HarnessOptions = {}) {
     const client = context.client().fileBrowser();
     const api = {
         getStorageUsage: vi.spyOn(client, 'getStorageUsage').mockResolvedValue({state: 'computing', home: HOME}),
-        listFiles: vi.spyOn(client, 'listFiles').mockResolvedValue({ cwd: cwd, listing: listing } as any),
+        listFiles: vi.spyOn(client, 'listFiles').mockResolvedValue({ cwd: cwd, listing: listing, truncated: options.truncated } as any),
         readFile: vi.spyOn(client, 'readFile').mockResolvedValue({ content: btoa('hello') } as any),
         saveFile: vi.spyOn(client, 'saveFile').mockResolvedValue({} as any),
         createFile: vi.spyOn(client, 'createFile').mockResolvedValue({} as any),
@@ -749,7 +751,7 @@ describe('file browser', () => {
             handler('complete')({});
 
             expect(infoSpy).toHaveBeenCalledWith(
-                'Saved my data.csv as my_data.csv. Skipped µ: no usable characters in the name.',
+                'Saved my data.csv as my_data.csv. Not saved: µ. The name or folder path could not be used: rename it and upload it again.',
                 'warning',
                 15000
             );
@@ -1956,3 +1958,49 @@ describe('file browser', () => {
 /* Not covered: grid view, sort and search as features in their own right (asserting row order is the
  * coupling this file avoids), Uppy transferring bytes, the File Transfer tab, dark mode, icons, drag
  * and drop (off today), and deleting at the filesystem root. Check those by hand. */
+
+describe('the upload request', () => {
+    const sentNames = (files: {name: string, relativePath?: string | null}[]) => {
+        const uppy = createUploader('https://portal.example/upload?cwd=/home/marker', 'marker-token');
+        for (const file of files) {
+            uppy.addFile({name: file.name, type: 'text/plain', data: new Blob(['marker']), meta: {relativePath: file.relativePath ?? null}});
+        }
+        const xhr: any = uppy.getPlugin('XHRUpload');
+        const body: FormData = xhr.createBundledUpload(uppy.getFiles(), xhr.opts);
+        return body.getAll('files[]').map(part => (part as File).name);
+    };
+
+    it('sends each file of a chosen folder under its path from that folder', () => {
+        expect(sentNames([
+            {name: 'a.jpg', relativePath: 'photos/2024/a.jpg'},
+            {name: 'a.jpg', relativePath: 'photos/2025/a.jpg'},
+            {name: 'notes.txt', relativePath: 'photos/notes.txt'},
+        ])).toEqual(['photos/2024/a.jpg', 'photos/2025/a.jpg', 'photos/notes.txt']);
+    });
+
+    it('sends a plain file under its own name, as before', () => {
+        expect(sentNames([{name: 'report.pdf'}, {name: 'data.csv', relativePath: 'data.csv'}])).toEqual(['report.pdf', 'data.csv']);
+    });
+
+    it('lists every file the server did not save', () => {
+        const skipped = Array.from({length: 12}, (_, i) => `photos/bad${i}`);
+        expect(describeUploadOutcome({files_skipped: skipped})).toBe(`Not saved: ${skipped.slice(0, 10).join(', ')}, and 2 more. The name or folder path could not be used: rename it and upload it again.`);
+    });
+});
+
+describe('a folder listed only in part', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('says the folder has more items and where to see them', async () => {
+        renderFileBrowser({ truncated: true });
+        await screen.findByText('notes.txt');
+        expect(await screen.findByText('This folder has more items than are shown')).toBeInTheDocument();
+        expect(screen.getByText(/Showing the first 10,000 items/)).toBeInTheDocument();
+    });
+
+    it('says nothing for a complete listing', async () => {
+        renderFileBrowser();
+        await screen.findByText('notes.txt');
+        expect(screen.queryByText('This folder has more items than are shown')).not.toBeInTheDocument();
+    });
+});

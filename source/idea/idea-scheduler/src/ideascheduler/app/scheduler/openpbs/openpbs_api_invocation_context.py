@@ -36,6 +36,7 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api import (
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
 from ideascheduler.app.scheduler import SocaJobBuilder
+from ideascheduler.app.scheduler.job_param_builder import JOB_UID_PATTERN
 from ideascheduler.app.scheduler.pbs_select import (
     select_chunks,
     chunk_resources,
@@ -86,6 +87,53 @@ class OpenPBSAPIInvocationContext:
 
         self._job_submission_result = SubmitJobResult()
 
+    @staticmethod
+    def _default_existing_fsx(queue_profile) -> Optional[str]:
+        default_params = queue_profile.default_job_params if queue_profile else None
+        default_fsx = default_params.fsx_lustre if default_params else None
+        return default_fsx.existing_fsx if default_fsx else None
+
+    def _default_existing_fsx_of(self, queue_name: Optional[str]) -> Optional[str]:
+        if Utils.is_empty(queue_name):
+            return None
+        try:
+            return self._default_existing_fsx(
+                self.app_context.queue_profiles.get_queue_profile(queue_name=queue_name)
+            )
+        except exceptions.SocaException:
+            # a source queue with no profile pinned nothing
+            return None
+
+    def _refuse_move_keeping_another_queues_fsx(
+        self, queue_profile, queue_name: str, moved_fsx: Optional[str]
+    ):
+        """
+        Resource_List is read-only to a movejob hook (the PBS hooks matrix, copied in
+        openpbs_hook_handler.JOB_PARAM_EVENT_TYPE_MATRIX), so the target queue's value
+        cannot be relied on to replace the one the job carries. a job carrying a queue's
+        pinned file system into a queue that restricts fsx_lustre and resolves to another
+        value would run with it: the move is refused instead (rereview3 S2)
+        """
+        if not moved_fsx:
+            return
+        params = queue_profile.queue_management_params if queue_profile else None
+        restricted = Utils.get_as_list(
+            params.restricted_parameters if params else None, []
+        )
+        if constants.JOB_PARAM_FSX_LUSTRE not in restricted:
+            return
+        fsx = self._job.params.fsx_lustre if self._job.params else None
+        resolved = fsx.existing_fsx if fsx is not None and fsx.enabled else None
+        if resolved == moved_fsx:
+            return
+        self.add_job_validation_entry(
+            error_code=errorcodes.INVALID_PARAMS,
+            message=f'This job uses the FSx for Lustre file system {moved_fsx}, the '
+            f'default of queue {self.event.src_queue}. Queue {queue_name} does not let '
+            f'jobs set fsx_lustre, so the job cannot keep it there. Submit the job to '
+            f'queue {queue_name} instead of moving it.',
+        )
+
     def build_and_validate_job(self):
         try:
             queue_name = None
@@ -113,6 +161,25 @@ class OpenPBSAPIInvocationContext:
             # create temporary job, in case of queue profile not found or disabled errors
             # and correlate with job submission handler
             self._job = SocaJob(job_uid=job_uid, owner=self._owner_username())
+
+            # job_uid names the bootstrap package a compute node downloads as root, so a
+            # value carried on the job must keep the letters, digits, underscores and dashes it is made of.
+            if not JOB_UID_PATTERN.fullmatch(str(job_uid)):
+                raise exceptions.invalid_params(
+                    f'job_uid can only contain letters, digits, underscores and dashes: ({job_uid})'
+                )
+            # the completion record is stored under job_uid, so a value the submitter
+            # chose must not be another job's: that job's record would be replaced
+            supplied_uid = (
+                self.event.type == 'queuejob'
+                and self.event.job is not None
+                and Utils.is_not_empty(self.event.job.get_job_uid())
+            )
+            if supplied_uid and self.app_context.job_cache.is_job_uid_taken(job_uid):
+                raise exceptions.invalid_params(
+                    f'job_uid {job_uid} already belongs to another job. Leave job_uid '
+                    f'out and IDEA assigns one.'
+                )
 
             # if no queue or project is specified during job submission, default queue name to 'normal'
             if Utils.is_empty(queue_name):
@@ -144,6 +211,29 @@ class OpenPBSAPIInvocationContext:
             ):
                 self.event.job.project = project_name
 
+            # the queue's default existing FSx was written onto the job at submission; on
+            # an edit or move that does not touch fsx_lustre it is the queue's value, not
+            # the job's, so it is left to the default again: read back as the job's own it
+            # was refused on queues that restrict fsx_lustre (A-S3). a move carries the
+            # whole job in event.job, so there the value equal to the source or target
+            # queue's default is the pinned one (S1)
+            pinned_values = {self._default_existing_fsx(queue_profile)}
+            if self.event.type == 'movejob':
+                pinned_values.add(self._default_existing_fsx_of(self.event.src_queue))
+            pinned_values.discard(None)
+            pinned = old_job_params.get('fsx_lustre')
+            if 'fsx_lustre' not in job_params and pinned and pinned in pinned_values:
+                old_job_params = {
+                    k: v for k, v in old_job_params.items() if k != 'fsx_lustre'
+                }
+            moved_fsx = None
+            if (
+                self.event.type == 'movejob'
+                and job_params.get('fsx_lustre')
+                and job_params['fsx_lustre'] in pinned_values
+            ):
+                moved_fsx = job_params['fsx_lustre']
+                job_params = {k: v for k, v in job_params.items() if k != 'fsx_lustre'}
             job_params = {**old_job_params, **job_params}
             self._job_builder = SocaJobBuilder(
                 context=self.app_context,
@@ -171,6 +261,9 @@ class OpenPBSAPIInvocationContext:
 
             self._job_validation_result: Optional[JobValidationResult] = None
             self._job_validation_result = self.job_builder.validate()
+            self._refuse_move_keeping_another_queues_fsx(
+                queue_profile, queue_name, moved_fsx
+            )
 
         except exceptions.SocaException as e:
             if e.error_code in (

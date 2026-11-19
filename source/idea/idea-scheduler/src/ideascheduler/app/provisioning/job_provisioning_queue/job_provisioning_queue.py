@@ -45,6 +45,10 @@ LIMIT_CHECK_NOT_OK_JOB_GROUP = 2
 QUEUE_LIMIT_REASON = 'queue is at its configured limit'
 
 
+# wider than any score or queue time (seconds) a job carries, so order always wins
+QUEUE_ORDER_SPAN = 10**15
+
+
 class JobProvisioningQueueEmpty(Exception):
     pass
 
@@ -67,7 +71,10 @@ class RoundRobinPriorityQueue:
 
     """
 
-    def __init__(self, maxsize_per_queue=10000):
+    # unbounded (SP-08): a full queue blocked put() inside both locks, so the consumer that
+    # needed the lock to drain it never ran and provisioning stopped cluster-wide, at start
+    # up too. JobProvisioningQueue keeps one entry per job id, which is the bound.
+    def __init__(self, maxsize_per_queue=0):
         self._queue_map: Dict[str, RoundRobinPriorityQueueEntry] = {}
         self._queues: List[RoundRobinPriorityQueueEntry] = []
         self._lock = RLock()
@@ -83,7 +90,8 @@ class RoundRobinPriorityQueue:
             try:
                 entry = self._queues[self._index]
 
-                queued_job = entry.priority_queue.get(timeout=timeout)
+                # never wait while holding the lock: put() needs it to make progress
+                queued_job = entry.priority_queue.get_nowait()
 
                 self._index += 1
                 self._index = self._index % len(self._queues)
@@ -96,8 +104,10 @@ class RoundRobinPriorityQueue:
                 del self._queues[self._index]
                 self._index -= 1
                 self._index = max(0, self._index)
-
-                raise e
+                empty = e
+        # the wait the blocking get gave, outside the lock
+        time.sleep(min(timeout, 0.1) if timeout else 0)
+        raise empty
 
     def put(self, item: QueuedJob):
         with self._lock:
@@ -120,7 +130,7 @@ class RoundRobinPriorityQueue:
         """
         if Utils.is_not_empty(key):
             with self._lock:
-                if key in self._queues:
+                if key in self._queue_map:
                     return self._queue_map[key].priority_queue.qsize()
                 return 0
         else:
@@ -152,9 +162,7 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
         for queue_name in self.queue_profile.queues:
             self._applicable_queues.add(queue_name)
 
-        self._queue: RoundRobinPriorityQueue = RoundRobinPriorityQueue(
-            maxsize_per_queue=10000
-        )
+        self._queue: RoundRobinPriorityQueue = RoundRobinPriorityQueue()
         self._queued_jobs: Dict[str, QueuedJob] = {}
         self._clear_processed_jobs_timestamp = None
 
@@ -177,17 +185,18 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
             1 - if the job being queued belongs to the 'high' priority queue
             3 - if the job being queued belongs to the 'low' priority queue
         """
-        queue_order = 0
-        for queue_name in self.queue_profile.queues:
-            queue_order += 1
-            if queue_name != queue_name:
-                continue
-            return queue_order
-
-        raise exceptions.SocaException(
-            error_code=errorcodes.GENERAL_ERROR,
-            message=f'queue_name not found: {queue_name}',
-        )
+        # the loop variable shadowed the argument, so every queue was order 1 (SCH-28)
+        queues = self.queue_profile.queues or []
+        for queue_order, name in enumerate(queues, start=1):
+            if name == queue_name:
+                return queue_order
+        if not queues:
+            raise exceptions.SocaException(
+                error_code=errorcodes.GENERAL_ERROR,
+                message=f'queue_name not found: {queue_name}',
+            )
+        # a job of a queue no longer listed (the profile changed) goes after the listed ones
+        return len(queues) + 1
 
     @property
     def queue_mode(self) -> SocaQueueMode:
@@ -242,12 +251,16 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
         return score + bonus_score
 
     def _get_job_priority(self, job: SocaJob) -> int:
+        # the queue's position is the primary key and the score or queue time orders jobs
+        # within it: score x order inverted the queues when a fair-share score went
+        # negative, which the default settings reach with two running jobs (B-S2)
         if self.queue_mode == SocaQueueMode.FAIRSHARE:
-            score = self._compute_fairshare_score(job=job)
-            priority = score * self.get_queue_order(queue_name=job.queue)
+            within = self._compute_fairshare_score(job=job)
         else:
-            timestamp = int(job.queue_time.timestamp())
-            priority = timestamp * self.get_queue_order(queue_name=job.queue)
+            within = int(job.queue_time.timestamp())
+        priority = int(
+            self.get_queue_order(queue_name=job.queue) * QUEUE_ORDER_SPAN + within
+        )
 
         # find a constant to break tie for jobs queued at the exact time.
         # job_id is a good candidate.
@@ -329,6 +342,14 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
     def _is_max_provisioned_instances_limit(
         self, job: SocaJob
     ) -> Optional[LimitCheckResult]:
+        # a shared-capacity job may run on idle nodes already counted here; the limit is
+        # enforced where nodes are added: BatchCapacityHelper for batch, with idle capacity
+        # allowed for, and ProvisionJobs.raise_if_past_instance_limit for a new non-batch
+        # shared stack (S2). checked here, the job
+        # was never taken, its own waiting kept the idle nodes up, and the profile stayed
+        # blocked behind it (B-B1)
+        if job.provisioning_options is not None and job.is_shared_capacity():
+            return None
         queue_params = self.queue_profile.queue_management_params
         count = self._context.instance_cache.get_queue_profile_instance_count(
             self.queue_type

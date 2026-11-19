@@ -1,4 +1,5 @@
 {
+  "test/cli/sea-runtime-cache.test.ts": "File modes and ownership are POSIX; Windows has no 0700 directory to check.",
   "test/cli/binary-smoke.test.ts": "The release executables and archives are build outputs, absent until the distribution build has run.",
   "test/stacks/cutover-killers.test.ts": "A Java runtime is optional only in a checkout that declares it has no prerequisites.",
   "test/config/backup-continuity.test.ts": "Captured deployed templates are private and optional.",

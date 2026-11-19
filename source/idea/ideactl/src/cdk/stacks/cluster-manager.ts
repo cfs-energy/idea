@@ -13,7 +13,7 @@
  * settings rows at boot, so it must not start before this stack has written them.
  */
 
-import { CustomResource, Duration, Fn } from 'aws-cdk-lib';
+import { Aws, CustomResource, Duration, Fn } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -59,7 +59,7 @@ import { OAuthClientIdAndSecret } from '../constructs/directory-service.ts';
 import {
   ExistingSocaCluster
 } from '../constructs/existing-resources.ts';
-import { WebPortalSecurityGroup } from '../constructs/network.ts';
+import { admitToOpenSearch, WebPortalSecurityGroup } from '../constructs/network.ts';
 import { renderPolicy } from '../policy.ts';
 
 const MODULE_CLUSTER_MANAGER = 'cluster-manager';
@@ -88,6 +88,8 @@ export class ClusterManagerStack extends IdeaBaseStack {
   bedrockInvocationLogGroupName: string | undefined;
   bedrockInvocationLogRole: Role | undefined;
   clusterManagerSecurityGroup!: WebPortalSecurityGroup;
+  /** The rule that admits this service to OpenSearch, when the cluster has analytics. */
+  openSearchIngress: ec2.CfnSecurityGroupIngress | undefined;
   webPortalEndpoint!: CustomResource;
   externalEndpoint!: CustomResource;
   internalEndpoint!: CustomResource;
@@ -390,6 +392,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
     );
     // The rule exists to reach a host. It goes when the last host does, not when routing moves.
     this.removeBastionHostIngressRule(this.clusterManagerSecurityGroup);
+    this.openSearchIngress = admitToOpenSearch(this.context, this.stack, this.clusterManagerSecurityGroup, 'cluster-manager');
   }
 
   private removeBastionHostIngressRule(securityGroup: ec2.SecurityGroup): void {
@@ -426,6 +429,28 @@ export class ClusterManagerStack extends IdeaBaseStack {
     const targetGroup = this.containerTargetGroups[index];
     if (targetGroup === undefined) throw new Error(`cluster-manager target group ${index} was not created`);
     return targetGroup.targetGroupArn;
+  }
+
+  /**
+   * Scratch cleanup and the stopped-desktop cleanup count a notice as given once SES has taken it,
+   * from a receipt row the cluster manager writes (notifications_service.py RECEIPT_TABLES): only
+   * rows keyed `delivered`, only in those two tables.
+   */
+  private receiptStatements(): iam.PolicyStatement[] {
+    const config = this.context.config;
+    const table = (moduleName: string, name: string) =>
+      `arn:${Aws.PARTITION}:dynamodb:${Aws.REGION}:${Aws.ACCOUNT_ID}:table/${this.clusterName}.${config.moduleId(moduleName)}.${name}`;
+    const resources = [
+      ...(config.isModuleEnabled('scheduler') ? [table('scheduler', 'scratch-cleanup')] : []),
+      ...(config.isModuleEnabled('virtual-desktop-controller') ? [table('virtual-desktop-controller', 'desktop-cleanup')] : []),
+    ];
+    if (resources.length === 0) return [];
+    return [new iam.PolicyStatement({
+      sid: 'NoticeDeliveryReceipts',
+      actions: ['dynamodb:PutItem'],
+      resources,
+      conditions: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['delivered'] } },
+    })];
   }
 
   /**
@@ -507,9 +532,23 @@ export class ClusterManagerStack extends IdeaBaseStack {
           'acm:DescribeCertificate',
           'secretsmanager:ListSecrets',
           'ds:DescribeDirectories',
+          // the API server trusts the forwarded client address only from the load balancer's
+          // subnets (ideasdk soca_server.py _load_balancer_networks)
+          'ec2:DescribeSubnets',
         ],
         resources: ['*'],
-      }), ...this.passwordSecretStatements()],
+      }),
+      // The cluster manager writes no host package or deployment object in the cluster bucket
+      // (hosts run those as root, deployment reads them); the template is at its size limit.
+      new iam.PolicyStatement({
+        sid: 'DeploymentObjectsWrittenByDeployment',
+        effect: iam.Effect.DENY,
+        actions: ['s3:PutObject', 's3:DeleteObject'],
+        resources: ['idea/*', 'cdk/*', 'values/*'].map((prefix) => `arn:${Aws.PARTITION}:s3:::${
+          this.context.config.getString('cluster.cluster_s3_bucket', undefined, { required: true })}/${prefix}`),
+      }),
+      ...this.receiptStatements(),
+      ...this.passwordSecretStatements()],
       tables: [],
       projects: [],
     };
@@ -569,7 +608,7 @@ export class ClusterManagerStack extends IdeaBaseStack {
       memoryLimitMiB: sizing.memory,
     });
     container.addPortMappings({ containerPort: 8443, protocol: ecs.Protocol.TCP });
-    addStorageMounts(scope, taskDefinition, container);
+    addStorageMounts(scope, taskDefinition, container, "cluster-manager");
     attachApplicationFileLogs(scope, {
       idPrefix: 'cluster-manager',
       logGroupName,
@@ -681,6 +720,9 @@ export class ClusterManagerStack extends IdeaBaseStack {
 
   buildClusterSettings(): void {
     const clusterSettings: Record<string, unknown> = {
+      // The service's own OpenSearch rule, written once the rule exists: an analytics upgrade that
+      // drops the VPC-wide rule checks for it (deployment-helper refuseAnalyticsAheadOfServices).
+      ...(this.openSearchIngress === undefined ? {} : { opensearch_ingress_rule: this.openSearchIngress.ref }),
       deployment_id: this.deploymentId,
       client_id: this.oauth2ClientSecret.clientId.ref,
       client_secret: this.oauth2ClientSecret.clientSecret.ref,

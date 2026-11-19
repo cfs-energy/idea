@@ -362,3 +362,29 @@ def test_a_client_error_report_logs_no_user_or_token(env):
     assert env.created.token_id not in lines
     # every other namespace still names its caller
     assert 'actor:user-a|' in api_token_invocation(env, 'Auth.GetUser').get_log_tag()
+
+
+def test_a_refused_last_use_write_does_not_fail_the_request(env):
+    from botocore.exceptions import ClientError
+
+    env.table.update_item.side_effect = ClientError(
+        {'Error': {'Code': 'AccessDeniedException', 'Message': 'marker'}},
+        'UpdateItem',
+    )
+    env.service._api_token_cache.clear()
+    authorization = api_token_invocation(env, 'Auth.GetUser').get_authorization()
+    assert authorization.username == 'user-a'
+    env.table.update_item.assert_called_once()
+
+
+def test_a_token_minted_while_its_owners_tokens_were_deleted_is_refused(env):
+    # the scan that deletes the account's tokens has already passed this row when the
+    # cutoff lands: the cutoff alone must refuse it
+    row = env.rows[env.created.token_id]
+    user = env.users.get_item.return_value['Item']
+    env.users.get_item.return_value = {
+        'Item': {**user, 'sessions_revoked_on': (int(row['created_on']) + 1) * 1000}
+    }
+    env.service._api_token_cache.clear()
+    with pytest.raises(exceptions.SocaException):
+        api_token_invocation(env, 'Auth.GetUser').get_authorization()

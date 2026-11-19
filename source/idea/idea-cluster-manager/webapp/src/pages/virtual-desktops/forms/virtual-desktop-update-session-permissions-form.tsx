@@ -14,18 +14,36 @@
 import React, {Component, RefObject} from "react";
 import {Box, Button, Container, Form, Grid, Header, Modal, SpaceBetween} from "@cloudscape-design/components";
 import {ModalProps} from "@cloudscape-design/components/modal";
-import {SocaUserInputChoice, SocaUserInputParamMetadata, User, VirtualDesktopPermissionProfile, VirtualDesktopSession, VirtualDesktopSessionPermission, ListUsersInGroupResult} from "../../../client/data-model";
+import {SocaUserInputChoice, SocaUserInputParamMetadata, User, VirtualDesktopPermissionProfile, VirtualDesktopSession, VirtualDesktopSessionPermission} from "../../../client/data-model";
+import {listAllSessionPermissions, listAllUsersInGroups} from "../../../common/paging";
 import {AuthClient, ProjectsClient, VirtualDesktopClient} from "../../../client";
 import {AppContext} from "../../../common";
 import {IdeaFormField, IdeaFormFieldLifecycleEvent, IdeaFormFieldStateChangeEvent, IdeaFormFieldStateChangeEventHandler} from "../../../components/form-field";
 import Utils from "../../../common/utils";
+import {Constants} from "../../../common/constants";
 import {faTrash, faUndo} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import {IconDefinition} from "@fortawesome/fontawesome-svg-core";
 import VirtualDesktopUtilsClient from "../../../client/virtual-desktop-utils-client";
 
+// a group share is keyed group:<name> by the controller; names cannot hold ':', so it never meets a username
+export const GROUP_ACTOR_PREFIX = 'group:'
+
+/** Recipients to choose from: people by username, and groups shown and keyed as groups. */
+export function recipientChoices(users: User[], groups: string[]): SocaUserInputChoice[] {
+    return [
+        ...Utils.generateUserSelectionChoices(users),
+        ...groups.map(group => ({
+            title: `Group: ${group}`,
+            description: 'Every member of this group who may use desktops and is in this project',
+            value: `${GROUP_ACTOR_PREFIX}${group}`
+        }))
+    ]
+}
+
 export interface PermissionRowProps {
     usersList: User[]
+    groupsList: string[]
     permissionProfileList: VirtualDesktopPermissionProfile[]
     existing: boolean
     row?: SessionPermissionRow
@@ -233,7 +251,7 @@ class PermissionRow extends Component<PermissionRowProps, PermissionRowState> {
                             validate: {
                                 required: true
                             },
-                            choices: Utils.generateUserSelectionChoices(this.props.usersList)
+                            choices: recipientChoices(this.props.usersList, this.props.groupsList)
                         }
                     }/>
                 <IdeaFormField
@@ -277,6 +295,8 @@ export interface UpdateSessionPermissionModalProps {
 export interface UpdateSessionPermissionModalState {
     showModal: boolean
     users: User[]
+    // groups a desktop can be shared with: the project's groups, and any group already shared
+    groups: string[]
     userListLoaded: boolean
     permissionProfiles: VirtualDesktopPermissionProfile[]
     permissionProfilesLoaded: boolean
@@ -292,7 +312,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
     allRowValues: {
         [k: string]: {
             row_id: string,
-            action: 'create' | 'delete' | 'update',
+            action: 'create' | 'delete' | 'update' | 'unchanged',
             actor?: string | undefined,
             profileId?: string | undefined,
             expiryDate?: string | undefined
@@ -309,6 +329,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
             showModal: false,
             permissionProfiles: [],
             users: [],
+            groups: [],
             allRows: {},
             visibleRows: {},
             existingPermissions: [],
@@ -339,57 +360,25 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
     }
 
     isVdiAuthorizedUser(user: User): boolean {
-        // Check if user is cluster administrator
-        if (user.sudo || user.username?.includes('clusteradmin')) {
-            return true
-        }
-
-        // Check if user is member of VDI groups
-        const vdiGroups = ['vdc-users-module-group', 'vdc-administrators-module-group']
+        // the desktop module's user and administrator groups, the groups the server checks a recipient against
+        const moduleId = Utils.getModuleId(Constants.MODULE_VIRTUAL_DESKTOP_CONTROLLER)
+        const vdiGroups = [Utils.getUserGroupName(moduleId), Utils.getAdministratorGroup(moduleId)]
         const userGroups = user.additional_groups || []
 
         return vdiGroups.some(vdiGroup => userGroups.includes(vdiGroup))
     }
 
     async fetchAllUsersInGroup(groupNames: string[]) {
-        let allUsers: User[] = []
-        let filteredUsers: User[] = []
-        let cursor: string | undefined = undefined
         const currentUsername = AppContext.get().auth().getUsername()
-
-        // Fetch all pages of users using cursor-based pagination
-        do {
-            try {
-                const response: ListUsersInGroupResult = await this.getAuthClient().listUsersInGroup({
-                    group_names: groupNames,
-                    paginator: {
-                        page_size: 1000,
-                        cursor: cursor
-                    }
-                })
-
-                // Add users from this page (excluding current user)
-                if (response.listing) {
-                    for (const user of response.listing) {
-                        if (currentUsername === user.username) {
-                            continue
-                        }
-                        allUsers.push(user)
-                    }
-                }
-
-                // Get cursor for next page
-                cursor = response.paginator?.cursor
-            } catch (error) {
-                this.accessLoadFailed()
-                break
-            }
-        } while (cursor) // Continue while there are more pages
-
-        // Filter to only include VDI-authorized users
-        filteredUsers = allUsers.filter(user => this.isVdiAuthorizedUser(user))
-
-        console.log(`Filtered ${filteredUsers.length} VDI-authorized users out of ${allUsers.length} total project members`)
+        let allUsers: User[]
+        try {
+            allUsers = await listAllUsersInGroups(request => this.getAuthClient().listUsersInGroup(request), groupNames)
+        } catch (error) {
+            // a partial list would let Save run without everyone who may be shown
+            this.accessLoadFailed()
+            return
+        }
+        const filteredUsers = allUsers.filter(user => user.username !== currentUsername && this.isVdiAuthorizedUser(user))
 
         this.setState({
             users: filteredUsers,
@@ -403,6 +392,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         this.getProjectsClient().getProject({
             project_id: this.props.session.project?.project_id
         }).then(response => {
+            this.setState({groups: response.project?.ldap_groups ?? []})
             this.fetchAllUsersInGroup(response.project?.ldap_groups!)
         }).catch(this.accessLoadFailed)
 
@@ -416,14 +406,11 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                 })
             }).catch(this.accessLoadFailed)
 
-        this.getVirtualDesktopClient().listSessionPermissions({
-            idea_session_id: this.props.session?.idea_session_id,
-            paginator: {
-                page_size: 100
-            }
-        }).then(response => {
+        listAllSessionPermissions(request => this.getVirtualDesktopClient().listSessionPermissions(request), {
+            idea_session_id: this.props.session?.idea_session_id
+        }).then(listing => {
             this.setState({
-                existingPermissions: response.listing!,
+                existingPermissions: listing,
                 existingPermissionsLoaded: true
             }, () => {
                 this.createInitRows()
@@ -457,7 +444,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
 
         if (row.existing) {
             if (buttonState === 'undo') {
-                this.allRowValues[row_id].action = 'update'
+                this.allRowValues[row_id].action = this.existingRowAction(row_id)
             } else {
                 this.allRowValues[row_id].action = 'delete'
             }
@@ -506,12 +493,18 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         return isUnique
     }
 
+    /** An existing grant is sent as an update only when its profile or expiry differs from what was loaded. */
+    existingRowAction(row_id: string): 'update' | 'unchanged' {
+        const stored = this.state.allRows[row_id]?.permission
+        const values = this.allRowValues[row_id]
+        const changed = values.profileId !== stored?.permission_profile?.profile_id
+            || Date.parse(values.expiryDate!) !== Date.parse(stored?.expiry_date!)
+        return changed ? 'update' : 'unchanged'
+    }
+
     onStateChange(event: IdeaFormFieldStateChangeEvent) {
         let row_id = event.ref.props.group?.name!
         let row = this.state.allRows[row_id]
-        if (row.existing) {
-            this.allRowValues[row_id].action = 'update'
-        }
 
         if (event.param.name === 'permission-profile') {
             this.allRowValues[row_id].profileId = event.value
@@ -526,6 +519,10 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                 })
             }
         }
+        // a field publishes its loaded value when it mounts: that alone is not a change
+        if (row.existing && this.allRowValues[row_id].action !== 'delete') {
+            this.allRowValues[row_id].action = this.existingRowAction(row_id)
+        }
     }
 
     onLifeCycleChange(event: PermissionRowLifeCycleEvent) {
@@ -533,7 +530,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
         if (event.type === 'mounted') {
             this.allRowValues[row_id] = {
                 row_id: row_id,
-                action: 'create',
+                action: event.ref.props.existing ? 'unchanged' : 'create',
             }
             this.rowRegistry[row_id] = event.ref
         } else {
@@ -571,11 +568,12 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                         <Box color="text-status-info" fontSize="body-s">
                             <strong>Note:</strong> Only users who are authorized to access Virtual Desktops AND are members of this session's project can be granted access.
                             If you don't see a user, contact your administrator to grant them VDI permissions and ensure they're added to the project.
+                            A group share lets each member connect while they are in the group, may use desktops and are in this project; a group can have at most 100 members when it is shared.
                         </Box>
                         <Box textAlign="left">
                             <Button variant={"normal"} onClick={() => {
                                 this.createNewRow()
-                            }}> Add User </Button>
+                            }}> Add User or Group </Button>
                         </Box>
                         <Container
                             variant={"stacked"}>
@@ -588,6 +586,9 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                                             ref={ref}
                                             key={row.row_id}
                                             usersList={this.state.users}
+                                            groupsList={[...new Set([...this.state.groups, ...this.state.existingPermissions
+                                                .filter(permission => permission.actor_name?.startsWith(GROUP_ACTOR_PREFIX))
+                                                .map(permission => permission.actor_name!.slice(GROUP_ACTOR_PREFIX.length))])]}
                                             onLifeCycleChange={(event) => this.onLifeCycleChange(event)}
                                             permissionProfileList={this.state.permissionProfiles}
                                             existing={row.existing}
@@ -656,6 +657,23 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                                     return
                                 }
 
+                                // the request is built from what each row shows: a refused duplicate left the earlier
+                                // choice in allRowValues, so read the field again and refuse a recipient named twice
+                                const shown = new Set<string>()
+                                for (const key of Object.keys(this.allRowValues)) {
+                                    const rowValue = this.allRowValues[key]
+                                    if (!this.state.visibleRows[rowValue.row_id] || rowValue.action === 'delete') {
+                                        continue
+                                    }
+                                    const actor = Utils.asString(this.rowRegistry[key]?.registry['actor']?.getTypedValue())
+                                    if (shown.has(actor)) {
+                                        this.setError('', `${actor} is listed more than once. Remove one of the rows, then save.`)
+                                        return
+                                    }
+                                    shown.add(actor)
+                                    rowValue.actor = actor
+                                }
+
                                 let addedPermissions: VirtualDesktopSessionPermission[] = []
                                 let updatedPermissions: VirtualDesktopSessionPermission[] = []
                                 let deletedPermissions: VirtualDesktopSessionPermission[] = []
@@ -676,7 +694,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                                         idea_session_created_on: this.props.session.created_on,
                                         idea_session_type: this.props.session.type,
                                         actor_name: this.allRowValues[key].actor,
-                                        actor_type: 'USER',
+                                        actor_type: this.allRowValues[key].actor?.startsWith(GROUP_ACTOR_PREFIX) ? 'GROUP' : 'USER',
                                         expiry_date: `${Date.parse(this.allRowValues[key].expiryDate!)}`,
                                         permission_profile: {
                                             profile_id: this.allRowValues[key].profileId
@@ -687,7 +705,7 @@ class UpdateSessionPermissionModal extends Component<UpdateSessionPermissionModa
                                         addedPermissions.push(permission)
                                     } else if (rowValue.action === 'update') {
                                         updatedPermissions.push(permission)
-                                    } else {
+                                    } else if (rowValue.action === 'delete') {
                                         deletedPermissions.push(permission)
                                     }
                                 })

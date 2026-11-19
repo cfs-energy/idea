@@ -10,6 +10,7 @@ import ReportingPeriodPicker, {datesPicked, REPORTING_PERIODS, validateReporting
 import ReportingTable, {DEFAULT_COLUMNS, REPORTING_COLUMNS} from './reporting-table';
 import {InfoTitle, InsightTab} from './insights-components';
 import {readPreferences, savePreferences} from './insights-table';
+import {downloadCsv} from '../../common/csv';
 import {costsDescription, date, updated} from './reporting-format';
 
 export function ReportingContent() {
@@ -147,14 +148,7 @@ export function ReportingContent() {
             const result = await client.exportCsv({snapshot_id: summary.snapshot_id, ...(username ? {username} : {}), table, sort_by: sortBy, descending, columns: columns.filter(column => column.visible && REPORTING_COLUMNS.some(item => item.id === column.id)).map(column => column.id as ReportingColumn)});
             if (!mounted.current) return;
             if (activeSelection.current !== selected) {setExportStatus('CSV download cancelled because the report selection changed. Try again.'); return;}
-            const url = URL.createObjectURL(new Blob([result.content], {type: result.content_type}));
-            const link = document.createElement('a');
-            try {
-                link.href = url; link.download = result.filename;
-                document.body.appendChild(link); link.click();
-            } finally {
-                link.remove(); URL.revokeObjectURL(url);
-            }
+            downloadCsv(result.filename, result.content, result.content_type);
             setExportStatus(`Downloaded ${result.row_count} rows across all pages.`);
         } catch (error) {
             if (!mounted.current) return;

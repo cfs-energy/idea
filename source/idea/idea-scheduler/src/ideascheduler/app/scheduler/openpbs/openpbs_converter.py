@@ -305,7 +305,8 @@ class OpenPBSConverter:
                 spot_price = None
             elif Utils.is_float(spot_price):
                 spot = True
-                spot_price_amount = Utils.is_float(spot_price)
+                # is_float answers whether it is one; the amount is the value (PBS-32)
+                spot_price_amount = float(spot_price)
                 spot_price = SocaAmount(amount=spot_price_amount)
             else:
                 spot_price = None

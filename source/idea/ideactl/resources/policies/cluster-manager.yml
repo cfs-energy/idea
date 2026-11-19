@@ -13,7 +13,6 @@ Statement:
       - elasticfilesystem:DescribeFileSystems
       - pricing:GetProducts
       - budgets:ViewBudget
-      - logs:PutRetentionPolicy
     {% if context.config.get_bool(context.module_id + '.bedrock.enabled', False) %}
       - bedrock:ListInferenceProfiles
       - bedrock:GetModelInvocationLoggingConfiguration
@@ -40,16 +39,8 @@ Statement:
       - '{{ context.arns.ses_arn }}'
     Effect: Allow
 
-{% if context.config.is_module_enabled('scheduler') %}
-
-  # scratch cleanup counts a digest as told once SES takes it, from this receipt, and only that
-  - Action: dynamodb:PutItem
-    Resource: '{{ context.arns.get_ddb_table_arn(context.config.get_module_id("scheduler") + ".scratch-cleanup") }}'
-    Condition:
-      ForAllValues:StringEquals:
-        dynamodb:LeadingKeys: [delivered]
-    Effect: Allow
-{% endif %}
+  # The delivery receipt rows (scratch and stopped-desktop cleanup) are granted in
+  # cluster-manager.ts: this template is at its size limit.
 
   - Action:
       - s3:GetObject

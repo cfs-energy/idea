@@ -16,11 +16,11 @@ const SESSION = {
     created_on: '2020-01-01T00:00:00Z'
 };
 
-async function renderPage(listing: any[] = [SESSION]) {
+async function renderPage(listing: any[] = [SESSION], projects: any[] = []) {
     const context = initTestAppContext();
     const clients = context.client();
     vi.spyOn(context.getClusterSettingsService(), 'getVirtualDesktopSettings').mockResolvedValue({ dcv_session: { max_root_volume_memory: 500 } });
-    vi.spyOn(clients.projects(), 'listProjects').mockResolvedValue({ listing: [] } as any);
+    vi.spyOn(clients.projects(), 'listProjects').mockResolvedValue({ listing: projects } as any);
     const admin = clients.virtualDesktopAdmin();
     const listSessions = vi.spyOn(admin, 'listSessions').mockResolvedValue({ listing, paginator: {} } as any);
     const flashbarItems: any[] = [];
@@ -135,5 +135,44 @@ describe('manage desktops', () => {
         await user.click(screen.getByText('Connect'));
         await waitFor(() => expect(open).toHaveBeenCalledWith('https://cluster.example/dcv?authToken=token#dcv-1'));
         expect(info.mock.calls[0][0].connection_info).toMatchObject({ idea_session_id: 'session-1', idea_session_owner: 'someowner', username: 'administrator' });
+    });
+});
+
+describe('moving a desktop to another project', () => {
+    afterEach(() => vi.restoreAllMocks());
+    const STOPPED = { ...SESSION, state: 'STOPPED', project: { project_id: 'p-old' } };
+    const PROJECTS = [{ project_id: 'p-old', title: 'Old project' }, { project_id: 'p-new', title: 'New project' }];
+
+    const moveTo = async (answer: Promise<any>) => {
+        const { admin, user, flashbarItems } = await renderPage([STOPPED], PROJECTS);
+        const move = vi.spyOn(admin, 'moveSessionToProject').mockReturnValue(answer);
+        await runAction(user, 'Move to Another Project');
+        const dialog = within((await screen.findByText(/Move beamline to another project/)).closest('[role="dialog"]') as HTMLElement);
+        await user.click(dialog.getByRole('button', { name: /Project/ }));
+        expect(dialog.queryByRole('option', { name: /Old project/ })).toBeNull();
+        await user.click(await dialog.findByRole('option', { name: /New project/ }));
+        await user.click(dialog.getByRole('button', { name: 'Move' }));
+        await waitFor(() => expect(move).toHaveBeenCalled());
+        return { move, flashbarItems, dialog };
+    };
+
+    it('sends the desktop, its owner and the chosen project', async () => {
+        const { move, flashbarItems } = await moveTo(Promise.resolve({ session: { ...STOPPED, project: { project_id: 'p-new' } } }));
+        expect(move.mock.calls[0][0]).toEqual({ session: { idea_session_id: 'session-1', owner: 'someowner', project: { project_id: 'p-new' } } });
+        await waitFor(() => expect(flashbarItems.map(item => item.content)).toContain('Moved beamline (Owner: someowner) to New project.'));
+    });
+
+    it('shows the refusal as the server words it', async () => {
+        const refusal = Promise.reject({ errorCode: 'INVALID_PARAMS', message: 'someowner is not a member of New project.' });
+        refusal.catch(() => {});
+        const { dialog } = await moveTo(refusal);
+        expect(await dialog.findByText('someowner is not a member of New project.')).toBeInTheDocument();
+    });
+
+    it('is offered only for one stopped desktop', async () => {
+        const { user } = await renderPage();
+        createWrapper().findTable()!.findRowSelectionArea(1)!.click();
+        await user.click(await screen.findByRole('button', { name: 'Actions' }));
+        expect(screen.getByRole('menuitem', { name: /Move to Another Project/ })).toHaveAttribute('aria-disabled', 'true');
     });
 });

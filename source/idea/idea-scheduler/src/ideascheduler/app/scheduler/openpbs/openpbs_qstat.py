@@ -321,9 +321,22 @@ class OpenPBSQStat:
                         )
                     continue
 
-                soca_job = pbs_job.as_soca_job(
-                    context=self._context, queue_profile=queue_profile
-                )
+                # one job that cannot be read (an instance profile deleted under it,
+                # an IAM error) must not cost the listing every other job (SJP-26)
+                try:
+                    soca_job = pbs_job.as_soca_job(
+                        context=self._context, queue_profile=queue_profile
+                    )
+                except Exception as e:
+                    if job_id not in _NO_PROFILE_SEEN:
+                        if len(_NO_PROFILE_SEEN) >= 1000:
+                            _NO_PROFILE_SEEN.clear()
+                        _NO_PROFILE_SEEN.add(job_id)
+                        self._logger.warning(
+                            f'job {job_id} is left out of job listings: it cannot be '
+                            f'read ({e})'
+                        )
+                    continue
 
                 if soca_job is None:
                     continue
@@ -331,8 +344,11 @@ class OpenPBSQStat:
 
             return response
         except orjson.JSONDecodeError as e:
+            # the output carries every listed job's environment: its size and the error's
+            # position are logged, never the text (SJ-37)
             self._logger.error(
-                f'failed to parse json data during pbs qstat: {qstat_result}'
+                f'failed to parse json data during pbs qstat: {len(str(qstat_result))} '
+                f'characters, error at position {getattr(e, "pos", None)}: {e.msg}'
             )
             raise e
 

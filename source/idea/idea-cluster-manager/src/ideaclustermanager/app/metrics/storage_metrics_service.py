@@ -683,7 +683,11 @@ class StorageMetricsService(SocaService):
             outbox = CollectorOutbox(
                 self.context, self._config_key('outbox'), historical=False
             )
-            outbox.replay()
+            try:
+                outbox.replay()
+            except Exception as e:
+                # an undeliverable batch must not stop the read or freeze the snapshot
+                self.logger.warning(f'saved storage metrics not delivered: {e}')
             targets = self.targets()
             if not targets:
                 self.logger.warning('no configured storage metrics targets. skip.')
@@ -738,12 +742,12 @@ class StorageMetricsService(SocaService):
                     succeeded = False
                     self.logger.warning(f'{target.name}: storage read failed: {e}')
             outbox.save()
-            outbox.replay()
             if succeeded and db is not None:
                 db.set_config_entry(
                     self._config_key('usage_snapshot'),
                     Utils.to_json(self.usage_by_filesystem()),
                 )
                 db.set_config_entry(checkpoint_key, arrow.utcnow().timestamp())
+            outbox.replay()
         finally:
             self.context.distributed_lock().release(key=lock_key)

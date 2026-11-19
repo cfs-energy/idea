@@ -21,6 +21,7 @@ import IdeaListView from "../../components/list-view";
 import IdeaSplitPanel from "../../components/split-panel";
 import {USER_TABLE_COLUMN_DEFINITIONS} from "./users";
 import Utils from "../../common/utils";
+import {listAllUsersInGroups} from "../../common/paging";
 import IdeaConfirm from "../../components/modals";
 import {AccountsClient} from "../../client";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
@@ -446,12 +447,8 @@ class Groups extends Component<GroupsProps, GroupsState> {
                         if (this.getSelected() == null) {
                             return Promise.resolve({})
                         }
-                        return AppContext.get().client().accounts().listUsersInGroup({
-                            group_names: [this.getSelected()!.name!],
-                            paginator: {
-                                page_size: 1000
-                            }
-                        })
+                        return listAllUsersInGroups(request => AppContext.get().client().accounts().listUsersInGroup(request), [this.getSelected()!.name!])
+                            .then(listing => ({listing}))
                     }}
                     selectionType="multi"
                     onSelectionChange={(event) => {

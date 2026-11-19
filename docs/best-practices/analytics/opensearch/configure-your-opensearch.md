@@ -10,9 +10,21 @@ Find the domain endpoint:
 ideactl config show --cluster-name <NAME> --aws-region <REGION> --query analytics.opensearch.domain_endpoint --format raw
 ```
 
-**From a network routed to the VPC** (VPN or Transit Gateway): open `https://<domain_endpoint>/_dashboards`. The domain security group allows HTTPS from the cluster VPC only; add your network's CIDR to it if your traffic does not arrive from inside the VPC.
+The domain security group admits HTTPS only from the analytics sink and the cluster-manager, scheduler and desktop controller tasks. To reach Dashboards from anywhere else, first admit your path to that group, and remove the rule when you are done:
 
-**From a workstation with Session Manager**: forward a local port through any cluster instance that runs the SSM agent (an ECS container host works):
+```bash
+SG=$(ideactl config show --cluster-name <NAME> --aws-region <REGION> --query analytics.opensearch.security_group_id --format raw)
+# a network routed to the VPC (VPN or Transit Gateway): your CIDR
+aws ec2 authorize-security-group-ingress --region <REGION> --group-id "$SG" --protocol tcp --port 443 --cidr <YOUR_CIDR>
+# or a forwarding instance: its security group
+aws ec2 authorize-security-group-ingress --region <REGION> --group-id "$SG" --protocol tcp --port 443 --source-group <INSTANCE_SECURITY_GROUP_ID>
+```
+
+Remove it afterwards with the same arguments to `aws ec2 revoke-security-group-ingress`.
+
+**From a network routed to the VPC**: open `https://<domain_endpoint>/_dashboards`.
+
+**From a workstation with Session Manager**: forward a local port through the instance you admitted above (any cluster instance that runs the SSM agent):
 
 ```bash
 aws ssm start-session --region <REGION> --target <INSTANCE_ID> \

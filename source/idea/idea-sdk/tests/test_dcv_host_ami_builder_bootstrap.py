@@ -235,6 +235,8 @@ mount() {
   if [[ "$*" != *nolustre* ]]; then MOUNTED=1; fi
 }
 findmnt() { [[ "$MOUNTED" == 1 ]]; }
+# the EFS shares mount with mount -a; a deferred Lustre share is not expected yet
+mountpoint() { return 0; }
 lctl() { echo "lctl $*" >> "$CALLS"; [[ "$MOUNTED" == 1 ]]; }
 """
 
@@ -332,6 +334,18 @@ def test_el_on_its_target_series_does_not_reboot(tmp_path):
     code, calls = run_set_kernel(tmp_path, 'rocky9', '5.14.0-687.5.1.el9_8.x86_64')
     assert code == 0, calls
     assert 'reboot' not in calls
+
+
+def test_an_el99_desktop_keeps_its_series(tmp_path):
+    # Rocky 9.9 images boot 741, which has an FSx client, and Rocky's repository has no 687
+    running = '5.14.0-741.22.1.el9_9.x86_64'
+    for base_os in ('rocky9', 'rhel9'):
+        code, calls = run_set_kernel(tmp_path, base_os, running)
+        assert code == 0, calls
+        assert 'reboot' not in calls
+        assert 'kernel-5.14.0-687' not in calls
+        assert 'kernel-core-5.14.0-741*' in calls
+        assert f'dnf versionlock kernel-{running} ' in calls
 
 
 def test_ubuntu_keeps_the_kernel_its_image_boots(tmp_path):
@@ -569,14 +583,15 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
         in checks
     )
     assert 'command -v mount.lustre' in checks
-    assert 'findmnt -rn -t lustre --mountpoint "/lustre"' in checks
+    assert "findmnt -rn -t lustre --mountpoint '/lustre'" in checks
 
 
 # EL kernel snapshots from 81d856e9, updated to defer reboot until cloud-final exits, to install
 # the newest kernel of the target series before locking it, to free /boot for it, to fail a
 # bootstrap that cannot put the running kernel back as the default, to apply the initramfs test
 # and rescue removal to a series change as well, and to keep the running kernel when the newer one
-# has no FSx for Lustre module (compute bakes report a failure through their in-bake checks).
+# has no FSx for Lustre module (compute bakes report a failure through their in-bake checks),
+# and to keep an EL 9.9 (741) image on its own series.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
@@ -586,8 +601,8 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
         ),
         ('rhel8', '30d4ad519b8498e21c9ff0d89b9b3b55d02c51dd016ea721109095e37210bebb'),
         ('rocky8', '30d4ad519b8498e21c9ff0d89b9b3b55d02c51dd016ea721109095e37210bebb'),
-        ('rhel9', 'e9b5f001eeb1946dbe1f71c305d3db6e87e1c41c42866f1c5be983d5be4a46cc'),
-        ('rocky9', 'e9b5f001eeb1946dbe1f71c305d3db6e87e1c41c42866f1c5be983d5be4a46cc'),
+        ('rhel9', 'ae515048727b94f00b047da9096ac1f1ccad89586b959f0a07930d91143cfd0c'),
+        ('rocky9', 'ae515048727b94f00b047da9096ac1f1ccad89586b959f0a07930d91143cfd0c'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
@@ -936,14 +951,16 @@ def test_el_fsx_lustre_imports_a_key_the_os_accepts_and_logs_a_failed_import(bas
     # rpm-sequoia on EL10 refuses fsx-rpm-public-key.asc (SHA-1 binding signature only);
     # the el/10 packages are signed by fsx-rpm-public-key-2.asc instead
     rendered = render('_templates/linux/fsx_lustre_client.jinja2', base_os=base_os)
-    key = 'https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/'
+    key = 'import_fsx_rpm_key '
     if base_os.endswith('10'):
-        assert f'{key}fsx-rpm-public-key-2.asc ' in rendered
-        assert f'{key}fsx-rpm-public-key.asc ' not in rendered
+        assert f'{key}fsx-rpm-public-key-2 ' in rendered
+        assert f'{key}fsx-rpm-public-key ' not in rendered
     else:
-        assert f'{key}fsx-rpm-public-key.asc ' in rendered
-        assert f'{key}fsx-rpm-public-key-2.asc ' not in rendered
-    imports = [line for line in rendered.splitlines() if 'rpm --import' in line]
+        assert f'{key}fsx-rpm-public-key ' in rendered
+        assert f'{key}fsx-rpm-public-key-2 ' not in rendered
+    imports = [
+        line for line in rendered.splitlines() if 'import_fsx_rpm_key fsx-' in line
+    ]
     assert imports
     for line in imports:
         assert (

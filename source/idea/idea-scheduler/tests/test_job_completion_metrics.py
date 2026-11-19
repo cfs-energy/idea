@@ -478,3 +478,21 @@ def test_the_scale_uses_the_boot_penalty_the_job_was_priced_with(context, monkey
     assert JobCompletionMetrics.cost_scale(job) == pytest.approx(
         (50 * 3600 + 300) / (2 * 3600 + 300)
     )
+
+
+@pytest.mark.parametrize(
+    'select,expected', [(None, 16), ('2:ncpus=4', 8), ('1:ncpus=4+2:ncpus=2', 8)]
+)
+def test_desired_capacity_counts_the_job_wide_cpus_once(select, expected):
+    # SJP-13: nodes x the job-wide total asked for twice the CPUs of a two-node job
+    from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSJob
+
+    resources = dict(ncpus='8', nodect='2')
+    if select is not None:
+        resources['select'] = select
+    params = OpenPBSJob(Resource_List=resources).get_soca_job_params()
+    job = _job(cpu_time_secs=0)
+    job.params.cpus = int(params['cpus'])
+    job.params.nodes = int(params['nodes'])
+    job.params.custom_params = {'select': select} if select else None
+    assert job.desired_capacity() == expected

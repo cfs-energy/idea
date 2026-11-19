@@ -29,6 +29,19 @@ function detect_gpu_hardware () {
   echo -n "none"
 }
 
+function stop_root_x_server () {
+  # the lock names the X server's PID; signal it only when root owns the lock and that PID is an
+  # X server, so a stale or planted lock file never redirects the signal
+  local pid comm
+  [[ -f /tmp/.X0-lock && ! -L /tmp/.X0-lock && "$(stat -c %u /tmp/.X0-lock 2> /dev/null)" == 0 ]] || return 0
+  pid=$(tr -dc '0-9' < /tmp/.X0-lock)
+  [[ -n "${pid}" ]] || return 0
+  comm=$(cat "/proc/${pid}/comm" 2> /dev/null)
+  case "${comm}" in
+    X|Xorg|Xwayland) kill "${pid}" ;;
+  esac
+}
+
 function is_gpu_driver_installed () {
   # same checks the driver installers use for idempotency
   local GPU_VENDOR="${1}"
@@ -256,6 +269,8 @@ function install_nvidia_grid_drivers () {
 {% endif %}
 
   log_info "Installing NVIDIA GRID Drivers"
+  # a fresh directory, so only installers from this copy can match the glob below
+  rm -rf /root/bootstrap/gpu_drivers
   mkdir -p /root/bootstrap/gpu_drivers
   pushd /root/bootstrap/gpu_drivers
 
@@ -266,7 +281,7 @@ function install_nvidia_grid_drivers () {
     local DRIVER_BUCKET_REGION=$(grep "AWS_REGION=" /etc/environment | cut -d= -f2 | tr -d '"')
     log_info "Detected GovCloud region: ${DRIVER_BUCKET_REGION}"
   else
-    local DRIVER_BUCKET_REGION=$(curl -s --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
+    local DRIVER_BUCKET_REGION=$(curl -s --connect-timeout 10 --max-time 30 --head {{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_url', required=True) }} | grep bucket-region | awk '{print $2}' | tr -d '\r\n')
   fi
 
   local DRIVER_S3_PATH="{{ context.config.get_string('global-settings.gpu_settings.nvidia.linux.s3_bucket_path', required=True) }}"
@@ -275,12 +290,14 @@ function install_nvidia_grid_drivers () {
     DRIVER_S3_PATH="s3://ec2-linux-nvidia-drivers/grid-17.1/"
   fi
 
-  $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive ${DRIVER_S3_PATH} .
-
-  local x_server_pid=$(cat /tmp/.X0-lock)
-  if [[ ! -z "${x_server_pid}" ]]; then
-    kill $x_server_pid
+  if ! $AWS --region ${DRIVER_BUCKET_REGION} s3 cp --quiet --recursive ${DRIVER_S3_PATH} . \
+      || ! compgen -G 'NVIDIA-Linux-x86_64*.run' > /dev/null; then
+    log_error "No NVIDIA GRID installer could be copied from ${DRIVER_S3_PATH} (region ${DRIVER_BUCKET_REGION:-unknown}); the host role must be able to list and read that path"
+    popd
+    return 1
   fi
+
+  stop_root_x_server
 
   local INSTALLER_RC=0
   if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
@@ -351,10 +368,7 @@ function install_nvidia_public_drivers() {
     return 1
   fi
 
-  local x_server_pid=$(cat /tmp/.X0-lock)
-  if [[ ! -z "${x_server_pid}" ]]; then
-    kill $x_server_pid
-  fi
+  stop_root_x_server
 
   local INSTALLER_RC=0
   if [[ $(uname -a) =~ "amzn2" ]] && [[ $(uname -r) =~ ^5.10 ]]
@@ -380,6 +394,28 @@ function install_nvidia_public_drivers() {
   popd
 }
 {% elif context.is_amd_gpu()  %}
+function amd_rpms_signed () {
+  local keydb out rpm_file rc=0
+  [[ $# -gt 0 ]] || return 1
+  keydb=$(mktemp -d) || return 1
+  cat > "${keydb}/rocm.asc" <<'AMD_ROCM_GPG_KEY'
+{% include '_templates/linux/AMD-ROCM-GPG-KEY' %}
+AMD_ROCM_GPG_KEY
+  if ! rpmkeys --dbpath "${keydb}" --import "${keydb}/rocm.asc"; then
+    rm -rf "${keydb}"
+    return 1
+  fi
+  for rpm_file in "$@"; do
+    out=$(LC_ALL=C rpmkeys --dbpath "${keydb}" --checksig "${rpm_file}" 2>&1)
+    case "${out}" in
+      *" signatures OK") log_info "${out}" ;;
+      *) log_error "not signed by the AMD ROCm key: ${out}"; rc=1 ;;
+    esac
+  done
+  rm -rf "${keydb}"
+  return ${rc}
+}
+
 function install_amd_gpu_drivers() {
   if command -v /opt/amdgpu-pro/bin/clinfo > /dev/null 2>&1; then
     log_info "GPU driver already installed. Skip."
@@ -418,6 +454,11 @@ function install_amd_gpu_drivers() {
 
     # Find RPM and install it
     local AMD_GPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}amdgpu-install-*.noarch.rpm")
+    # yum localinstall does not check signatures (localpkg_gpgcheck=0): each RPM must verify
+    # against a scratch rpmdb holding only the AMD ROCm key carried in this bundle (primary
+    # fingerprint CA8B B472 7A47 B4D0 9B4E E896 9386 B48A 1A69 3C5C, expires 2028-08-21).
+    amd_rpms_signed $(ls ${AMD_GPU_RPM}) \
+      || fail_bootstrap download-unverified "amdgpu-install RPM is not signed by the AMD ROCm key"
     log_info "Installing RPM ${AMD_GPU_RPM}"
     package_transaction yum localinstall -y $(ls ${AMD_GPU_RPM})
 
@@ -435,6 +476,8 @@ function install_amd_gpu_drivers() {
     local LIBDRM_AMDGPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}libdrm-amdgpu-*.rpm")
     local XORG_AMDGPU_RPM=$(echo "${RHEL_ROCKY_INSTALLER_URL#https://}xorg-x11-amdgpu-drv-amdgpu-*.rpm")
 
+    amd_rpms_signed $(ls ${LIBDRM_AMDGPU_COMMON_RPM} ${LIBDRM_AMDGPU_RPM} ${XORG_AMDGPU_RPM}) \
+      || fail_bootstrap download-unverified "AMD GPU RPMs are not signed by the AMD ROCm key"
     log_info "Installing additional AMD GPU RPMs"
     package_transaction yum localinstall -y $(ls ${LIBDRM_AMDGPU_COMMON_RPM})
     package_transaction yum localinstall -y $(ls ${LIBDRM_AMDGPU_RPM})

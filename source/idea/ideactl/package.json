@@ -8,7 +8,7 @@
     "ideactl": "dist/src/cli/main.js"
   },
   "engines": {
-    "node": ">=22.18"
+    "node": ">=22.19"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-resources.mjs && node scripts/build-lambda-bundles.mjs",

@@ -168,9 +168,25 @@ Hooks are plain bash scripts on the cluster's shared `/apps` file system and app
 | `/apps/<cluster>/scheduler/ami_builder/userdata_customizations.sh` | while each compute image bakes | software every job needs |
 | `/apps/<cluster>/vdc/ami_builder/userdata_customizations.sh` | while each desktop image bakes | software every desktop needs |
 | `/apps/<cluster>/scheduler/compute_node/userdata_customizations.sh` | on every compute node boot | per-node setup that must not be baked in |
-| `/apps/<cluster>/dcv_host/userdata_customizations.sh` | on every desktop boot | per-desktop setup that must not be baked in |
-| `/apps/<cluster>/bastion-host/userdata_customizations.sh` | at every start of the login node (bastion) container, only when owned by root and writable by no one else, for at most two minutes | tools users expect on the login node; it is arm64 Amazon Linux 2023 |
+| `/apps/<cluster>/dcv_host/userdata_customizations.sh` | once, while a new desktop is provisioned; a resumed or rebooted desktop does not run it again | per-desktop setup that must not be baked in |
+| `/apps/<cluster>/bastion-host/userdata_customizations.sh` | at every start of the login node (bastion) container, for at most two minutes; when `bastion-host.site_hook_sha256` is set, only if the hook matches it | tools users expect on the login node; it is arm64 Amazon Linux 2023 |
 
+* **Hook checksums (recommended).** Each hook can be pinned to its SHA-256, computed with `sha256sum <hook file>`. A setting key starts with the module's **id**, which `config set` writes as given. The desktop controller's id is `vdc` on a default cluster, not its name. Find a module's id with `./idea-admin.sh config show --query 'global-settings\.module_sets\..*\.module_id' --cluster-name <CLUSTER_NAME> --aws-region <REGION>`, then set the checksum with `./idea-admin.sh config set "Key=<module id>.<setting>,Type=string,Value=<digest>" --cluster-name <CLUSTER_NAME> --aws-region <REGION>`. The value must be empty or 64 hex characters (case and surrounding spaces ignored); a deploy refuses anything else, and warns when a checksum was set under the module name instead of its id. Without a checksum the hook runs as before and the log warns with the value to set. The portal's settings page writes the right key itself.
+
+  | Hook | Setting (default module id) |
+  |---|---|
+  | login node | `bastion-host.site_hook_sha256` |
+  | compute image bake | `scheduler.ami_builder_site_hook_sha256` |
+  | desktop image bake | `vdc.ami_builder_site_hook_sha256` |
+  | compute node boot | `scheduler.compute_node_site_hook_sha256` |
+  | new desktop (at provisioning) | `vdc.dcv_host_site_hook_sha256` |
+
+  **A mismatch behaves differently by host.** Values are compared without surrounding spaces and without regard to case on every host.
+  - **Login node:** a hook that does not match its checksum is skipped, both digests are logged, and the login node still starts.
+  - **Compute nodes and image bakes:** a mismatch stops that host's bootstrap with `site-hook-mismatch`, naming both digests.
+  - **Desktops:** the check runs just before the remote display server starts on a new desktop, so a mismatch stops that desktop while it is still provisioning, before its owner can connect, and the session is failed with a message. A resumed or rebooted desktop does not run or re-check the hook.
+
+  So editing a pinned hook without updating its checksum stops every new compute node, new desktop and bake until the checksum is set again. Update the checksum in the same change as the hook.
 * Hooks run as root with the cluster environment (`IDEA_CLUSTER_HOME`, `IDEA_BASE_OS`, …) and run for every Linux OS, so check `IDEA_BASE_OS` when a step only applies to one.
 * A bake hook that exits non-zero fails that bake. The row stays on its last good image, and the error links to the hook's log. A boot hook that fails logs a warning and the node, desktop or login node still starts.
 * After editing a bake hook, select the rows it affects and choose **Force rebake** (or wait for the next refresh) to bake it in.

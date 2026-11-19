@@ -23,6 +23,7 @@ from ideasdk.utils import Utils
 from ideaclustermanager.app.accounts.ldapclient.ldap_utils import LdapUtils
 
 from typing import Optional, Dict, List, Tuple
+import ast
 import ldap  # noqa
 from ldap.filter import escape_filter_chars  # noqa
 from ldap.ldapobject import LDAPObject  # noqa
@@ -130,7 +131,8 @@ class AbstractLDAPClient:
                 f'Obtained LDAP options from directoryservice.ldap_options: {configured_ldap_options}'
             )
             for option in configured_ldap_options:
-                opt_d = dict(eval(option))
+                # a literal only: the stored string is never run as code
+                opt_d = dict(ast.literal_eval(option))
                 if isinstance(opt_d, dict):
                     self.logger.debug(
                         f'Setting configured option: {opt_d.get("name")}({opt_d.get("code")}) -> {opt_d.get("value")}'

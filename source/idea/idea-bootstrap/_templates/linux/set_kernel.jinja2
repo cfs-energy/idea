@@ -29,11 +29,13 @@ function fail_kernel_bootstrap() {
 # Add the repository here because kernel management runs before client installation.
 TARGET_KERNEL_ABI=$(uname -r)
 {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
+{% include '_templates/linux/fsx_lustre_keys.jinja2' %}
 # A baked image of this release already has the repository and passed the Lustre module
 # check for this kernel in the bake; an apt-get update here cost its first boot the gate.
 if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
   . /etc/os-release
-  wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
+  # the repository key is the one carried in this bundle, never fetched at boot
+  fsx_lustre_key fsx-ubuntu-public-key | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg || exit 1
   echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
   apt_update || exit 1
 {% if ubuntu_desktop_bake | default(false) %}  if [[ -n "${BAKE_STAGE:-}" ]]; then
@@ -120,8 +122,11 @@ TARGET_KERNEL_VERSION="$(echo "${TARGET_KERNEL_ABI}" | cut -d. -f1-2)*"
 {% elif context.base_os in ('rhel8', 'rocky8') and not (keep_kernel_series | default(false)) %}
 TARGET_KERNEL_VERSION="4.18.0-553*"
 {% elif context.base_os in ('rhel9', 'rocky9') and not (keep_kernel_series | default(false)) %}
-{# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm #}
+{# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm.
+   An image on the EL 9.9 series (741) keeps it: its client is in el/9.9, and Rocky's repository
+   no longer carries 687 once 9.9 ships. #}
 TARGET_KERNEL_VERSION="5.14.0-687*"
+[[ "$(uname -r)" != 5.14.0-741.* ]] || TARGET_KERNEL_VERSION="5.14.0-741*"
 {% elif context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
 {# the series the image boots: fsx_lustre_client.jinja2 has a client for the 10.1 and 10.2 series,
    and pinning it keeps a package upgrade from moving the host to a kernel without one. Compute

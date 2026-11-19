@@ -5,6 +5,11 @@ check (missing output is a failure), a missing bootstrap log fails, and the vali
 desktop and candidate stack are always deleted.
 """
 
+import types
+
+from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
+    VirtualDesktopSessionDB,
+)
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -647,7 +652,7 @@ def test_refused_listing_requires_existence_except_for_unprovable_per_user_paths
     assert 'Check $n $false "$label not reachable: $($err.Exception.Message)"' in probe
     # A non-per-user share root still requires proof from the server.
     assert '$parts = $probe.TrimEnd("\\").Split("\\");' in probe
-    assert 'cmd /c "net view \\\\$server /all 2>&1"' in probe
+    assert '& net.exe view "\\\\$server" /all 2>&1' in probe
     assert 'if ($LASTEXITCODE -ne 0) { if ($perUser) { Check $n $true' in probe
     assert '[regex]::Escape($share) + "(\\s{2,}|\\s*$)"' in probe
     assert 'no share named $share on $server' in probe
@@ -712,6 +717,12 @@ def test_giving_up_on_a_bake_leaves_the_test_launch_of_its_retry_alone():
     ]
     api.session_db = Mock()
     api.session_db._table.query.return_value = {'Items': rows}
+    api.session_db.list_for_owner = types.MethodType(
+        VirtualDesktopSessionDB.list_for_owner, api.session_db
+    )
+    api.session_db._convert_or_skip = types.MethodType(
+        VirtualDesktopSessionDB._convert_or_skip, api.session_db
+    )
     api.session_db.convert_db_dict_to_session_object = lambda item: item
     api.session_utils = Mock()
     api.software_stack_db = Mock()
@@ -726,6 +737,12 @@ def test_a_stack_left_behind_by_a_dead_bake_is_reaped():
     tester, _ = launcher(api, Clock())
     api.session_db = Mock()
     api.session_db._table.query.return_value = {'Items': []}
+    api.session_db.list_for_owner = types.MethodType(
+        VirtualDesktopSessionDB.list_for_owner, api.session_db
+    )
+    api.session_db._convert_or_skip = types.MethodType(
+        VirtualDesktopSessionDB._convert_or_skip, api.session_db
+    )
     api.software_stack_db = Mock()
     now = datetime.now(tz=timezone.utc)
     old = VirtualDesktopSoftwareStack(
@@ -754,6 +771,12 @@ def test_discard_removes_only_this_rows_test_desktop_and_candidate_stack():
     ]
     api.session_db = Mock()
     api.session_db._table.query.return_value = {'Items': rows}
+    api.session_db.list_for_owner = types.MethodType(
+        VirtualDesktopSessionDB.list_for_owner, api.session_db
+    )
+    api.session_db._convert_or_skip = types.MethodType(
+        VirtualDesktopSessionDB._convert_or_skip, api.session_db
+    )
     api.session_db.convert_db_dict_to_session_object = lambda item: item
     api.session_utils = Mock()
     api.software_stack_db = Mock()

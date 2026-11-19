@@ -548,14 +548,43 @@ def test_request_response_data_can_be_opted_in():
     assert bedrock.calls[1][1]['textDataDeliveryEnabled'] is True
 
 
+DELIVERY_FLAGS = (
+    'textDataDeliveryEnabled',
+    'imageDataDeliveryEnabled',
+    'embeddingDataDeliveryEnabled',
+    'videoDataDeliveryEnabled',
+    'audioDataDeliveryEnabled',
+)
+
+
+def own_logging_config(include_data):
+    return {
+        'cloudWatchConfig': {'logGroupName': LOG_GROUP, 'roleArn': LOG_ROLE_ARN},
+        **{key: include_data for key in DELIVERY_FLAGS},
+    }
+
+
 def test_invocation_logging_is_idempotent_when_already_ours():
     manager, bedrock, _ = build_invocation_logging(
-        logging_config={
-            'cloudWatchConfig': {'logGroupName': LOG_GROUP, 'roleArn': LOG_ROLE_ARN}
-        }
+        logging_config=own_logging_config(False)
     )
     assert manager.reconcile() == STATE_ADOPTED_ALREADY
     assert [name for name, _ in bedrock.calls] == ['get']
+
+
+def test_turning_request_response_data_off_updates_our_configuration():
+    manager, bedrock, _ = build_invocation_logging(
+        logging_config=own_logging_config(True)
+    )
+    assert manager.reconcile() == STATE_ADOPTED_ALREADY
+    assert [name for name, _ in bedrock.calls] == ['get', 'put']
+    put = bedrock.calls[1][1]
+    assert put['cloudWatchConfig'] == {
+        'logGroupName': LOG_GROUP,
+        'roleArn': LOG_ROLE_ARN,
+    }
+    for key in DELIVERY_FLAGS:
+        assert put[key] is False
 
 
 def test_invocation_logging_stands_down_for_another_owner():

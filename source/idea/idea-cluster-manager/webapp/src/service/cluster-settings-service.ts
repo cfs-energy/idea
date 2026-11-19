@@ -279,6 +279,11 @@ class ClusterSettingsService {
         return null
     }
 
+    /** Settings are projected per person: the next sign-in on this page reads its own. */
+    reset() {
+        this.moduleSettings = {}
+    }
+
     getModuleSettings(name: string): Promise<any> {
         if (name in this.moduleSettings) {
             return Promise.resolve(this.moduleSettings[name])

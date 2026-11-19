@@ -11,8 +11,6 @@
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
-    ListSessionsRequest,
-    SocaPaginator,
     VirtualDesktopWeekSchedule,
     DayOfWeek,
     VirtualDesktopSessionState,
@@ -45,31 +43,23 @@ class UserDisabledEventHandler(BaseVirtualDesktopControllerEventHandler):
             )
             return
 
-        cursor = None
-        while True:
-            response = self.session_db.list_all_for_user(
-                request=ListSessionsRequest(paginator=SocaPaginator(cursor=cursor)),
-                username=username,
+        # the table, not the search index: every desktop, including one not yet indexed
+        for session in self.session_db.list_for_owner(username):
+            # Delete schedule rows before stopping; queued resume events also check the owner.
+            self.schedule_utils.delete_schedules_for_session(session)
+            session.schedule = VirtualDesktopWeekSchedule(
+                **{
+                    day.value: self.schedule_db.get_empty_schedule(day)
+                    for day in DayOfWeek
+                }
             )
-            for session in response.listing:
-                # Delete schedule rows before stopping; queued resume events also check the owner.
-                self.schedule_utils.delete_schedules_for_session(session)
-                session.schedule = VirtualDesktopWeekSchedule(
-                    **{
-                        day.value: self.schedule_db.get_empty_schedule(day)
-                        for day in DayOfWeek
-                    }
+            self.session_db.update(session, check_version=True)
+            # STOPPING can be persisted before EC2 accepts the stop; retries must resend it.
+            if session.state == VirtualDesktopSessionState.STOPPED:
+                continue
+            session.force = True
+            _, failed = self.session_utils.stop_sessions([session])
+            if failed:
+                raise self.do_not_delete_message_exception(
+                    'Disabled user session could not be stopped'
                 )
-                self.session_db.update(session)
-                # STOPPING can be persisted before EC2 accepts the stop; retries must resend it.
-                if session.state == VirtualDesktopSessionState.STOPPED:
-                    continue
-                session.force = True
-                _, failed = self.session_utils.stop_sessions([session])
-                if failed:
-                    raise self.do_not_delete_message_exception(
-                        'Disabled user session could not be stopped'
-                    )
-            cursor = response.paginator.cursor if response.paginator else None
-            if not cursor:
-                break

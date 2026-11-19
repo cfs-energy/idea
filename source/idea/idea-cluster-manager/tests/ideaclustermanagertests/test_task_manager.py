@@ -1811,3 +1811,51 @@ def test_one_server_stops_when_its_connection_was_reopened():
             client.add_s('cn=a', [])
     pool.made[0].add_s.assert_not_called()
     assert pool.in_use == 0
+
+
+@pytest.mark.parametrize(
+    'absent', [ldap.NO_SUCH_ATTRIBUTE, ldap.NO_SUCH_OBJECT, ldap.UNWILLING_TO_PERFORM]
+)
+def test_removing_a_member_the_directory_no_longer_has_still_drops_the_project_row(
+    absent,
+):
+    task, context = membership_task({'group_name': 'team', 'enabled': True})
+    context.ldap_client.remove_user_from_group.side_effect = absent()
+    task.invoke({'group_name': 'team', 'username': 'user', 'operation': 'remove'})
+    context.projects.user_projects_dao.group_member_removed.assert_called_once_with(
+        group_name='team', username='user'
+    )
+
+
+def test_an_enabled_account_gets_its_memberships_back_and_a_password_reset(
+    live_accounts, monkeypatch
+):
+    from ideadatamodel import Group
+
+    context, _, _, directory, _, create, drain = live_accounts
+    resets = []
+    monkeypatch.setattr(
+        context.accounts.user_pool, 'admin_reset_password', resets.append
+    )
+    accounts = context.accounts
+    for name in ('tasks-back-on', 'tasks-back-off'):
+        accounts.create_group(Group(name=name, group_type='project', title='marker'))
+    create('tasks_back1')
+    for name in ('tasks-back-on', 'tasks-back-off'):
+        accounts.add_users_to_group(['tasks_back1'], name)
+    drain()
+    accounts.disable_group('tasks-back-off')
+    accounts.disable_user('tasks_back1')
+    drain()
+    # deleting the directory account takes its memberships with it
+    directory.members = [m for m in directory.members if m[1] != 'tasks_back1']
+    assert resets == []
+    accounts.enable_user('tasks_back1')
+    drain()
+    joined = {group for group, user in directory.members if user == 'tasks_back1'}
+    row = accounts.user_dao.get_user('tasks_back1')
+    assert joined == {
+        name for name in row['additional_groups'] if name != 'tasks-back-off'
+    }
+    assert {'tasks-back-on', row['group_name']} <= joined
+    assert resets == ['tasks_back1']

@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -14,8 +15,16 @@ class InputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             git = root / 'git'
+            # quotes a non-ASCII path as git does, unless core.quotePath=false is passed
             git.write_text(
-                '#!/bin/sh\nprintf "%s\\n" "$TEST_PATHS"\nexit "$TEST_STATUS"\n'
+                f'#!{sys.executable}\n'
+                'import os, sys\n'
+                "keep = 'core.quotePath=false' in sys.argv\n"
+                "for path in os.environ['TEST_PATHS'].splitlines():\n"
+                '    if not keep and not path.isascii():\n'
+                "        path = '\"' + ''.join(c if c.isascii() else ''.join(f'\\\\{b:03o}' for b in c.encode()) for c in path) + '\"'\n"
+                '    print(path)\n'
+                "sys.exit(int(os.environ['TEST_STATUS']))\n"
             )
             git.chmod(0o755)
             output = root / 'outputs'
@@ -53,6 +62,13 @@ class InputTests(unittest.TestCase):
             ('docs/README.md', False, False, False),
             ('scripts/tooling/requirements.mjs', True, True, False),
             ('mise-tasks/unused', False, False, False),
+            # git quotes non-ASCII paths unless told not to, and a quoted path matches no prefix
+            (
+                'source/idea/idea-cluster-manager/r\u00e9sum\u00e9.py',
+                True,
+                False,
+                False,
+            ),
         ]:
             with self.subTest(path=path):
                 code, values = self.run_gate(path)
@@ -76,6 +92,8 @@ class InputTests(unittest.TestCase):
                 code, values = self.run_gate(path)
                 self.assertEqual(code, 0)
                 self.assertEqual(values['version'], 'true')
+                # the wrapper names the image's version file, which the image job reads
+                self.assertEqual(values['images'], 'true')
 
     def test_real_renames_out_of_gated_trees(self):
         for source, release in [

@@ -260,3 +260,15 @@ openpbs:
 
     # The maximum number of vnodes allowed to be in the process of being provisioned.
     max_concurrent_provision: '5000'
+
+# SHA-256 of <cluster home>/<module id>/compute_node/userdata_customizations.sh (sha256sum of the file).
+# Set, compute nodes run the hook only when it matches; a mismatch STOPS that host's bootstrap with
+# site-hook-mismatch. Empty, the hook runs as before with a logged warning naming the value to set.
+# Recommended; set it again after every edit of the hook.
+compute_node_site_hook_sha256: ~
+
+# SHA-256 of <cluster home>/<module id>/ami_builder/userdata_customizations.sh (sha256sum of the file).
+# Set, compute image bakes run the hook only when it matches; a mismatch STOPS that host's bootstrap with
+# site-hook-mismatch. Empty, the hook runs as before with a logged warning naming the value to set.
+# Recommended; set it again after every edit of the hook.
+ami_builder_site_hook_sha256: ~

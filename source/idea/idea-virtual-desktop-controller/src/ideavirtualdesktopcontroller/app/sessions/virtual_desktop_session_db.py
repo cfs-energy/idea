@@ -8,9 +8,11 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from typing import Union, Dict, List, Optional
+from typing import Union, Dict, Iterable, List, Optional
 
 from botocore.exceptions import ClientError
+
+from boto3.dynamodb.conditions import Key
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import (
@@ -373,6 +375,7 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         session._updated_on_ms = Utils.get_value_as_int(
             sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY, db_entry
         )
+        session._read_entry = db_entry
         return session
 
     def convert_session_object_to_db_dict(self, session: VirtualDesktopSession) -> Dict:
@@ -618,12 +621,25 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             session.stopped_on = None
 
     def update(
-        self, session: VirtualDesktopSession, *, check_version: bool = False
+        self,
+        session: VirtualDesktopSession,
+        *,
+        check_version: bool = False,
+        unless_changed: Iterable[str] = (),
     ) -> VirtualDesktopSession:
+        """
+        a session read from the table writes only the attributes it changed since that read,
+        so a write made long after the read cannot put back what another writer changed.
+        check_version refuses the write when anything changed; unless_changed names the
+        attributes that must still hold the values read (ConditionalCheckFailedException).
+        """
+        read_entry = session._read_entry
         if check_version and session._updated_on_ms is None:
             raise ValueError(
                 'A stored session version is required for a conditional update'
             )
+        if unless_changed and read_entry is None:
+            raise ValueError('A stored session is required for a conditional update')
         if session.state != VirtualDesktopSessionState.INITIALIZING:
             session.recovering = False
             session.recovery_pending_create = False
@@ -649,6 +665,16 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         expression_attr_names = {}
         expression_attr_values = {}
 
+        # the row as this object would have written it when read, so a stored shape that
+        # differs from today's (an older release's extra fields) is not taken for a change
+        baseline = (
+            None
+            if read_entry is None
+            else self.convert_session_object_to_db_dict(
+                self.convert_db_dict_to_session_object(read_entry)
+            )
+        )
+        written = {}
         for key, value in db_entry.items():
             if key in {
                 sessions_constants.USER_SESSION_DB_HASH_KEY,
@@ -656,14 +682,42 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
                 sessions_constants.USER_SESSION_DB_CREATED_ON_KEY,
             }:
                 continue
+            if (
+                baseline is not None
+                and key != sessions_constants.USER_SESSION_DB_UPDATED_ON_KEY
+                and baseline.get(key) == value
+            ):
+                continue
+            written[key] = value
             update_expression_tokens.append(f'#{key} = :{key}')
             expression_attr_names[f'#{key}'] = key
             expression_attr_values[f':{key}'] = value
 
-        condition = {}
+        conditions = []
         if check_version:
             expression_attr_values[':expected_updated_on'] = session._updated_on_ms
-            condition['ConditionExpression'] = '#updated_on = :expected_updated_on'
+            conditions.append('#updated_on = :expected_updated_on')
+        for key in unless_changed:
+            expression_attr_names[f'#{key}'] = key
+            if read_entry.get(key) is None:
+                expression_attr_values[':null_type'] = 'NULL'
+                conditions.append(
+                    f'(attribute_not_exists(#{key}) OR attribute_type(#{key}, :null_type))'
+                )
+            else:
+                expression_attr_values[f':read_{key}'] = read_entry[key]
+                conditions.append(f'#{key} = :read_{key}')
+        caller_conditioned = bool(conditions)
+        if read_entry is not None:
+            # a row read from the table is updated, never created: a write landing after a
+            # delete would otherwise leave a partial row no reader can convert
+            expression_attr_names['#row_key'] = (
+                sessions_constants.USER_SESSION_DB_HASH_KEY
+            )
+            conditions.append('attribute_exists(#row_key)')
+        condition = (
+            {'ConditionExpression': ' AND '.join(conditions)} if conditions else {}
+        )
 
         try:
             result = self._table.update_item(
@@ -683,12 +737,21 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             )
         except ClientError as error:
             if error.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                if not caller_conditioned:
+                    # only the row's existence was asked: it was deleted since the read
+                    self._logger.warning(
+                        f'session {session.idea_session_id} was deleted since it was read; '
+                        f'the write is dropped'
+                    )
+                    return self.convert_db_dict_to_session_object(db_entry)
                 self._logger.warning(
                     f'Conditional update failed for session {session.idea_session_id}; re-read before retrying'
                 )
             raise
 
         old_db_entry = Utils.get_value_as_dict('Attributes', result, {})
+        # what the row holds now: the stored attributes this write left alone, and its own
+        db_entry = {**db_entry, **old_db_entry, **written}
         self._record_run(
             session,
             Utils.get_value_as_string(
@@ -793,6 +856,38 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             deleted_entry=old_db_entry,
         )
 
+    def _convert_or_skip(self, db_entry: Dict) -> Optional[VirtualDesktopSession]:
+        """one row that cannot be read is logged and left out, so it cannot stop a sweep"""
+        try:
+            return self.convert_db_dict_to_session_object(db_entry)
+        except Exception as e:
+            self._logger.error(
+                f'session row {db_entry.get(sessions_constants.USER_SESSION_DB_HASH_KEY)}/'
+                f'{db_entry.get(sessions_constants.USER_SESSION_DB_RANGE_KEY)} '
+                f'cannot be read and is skipped: {e}'
+            )
+            return None
+
+    def list_for_owner(self, owner: str) -> List[VirtualDesktopSession]:
+        """every desktop of one owner from the table, read consistently, every page"""
+        query = {
+            'KeyConditionExpression': Key(
+                sessions_constants.USER_SESSION_DB_HASH_KEY
+            ).eq(owner),
+            'ConsistentRead': True,
+        }
+        sessions = []
+        while True:
+            result = self._table.query(**query)
+            for db_entry in Utils.get_value_as_list('Items', result, []):
+                session = self._convert_or_skip(db_entry)
+                if session is not None:
+                    sessions.append(session)
+            last_key = result.get('LastEvaluatedKey')
+            if not last_key:
+                return sessions
+            query['ExclusiveStartKey'] = last_key
+
     def get_from_db(
         self, idea_session_owner: str, idea_session_id: str
     ) -> Optional[VirtualDesktopSession]:
@@ -883,6 +978,8 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
     def get_session_count_for_user(self, username: str) -> int:
         count_request = {
             'Select': 'COUNT',
+            # a row written by a create that just finished must be counted
+            'ConsistentRead': True,
             'KeyConditions': {
                 sessions_constants.USER_SESSION_DB_HASH_KEY: {
                     'AttributeValueList': [username],
@@ -891,8 +988,15 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
             },
         }
 
-        response = self._table.query(**count_request)
-        return Utils.get_value_as_int('Count', response)
+        count = 0
+        while True:
+            response = self._table.query(**count_request)
+            count += Utils.get_value_as_int('Count', response, 0)
+            # a count reads one 1 MB page at a time
+            last_key = response.get('LastEvaluatedKey')
+            if not last_key:
+                return count
+            count_request['ExclusiveStartKey'] = last_key
 
     def cursor_for(self, session: VirtualDesktopSession) -> Optional[str]:
         """
@@ -929,7 +1033,9 @@ class VirtualDesktopSessionDB(VirtualDesktopNotifiableDB, OpenSearchableDB):
         session_entries = Utils.get_value_as_list('Items', list_result, [])
         result = []
         for session_entry in session_entries:
-            result.append(self.convert_db_dict_to_session_object(session_entry))
+            session = self._convert_or_skip(session_entry)
+            if session is not None:
+                result.append(session)
 
         response_cursor = None
         exclusive_start_key = Utils.get_any_value('LastEvaluatedKey', list_result)

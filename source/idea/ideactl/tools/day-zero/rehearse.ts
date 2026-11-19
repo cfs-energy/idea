@@ -130,7 +130,7 @@ function settingValue(key: string, accountId: string): string {
   }
   if (key.endsWith("_url")) return "https://example.invalid/day-zero";
   if (key.endsWith("_dns_name") || key.endsWith("_hostname")) return "day-zero.example.invalid";
-  if (key.endsWith("_ip")) return "192.0.2.10";
+  if (key.endsWith("_ip") || key.endsWith("_ips")) return "192.0.2.10";
   if (key.endsWith(".vpc_id")) return "vpc-12345678";
   if (key.includes(".network.security_groups.")) return "sg-12345678";
   if (key.includes(".subnets")) return "subnet-12345678";

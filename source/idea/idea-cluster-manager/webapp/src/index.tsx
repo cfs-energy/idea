@@ -20,7 +20,7 @@ import IdeaWebPortal from "./App";
 import {ToastContainer} from "react-toastify";
 import 'react-toastify/dist/ReactToastify.css';
 import {AppContext} from "./common";
-import Utils from "./common/utils";
+import Utils, {decodeFileContent} from "./common/utils";
 import * as serviceWorkerRegistration from './service-worker-registration'
 import AppLogger from "./common/app-logger";
 import {notifyPortalUpdate} from "./components/update-notice";
@@ -66,7 +66,8 @@ if (window.idea.app_init_data.startsWith('{{') && window.idea.app_init_data.ends
         default_log_level: 3
     }
 } else {
-    const appData = JSON.parse(window.atob(window.idea.app_init_data))
+    // the server encodes UTF-8 bytes: a title or message outside ASCII is decoded as text, not as Latin-1
+    const appData = JSON.parse(decodeFileContent(window.idea.app_init_data))
     // enable ability to disable sso, even if enabled from server
     const currentUrl = new URL(window.location.href)
     const ssoParam = currentUrl.searchParams.get('sso')
@@ -181,7 +182,7 @@ if (sessionManagement === 'local-storage') {
         },
         onError: (error) => {
             LOGGER.warn('✗ failed to initialize service worker. ', error)
-            LOGGER.info('✓ using local-storage based fallback mode ...')
+            LOGGER.info('✓ keeping the session in page memory: it ends when the tab closes or reloads')
             initializeApp({})
         }
     })

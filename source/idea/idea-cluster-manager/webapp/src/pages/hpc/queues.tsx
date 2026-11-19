@@ -327,6 +327,8 @@ class Queues extends Component<QueuesProps, QueuesState> {
                                               value={queueParams().allowed_instance_profiles}/>
                                     <KeyValue title="Allowed Security Groups"
                                               value={queueParams().allowed_security_groups}/>
+                                    <KeyValue title="Jobs may create a new FSx for Lustre"
+                                              value={queueParams().allow_new_fsx_lustre !== false}/>
                                 </ColumnLayout>
                             )
                         },

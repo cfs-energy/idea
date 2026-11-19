@@ -29,10 +29,17 @@ from typing import Optional, Dict, Type, TypeVar, Union, List
 import logging
 import re
 
+from pydantic import ValidationError
+
 T = TypeVar('T')
 
-PATTERN_NAMESPACE = r'^[A-Za-z0-9]+.{1}[A-Za-z0-9]+$'
-PATTERN_REQUEST_ID = r'^[0-9a-zA-Z-_]+$'
+# Checked before any authorization, on text anyone can send: bounded runs and a literal dot,
+# matched whole, so the time is linear in the (already capped) length. The longest name part
+# registered today is 35 characters.
+PATTERN_NAMESPACE = r'[A-Za-z0-9]{1,64}\.[A-Za-z0-9]{1,64}'
+PATTERN_REQUEST_ID = r'[0-9a-zA-Z_-]{1,128}'
+MAX_NAMESPACE_LENGTH = 129
+MAX_REQUEST_ID_LENGTH = 128
 # audit lines for these name no user or token: the API promises it does not record who called
 UNATTRIBUTED_NAMESPACES = frozenset({'Portal.ReportClientError'})
 
@@ -56,7 +63,11 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         logger: logging.Logger,
         token: Optional[Dict] = None,
         token_service: Optional[TokenService] = None,
+        client_address: Optional[str] = None,
     ):
+        # where the request came from, as the server established it, for limits that count
+        # per address; None for the local socket
+        self.client_address = client_address
         self._context = context
         self._request = request
         self._invocation_source = invocation_source
@@ -376,7 +387,22 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         return Utils.get_value_as_dict('payload', self.request, default={})
 
     def get_request_payload_as(self, payload_type: Type[T]) -> T:
-        return get_payload_as(payload=self.request_payload, payload_type=payload_type)
+        try:
+            return get_payload_as(
+                payload=self.request_payload, payload_type=payload_type
+            )
+        except ValidationError as e:
+            # which fields are wrong, never what was sent: only the top-level name, since a
+            # deeper part of the path can be a key the caller sent
+            fields = sorted(
+                {
+                    str(error['loc'][0])[:64] if error['loc'] else 'payload'
+                    for error in e.errors()
+                }
+            )
+            raise exceptions.invalid_params(
+                f'Invalid value for: {", ".join(fields[:10])}'
+            ) from None
 
     @property
     def response_payload(self) -> Dict:
@@ -453,16 +479,20 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
         namespace = self.namespace
         if Utils.is_empty(namespace):
             raise exceptions.invalid_params('namespace is required')
-        if not re.match(PATTERN_NAMESPACE, namespace):
+        if len(namespace) > MAX_NAMESPACE_LENGTH or not re.fullmatch(
+            PATTERN_NAMESPACE, namespace
+        ):
             raise exceptions.invalid_params(
-                f'namespace must satisfy regex: {PATTERN_NAMESPACE}'
+                'namespace must be <Service>.<Operation>, letters and digits'
             )
 
         request_id = self.request_id
         if Utils.is_not_empty(request_id):
-            if not re.match(PATTERN_REQUEST_ID, request_id):
+            if len(request_id) > MAX_REQUEST_ID_LENGTH or not re.fullmatch(
+                PATTERN_REQUEST_ID, request_id
+            ):
                 raise exceptions.invalid_params(
-                    f'request_id must satisfy regex: {PATTERN_REQUEST_ID}'
+                    'request_id must be up to 128 letters, digits, - or _'
                 )
 
     def is_valid_request(self) -> bool:
@@ -501,12 +531,11 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
                 token_id = None
             else:
                 actor = self.get_username()
-        except exceptions.SocaException as e:
-            if e.error_code == errorcodes.UNAUTHORIZED_ACCESS:
-                actor = 'unknown'
-                authorization_type = 'public'
-            else:
-                raise e
+        except exceptions.SocaException:
+            # an expired or refused token too: the handler refuses it with its own code, and
+            # writing the log line must not turn that into a server fault
+            actor = 'unknown'
+            authorization_type = 'public'
 
         enabled_tags = self._context.config().get_list(
             'cluster.logging.audit_logs.tags', default=[]
@@ -528,10 +557,33 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
 
         if 'request_id' in enabled_tags:
             request_id = self.request_id
-            if Utils.is_not_empty(request_id):
+            # only a well-formed one: this line is also written for refused requests
+            if Utils.is_not_empty(request_id) and re.fullmatch(
+                PATTERN_REQUEST_ID, request_id[: MAX_REQUEST_ID_LENGTH + 1]
+            ):
                 tags.append(f'request_id:{request_id}')
 
         return f'{"|".join(tags)}'
+
+    @property
+    def loggable_namespace(self) -> str:
+        """the namespace for a log line: as sent only if it is a well-formed one"""
+        namespace = self.namespace
+        if isinstance(namespace, str) and re.fullmatch(
+            PATTERN_NAMESPACE, namespace[: MAX_NAMESPACE_LENGTH + 1]
+        ):
+            return namespace
+        return '(invalid namespace)'
+
+    def log_refused_request(self):
+        """
+        The log line for a request refused before it was understood: its body is never
+        written, whatever the tracing setting, since what in it would be masked is only
+        known for a request that passed validation.
+        """
+        self._logger.info(
+            f'(req) [{self.get_log_tag()}] {self.loggable_namespace} (refused)'
+        )
 
     def log_request(self, request: Optional[Dict] = None):
         if self.is_payload_tracing_enabled():
@@ -539,7 +591,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
                 request = self.request
             self._logger.info(f'(req) [{self.get_log_tag()}] {Utils.to_json(request)}')
         else:
-            self._logger.info(f'(req) [{self.get_log_tag()}] {self.namespace}')
+            self._logger.info(f'(req) [{self.get_log_tag()}] {self.loggable_namespace}')
 
     def log_response(self, response: Optional[Dict] = None):
         success = Utils.get_value_as_bool('success', self.response, False)
@@ -553,7 +605,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
                 )
             else:
                 self._logger.info(
-                    f'(res) [{self.get_log_tag()}] {self.namespace} ({self.get_total_time_ms()} ms) [OK]'
+                    f'(res) [{self.get_log_tag()}] {self.loggable_namespace} ({self.get_total_time_ms()} ms) [OK]'
                 )
         else:
             if self.is_payload_tracing_enabled():
@@ -563,7 +615,7 @@ class ApiInvocationContext(ApiInvocationContextProtocol):
             else:
                 error_code = Utils.get_value_as_string('error_code', response)
                 self._logger.info(
-                    f'(res) [{self.get_log_tag()}] {self.namespace} ({self.get_total_time_ms()} ms) [{error_code}]'
+                    f'(res) [{self.get_log_tag()}] {self.loggable_namespace} ({self.get_total_time_ms()} ms) [{error_code}]'
                 )
 
     def log_info(self, message: str):
