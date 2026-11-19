@@ -16,8 +16,14 @@ from ideasdk.context import SocaContext
 from ideaclustermanager.app.accounts.accounts_service import AccountsService
 from ideaclustermanager.app.projects.db.projects_dao import ProjectsDAO
 
-from typing import List
+from typing import List, Optional
 from boto3.dynamodb.conditions import Attr, Key
+
+
+def is_enabled(group: dict) -> bool:
+    # only an explicit false disables a group: records from earlier releases may carry
+    # no value. A project is different: it is written without one until first enabled
+    return Utils.get_value_as_bool('enabled', group, True)
 
 
 class UserProjectsDAO:
@@ -214,32 +220,46 @@ class UserProjectsDAO:
         remaining.discard(group_name)
         for project_id in project_ids:
             project = self.projects_dao.get_project_by_id(project_id) or {}
-            if remaining & self._granting_groups(project):
+            granting, unknown = self._group_states(project)
+            # a group with no record may still be what grants it: left as it is
+            if remaining & (granting | unknown):
                 continue
             self.delete_user_project(project_id=project_id, username=username)
 
     def _group_grants(self, group_name: str) -> bool:
         # a disabled group grants none of its projects while it is disabled
         group = self.accounts_service.group_dao.get_group(group_name)
-        return Utils.get_value_as_bool('enabled', group, False)
+        return group is not None and is_enabled(group)
 
-    def _granting_groups(self, project: dict) -> set:
-        return {
-            name
-            for name in Utils.get_value_as_list('ldap_groups', project, [])
-            if self._group_grants(name)
-        }
+    def _group_states(self, project: dict):
+        """the project's groups that grant it, and those that have no group record"""
+        granting, unknown = set(), set()
+        for name in Utils.get_value_as_list('ldap_groups', project, []):
+            group = self.accounts_service.group_dao.get_group(name)
+            if group is None:
+                unknown.add(name)
+            elif is_enabled(group):
+                granting.add(name)
+        return granting, unknown
 
-    def refresh_project(self, project_id: str):
+    def _plan_project(self, project_id: str, project: Optional[dict]):
         """
-        the project's user rows made to match who its enabled groups grant it to: rows
-        for members of an enabled group of an enabled project, and no others
+        the writes that make the project's user rows match who its enabled groups grant
+        it to, worked out from reads alone. None: no project record, nothing to change
         """
-        project = self.projects_dao.get_project_by_id(project_id) or {}
-        self._refresh_group_mapping(project_id, project)
-        desired = set()
-        if Utils.get_value_as_bool('enabled', project, False):
-            for name in self._granting_groups(project):
+        if project is None:
+            return None
+        wanted = set(Utils.get_value_as_list('ldap_groups', project, []))
+        rows = Utils.scan_all(
+            self.project_groups_table,
+            {'FilterExpression': Attr('project_id').eq(project_id)},
+        )
+        held = {row['group_name'] for row in rows}
+        state = Utils.get_value_as_bool('enabled', project)
+        desired, unknown = set(), set()
+        if state:
+            granting, unknown = self._group_states(project)
+            for name in granting:
                 desired.update(
                     self.accounts_service.group_members_dao.get_usernames_in_group(name)
                 )
@@ -248,30 +268,55 @@ class UserProjectsDAO:
             {'FilterExpression': Attr('project_id').eq(project_id)},
         )
         current = {row['username'] for row in rows}
-        for username in sorted(desired - current):
-            self.create_user_project(project_id=project_id, username=username)
-        for username in sorted(current - desired):
-            self.delete_user_project(project_id=project_id, username=username)
+        for name in sorted(unknown):
+            self.logger.warning(
+                f'project {project_id} names group {name}, which has no group record: '
+                'its members keep the project until an administrator edits it'
+            )
+        if state is None:
+            # never enabled, or a record whose value was lost: what is there is kept,
+            # and nothing is granted until it is enabled or disabled
+            if current:
+                self.logger.warning(
+                    f'project {project_id} has user rows but no enabled value: they are '
+                    'kept until an administrator enables or disables it'
+                )
+            desired, current = set(), set()
+        return {
+            'project_id': project_id,
+            'groups_added': sorted(wanted - held),
+            'groups_removed': sorted(held - wanted),
+            'users_added': sorted(desired - current),
+            # who has it through a group with no record cannot be told apart
+            'users_removed': [] if unknown else sorted(current - desired),
+        }
 
-    def _refresh_group_mapping(self, project_id: str, project: dict):
-        """
-        the group to project index made to match the project's groups: earlier releases
-        left rows for groups removed from a project and none for groups added to one
-        """
-        wanted = set(Utils.get_value_as_list('ldap_groups', project, []))
-        rows = Utils.scan_all(
-            self.project_groups_table,
-            {'FilterExpression': Attr('project_id').eq(project_id)},
-        )
-        held = {row['group_name'] for row in rows}
-        for group_name in sorted(wanted - held):
+    def _apply_plan(self, plan: Optional[dict]):
+        if plan is None:
+            return
+        project_id = plan['project_id']
+        for group_name in plan['groups_added']:
             self.project_groups_table.put_item(
                 Item={'group_name': group_name, 'project_id': project_id}
             )
-        for group_name in sorted(held - wanted):
+        for group_name in plan['groups_removed']:
             self.project_groups_table.delete_item(
                 Key={'group_name': group_name, 'project_id': project_id}
             )
+        for username in plan['users_added']:
+            self.create_user_project(project_id=project_id, username=username)
+        for username in plan['users_removed']:
+            self.delete_user_project(project_id=project_id, username=username)
+
+    def refresh_project(self, project_id: str):
+        """
+        the project's user rows made to match who its enabled groups grant it to: rows
+        for members of an enabled group of an enabled project, and no others. The group
+        to project index is made to match the project's groups too: earlier releases
+        left rows for groups removed from a project and none for groups added to one
+        """
+        project = self.projects_dao.get_project_by_id(project_id)
+        self._apply_plan(self._plan_project(project_id, project))
 
     def group_enabled_changed(self, group_name: str):
         """a group disabled or enabled: its projects follow who it grants them to"""
@@ -281,10 +326,15 @@ class UserProjectsDAO:
     def refresh_all_projects(self):
         """
         every project's rows made to match its groups: rows left by group edits that
-        did not reach the worker in releases before 26.11.2
+        did not reach the worker in releases before 26.11.2. Every table is read before
+        anything is written, so a read that fails changes nothing
         """
-        for project in Utils.scan_all(self.projects_dao.table, {}):
-            self.refresh_project(project['project_id'])
+        plans = [
+            self._plan_project(project['project_id'], project)
+            for project in Utils.scan_all(self.projects_dao.table, {})
+        ]
+        for plan in plans:
+            self._apply_plan(plan)
 
     def project_disabled(self, project_id: str):
         if Utils.are_empty(project_id):

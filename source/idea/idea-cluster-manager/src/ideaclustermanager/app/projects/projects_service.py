@@ -636,7 +636,8 @@ class ProjectsService:
             db_project = self.projects_dao.get_project_by_id(project_id)
             if db_project is None:
                 continue
-            if not db_project['enabled']:
+            # a project is written without the value until it is first enabled
+            if not Utils.get_value_as_bool('enabled', db_project, False):
                 continue
             result.append(self.projects_dao.convert_from_db(db_project))
         result.sort(key=lambda p: p.name)

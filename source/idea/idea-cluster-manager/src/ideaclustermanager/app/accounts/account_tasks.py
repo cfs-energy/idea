@@ -80,7 +80,8 @@ class SyncGroupInDirectoryServiceTask(BaseTask):
 
         delete_group = False
         if group is not None:
-            if group['enabled']:
+            # only an explicit false disables; records from earlier releases may have none
+            if Utils.get_value_as_bool('enabled', group, True):
                 self.logger.info(f'sync group: {group_name} directory service ...')
                 directory = self.context.ldap_client
                 accounts = self.context.accounts
@@ -159,7 +160,7 @@ class GroupMembershipUpdatedTask(BaseTask):
                 group_name=group_name, username=username
             )
             return
-        if group['enabled']:
+        if Utils.get_value_as_bool('enabled', group, True):
             if operation == 'add':
                 if ds_readonly:
                     self.logger.info(
@@ -366,7 +367,9 @@ class SyncUserInDirectoryServiceTask(BaseTask):
                 # enabled account gets those of its enabled groups back
                 for name in Utils.get_value_as_list('additional_groups', user, []):
                     group = self.context.accounts.group_dao.get_group(name)
-                    if group is not None and group.get('enabled'):
+                    if group is not None and Utils.get_value_as_bool(
+                        'enabled', group, True
+                    ):
                         directory.add_user_to_group([username], name)
 
             if sudo:
