@@ -2225,12 +2225,22 @@ class SubnetIdsParamBuilder(BaseParamBuilder):
         subnet_ids = self._subnets_offering_the_job(subnet_ids)
         preferred = self._preferred_subnet_id(subnet_ids)
         if preferred is None:
-            return random.choice(subnet_ids)
+            return self._draw(subnet_ids)
         if self._provisioning_retry_count() == 0:
             return preferred
         others = [subnet_id for subnet_id in subnet_ids if subnet_id != preferred]
         # nothing to fall back to when the preferred subnet is the only candidate
-        return random.choice(others) if others else preferred
+        return self._draw(others) if others else preferred
+
+    def _draw(self, subnet_ids: List[str]) -> str:
+        # the same job and attempt draw the same subnet on every read: the subnet is in
+        # the job's group, and a new draw per read changed the group of an unedited job.
+        # a retry draws again. a submission-time build has no job id and stores nothing
+        job_id = self.context.job_id
+        if Utils.is_empty(job_id):
+            return random.choice(subnet_ids)
+        seed = f'{job_id}:{self._provisioning_retry_count()}'
+        return random.Random(seed).choice(subnet_ids)
 
     def default(self) -> List[str]:
         default_subnet_ids = None
