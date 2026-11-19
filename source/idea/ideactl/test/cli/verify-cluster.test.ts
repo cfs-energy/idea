@@ -3,13 +3,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { CloudTrailClient } from "@aws-sdk/client-cloudtrail";
 import { Command } from "commander";
 
-import { imageRepository, verifyCluster, registerVerifyClusterCommand, type ClusterHealthApi, type VerifyClusterDeps } from "../../src/cli/commands/verify-cluster.ts";
+import { imageRepository, liveClusterHealth, verifyCluster, registerVerifyClusterCommand, type ClusterHealthApi, type VerifyClusterDeps } from "../../src/cli/commands/verify-cluster.ts";
 
 const clusterName = "idea-test1";
 const awsRegion = "us-east-2";
 const image = "public.ecr.aws/sample/idea:26.11.2";
+const oldImage = "public.ecr.aws/sample/idea:26.11.1";
+// the scheduler task as ECS reports it: the log sidecars have no health check
+const schedulerTask = [
+  { task: "task-1", container: "scheduler", health: "HEALTHY" },
+  { task: "task-1", container: "scheduler-application-logs", health: "UNKNOWN" },
+  { task: "task-1", container: "scheduler-openpbs-logs", health: "UNKNOWN" },
+];
 
 interface Fixture {
   deps: VerifyClusterDeps;
@@ -24,6 +32,7 @@ function fixture(): Fixture {
     [`${clusterName}-cluster`, "UPDATE_COMPLETE"],
     [`${clusterName}-scheduler`, "UPDATE_COMPLETE"],
     [`${clusterName}-bastion-host`, "UPDATE_COMPLETE"],
+    [`${clusterName}-cluster-manager`, "UPDATE_COMPLETE"],
   ]);
   const tables: Record<string, Array<Record<string, unknown>>> = {
     [`${clusterName}.cluster-settings`]: [{ key: "ecs.cluster_name", value: `${clusterName}-ecs` }, { key: "ecs.image", value: image }],
@@ -32,18 +41,20 @@ function fixture(): Fixture {
       { module_id: "cluster", name: "cluster", type: "stack", status: "deployed" },
       { module_id: "scheduler", name: "scheduler", type: "app", status: "deployed" },
       { module_id: "bastion-host", name: "bastion-host", type: "stack", status: "deployed" },
+      { module_id: "cluster-manager", name: "cluster-manager", type: "app", status: "deployed" },
       { module_id: "analytics", name: "analytics", type: "stack", status: "not-deployed" },
     ],
   };
   const health: ClusterHealthApi = {
     async services() {
       return [
-        { name: `${clusterName}-scheduler`, running: 1, desired: 1, rollout: "COMPLETED", images: [image] },
+        { name: `${clusterName}-scheduler`, running: 1, desired: 1, rollout: "COMPLETED", images: [image, image, image] },
+        { name: `${clusterName}-cluster-manager`, running: 2, desired: 2, rollout: "COMPLETED", images: [image] },
         { name: `${clusterName}-datadog`, running: 3, desired: 3, rollout: "COMPLETED", images: ["public.ecr.aws/datadog/agent:7"] },
       ];
     },
     async containerHealth(input) {
-      return [{ task: "task-1", container: input.service.endsWith("scheduler") ? "scheduler" : "bastion", health: "HEALTHY" }];
+      return input.service.endsWith("scheduler") ? schedulerTask : [{ task: "task-1", container: "bastion", health: "HEALTHY" }];
     },
     async targetGroups() {
       return [{ name: "idea-test1-scheduler", states: ["healthy"] }, { name: "idea-test1-bastion", states: ["healthy", "draining"] }];
@@ -107,10 +118,65 @@ test("each unsettled state fails its own line and the whole check", async () => 
     /\| ecs service +\| idea-test1-scheduler +\| 0\/1 running, rollout IN_PROGRESS, release image +\| FAIL +\|/,
     /\| ecs service +\| idea-test1-vdc-controller +\| .*image public\.ecr\.aws\/sample\/idea:26\.11\.1 +\| FAIL +\|/,
     /\| container health +\| idea-test1-scheduler +\| no running task +\| FAIL +\|/,
-    /\| container health +\| idea-test1-bastion-host +\| bastion UNHEALTHY +\| FAIL +\|/,
+    /\| container health +\| idea-test1-bastion-host +\| bastion UNHEALTHY, no HEALTHY container in 1 task\(s\) +\| FAIL +\|/,
     /\| target group +\| idea-test1-controller +\| healthy 1, unhealthy 1 +\| FAIL +\|/,
   ]) assert.match(rows, row);
   assert.equal(lines.at(-1), "Cluster verification: 6 line(s) FAIL");
+});
+
+test("a scheduler task with one HEALTHY container and two log sidecars without a health check passes", async () => {
+  const { deps, lines } = fixture();
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion }), true);
+  assert.match(table(lines), /\| container health +\| idea-test1-scheduler +\| 1 container\(s\) HEALTHY, unchecked \(no health check\): scheduler-application-logs scheduler-openpbs-logs +\| ok +\|/);
+});
+
+test("an UNHEALTHY container fails its task even beside a HEALTHY one", async () => {
+  const { deps, lines, health } = fixture();
+  health.containerHealth = async () => [...schedulerTask.slice(0, 2), { task: "task-1", container: "scheduler-openpbs-logs", health: "UNHEALTHY" }];
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion }), false);
+  assert.match(table(lines), /\| container health +\| idea-test1-scheduler +\| scheduler-openpbs-logs UNHEALTHY, unchecked \(no health check\): scheduler-application-logs +\| FAIL +\|/);
+});
+
+test("a task with no HEALTHY container fails, also beside a healthy task", async () => {
+  const { deps, lines, health } = fixture();
+  const starting = schedulerTask.map((container) => ({ ...container, task: "task-2", health: "UNKNOWN" }));
+  health.containerHealth = async (input) => input.service.endsWith("scheduler") ? starting : [{ task: "task-1", container: "bastion", health: "HEALTHY" }, { task: "task-2", container: "bastion", health: "UNKNOWN" }];
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion }), false);
+  const rows = table(lines);
+  assert.match(rows, /\| container health +\| idea-test1-scheduler +\| scheduler UNKNOWN, scheduler-application-logs UNKNOWN, scheduler-openpbs-logs UNKNOWN, no HEALTHY container in 1 task\(s\) +\| FAIL +\|/);
+  assert.match(rows, /\| container health +\| idea-test1-bastion-host +\| bastion UNKNOWN, no HEALTHY container in 1 task\(s\) +\| FAIL +\|/);
+});
+
+test("a two-page CloudTrail lookup sends the same window on both pages", async (t) => {
+  const { deps, lines, health } = fixture();
+  const windows: Array<[number | undefined, number | undefined, string | undefined]> = [];
+  t.mock.method(CloudTrailClient.prototype, "send", async (command: { input: { StartTime?: Date; EndTime?: Date; NextToken?: string } }) => {
+    windows.push([command.input.StartTime?.getTime(), command.input.EndTime?.getTime(), command.input.NextToken]);
+    // the first page takes a moment, as a real one does, so a clock read per page would move
+    if (windows.length === 1) { await new Promise((resolve) => setTimeout(resolve, 15)); return { Events: [{ CloudTrailEvent: "{}" }], NextToken: "page-2" }; }
+    return { Events: [{ CloudTrailEvent: "{}" }] };
+  });
+  health.accessDenied = liveClusterHealth().accessDenied;
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion }), true);
+  assert.equal(windows.length, 2);
+  assert.deepEqual(windows.map(([start, end]) => [start, end]), [windows[0].slice(0, 2), windows[0].slice(0, 2)]);
+  assert.deepEqual(windows.map(([, , token]) => token), [undefined, "page-2"]);
+  assert.match(table(lines), /none in 2 event\(s\) since/);
+});
+
+test("a scoped upgrade holds only the selected modules' services to the release image", async () => {
+  const { deps, lines, health } = fixture();
+  const services = health.services;
+  health.services = async (input) => (await services(input)).map((service) => service.name.endsWith("cluster-manager") ? { ...service, images: [oldImage] } : service);
+  // cluster is selected, cluster-manager is not: a shared name prefix does not make it selected
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion, modules: ["scheduler", "cluster"] }), true);
+  assert.match(table(lines), /\| ecs service +\| idea-test1-cluster-manager +\| 2\/2 running, rollout COMPLETED, image public\.ecr\.aws\/sample\/idea:26\.11\.1, not in this upgrade +\| ok +\|/);
+  lines.length = 0;
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion, modules: ["cluster-manager"] }), false);
+  assert.match(table(lines), /\| ecs service +\| idea-test1-cluster-manager +\| .*image public\.ecr\.aws\/sample\/idea:26\.11\.1 +\| FAIL +\|/);
+  lines.length = 0;
+  // the standalone check has no module list and holds every service to the release image
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion }), false);
 });
 
 test("no permission for the CloudTrail lookup reads 'not checked' and never fails the check", async () => {

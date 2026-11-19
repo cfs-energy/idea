@@ -67,6 +67,8 @@ export interface VerifyClusterOptions {
   awsProfile?: string;
   /** Start of the access-denial window, epoch milliseconds. */
   since?: number;
+  /** A scoped upgrade's module ids: only their services are held to the release image. */
+  modules?: readonly string[];
 }
 
 /** Events read from CloudTrail at most, 50 a page: ten pages at its two-calls-a-second limit. */
@@ -134,12 +136,18 @@ export async function verifyCluster(deps: VerifyClusterDeps, options: VerifyClus
   } else {
     try {
       const repository = typeof image === "string" ? imageRepository(image) : undefined;
+      // services are named <cluster>-<module id>[-<component>]; the longest matching id owns one
+      const owner = (name: string): string | undefined => modules.map((row) => String(row["module_id"]))
+        .filter((id) => name === `${options.clusterName}-${id}` || name.startsWith(`${options.clusterName}-${id}-`))
+        .sort((a, b) => b.length - a.length)[0];
       for (const service of await api.services({ ...context, cluster })) {
         const ours = repository === undefined ? [] : service.images.filter((candidate) => imageRepository(candidate) === repository);
+        const selected = !options.modules?.length || options.modules.includes(owner(service.name) ?? "");
         const imageOk = ours.every((candidate) => candidate === image);
         const counts = `${service.running}/${service.desired} running, rollout ${service.rollout ?? "unknown"}`;
-        const imageText = ours.length === 0 ? "no release image" : imageOk ? "release image" : `image ${ours.find((candidate) => candidate !== image)}`;
-        const ok = service.running === service.desired && service.rollout === "COMPLETED" && imageOk;
+        const imageText = ours.length === 0 ? "no release image" : imageOk ? "release image"
+          : `image ${ours.find((candidate) => candidate !== image)}${selected ? "" : ", not in this upgrade"}`;
+        const ok = service.running === service.desired && service.rollout === "COMPLETED" && (imageOk || !selected);
         rows.push(["ecs service", service.name, `${counts}, ${imageText}`, ok ? "ok" : "FAIL"]);
       }
     } catch (error) {
@@ -149,11 +157,20 @@ export async function verifyCluster(deps: VerifyClusterDeps, options: VerifyClus
       const service = `${options.clusterName}-${String(module["module_id"])}`;
       try {
         const containers = await api.containerHealth({ ...context, cluster, service });
-        const unhealthy = containers.filter((container) => container.health !== "HEALTHY");
-        const detail = containers.length === 0 ? "no running task"
-          : unhealthy.length === 0 ? `${containers.length} container(s) HEALTHY`
-            : unhealthy.map((container) => `${container.container} ${container.health}`).join(", ");
-        rows.push(["container health", service, detail, containers.length > 0 && unhealthy.length === 0 ? "ok" : "FAIL"]);
+        // UNKNOWN is a container with no health check (the log sidecars); each task still needs one HEALTHY
+        const healthy = containers.filter((container) => container.health === "HEALTHY");
+        const blind = new Set(containers.map((container) => container.task).filter((task) => !healthy.some((container) => container.task === task)));
+        const sidecar = (container: ContainerHealth): boolean => container.health === "UNKNOWN" && !blind.has(container.task);
+        const unhealthy = containers.filter((container) => container.health !== "HEALTHY" && !sidecar(container));
+        const unchecked = [...new Set(containers.filter(sidecar).map((container) => container.container))];
+        const ok = containers.length > 0 && unhealthy.length === 0 && blind.size === 0;
+        const detail = containers.length === 0 ? "no running task" : [
+          ...unhealthy.map((container) => `${container.container} ${container.health}`),
+          ...(blind.size > 0 ? [`no HEALTHY container in ${blind.size} task(s)`] : []),
+          ...(ok ? [`${healthy.length} container(s) HEALTHY`] : []),
+          ...(unchecked.length > 0 ? [`unchecked (no health check): ${unchecked.join(" ")}`] : []),
+        ].join(", ");
+        rows.push(["container health", service, detail, ok ? "ok" : "FAIL"]);
       } catch (error) {
         rows.push(["container health", service, message(error), "FAIL"]);
       }
@@ -295,8 +312,10 @@ export function liveClusterHealth(): ClusterHealthApi {
       const events: AccessDeniedEvent[] = [];
       let scanned = 0;
       let nextToken: string | undefined;
+      // a NextToken is only valid with the parameters of the first page
+      const endTime = new Date();
       do {
-        const page = await client.send(new trail.LookupEventsCommand({ StartTime: input.since, EndTime: new Date(), MaxResults: 50, NextToken: nextToken }));
+        const page = await client.send(new trail.LookupEventsCommand({ StartTime: input.since, EndTime: endTime, MaxResults: 50, NextToken: nextToken }));
         for (const event of page.Events ?? []) {
           scanned += 1;
           const record = JSON.parse(event.CloudTrailEvent ?? "{}") as {
