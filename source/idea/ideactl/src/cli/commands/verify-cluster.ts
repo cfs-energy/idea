@@ -57,7 +57,7 @@ export interface ClusterHealthApi {
   }>;
 }
 
-export interface VerifyClusterDeps extends Pick<Deps, "scan" | "cfn" | "out" | "now"> {
+export interface VerifyClusterDeps extends Pick<Deps, "scan" | "cfn" | "out" | "now" | "sleep"> {
   clusterHealth?: ClusterHealthApi;
 }
 
@@ -69,6 +69,13 @@ export interface VerifyClusterOptions {
   since?: number;
   /** A scoped upgrade's module ids: only their services are held to the release image. */
   modules?: readonly string[];
+  /**
+   * How long to wait for ECS rollouts that are still in progress with every task running on the
+   * expected image. Unset, the check reads once and reports them as `wait`.
+   */
+  settleMs?: number;
+  /** Called once the services have settled or the wait has ended, before the other reads. */
+  onSettled?: () => void;
 }
 
 /** Events read from CloudTrail at most, 50 a page: ten pages at its two-calls-a-second limit. */
@@ -78,8 +85,12 @@ const STACK_OK = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE", "IMPORT_COMPLETE
 const MODULE_TYPE_CONFIG = "config";
 // a draining target is leaving after a rollout; an unused one sits behind a rule that is switched off
 const TARGET_FAIL = new Set(["unhealthy", "initial"]);
+/** The end of an upgrade waits this long for rollouts that are only draining their old tasks. */
+export const SETTLE_LIMIT_MS = 10 * 60_000;
+const SETTLE_POLL_MS = 5_000;
+const SETTLE_NOTE_MS = 30_000;
 
-type Result = "ok" | "FAIL" | "not checked";
+type Result = "ok" | "FAIL" | "not checked" | "wait";
 type Row = [check: string, target: string, detail: string, result: Result];
 
 async function scanRows(deps: Pick<Deps, "scan">, tableName: string): Promise<Array<Record<string, unknown>>> {
@@ -133,26 +144,52 @@ export async function verifyCluster(deps: VerifyClusterDeps, options: VerifyClus
   const image = settings.get("ecs.image");
   if (api === undefined || typeof cluster !== "string" || cluster === "") {
     rows.push(["ecs services", "-", api === undefined ? "no ECS reader in this build" : "ecs.cluster_name is not set", "not checked"]);
+    options.onSettled?.();
   } else {
-    try {
-      const repository = typeof image === "string" ? imageRepository(image) : undefined;
-      // services are named <cluster>-<module id>[-<component>]; the longest matching id owns one
-      const owner = (name: string): string | undefined => modules.map((row) => String(row["module_id"]))
-        .filter((id) => name === `${options.clusterName}-${id}` || name.startsWith(`${options.clusterName}-${id}-`))
-        .sort((a, b) => b.length - a.length)[0];
-      for (const service of await api.services({ ...context, cluster })) {
-        const ours = repository === undefined ? [] : service.images.filter((candidate) => imageRepository(candidate) === repository);
-        const selected = !options.modules?.length || options.modules.includes(owner(service.name) ?? "");
-        const imageOk = ours.every((candidate) => candidate === image);
-        const counts = `${service.running}/${service.desired} running, rollout ${service.rollout ?? "unknown"}`;
-        const imageText = ours.length === 0 ? "no release image" : imageOk ? "release image"
-          : `image ${ours.find((candidate) => candidate !== image)}${selected ? "" : ", not in this upgrade"}`;
-        const ok = service.running === service.desired && service.rollout === "COMPLETED" && (imageOk || !selected);
-        rows.push(["ecs service", service.name, `${counts}, ${imageText}`, ok ? "ok" : "FAIL"]);
+    const repository = typeof image === "string" ? imageRepository(image) : undefined;
+    // services are named <cluster>-<module id>[-<component>]; the longest matching id owns one
+    const owner = (name: string): string | undefined => modules.map((row) => String(row["module_id"]))
+      .filter((id) => name === `${options.clusterName}-${id}` || name.startsWith(`${options.clusterName}-${id}-`))
+      .sort((a, b) => b.length - a.length)[0];
+    // a rollout still draining its old tasks, with every new task running on the expected image, is settling
+    const readServices = async (): Promise<Array<{ row: Row; settling: boolean }>> => {
+      try {
+        return (await api.services({ ...context, cluster })).map((service) => {
+          const ours = repository === undefined ? [] : service.images.filter((candidate) => imageRepository(candidate) === repository);
+          const selected = !options.modules?.length || options.modules.includes(owner(service.name) ?? "");
+          const imageOk = ours.every((candidate) => candidate === image) || !selected;
+          const counts = `${service.running}/${service.desired} running, rollout ${service.rollout ?? "unknown"}`;
+          const imageText = ours.length === 0 ? "no release image" : ours.every((candidate) => candidate === image) ? "release image"
+            : `image ${ours.find((candidate) => candidate !== image)}${selected ? "" : ", not in this upgrade"}`;
+          const ok = service.running === service.desired && service.rollout === "COMPLETED" && imageOk;
+          const settling = service.running === service.desired && service.rollout === "IN_PROGRESS" && imageOk;
+          return { row: ["ecs service", service.name, `${counts}, ${imageText}`, ok ? "ok" : "FAIL"], settling };
+        });
+      } catch (error) {
+        return [{ row: ["ecs services", cluster, message(error), "FAIL"], settling: false }];
       }
-    } catch (error) {
-      rows.push(["ecs services", cluster, message(error), "FAIL"]);
+    };
+    const waitStarted = deps.now();
+    let noted = { names: "", at: -Infinity };
+    let services = await readServices();
+    for (;;) {
+      const names = services.filter((service) => service.settling).map((service) => service.row[1]).join(", ");
+      const waited = deps.now() - waitStarted;
+      if (names === "" || options.settleMs === undefined || waited >= options.settleMs) break;
+      if (names !== noted.names || waited - noted.at >= SETTLE_NOTE_MS) {
+        deps.out(`Waiting for ECS rollouts to finish (old tasks draining), ${Math.round(waited / 1000)}s of ${Math.round(options.settleMs / 1000)}s: ${names}`);
+        noted = { names, at: waited };
+      }
+      await deps.sleep(SETTLE_POLL_MS);
+      services = await readServices();
     }
+    const waitedSeconds = Math.round((deps.now() - waitStarted) / 1000);
+    for (const { row, settling } of services) {
+      if (!settling) rows.push(row);
+      else if (options.settleMs === undefined) rows.push([row[0], row[1], `${row[2]}, settling`, "wait"]);
+      else rows.push([row[0], row[1], `${row[2]}, rollout still in progress after ${waitedSeconds}s; run verify-cluster again`, "FAIL"]);
+    }
+    options.onSettled?.();
     for (const module of modules.filter((row) => row["name"] === "scheduler" || row["name"] === "bastion-host")) {
       const service = `${options.clusterName}-${String(module["module_id"])}`;
       try {
@@ -213,9 +250,13 @@ export async function verifyCluster(deps: VerifyClusterDeps, options: VerifyClus
   }
 
   const failed = rows.filter((row) => row[3] === "FAIL").length;
+  const waiting = rows.filter((row) => row[3] === "wait").length;
+  const rolling = waiting === 0 ? "" : `${waiting} service(s) still rolling out; run again in a minute`;
   deps.out(`Cluster verification for ${options.clusterName}\n${renderTable(["check", "target", "detail", "result"], rows)}`);
-  deps.out(failed === 0 ? "Cluster verification: every checked line is ok" : `Cluster verification: ${failed} line(s) FAIL`);
-  return failed === 0;
+  deps.out(failed > 0 ? `Cluster verification: ${failed} line(s) FAIL${rolling === "" ? "" : `, ${rolling}`}`
+    : rolling !== "" ? `Cluster verification: ${rolling}` : "Cluster verification: every checked line is ok");
+  // a rollout still in progress is not yet proven, so the standalone check exits 1 for it too
+  return failed === 0 && waiting === 0;
 }
 
 export function registerVerifyClusterCommand(program: Command, deps: VerifyClusterDeps): void {

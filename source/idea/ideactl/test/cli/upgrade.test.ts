@@ -974,7 +974,7 @@ test("the upgrade prints a timestamp and elapsed time per phase and per stack, a
     await upgradeCluster(withDefaultUpgradeDeployment(deps), {
       clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules: ["analytics"],
     });
-    for (const phase of ["Pre-flight", "Phase 1", "Phase 2", "Phase 2b", "Phase 3", "Phase 4", "Broker rule pass", "Completion"]) {
+    for (const phase of ["Pre-flight", "Phase 1", "Phase 2", "Phase 2b", "Phase 3", "Phase 4", "Broker rule pass", "Completion", "Rollout settle", "Verification"]) {
       assert.ok(events.some((line) => new RegExp(`^timing \\d\\d:\\d\\d:\\d\\dZ \\+\\d+s: ${phase} started$`).test(line)), `${phase} start`);
       assert.ok(events.some((line) => new RegExp(`^timing .*: ${phase} took \\d+s$`).test(line)), `${phase} end`);
     }
