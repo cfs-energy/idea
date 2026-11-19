@@ -1102,7 +1102,8 @@ def slow_inputs(config, bootstrap_dir: Optional[str]) -> Dict[str, Any]:
     the scheduler provider, GPU settings and the third-party install templates. a template
     the module does not ship is recorded as absent
     """
-    storage = config.get_config('shared-storage', default={}) or {}
+    from ideasdk.config.cluster_config import shared_storage_entries
+
     templates = {}
     for path in SLOW_INPUT_TEMPLATES:
         try:
@@ -1115,11 +1116,7 @@ def slow_inputs(config, bootstrap_dir: Optional[str]) -> Dict[str, Any]:
             'global-settings.package_config', default={}
         ),
         'storage_providers': sorted(
-            {
-                str(fs.get('provider'))
-                for fs in storage.values()
-                if hasattr(fs, 'get') and fs.get('provider')
-            }
+            {str(fs['provider']) for _, fs in shared_storage_entries(config)}
         ),
         'scheduler_provider': config.get_string('scheduler.provider', default=None),
         'gpu_settings': config.get_config('global-settings.gpu_settings', default={}),

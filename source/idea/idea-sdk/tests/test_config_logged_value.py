@@ -98,6 +98,8 @@ def following():
     config = object.__new__(ClusterConfig)
     SocaConfig.__init__(config, config={})
     config.logger = Mock()
+    config.module_info = None
+    config.module_set = 'default'
     return config
 
 
@@ -155,3 +157,56 @@ def test_the_settings_a_module_prints_at_start_name_no_one():
     # the settings themselves are untouched
     assert SocaConfig.get_string(config, KEY) == SNAPSHOT
     assert printed.replace(SHOWN, SNAPSHOT) == config.as_yaml()
+
+
+def removed_share_config():
+    """a live config holding two file systems, one removed setting by setting"""
+    config = following()
+    for key, value in (
+        ('shared-storage.data.provider', 'efs'),
+        ('shared-storage.data.mount_dir', '/data'),
+        ('shared-storage.rc17dss.provider', 'efs'),
+        ('shared-storage.rc17dss.mount_dir', '/rc17d-ss'),
+        ('shared-storage.rc17dss.efs.file_system_id', 'fs-1'),
+    ):
+        config.on_create(entry(value, key))
+    for key in (
+        'shared-storage.rc17dss.provider',
+        'shared-storage.rc17dss.mount_dir',
+        'shared-storage.rc17dss.efs.file_system_id',
+    ):
+        config.on_delete(entry(None, key))
+    return config
+
+
+def test_a_deleted_settings_subtree_leaves_no_empty_entry():
+    # dev rc.17 F3: the running scheduler kept an empty rc17dss and every reader that
+    # took it for a file system raised on its missing provider
+    config = removed_share_config()
+    storage = SocaConfig.get_config(config, 'shared-storage')
+    assert list(storage.keys()) == ['data']
+    assert SocaConfig.get_string(config, 'shared-storage.data.provider') == 'efs'
+
+
+def test_an_entry_without_a_provider_is_skipped_with_one_warning():
+    from ideasdk.config import cluster_config
+
+    cluster_config._skipped_storage.clear()
+    config = following()
+    config.on_create(entry('efs', 'shared-storage.data.provider'))
+    config.on_create(entry('/half', 'shared-storage.half.mount_dir'))
+    logger = Mock()
+    for _ in range(2):
+        entries = cluster_config.shared_storage_entries(config, logger)
+        assert [name for name, _ in entries] == ['data']
+    logger.warning.assert_called_once()
+    assert 'shared-storage.half has no provider' in logger.warning.call_args.args[0]
+
+
+def test_the_bake_inputs_read_storage_with_an_entry_being_removed():
+    from ideasdk.aws.image_builds import slow_inputs
+
+    config = following()
+    config.on_create(entry('fsx_lustre', 'shared-storage.scratch.provider'))
+    config.on_create(entry('/half', 'shared-storage.half.mount_dir'))
+    assert slow_inputs(config, None)['storage_providers'] == ['fsx_lustre']

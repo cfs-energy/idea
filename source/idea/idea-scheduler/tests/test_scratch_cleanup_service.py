@@ -2811,3 +2811,40 @@ def test_each_email_renders_every_value_from_what_the_service_sends(world):
         **sent[TEMPLATE_ADMIN_SUMMARY]
     )
     assert 'and  are' not in summary
+
+
+def test_a_file_system_removed_while_running_does_not_stop_the_cleanup(world):
+    # dev rc.17 F3: deleting a shared-storage entry's settings left an empty entry in the
+    # running scheduler, and the cleanup failed every minute on its missing provider
+    from unittest.mock import Mock
+
+    from ideasdk.config import cluster_config
+    from ideasdk.config.cluster_config import ClusterConfig
+    from ideasdk.config.soca_config import SocaConfig
+
+    cluster_config._skipped_storage.clear()
+    live = object.__new__(ClusterConfig)
+    SocaConfig.__init__(live, config=dict(world.config))
+    live.logger = Mock()
+    live.module_info = None
+    live.module_set = 'default'
+    for key, value in (
+        ('shared-storage.rc17dss.provider', 'efs'),
+        ('shared-storage.rc17dss.mount_dir', '/rc17d-ss'),
+    ):
+        live.on_create({'key': key, 'value': value})
+    world.service.context.config.return_value = live
+    for key in ('shared-storage.rc17dss.provider', 'shared-storage.rc17dss.mount_dir'):
+        live.on_delete({'key': key, 'value': None})
+    assert [fs.name for fs in world.service.file_systems()] == ['scratch']
+
+    # an entry left without a provider some other way is skipped, with one warning
+    live.on_create({'key': 'shared-storage.half.mount_dir', 'value': '/half'})
+    assert [fs.name for fs in world.service.file_systems()] == ['scratch']
+    assert [fs.name for fs in world.service.file_systems()] == ['scratch']
+    warned = [
+        call.args[0]
+        for call in world.service._logger.warning.call_args_list
+        if 'shared-storage.half has no provider' in call.args[0]
+    ]
+    assert len(warned) == 1

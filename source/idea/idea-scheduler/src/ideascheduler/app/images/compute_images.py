@@ -87,6 +87,7 @@ from ideascheduler.app.images.compute_node_ami_builder import (
     DEFAULT_INSTANCE_TYPE,
     ComputeNodeAmiBuilder,
 )
+from ideasdk.config.cluster_config import shared_storage_entries
 from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 
@@ -697,16 +698,13 @@ class ComputeImageService:
                 record.release = __version__
                 record.source_ami = record.base_ami = source
                 if builder is None:
-                    storage = (
-                        self.context.config().get_config('shared-storage', default={})
-                        or {}
-                    )
                     drivers = (
                         ('fsx_lustre',)
                         if any(
-                            fs.get('provider') == 'fsx_lustre'
-                            for fs in storage.values()
-                            if isinstance(fs, dict)
+                            fs['provider'] == 'fsx_lustre'
+                            for _, fs in shared_storage_entries(
+                                self.context.config(), self._logger
+                            )
                         )
                         else ()
                     )
