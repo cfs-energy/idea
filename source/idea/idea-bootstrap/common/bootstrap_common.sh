@@ -440,6 +440,23 @@ function sha256_matches () {
   return 1
 }
 
+# Every gpg call on a host goes through this: idea_gpg <homedir> <gpg arguments...>. A private
+# keyring (the given directory, or with "" a scratch one removed afterwards), no prompts,
+# and never a gpg-agent: AL2023's gnupg2-minimal ships none, and a gpg that tries to start one
+# exits 2 even when the operation itself succeeded.
+function idea_gpg () {
+  local home="${1}" scratch="" rc
+  shift
+  if [[ -z "${home}" ]]; then
+    scratch=$(mktemp -d) || return 1
+    home="${scratch}"
+  fi
+  gpg --batch --no-autostart --homedir "${home}" "$@"
+  rc=$?
+  [[ -z "${scratch}" ]] || rm -rf "${scratch}"
+  return ${rc}
+}
+
 # Succeeds only when <signature> is a valid signature of <file> by the key with primary
 # fingerprint <fingerprint>, read from the armored <key> carried in the bootstrap bundle. A
 # scratch keyring holds that key alone; expiry of the carried copy does not stop the check.
@@ -455,8 +472,8 @@ function verify_detached_signature () {
     fi
   fi
   gnupg=$(mktemp -d) || return 1
-  if gpg --batch --quiet --homedir "${gnupg}" --import "${key}" 2> "${gnupg}/import.err"; then
-    status=$(gpg --batch --homedir "${gnupg}" --status-fd 1 --verify "${signature}" "${file}" 2> "${gnupg}/verify.err")
+  if idea_gpg "${gnupg}" --quiet --import "${key}" 2> "${gnupg}/import.err"; then
+    status=$(idea_gpg "${gnupg}" --status-fd 1 --verify "${signature}" "${file}" 2> "${gnupg}/verify.err")
   fi
   # gpg's own words (a bad signature, a digest or key the host's gpg refuses) go to the log
   reason=$(cat "${gnupg}/import.err" "${gnupg}/verify.err" 2> /dev/null | tr '\n' ' ')

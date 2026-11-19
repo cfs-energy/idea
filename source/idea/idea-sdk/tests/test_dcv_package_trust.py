@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -82,7 +83,7 @@ def test_no_key_is_fetched_and_the_bundled_key_is_used(template, base_os):
     if base_os in RPM_OS:
         assert 'rpm --import "${DCV_NICE_KEY}"' in text
     else:
-        assert 'gpg --dearmor < "${DCV_NICE_KEY}"' in text
+        assert 'idea_gpg "" --dearmor < "${DCV_NICE_KEY}"' in text
 
 
 def before(text: str, check: str, install: str):
@@ -163,9 +164,13 @@ def run_trust(
 ) -> subprocess.CompletedProcess:
     trust = tmp_path / 'trust.sh'
     trust.write_text(render('_templates/linux/dcv_package_trust.jinja2', 'rocky9'))
+    # the host sources bootstrap_common.sh first; the trust checks use its gpg helper
+    common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
+    helper = re.search(r'function idea_gpg \(\) \{\n.*?\n\}\n', common, re.S)[0]
     prelude = (
         'log_info() { echo "INFO $*"; }\nlog_error() { echo "ERROR $*"; }\n'
-        f'source {trust}\n'
+        + helper
+        + f'source {trust}\n'
     )
     env = dict(os.environ)
     if path_prefix:

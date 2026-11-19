@@ -264,7 +264,7 @@ fi
 {% else %}
   if [[ -z "$(dpkg -l lustre-client-utils | grep ^ii)" ]]; then
     # Kernel version is now managed by set_kernel.jinja2 - proceed with installation
-    fsx_lustre_key fsx-ubuntu-public-key | gpg --dearmor | sudo tee /usr/share/keyrings/fsx-ubuntu-public-key.gpg >/dev/null
+    fsx_lustre_key fsx-ubuntu-public-key | idea_gpg "" --dearmor | sudo tee /usr/share/keyrings/fsx-ubuntu-public-key.gpg >/dev/null
     bash -c 'echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list && apt update'
 
     # Request the running kernel's module package directly so the metapackage cannot
