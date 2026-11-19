@@ -467,7 +467,8 @@ def job_resource_names() -> list:
                 if tokens:
                     names.append(tokens[0])
     except Exception as e:
-        log_error(f'resourcedef not read: {e}')
+        # an execution host keeps no resourcedef: PBS's own resources are read there
+        log_debug(f'resourcedef not read: {e}')
     return names
 
 
@@ -487,12 +488,14 @@ def plain(value):
 
 
 class OpenPBSJob:
-    def __init__(self, event_type: str, job, original: bool = False):
+    def __init__(self, event_type: str, job, whole: bool = False):
         self.event_type = event_type
         self.job = job
-        # the job as it was before a modifyjob: its resource list lists no keys on the
-        # cluster's PBS, so its resources are read by name
-        self.original = original
+        # whole: the job's full current request. on the cluster's PBS the job object of a
+        # movejob and the pre-edit job of a modifyjob list no resource keys but answer a
+        # lookup by name, so their resources are read by name. only a modifyjob's edited
+        # job is not whole: it lists the resources the edit sets, and no others
+        self.whole = whole
         self.matrix = self.build_matrix()
 
     def build_matrix(self):
@@ -951,7 +954,7 @@ class OpenPBSJob:
                 return None
             resources = self.job.Resource_List
             keys = list(resources.keys())
-            if not keys and self.original:
+            if not keys and self.whole:
                 keys = job_resource_names()
             response = {}
             for key in keys:
@@ -1206,6 +1209,17 @@ class OpenPBSJob:
         return result
 
 
+def current_job(event_type: str, job) -> dict:
+    """the job's full current request, from the job object of any event: every way the
+    hook sends a job goes through here or edited_job, so the two cannot drift again"""
+    return OpenPBSJob(event_type=event_type, job=job, whole=True).build()
+
+
+def edited_job(event_type: str, job) -> dict:
+    """a modifyjob's edited job: only what the edit sets"""
+    return OpenPBSJob(event_type=event_type, job=job, whole=False).build()
+
+
 class OpenPBSNode:
     def __init__(self, node):
         self.node = node
@@ -1327,7 +1341,7 @@ class OpenPBSEvent:
             response = []
             for key in self.event.job_list.keys():
                 pbs_job = self.event.job_list[key]
-                job = OpenPBSJob(event_type=self.type, job=pbs_job).build()
+                job = current_job(self.type, pbs_job)
                 response.append(job)
             return response
         return None
@@ -1436,12 +1450,14 @@ class OpenPBSEvent:
 
         job = self.job
         if job:
-            pbs_event['job'] = OpenPBSJob(event_type=self.type, job=job).build()
+            pbs_event['job'] = (
+                edited_job(self.type, job)
+                if self.type == 'modifyjob'
+                else current_job(self.type, job)
+            )
         job_o = self.job_o
         if job_o:
-            pbs_event['job_o'] = OpenPBSJob(
-                event_type=self.type, job=job_o, original=True
-            ).build()
+            pbs_event['job_o'] = current_job(self.type, job_o)
 
         result = {}
         for key in pbs_event:
