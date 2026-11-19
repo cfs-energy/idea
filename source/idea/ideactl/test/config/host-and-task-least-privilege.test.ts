@@ -90,7 +90,7 @@ describe('desktop gateway and broker tasks', () => {
       assert.deepEqual(asList(statement.Resource), [`arn:aws:dynamodb:us-east-2:${ACCOUNT}:table/${CLUSTER}.vdc.dcv-broker.*`]);
     }
     for (const statement of granting(statements, 'dynamodb:DeleteItem')) {
-      assert.ok(!asList(statement.Resource).some((arn) => new RegExp(`^${arn.replace(/[.]/g, "\\.").replace(/\*/g, ".*")}$`).test(`arn:aws:dynamodb:us-east-2:${ACCOUNT}:table/${CLUSTER}.vdc.controller.session-permissions`)));
+      assert.ok(!asList(statement.Resource).some((arn) => new RegExp(`^${arn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*")}$`).test(`arn:aws:dynamodb:us-east-2:${ACCOUNT}:table/${CLUSTER}.vdc.controller.session-permissions`)));
     }
   });
 });
