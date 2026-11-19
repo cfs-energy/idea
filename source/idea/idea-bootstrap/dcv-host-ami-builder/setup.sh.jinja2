@@ -81,6 +81,12 @@ systemctl enable --now amazon-ssm-agent
 {% set ubuntu_desktop_bake = context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
 {% if ubuntu_desktop_bake %}
 {% include '_templates/linux/set_kernel.jinja2' %}
+{% elif context.base_os in ('rhel9', 'rocky9', 'rhel10', 'rocky10') and (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache')) %}
+{# an image on a kernel series newer than any the Lustre client supports moves off it first;
+   dcv_host_ami_builder.sh holds the kernel after the client install #}
+{% with kernel_ahead_only = true %}
+{% include '_templates/linux/set_kernel.jinja2' %}
+{% endwith %}
 {% endif %}
 
 {# this host mounts Lustre, so a failed client install stops it #}

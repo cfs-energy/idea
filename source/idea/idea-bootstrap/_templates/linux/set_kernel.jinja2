@@ -134,6 +134,44 @@ TARGET_KERNEL_VERSION="5.14.0-687*"
    the image boots, and the FSx repository has none for a series Red Hat has only just shipped. #}
 TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
 {% endif %}
+{# Bakes and desktops on a cluster that uses FSx for Lustre move a host whose image boots a kernel
+   series newer than any the client has a build for (Rocky 10.3, 6.12.0-264, in 2026-11) to the
+   newest kernel of the newest series it supports, and reboot, before the client is installed.
+   Unbaked compute nodes do not: their client step already ran. #}{% set fsx_kernel_move = context.base_os in ('rhel9', 'rocky9', 'rhel10', 'rocky10') and ((compute_image_bake | default(false)) if (keep_kernel_series | default(false)) else (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache'))) %}
+{% if fsx_kernel_move %}
+{# the newest series fsx_lustre_client.jinja2 has an arm for, and the minor release it shipped in:
+   change both files together when FSx publishes the next point release #}
+{% if context.base_os in ('rhel10', 'rocky10') %}
+FSX_NEWEST_SERIES="6.12.0-211"
+FSX_NEWEST_MINOR="10.2"
+{% else %}
+FSX_NEWEST_SERIES="5.14.0-741"
+FSX_NEWEST_MINOR="9.9"
+{% endif %}
+# the minor release whose repository carries the target series: the running kernel's, unless it moves
+KERNEL_SERIES_MINOR=$(uname -r | sed -n 's/.*\.el\([0-9]*\)_\([0-9]*\)[.].*/\1.\2/p')
+KERNEL_SERIES_MOVE=""
+if [[ "$(printf '%s\n%s\n' "$(uname -r | cut -d. -f1-3)" "${FSX_NEWEST_SERIES}" | sort -V | tail -1)" != "${FSX_NEWEST_SERIES}" ]]; then
+  KERNEL_SERIES_MOVE="Kernel $(uname -r) is newer than any FSx for Lustre client build"
+  log_warning "${KERNEL_SERIES_MOVE}; moving to the newest ${FSX_NEWEST_SERIES} kernel (EL ${FSX_NEWEST_MINOR})"
+  TARGET_KERNEL_VERSION="${FSX_NEWEST_SERIES}*"
+  KERNEL_SERIES_MINOR="${FSX_NEWEST_MINOR}"
+fi
+{% endif %}
+{% if fsx_kernel_move and context.base_os in ('rocky9', 'rocky10') %}
+# Rocky's repositories carry the kernels of the current minor release only and its vault keeps the
+# earlier ones; Red Hat's keep every kernel of the major release, so RHEL needs nothing here.
+function add_kernel_vault_repo() {
+  [[ -n "${KERNEL_SERIES_MINOR}" ]] || return 0
+  [[ -z "$(dnf -q repoquery --latest-limit 1 "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | head -1)" ]] || return 0
+  log_info "Kernel ${TARGET_KERNEL_VERSION} is not in Rocky's repositories; adding the Rocky ${KERNEL_SERIES_MINOR} vault for kernel packages"
+  local section
+  for section in BaseOS AppStream; do
+    printf '[idea-rocky-kernel-vault-%s]\nname=Rocky Linux %s %s vault, kernel packages only\nbaseurl=https://dl.rockylinux.org/vault/rocky/%s/%s/$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-{{ '10' if context.base_os == 'rocky10' else '9' }}\nincludepkgs=kernel*\nenabled=1\n\n' \
+        "${section}" "${KERNEL_SERIES_MINOR}" "${section}" "${KERNEL_SERIES_MINOR}" "${section}"
+  done > /etc/yum.repos.d/idea-rocky-kernel-vault.repo
+}
+{% endif %}
 
 
 {% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') or ubuntu_desktop_bake | default(false) %}function apply_kernel_holds() {
@@ -358,6 +396,11 @@ function set_kernel_version() {
   log_info "Current kernel: $current_kernel"
   log_info "Target kernel version: $target_version"
 
+{% if fsx_kernel_move and context.base_os in ('rocky9', 'rocky10') %}  add_kernel_vault_repo
+{% endif %}
+{% if kernel_ahead_only | default(false) %}  # this pass runs before the Lustre client install and only moves a host off a series it has no build for
+  [[ -n "${KERNEL_SERIES_MOVE:-}" && "$current_kernel" != "${target_base}"[.-]* ]] || return 0
+{% endif %}
 {% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  # Check if we're already running the target kernel series
   if [[ "$current_kernel" == "${target_base}"[.-]* ]]; then
     log_info "Confirmed running target kernel series $target_base"
@@ -394,8 +437,12 @@ function set_kernel_version() {
   # Install target kernel if not already installed
   if [[ "$kernel_installed" != "true" ]]; then
     log_info "Target kernel ${target_version} not installed, installing..."
-    install_target_kernel || fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
-  else
+{% if fsx_kernel_move %}    if ! install_target_kernel; then
+      [[ -z "${KERNEL_SERIES_MOVE}" ]] || fail_kernel_bootstrap lustre-module-missing "${KERNEL_SERIES_MOVE}, and no ${target_version} kernel could be installed{{ ' from the Rocky ${KERNEL_SERIES_MINOR} vault' if context.base_os in ('rocky9', 'rocky10') else '' }}. To fix: use a base image on the ${FSX_NEWEST_SERIES} series, or rebuild once FSx publishes a client for this one (reason code: lustre-module-missing)."
+      fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
+    fi
+{% else %}    install_target_kernel || fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
+{% endif %}  else
     log_info "Target kernel ${target_version} already installed"
   fi
 

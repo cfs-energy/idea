@@ -98,6 +98,10 @@ systemctl enable --now amazon-ssm-agent
 
 {# a failed Lustre client install reports through the in-bake checks #}
 {% set compute_image_bake = true %}
+{# an image on a kernel series newer than any the Lustre client supports moves off it first #}
+{% with kernel_ahead_only = true %}
+{% include '_templates/linux/compute_kernel_hold.jinja2' %}
+{% endwith %}
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
 # the bootstrap trace lands on shared storage and carries host and job details: root only
