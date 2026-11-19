@@ -1704,22 +1704,23 @@ const wholeSeconds = (ms: number): number => Math.round(ms / 1000);
  */
 export class UpgradeTiming {
   private readonly rows: string[][] = [];
-  private readonly startedAt: number;
+  private startedAt: number | undefined;
   private current: { name: string; startedAt: number } | undefined;
   private readonly deps: Pick<UpgradeDeps, "now" | "out">;
 
+  // The clock is first read by the first phase, so a refusal before it touches nothing else.
   constructor(deps: Pick<UpgradeDeps, "now" | "out">) {
     this.deps = deps;
-    this.startedAt = deps.now();
   }
 
   private mark(at: number): string {
-    return `${new Date(at).toISOString().slice(11, 19)}Z +${wholeSeconds(at - this.startedAt)}s`;
+    return `${new Date(at).toISOString().slice(11, 19)}Z +${wholeSeconds(at - (this.startedAt ?? at))}s`;
   }
 
   phase(name: string): void {
     this.close();
     const at = this.deps.now();
+    this.startedAt ??= at;
     this.current = { name, startedAt: at };
     this.deps.out(`timing ${this.mark(at)}: ${name} started`);
   }
@@ -1732,6 +1733,7 @@ export class UpgradeTiming {
 
   /** Closes the open phase and prints the table, whatever the run's outcome. */
   summary(): void {
+    if (this.startedAt === undefined) return;
     this.close();
     this.rows.push(["total", "", String(wholeSeconds(this.deps.now() - this.startedAt))]);
     this.deps.out(`Upgrade timing (seconds)\n${renderTable(["phase", "stack", "seconds"], this.rows)}`);
@@ -1750,7 +1752,6 @@ export class UpgradeTiming {
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
   const timing = new UpgradeTiming(deps);
-  timing.phase("Pre-flight");
   try {
     await runUpgrade(deps, options, timing);
   } finally {
@@ -1801,6 +1802,7 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
     }
   }
   let cleared: ClearedInstance[] = [];
+  timing.phase("Pre-flight");
   try {
     if (await upgradeDeploysEcs(deps, options)) await checkAwsvpcTrunking(deps, options);
     const baseOs = await resolveUpgradeBaseOs(deps, options);
