@@ -167,7 +167,7 @@ function add_kernel_vault_repo() {
   log_info "Kernel ${TARGET_KERNEL_VERSION} is not in Rocky's repositories; adding the Rocky ${KERNEL_SERIES_MINOR} vault for kernel packages"
   local section
   for section in BaseOS AppStream; do
-    printf '[idea-rocky-kernel-vault-%s]\nname=Rocky Linux %s %s vault, kernel packages only\nbaseurl=https://dl.rockylinux.org/vault/rocky/%s/%s/$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-{{ '10' if context.base_os == 'rocky10' else '9' }}\nincludepkgs=kernel*\nenabled=1\n\n' \
+    printf '[idea-rocky-kernel-vault-%s]\nname=Rocky Linux %s %s vault, kernel packages only\nbaseurl=https://dl.rockylinux.org/vault/rocky/%s/%s/$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-{{ '10' if context.base_os == 'rocky10' else '9' }}\nincludepkgs=kernel*\nenabled=1\n# a host that cannot reach the vault still runs every other package operation\nskip_if_unavailable=1\n\n' \
         "${section}" "${KERNEL_SERIES_MINOR}" "${section}" "${KERNEL_SERIES_MINOR}" "${section}"
   done > /etc/yum.repos.d/idea-rocky-kernel-vault.repo
 }
@@ -352,7 +352,8 @@ function update_within_target_series() {
   newest=$(dnf repoquery -q --latest-limit 1 --qf '%{version}-%{release}.%{arch}' "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | tail -1)
   [[ -n "${newest}" && "${newest}" != "${current_kernel}" ]] || return 0
   [[ "$(printf '%s\n%s\n' "${current_kernel}" "${newest}" | sort -V | tail -1)" == "${newest}" ]] || return 0
-  make_boot_room_for_kernel
+  # already installed (the Lustre client package can pull it in): it needs no more room
+  rpm -q "kernel-core-${newest}" >/dev/null 2>&1 || make_boot_room_for_kernel
   if ! package_transaction dnf install -y "kernel-${newest}" "kernel-core-${newest}" "kernel-devel-${newest}"; then
 {% endif %}
     log_warning "Unable to install kernel ${newest}; keeping ${current_kernel}"

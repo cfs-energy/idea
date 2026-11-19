@@ -192,6 +192,8 @@ def test_an_image_ahead_of_the_lustre_client_moves_to_a_supported_kernel_first(
     )
     assert f'/vault/rocky/{minor}/AppStream/' in first['vault']
     assert 'includepkgs=kernel*' in first['vault'] and 'gpgcheck=1' in first['vault']
+    # an unreachable vault never fails an unrelated package operation on the host
+    assert first['vault'].count('skip_if_unavailable=1') == 2
     assert f'install kernel {supported}' in first['calls']
     assert first['default'] == supported
     assert first['calls'][-1] == f'reboot into {supported}'
@@ -244,6 +246,7 @@ def test_a_supported_kernel_is_left_as_it_is(tmp_path):
 
 
 def test_no_supported_kernel_to_move_to_stops_with_the_lustre_reason(tmp_path):
+    # also what an unreachable vault looks like: skip_if_unavailable leaves it with no kernels
     image, _, _, _ = HOSTS['rocky10']
     _, stage = setup_stage(COMPUTE_SETUP, 'rocky10')
     host = boot(tmp_path, stage, image, HOSTS['rocky10'], vault='')
