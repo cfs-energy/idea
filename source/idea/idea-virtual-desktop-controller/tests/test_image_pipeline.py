@@ -11,6 +11,8 @@ import time
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
+from pathlib import Path
+
 import pytest
 from botocore.exceptions import ClientError
 
@@ -368,18 +370,22 @@ class FakeBuilder:
     ):
         self.before_snapshot = before_snapshot
         self.ami_name = ami_name
+        self.image_tags = dict(image_tags or {})
         FakeBuilder.made.append(
             {
                 'base_ami': base_ami,
                 'instance_type': instance_type,
                 'ebs_volume_size': ebs_volume_size,
-                'tags': image_tags,
+                'tags': self.image_tags,
                 'ami_name': ami_name,
             }
         )
 
     def get_ami_full_name(self):
         return f'{self.ami_name}-v10022026-120000-abcd'
+
+    def get_bootstrap_dir(self):
+        return str(Path(__file__).resolve().parents[2] / 'idea-bootstrap')
 
     def build(self, progress):
         if FakeBuilder.error:
@@ -474,7 +480,7 @@ def test_a_row_runs_every_step_and_promotes_a_validated_image():
         h.stack_db.stacks['ss-base-rocky9-x86-64-base'].base_ami_id
         == 'ami-stock-rocky9'
     )
-    assert FakeBuilder.made[0]['tags'] == {'idea:ImagePipeline': 'desktop'}
+    assert FakeBuilder.made[0]['tags']['idea:ImagePipeline'] == 'desktop'
 
 
 def test_a_second_promotion_keeps_the_previous_image():
@@ -2489,3 +2495,13 @@ def test_a_stored_builder_type_of_the_other_architecture_fails_the_row():
     assert row.status == 'failed'
     assert 'c7i.4xlarge is x86_64' in row.error
     assert FakeBuilder.made == []
+
+
+def test_a_desktop_image_carries_its_lineage():
+    h = Harness()
+    queue_and_run(h)
+    tags = FakeBuilder.made[0]['tags']
+    assert tags['idea:ImagePipeline'] == 'desktop'
+    assert (tags['idea:BakeMode'], tags['idea:BakeLineageDepth']) == ('full', '0')
+    assert tags['idea:BakeRootImage'] == 'ami-stock-rocky9'
+    assert len(tags['idea:BakeInputs']) == 64

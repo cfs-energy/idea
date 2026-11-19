@@ -1380,3 +1380,140 @@ def test_the_builder_disk_is_gp3_at_the_most_the_size_allows(
     }
     assert ebs['Iops'] <= max(3000, 500 * volume_gb)
     assert ebs['Throughput'] <= ebs['Iops'] / 4
+
+
+class _Config:
+    def __init__(self, values):
+        self.values = values
+
+    def get_config(self, key, default=None):
+        return self.values.get(key, default)
+
+    def get_string(self, key, default=None):
+        return self.values.get(key, default)
+
+
+def _slow_config():
+    return {
+        'global-settings.package_config': {
+            'linux_packages': {'application': ['cmake', 'tcl']},
+            'aws_ssm': {'x86_64': 'https://example.invalid/ssm.rpm'},
+        },
+        'shared-storage': {
+            'home': {'provider': 'efs', 'mount_dir': '/home'},
+            'scratch': {'provider': 'fsx_lustre'},
+        },
+        'scheduler.provider': 'openpbs',
+        'global-settings.gpu_settings': {'nvidia': {'driver': '580'}},
+    }
+
+
+def _bootstrap(tmp_path):
+    from ideasdk.aws.image_builds import SLOW_INPUT_TEMPLATES
+
+    for name in SLOW_INPUT_TEMPLATES[:2]:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'install {name}')
+    return str(tmp_path)
+
+
+def test_the_slow_inputs_fingerprint_ignores_key_order(tmp_path):
+    from ideasdk.aws.image_builds import inputs_fingerprint, lineage_tags, slow_inputs
+
+    bootstrap = _bootstrap(tmp_path)
+    values = _slow_config()
+    shuffled = {key: values[key] for key in reversed(list(values))}
+    shuffled['global-settings.package_config'] = {
+        'aws_ssm': values['global-settings.package_config']['aws_ssm'],
+        'linux_packages': values['global-settings.package_config']['linux_packages'],
+    }
+    shuffled['shared-storage'] = {
+        'scratch': values['shared-storage']['scratch'],
+        'home': values['shared-storage']['home'],
+    }
+    first = inputs_fingerprint(slow_inputs(_Config(values), bootstrap))
+    assert first == inputs_fingerprint(slow_inputs(_Config(shuffled), bootstrap))
+    assert len(first) == 64
+    assert lineage_tags(_Config(values), bootstrap, 'ami-root') == {
+        'idea:BakeMode': 'full',
+        'idea:BakeRootImage': 'ami-root',
+        'idea:BakeInputs': first,
+        'idea:BakeLineageDepth': '0',
+    }
+
+
+def _changed(values, key, value):
+    values = dict(values)
+    values[key] = value
+    return values
+
+
+@pytest.mark.parametrize(
+    'change',
+    [
+        lambda v: _changed(
+            v,
+            'global-settings.package_config',
+            {'linux_packages': {'application': ['cmake', 'tcl', 'tk']}},
+        ),
+        lambda v: _changed(
+            v, 'shared-storage', {'home': {'provider': 'fsx_netapp_ontap'}}
+        ),
+        lambda v: _changed(v, 'scheduler.provider', 'slurm'),
+        lambda v: _changed(
+            v, 'global-settings.gpu_settings', {'nvidia': {'driver': '590'}}
+        ),
+    ],
+    ids=['package-pins', 'storage-providers', 'scheduler-provider', 'gpu-settings'],
+)
+def test_the_slow_inputs_fingerprint_changes_with_each_input(tmp_path, change):
+    from ideasdk.aws.image_builds import inputs_fingerprint, slow_inputs
+
+    bootstrap = _bootstrap(tmp_path)
+    values = _slow_config()
+    before = inputs_fingerprint(slow_inputs(_Config(values), bootstrap))
+    after = inputs_fingerprint(slow_inputs(_Config(change(values)), bootstrap))
+    assert before != after
+
+
+def test_the_slow_inputs_fingerprint_changes_with_a_template(tmp_path):
+    from ideasdk.aws.image_builds import (
+        SLOW_INPUT_TEMPLATES,
+        inputs_fingerprint,
+        slow_inputs,
+    )
+
+    bootstrap = _bootstrap(tmp_path)
+    config = _Config(_slow_config())
+    before = inputs_fingerprint(slow_inputs(config, bootstrap))
+    (tmp_path / SLOW_INPUT_TEMPLATES[0]).write_text('install a newer version')
+    edited = inputs_fingerprint(slow_inputs(config, bootstrap))
+    (tmp_path / SLOW_INPUT_TEMPLATES[-1]).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / SLOW_INPUT_TEMPLATES[-1]).write_text('a template that was absent')
+    added = inputs_fingerprint(slow_inputs(config, bootstrap))
+    assert len({before, edited, added}) == 3
+
+
+def test_the_slow_inputs_fingerprint_reads_a_pyhocon_null_as_null(tmp_path):
+    from pyhocon import ConfigFactory
+
+    from ideasdk.aws.image_builds import inputs_fingerprint, slow_inputs
+
+    bootstrap = _bootstrap(tmp_path)
+    tree = ConfigFactory.parse_string('a { sha256 = null, link = "x" }')
+    first = inputs_fingerprint(
+        slow_inputs(_Config({'global-settings.package_config': tree}), bootstrap)
+    )
+    again = ConfigFactory.parse_string('a { link = "x", sha256 = null }')
+    assert first == inputs_fingerprint(
+        slow_inputs(_Config({'global-settings.package_config': again}), bootstrap)
+    )
+    assert first == inputs_fingerprint(
+        slow_inputs(
+            _Config(
+                {'global-settings.package_config': {'a': {'sha256': None, 'link': 'x'}}}
+            ),
+            bootstrap,
+        )
+    )

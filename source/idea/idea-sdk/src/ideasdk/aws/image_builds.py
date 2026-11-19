@@ -5,7 +5,9 @@ that executes a build in a thread and keeps that record current, and the helpers
 Custom AMIs page uses to classify what a cluster runs today.
 """
 
+import hashlib
 import json
+import os
 import re
 import socket
 import threading
@@ -145,6 +147,41 @@ GP3_BASELINE_THROUGHPUT = 125
 GP3_MAX_IOPS_PER_GIB = 500
 HOST_ROOT_GP3_IOPS = GP3_BASELINE_IOPS
 HOST_ROOT_GP3_THROUGHPUT = GP3_BASELINE_THROUGHPUT
+
+# lineage tags on every pipeline image, so a later bake can tell whether an image is a safe
+# starting point: how it was baked, the vendor image the chain started from, a fingerprint
+# of the slow inputs, and how many bakes deep it is (0: baked from the vendor image)
+BAKE_MODE_TAG = 'idea:BakeMode'
+BAKE_ROOT_IMAGE_TAG = 'idea:BakeRootImage'
+BAKE_INPUTS_TAG = 'idea:BakeInputs'
+BAKE_LINEAGE_DEPTH_TAG = 'idea:BakeLineageDepth'
+BAKE_MODE_FULL = 'full'
+# the bootstrap templates that install third-party software, relative to the bootstrap dir
+SLOW_INPUT_TEMPLATES = (
+    '_templates/linux/aws_ssm.jinja2',
+    '_templates/linux/cjson_devel.jinja2',
+    '_templates/linux/cloudwatch_agent.jinja2',
+    '_templates/linux/compute_kernel_hold.jinja2',
+    '_templates/linux/dcv_server.jinja2',
+    '_templates/linux/dcv_session_manager_agent.jinja2',
+    '_templates/linux/efs_mount_helper.jinja2',
+    '_templates/linux/epel_repo.jinja2',
+    '_templates/linux/fsx_lustre_client.jinja2',
+    '_templates/linux/gpu_drivers.jinja2',
+    '_templates/linux/jq.jinja2',
+    '_templates/linux/nfs_utils.jinja2',
+    '_templates/linux/openpbs.jinja2',
+    '_templates/linux/openpbs_client.jinja2',
+    '_templates/linux/prometheus.jinja2',
+    '_templates/linux/prometheus_node_exporter.jinja2',
+    '_templates/linux/stunnel.jinja2',
+    '_templates/linux/system_packages.jinja2',
+    '_templates/windows/cloudwatch_agent.jinja2',
+    '_templates/windows/gpu/amd_drivers.jinja2',
+    '_templates/windows/gpu/nvidia_drivers.jinja2',
+    'dcv-host-ami-builder-windows/Setup.ps1.jinja2',
+    'virtual-desktop-host-windows/Install.ps1',
+)
 
 _RECORD_TIMESTAMPS = (
     'started_on',
@@ -956,6 +993,62 @@ def builder_root_ebs(volume_gb: int) -> Dict[str, Any]:
         'VolumeType': 'gp3',
         'Iops': iops,
         'Throughput': throughput,
+    }
+
+
+def slow_inputs(config, bootstrap_dir: Optional[str]) -> Dict[str, Any]:
+    """
+    what a bake spends its slow steps on: package pins and lists, the storage providers,
+    the scheduler provider, GPU settings and the third-party install templates. a template
+    the module does not ship is recorded as absent
+    """
+    storage = config.get_config('shared-storage', default={}) or {}
+    templates = {}
+    for path in SLOW_INPUT_TEMPLATES:
+        try:
+            with open(os.path.join(bootstrap_dir or '', path), 'rb') as f:
+                templates[path] = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            templates[path] = None
+    return {
+        'package_config': config.get_config(
+            'global-settings.package_config', default={}
+        ),
+        'storage_providers': sorted(
+            {
+                str(fs.get('provider'))
+                for fs in storage.values()
+                if hasattr(fs, 'get') and fs.get('provider')
+            }
+        ),
+        'scheduler_provider': config.get_string('scheduler.provider', default=None),
+        'gpu_settings': config.get_config('global-settings.gpu_settings', default={}),
+        'templates': templates,
+    }
+
+
+def inputs_fingerprint(inputs: Dict[str, Any]) -> str:
+    """sha256 of the inputs as canonical JSON: key order does not change it"""
+
+    def plain(value):
+        # pyhocon keeps a null as a NoneValue object, whose str() carries its address
+        return None if type(value).__name__ == 'NoneValue' else str(value)
+
+    canonical = json.dumps(
+        inputs, sort_keys=True, separators=(',', ':'), default=plain
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def lineage_tags(
+    config, bootstrap_dir: Optional[str], root_image_id: Optional[str]
+) -> Dict[str, str]:
+    """the lineage tags of a full bake from the vendor image root_image_id"""
+    return {
+        BAKE_MODE_TAG: BAKE_MODE_FULL,
+        BAKE_ROOT_IMAGE_TAG: root_image_id or '',
+        BAKE_INPUTS_TAG: inputs_fingerprint(slow_inputs(config, bootstrap_dir)),
+        BAKE_LINEAGE_DEPTH_TAG: '0',
     }
 
 

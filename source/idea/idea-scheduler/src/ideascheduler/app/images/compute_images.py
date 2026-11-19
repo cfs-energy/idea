@@ -53,6 +53,7 @@ from ideasdk.aws.image_builds import (
     check_builder_instance_type,
     custom_build_architecture,
     is_custom_record,
+    lineage_tags,
     pipeline_builder_instance_type,
     IMAGE_BUILD_TAG,
     STALE_AFTER,
@@ -720,6 +721,12 @@ class ComputeImageService:
                         ),
                         force=True,
                         image_tags={PIPELINE_IMAGE_TAG: 'compute'},
+                    )
+                    # lineage for a later bake to judge this image as a starting point
+                    builder.image_tags.update(
+                        lineage_tags(
+                            self.context.config(), builder.get_bootstrap_dir(), source
+                        )
                     )
                 else:
                     builder.base_ami = source

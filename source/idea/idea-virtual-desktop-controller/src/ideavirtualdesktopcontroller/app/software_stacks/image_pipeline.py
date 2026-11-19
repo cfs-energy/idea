@@ -53,6 +53,7 @@ from ideasdk.aws.image_builds import (
     describe_image_or_none,
     builder_log_link,
     is_custom_record,
+    lineage_tags,
     pipeline_builder_instance_type,
     ImageBuildRecordsDB,
     ImageBuildRunner,
@@ -1058,6 +1059,14 @@ class DesktopImagePipeline:
                 force=True,
                 before_snapshot=before_snapshot,
                 image_tags={PIPELINE_IMAGE_TAG: 'desktop'},
+            )
+            # lineage for a later bake to judge this image as a starting point
+            builder.image_tags.update(
+                lineage_tags(
+                    self.context.config(),
+                    builder.get_bootstrap_dir(),
+                    record.source_ami,
+                )
             )
             record.ami_name = builder.get_ami_full_name()
             self._save(record)

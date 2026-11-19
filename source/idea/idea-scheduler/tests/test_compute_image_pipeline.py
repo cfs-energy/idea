@@ -1580,6 +1580,7 @@ class LaunchingEc2(FakeEc2):
 
 def bake_through_the_pipeline(monkeypatch, architecture='x86_64', settings=None):
     """one queued row through _run_pipeline with the real builder up to CreateImage"""
+    monkeypatch.setenv('IDEA_DEV_MODE', 'true')  # the bootstrap templates of this tree
     ec2 = LaunchingEc2()
     config = {**DEFAULT_CONFIG, **BUILDER_CONFIG, 'global-settings.custom_tags': []}
     if settings is not None:
@@ -1651,3 +1652,14 @@ def test_a_stored_compute_builder_type_of_the_other_architecture_fails_the_row(
     assert record.status == 'failed'
     assert 'm8g.2xlarge is arm64' in record.error
     assert ec2.launches == []
+
+
+def test_a_compute_image_carries_its_lineage(monkeypatch):
+    _, ec2, _ = bake_through_the_pipeline(monkeypatch)
+    for spec in ec2.images[0]['TagSpecifications']:
+        tags = {tag['Key']: tag['Value'] for tag in spec['Tags']}
+        assert tags['idea:ImagePipeline'] == 'compute'
+        assert tags['idea:BakeMode'] == 'full'
+        assert tags['idea:BakeRootImage'] == 'ami-rocky9stock00001'
+        assert tags['idea:BakeLineageDepth'] == '0'
+        assert len(tags['idea:BakeInputs']) == 64
