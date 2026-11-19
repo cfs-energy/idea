@@ -56,6 +56,9 @@ InfoTuple = Tuple[QueueType, LogInfo]
 CAPACITY_FAILURE_REASON_MIN_STACK_AGE_SECS = 300
 # written by a compute node that stops its own bootstrap (bootstrap_common.sh fail_bootstrap)
 BOOTSTRAP_STATUS_TAG = 'idea:BootstrapStatus'
+# what the node named with its status (a shared storage stop: the mount directories); the node
+# and its log are deleted within seconds, this tag is what the scheduler can still read
+BOOTSTRAP_DETAIL_TAG = 'idea:BootstrapDetail'
 BOOTSTRAP_INSUFFICIENT_MEMORY = 'insufficient-memory'
 # the statuses the Linux bootstrap writes when a node stops for its FSx for Lustre (owner
 # decision: the job does not run on such a node): an existing or queue-default file system
@@ -95,6 +98,19 @@ SHARED_STORAGE_REASON = (
     'An administrator must check that file system and its network access. This is not '
     'a problem with the job or the image'
 )
+
+
+def shared_storage_reason(directories: str = '') -> str:
+    """the owner's reason, naming the mount directories the node reported when it did"""
+    if not directories:
+        return SHARED_STORAGE_REASON
+    return SHARED_STORAGE_REASON.replace(
+        'could not be mounted on the node.',
+        f'could not be mounted on the node ({directories}).',
+        1,
+    )
+
+
 # the cluster-wide site hook mismatch is logged at error level once per process, not once
 # per job: every job hits it until it is fixed
 _site_hook_mismatch_reported = Event()
@@ -1402,7 +1418,7 @@ class NodeHouseKeepingSession:
                 f'hook file'
             )
         if status == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
-            return SHARED_STORAGE_REASON
+            return shared_storage_reason(self._stopped_node_detail(job, status))
         if status == BOOTSTRAP_SCRATCH_UNAVAILABLE:
             return (
                 f'the new FSx for Lustre file system made for this job in stack '
@@ -1448,12 +1464,35 @@ class NodeHouseKeepingSession:
             if stack in _shared_storage_reported:
                 return
             _shared_storage_reported.add(stack)
+            directories = (
+                self._stopped_node_detail(job, status) or 'not reported by the node'
+            )
             self._logger.error(
                 f'a compute node of stack {stack} stopped its bootstrap: a shared file '
-                f'system configured for the cluster did not mount (the node bootstrap log '
-                f'names the mount directories). Jobs are held until an administrator '
-                f'restores that file system or its network access (job {job.job_id}).'
+                f'system configured for the cluster did not mount (mount directories: '
+                f'{directories}). Jobs are held until an administrator restores that file '
+                f'system or its network access (job {job.job_id}).'
             )
+
+    def _stopped_node_detail(self, job: SocaJob, status: str) -> str:
+        """the detail a node of this job or its stack tagged with status, commas dropped
+        (qalter), or ''"""
+        stack = job.get_compute_stack()
+        try:
+            for instance in self._context.instance_cache.list_compute_instances(
+                states=['pending', 'running']
+            ):
+                if instance.get_tag(BOOTSTRAP_STATUS_TAG) != status:
+                    continue
+                if instance.soca_job_id != job.job_id and (
+                    not stack or instance.soca_compute_stack != stack
+                ):
+                    continue
+                detail = instance.get_tag(BOOTSTRAP_DETAIL_TAG) or ''
+                return ' '.join(detail.replace(',', ' ').split())
+        except Exception as e:
+            self._logger.warning(f'{job.log_tag} bootstrap detail not read: {e}')
+        return ''
 
     def _stack_bootstrap_status(self, job: SocaJob) -> Optional[str]:
         """a stop status a node of the job's stack reported, read by stack (shared nodes
@@ -1492,7 +1531,10 @@ class NodeHouseKeepingSession:
                 f'setting. qrls {job.job_id} to retry'
             )
         elif fsx_unavailable == BOOTSTRAP_SHARED_STORAGE_UNAVAILABLE:
-            message = f'Job held: {SHARED_STORAGE_REASON}. qrls {job.job_id} to retry after that.'
+            message = (
+                f'Job held: {shared_storage_reason(self._stopped_node_detail(job, fsx_unavailable))}. '
+                f'qrls {job.job_id} to retry after that.'
+            )
             comment = (
                 f'IDEA: held. Shared cluster storage did not mount on its node. '
                 f'qrls {job.job_id} to retry'

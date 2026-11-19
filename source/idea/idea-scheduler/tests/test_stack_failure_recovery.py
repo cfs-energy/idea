@@ -537,7 +537,9 @@ class MockInstanceCache:
         ]
 
 
-def job_instance(job: SocaJob, bootstrap_status=None, stack=None, state='running'):
+def job_instance(
+    job: SocaJob, bootstrap_status=None, stack=None, state='running', detail=None
+):
     from ideadatamodel import EC2Instance, constants
 
     tags = {
@@ -546,6 +548,8 @@ def job_instance(job: SocaJob, bootstrap_status=None, stack=None, state='running
     }
     if bootstrap_status:
         tags['idea:BootstrapStatus'] = bootstrap_status
+    if detail:
+        tags['idea:BootstrapDetail'] = detail
     return EC2Instance(
         {
             'InstanceId': 'i-0123456789abcdef0',
@@ -2111,3 +2115,51 @@ def test_every_bootstrap_status_a_compute_host_can_write_is_handled():
     arriving = {'shared-storage-unavailable'}
     assert arriving <= own_reason
     assert sorted((written | arriving) - own_reason - image_or_download) == []
+
+
+@pytest.mark.parametrize(
+    'detail, named', [('/apps/ /rc17d-ss', '/apps/ /rc17d-ss'), (None, None)]
+)
+def test_the_hold_and_the_operator_log_name_the_directories_the_node_tagged(
+    context,
+    job_cache,
+    mock_scheduler,
+    mock_job_monitor,
+    deleted_stacks,
+    monkeypatch,
+    caplog,
+    detail,
+    named,
+):
+    # the node and its log are gone within seconds: its detail tag is what is left
+    from ideascheduler.app.provisioning.node_monitor import node_house_keeper
+
+    node_house_keeper._shared_storage_reported.clear()
+    created_stack(monkeypatch, minutes_ago=4)
+    job = mock_job(provisioned=True)
+    job_cache.sync(jobs=[job])
+    mock_scheduler.live_jobs[job.job_id] = job
+    context.instance_cache = MockInstanceCache(
+        [
+            job_instance(
+                job, bootstrap_status='shared-storage-unavailable', detail=detail
+            )
+        ]
+    )
+
+    with caplog.at_level(logging.ERROR):
+        housekeeping_session(context).retry_provisioning_cleanup()
+
+    held = job_cache.get_job(job.job_id).error_message
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    if named:
+        assert held.startswith(
+            'Job held: a shared file system configured for the cluster could not be '
+            f'mounted on the node ({named}). An administrator must check'
+        )
+        assert any(f'mount directories: {named}' in e for e in errors)
+    else:
+        # an older image tags no detail: the reason reads as before
+        assert 'could not be mounted on the node. An administrator' in held
+        assert any('mount directories: not reported by the node' in e for e in errors)
+    assert ',' not in held

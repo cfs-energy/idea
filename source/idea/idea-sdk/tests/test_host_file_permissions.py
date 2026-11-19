@@ -49,7 +49,7 @@ def permissions_block(tmp_path, name) -> str:
         content = f.read()
     assert 'chmod 777' not in content
     # the mounts: the shared storage check that ends in this stop (it runs mount -a)
-    before, after = content.split('\nmount_shared_filesystems || fail_bootstrap ', 1)
+    before, after = content.split('\nmount_shared_filesystems || BOOTSTRAP_DETAIL=', 1)
     after = after.split('\n', 1)[1]
     # the existing-FSx mount check (tested on its own) runs between the mounts and this block
     for check in ('# End: Existing FSx Check\n', '# End: New FSx Check\n'):

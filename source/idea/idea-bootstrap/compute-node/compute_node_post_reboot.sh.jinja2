@@ -35,7 +35,7 @@ while [[ ${FS_MOUNT_ATTEMPT} -lt 5 ]] && ! mount_shared_filesystems; do
   sleep $(( RANDOM % 33 + 8 ))
   FS_MOUNT_ATTEMPT=$(( FS_MOUNT_ATTEMPT + 1 ))
 done
-mount_shared_filesystems || fail_bootstrap shared-storage-unavailable "Shared storage did not mount after the bootstrap reboot (5 attempts): ${SHARED_STORAGE_NOT_MOUNTED:-a configured file system}. Check that the file system exists and that this host's subnet and security groups reach it."
+mount_shared_filesystems || BOOTSTRAP_DETAIL="${SHARED_STORAGE_NOT_MOUNTED}" fail_bootstrap shared-storage-unavailable "Shared storage did not mount after the bootstrap reboot (5 attempts): ${SHARED_STORAGE_NOT_MOUNTED:-a configured file system}. Check that the file system exists and that this host's subnet and security groups reach it."
 
 {% if context.vars.job.params.fsx_lustre.enabled %}
 {% set fsx_existing = context.vars.job.params.fsx_lustre.existing_fsx %}

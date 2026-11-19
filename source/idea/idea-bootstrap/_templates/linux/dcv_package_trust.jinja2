@@ -49,7 +49,7 @@ function dcv_debs_signed () {
   command -v gpg > /dev/null || package_transaction apt-get install -y gnupg
   work=$(mktemp -d) || return 1
   mkdir -m 0700 "${work}/gnupg"
-  if ! gpg --batch --quiet --homedir "${work}/gnupg" --import "${DCV_NICE_KEY}"; then
+  if ! idea_gpg "${work}/gnupg" --quiet --import "${DCV_NICE_KEY}"; then
     rm -rf "${work}"
     return 1
   fi
@@ -61,7 +61,7 @@ function dcv_debs_signed () {
       continue
     fi
     # --decrypt writes only the signed text, so nothing outside the signature is read
-    gpg --batch --homedir "${work}/gnupg" --status-file "${work}/status" --output "${work}/signed" --decrypt "${work}/sig" 2> /dev/null
+    idea_gpg "${work}/gnupg" --status-file "${work}/status" --output "${work}/signed" --decrypt "${work}/sig" 2> /dev/null
     if ! grep -q '^\[GNUPG:\] GOODSIG ' "${work}/status" || ! grep -q "^\[GNUPG:\] VALIDSIG .* ${DCV_NICE_FINGERPRINT}\$" "${work}/status"; then
       log_error "${deb} is not signed by the pinned NICE key ${DCV_NICE_FINGERPRINT}: $(grep -o '\[GNUPG:\] [A-Z]*SIG.*' "${work}/status" | head -1)"
       rc=1

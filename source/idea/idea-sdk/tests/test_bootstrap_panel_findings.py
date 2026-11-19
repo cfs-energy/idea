@@ -239,7 +239,9 @@ def test_ubuntu_kernel_selection_uses_the_carried_fsx_key(base_os):
         bash(body + 'fsx_lustre_key fsx-ubuntu-public-key').stdout.strip()
         == carried.strip()
     )
-    key_line = text.index('fsx_lustre_key fsx-ubuntu-public-key | gpg --dearmor')
+    key_line = text.index(
+        'fsx_lustre_key fsx-ubuntu-public-key | idea_gpg "" --dearmor'
+    )
     assert text.index('function fsx_lustre_key') < key_line
 
 

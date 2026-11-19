@@ -308,8 +308,12 @@ function reboot_after_cloud_init () {
     bash "${BASH_SOURCE[0]}" || fail_bootstrap reboot-failed "Unable to schedule bootstrap reboot"
 }
 
+# BOOTSTRAP_DETAIL, when a caller sets it (a shared storage stop: the mount directories), is
+# tagged as idea:BootstrapDetail after the status: a compute node and its log are deleted within
+# seconds, and the scheduler can still read the tag. Commas go (the tag syntax splits on them),
+# and a value past the 256 character tag limit is cut with a " ..." marker.
 function fail_bootstrap () {
-  local status="${1}"
+  local status="${1}" detail="${BOOTSTRAP_DETAIL:-}"
   shift
   log_error "${1}"
   mkdir -p "${BOOTSTRAP_DIR}"
@@ -335,6 +339,15 @@ function fail_bootstrap () {
   if [[ -z "${id}" ]] || ! AWS_MAX_ATTEMPTS=1 timeout 30 aws --region "${region}" --cli-connect-timeout 5 --cli-read-timeout 10 \
       ec2 create-tags --resources "${id}" --tags "Key=idea:BootstrapStatus,Value=${status}"; then
     log_error "Unable to tag instance with idea:BootstrapStatus=${status}"
+  fi
+  # a call of its own after the status: a role that may not write it still gets the status
+  if [[ -n "${id}" && -n "${detail}" ]]; then
+    detail=$(tr ',\n' '  ' <<< "${detail}" | tr -s ' ')
+    detail="${detail% }"
+    (( ${#detail} <= 256 )) || detail="${detail:0:252} ..."
+    AWS_MAX_ATTEMPTS=1 timeout 30 aws --region "${region}" --cli-connect-timeout 5 --cli-read-timeout 10 \
+        ec2 create-tags --resources "${id}" --tags "Key=idea:BootstrapDetail,Value=${detail}" \
+      || log_error "Unable to tag instance with idea:BootstrapDetail=${detail}"
   fi
   exit 1
 }
@@ -440,6 +453,23 @@ function sha256_matches () {
   return 1
 }
 
+# Every gpg call on a host goes through this: idea_gpg <homedir> <gpg arguments...>. A private
+# keyring (the given directory, or with "" a scratch one removed afterwards), no prompts,
+# and never a gpg-agent: AL2023's gnupg2-minimal ships none, and a gpg that tries to start one
+# exits 2 even when the operation itself succeeded.
+function idea_gpg () {
+  local home="${1}" scratch="" rc
+  shift
+  if [[ -z "${home}" ]]; then
+    scratch=$(mktemp -d) || return 1
+    home="${scratch}"
+  fi
+  gpg --batch --no-autostart --homedir "${home}" "$@"
+  rc=$?
+  [[ -z "${scratch}" ]] || rm -rf "${scratch}"
+  return ${rc}
+}
+
 # Succeeds only when <signature> is a valid signature of <file> by the key with primary
 # fingerprint <fingerprint>, read from the armored <key> carried in the bootstrap bundle. A
 # scratch keyring holds that key alone; expiry of the carried copy does not stop the check.
@@ -455,8 +485,8 @@ function verify_detached_signature () {
     fi
   fi
   gnupg=$(mktemp -d) || return 1
-  if gpg --batch --quiet --homedir "${gnupg}" --import "${key}" 2> "${gnupg}/import.err"; then
-    status=$(gpg --batch --homedir "${gnupg}" --status-fd 1 --verify "${signature}" "${file}" 2> "${gnupg}/verify.err")
+  if idea_gpg "${gnupg}" --quiet --import "${key}" 2> "${gnupg}/import.err"; then
+    status=$(idea_gpg "${gnupg}" --status-fd 1 --verify "${signature}" "${file}" 2> "${gnupg}/verify.err")
   fi
   # gpg's own words (a bad signature, a digest or key the host's gpg refuses) go to the log
   reason=$(cat "${gnupg}/import.err" "${gnupg}/verify.err" 2> /dev/null | tr '\n' ' ')
