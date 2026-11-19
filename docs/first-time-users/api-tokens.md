@@ -26,7 +26,7 @@ the web terminal; that needs a signed-in session. Keep a token as safe as a pass
 
 Choose **Revoke** beside a token to delete it. Revocation takes effect across services
 within 60 seconds. Expired tokens are refused even while cached. Create a replacement
-before expiry when automation must continue. Only a SHA-256 hash is stored; a lost
+before expiry when automation must continue. On a service that runs more than one task, a revoked token can keep working on the other tasks for up to 30 seconds, because each task keeps authorization answers for that long. Only a SHA-256 hash is stored; a lost
 token must be replaced. Last used is recorded at most once per minute.
 
 The Auth API offers `CreateApiToken` (`name`, `expires_in_days`, from 1 to 365),

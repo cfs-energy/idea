@@ -329,6 +329,14 @@ Run these checks on each cluster before upgrading to 26.11.2. Every command only
 
 15. **Pinned control-plane image.** An `ecs.image` the upgrade leaves in place must be a 26.11.2 build: see [release images and template defaults](#release-images-and-template-defaults).
 
+16. **Groups and projects the start-time refresh cannot account for (optional, informational).** The refresh at every start removes access only on an explicit `enabled: false`. Run this read-only check to see what it will leave alone.
+
+    ```bash
+    C=<CLUSTER_NAME>; R=<REGION>; jq -rn --argjson g "$(aws dynamodb scan --region $R --table-name $C.accounts.groups --projection-expression 'group_name,enabled' --output json)" --argjson p "$(aws dynamodb scan --region $R --table-name $C.projects --projection-expression 'project_id,#n,enabled,ldap_groups' --expression-attribute-names '{"#n":"name"}' --output json)" '[$g.Items[].group_name.S] as $all | ($g.Items[]|select(.enabled.BOOL==null)|"group without enabled: \(.group_name.S)"), ($p.Items[]|select(.enabled.BOOL==null)|"project without enabled: \(.name.S) \(.project_id.S)"), ($p.Items[] as $x|$x.ldap_groups.L[]?.S|select(IN($all[])|not)|"project \($x.name.S) names a group with no record: \(.)"), "groups \($g.Count), projects \($p.Count)"'
+    ```
+
+    A group without `enabled` still grants access. A project without `enabled` is one nobody has enabled yet, which is normal; the refresh neither adds nor removes its rows. A project that names a group with no record keeps its rows. Nothing needs fixing before the upgrade, but a project in the list that people rely on should be enabled in the portal.
+
 ### What Changes After the Upgrade
 
 In plain terms, most disruptive first.
@@ -349,6 +357,7 @@ In plain terms, most disruptive first.
 - At most half the scheduler's request workers (8 by default, `scheduler.server.max_workers`) take portal and API submissions at once. The next gets "The scheduler is busy with other job submissions. Try again in a few seconds." A bash submission script is ended after 300 s.
 - A job asking for a `terminate_when_idle` above its queue's is refused at submission; on the built-in `job-shared` queue that is above 3. Jobs already queued keep their value.
 - Queue profiles created from now on do not let jobs create a new FSx for Lustre until an administrator ticks **Jobs may create a new FSx for Lustre**. Existing and built-in profiles keep allowing it; clear the box on those where it is not wanted.
+- A job whose node stops with `shared-storage-unavailable` (a cluster share did not mount) is held at once, with no retries.
 - A job that took its queue's default existing FSx cannot be moved with `qmove` into a queue that restricts `fsx_lustre` and has a different default or none.
 - Turning scratch off in a queue profile and saving clears its stored scratch and FSx defaults.
 - Job script templates that use a removed construct do not render (check 10).

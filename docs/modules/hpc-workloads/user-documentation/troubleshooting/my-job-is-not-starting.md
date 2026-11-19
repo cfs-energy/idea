@@ -20,6 +20,10 @@ stopped retrying and the job will not start on its own. Read the error message, 
 names, then release the job with `qrls <job_id>` or delete it with `qdel <job_id>` and
 resubmit.
 
+A job whose node stopped because a shared file system of the cluster did not mount (`idea:BootstrapStatus=shared-storage-unavailable`) is held at once, without retries. The reason reads "a shared file system configured for the cluster could not be mounted on the node. An administrator must check that file system and its network access. This is not a problem with the job or the image". Ask an administrator to fix the file system, then release the job with `qrls <job_id>`.
+
+If you change a waiting job with `qalter` and the scheduler still cannot match it to capacity, it counts toward the same retry limit and is held with the reason "The capacity of job group ... was built for another request".
+
 IDEA does not report a queue position or an estimated start time. Compute capacity is
 created on demand rather than drawn from a fixed pool, so neither can be computed from
 what the scheduler knows.

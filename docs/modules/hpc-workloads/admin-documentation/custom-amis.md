@@ -40,6 +40,8 @@ The line above the table shows the vendor image check schedule, when it last ran
 | **Pinned to** *image* | The row is pinned. It is not rebuilt or switched until you unpin it. |
 | **Unsupported in this region** | The vendor does not publish this OS in the region. |
 
+Rocky Linux publishes no images in the AWS GovCloud (US) partition, so there its compute and desktop rows read "Not available in this partition" and are never queued, refreshed or baked. A pinned or custom Rocky image is not affected.
+
 **Rolled back: automatic updates paused** under a status means the row was rolled back. See [Roll back and pin](#roll-back-and-pin).
 
 ### Row actions
@@ -90,6 +92,10 @@ These run on the builder before the snapshot. On Linux:
 * the SSM agent is installed and enabled;
 * GPU variants: the NVIDIA or AMD driver responds.
 
+Before a bake installs a kernel it removes rescue images and, on a bake, kernels older than the running one. If `/boot` still cannot hold the new kernel the bake stops with `kernel-install-failed` and says to use a base image with a larger `/boot`.
+
+On a cluster that uses FSx for Lustre, an EL 9 or 10 image that boots a kernel series newer than the newest the FSx client supports (Rocky 10.3 today) moves to the newest kernel of the newest supported series and reboots before the client installs. Rocky takes that kernel from its vault, so builders need access to `dl.rockylinux.org`. The host then stays on that kernel, which Rocky no longer updates, until FSx publishes a client for the newer series. If no supported kernel can be installed, the row fails with `lustre-module-missing` and keeps its previous image.
+
 On Windows: the bootstrap succeeded with a clean log, the SSM agent is running, the DCV server and session manager agent services are installed, host utilities are installed, EC2Launch v2 is present for sysprep, the baked release matches, and GPU variants have a display driver.
 
 The image is generalized before the snapshot: no domain membership, machine ID, SSH host keys or directory cache are kept, and Windows images are sysprepped.
@@ -113,6 +119,15 @@ The test desktop and the stack copy are deleted afterwards, whether the test pas
 ### Test job (compute)
 
 A real job runs on a hidden copy of a queue that uses the candidate image. It must land on that AMI, mount every shared file system, produce the expected output and exit 0.
+
+When the job does not finish, the failure names the phase it reached:
+
+* No node launched: the environment is the cause, not the image. The reason includes the scheduler's refusal when it gave one, such as no capacity or a limit.
+* A node launched on the candidate image but never registered: the image is the likely cause, and the failure carries the node's log.
+* The job started on a host but did not finish: a slow or unanswering file system on the node is the likely cause.
+* The output file could not be read within the limit: the shared home is the likely cause, not the image.
+
+A rebake checks that the shared home answers once and every row waits on that answer. A home that does not answer fails each row with "The home directory ... did not answer within 60 seconds" before any test node launches. The overall time limit is unchanged.
 
 ### Switching to the new image
 
