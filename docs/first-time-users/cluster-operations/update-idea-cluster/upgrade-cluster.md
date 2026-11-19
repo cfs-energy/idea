@@ -408,6 +408,20 @@ In plain terms, most disruptive first.
 
 When the desktop controller stack holds its own broker listener rules, `upgrade-cluster` deploys the cluster stack once more at the end, which removes the VPC-wide broker client and gateway rules, and reads the template back. If that pass fails, every module is still upgraded and serving with the wide rules in place; the rest of the upgrade completes and the command reports the failure: re-run `upgrade-cluster`. After rolling a desktop controller stack back by hand (a run with `--no-rollback` that failed), deploy the cluster module before anything else, so the wide rules come back while the controller has none of its own.
 
+### Deploy Order, Timing and Verification
+
+Stacks of one priority group deploy together, at most `--max-parallel` (default 4) at a time, and groups run in priority order: the cluster stack; the metrics, directory, identity provider and (once every deployed cluster manager, scheduler and desktop controller holds its own search rule) analytics stacks; shared storage; the container stack; the cluster manager; then the desktop controller, scheduler and bastion together. The bastion follows the cluster manager because its hosts need the terminal CA and the directory joins that the cluster manager serves. When a deployed service still has no search rule of its own, analytics deploys after the services. `--serial` keeps the earlier groups, with analytics and the bastion each on their own; `--no-optimize-deployment` deploys one stack at a time. Lines printed by stacks deploying together start with the stack name.
+
+When a stack fails, the other stacks of its group finish, no further stack starts, values.yml is saved to the cluster bucket, the verification below runs, and the error names every failed stack. Termination protection stays cleared, as before, and is restored by the next successful run.
+
+Each phase and each stack prints a timestamp and its elapsed time, and the run ends with a timing table (phase, stack, seconds).
+
+After the last deploy the upgrade runs `ideactl verify-cluster` once: stack status, ECS service running and desired counts, rollout state and image, target health, scheduler and bastion container health, and AccessDenied-class CloudTrail events from the cluster's roles since the upgrade started. It reads AWS APIs only and changes nothing, so you can re-run it alone, also when the VPN dropped during the upgrade. A failed line makes the upgrade exit non-zero after every other step has run; a transient state (a task still starting) passes on a re-run of `verify-cluster`. CloudTrail delivers events up to about 15 minutes late, and a lookup your credentials may not make reads `not checked`.
+
+### Interrupted Upgrades
+
+An upgrade interrupted by a lost connection or a sleeping laptop leaves the stacks it already deployed on the new release, the stack it was deploying finishing on its own in CloudFormation, termination protection cleared on the module instances, and the `cluster.upgrade_module_set_owners` row in place. Run the same `upgrade-cluster` command again. It waits for a stack still updating, reuses the interrupted run's deployment id (printed before the deploy starts), so each stack already deployed shows `no changes` and is not updated again, deploys the rest, and restores termination protection at the end. Analytics is updated on every run, because its dashboard target group takes a new name each time. Pass `--deployment-id` only to choose the id yourself.
+
 ### Site Hook Checksums
 
 Nothing changes at upgrade: a site hook without a configured checksum runs as before, and the log warns with the checksum to set. To pin a hook (recommended), compute `sha256sum <hook file>` and set its setting under the module's id (the desktop controller's is `vdc` on a default cluster): `bastion-host.site_hook_sha256` (login node), `scheduler.compute_node_site_hook_sha256`, `scheduler.ami_builder_site_hook_sha256`, `vdc.dcv_host_site_hook_sha256`, `vdc.ami_builder_site_hook_sha256`. Each is empty or 64 hex characters (case and surrounding spaces ignored); the deploy warns when one is set under the module name instead. Set the checksum again after every edit of the hook. A mismatch skips the login node's hook (the login node still starts). It stops a compute node's or image bake's bootstrap with `site-hook-mismatch`, and a new desktop's while it is still provisioning; resumed or rebooted desktops do not re-check it. Values are compared without surrounding spaces and without regard to case. See [Custom AMIs](../../../modules/hpc-workloads/admin-documentation/custom-amis.md).
@@ -443,11 +457,13 @@ If no modules are specified, all modules will be upgraded automatically.
 * `--force-build-bootstrap`: Re-build bootstrap package even if directory exists
 * `--rollback/--no-rollback`: Enable/disable stack rollback on failure (default: true)
 * `--optimize-deployment/--no-optimize-deployment`: Deploy the stacks of one priority group in parallel, for example the scheduler beside the desktop stack (default: on)
+* `--max-parallel`: Stacks of one priority group deployed at once (default: 4). See [Deploy Order, Timing and Verification](#deploy-order-timing-and-verification)
+* `--serial`: Keep the earlier priority groups, with analytics and the bastion each deployed on their own
 * `--force`: Skip phase confirmation prompts; overwritten rows with no source marker that differ from generated configuration still require drift acceptance
 * `--accept-config-drift`: Accept overwriting differing rows with no source marker after reviewing `./idea-admin.sh config preview-upgrade`; release image moves, template default updates and rows written from the portal or the command line (which keep their values) do not need this flag
 * `--skip-global-settings-update`: Skip the global settings update if you've already done it
 * `--module-set`: Name of the module set to use (default: default)
-* `--deployment-id`: UUID to identify the deployment
+* `--deployment-id`: UUID to identify the deployment. Without it, a re-run after an interrupted upgrade reuses that run's id; see [Interrupted Upgrades](#interrupted-upgrades)
 * `--disable-eol-stacks-in-use`: Disable, rather than delete, end-of-life virtual desktop software stacks that a live session still uses
 * `--refresh-hosts`: Replace the container hosts when any runs an older launch template (instance refresh of the whole group, new hosts first, managed draining moves the tasks) after the ecs stack deploys. Without it the upgrade stops right after the ecs stack when such a host has not joined the directory, and names the hosts
 

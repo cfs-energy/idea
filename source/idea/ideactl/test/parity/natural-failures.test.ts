@@ -401,8 +401,9 @@ test("a second run redeploys the module that succeeded as a no-op and retries th
     Changes: [],
   };
 
-  // Run one: metrics commits, analytics is rolled back by CloudFormation. An upgrade deploys a
-  // deployed analytics module after the others (deployment-helper `runPriority`).
+  // Run one: metrics commits, analytics is rolled back by CloudFormation. With no search client
+  // deployed, analytics keeps its own priority beside metrics, so the requested order holds
+  // (deployment-helper `runPriority`).
   const first = replay({ modules });
   let firstStack = "";
   first.deps.cfn.describeStack = async (stackName) => {
@@ -416,7 +417,7 @@ test("a second run redeploys the module that succeeded as a no-op and retries th
     awsRegion: REGION,
     moduleSet: "default",
     upgrade: true,
-    moduleIds: ["analytics", "metrics"],
+    moduleIds: ["metrics", "analytics"],
     deps: first.deps,
   });
   await assert.rejects(() => firstHelper.invoke(), /UPDATE_ROLLBACK_COMPLETE/);
@@ -438,7 +439,7 @@ test("a second run redeploys the module that succeeded as a no-op and retries th
     awsRegion: REGION,
     moduleSet: "default",
     upgrade: true,
-    moduleIds: ["analytics", "metrics"],
+    moduleIds: ["metrics", "analytics"],
     deps: second.deps,
   });
 
@@ -502,8 +503,9 @@ function upgradeReplay(input: {
         return {};
       },
       async executeChangeSet() { },
+      // the end-of-upgrade verification reads every deployed stack's status
       async describeStack() {
-        return {};
+        return { StackStatus: "UPDATE_COMPLETE" };
       },
     },
     s3: {

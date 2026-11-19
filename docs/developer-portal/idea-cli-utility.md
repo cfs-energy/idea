@@ -53,6 +53,7 @@ Commands:
   list-modules [options]                        list all modules for a cluster
   show-connection-info [options]                print cluster connection information
   upgrade-cluster [options] [modules...]        upgrade an existing cluster
+  verify-cluster [options]                      read-only check of a cluster's stacks, services, targets and access denials
   return-hosts [options]                        drain and remove a container host the host group holds beyond its minimum
   delete-cluster [options]                      delete cluster
   delete-backups [options]                      delete all recovery points in the cluster's backup vault

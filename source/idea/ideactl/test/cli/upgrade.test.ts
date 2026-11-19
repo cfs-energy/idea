@@ -947,6 +947,64 @@ test("default upgrade deployment executes a settings-only stack change, which st
   });
 });
 
+async function withCdkBin(action: () => Promise<void>): Promise<void> {
+  const previousCdkBin = process.env.IDEA_CDK_BIN;
+  process.env.IDEA_CDK_BIN = "/opt/idea/lib/idea-cdk/node_modules/aws-cdk/bin/cdk";
+  try {
+    await action();
+  } finally {
+    if (previousCdkBin === undefined) delete process.env.IDEA_CDK_BIN;
+    else process.env.IDEA_CDK_BIN = previousCdkBin;
+  }
+}
+
+test("the upgrade prints a timestamp and elapsed time per phase and per stack, and a summary table", async () => {
+  await withFixture(async ({ deps, events, rows }) => withCdkBin(async () => {
+    rows[`${clusterName}.modules`] = [{ ...moduleRow("analytics", "analytics"), version: "26.10.0" }];
+    let clock = Date.UTC(2026, 10, 19, 14, 21, 23);
+    deps.now = () => (clock += 1000);
+    deps.cfn.describeChangeSet = async () => ({
+      Status: "CREATE_COMPLETE",
+      Changes: [change("Modify", "analyticsclustersettings", "Custom::ClusterSettings", "False")],
+    });
+    deps.cfn.executeChangeSet = async () => {
+      (rows[`${clusterName}.modules`] as Array<Record<string, unknown>>)[0].version = ideaVersion();
+    };
+    const { withDefaultUpgradeDeployment } = await import("../../src/cli/commands/upgrade.ts");
+    await upgradeCluster(withDefaultUpgradeDeployment(deps), {
+      clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules: ["analytics"],
+    });
+    for (const phase of ["Pre-flight", "Phase 1", "Phase 2", "Phase 2b", "Phase 3", "Phase 4", "Broker rule pass", "Completion"]) {
+      assert.ok(events.some((line) => new RegExp(`^timing \\d\\d:\\d\\d:\\d\\dZ \\+\\d+s: ${phase} started$`).test(line)), `${phase} start`);
+      assert.ok(events.some((line) => new RegExp(`^timing .*: ${phase} took \\d+s$`).test(line)), `${phase} end`);
+    }
+    assert.ok(events.some((line) => /^timing .*: idea-test1-analytics deployed in \d+s$/.test(line)));
+    const table = events.find((line) => line.startsWith("Upgrade timing (seconds)"));
+    assert.ok(table !== undefined);
+    assert.match(table, /\| phase +\| stack +\| seconds \|/);
+    assert.match(table, /\| Phase 4 +\| idea-test1-analytics +\| \d+ +\|/);
+    assert.match(table, /\| total +\| +\| \d+ +\|/);
+    // the table closes the run: nothing is printed after it
+    assert.equal(events.at(-1), table);
+  }));
+});
+
+test("a failed stack still gets its timing row, and the table prints when the upgrade stops", async () => {
+  await withFixture(async ({ deps, events, rows }) => withCdkBin(async () => {
+    rows[`${clusterName}.modules`] = [moduleRow("analytics", "analytics")];
+    deps.cfn.describeChangeSet = async () => ({
+      Status: "CREATE_COMPLETE",
+      Changes: [change("Modify", "identityprovideruserpool", "AWS::Cognito::UserPool", "True")],
+    });
+    const { withDefaultUpgradeDeployment } = await import("../../src/cli/commands/upgrade.ts");
+    await assert.rejects(upgradeCluster(withDefaultUpgradeDeployment(deps), {
+      clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, modules: ["analytics"],
+    }), (error: unknown) => error instanceof Error && error.name === "ChangeSetRefused");
+    assert.ok(events.some((line) => /^timing .*: idea-test1-analytics failed in \d+s$/.test(line)));
+    assert.match(events.at(-1) ?? "", /^Upgrade timing \(seconds\)[\s\S]*\| Phase 4 +\| idea-test1-analytics /);
+  }));
+});
+
 test("declining the global-settings prompt leaves Phase 1 applied and stops before Phase 2", async () => {
   await withFixture(async ({ deps, events }) => {
     const answers = ["Yes", "no"];
@@ -1887,6 +1945,118 @@ test("upgrade-cluster deploys each priority group's stacks in parallel unless to
       assert.deepEqual(seen, [expected], flags.join(" ") || "default");
     });
   }
+});
+
+test("--serial and --max-parallel reach the deployment; the default holds four stacks of a group at once", async () => {
+  for (const [flags, serial, maxParallel] of [[[], false, 4], [["--serial"], true, 4], [["--max-parallel", "2"], false, 2]] as const) {
+    await withFixture(async (state) => {
+      await routineReleaseFixture(state);
+      const { deps } = state;
+      const seen: Array<[boolean | undefined, number | undefined]> = [];
+      const deploy = deps.deploy.bind(deps);
+      deps.deploy = async (input) => { seen.push([input.serial, input.maxParallel]); await deploy(input); };
+      const program = new Command("ideactl");
+      registerUpgradeCommands(program, deps);
+      await program.parseAsync([
+        "upgrade-cluster", "--force", "--accept-config-drift", "--skip-release-image-check",
+        "--cluster-name", clusterName, "--aws-region", awsRegion, ...flags,
+      ], { from: "user" });
+      assert.deepEqual(seen, [[serial, maxParallel]], flags.join(" ") || "default");
+    });
+  }
+});
+
+test("a --max-parallel that is not a whole number of at least 1 is refused before anything is written", async () => {
+  for (const value of ["0", "two", "1.5"]) {
+    await withFixture(async ({ deps, events }) => {
+      await assert.rejects(
+        upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, maxParallel: value }),
+        /--max-parallel must be a whole number of at least 1/,
+      );
+      assert.ok(!events.some((event) => event.startsWith("Phase ") || event.startsWith("set:") || event.startsWith("sync:")), value);
+    });
+  }
+});
+
+test("a failed deployment still saves values.yml and names the failed stacks", async () => {
+  await withFixture(async ({ deps, events }) => {
+    deps.deploy = async () => {
+      events.push("deploy");
+      throw new Error("deployment failed. could not deploy module(s): scheduler (stack idea-test1-scheduler: ended UPDATE_ROLLBACK_COMPLETE)");
+    };
+    await assert.rejects(
+      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
+      /could not deploy module\(s\): scheduler \(stack idea-test1-scheduler: /,
+    );
+    assert.ok(events.indexOf("save-values") > events.indexOf("deploy"));
+    // protection stays cleared, as before: a failed stack may still be replacing an instance
+    assert.ok(!events.includes("restore:i-sample"));
+  });
+});
+
+test("the upgrade ends with one verification, and a failed line fails the run after every other step", async () => {
+  await withFixture(async ({ deps, events }) => {
+    let stackStatus = "UPDATE_COMPLETE";
+    deps.cfn.describeStack = async () => ({ StackStatus: stackStatus, Tags: [{ Key: "idea:ModuleVersion", Value: ideaVersion() }] });
+    const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
+    await upgradeCluster(deps, options);
+    assert.equal(events.filter((line) => line.startsWith("Cluster verification for idea-test1")).length, 1);
+    assert.ok(events.indexOf("save-values") < events.findIndex((line) => line.startsWith("Cluster verification for")));
+    assert.ok(events.includes("All upgrade phases completed successfully"));
+
+    events.length = 0;
+    stackStatus = "UPDATE_ROLLBACK_COMPLETE";
+    await assert.rejects(upgradeCluster(deps, options), /verification above found problems\. Re-run ideactl verify-cluster --cluster-name idea-test1 --aws-region us-east-2/);
+    assert.ok(events.includes("save-values"));
+    assert.ok(events.includes("delete:cluster.upgrade_module_set_owners"));
+    assert.ok(!events.includes("All upgrade phases completed successfully"));
+  });
+});
+
+test("a failed deployment is followed by the same read-only verification", async () => {
+  await withFixture(async ({ deps, events }) => {
+    deps.deploy = async () => { throw new Error("deployment failed. could not deploy module(s): scheduler (stack idea-test1-scheduler: x)"); };
+    await assert.rejects(
+      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
+      /could not deploy module\(s\): scheduler/,
+    );
+    assert.ok(events.some((line) => line.startsWith("Cluster verification for idea-test1")));
+  });
+});
+
+test("verify-cluster is registered beside upgrade-cluster", () => {
+  const program = new Command("ideactl");
+  registerUpgradeCommands(program, replay().deps);
+  const help = program.commands.find((candidate) => candidate.name() === "verify-cluster")?.helpInformation() ?? "";
+  for (const option of ["--cluster-name", "--aws-region", "--aws-profile", "--since-minutes"]) assert.ok(help.includes(option), option);
+});
+
+test("a re-run after an unfinished upgrade reuses its deployment id, so the stacks it deployed are unchanged", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    const ids: Array<string | undefined> = [];
+    const deploy = deps.deploy.bind(deps);
+    deps.deploy = async (input) => { ids.push(input.deploymentId); await deploy(input); };
+    const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
+    // a first run: a fresh id, named so the operator knows a re-run picks it up
+    await upgradeCluster(deps, options);
+    assert.deepEqual(ids, ["00000000-0000-0000-0000-000000000000"]);
+    assert.ok(events.some((line) => line.startsWith("Deployment id 00000000-0000-0000-0000-000000000000. If this run is interrupted")));
+
+    // an interrupted run leaves its owners row, and the cluster stack published its id
+    const settings = rows[`${clusterName}.cluster-settings`]!;
+    settings.push(setting("cluster.upgrade_module_set_owners", {}), setting("cluster.deployment_id", "run-1"));
+    ids.length = 0;
+    events.length = 0;
+    await upgradeCluster(deps, options);
+    assert.deepEqual(ids, ["run-1"]);
+    assert.ok(events.includes("Deployment id run-1, reused from the upgrade that did not finish: stacks it deployed show no changes."));
+
+    // an explicit id wins
+    settings.push(setting("cluster.upgrade_module_set_owners", {}));
+    ids.length = 0;
+    await upgradeCluster(deps, { ...options, deploymentId: "operator-id" });
+    assert.deepEqual(ids, ["operator-id"]);
+  });
 });
 
 test("ECR token and manifest requests honor proxy environment and NO_PROXY without network", async () => {

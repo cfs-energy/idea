@@ -41,15 +41,17 @@ import { vpcEndpointsFor } from "../../config/vpc-endpoints.ts";
 import { ideaVersion } from "../../version.ts";
 import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
 import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
-import { DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData } from "../deployment-helper.ts";
+import { DEFAULT_MAX_PARALLEL, DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData, type StackTiming } from "../deployment-helper.ts";
 import { compareIdeaRelease, upgradeFloorRefusal, HOST_CONTROL_PLANE_REFUSAL, RECOVERY_COMMAND } from "../upgrade-floor.ts";
 import {
   buildTree,
+  renderTable,
   toYaml,
   type ConfigDriftPreviewDeps,
   type ConfigUpgradePreviewOptions,
 } from "./config.ts";
 import { asBoolFlag } from "./deploy.ts";
+import { liveClusterHealth, registerVerifyClusterCommand, verifyCluster, type ClusterHealthApi } from "./verify-cluster.ts";
 
 export const EOL_BASE_OS: Readonly<Record<string, string>> = {
   amazonlinux2: "amazonlinux2023",
@@ -231,6 +233,9 @@ export interface UpgradeDeploymentOptions {
   allModules: boolean;
   moduleIds?: readonly string[];
   allowReplacement?: readonly string[];
+  onStack?: (event: StackTiming) => void;
+  serial?: boolean;
+  maxParallel?: number;
 }
 
 export interface ContainerHost {
@@ -279,6 +284,8 @@ export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   openSearch: UpgradeOpenSearchApi;
   eolSoftwareStacks: EolSoftwareStackApi;
   deploy(options: UpgradeDeploymentOptions): Promise<void>;
+  /** The reads behind the end-of-upgrade verification; without it those lines read "not checked". */
+  clusterHealth?: ClusterHealthApi;
   regionAmiConfig?: () => RegionsConfig;
   /** Whether the registry serves this tagged image; throws when the registry cannot say. */
   releaseImageExists?: (image: string) => Promise<boolean>;
@@ -305,6 +312,8 @@ export interface UpgradeCommandOptions {
   disableEolStacksInUse?: boolean;
   modules?: readonly string[];
   allowReplacement?: string[];
+  serial?: boolean;
+  maxParallel?: string | number;
 }
 
 interface EolStack {
@@ -1498,7 +1507,7 @@ async function saveValuesFile(deps: UpgradeDeps, options: UpgradeCommandOptions)
         ? `s3://${bucket}/${VALUES_FILE_S3_KEY}`
         : "the cluster bucket";
     deps.out(
-      `warning: Upgrade of ${options.clusterName} finished its stack steps, but values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
+      `warning: Upgrade of ${options.clusterName}: values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
     );
   }
 }
@@ -1520,6 +1529,9 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
     moduleIds: options.moduleIds,
     rollback: options.rollback,
     allowReplacement: options.allowReplacement,
+    onStack: options.onStack,
+    serial: options.serial,
+    maxParallel: options.maxParallel,
     deps,
   });
   await helper.invoke();
@@ -1693,8 +1705,81 @@ async function verifyUpgradeCompletion(
   deps.out("Completion verified: settings and deployed module versions read back");
 }
 
+const wholeSeconds = (ms: number): number => Math.round(ms / 1000);
+
+/**
+ * Wall-clock marks for one upgrade run: a line when each phase starts and ends and when each stack
+ * ends, and a table at the end. Measurement only; nothing waits on it.
+ */
+export class UpgradeTiming {
+  private readonly rows: string[][] = [];
+  private startedAt: number | undefined;
+  private current: { name: string; startedAt: number } | undefined;
+  private readonly deps: Pick<UpgradeDeps, "now" | "out">;
+
+  // The clock is first read by the first phase, so a refusal before it touches nothing else.
+  constructor(deps: Pick<UpgradeDeps, "now" | "out">) {
+    this.deps = deps;
+  }
+
+  private mark(at: number): string {
+    return `${new Date(at).toISOString().slice(11, 19)}Z +${wholeSeconds(at - (this.startedAt ?? at))}s`;
+  }
+
+  phase(name: string): void {
+    this.close();
+    const at = this.deps.now();
+    this.startedAt ??= at;
+    this.current = { name, startedAt: at };
+    this.deps.out(`timing ${this.mark(at)}: ${name} started`);
+  }
+
+  stack(event: StackTiming): void {
+    const took = wholeSeconds(event.endedAt - event.startedAt);
+    this.rows.push([this.current?.name ?? "", event.stackName, String(took)]);
+    this.deps.out(`timing ${this.mark(event.endedAt)}: ${event.stackName} ${event.ok ? "deployed" : "failed"} in ${took}s`);
+  }
+
+  /** Closes the open phase and prints the table, whatever the run's outcome. */
+  summary(): void {
+    if (this.startedAt === undefined) return;
+    this.close();
+    this.rows.push(["total", "", String(wholeSeconds(this.deps.now() - this.startedAt))]);
+    this.deps.out(`Upgrade timing (seconds)\n${renderTable(["phase", "stack", "seconds"], this.rows)}`);
+  }
+
+  private close(): void {
+    if (this.current === undefined) return;
+    const at = this.deps.now();
+    const took = wholeSeconds(at - this.current.startedAt);
+    this.rows.push([this.current.name, "", String(took)]);
+    this.deps.out(`timing ${this.mark(at)}: ${this.current.name} took ${took}s`);
+    this.current = undefined;
+  }
+}
+
+/**
+ * The deployment id of an upgrade that did not finish. Phase 2 writes the module-set owners row and
+ * only a completed upgrade removes it; every stack the run deployed published the run's id, the
+ * cluster stack first. Undefined when no upgrade was left unfinished or no stack recorded an id.
+ */
+export function unfinishedUpgradeDeploymentId(settings: readonly Record<string, unknown>[], moduleSet: string): string | undefined {
+  if (!settings.some((row) => row["key"] === "cluster.upgrade_module_set_owners")) return undefined;
+  const clusterModule = settingString(settings, `global-settings.module_sets.${moduleSet}.cluster.module_id`) ?? "cluster";
+  return settingString(settings, `${clusterModule}.deployment_id`);
+}
+
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
+  const timing = new UpgradeTiming(deps);
+  try {
+    await runUpgrade(deps, options, timing);
+  } finally {
+    timing.summary();
+  }
+}
+
+async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, timing: UpgradeTiming): Promise<void> {
   // Validate the source release and deployment mode before any mutation.
   // An incomplete inventory cannot establish a safe starting release.
   const modulesBefore = await clusterModules(deps, options.clusterName);
@@ -1723,6 +1808,10 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
   if (unknown.length > 0) throw new ClusterConfigError(`Unknown module ${unknown.join(", ")}: this cluster's modules are ${modulesBefore.map((module) => module.module_id).join(", ")}`);
   // a bad value fails here, before any write, rather than when the deploy starts
   const terminationProtection = asBoolFlag(options.terminationProtection, true);
+  const maxParallel = Number(options.maxParallel ?? DEFAULT_MAX_PARALLEL);
+  if (!Number.isInteger(maxParallel) || maxParallel < 1) {
+    throw new ClusterConfigError(`--max-parallel must be a whole number of at least 1, not ${String(options.maxParallel)}`);
+  }
   refuseLustreAppsOrData((key) => {
     const value = initialSettings.find((row) => row.key === key)?.value;
     return typeof value === "string" ? value : undefined;
@@ -1737,6 +1826,8 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
   }
   let cleared: ClearedInstance[] = [];
+  timing.phase("Pre-flight");
+  const startedAt = deps.now();
   try {
     if (await upgradeDeploysEcs(deps, options)) await checkAwsvpcTrunking(deps, options);
     const baseOs = await resolveUpgradeBaseOs(deps, options);
@@ -1777,6 +1868,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     }
     await applyEolSoftwareStacks(deps, options.awsRegion, eolPlans);
 
+    timing.phase("Phase 1");
     deps.out("Phase 1: Update Base OS in values.yml");
     resolveRegionAmi((deps.regionAmiConfig ?? loadRegionAmiConfig)(), options.awsRegion, baseOs);
     await updateValuesBaseOs(deps, options, baseOs);
@@ -1787,6 +1879,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         const confirm = await deps.prompt({ message: "Continue with global settings backup and update?", default: true });
         if (confirm !== true && confirm !== "Yes") throw new ExitWithCode(0);
       }
+      timing.phase("Phase 2");
       deps.out("Phase 2: Global Settings Backup and Update");
       configDir = await backupAndUpdateGlobalSettings(deps, options, modulesBefore);
     }
@@ -1801,10 +1894,12 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         const values = loadValuesFile(valuesFilePath(options.clusterName, options.awsRegion));
         generateConfigFromTemplates(values, configDir, { vpcEndpoints: await vpcEndpointsFor(deps, values, options.awsProfile) });
       }
+      timing.phase("Phase 2b");
       deps.out("Phase 2b: Sync full configuration without overwrite");
       await syncFullConfiguration(deps, options, configDir, modulesBefore);
     }
 
+    timing.phase("Phase 3");
     deps.out("Phase 3: Update AMI IDs and Settings");
     let updateAmis = options.force === true;
     if (options.force !== true) {
@@ -1823,6 +1918,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
         `and this release's modules cannot deploy on it. Nothing was deployed. Run the upgrade again and answer Yes to the AMI and settings updates.`);
     }
 
+    timing.phase("Phase 4");
     deps.out("Phase 4: Module Deployment");
     if (!options.force && allModules) {
       const confirm = await deps.prompt({ message: "Proceed with deploying all modules?", default: true });
@@ -1833,6 +1929,13 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
     } catch (error) {
       deps.out(`warning: pre-upgrade termination-protection sweep failed: ${(error as Error).message}. Verify replaced instances are terminated after the upgrade.`);
     }
+    // Reusing an unfinished run's id keeps the templates of the stacks it deployed identical, so a
+    // re-run finds them unchanged (an empty change set, nothing executed) instead of updating each.
+    const resumedId = options.deploymentId ? undefined : unfinishedUpgradeDeploymentId(initialSettings, options.moduleSet);
+    const deploymentId = options.deploymentId || resumedId || deps.uuid();
+    deps.out(resumedId === undefined
+      ? `Deployment id ${deploymentId}. If this run is interrupted, run the same upgrade-cluster command again: it reuses this id, and stacks already deployed show no changes.`
+      : `Deployment id ${deploymentId}, reused from the upgrade that did not finish: stacks it deployed show no changes.`);
     const deployment: UpgradeDeploymentOptions = {
       refreshHosts: options.refreshHosts,
       hostPoolRerunCommand: refreshHostsCommand("upgrade-cluster", options, options.modules),
@@ -1840,7 +1943,7 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       awsRegion: options.awsRegion,
       awsProfile: options.awsProfile,
       terminationProtection,
-      deploymentId: options.deploymentId,
+      deploymentId,
       forceBuildBootstrap: options.forceBuildBootstrap === true,
       rollback: options.rollback !== false,
       optimizeDeployment: options.optimizeDeployment === true,
@@ -1848,17 +1951,36 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       allModules,
       moduleIds: allModules ? undefined : options.modules,
       allowReplacement: options.allowReplacement,
+      onStack: (event) => timing.stack(event),
+      serial: options.serial === true,
+      maxParallel,
     };
-    await deps.deploy(deployment);
+    try {
+      await deps.deploy(deployment);
+    } catch (error) {
+      // The settings Phases 2 and 3 wrote stay with the stacks that deployed, so the bucket copy
+      // of values.yml follows them and a retry from another machine regenerates the same rows.
+      // Termination protection stays cleared: a stack may still be replacing an instance.
+      await saveValuesFile(deps, options);
+      timing.phase("Verification");
+      try {
+        await verifyCluster(deps, { ...options, since: startedAt });
+      } catch (verification) {
+        deps.out(`warning: could not verify the cluster after the failed deployment: ${(verification as Error).message}`);
+      }
+      throw error;
+    }
     // Every module is upgraded and serving by now; a failed second cluster pass leaves the wide
     // rule in place, so the rest of the upgrade still runs and the failure is reported at the end.
     let convergence: unknown;
+    timing.phase("Broker rule pass");
     try {
       await convergeBrokerListenerRules(deps, options, deployment);
     } catch (error) {
       convergence = error;
       deps.out(`warning: ${(error as Error).message}`);
     }
+    timing.phase("Completion");
     if (options.skipGlobalSettingsUpdate !== true) await removeObsoleteGlobalSettings(deps, options, configDir);
     let restore = cleared;
     try {
@@ -1884,7 +2006,12 @@ export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandO
       }
     }
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
+    timing.phase("Verification");
+    const verified = await verifyCluster(deps, { ...options, since: startedAt });
     if (convergence !== undefined) throw convergence;
+    if (!verified) {
+      throw new ClusterConfigError(`Every stack deployed, but the verification above found problems. Re-run ideactl verify-cluster --cluster-name ${options.clusterName} --aws-region ${options.awsRegion} once they settle; it changes nothing.`);
+    }
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
     await warnClearedProtection(deps, options.awsRegion, cleared);
@@ -1912,6 +2039,8 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     // others write, so they go together: the scheduler no longer queues behind the desktop stack.
     .option("--optimize-deployment", "Deploy the stacks of one priority group in parallel. Default.", true)
     .option("--no-optimize-deployment", "Deploy one stack at a time.")
+    .option("--serial", "Use the earlier priority groups: analytics and the bastion each deploy in a group of their own.")
+    .option("--max-parallel <count>", `Stacks of one priority group deployed at once. Default: ${DEFAULT_MAX_PARALLEL}`, String(DEFAULT_MAX_PARALLEL))
     .option("--module-set <module-set>", "Name of the ModuleSet. Default: default", "default")
     .option("--force", "Skip all confirmation prompts.")
     .option(
@@ -1930,6 +2059,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
       await upgradeCluster(deps, { ...commandOptions, modules });
     });
+  registerVerifyClusterCommand(program, deps);
   program
     .command("return-hosts")
     .description("drain and remove a container host the host group holds beyond its minimum")
@@ -2049,6 +2179,7 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
     ec2,
     ecsAccountSettings,
     containerHosts,
+    clusterHealth: liveClusterHealth(),
     cloudFormation: {
       async listStackResources(input) {
         const { CloudFormationClient, ListStackResourcesCommand } = await import("@aws-sdk/client-cloudformation");

@@ -24,6 +24,7 @@
     "@aws-sdk/client-backup": "3.1168.0",
     "@aws-sdk/client-bedrock": "3.1168.0",
     "@aws-sdk/client-cloudformation": "3.1168.0",
+    "@aws-sdk/client-cloudtrail": "3.1168.0",
     "@aws-sdk/client-cloudwatch": "3.1168.0",
     "@aws-sdk/client-cloudwatch-logs": "3.1168.0",
     "@aws-sdk/client-cognito-identity-provider": "3.1168.0",
