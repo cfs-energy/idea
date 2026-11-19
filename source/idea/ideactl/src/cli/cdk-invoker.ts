@@ -548,6 +548,12 @@ const STACK_STATUS_OK = new Set(['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'IMPORT_C
 const STACK_STATUS_IN_PROGRESS = /_IN_PROGRESS$/;
 const STACK_WAIT_TIMEOUT_MS = 4 * 60 * 60_000;
 const STACK_WAIT_REPORT_MS = 5 * 60_000;
+/**
+ * How often a running stack is read. The next module cannot start until this read sees the stack
+ * finish, so the interval is dead time after every stack: half of it on average. One read per
+ * stack in flight every five seconds stays far below the CloudFormation describe limits.
+ */
+export const STACK_POLL_INTERVAL_MS = 5_000;
 
 // ---------------------------------------------------------------------------------------------
 // the invoker
@@ -604,7 +610,7 @@ export class CdkInvoker {
     this.rollback = options.rollback ?? true;
     this.allowReplacement = options.allowReplacement ?? [];
     this.allowReplacementOfType = options.allowReplacementOfType ?? new Map();
-    this.pollIntervalMs = options.pollIntervalMs ?? 15_000;
+    this.pollIntervalMs = options.pollIntervalMs ?? STACK_POLL_INTERVAL_MS;
     this.deps = options.deps;
     this.config = options.config;
     this.deploymentDir = ensureDir(join(clusterDeploymentsDir(this.clusterName, this.awsRegion), this.deploymentId));

@@ -542,7 +542,8 @@ describe('CdkInvoker.deployThroughChangeSet', () => {
     const statuses = ['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_COMPLETE'];
     deps.cfn.describeStack = async () => ({ StackStatus: statuses.shift() });
     await invoker.deployThroughChangeSet();
-    assert.deepEqual(deps.sleeps, [15_000, 15_000]);
+    // every five seconds: the read after the stack finishes is dead time before the next module
+    assert.deepEqual(deps.sleeps, [5_000, 5_000]);
   });
 
   it('stops waiting for an in-progress stack after four hours, reporting progress on the way', async () => {
