@@ -744,3 +744,21 @@ def test_a_job_with_capacity_or_a_custom_group_keeps_its_group(context):
     custom = _edited_instance_type(mock_job())
     custom.job_group = custom.params.job_group = 'custom-batch'
     assert provisioner._regrouped(custom) is custom
+
+
+def test_a_provisioner_stopped_mid_retry_returns_the_jobs_unplaced(context):
+    # dev rc.16: saving a queue profile restarts the provisioner while a batch retries; the
+    # retry loop returned None and the poller failed on result.status
+    provisioner = make_provisioner(context)
+    provisioner._exit.set()
+    jobs = [mock_job(), mock_job()]
+    context.lifecycle_events = None
+
+    result = provisioner._provision_with_retry_backoff(jobs=list(jobs))
+
+    assert result is not None and result.status is False
+    assert [job.job_id for job in result.unprovisioned_jobs] == [
+        job.job_id for job in jobs
+    ]
+    # not a failure: nothing is charged to the jobs' retry count
+    assert provisioner._track_failed_jobs(jobs=jobs, result=result) == jobs

@@ -1131,6 +1131,13 @@ class JobProvisioner(SocaService):
                 current_retry=retry_count, backoff_in_seconds=backoff_in_seconds
             )
 
+        # stopped mid-retry (a queue profile saved restarts the provisioner): nothing was
+        # placed and nothing failed, the jobs are taken up again by the next provisioner
+        self._logger.info(
+            f'{jobs[0].log_tag} provisioner stopping; {len(jobs)} jobs left for the next cycle'
+        )
+        return ProvisionJobsResult(status=False, unprovisioned_jobs=jobs)
+
     def _drop_undispatchable_jobs(self, jobs: Dict[str, SocaJob]):
         """
         refresh a batch from the scheduler and drop the jobs it will not dispatch.
