@@ -51,6 +51,7 @@ import {
   type ConfigUpgradePreviewOptions,
 } from "./config.ts";
 import { asBoolFlag } from "./deploy.ts";
+import { liveClusterHealth, registerVerifyClusterCommand, verifyCluster, type ClusterHealthApi } from "./verify-cluster.ts";
 
 export const EOL_BASE_OS: Readonly<Record<string, string>> = {
   amazonlinux2: "amazonlinux2023",
@@ -283,6 +284,8 @@ export interface UpgradeDeps extends ConfigDriftPreviewDeps {
   openSearch: UpgradeOpenSearchApi;
   eolSoftwareStacks: EolSoftwareStackApi;
   deploy(options: UpgradeDeploymentOptions): Promise<void>;
+  /** The reads behind the end-of-upgrade verification; without it those lines read "not checked". */
+  clusterHealth?: ClusterHealthApi;
   regionAmiConfig?: () => RegionsConfig;
   /** Whether the registry serves this tagged image; throws when the registry cannot say. */
   releaseImageExists?: (image: string) => Promise<boolean>;
@@ -1813,6 +1816,7 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
   }
   let cleared: ClearedInstance[] = [];
   timing.phase("Pre-flight");
+  const startedAt = deps.now();
   try {
     if (await upgradeDeploysEcs(deps, options)) await checkAwsvpcTrunking(deps, options);
     const baseOs = await resolveUpgradeBaseOs(deps, options);
@@ -1940,6 +1944,12 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
       // of values.yml follows them and a retry from another machine regenerates the same rows.
       // Termination protection stays cleared: a stack may still be replacing an instance.
       await saveValuesFile(deps, options);
+      timing.phase("Verification");
+      try {
+        await verifyCluster(deps, { ...options, since: startedAt });
+      } catch (verification) {
+        deps.out(`warning: could not verify the cluster after the failed deployment: ${(verification as Error).message}`);
+      }
       throw error;
     }
     // Every module is upgraded and serving by now; a failed second cluster pass leaves the wide
@@ -1978,7 +1988,12 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
       }
     }
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
+    timing.phase("Verification");
+    const verified = await verifyCluster(deps, { ...options, since: startedAt });
     if (convergence !== undefined) throw convergence;
+    if (!verified) {
+      throw new ClusterConfigError(`Every stack deployed, but the verification above found problems. Re-run ideactl verify-cluster --cluster-name ${options.clusterName} --aws-region ${options.awsRegion} once they settle; it changes nothing.`);
+    }
     deps.out("All upgrade phases completed successfully");
   } catch (error) {
     await warnClearedProtection(deps, options.awsRegion, cleared);
@@ -2026,6 +2041,7 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     .action(async (modules: string[], commandOptions: UpgradeCommandOptions) => {
       await upgradeCluster(deps, { ...commandOptions, modules });
     });
+  registerVerifyClusterCommand(program, deps);
   program
     .command("return-hosts")
     .description("drain and remove a container host the host group holds beyond its minimum")
@@ -2145,6 +2161,7 @@ export function createLiveUpgradeDeps(deps: Deps): UpgradeDeps {
     ec2,
     ecsAccountSettings,
     containerHosts,
+    clusterHealth: liveClusterHealth(),
     cloudFormation: {
       async listStackResources(input) {
         const { CloudFormationClient, ListStackResourcesCommand } = await import("@aws-sdk/client-cloudformation");

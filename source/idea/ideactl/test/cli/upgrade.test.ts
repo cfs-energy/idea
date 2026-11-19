@@ -1994,6 +1994,43 @@ test("a failed deployment still saves values.yml and names the failed stacks", a
   });
 });
 
+test("the upgrade ends with one verification, and a failed line fails the run after every other step", async () => {
+  await withFixture(async ({ deps, events }) => {
+    let stackStatus = "UPDATE_COMPLETE";
+    deps.cfn.describeStack = async () => ({ StackStatus: stackStatus, Tags: [{ Key: "idea:ModuleVersion", Value: ideaVersion() }] });
+    const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
+    await upgradeCluster(deps, options);
+    assert.equal(events.filter((line) => line.startsWith("Cluster verification for idea-test1")).length, 1);
+    assert.ok(events.indexOf("save-values") < events.findIndex((line) => line.startsWith("Cluster verification for")));
+    assert.ok(events.includes("All upgrade phases completed successfully"));
+
+    events.length = 0;
+    stackStatus = "UPDATE_ROLLBACK_COMPLETE";
+    await assert.rejects(upgradeCluster(deps, options), /verification above found problems\. Re-run ideactl verify-cluster --cluster-name idea-test1 --aws-region us-east-2/);
+    assert.ok(events.includes("save-values"));
+    assert.ok(events.includes("delete:cluster.upgrade_module_set_owners"));
+    assert.ok(!events.includes("All upgrade phases completed successfully"));
+  });
+});
+
+test("a failed deployment is followed by the same read-only verification", async () => {
+  await withFixture(async ({ deps, events }) => {
+    deps.deploy = async () => { throw new Error("deployment failed. could not deploy module(s): scheduler (stack idea-test1-scheduler: x)"); };
+    await assert.rejects(
+      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
+      /could not deploy module\(s\): scheduler/,
+    );
+    assert.ok(events.some((line) => line.startsWith("Cluster verification for idea-test1")));
+  });
+});
+
+test("verify-cluster is registered beside upgrade-cluster", () => {
+  const program = new Command("ideactl");
+  registerUpgradeCommands(program, replay().deps);
+  const help = program.commands.find((candidate) => candidate.name() === "verify-cluster")?.helpInformation() ?? "";
+  for (const option of ["--cluster-name", "--aws-region", "--aws-profile", "--since-minutes"]) assert.ok(help.includes(option), option);
+});
+
 test("ECR token and manifest requests honor proxy environment and NO_PROXY without network", async () => {
   const savedEnv = process.env;
   try {

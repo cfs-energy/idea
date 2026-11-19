@@ -555,6 +555,25 @@ A leftover `*.maintenance.upgrade_baseline` or `cluster.upgrade_historical_pendi
 
 `awsvpcTrunking` is checked whenever the run reaches the `ecs` module, which includes an all-module upgrade of a cluster that has it. `--disable-eol-stacks-in-use` disables in-use EOL eVDI stacks instead of refusing. The drift preview asks before overwriting differing operator or unknown-source rows; `--force` skips other confirmations, while `--accept-config-drift` accepts these reviewed overwrites. An older release tag in this partition's release repository moves to the tool's release tag automatically and is reported without drift acceptance. Private images remain unchanged and visible in the preview. Global rows stamped `source=template` by settings sync are listed as "Template defaults updated" and rewritten without acceptance. CLI and API edits stamp `cli` and `api`; stack writes stamp `stack`. The 26.09.4 sync set no marker and retained existing markers, so differing legacy defaults still require review on the first upgrade. Once rewritten and stamped `template`, later template default changes need no drift acceptance.
 
+## `verify-cluster`
+
+Read-only check of a cluster's deployed state, printed as one table with one exit status. `upgrade-cluster` runs it after its last deploy (and after a failed deploy). It reads AWS APIs only, never the cluster's own endpoints, so it works when the VPN has dropped, and it changes nothing, so it is safe to re-run.
+
+**Usage:** `ideactl verify-cluster [options]`
+
+| Flag | Value | Default | Required |
+| --- | --- | --- | --- |
+| `--cluster-name <cluster-name>` | yes | none | yes |
+| `--aws-region <aws-region>` | yes | none | yes |
+| `--aws-profile <aws-profile>` | yes | none | no |
+| `--since-minutes <minutes>` | yes | `"60"` | no |
+
+Lines: the CloudFormation status of every deployed module's stack; every ECS service of the cluster with running and desired counts, the primary deployment's rollout state, and whether each container from the release repository runs `ecs.image` (sidecars from other repositories are not held to it); target health of every target group tagged with the cluster name (`unhealthy` or `initial` fails; `draining` and `unused` do not); the container health of the scheduler and bastion tasks; and AccessDenied-class CloudTrail management events from roles whose name starts with `<cluster-name>-`, from `--since-minutes` ago (the upgrade passes its own start), reading at most the newest 500 events. CloudTrail delivers events up to about 15 minutes late. A lookup the credentials may not make, or that fails, reads `not checked` and never fails the check.
+
+**Reads:** DynamoDB cluster config and modules, CloudFormation stacks, ECS services, task definitions and tasks, the tagging API and target health, CloudTrail `LookupEvents`. **Changes:** nothing. **Exit codes:** 1 when any line is `FAIL`.
+
+**Example:** `ideactl verify-cluster --cluster-name sample-cluster --aws-region us-east-2`
+
 ## `delete-cluster`
 
 Delete a cluster. Bootstrap, databases, backups, and log groups stay unless their flags (or `--delete-all`) are set. The bootstrap bucket is retained unless `--delete-bootstrap` or `--delete-all` is set.
