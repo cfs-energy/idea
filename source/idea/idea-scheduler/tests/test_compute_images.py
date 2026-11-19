@@ -485,7 +485,7 @@ def test_rocky_builds_are_reported_unsupported_in_govcloud():
     )
     with pytest.raises(exceptions.SocaException) as exc_info:
         service.build(BuildComputeImageRequest(base_os='rocky9'), 'operator')
-    assert 'GovCloud' in exc_info.value.message
+    assert 'Not available in this partition' in exc_info.value.message
 
 
 def instance_type_arch(service, table):

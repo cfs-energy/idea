@@ -599,8 +599,8 @@ export class VirtualDesktopSoftwareStacks extends Component<VirtualDesktopSoftwa
 
     buildRefreshResultsModal() {
         const rows = this.state.refreshResults ?? [];
-        const statusType = (status?: string) => status === 'updated' ? 'success' : status === 'base_updated' ? 'info' : status === 'up_to_date' ? 'stopped' : 'error';
-        const statusText = (status?: string) => status === 'updated' ? 'Updated' : status === 'base_updated' ? 'Base updated' : status === 'up_to_date' ? 'Up to date' : 'Error';
+        const statusType = (status?: string) => status === 'updated' ? 'success' : status === 'base_updated' ? 'info' : status === 'up_to_date' || status === 'unsupported' ? 'stopped' : 'error';
+        const statusText = (status?: string) => status === 'updated' ? 'Updated' : status === 'base_updated' ? 'Base updated' : status === 'up_to_date' ? 'Up to date' : status === 'unsupported' ? 'Not available in this partition' : 'Error';
         return (
             <Modal
                 visible={this.state.showRefreshResultsModal}

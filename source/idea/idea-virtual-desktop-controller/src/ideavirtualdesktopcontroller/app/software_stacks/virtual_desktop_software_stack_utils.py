@@ -28,8 +28,8 @@ from ideasdk.aws.stock_amis import (
     find_latest_image,
     get_ami_pattern_for_stack,
     stack_architecture,
-    stock_unsupported_reason,
 )
+from ideasdk.aws.image_builds import partition_unavailable_reason
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.events.events_utils import EventsUtils
 from ideavirtualdesktopcontroller.app.software_stacks.virtual_desktop_software_stack_db import (
@@ -100,11 +100,11 @@ class VirtualDesktopSoftwareStackUtils:
                         continue
                     parts = stack_id[len('ss-base-') :].split('-')
                     ami_type = parts[0] if len(parts) >= 2 else None
-                    unsupported = stock_unsupported_reason(
+                    unsupported = partition_unavailable_reason(
                         ami_type, ec2_client.meta.region_name
                     )
                     if unsupported:
-                        result.status = 'error'
+                        result.status = 'unsupported'
                         result.message = unsupported
                         continue
                     latest = find_latest_image(

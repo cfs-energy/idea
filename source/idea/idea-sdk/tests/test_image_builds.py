@@ -1351,3 +1351,44 @@ def test_console_links_use_the_partitions_host(region, host):
     from ideasdk.aws.image_builds import console_host
 
     assert console_host(region) == host
+
+
+@pytest.mark.parametrize(
+    'base_os, region, unavailable',
+    [
+        ('rocky9', 'us-gov-west-1', True),
+        ('rocky10', 'us-gov-east-1', True),
+        ('rocky8', 'us-gov-west-1', True),
+        ('rhel9', 'us-gov-west-1', False),
+        ('rocky9', 'us-east-2', False),
+        ('rocky9', None, False),
+    ],
+)
+def test_rocky_is_not_available_in_the_govcloud_partition(base_os, region, unavailable):
+    from ideasdk.aws.image_builds import partition_unavailable_reason, region_partition
+
+    reason = partition_unavailable_reason(base_os, region)
+    assert bool(reason) is unavailable
+    if unavailable:
+        assert reason.startswith('Not available in this partition')
+        assert region_partition(region) in reason
+
+
+def test_the_shipped_ami_map_has_no_rocky_image_in_govcloud():
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).parents[2]
+        / 'ideactl'
+        / 'resources'
+        / 'config'
+        / 'region_ami_config.yml'
+    )
+    config = yaml.safe_load(path.read_text())
+    for region, entries in config.items():
+        if not str(region).startswith('us-gov-'):
+            continue
+        flat = [entries] + [v for v in (entries or {}).values() if isinstance(v, dict)]
+        assert not [os for e in flat for os in e if str(os).startswith('rocky')], region

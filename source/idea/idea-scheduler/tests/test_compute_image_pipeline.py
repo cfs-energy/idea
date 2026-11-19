@@ -1559,3 +1559,98 @@ def test_the_admin_api_refuses_a_validation_queue_name(field):
     with pytest.raises(exceptions.SocaException) as error:
         refuse_validation_names(profile)
     assert 'cannot start with iv-' in error.value.message
+
+
+# Rocky's publisher has no images in the aws-us-gov partition: nothing is ever attempted there
+
+
+def gov_service():
+    svc = build_service(DEFAULT_CONFIG, FakeEc2(region='us-gov-west-1'))
+    svc.context.config().values['scheduler.images.refreshed_release'] = 'old'
+    return svc
+
+
+def queued_by(svc, now, monkeypatch):
+    monkeypatch.setattr(module, 'find_latest_stock_ami', lambda *args: 'ami-stock')
+    svc._enqueue = Mock()
+    svc._setting = Mock()
+    svc.tick(now)
+    return {(c.args[0].base_os, c.args[2]) for c in svc._enqueue.call_args_list}
+
+
+def test_govcloud_never_queues_rocky_on_a_monthly_run_or_a_release_change(monkeypatch):
+    svc = gov_service()
+    # the first Sunday of the month at two (cluster time UTC), and a release change
+    queued = queued_by(svc, datetime(2026, 10, 4, 2, tzinfo=timezone.utc), monkeypatch)
+    assert queued, 'nothing was queued at all, so this proves nothing'
+    assert not [q for q in queued if q[0].startswith('rocky')]
+    assert ('rhel9', 'monthly') in queued or ('rhel9', 'release') in queued
+
+
+def test_govcloud_never_queues_rocky_from_a_forced_refresh():
+    svc = gov_service()
+    rows = [k for k in svc.list_rows() if k.base_os.startswith('rocky')]
+    assert {r.base_os for r in rows} == {'rocky8', 'rocky9', 'rocky10'}
+    results = svc.refresh_images(
+        RefreshImagesRequest(rows=[r.row_key() for r in rows], force=True)
+    )
+    assert {r.outcome for r in results} == {'unsupported'}
+    assert not [r for r in svc.records.items.values() if r.status == 'queued']
+
+
+def test_an_existing_rocky_row_in_govcloud_reads_not_available_not_failed():
+    svc = gov_service()
+    svc.records.put(row(status='failed', error='lustre: something broke'))
+    listed = next(
+        r
+        for r in svc.list_rows()
+        if (r.base_os, r.architecture) == ('rocky9', 'x86_64')
+    )
+    assert listed.status == 'unsupported'
+    assert listed.error.startswith('Not available in this partition: no Rocky Linux')
+    assert listed.current_image_id == 'ami-old'
+
+
+def test_a_rocky_row_queued_before_the_rule_ends_unsupported_without_a_failure(
+    monkeypatch,
+):
+    svc = gov_service()
+    svc.records.put(row(status='queued'))
+    reported = []
+    monkeypatch.setattr(
+        module, 'report_bake_failure', lambda *a, **k: reported.append(a)
+    )
+    monkeypatch.setattr(
+        module,
+        'find_latest_stock_ami',
+        lambda *a: pytest.fail('looked up a base image'),
+    )
+    svc._run_pipeline(svc.records.get('rocky9', 'x86_64'))
+    stored = svc.records.get('rocky9', 'x86_64')
+    assert stored.status == 'unsupported' and reported == []
+    assert stored.error.startswith('Not available in this partition')
+
+
+def test_a_pinned_rocky_image_in_govcloud_is_left_as_it_is():
+    svc = gov_service()
+    svc.records.put(row(pinned=True, current_image_id='ami-site'))
+    listed = next(
+        r
+        for r in svc.list_rows()
+        if r.base_os == 'rocky9' and r.architecture == 'x86_64'
+    )
+    assert listed.status == 'pinned' and listed.current_image_id == 'ami-site'
+    result = svc.refresh_images(RefreshImagesRequest(rows=[row().row_key()]))[0]
+    assert result.outcome == 'pinned'
+
+
+def test_the_commercial_partition_still_bakes_rocky():
+    svc = service()
+    listed = next(
+        r
+        for r in svc.list_rows()
+        if r.base_os == 'rocky9' and r.architecture == 'x86_64'
+    )
+    assert listed.status == 'current'
+    result = svc.refresh_images(RefreshImagesRequest(rows=[row().row_key()]))[0]
+    assert result.outcome == 'queued'

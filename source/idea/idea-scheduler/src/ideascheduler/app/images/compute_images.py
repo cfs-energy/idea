@@ -75,10 +75,10 @@ from ideasdk.aws.image_builds import (
     deregister_legacy_images,
     deregister_unreferenced_images,
     describe_image_or_none,
+    partition_unavailable_reason,
 )
 from ideasdk.aws.stock_amis import (
     find_latest_stock_ami,
-    stock_unsupported_reason,
     trusted_owners,
 )
 from ideascheduler.app.images.compute_node_ami_builder import ComputeNodeAmiBuilder
@@ -269,7 +269,7 @@ class ComputeImageService:
             raise exceptions.invalid_params(
                 f'base_os must be one of: {", ".join(COMPUTE_BASE_OS)}'
             )
-        unsupported = stock_unsupported_reason(
+        unsupported = partition_unavailable_reason(
             base_os, self.context.aws().ec2().meta.region_name
         )
         if unsupported:
@@ -429,7 +429,7 @@ class ComputeImageService:
         region = self.context.aws().ec2().meta.region_name
         result = []
         for record in rows.values():
-            reason = stock_unsupported_reason(record.base_os, region)
+            reason = partition_unavailable_reason(record.base_os, region)
             if record.variant != ImageVariant.CPU:
                 reason = 'Compute validation currently supports CPU images only.'
             if record.pinned:
@@ -535,7 +535,7 @@ class ComputeImageService:
             or row.base_os not in COMPUTE_BASE_OS
             or row.architecture not in ('x86_64', 'arm64')
             or row.variant not in (None, ImageVariant.CPU)
-            or stock_unsupported_reason(
+            or partition_unavailable_reason(
                 row.base_os, self.context.aws().ec2().meta.region_name
             )
         ):
@@ -677,6 +677,13 @@ class ComputeImageService:
                         or datetime.now(timezone.utc),
                     }
                 )
+                unavailable = partition_unavailable_reason(
+                    record.base_os, self.context.aws().ec2().meta.region_name
+                )
+                if unavailable:
+                    # queued before this rule, or by an older release: not a failed bake
+                    progress({'status': 'unsupported', 'error': unavailable})
+                    return
                 source = self.default_base_ami(record.base_os, record.architecture)
                 if not source:
                     raise exceptions.general_exception(

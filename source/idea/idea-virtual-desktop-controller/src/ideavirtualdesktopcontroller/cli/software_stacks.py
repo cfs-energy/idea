@@ -619,6 +619,7 @@ def clear_software_stacks_index(context):
 
 # the pattern and publisher tables live in the sdk so the scheduler's compute image
 # builds resolve stock AMIs the same way; re-exported here for ideactl update-base-stacks
+from ideasdk.aws.image_builds import partition_unavailable_reason  # noqa: E402
 from ideasdk.aws.stock_amis import (  # noqa: E402,F401
     AMI_OWNERS,
     AMI_PATTERNS,
@@ -925,6 +926,12 @@ def update_base_stacks(dry_run, stack_id, force, **kwargs):
                 if len(parts) >= 2:
                     # For patterns like 'amazonlinux2023-x86' or 'rocky8-arm64'
                     ami_type = parts[0]
+
+            unavailable = partition_unavailable_reason(ami_type, aws_region)
+            if unavailable:
+                click.echo(f'Skipping {current_stack_id}: {unavailable}')
+                stats['skipped'] += 1
+                continue
 
             # Find the latest AMI
             latest_ami_id = find_latest_ami(

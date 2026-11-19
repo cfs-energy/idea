@@ -82,6 +82,38 @@ def console_host(region: str) -> str:
     return f'{region}.console.aws.amazon.com'
 
 
+def region_partition(region: Optional[str]) -> str:
+    """the AWS partition a region belongs to"""
+    region = region if isinstance(region, str) else ''
+    if region.startswith('us-gov-'):
+        return 'aws-us-gov'
+    if region.startswith('cn-'):
+        return 'aws-cn'
+    return 'aws'
+
+
+# base OS families no image is published for in a partition. Rocky's publisher has no images
+# in aws-us-gov; the only listing there is a Marketplace one that needs a subscription.
+UNAVAILABLE_IN_PARTITION = {'aws-us-gov': ('rocky',)}
+
+
+def partition_unavailable_reason(
+    base_os: Optional[str], region: Optional[str]
+) -> Optional[str]:
+    """
+    why base_os has no stock image in this region's partition, or None. the one rule both image
+    pipelines, the base stack refresh and the stock lookup follow: such a row is never seeded,
+    queued or baked and is shown as unsupported. a pinned or custom image is not affected.
+    """
+    partition = region_partition(region)
+    if base_os and base_os.startswith(UNAVAILABLE_IN_PARTITION.get(partition, ())):
+        return (
+            f'Not available in this partition: no Rocky Linux images are published in '
+            f'{partition}, so this row is not built. A pinned or custom image still works.'
+        )
+    return None
+
+
 def builder_log_link(context, instance_id: str) -> str:
     """
     CloudWatch console link to the builder's bootstrap_<instance id> stream, which carries

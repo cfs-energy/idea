@@ -66,10 +66,10 @@ from ideasdk.aws.image_builds import (
     resume_record,
     terminate_builder,
     with_cause,
+    partition_unavailable_reason,
 )
 from ideasdk.aws.stock_amis import (
     resolve_stock_image,
-    stock_unsupported_reason,
     trusted_owners,
 )
 from ideasdk.metrics.health import HealthMetrics
@@ -198,7 +198,14 @@ class DesktopImagePipeline:
 
     def managed(self) -> List[ImageBuildRecord]:
         """the pipeline's rows; custom (ad hoc) build records are never listed, run or promoted"""
-        return [r for r in self.records.list_all() if not is_custom_record(r)]
+        rows = [r for r in self.records.list_all() if not is_custom_record(r)]
+        region = self.context.aws().ec2().meta.region_name
+        for record in rows:
+            # a row failed before the partition rule reads as unsupported, so nothing pages on it
+            reason = partition_unavailable_reason(record.base_os, region)
+            if reason and not record.pinned and not record.is_in_flight():
+                record.status, record.error = S.UNSUPPORTED.value, reason
+        return rows
 
     # settings
 
@@ -324,7 +331,7 @@ class DesktopImagePipeline:
 
     def unsupported_reason(self, record: ImageBuildRecord) -> Optional[str]:
         region = self.context.aws().ec2().meta.region_name
-        reason = stock_unsupported_reason(record.base_os, region)
+        reason = partition_unavailable_reason(record.base_os, region)
         if reason:
             return reason
         if record.base_os not in BUILD_SUPPORTED_BASE_OS:
