@@ -53,6 +53,23 @@ describe('job info panel', () => {
         expect(valueOf('Total Time')).toBe('-');
     });
 
+    it('shows a running job with no start time without a date error or a growing wait', () => {
+        const job: SocaJob = {
+            job_id: '2349',
+            state: 'running',
+            queue_time: '2026-08-19T10:00:00Z',
+            start_time: '',
+            end_time: '',
+            params: {walltime: '05:00:00'}
+        };
+        const {container} = render(<JobInfo job={job} now={NOW}/>);
+        expect(valueOf('Start Time')).toBe('-');
+        expect(valueOf('End Time')).toBe('-');
+        expect(valueOf('Queued For')).toBe('-');
+        expect(valueOf('Elapsed vs Requested')).toBe('Running, start time not recorded');
+        expect(container.textContent).not.toContain('Invalid Date');
+    });
+
     it('reports elapsed against requested for a running job, in minutes', () => {
         const job: SocaJob = {
             job_id: '2348',
@@ -123,6 +140,13 @@ describe('job waiting signals', () => {
         })} now={NOW}/>);
         expect(screen.getByText(/waiting 45 min/)).toBeInTheDocument();
         expect(screen.getByText(/attempt 2 of 3/)).toBeInTheDocument();
+    });
+
+    it('shows nothing for a running job with no start time, and still shows a queued one waiting', () => {
+        const {container} = render(<JobWaitingSignals job={queuedJob({state: 'running', start_time: ''})} now={NOW}/>);
+        expect(container.textContent).toBe('');
+        const queued = render(<JobWaitingSignals job={queuedJob({start_time: ''})} now={NOW}/>);
+        expect(queued.container.textContent).toBe('waiting 45 min');
     });
 
     it('names the queue limit holding the job, and nothing else about the queue', () => {

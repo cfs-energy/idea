@@ -31,6 +31,8 @@ const NEAR_WALLTIME_RATIO = 0.9
 // states a job cannot leave. a job in one of these stopped accruing time, so a
 // missing end_time must never be substituted with the browser clock.
 const TERMINAL_JOB_STATES = ['finished', 'exit']
+// states the scheduler only reports once the job has been sent to a node (the same two the status label calls Running)
+const RUNNING_JOB_STATES = ['running', 'subjob_begun']
 
 /** Parses an HH:MM:SS walltime into seconds, matching the server's ModelUtils.walltime_to_seconds.
  * Returns null for anything it cannot parse. */
@@ -542,6 +544,10 @@ export class JobUtils extends JobParamUtils {
         return parseWalltimeSeconds(this.params?.walltime)
     }
 
+    isRunning(): boolean {
+        return RUNNING_JOB_STATES.indexOf(Utils.asString(this.job.state)) >= 0
+    }
+
     isTerminal(): boolean {
         return TERMINAL_JOB_STATES.indexOf(Utils.asString(this.job.state)) >= 0
     }
@@ -570,6 +576,10 @@ export class JobUtils extends JobParamUtils {
     getQueuedSeconds(now: Date = new Date()): number | null {
         const queueTime = toEpochMillis(this.job.queue_time)
         if (queueTime == null) {
+            return null
+        }
+        // a running job with no recorded start stopped waiting at a time we do not know
+        if (this.isRunning() && toEpochMillis(this.job.start_time) == null) {
             return null
         }
         // a job that never started stopped waiting when it ended
@@ -601,6 +611,9 @@ export class JobUtils extends JobParamUtils {
      * started reports that, never a duration. */
     getElapsedSummary(now: Date = new Date()): JobElapsedSummary {
         const elapsedSeconds = this.getElapsedSeconds(now)
+        if (elapsedSeconds == null && this.isRunning()) {
+            return {state: 'no-walltime', text: 'Running, start time not recorded'}
+        }
         if (elapsedSeconds == null) {
             return {state: 'not-started', text: 'Not started'}
         }
@@ -680,7 +693,7 @@ export function getJobWaitingSignals(job: SocaJob, now: Date = new Date()): stri
     const signals: string[] = []
     const held = job.state === 'held'
 
-    if (Utils.isEmpty(job.start_time)) {
+    if (Utils.isEmpty(job.start_time) && !new JobUtils(job).isRunning()) {
         const queuedSeconds = new JobUtils(job).getQueuedSeconds(now)
         if (queuedSeconds != null) {
             signals.push(`waiting ${formatDurationMinutes(queuedSeconds)}`)

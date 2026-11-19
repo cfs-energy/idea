@@ -84,6 +84,18 @@ describe('JobUtils job timings', () => {
         expect(queued.getElapsedSummary(NOW)).toEqual({state: 'not-started', text: 'Not started'});
     });
 
+    it('does not call a running job with no start time not started, and stops its queue clock', () => {
+        const running = new JobUtils(job({state: 'running', queue_time: '2026-08-19T11:15:00Z'}));
+        expect(running.getElapsedSummary(NOW)).toEqual({state: 'no-walltime', text: 'Running, start time not recorded'});
+        expect(running.getQueuedSeconds(NOW)).toBeNull();
+        expect(getJobWaitingSignals(job({state: 'running', queue_time: '2026-08-19T11:15:00Z'}), NOW)).toEqual([]);
+    });
+
+    it('still reports a queued job with no start time as waiting', () => {
+        const queued = job({state: 'queued', queue_time: '2026-08-19T11:15:00Z'});
+        expect(getJobWaitingSignals(queued, NOW)).toEqual(['waiting 45 min']);
+    });
+
     it('reports total time only from the recorded value', () => {
         expect(new JobUtils(job({total_time_secs: 3720})).getTotalTimeSeconds()).toBe(3720);
         expect(new JobUtils(job({total_time_secs: 0})).getTotalTimeSeconds()).toBe(0);
