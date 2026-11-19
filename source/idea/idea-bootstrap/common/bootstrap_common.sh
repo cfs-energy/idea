@@ -796,6 +796,8 @@ function mount_shared_filesystems () {
   if [[ ${#not_mounted[@]} -gt 0 ]]; then
     log_error "Shared storage not mounted: ${not_mounted[*]}"
   fi
+  # for the caller's stop message
+  SHARED_STORAGE_NOT_MOUNTED="${not_mounted[*]}"
   # the last command is the one a bake records, so it says what failed
   [[ ${#not_mounted[@]} -eq 0 ]]
 }
