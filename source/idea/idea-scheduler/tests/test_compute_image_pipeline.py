@@ -1618,6 +1618,20 @@ def test_a_compute_bake_without_the_setting_launches_todays_builder(
     _, ec2, record = bake_through_the_pipeline(monkeypatch, architecture)
     assert record.error is None
     assert [launch['InstanceType'] for launch in ec2.launches] == [expected]
+    # today's root size; gp3 at the most 10 GiB allows instead of the image's volume type
+    assert ec2.launches[0]['BlockDeviceMappings'] == [
+        {
+            'DeviceName': '/dev/xvda',
+            'Ebs': {
+                'VolumeSize': 10,
+                'VolumeType': 'gp3',
+                'Iops': 5000,
+                'Throughput': 1000,
+            },
+        }
+    ]
+    # CreateImage cannot change those figures, so it still names only the size
+    assert ec2.images[0]['BlockDeviceMappings'][0]['Ebs'] == {'VolumeSize': 10}
 
 
 def test_a_compute_bake_uses_the_configured_builder_type(monkeypatch):

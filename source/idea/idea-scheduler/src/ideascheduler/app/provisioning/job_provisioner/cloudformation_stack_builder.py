@@ -19,7 +19,12 @@ from ideadatamodel import (
     GetUserRequest,
 )
 from ideadatamodel.model_utils import ModelUtils
-from ideasdk.aws.image_builds import cached_image_root_gb, launch_root_gb
+from ideasdk.aws.image_builds import (
+    HOST_ROOT_GP3_IOPS,
+    HOST_ROOT_GP3_THROUGHPUT,
+    cached_image_root_gb,
+    launch_root_gb,
+)
 from ideasdk.utils import Utils
 from ideasdk.context import BootstrapContext
 from ideasdk.bootstrap import (
@@ -656,6 +661,9 @@ class CloudFormationStackBuilder:
                 Ebs=EBSBlockDevice(
                     VolumeSize=root_volume_gb,
                     VolumeType=constants.DEFAULT_VOLUME_TYPE_COMPUTE,
+                    # explicit: an IDEA image's mapping carries its builder's provisioned figures
+                    Iops=HOST_ROOT_GP3_IOPS,
+                    Throughput=HOST_ROOT_GP3_THROUGHPUT,
                     DeleteOnTermination=not self.job.params.keep_ebs_volumes,
                     Encrypted=constants.DEFAULT_VOLUME_ENCRYPTION_COMPUTE,
                     KmsKeyId=kms_key_id,

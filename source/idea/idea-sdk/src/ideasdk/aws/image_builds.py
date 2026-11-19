@@ -135,6 +135,17 @@ BUILDER_INSTANCE_TYPES = {
 }
 DEFAULT_ARM64_BUILDER_INSTANCE_TYPE = 'm8g.large'
 
+# the builder root disk: gp3 at these figures, lowered to what the volume size allows. the
+# image created from it keeps them in its mapping (CreateImage cannot change them), so every
+# host launch sets HOST_ROOT_GP3_IOPS / HOST_ROOT_GP3_THROUGHPUT explicitly
+BUILDER_ROOT_IOPS = 16000
+BUILDER_ROOT_THROUGHPUT = 1000
+GP3_BASELINE_IOPS = 3000
+GP3_BASELINE_THROUGHPUT = 125
+GP3_MAX_IOPS_PER_GIB = 500
+HOST_ROOT_GP3_IOPS = GP3_BASELINE_IOPS
+HOST_ROOT_GP3_THROUGHPUT = GP3_BASELINE_THROUGHPUT
+
 _RECORD_TIMESTAMPS = (
     'started_on',
     'finished_on',
@@ -927,6 +938,25 @@ def pipeline_builder_instance_type(
         return default_builder_instance_type(wanted, x86_default)
     check_builder_instance_type(configured, wanted)
     return configured
+
+
+def builder_root_ebs(volume_gb: int) -> Dict[str, Any]:
+    """
+    the builder root volume: gp3 at BUILDER_ROOT_IOPS / BUILDER_ROOT_THROUGHPUT, lowered to
+    what gp3 allows for the size (500 IOPS per GiB, never below the 3000 baseline; 0.25 MiB/s
+    per provisioned IOPS, never below 125)
+    """
+    iops = max(
+        GP3_BASELINE_IOPS,
+        min(BUILDER_ROOT_IOPS, GP3_MAX_IOPS_PER_GIB * int(volume_gb)),
+    )
+    throughput = max(GP3_BASELINE_THROUGHPUT, min(BUILDER_ROOT_THROUGHPUT, iops // 4))
+    return {
+        'VolumeSize': int(volume_gb),
+        'VolumeType': 'gp3',
+        'Iops': iops,
+        'Throughput': throughput,
+    }
 
 
 def sanitize_aws_message(text: Optional[str]) -> str:

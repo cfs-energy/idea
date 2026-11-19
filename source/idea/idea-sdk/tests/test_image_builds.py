@@ -1351,3 +1351,32 @@ def test_console_links_use_the_partitions_host(region, host):
     from ideasdk.aws.image_builds import console_host
 
     assert console_host(region) == host
+
+
+@pytest.mark.parametrize(
+    'volume_gb, iops, throughput',
+    [
+        # 4 GiB allows 2000 IOPS, below the 3000 every gp3 volume gets; 750 = 3000 / 4
+        (4, 3000, 750),
+        # the compute floor: 500 x 10 = 5000 IOPS, whose 1250 MiB/s is capped at 1000
+        (10, 5000, 1000),
+        (20, 10000, 1000),
+        # 32 GiB is the first size the full 16000 fits; larger volumes stay there
+        (32, 16000, 1000),
+        (100, 16000, 1000),
+    ],
+)
+def test_the_builder_disk_is_gp3_at_the_most_the_size_allows(
+    volume_gb, iops, throughput
+):
+    from ideasdk.aws.image_builds import builder_root_ebs
+
+    ebs = builder_root_ebs(volume_gb)
+    assert ebs == {
+        'VolumeSize': volume_gb,
+        'VolumeType': 'gp3',
+        'Iops': iops,
+        'Throughput': throughput,
+    }
+    assert ebs['Iops'] <= max(3000, 500 * volume_gb)
+    assert ebs['Throughput'] <= ebs['Iops'] / 4
