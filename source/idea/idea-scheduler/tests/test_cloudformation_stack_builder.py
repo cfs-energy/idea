@@ -1118,5 +1118,7 @@ def test_interfaces_are_tagged_at_launch_only_where_the_launcher_may(
         'Resources.NodeLaunchTemplate.Properties.LaunchTemplateData.TagSpecifications'
     )
     expected = ['instance', 'volume']
-    expected += ['network-interface'] if interface_tagged else ['spot-instances-request']
+    expected += (
+        ['network-interface'] if interface_tagged else ['spot-instances-request']
+    )
     assert [spec['ResourceType'] for spec in specs] == expected
