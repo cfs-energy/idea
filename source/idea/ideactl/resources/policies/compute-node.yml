@@ -60,6 +60,7 @@ Statement:
       ForAllValues:StringEquals:
         aws:TagKeys:
           - idea:BootstrapStatus
+          - idea:BootstrapDetail
           - idea:AmiBuilderStatus
     Effect: Allow
 

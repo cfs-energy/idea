@@ -243,7 +243,7 @@ describe('desktop and compute hosts', () => {
       assert.deepEqual(asList(onInstances[0]!.Resource), [`arn:aws:ec2:us-east-2:${ACCOUNT}:instance/*`]);
       assert.deepEqual(onInstances[0]!.Condition, {
         ArnEquals: { 'ec2:SourceInstanceARN': `arn:aws:ec2:us-east-2:${ACCOUNT}:instance/\${ec2:InstanceID}` },
-        'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:BootstrapStatus', 'idea:AmiBuilderStatus'] },
+        'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:BootstrapStatus', 'idea:BootstrapDetail', 'idea:AmiBuilderStatus'] },
       });
     });
   }

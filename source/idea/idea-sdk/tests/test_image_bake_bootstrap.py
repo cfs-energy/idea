@@ -575,12 +575,13 @@ def test_the_mount_retry_loop_gives_up_loudly(tmp_path):
         '[ERROR] Shared storage did not mount after 5 attempts: /apps/. Check'
         in result.stdout
     )
-    # the directories survive the node in a tag beside the status, in the same call
-    assert (
-        'ec2 create-tags --resources i-0 --tags '
-        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable '
-        'Key=idea:BootstrapDetail,Value=/apps/'
-    ) in (tmp_path / 'tags').read_text()
+    # the directories survive the node in a tag written after the status, in a call of its
+    # own: a role that may not write the detail still records the status
+    tags = (tmp_path / 'tags').read_text().splitlines()
+    assert [t.split('--tags ')[1] for t in tags] == [
+        'Key=idea:BootstrapStatus,Value=shared-storage-unavailable',
+        'Key=idea:BootstrapDetail,Value=/apps/',
+    ]
 
 
 def test_a_host_whose_storage_mounts_goes_on(tmp_path):
@@ -2016,7 +2017,7 @@ def test_an_optional_share_that_did_not_come_back_does_not_stop_the_node(tmp_pat
 def test_the_stop_detail_fits_a_tag(tmp_path, detail, tagged):
     common = Path(IDEA_BOOTSTRAP_DIR, 'common/bootstrap_common.sh').read_text()
     stubs = (
-        f'curl() {{ echo i-0; }}\naws() {{ printf "%s\\n" "$@" > {tmp_path}/tags; }}\n'
+        f'curl() {{ echo i-0; }}\naws() {{ printf "%s\\n" "$@" >> {tmp_path}/tags; }}\n'
         'timeout() { shift; "$@"; }\n'
     )
     subprocess.run(
