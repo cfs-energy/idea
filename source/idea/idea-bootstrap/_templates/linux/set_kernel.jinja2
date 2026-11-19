@@ -301,7 +301,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel8', 'rocky8') %}
   # RHEL8/Rocky8 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
-  drop_rescue_images
+  make_boot_room_for_kernel
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
@@ -312,7 +312,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel9', 'rhel10', 'rocky9', 'rocky10') %}
   # RHEL9/Rocky9 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
-  drop_rescue_images
+  make_boot_room_for_kernel
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
@@ -352,7 +352,7 @@ function update_within_target_series() {
   newest=$(dnf repoquery -q --latest-limit 1 --qf '%{version}-%{release}.%{arch}' "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | tail -1)
   [[ -n "${newest}" && "${newest}" != "${current_kernel}" ]] || return 0
   [[ "$(printf '%s\n%s\n' "${current_kernel}" "${newest}" | sort -V | tail -1)" == "${newest}" ]] || return 0
-  drop_rescue_images
+  make_boot_room_for_kernel
   if ! package_transaction dnf install -y "kernel-${newest}" "kernel-core-${newest}" "kernel-devel-${newest}"; then
 {% endif %}
     log_warning "Unable to install kernel ${newest}; keeping ${current_kernel}"
@@ -379,6 +379,34 @@ function update_within_target_series() {
   TARGET_KERNEL_RELEASE="${newest}"
   set_reboot_required "Kernel update to ${newest}"
 }
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+
+# Before a kernel is installed. Rescue images always go. A bake also drops the kernels older than
+# the one it runs, which its dcv stage removed only after the reboot (remove_superseded_kernels),
+# and stops with the reason when the 1 GB /boot still cannot hold another kernel: the Rocky 9
+# desktop bake ran out of room writing the new initramfs.
+function make_boot_room_for_kernel() {
+  drop_rescue_images
+{% if not (compute_image_bake | default(false)) %}  [[ -n "${BAKE_STAGE:-}" ]] || return 0
+{% endif %}  local boot="${KERNEL_BOOT_DIR:-/boot}" running package version older=() need free
+  running=$(uname -r)
+  while read -r package version; do
+    [[ -n "${version}" && "${version}" != "${running}" ]] || continue
+    [[ "$(printf '%s\n%s\n' "${version}" "${running}" | sort -V | head -1)" == "${version}" ]] && older+=("${package}")
+  done < <(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH} %{VERSION}-%{RELEASE}.%{ARCH}\n' kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra kernel-devel 2>/dev/null | grep -v 'is not installed' || true)
+  if [[ -n "${older[*]}" ]]; then
+    package_transaction dnf remove -y --noautoremove "${older[@]}" || log_warning "Unable to remove superseded kernels: ${older[*]}"
+  fi
+  # what the running kernel takes in /boot (kernel, initramfs, kdump initrd, map), with a margin
+  need=$(du -cb "${boot}"/*"${running}"* 2>/dev/null | tail -1 | cut -f1)
+  need=$(( ${need:-0} * 12 / 10 ))
+  free=$(df -B1 --output=avail "${boot}" 2>/dev/null | tail -1 | tr -d ' ')
+  [[ "${free}" =~ ^[0-9]+$ ]] || { log_warning "Free space on ${boot} could not be read"; return 0; }
+  if (( free < need )); then
+    fail_kernel_bootstrap kernel-install-failed "${boot} has $(( free / 1048576 )) MB free after removing rescue images and older kernels, and kernel ${TARGET_KERNEL_VERSION} needs about $(( need / 1048576 )) MB. To fix: bake from a base image with a larger /boot partition."
+  fi
+}
+{% endif %}
 {% endif %}
 
 function set_kernel_version() {

@@ -461,7 +461,12 @@ def test_a_series_change_that_cannot_select_the_kernel_stops(tmp_path):
 def test_a_series_change_drops_rescue_images_before_the_install():
     rendered = render('_templates/linux/set_kernel.jinja2', base_os='rocky9')
     install = rendered[rendered.index('function install_target_kernel()') :]
-    assert install.index('drop_rescue_images') < install.index('dnf install -y kernel-')
+    # make_boot_room_for_kernel drops them, and in a bake the older kernels too
+    assert install.index('make_boot_room_for_kernel') < install.index(
+        'dnf install -y kernel-'
+    )
+    room = rendered[rendered.index('function make_boot_room_for_kernel()') :]
+    assert room.index('drop_rescue_images') < room.index('BAKE_STAGE')
 
 
 def ubuntu_bake(tmp_path, abi, initrd, builds=False):
@@ -592,18 +597,19 @@ def test_ubuntu2404_bake_selects_fsx_abi_before_upgrades(base_os, instance_type)
 # and rescue removal to a series change as well, and to keep the running kernel when the newer one
 # has no FSx for Lustre module (compute bakes report a failure through their in-bake checks),
 # and to keep an EL 9.9 (741) image on its own series. A cluster without Lustre gets no kernel series
-# move, so these renders change only by blank lines.
+# move, so these renders change only by blank lines; a bake makes room on /boot before a kernel
+# install.
 @pytest.mark.parametrize(
     'base_os, expected',
     [
         (
             'amazonlinux2023',
-            '578fb1241db267adfdda629d4628c844c95591d038c7c6699e057af98fd17771',
+            '8975140e91aa04eab33e9083b442c4111df26b7d9c96cfa1794a53c154b8be08',
         ),
-        ('rhel8', 'b24c153acdb954e426d7f768361b208e35d59cc407f44d72049efea8d26df690'),
-        ('rocky8', 'b24c153acdb954e426d7f768361b208e35d59cc407f44d72049efea8d26df690'),
-        ('rhel9', '795b5b9f74731c5f0b0af2939207d074e1d5335c76dc32fab580c195d75c5435'),
-        ('rocky9', '795b5b9f74731c5f0b0af2939207d074e1d5335c76dc32fab580c195d75c5435'),
+        ('rhel8', '8f1ab71670192499b6413bb4cb4b9cbca33d3764aa352bdbc92ae7b659f49b55'),
+        ('rocky8', '8f1ab71670192499b6413bb4cb4b9cbca33d3764aa352bdbc92ae7b659f49b55'),
+        ('rhel9', '72a9045048cc863a9a71884126ea2a4d809a0c3d10656e362c5098a32e43f5d0'),
+        ('rocky9', '72a9045048cc863a9a71884126ea2a4d809a0c3d10656e362c5098a32e43f5d0'),
     ],
 )
 def test_non_ubuntu_kernel_renders_unchanged(base_os, expected):
