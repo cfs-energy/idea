@@ -36,7 +36,10 @@ from ideascheduler.app.scheduler.openpbs.openpbs_api import (
 )
 from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSEvent
 from ideascheduler.app.scheduler import SocaJobBuilder
-from ideascheduler.app.scheduler.job_param_builder import JOB_UID_PATTERN
+from ideascheduler.app.scheduler.job_param_builder import (
+    COMPUTED_JOB_GROUP_PATTERN,
+    JOB_UID_PATTERN,
+)
 from ideascheduler.app.scheduler.pbs_select import (
     select_chunks,
     chunk_resources,
@@ -133,6 +136,21 @@ class OpenPBSAPIInvocationContext:
             f'jobs set fsx_lustre, so the job cannot keep it there. Submit the job to '
             f'queue {queue_name} instead of moving it.',
         )
+
+    def _regroups_edit(self, old_job_params: dict, job_params: dict) -> bool:
+        """
+        an edit of a job with no capacity yet takes a new group when its old one was
+        computed (g + hex) and the edit names none: a custom group (custom-...) is the
+        submitter's or the queue's and stays. a job bound to a stack keeps its group,
+        which names that stack.
+        """
+        if self.event.type != 'modifyjob' or 'job_group' in job_params:
+            return False
+        old_group = old_job_params.get('job_group')
+        if not old_group or not COMPUTED_JOB_GROUP_PATTERN.fullmatch(str(old_group)):
+            return False
+        select = (self.event.job_o.Resource_List or {}).get('select') or ''
+        return 'compute_node=' not in select or 'compute_node=tbd' in select
 
     def build_and_validate_job(self):
         try:
@@ -234,6 +252,13 @@ class OpenPBSAPIInvocationContext:
             ):
                 moved_fsx = job_params['fsx_lustre']
                 job_params = {k: v for k, v in job_params.items() if k != 'fsx_lustre'}
+            if self._regroups_edit(old_job_params, job_params):
+                # the group was computed from the request before the edit: carried over,
+                # the edited job was placed on the old group's stack and refused there on
+                # every cycle. it is computed again from the edited request
+                old_job_params = {
+                    k: v for k, v in old_job_params.items() if k != 'job_group'
+                }
             job_params = {**old_job_params, **job_params}
             self._job_builder = SocaJobBuilder(
                 context=self.app_context,
