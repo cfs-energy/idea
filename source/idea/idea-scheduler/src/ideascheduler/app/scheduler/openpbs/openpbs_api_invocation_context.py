@@ -137,6 +137,24 @@ class OpenPBSAPIInvocationContext:
             f'queue {queue_name} instead of moving it.',
         )
 
+    def _refuse_move_of_bound_job(self, queue_name: str):
+        """
+        a movejob hook may only read the job, so a job whose selector already names a
+        node of its queue's stack (held jobs keep it) cannot be unbound: accepted, it sat
+        in the target queue bound to the source queue's capacity. it is refused instead
+        """
+        if self.event.type != 'movejob' or self.event.job is None:
+            return
+        select = (self.event.job.Resource_List or {}).get('select') or ''
+        if 'compute_node=' not in select or 'compute_node=tbd' in select:
+            return
+        self.add_job_validation_entry(
+            error_code=errorcodes.INVALID_PARAMS,
+            message=f'This job already has a node from queue {self.event.src_queue}, '
+            f'so it cannot be moved to queue {queue_name}. Delete it and submit it to '
+            f'queue {queue_name}, or move a job before it is given a node.',
+        )
+
     def _bound_to_capacity(self) -> bool:
         """an edit of a job whose node selector names its stack"""
         if self.event.type != 'modifyjob' or self.event.job_o is None:
@@ -294,6 +312,7 @@ class OpenPBSAPIInvocationContext:
                 # a job on a stack keeps the group that names the stack
                 self._job.job_group = carried_group
                 self._job.params.job_group = carried_group
+            self._refuse_move_of_bound_job(queue_name)
             self._refuse_move_keeping_another_queues_fsx(
                 queue_profile, queue_name, moved_fsx
             )

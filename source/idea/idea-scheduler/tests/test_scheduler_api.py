@@ -1403,3 +1403,18 @@ def test_a_qsub_that_never_returns_fails_the_submission(context, monkeypatch):
         api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
     assert raised.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
     assert 'Check Active Jobs before submitting it again' in raised.value.message
+    # the job may be queued: the submission id is not released for a retry
+    assert raised.value.submission_indeterminate is True
+
+
+def test_a_script_that_could_not_be_written_is_removed(context, monkeypatch):
+    # a write that fails partway (a full quota) left the partial script behind
+    api = _prepare_submit(context, monkeypatch)
+
+    def full(fd, user, group):
+        raise OSError(122, 'Disk quota exceeded')
+
+    monkeypatch.setattr(scheduler_api_module, 'chown_fd', full)
+    with pytest.raises(OSError):
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    assert os.listdir(_jobs_dir(context)) == []

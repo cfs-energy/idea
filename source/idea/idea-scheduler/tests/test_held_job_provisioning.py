@@ -762,3 +762,18 @@ def test_a_provisioner_stopped_mid_retry_returns_the_jobs_unplaced(context):
     ]
     # not a failure: nothing is charged to the jobs' retry count
     assert provisioner._track_failed_jobs(jobs=jobs, result=result) == jobs
+
+
+def test_an_unedited_job_is_not_regrouped_on_a_second_read(context, mock_scheduler):
+    # the group is computed from the request; an unchanged request computes the same one
+    provisioner = make_provisioner(context)
+    job = mock_job()
+    job.params.compute_stack = None
+    job.job_group = job.params.job_group = job.get_job_group()
+    written = []
+    mock_scheduler.set_job_attributes = lambda job_id, attributes: written.append(
+        attributes
+    )
+    assert provisioner._regrouped(job) is job
+    assert provisioner._regrouped(job.model_copy(deep=True)).job_group == job.job_group
+    assert written == []

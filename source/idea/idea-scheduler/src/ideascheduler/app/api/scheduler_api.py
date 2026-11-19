@@ -623,8 +623,11 @@ class SchedulerAPI(BaseAPI):
             result = self._submit_job(
                 request=request, job_owner=job_owner, dry_run=dry_run
             )
-        except BaseException:
-            self.job_submission_deduplicator.rollback(dedupe_key)
+        except BaseException as error:
+            # a qsub that timed out may have queued the job: the key stays claimed for its
+            # lifetime, so a retry with the same id is refused instead of queuing a second
+            if not getattr(error, 'submission_indeterminate', False):
+                self.job_submission_deduplicator.rollback(dedupe_key)
             raise
 
         if Utils.get_as_bool(result.accepted, False):
@@ -700,12 +703,20 @@ class SchedulerAPI(BaseAPI):
             # the script is created relative to the jobs dir opened and checked here and
             # chowned through its fd, so nothing swapped in at the path can redirect it.
             fd = open_jobs_dir(job_submission_dir, user=job_owner, group=group_name)
+            created = False
             try:
                 with open_new_job_script(script_name, dir_fd=fd) as f:
+                    created = True
                     f.write(Utils.base64_decode(job_script))
                     f.write('\n')
                     chown_fd(f.fileno(), user=job_owner, group=group_name)
             except BaseException:
+                # a script this call created and could not finish (a full quota) is removed
+                if created:
+                    try:
+                        os.unlink(script_name, dir_fd=fd)
+                    except OSError:
+                        pass
                 os.close(fd)
                 raise
             return fd
@@ -765,12 +776,14 @@ class SchedulerAPI(BaseAPI):
                         f'qsub did not finish in {QSUB_TIMEOUT_SECONDS} s: '
                         f'{shlex.join(command)}'
                     )
-                    raise exceptions.soca_exception(
+                    timed_out = exceptions.soca_exception(
                         errorcodes.JOB_SUBMISSION_FAILED,
                         f'The submission did not finish within {QSUB_TIMEOUT_SECONDS} '
                         f'seconds; the home directory on {data_dir} may not be answering. '
                         f'Check Active Jobs before submitting it again.',
                     )
+                    timed_out.submission_indeterminate = True
+                    raise timed_out
 
                 job_id = None
                 if result.returncode == 0:

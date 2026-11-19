@@ -3970,3 +3970,36 @@ def test_persistent_2_with_the_queues_bucket_is_refused(context):
     assert any(
         "can't be linked to an S3 bucket" in m for m in get_validation_messages(result)
     )
+
+
+def test_an_unchanged_job_draws_the_same_subnet_on_every_read(context, monkeypatch):
+    # with no preferred subnet a multi-node on-demand job drew a subnet per read; the subnet
+    # is in its group, and the live read before placement then rewrote an unedited job's group
+    private_subnets = context.config().get_list('cluster.network.private_subnets', [])
+    assert len(private_subnets) > 1
+    retries = {'count': 0}
+
+    class Cache:
+        @staticmethod
+        def get_job_provisioning_retry_count(_job_id: str) -> int:
+            return retries['count']
+
+    monkeypatch.setattr(context, 'job_cache', Cache(), raising=False)
+
+    def subnet(job_id='101'):
+        result = build_and_validate(
+            context=context, params=MULTI_NODE_JOB, job_id=job_id
+        )
+        assert result.success is True
+        return tuple(result.job_params.subnet_ids)
+
+    assert len({subnet() for _ in range(20)}) == 1
+    # a retry draws again, so a later attempt can land in another zone
+    drawn = set()
+    for count in range(12):
+        retries['count'] = count
+        drawn.add(subnet())
+    assert len(drawn) > 1
+    # and so does another job
+    retries['count'] = 0
+    assert len({subnet(str(job_id)) for job_id in range(100, 120)}) > 1
