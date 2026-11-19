@@ -41,7 +41,7 @@ import { vpcEndpointsFor } from "../../config/vpc-endpoints.ts";
 import { ideaVersion } from "../../version.ts";
 import { awsClientOptions, type AwsClientOptions } from "../aws-client-options.ts";
 import { ExitWithCode, VALUES_FILE_S3_KEY, valuesFilePath, type Deps } from "../cdk-invoker.ts";
-import { DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData, type StackTiming } from "../deployment-helper.ts";
+import { DEFAULT_MAX_PARALLEL, DeploymentHelper, refuseAnalyticsAheadOfServices, refuseLustreAppsOrData, type StackTiming } from "../deployment-helper.ts";
 import { compareIdeaRelease, upgradeFloorRefusal, HOST_CONTROL_PLANE_REFUSAL, RECOVERY_COMMAND } from "../upgrade-floor.ts";
 import {
   buildTree,
@@ -233,6 +233,8 @@ export interface UpgradeDeploymentOptions {
   moduleIds?: readonly string[];
   allowReplacement?: readonly string[];
   onStack?: (event: StackTiming) => void;
+  serial?: boolean;
+  maxParallel?: number;
 }
 
 export interface ContainerHost {
@@ -307,6 +309,8 @@ export interface UpgradeCommandOptions {
   disableEolStacksInUse?: boolean;
   modules?: readonly string[];
   allowReplacement?: string[];
+  serial?: boolean;
+  maxParallel?: string | number;
 }
 
 interface EolStack {
@@ -1500,7 +1504,7 @@ async function saveValuesFile(deps: UpgradeDeps, options: UpgradeCommandOptions)
         ? `s3://${bucket}/${VALUES_FILE_S3_KEY}`
         : "the cluster bucket";
     deps.out(
-      `warning: Upgrade of ${options.clusterName} finished its stack steps, but values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
+      `warning: Upgrade of ${options.clusterName}: values.yml was not saved to ${location} (${detail}). The cluster bucket still has the previous file. Retry ideactl config save-values --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}. Until that works, a run on another machine can restore the old values.yml.`,
     );
   }
 }
@@ -1523,6 +1527,8 @@ async function defaultDeployment(deps: Deps, options: UpgradeDeploymentOptions):
     rollback: options.rollback,
     allowReplacement: options.allowReplacement,
     onStack: options.onStack,
+    serial: options.serial,
+    maxParallel: options.maxParallel,
     deps,
   });
   await helper.invoke();
@@ -1788,6 +1794,10 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
   if (unknown.length > 0) throw new ClusterConfigError(`Unknown module ${unknown.join(", ")}: this cluster's modules are ${modulesBefore.map((module) => module.module_id).join(", ")}`);
   // a bad value fails here, before any write, rather than when the deploy starts
   const terminationProtection = asBoolFlag(options.terminationProtection, true);
+  const maxParallel = Number(options.maxParallel ?? DEFAULT_MAX_PARALLEL);
+  if (!Number.isInteger(maxParallel) || maxParallel < 1) {
+    throw new ClusterConfigError(`--max-parallel must be a whole number of at least 1, not ${String(options.maxParallel)}`);
+  }
   refuseLustreAppsOrData((key) => {
     const value = initialSettings.find((row) => row.key === key)?.value;
     return typeof value === "string" ? value : undefined;
@@ -1920,8 +1930,18 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
       moduleIds: allModules ? undefined : options.modules,
       allowReplacement: options.allowReplacement,
       onStack: (event) => timing.stack(event),
+      serial: options.serial === true,
+      maxParallel,
     };
-    await deps.deploy(deployment);
+    try {
+      await deps.deploy(deployment);
+    } catch (error) {
+      // The settings Phases 2 and 3 wrote stay with the stacks that deployed, so the bucket copy
+      // of values.yml follows them and a retry from another machine regenerates the same rows.
+      // Termination protection stays cleared: a stack may still be replacing an instance.
+      await saveValuesFile(deps, options);
+      throw error;
+    }
     // Every module is upgraded and serving by now; a failed second cluster pass leaves the wide
     // rule in place, so the rest of the upgrade still runs and the failure is reported at the end.
     let convergence: unknown;
@@ -1986,6 +2006,8 @@ export function registerUpgradeCommands(program: Command, deps: UpgradeDeps): vo
     // others write, so they go together: the scheduler no longer queues behind the desktop stack.
     .option("--optimize-deployment", "Deploy the stacks of one priority group in parallel. Default.", true)
     .option("--no-optimize-deployment", "Deploy one stack at a time.")
+    .option("--serial", "Use the earlier priority groups: analytics and the bastion each deploy in a group of their own.")
+    .option("--max-parallel <count>", `Stacks of one priority group deployed at once. Default: ${DEFAULT_MAX_PARALLEL}`, String(DEFAULT_MAX_PARALLEL))
     .option("--module-set <module-set>", "Name of the ModuleSet. Default: default", "default")
     .option("--force", "Skip all confirmation prompts.")
     .option(

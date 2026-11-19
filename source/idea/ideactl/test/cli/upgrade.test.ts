@@ -1947,6 +1947,53 @@ test("upgrade-cluster deploys each priority group's stacks in parallel unless to
   }
 });
 
+test("--serial and --max-parallel reach the deployment; the default holds four stacks of a group at once", async () => {
+  for (const [flags, serial, maxParallel] of [[[], false, 4], [["--serial"], true, 4], [["--max-parallel", "2"], false, 2]] as const) {
+    await withFixture(async (state) => {
+      await routineReleaseFixture(state);
+      const { deps } = state;
+      const seen: Array<[boolean | undefined, number | undefined]> = [];
+      const deploy = deps.deploy.bind(deps);
+      deps.deploy = async (input) => { seen.push([input.serial, input.maxParallel]); await deploy(input); };
+      const program = new Command("ideactl");
+      registerUpgradeCommands(program, deps);
+      await program.parseAsync([
+        "upgrade-cluster", "--force", "--accept-config-drift", "--skip-release-image-check",
+        "--cluster-name", clusterName, "--aws-region", awsRegion, ...flags,
+      ], { from: "user" });
+      assert.deepEqual(seen, [[serial, maxParallel]], flags.join(" ") || "default");
+    });
+  }
+});
+
+test("a --max-parallel that is not a whole number of at least 1 is refused before anything is written", async () => {
+  for (const value of ["0", "two", "1.5"]) {
+    await withFixture(async ({ deps, events }) => {
+      await assert.rejects(
+        upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true, maxParallel: value }),
+        /--max-parallel must be a whole number of at least 1/,
+      );
+      assert.ok(!events.some((event) => event.startsWith("Phase ") || event.startsWith("set:") || event.startsWith("sync:")), value);
+    });
+  }
+});
+
+test("a failed deployment still saves values.yml and names the failed stacks", async () => {
+  await withFixture(async ({ deps, events }) => {
+    deps.deploy = async () => {
+      events.push("deploy");
+      throw new Error("deployment failed. could not deploy module(s): scheduler (stack idea-test1-scheduler: ended UPDATE_ROLLBACK_COMPLETE)");
+    };
+    await assert.rejects(
+      upgradeCluster(deps, { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true }),
+      /could not deploy module\(s\): scheduler \(stack idea-test1-scheduler: /,
+    );
+    assert.ok(events.indexOf("save-values") > events.indexOf("deploy"));
+    // protection stays cleared, as before: a failed stack may still be replacing an instance
+    assert.ok(!events.includes("restore:i-sample"));
+  });
+});
+
 test("ECR token and manifest requests honor proxy environment and NO_PROXY without network", async () => {
   const savedEnv = process.env;
   try {

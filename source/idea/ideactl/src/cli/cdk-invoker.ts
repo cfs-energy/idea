@@ -126,8 +126,30 @@ export function setupClusterCdkDir(clusterName: string, awsRegion: string): stri
 /** One child process. Resolves with the exit code; it never throws on a non-zero exit. */
 export type Spawn = (
   argv: string[],
-  options: { cwd: string; env: Record<string, string | undefined>; onStderr?: (chunk: string) => void },
+  options: {
+    cwd: string;
+    env: Record<string, string | undefined>;
+    onStderr?: (chunk: string) => void;
+    /** Written before every line the child prints, so runs side by side read apart. */
+    linePrefix?: string;
+  },
 ) => Promise<number>;
+
+/** Splits a stream into whole lines, each written with the prefix; `flush` writes a final partial line. */
+export function prefixLines(prefix: string, write: (text: string) => void): { push(chunk: string): void; flush(): void } {
+  let pending = '';
+  return {
+    push(chunk) {
+      const lines = (pending + chunk).split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) write(`${prefix}${line}\n`);
+    },
+    flush() {
+      if (pending !== '') write(`${prefix}${pending}\n`);
+      pending = '';
+    },
+  };
+}
 
 /** Error text from Node, the SDK or the CDK toolkit that means the network, not the request, failed. */
 export const NETWORK_FAILURE = /\b(ENETUNREACH|EHOSTUNREACH|EADDRNOTAVAIL|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up)\b/;
@@ -142,15 +164,25 @@ export const liveSpawn: Spawn = (argv, options) =>
       ? [process.execPath, '__ideactl_internal_cdk__', ...argv.slice(1)] : argv;
     const [command, ...args] = invocation;
     if (command === undefined) throw new GeneralException('empty argv');
+    const prefix = options.linePrefix;
     const child = spawnProcess(command, args, {
-      cwd: options.cwd, env: options.env, stdio: ['inherit', 'inherit', options.onStderr ? 'pipe' : 'inherit'],
+      cwd: options.cwd, env: options.env,
+      stdio: ['inherit', prefix === undefined ? 'inherit' : 'pipe', options.onStderr || prefix !== undefined ? 'pipe' : 'inherit'],
     });
+    const stdout = prefix === undefined ? undefined : prefixLines(prefix, (text) => process.stdout.write(text));
+    const stderr = prefix === undefined ? undefined : prefixLines(prefix, (text) => process.stderr.write(text));
+    child.stdout?.on('data', (chunk: Buffer) => stdout?.push(chunk.toString()));
     child.stderr?.on('data', (chunk: Buffer) => {
-      process.stderr.write(chunk);
+      if (stderr === undefined) process.stderr.write(chunk);
+      else stderr.push(chunk.toString());
       options.onStderr?.(chunk.toString());
     });
     child.on('error', reject);
-    child.on('close', (code) => resolve(code ?? 1));
+    child.on('close', (code) => {
+      stdout?.flush();
+      stderr?.flush();
+      resolve(code ?? 1);
+    });
   });
 
 /** One property-level detail of a change, as `DescribeChangeSet` reports it. */

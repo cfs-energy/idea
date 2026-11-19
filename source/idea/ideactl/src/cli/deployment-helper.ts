@@ -18,6 +18,9 @@ import { mergeClientIpEntries } from './commands/utils.ts';
 /** `deployment_helper.py:194`: the stagger between two modules of the same priority group. */
 export const OPTIMIZED_DEPLOYMENT_STAGGER_MS = 10_000;
 
+/** Stacks of one group in flight at once. The largest group of the standard modules holds four. */
+export const DEFAULT_MAX_PARALLEL = 4;
+
 const MODULE_TYPE_CONFIG = 'config';
 const MODULE_NAME_CLUSTER = 'cluster';
 const MODULE_NAME_DIRECTORYSERVICE = 'directoryservice';
@@ -49,17 +52,42 @@ export function deploymentPriority(moduleName: string): number {
   return priority;
 }
 
+/** What a run knows when it orders its modules. */
+interface RunOrder {
+  upgrade: boolean;
+  /** The priority groups of 26.11.2 and earlier, kept for `--serial`. */
+  serial: boolean;
+  /** Every deployed OpenSearch client already publishes its own rule on the domain. */
+  clientsHoldRules: boolean;
+}
+
 /**
  * Where a module sorts in one run. A deployed analytics module redeploys after the control-plane
  * services: its OpenSearch group admits only them and the analytics sink, and each service stack
  * adds its own rule, so redeploying analytics first would leave the services unable to reach the
  * domain until their stacks caught up. Nothing in those stacks reads an analytics setting that a
- * redeploy changes (domain endpoint, stream and group id are fixed by the first deploy). On a fresh
- * install analytics keeps its place, ahead of the services that read those settings.
+ * redeploy changes (domain endpoint, stream and group id are fixed by the first deploy). Once
+ * every deployed client holds its own rule there is nothing to catch up, so analytics keeps its
+ * install place beside the other stacks that read only cluster settings. On a fresh install
+ * analytics keeps its place, ahead of the services that read those settings.
+ *
+ * A deployed bastion redeploys beside the scheduler and the desktop controller. What its stack
+ * reads from them (the scheduler's DNS name, the directory settings) is fixed by their first
+ * deploy, and its prerequisite check reads only the scheduler's status. It still follows the
+ * cluster manager, whose new tasks publish the terminal CA its hosts install and answer the
+ * directory joins it waits for.
  */
-function runPriority(module: ModuleInfo, upgrade: boolean): number {
-  if (upgrade && module.name === 'analytics' && module.status === 'deployed') return 6.5;
+function runPriority(module: ModuleInfo, run: RunOrder): number {
+  if (run.upgrade && module.status === 'deployed') {
+    if (module.name === 'analytics') return !run.serial && run.clientsHoldRules ? deploymentPriority('analytics') : 6.5;
+    if (module.name === 'bastion-host' && !run.serial) return deploymentPriority('scheduler');
+  }
   return deploymentPriority(module.name);
+}
+
+function runOrder(modules: readonly ModuleInfo[], upgrade: boolean, serial: boolean, holdsRule: HoldsOpenSearchRule): RunOrder {
+  const clients = modules.filter((module) => OPENSEARCH_CLIENTS.includes(module.name) && module.status === 'deployed');
+  return { upgrade, serial, clientsHoldRules: clients.every(holdsRule) };
 }
 
 /**
@@ -128,6 +156,10 @@ export interface DeploymentHelperOptions {
   allowReplacement?: readonly string[];
   allowReplacementOfType?: ReadonlyMap<string, string>;
   staggerMs?: number;
+  /** The priority groups of 26.11.2 and earlier: analytics and the bastion each in a group of their own. */
+  serial?: boolean;
+  /** Stacks of one group in flight at once; `DEFAULT_MAX_PARALLEL` when unset. */
+  maxParallel?: number;
   /** Called once per module stack with its wall-clock span, whether it deployed or failed. */
   onStack?: (event: StackTiming) => void;
   deps: Deps;
@@ -152,19 +184,22 @@ export function deploymentOrder(
   upgrade: boolean,
   // without the settings, no service is known to hold its rule
   holdsRule: HoldsOpenSearchRule = () => false,
+  serial = false,
 ): string[] {
   const byId = new Map(modules.map((module) => [module.module_id, module]));
-  const selected: Array<{ moduleId: string; priority: number }> = [];
+  const run = runOrder(modules, upgrade, serial, holdsRule);
+  const selected: Array<{ moduleId: string; priority: number; own: number }> = [];
   for (const moduleId of moduleIds) {
     const module = byId.get(moduleId);
     if (module === undefined) continue;
     if (module.type === MODULE_TYPE_CONFIG) continue;
     if (module.status === 'deployed' && !upgrade) continue;
-    selected.push({ moduleId, priority: runPriority(module, upgrade) });
+    selected.push({ moduleId, priority: runPriority(module, run), own: deploymentPriority(module.name) });
   }
   refuseAnalyticsAheadOfServices(modules, selected.map((entry) => entry.moduleId), upgrade, holdsRule);
-  // Python's list.sort is stable, so equal priorities keep the modules-table order.
-  selected.sort((a, b) => a.priority - b.priority);
+  // Python's list.sort is stable, so equal priorities keep the modules-table order. A module moved
+  // into an earlier group starts after the group's own modules, which are the longer stacks.
+  selected.sort((a, b) => a.priority - b.priority || a.own - b.own);
   return selected.map((entry) => entry.moduleId);
 }
 
@@ -174,13 +209,15 @@ export function optimizedDeploymentOrder(
   moduleIds: readonly string[],
   upgrade: boolean,
   holdsRule: HoldsOpenSearchRule = () => false,
+  serial = false,
 ): string[][] {
   const byId = new Map(modules.map((module) => [module.module_id, module]));
+  const run = runOrder(modules, upgrade, serial, holdsRule);
   const groups = new Map<number, string[]>();
-  for (const moduleId of deploymentOrder(modules, moduleIds, upgrade, holdsRule)) {
+  for (const moduleId of deploymentOrder(modules, moduleIds, upgrade, holdsRule, serial)) {
     const module = byId.get(moduleId);
     if (module === undefined) continue;
-    const priority = runPriority(module, upgrade);
+    const priority = runPriority(module, run);
     const group = groups.get(priority);
     if (group === undefined) groups.set(priority, [moduleId]);
     else group.push(moduleId);
@@ -340,7 +377,7 @@ export class DeploymentHelper {
   }
 
   getDeploymentOrder(): string[] {
-    return deploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade, this.holdsOpenSearchRule);
+    return deploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade, this.holdsOpenSearchRule, this.options.serial === true);
   }
 
   private readonly holdsOpenSearchRule: HoldsOpenSearchRule = (module) =>
@@ -355,7 +392,7 @@ export class DeploymentHelper {
   }
 
   getOptimizedDeploymentOrder(): string[][] {
-    return optimizedDeploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade, this.holdsOpenSearchRule);
+    return optimizedDeploymentOrder(this.config.modules(), this.moduleIds(), this.upgrade, this.holdsOpenSearchRule, this.options.serial === true);
   }
 
   private printNoOpMessage(): void {
@@ -376,22 +413,23 @@ export class DeploymentHelper {
     throw new ExitWithCode(1);
   }
 
-  async deployModule(moduleId: string): Promise<void> {
+  /** `linePrefix` tags every line this module and its CDK run print, for a group deploying together. */
+  async deployModule(moduleId: string, linePrefix?: string): Promise<void> {
     const startedAt = this.deps.now();
     let ok = false;
     try {
-      await this.deployModuleStack(moduleId);
+      await this.deployModuleStack(moduleId, linePrefix === undefined ? this.deps : prefixedDeps(this.deps, linePrefix));
       ok = true;
     } finally {
       this.options.onStack?.({ moduleId, stackName: `${this.clusterName}-${moduleId}`, startedAt, endedAt: this.deps.now(), ok });
     }
   }
 
-  private async deployModuleStack(moduleId: string): Promise<void> {
+  private async deployModuleStack(moduleId: string, deps: Deps): Promise<void> {
     const moduleInfo = this.config.moduleInfoById(moduleId);
     if (moduleInfo === undefined) throw new GeneralException(`module not found for module_id: ${moduleId}`);
-    this.deps.out(`deploying module: ${moduleInfo.name}, module id: ${moduleId}`);
-    await this.ensureCertificates(moduleInfo);
+    deps.out(`deploying module: ${moduleInfo.name}, module id: ${moduleId}`);
+    await this.ensureCertificates(moduleInfo, deps);
     const invoker = await CdkInvoker.open({
       clusterName: this.clusterName,
       awsRegion: this.awsRegion,
@@ -403,15 +441,15 @@ export class DeploymentHelper {
       rollback: this.options.rollback,
       allowReplacement: this.options.allowReplacement,
       allowReplacementOfType: this.options.allowReplacementOfType,
-      deps: this.deps,
+      deps,
     });
     if (["bastion-host", "cluster-manager", "scheduler", "virtual-desktop-controller"].includes(moduleInfo.name)) {
-      await refuseHostsWithStaleMounts(this.deps, this.options);
+      await refuseHostsWithStaleMounts(deps, this.options);
     }
-    if (moduleInfo.name === "bastion-host") await waitForDirectoryJoin(this.deps, this.options);
+    if (moduleInfo.name === "bastion-host") await waitForDirectoryJoin(deps, this.options);
     await invoker.invoke({ forceBuildBootstrap: this.options.forceBuildBootstrap });
-    if (moduleInfo.name === "ecs") await refreshHostPool(this.deps, this.options);
-    if (moduleInfo.name === MODULE_NAME_CLUSTER) await this.mergeClientIps();
+    if (moduleInfo.name === "ecs") await refreshHostPool(deps, this.options);
+    if (moduleInfo.name === MODULE_NAME_CLUSTER) await this.mergeClientIps(deps);
   }
 
   /**
@@ -427,20 +465,20 @@ export class DeploymentHelper {
    * reads them synthesizes. The rows go to the settings table and to the configuration this
    * process holds, so the synthesis reads the same values whether it re-reads the table or not.
    */
-  private async ensureCertificates(moduleInfo: ModuleInfo): Promise<void> {
-    const certificates = this.deps.certificates;
+  private async ensureCertificates(moduleInfo: ModuleInfo, deps: Deps): Promise<void> {
+    const certificates = deps.certificates;
     if (certificates === undefined) return;
     const hooks = this.certificateHooks(moduleInfo);
     if (hooks.length === 0) return;
 
-    const writer = await this.deps.configWriter({
+    const writer = await deps.configWriter({
       clusterName: this.clusterName,
       awsRegion: this.awsRegion,
       awsProfile: this.options.awsProfile,
     });
     for (const hook of hooks) {
       const result = await ensureSelfSignedCertificate(hook.request, certificates);
-      this.deps.out(`certificate ${hook.request.certificateName}: ${result.certificateSecretArn}`);
+      deps.out(`certificate ${hook.request.certificateName}: ${result.certificateSecretArn}`);
       await this.publishSetting(writer, hook.certificateKey, result.certificateSecretArn);
       await this.publishSetting(writer, hook.privateKeyKey, result.privateKeySecretArn);
       if (hook.acmKey !== undefined && result.acmCertificateArn !== undefined) {
@@ -462,14 +500,14 @@ export class DeploymentHelper {
    * reads the settings again to get it: on a first deploy the id does not exist until then. It is
    * add-only, which is why it can run on every cluster deploy.
    */
-  private async mergeClientIps(): Promise<void> {
-    const api = this.deps.prefixList;
+  private async mergeClientIps(deps: Deps): Promise<void> {
+    const api = deps.prefixList;
     if (api === undefined) return;
     const config = await ClusterConfig.fromDynamoDb(this.clusterName, this.awsRegion, {
       moduleSet: this.moduleSet,
-      scan: this.deps.scan,
+      scan: deps.scan,
     });
-    await mergeClientIpEntries({ api, config, out: this.deps.out });
+    await mergeClientIpEntries({ api, config, out: deps.out });
   }
 
   /**
@@ -502,15 +540,24 @@ export class DeploymentHelper {
       }
       this.deps.out(`optimized deployment order: ${JSON.stringify(groups)}`);
 
+      const maxParallel = this.options.maxParallel ?? DEFAULT_MAX_PARALLEL;
       for (const group of groups) {
+        // A stack that fails lets the others of its group finish; nothing that has not started yet starts.
         const failures = new Map<string, unknown>();
-        const running: Array<Promise<void>> = [];
+        const notStarted: string[] = [];
+        const running = new Set<Promise<void>>();
         for (const moduleId of group) {
-          running.push(
-            this.deployModule(moduleId).catch((error: unknown) => {
+          while (failures.size === 0 && running.size >= maxParallel) await Promise.race(running);
+          if (failures.size > 0) {
+            notStarted.push(moduleId);
+            continue;
+          }
+          const deploy: Promise<void> = this.deployModule(moduleId, group.length > 1 ? `${this.clusterName}-${moduleId}` : undefined)
+            .catch((error: unknown) => {
               failures.set(moduleId, error);
-            }),
-          );
+            })
+            .finally(() => running.delete(deploy));
+          running.add(deploy);
           // process the next entry after 10 seconds.
           await this.deps.sleep(this.staggerMs);
         }
@@ -520,9 +567,10 @@ export class DeploymentHelper {
         // release still reads 'deployed' after a failed re-deploy.
         if (failures.size > 0) {
           const detail = [...failures.entries()]
-            .map(([moduleId, error]) => `${moduleId} (${errorMessage(error)})`)
+            .map(([moduleId, error]) => `${moduleId} (stack ${this.clusterName}-${moduleId}: ${errorMessage(error)})`)
             .join(', ');
-          throw new GeneralException(`deployment failed. could not deploy module(s): ${detail}`);
+          const skipped = notStarted.length === 0 ? '' : `; not started: ${notStarted.join(', ')}`;
+          throw new GeneralException(`deployment failed. could not deploy module(s): ${detail}${skipped}`);
         }
 
         await this.refreshModules();
@@ -547,6 +595,23 @@ export class DeploymentHelper {
       await this.deployModule(moduleId);
     }
   }
+}
+
+/**
+ * The same effects with every line tagged by one stack: the lines this process prints for it and,
+ * through `spawn`, the lines its CDK run prints, so stacks deploying together read apart.
+ */
+function prefixedDeps(deps: Deps, stackName: string): Deps {
+  const tag = `[${stackName}] `;
+  return new Proxy(deps, {
+    get: (target, property, receiver) => {
+      if (property === 'out') return (line: string) => target.out(tag + line);
+      if (property === 'err') return (line: string) => target.err(tag + line);
+      if (property === 'notice' && target.notice !== undefined) return (line: string) => target.notice?.(tag + line);
+      if (property === 'spawn') return ((argv, options) => target.spawn(argv, { ...options, linePrefix: tag })) satisfies Deps['spawn'];
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 function errorMessage(error: unknown): string {

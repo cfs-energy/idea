@@ -535,6 +535,8 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--no-rollback` | no | none | no |
 | `--optimize-deployment` | no | `true` | no |
 | `--no-optimize-deployment` | no | none | no |
+| `--serial` | no | none | no |
+| `--max-parallel <count>` | yes | `"4"` | no |
 | `--module-set <module-set>` | yes | `"default"` | no |
 | `--force` | no | none | no |
 | `--accept-config-drift` | no | none | no |
@@ -543,7 +545,7 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
 
-Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. `--no-optimize-deployment` deploys one stack at a time.
+Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. On an upgrade, a deployed bastion deploys with the scheduler and desktop stacks, after the cluster manager, and a deployed analytics module deploys with the settings-only stacks once every deployed cluster manager, scheduler and desktop controller publishes its own OpenSearch rule (otherwise it follows them). `--max-parallel` bounds the stacks of one group in flight. When a stack fails, the others of its group finish, nothing else starts, values.yml is saved to the cluster bucket, and the error names every failed stack. Lines from stacks deploying together are prefixed with the stack name. `--serial` keeps the earlier groups (analytics and the bastion each on their own). `--no-optimize-deployment` deploys one stack at a time. Each phase and stack prints a timestamp and its elapsed time, and the run ends with a timing table.
 
 Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move, except on GovCloud when `ecs.image_repositories.aws-us-gov` is unset: the public fallback is always resolved to a manifest digest and written as `tag@sha256:...`.
 
