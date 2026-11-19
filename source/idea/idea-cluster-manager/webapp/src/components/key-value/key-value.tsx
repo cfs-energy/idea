@@ -135,7 +135,9 @@ export class KeyValue extends Component<KeyValueProps, KeyValueState> {
         }
 
         if (this.isDateType()) {
-            return new Date(this.props.value).toLocaleString()
+            // an empty or unparsable date shows the empty marker, never "Invalid Date"
+            const date = new Date(this.props.value)
+            return Utils.isEmpty(this.props.value) || Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
         }
 
         if (this.isReactNodeType()) {
