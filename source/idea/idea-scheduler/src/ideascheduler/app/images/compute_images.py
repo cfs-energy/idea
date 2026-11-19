@@ -711,14 +711,20 @@ class ComputeImageService:
                             or {}
                         )
                     )
+                    instance_type, fallback = pipeline_builder_instance_type(
+                        self.context,
+                        settings,
+                        record.architecture,
+                        DEFAULT_INSTANCE_TYPE,
+                        logger=self._logger,
+                    )
                     builder = ComputeNodeAmiBuilder(
                         enable_driver=drivers,
                         context=self.context,
                         base_os=record.base_os,
                         base_ami=source,
-                        instance_type=pipeline_builder_instance_type(
-                            settings, record.architecture, DEFAULT_INSTANCE_TYPE
-                        ),
+                        instance_type=instance_type,
+                        fallback_instance_type=fallback,
                         force=True,
                         image_tags={PIPELINE_IMAGE_TAG: 'compute'},
                     )

@@ -120,7 +120,7 @@ TERMINAL = (
 )
 
 # GPU variants bake on the vendor's smallest GPU so the driver installs; CPU rows use
-# image_pipeline.builder_instance_types, else the builder default for the architecture
+# image_pipeline.builder_instance_types, else the pipeline default (pipeline_builder_instance_type)
 BUILDER_INSTANCE_TYPES = {
     ('x86_64', ImageVariant.NVIDIA.value): 'g4dn.xlarge',
     ('arm64', ImageVariant.NVIDIA.value): 'g5g.xlarge',
@@ -1046,15 +1046,26 @@ class DesktopImagePipeline:
                 )
 
         try:
+            instance_type, fallback = (
+                BUILDER_INSTANCE_TYPES.get((record.architecture, variant)),
+                None,
+            )
+            if instance_type is None:
+                instance_type, fallback = pipeline_builder_instance_type(
+                    self.context,
+                    self.settings(),
+                    record.architecture,
+                    DEFAULT_INSTANCE_TYPE,
+                    windows=windows,
+                    logger=self._logger,
+                )
             builder = DcvHostImageBuilder(
                 context=self.context,
                 base_ami=record.source_ami,
                 base_os=record.base_os,
                 ami_name=f'{DESKTOP_IMAGE_PREFIX}{record.base_os}{suffix}',
-                instance_type=BUILDER_INSTANCE_TYPES.get((record.architecture, variant))
-                or pipeline_builder_instance_type(
-                    self.settings(), record.architecture, DEFAULT_INSTANCE_TYPE
-                ),
+                instance_type=instance_type,
+                fallback_instance_type=fallback,
                 ebs_volume_size=self._builder_volume_gb(record),
                 force=True,
                 before_snapshot=before_snapshot,

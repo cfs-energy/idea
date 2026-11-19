@@ -506,3 +506,48 @@ def test_userdata_failure_does_not_wait_for_uninstalled_image_checks(stage):
     with pytest.raises(exceptions.SocaException, match=f'userdata-{stage}'):
         builder.check_builder_status('i-builder', f'failed:userdata-{stage}')
     builder.before_snapshot.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'code, launched',
+    [
+        ('VcpuLimitExceeded', ['c7i.2xlarge', 'm7i.large']),
+        ('InsufficientInstanceCapacity', ['c7i.2xlarge', 'm7i.large']),
+        ('InvalidParameterValue', ['c7i.2xlarge']),
+    ],
+)
+def test_a_refused_builder_launches_once_on_its_fallback(code, launched):
+    from botocore.exceptions import ClientError
+
+    context = fake_context()
+    tried = []
+
+    def run_instances(**kwargs):
+        tried.append(kwargs['InstanceType'])
+        if len(tried) == 1:
+            raise ClientError(
+                {'Error': {'Code': code, 'Message': code}}, 'RunInstances'
+            )
+        return {'Instances': [{'InstanceId': 'i-builder'}]}
+
+    context.aws().ec2().run_instances.side_effect = run_instances
+    builder = DcvHostImageBuilder(
+        context=context,
+        base_ami='ami-base',
+        base_os='rocky9',
+        instance_type='c7i.2xlarge',
+        fallback_instance_type='m7i.large',
+    )
+    builder.build_userdata = lambda: 'userdata'
+    if len(launched) == 1:
+        with pytest.raises(ClientError):
+            builder.launch_ec2_instance()
+    else:
+        builder.launch_ec2_instance()
+        assert builder.launch_update('i-builder') == {
+            'instance_id': 'i-builder',
+            'builder_instance_type': 'm7i.large',
+            'builder_fallback': f'c7i.2xlarge was refused ({code}); '
+            'this bake launched once on m7i.large',
+        }
+    assert tried == launched

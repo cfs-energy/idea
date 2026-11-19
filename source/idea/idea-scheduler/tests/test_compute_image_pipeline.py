@@ -1569,8 +1569,16 @@ class LaunchingEc2(FakeEc2):
         super().__init__()
         self.launches, self.images = [], []
 
+        self.refuse = []  # error codes for the next launches, in order
+
     def run_instances(self, **kwargs):
-        self.launches.append(kwargs)
+        self.launches.append(dict(kwargs))
+        if self.refuse:
+            code = self.refuse.pop(0)
+            raise ClientError(
+                {'Error': {'Code': code, 'Message': f'{code} for the test'}},
+                'RunInstances',
+            )
         return {'Instances': [{'InstanceId': 'i-builder'}]}
 
     def create_image(self, **kwargs):
@@ -1578,14 +1586,22 @@ class LaunchingEc2(FakeEc2):
         return {'ImageId': 'ami-candidate'}
 
 
-def bake_through_the_pipeline(monkeypatch, architecture='x86_64', settings=None):
+def bake_through_the_pipeline(
+    monkeypatch, architecture='x86_64', settings=None, offered=True, refuse=()
+):
     """one queued row through _run_pipeline with the real builder up to CreateImage"""
     monkeypatch.setenv('IDEA_DEV_MODE', 'true')  # the bootstrap templates of this tree
     ec2 = LaunchingEc2()
     config = {**DEFAULT_CONFIG, **BUILDER_CONFIG, 'global-settings.custom_tags': []}
     if settings is not None:
         config['virtual-desktop-controller.software_stacks.image_pipeline'] = settings
+    ec2.refuse = list(refuse)
     svc = build_service(config, ec2)
+    lookup = svc.context.aws_util.return_value.is_instance_type_valid
+    if isinstance(offered, Exception):
+        lookup.side_effect = offered
+    else:
+        lookup.return_value = offered
     stock = (
         'ami-rocky9armstock01' if architecture == 'arm64' else 'ami-rocky9stock00001'
     )
@@ -1594,7 +1610,7 @@ def bake_through_the_pipeline(monkeypatch, architecture='x86_64', settings=None)
 
     def build(self, progress=None):
         self.build_userdata = lambda: 'userdata'
-        progress({'instance_id': self.launch_ec2_instance().instance_id})
+        progress(self.launch_update(self.launch_ec2_instance().instance_id))
         progress({'checks': [ImageCheck(name='kernel_default', ok=True)]})
         return self.create_image('i-builder')
 
@@ -1611,14 +1627,15 @@ def bake_through_the_pipeline(monkeypatch, architecture='x86_64', settings=None)
 
 
 @pytest.mark.parametrize(
-    'architecture, expected', [('x86_64', 'c7i.large'), ('arm64', 'm8g.large')]
+    'architecture, expected', [('x86_64', 'c7i.2xlarge'), ('arm64', 'c8g.2xlarge')]
 )
-def test_a_compute_bake_without_the_setting_launches_todays_builder(
+def test_a_compute_bake_without_the_setting_launches_the_2xlarge_default(
     monkeypatch, architecture, expected
 ):
     _, ec2, record = bake_through_the_pipeline(monkeypatch, architecture)
     assert record.error is None
     assert [launch['InstanceType'] for launch in ec2.launches] == [expected]
+    assert (record.builder_instance_type, record.builder_fallback) == (expected, None)
     # today's root size; gp3 at the most 10 GiB allows instead of the image's volume type
     assert ec2.launches[0]['BlockDeviceMappings'] == [
         {
@@ -1663,3 +1680,64 @@ def test_a_compute_image_carries_its_lineage(monkeypatch):
         assert tags['idea:BakeRootImage'] == 'ami-rocky9stock00001'
         assert tags['idea:BakeLineageDepth'] == '0'
         assert len(tags['idea:BakeInputs']) == 64
+
+
+@pytest.mark.parametrize(
+    'architecture, previous', [('x86_64', 'c7i.large'), ('arm64', 'm8g.large')]
+)
+def test_a_region_without_the_default_bakes_on_the_previous_one(
+    monkeypatch, architecture, previous
+):
+    svc, ec2, record = bake_through_the_pipeline(
+        monkeypatch, architecture, offered=False
+    )
+    assert [launch['InstanceType'] for launch in ec2.launches] == [previous]
+    assert record.error is None
+    lines = [call.args[0] for call in svc._logger.warning.call_args_list]
+    assert [line for line in lines if 'is not offered in this region' in line] == [
+        f'image builder {"c7i" if architecture == "x86_64" else "c8g"}.2xlarge '
+        f'is not offered in this region; {architecture} bakes use {previous}'
+    ]
+
+
+def test_a_failed_offering_lookup_bakes_on_the_previous_default(monkeypatch):
+    svc, ec2, record = bake_through_the_pipeline(
+        monkeypatch, offered=RuntimeError('lookup timed out')
+    )
+    assert [launch['InstanceType'] for launch in ec2.launches] == ['c7i.large']
+    assert record.error is None
+    assert any(
+        'could not be looked up (lookup timed out)' in call.args[0]
+        for call in svc._logger.warning.call_args_list
+    )
+
+
+@pytest.mark.parametrize('code', ['VcpuLimitExceeded', 'InsufficientInstanceCapacity'])
+def test_a_refused_default_launches_once_on_the_previous_type(monkeypatch, code):
+    _, ec2, record = bake_through_the_pipeline(monkeypatch, refuse=[code])
+    assert [launch['InstanceType'] for launch in ec2.launches] == [
+        'c7i.2xlarge',
+        'c7i.large',
+    ]
+    assert record.error is None
+    assert record.builder_instance_type == 'c7i.large'
+    assert code in record.builder_fallback
+    assert 'launched once on c7i.large' in record.builder_fallback
+
+
+def test_the_fallback_is_tried_only_once(monkeypatch):
+    _, ec2, record = bake_through_the_pipeline(
+        monkeypatch, refuse=['VcpuLimitExceeded', 'VcpuLimitExceeded']
+    )
+    assert len(ec2.launches) == 2
+    assert record.status == 'failed'
+    assert 'VcpuLimitExceeded' in record.error
+
+
+def test_a_configured_type_has_no_fallback(monkeypatch):
+    settings = {'builder_instance_types': {'x86_64': 'c7i.8xlarge'}}
+    _, ec2, record = bake_through_the_pipeline(
+        monkeypatch, settings=settings, refuse=['VcpuLimitExceeded']
+    )
+    assert [launch['InstanceType'] for launch in ec2.launches] == ['c7i.8xlarge']
+    assert record.status == 'failed'

@@ -367,6 +367,7 @@ class FakeBuilder:
         force=False,
         before_snapshot=None,
         image_tags=None,
+        fallback_instance_type=None,
     ):
         self.before_snapshot = before_snapshot
         self.ami_name = ami_name
@@ -375,6 +376,7 @@ class FakeBuilder:
             {
                 'base_ami': base_ami,
                 'instance_type': instance_type,
+                'fallback_instance_type': fallback_instance_type,
                 'ebs_volume_size': ebs_volume_size,
                 'tags': self.image_tags,
                 'ami_name': ami_name,
@@ -2456,12 +2458,40 @@ def test_a_controller_host_started_seconds_ago_cleans_up_on_its_first_tick(monke
     h.pipeline.cleanup.assert_called_once()
 
 
-def test_a_cpu_row_bakes_on_the_module_default_until_a_type_is_set():
-    h = Harness([base_stack('rocky9'), base_stack('rocky9', arch='arm64')])
+def test_a_linux_cpu_row_bakes_on_the_2xlarge_default_with_the_old_one_as_fallback():
+    h = Harness(
+        [
+            base_stack('rocky9'),
+            base_stack('rocky9', arch='arm64'),
+            base_stack('windows2022'),
+            base_stack('rocky9', suffix='gpu', gpu=VirtualDesktopGPU.NVIDIA),
+        ]
+    )
     queue_and_run(h)
-    assert sorted(m['instance_type'] for m in FakeBuilder.made) == [
-        'm7i.large',
-        'm8g.large',
+    made = sorted(
+        (m['ami_name'], m['instance_type'], m['fallback_instance_type'])
+        for m in FakeBuilder.made
+    )
+    assert made == [
+        ('idea-dcv-host-rocky9', 'c7i.2xlarge', 'm7i.large'),
+        ('idea-dcv-host-rocky9', 'c8g.2xlarge', 'm8g.large'),
+        # GPU and Windows rows were not part of the size trial: unchanged, no fallback
+        ('idea-dcv-host-rocky9-nvidia', 'g4dn.xlarge', None),
+        ('idea-dcv-host-windows2022', 'm7i.large', None),
+    ]
+
+
+def test_a_region_without_the_default_bakes_desktops_on_the_previous_one():
+    h = Harness([base_stack('rocky9')])
+    h.context.aws_util.return_value.is_instance_type_valid.return_value = False
+    warnings = []
+    h.pipeline._logger = Mock(warning=warnings.append)
+    queue_and_run(h)
+    assert [
+        (m['instance_type'], m['fallback_instance_type']) for m in FakeBuilder.made
+    ] == [('m7i.large', None)]
+    assert [w for w in warnings if 'not offered' in w] == [
+        'image builder c7i.2xlarge is not offered in this region; x86_64 bakes use m7i.large'
     ]
 
 

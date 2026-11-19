@@ -238,15 +238,17 @@ ideactl build-desktop-image --base-os rocky9 --base-ami <vendor ami> --force
 | `virtual-desktop-controller.software_stacks.image_refresh_schedule.hour` | `2` | Hour in cluster time. |
 | `virtual-desktop-controller.software_stacks.image_pipeline.ready_gate_seconds_linux` | `600` | Linux test launch limit from request to Ready. Also limits the compute test job. |
 | `virtual-desktop-controller.software_stacks.image_pipeline.ready_gate_seconds_windows` | `900` | Windows test launch limit. |
-| `virtual-desktop-controller.software_stacks.image_pipeline.max_concurrent_bakes` | `32` | Desktop bakes at a time. |
+| `virtual-desktop-controller.software_stacks.image_pipeline.max_concurrent_bakes` | `32` | Desktop bakes at a time. Each Linux bake runs an 8 vCPU builder by default (Windows 2), from the same On-Demand vCPU quota as jobs. |
 | `scheduler.images.max_concurrent_bakes` | `32` | Compute bakes at a time. |
 | `virtual-desktop-controller.images.legacy_cleanup_min_age_days` | `30` | Age before untracked desktop builder images are removed. `0` keeps them. |
 | `scheduler.images.legacy_cleanup_min_age_days` | `30` | The same for compute builder images. |
 | `scheduler.images.default_image_pinned` | `false` | Keep `scheduler.compute_node_ami` when a compute row switches. |
-| `virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64` | empty | Builder for x86_64 desktop and compute bakes. Empty uses `m7i.large` for desktops and `c7i.large` for compute. |
-| `virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64` | empty | Builder for arm64 desktop and compute bakes. Empty uses `m8g.large`. |
+| `virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.x86_64` | empty | Builder for x86_64 desktop and compute bakes. Empty uses `c7i.2xlarge` for Linux images and `m7i.large` for Windows. |
+| `virtual-desktop-controller.software_stacks.image_pipeline.builder_instance_types.arm64` | empty | Builder for arm64 desktop and compute bakes. Empty uses `c8g.2xlarge`. |
 
 ### Builder size
+
+With no type set, Linux bakes run on `c7i.2xlarge` (x86_64) or `c8g.2xlarge` (arm64), which took 31 to 41 percent less builder time than `large` in testing; Windows bakes stay on `m7i.large`. Where the region does not offer the 2xlarge type, the bake uses the previous default (`c7i.large` for compute, `m7i.large` for desktops, `m8g.large` for arm64) and the module log says so. When EC2 refuses the 2xlarge launch for capacity or the vCPU quota, the bake launches once on the previous default and the row records it. A full rebake needs 8 On-Demand vCPUs per Linux row baking at once (2 per Windows row): 42 rows all at once (39 Linux, 3 Windows) take about 320 vCPUs from the quota jobs use, so set `max_concurrent_bakes` (for example 30, about 240 vCPUs) where the quota is tight.
 
 Both pipelines read the builder type for CPU bakes from `builder_instance_types`; GPU desktop images keep their GPU builder (`g4dn.xlarge`, `g5g.xlarge`, `g4ad.xlarge`). The x86_64 key takes `c7i`, `c7a` and `m7i` from `large` to `8xlarge` (and `c6i`, `m6i` `large` or `xlarge`); the arm64 key takes `c8g` and `m8g` from `large` to `8xlarge` (and `c6g`, `m6g` `large` or `xlarge`). The settings page refuses a type of the other architecture. Set it on the cluster settings page (Deployment, Installed deployment, advanced settings), or with `./idea-admin.sh config set Key=vdc.software_stacks.image_pipeline.builder_instance_types.x86_64,Type=string,Value=c7i.4xlarge --cluster-name <cluster> --aws-region <region>`; a value written with `config set` is not checked until the next bake, which fails with the reason. The next bake uses it; a bake already running keeps its builder. A larger builder draws on the same On-Demand vCPU quota as jobs, so lower `max_concurrent_bakes` (desktop and compute) when the quota is tight.
 
