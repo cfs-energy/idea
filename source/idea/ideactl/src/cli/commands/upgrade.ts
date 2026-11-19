@@ -51,7 +51,7 @@ import {
   type ConfigUpgradePreviewOptions,
 } from "./config.ts";
 import { asBoolFlag } from "./deploy.ts";
-import { liveClusterHealth, registerVerifyClusterCommand, verifyCluster, type ClusterHealthApi } from "./verify-cluster.ts";
+import { liveClusterHealth, registerVerifyClusterCommand, SETTLE_LIMIT_MS, verifyCluster, type ClusterHealthApi } from "./verify-cluster.ts";
 
 export const EOL_BASE_OS: Readonly<Record<string, string>> = {
   amazonlinux2: "amazonlinux2023",
@@ -2006,8 +2006,9 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
       }
     }
     await (await deps.configWriter(options)).deleteConfigEntries("cluster.upgrade_module_set_owners");
-    timing.phase("Verification");
-    const verified = await verifyCluster(deps, { ...options, since: startedAt });
+    // the rollout wait has its own row, so the Verification row stays comparable with earlier runs
+    timing.phase("Rollout settle");
+    const verified = await verifyCluster(deps, { ...options, since: startedAt, settleMs: SETTLE_LIMIT_MS, onSettled: () => timing.phase("Verification") });
     if (convergence !== undefined) throw convergence;
     if (!verified) {
       throw new ClusterConfigError(`Every stack deployed, but the verification above found problems. Re-run ideactl verify-cluster --cluster-name ${options.clusterName} --aws-region ${options.awsRegion}${options.awsProfile ? ` --aws-profile ${options.awsProfile}` : ""} once they settle; it changes nothing. Do not re-run the upgrade for this: it has finished and would roll every stack again.`);

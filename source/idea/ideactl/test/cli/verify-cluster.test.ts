@@ -24,10 +24,14 @@ interface Fixture {
   lines: string[];
   health: ClusterHealthApi;
   stacks: Map<string, string>;
+  /** Every sleep the check asked for; a sleep moves the injected clock instead of waiting. */
+  sleeps: number[];
 }
 
 function fixture(): Fixture {
   const lines: string[] = [];
+  const sleeps: number[] = [];
+  let clock = Date.UTC(2026, 10, 19, 15, 0, 0);
   const stacks = new Map([
     [`${clusterName}-cluster`, "UPDATE_COMPLETE"],
     [`${clusterName}-scheduler`, "UPDATE_COMPLETE"],
@@ -77,10 +81,11 @@ function fixture(): Fixture {
       async executeChangeSet() { throw new Error("verification must not change a stack"); },
     },
     out(line) { lines.push(line); },
-    now() { return Date.UTC(2026, 10, 19, 15, 0, 0); },
+    now() { return clock; },
+    async sleep(ms) { sleeps.push(ms); clock += ms; },
     clusterHealth: health,
   };
-  return { deps, lines, health, stacks };
+  return { deps, lines, health, stacks, sleeps };
 }
 
 const table = (lines: string[]): string => lines.find((line) => line.startsWith("Cluster verification for")) ?? "";
@@ -177,6 +182,87 @@ test("a scoped upgrade holds only the selected modules' services to the release 
   lines.length = 0;
   // the standalone check has no module list and holds every service to the release image
   assert.equal(await verifyCluster(deps, { clusterName, awsRegion }), false);
+});
+
+// the scheduler and a controller drain their old tasks after the stacks complete, as on dev
+function rollouts(health: ClusterHealthApi, rolloutFor: (read: number, name: string) => string): { reads: () => number; order: string[] } {
+  const services = health.services;
+  const containerHealth = health.containerHealth;
+  let reads = 0;
+  const order: string[] = [];
+  health.services = async (input) => {
+    reads += 1;
+    order.push("services");
+    return (await services(input)).map((service) => service.name.endsWith("-scheduler") || service.name.endsWith("-cluster-manager")
+      ? { ...service, rollout: rolloutFor(reads, service.name) } : service);
+  };
+  health.containerHealth = async (input) => { order.push("containers"); return containerHealth(input); };
+  return { reads: () => reads, order };
+}
+
+test("at the end of an upgrade, rollouts still draining are waited for and then pass", async () => {
+  const { deps, lines, health, sleeps } = fixture();
+  const seen = rollouts(health, (read, name) => read <= 2 || (read === 3 && name.endsWith("-cluster-manager")) ? "IN_PROGRESS" : "COMPLETED");
+  let settledAt = -1;
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion, settleMs: 600_000, onSettled: () => { settledAt = seen.reads(); } }), true);
+  assert.equal(seen.reads(), 4);
+  assert.deepEqual(sleeps, [5000, 5000, 5000]);
+  assert.equal(settledAt, 4);
+  // container health is read once, after the services settled
+  assert.deepEqual(seen.order, ["services", "services", "services", "services", "containers", "containers"]);
+  assert.deepEqual(lines.filter((line) => line.startsWith("Waiting")), [
+    "Waiting for ECS rollouts to finish (old tasks draining), 0s of 600s: idea-test1-scheduler, idea-test1-cluster-manager",
+    "Waiting for ECS rollouts to finish (old tasks draining), 10s of 600s: idea-test1-cluster-manager",
+  ]);
+  assert.equal(lines.filter((line) => line.startsWith("Cluster verification for")).length, 1);
+  assert.match(table(lines), /\| ecs service +\| idea-test1-scheduler +\| 1\/1 running, rollout COMPLETED, release image +\| ok +\|/);
+  assert.equal(lines.at(-1), "Cluster verification: every checked line is ok");
+});
+
+test("a rollout still in progress at the limit fails with the reason", async () => {
+  const { deps, lines, health, sleeps } = fixture();
+  rollouts(health, (_read, name) => name.endsWith("-scheduler") ? "IN_PROGRESS" : "COMPLETED");
+  assert.equal(await verifyCluster(deps, { clusterName, awsRegion, settleMs: 60_000 }), false);
+  assert.equal(sleeps.length, 12);
+  // one line when the wait starts and one every 30 s while nothing changes
+  assert.deepEqual(lines.filter((line) => line.startsWith("Waiting")).map((line) => line.split(",")[1]), [" 0s of 60s: idea-test1-scheduler", " 30s of 60s: idea-test1-scheduler"]);
+  assert.match(table(lines), /\| ecs service +\| idea-test1-scheduler +\| 1\/1 running, rollout IN_PROGRESS, release image, rollout still in progress after 60s; run verify-cluster again +\| FAIL +\|/);
+  assert.equal(lines.at(-1), "Cluster verification: 1 line(s) FAIL");
+});
+
+test("a FAILED rollout, a short service or an old image fails as read and is not waited for", async () => {
+  for (const service of [
+    { rollout: "FAILED", running: 1, images: [image] },
+    { rollout: "IN_PROGRESS", running: 0, images: [image] },
+    { rollout: "IN_PROGRESS", running: 1, images: [oldImage] },
+  ]) {
+    const { deps, lines, health, sleeps } = fixture();
+    let reads = 0;
+    // beside it, a draining service that settles on the second read
+    health.services = async () => [
+      { name: `${clusterName}-scheduler`, desired: 1, ...service },
+      { name: `${clusterName}-cluster-manager`, running: 2, desired: 2, rollout: (reads += 1) === 1 ? "IN_PROGRESS" : "COMPLETED", images: [image] },
+    ];
+    assert.equal(await verifyCluster(deps, { clusterName, awsRegion, settleMs: 600_000 }), false);
+    assert.deepEqual(sleeps, [5000]);
+    const rows = table(lines);
+    assert.match(rows, /\| ecs service +\| idea-test1-scheduler +\| [^|]* +\| FAIL +\|/);
+    assert.doesNotMatch(rows, /still in progress after/);
+    assert.match(rows, /\| ecs service +\| idea-test1-cluster-manager +\| 2\/2 running, rollout COMPLETED, release image +\| ok +\|/);
+  }
+});
+
+test("the standalone check reads once and reports a draining rollout as wait", async () => {
+  const { deps, lines, health, sleeps } = fixture();
+  const seen = rollouts(health, () => "IN_PROGRESS");
+  const program = new Command("ideactl").exitOverride();
+  registerVerifyClusterCommand(program, deps);
+  await assert.rejects(program.parseAsync(["verify-cluster", "--cluster-name", clusterName, "--aws-region", awsRegion], { from: "user" }),
+    (error: Error) => error.name === "ExitWithCode" && (error as Error & { code: number }).code === 1);
+  assert.equal(seen.reads(), 1);
+  assert.deepEqual(sleeps, []);
+  assert.match(table(lines), /\| ecs service +\| idea-test1-scheduler +\| 1\/1 running, rollout IN_PROGRESS, release image, settling +\| wait +\|/);
+  assert.equal(lines.at(-1), "Cluster verification: 2 service(s) still rolling out; run again in a minute");
 });
 
 test("no permission for the CloudTrail lookup reads 'not checked' and never fails the check", async () => {
