@@ -703,12 +703,20 @@ class SchedulerAPI(BaseAPI):
             # the script is created relative to the jobs dir opened and checked here and
             # chowned through its fd, so nothing swapped in at the path can redirect it.
             fd = open_jobs_dir(job_submission_dir, user=job_owner, group=group_name)
+            created = False
             try:
                 with open_new_job_script(script_name, dir_fd=fd) as f:
+                    created = True
                     f.write(Utils.base64_decode(job_script))
                     f.write('\n')
                     chown_fd(f.fileno(), user=job_owner, group=group_name)
             except BaseException:
+                # a script this call created and could not finish (a full quota) is removed
+                if created:
+                    try:
+                        os.unlink(script_name, dir_fd=fd)
+                    except OSError:
+                        pass
                 os.close(fd)
                 raise
             return fd

@@ -814,6 +814,28 @@ def _job(state, error_message=None):
             'the environment',
         ),
         (
+            SocaJob(
+                job_id='1',
+                state=SocaJobState.QUEUED,
+                comment='Job held: max_provisioned_instances limit',
+            ),
+            None,
+            None,
+            'the scheduler reported "Job held: max_provisioned_instances limit"',
+            'the environment',
+        ),
+        (
+            SocaJob(
+                job_id='1',
+                state=SocaJobState.QUEUED,
+                comment='IDEA: provisioning compute capacity for this job',
+            ),
+            None,
+            None,
+            'seconds. This is the environment (scheduler provisioning or EC2)',
+            'not the image',
+        ),
+        (
             _job(SocaJobState.QUEUED),
             None,
             'i-candidate',
@@ -828,7 +850,14 @@ def _job(state, error_message=None):
             'the environment',
         ),
     ],
-    ids=['launch-refused', 'never-launched', 'never-registered', 'did-not-finish'],
+    ids=[
+        'launch-refused',
+        'never-launched',
+        'refused-in-comment',
+        'own-wait-comment',
+        'never-registered',
+        'did-not-finish',
+    ],
 )
 def test_a_timed_out_validation_names_its_phase_and_the_likely_cause(
     monkeypatch, last_job, node, instance, expected, cause

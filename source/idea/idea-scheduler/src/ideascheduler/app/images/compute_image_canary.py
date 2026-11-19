@@ -26,6 +26,7 @@ from ideasdk.aws.failure_capture import (
     capture_failure,
     find_job_instance,
 )
+from ideascheduler.app.scheduler.openpbs.openpbs_model import is_wait_comment
 from ideasdk.aws.image_builds import default_builder_instance_type, with_cause
 from ideasdk.aws.validation_identity import (
     call_within,
@@ -323,7 +324,15 @@ class ComputeImageCanary:
             )
         instance = find_job_instance(self.context, job_id)
         if instance is None:
-            refused = last_job.error_message if last_job is not None else None
+            # the converter puts the scheduler's refusal in the comment, not error_message
+            comment = last_job.comment if last_job is not None else None
+            refused = (last_job.error_message if last_job is not None else None) or (
+                comment
+                if comment
+                and not is_wait_comment(comment)
+                and not comment.startswith('IDEA: provisioning')
+                else None
+            )
             if refused:
                 return (
                     f'No node was launched for the validation job within {seconds} '
