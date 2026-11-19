@@ -29,6 +29,7 @@ from ideasdk.aws.image_builds import (
     check_builder_type_architecture,
     default_builder_instance_type,
     is_throttle,
+    launch_builder,
     root_ebs_mapping,
     SNAPSHOT_STOP_TIMEOUT_SECONDS,
     stop_builder,
@@ -122,6 +123,7 @@ class DcvHostImageBuilder:
         progress=None,
         before_snapshot: Optional[Callable[[str, str], None]] = None,
         image_tags: Optional[Dict[str, str]] = None,
+        fallback_instance_type: Optional[str] = None,
     ):
         self.context = context
         # called with {"instance_id": ...} once the builder instance exists
@@ -131,6 +133,9 @@ class DcvHostImageBuilder:
         self.before_snapshot = before_snapshot
         # extra tags for the image and its snapshots (the pipeline marks its own)
         self.image_tags = dict(image_tags or {})
+        # tried once when RunInstances refuses instance_type for capacity or quota
+        self.fallback_instance_type = fallback_instance_type
+        self.builder_fallback: Optional[str] = None
 
         if Utils.is_empty(base_ami) or Utils.is_empty(base_os):
             raise exceptions.invalid_params('base_ami and base_os are required')
@@ -457,36 +462,39 @@ class DcvHostImageBuilder:
             ).items()
         ]
 
-        run_instances_result = (
-            self.context.aws()
-            .ec2()
-            .run_instances(
-                ImageId=self.base_ami,
-                InstanceType=self.instance_type,
-                BlockDeviceMappings=[
-                    {
-                        'DeviceName': self.block_device_name,
-                        # gp3 with provisioned IOPS, Windows too (its vendor image is gp2)
-                        'Ebs': builder_root_ebs(self.ebs_volume_size),
-                    }
-                ],
-                IamInstanceProfile={'Arn': self.instance_profile_arn},
-                # EC2 refuses an ED25519 key on a Windows AMI. The bake is SSM
-                # only and never reads the instance password.
-                **({} if is_windows(self.base_os) else {'KeyName': self.ssh_key_pair}),
-                NetworkInterfaces=[
-                    {
-                        'DeviceIndex': 0,
-                        'Groups': self.security_group_ids,
-                        'SubnetId': self.subnet_id,
-                    }
-                ],
-                MaxCount=1,
-                MinCount=1,
-                TagSpecifications=[{'ResourceType': 'instance', 'Tags': tags}],
-                UserData=self.build_userdata(),
-            )
+        run_instance_request = dict(
+            ImageId=self.base_ami,
+            InstanceType=self.instance_type,
+            BlockDeviceMappings=[
+                {
+                    'DeviceName': self.block_device_name,
+                    # gp3 with provisioned IOPS, Windows too (its vendor image is gp2)
+                    'Ebs': builder_root_ebs(self.ebs_volume_size),
+                }
+            ],
+            IamInstanceProfile={'Arn': self.instance_profile_arn},
+            # EC2 refuses an ED25519 key on a Windows AMI. The bake is SSM
+            # only and never reads the instance password.
+            **({} if is_windows(self.base_os) else {'KeyName': self.ssh_key_pair}),
+            NetworkInterfaces=[
+                {
+                    'DeviceIndex': 0,
+                    'Groups': self.security_group_ids,
+                    'SubnetId': self.subnet_id,
+                }
+            ],
+            MaxCount=1,
+            MinCount=1,
+            TagSpecifications=[{'ResourceType': 'instance', 'Tags': tags}],
+            UserData=self.build_userdata(),
         )
+        run_instances_result, self.builder_fallback = launch_builder(
+            self.context.aws().ec2(),
+            run_instance_request,
+            getattr(self, 'fallback_instance_type', None),
+            self.report.warning,
+        )
+        self.instance_type = run_instance_request['InstanceType']
         created_instances = Utils.get_value_as_list('Instances', run_instances_result)
         return EC2Instance(data=Utils.get_first(created_instances))
 
@@ -640,6 +648,14 @@ class DcvHostImageBuilder:
                 )
             time.sleep(10)
 
+    def launch_update(self, instance_id: str) -> Dict:
+        """the row fields a launch sets: the builder and the type it really runs"""
+        return {
+            'instance_id': instance_id,
+            'builder_instance_type': self.instance_type,
+            'builder_fallback': getattr(self, 'builder_fallback', None),
+        }
+
     def build(self, progress=None) -> str:
         """build the image and return its id; the builder instance is stopped, not terminated, when a step fails"""
         progress = progress or self.progress
@@ -664,7 +680,7 @@ class DcvHostImageBuilder:
             self.report.print(bootstrap_logs)
             time.sleep(3)
             if progress is not None:
-                progress({'instance_id': instance_id})
+                progress(self.launch_update(instance_id))
             try:
                 status = self.wait_for_software_packages(instance_id=instance_id)
                 self.check_builder_status(instance_id, status)

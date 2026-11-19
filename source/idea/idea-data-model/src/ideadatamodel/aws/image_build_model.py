@@ -247,8 +247,8 @@ class ImagePipelineSettings(SocaBaseModel):
     validation_user: Optional[str] = Field(default='idea-validate')
     validation_project: Optional[str] = Field(default='idea-validate')
     # read from vdc by both pipelines: the builder type for CPU bakes, by architecture
-    # (x86_64, arm64). empty means the module default (compute c7i.large, desktop
-    # m7i.large, arm64 m8g.large); GPU bakes keep their GPU builder
+    # (x86_64, arm64). empty means the pipeline default (Linux c7i.2xlarge / c8g.2xlarge,
+    # Windows m7i.large); GPU bakes keep their GPU builder
     builder_instance_types: Optional[Dict[str, Optional[str]]] = Field(default=None)
 
     def bake_time_limit(self) -> timedelta:
@@ -302,6 +302,10 @@ class ImageBuildRecord(SocaBaseModel):
     validated_on: Optional[datetime] = Field(default=None)
     promoted_on: Optional[datetime] = Field(default=None)
     checks: Optional[List[ImageCheck]] = Field(default=None)
+    # the type this attempt's builder launched on, and why it is not the chosen one when
+    # a capacity or quota refusal sent it to the fallback (None otherwise)
+    builder_instance_type: Optional[str] = Field(default=None)
+    builder_fallback: Optional[str] = Field(default=None)
     # CloudWatch console link for the run's log stream
     log_link: Optional[str] = Field(default=None)
     attempts: Optional[int] = Field(default=None)

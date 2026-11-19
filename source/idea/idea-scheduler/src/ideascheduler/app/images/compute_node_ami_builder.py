@@ -24,6 +24,7 @@ from ideasdk.aws.image_builds import (
     check_builder_type_architecture,
     default_builder_instance_type,
     is_throttle,
+    launch_builder,
     root_ebs_mapping,
     SNAPSHOT_STOP_TIMEOUT_SECONDS,
     stop_builder,
@@ -82,10 +83,14 @@ class ComputeNodeAmiBuilder:
         overwrite: bool = False,
         progress=None,
         image_tags: Optional[Dict[str, str]] = None,
+        fallback_instance_type: Optional[str] = None,
     ):
         self.context = context
         # extra tags on the image and its snapshots (the pipeline marks what it may clean up)
         self.image_tags = dict(image_tags or {})
+        # tried once when RunInstances refuses instance_type for capacity or quota
+        self.fallback_instance_type = fallback_instance_type
+        self.builder_fallback: Optional[str] = None
         # called with {"instance_id": ...} once the builder instance exists
         self.progress = progress
 
@@ -452,9 +457,13 @@ class ComputeNodeAmiBuilder:
             'UserData': self.build_userdata(),
         }
 
-        run_instances_result = (
-            self.context.aws().ec2().run_instances(**run_instance_request)
+        run_instances_result, self.builder_fallback = launch_builder(
+            self.context.aws().ec2(),
+            run_instance_request,
+            getattr(self, 'fallback_instance_type', None),
+            self.report.warning,
         )
+        self.instance_type = run_instance_request['InstanceType']
         created_instances = Utils.get_value_as_list('Instances', run_instances_result)
         return EC2Instance(data=Utils.get_first(created_instances))
 
@@ -681,6 +690,14 @@ class ComputeNodeAmiBuilder:
     def stop_ec2_instance(self, instance_id: str):
         self.context.aws().ec2().stop_instances(InstanceIds=[instance_id])
 
+    def launch_update(self, instance_id: str) -> Dict:
+        """the row fields a launch sets: the builder and the type it really runs"""
+        return {
+            'instance_id': instance_id,
+            'builder_instance_type': self.instance_type,
+            'builder_fallback': getattr(self, 'builder_fallback', None),
+        }
+
     def build(self, progress=None) -> str:
         """build the image and return its id; the builder instance is stopped, not terminated, when a step fails"""
         progress = progress or self.progress
@@ -709,7 +726,7 @@ class ComputeNodeAmiBuilder:
                 self.report.print(bootstrap_logs)
                 time.sleep(3)
                 if progress is not None:
-                    progress({'instance_id': instance_id})
+                    progress(self.launch_update(instance_id))
             else:
                 instance_id = self.instance_id
 

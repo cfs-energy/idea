@@ -136,6 +136,21 @@ BUILDER_INSTANCE_TYPES = {
     ),
 }
 DEFAULT_ARM64_BUILDER_INSTANCE_TYPE = 'm8g.large'
+# what a pipeline's Linux CPU bake launches when no type is set: the 11-19 size trial
+# measured 31 to 41 percent less builder time than large, with nothing gained past 2xlarge.
+# Windows bakes, custom builds and the CLI keep the module defaults above (DEFAULT_INSTANCE_TYPE
+# in each builder module, DEFAULT_ARM64_BUILDER_INSTANCE_TYPE), which are also the fallback
+PIPELINE_LINUX_BUILDER_INSTANCE_TYPES = {
+    'x86_64': 'c7i.2xlarge',
+    'arm64': 'c8g.2xlarge',
+}
+# RunInstances refusals that a smaller builder of the previous default may get past
+BUILDER_FALLBACK_ERROR_CODES = (
+    'InsufficientInstanceCapacity',
+    'VcpuLimitExceeded',
+    'InstanceLimitExceeded',
+    'Unsupported',
+)
 
 # the builder root disk: gp3 at these figures, lowered to what the volume size allows. the
 # image created from it keeps them in its mapping (CreateImage cannot change them), so every
@@ -962,19 +977,72 @@ def check_builder_instance_type(
 
 
 def pipeline_builder_instance_type(
-    settings: ImagePipelineSettings, architecture: Optional[str], x86_default: str
-) -> str:
+    context,
+    settings: ImagePipelineSettings,
+    architecture: Optional[str],
+    previous_default: str,
+    windows: bool = False,
+    logger=None,
+) -> Tuple[str, Optional[str]]:
     """
-    the builder type for a pipeline's CPU bake: image_pipeline.builder_instance_types for
-    the architecture, else the module default. a stored type off the allowlist (written
-    around the settings page) fails the bake with the reason instead of launching
+    (builder type, fallback type) for a pipeline's CPU bake.
+
+    image_pipeline.builder_instance_types for the architecture wins, with no fallback; a
+    stored type off the allowlist (written around the settings page) fails the bake with the
+    reason instead of launching. Otherwise a Linux bake gets
+    PIPELINE_LINUX_BUILDER_INSTANCE_TYPES with the previous default (the module default) as
+    its fallback at launch, or the previous default outright when the region does not offer
+    the new type or the lookup fails. Windows bakes keep the previous default.
     """
     wanted = architecture or 'x86_64'
     configured = (settings.builder_instance_types or {}).get(wanted)
-    if Utils.is_empty(configured):
-        return default_builder_instance_type(wanted, x86_default)
-    check_builder_instance_type(configured, wanted)
-    return configured
+    if Utils.is_not_empty(configured):
+        check_builder_instance_type(configured, wanted)
+        return configured, None
+    previous = default_builder_instance_type(wanted, previous_default)
+    preferred = PIPELINE_LINUX_BUILDER_INSTANCE_TYPES.get(wanted)
+    if windows or not preferred:
+        return previous, None
+    try:
+        offered = context.aws_util().is_instance_type_valid(preferred)
+        why = 'is not offered in this region'
+    except Exception as e:
+        offered = False
+        why = f'could not be looked up ({sanitize_aws_message(str(e))[:120]})'
+    if not offered:
+        if logger is not None:
+            logger.warning(
+                f'image builder {preferred} {why}; {wanted} bakes use {previous}'
+            )
+        return previous, None
+    return preferred, previous
+
+
+def launch_builder(
+    ec2_client,
+    request: Dict[str, Any],
+    fallback_type: Optional[str],
+    warn: Optional[Callable[[str], None]] = None,
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """
+    RunInstances for a builder: (result, note). A capacity, vCPU quota or not-offered
+    refusal of the requested type is retried once on fallback_type; note then says so, and
+    request['InstanceType'] is the type that launched
+    """
+    try:
+        return ec2_client.run_instances(**request), None
+    except ClientError as e:
+        code = (e.response or {}).get('Error', {}).get('Code')
+        if not fallback_type or code not in BUILDER_FALLBACK_ERROR_CODES:
+            raise
+    note = (
+        f'{request["InstanceType"]} was refused ({code}); '
+        f'this bake launched once on {fallback_type}'
+    )
+    if warn is not None:
+        warn(f'image builder {note}')
+    request['InstanceType'] = fallback_type
+    return ec2_client.run_instances(**request), note
 
 
 def builder_root_ebs(volume_gb: int) -> Dict[str, Any]:
