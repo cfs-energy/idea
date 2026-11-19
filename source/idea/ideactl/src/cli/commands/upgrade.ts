@@ -1758,6 +1758,17 @@ export class UpgradeTiming {
   }
 }
 
+/**
+ * The deployment id of an upgrade that did not finish. Phase 2 writes the module-set owners row and
+ * only a completed upgrade removes it; every stack the run deployed published the run's id, the
+ * cluster stack first. Undefined when no upgrade was left unfinished or no stack recorded an id.
+ */
+export function unfinishedUpgradeDeploymentId(settings: readonly Record<string, unknown>[], moduleSet: string): string | undefined {
+  if (!settings.some((row) => row["key"] === "cluster.upgrade_module_set_owners")) return undefined;
+  const clusterModule = settingString(settings, `global-settings.module_sets.${moduleSet}.cluster.module_id`) ?? "cluster";
+  return settingString(settings, `${clusterModule}.deployment_id`);
+}
+
 /** Execute Phases 1 through 4 after every pre-flight refusal has passed. */
 export async function upgradeCluster(deps: UpgradeDeps, options: UpgradeCommandOptions): Promise<void> {
   const timing = new UpgradeTiming(deps);
@@ -1918,6 +1929,13 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
     } catch (error) {
       deps.out(`warning: pre-upgrade termination-protection sweep failed: ${(error as Error).message}. Verify replaced instances are terminated after the upgrade.`);
     }
+    // Reusing an unfinished run's id keeps the templates of the stacks it deployed identical, so a
+    // re-run finds them unchanged (an empty change set, nothing executed) instead of updating each.
+    const resumedId = options.deploymentId ? undefined : unfinishedUpgradeDeploymentId(initialSettings, options.moduleSet);
+    const deploymentId = options.deploymentId || resumedId || deps.uuid();
+    deps.out(resumedId === undefined
+      ? `Deployment id ${deploymentId}. If this run is interrupted, run the same upgrade-cluster command again: it reuses this id, and stacks already deployed show no changes.`
+      : `Deployment id ${deploymentId}, reused from the upgrade that did not finish: stacks it deployed show no changes.`);
     const deployment: UpgradeDeploymentOptions = {
       refreshHosts: options.refreshHosts,
       hostPoolRerunCommand: refreshHostsCommand("upgrade-cluster", options, options.modules),
@@ -1925,7 +1943,7 @@ async function runUpgrade(deps: UpgradeDeps, options: UpgradeCommandOptions, tim
       awsRegion: options.awsRegion,
       awsProfile: options.awsProfile,
       terminationProtection,
-      deploymentId: options.deploymentId,
+      deploymentId,
       forceBuildBootstrap: options.forceBuildBootstrap === true,
       rollback: options.rollback !== false,
       optimizeDeployment: options.optimizeDeployment === true,

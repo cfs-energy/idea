@@ -2031,6 +2031,34 @@ test("verify-cluster is registered beside upgrade-cluster", () => {
   for (const option of ["--cluster-name", "--aws-region", "--aws-profile", "--since-minutes"]) assert.ok(help.includes(option), option);
 });
 
+test("a re-run after an unfinished upgrade reuses its deployment id, so the stacks it deployed are unchanged", async () => {
+  await withFixture(async ({ deps, events, rows }) => {
+    const ids: Array<string | undefined> = [];
+    const deploy = deps.deploy.bind(deps);
+    deps.deploy = async (input) => { ids.push(input.deploymentId); await deploy(input); };
+    const options = { clusterName, awsRegion, baseOs: "amazonlinux2023", moduleSet: "default", force: true, acceptConfigDrift: true };
+    // a first run: a fresh id, named so the operator knows a re-run picks it up
+    await upgradeCluster(deps, options);
+    assert.deepEqual(ids, ["00000000-0000-0000-0000-000000000000"]);
+    assert.ok(events.some((line) => line.startsWith("Deployment id 00000000-0000-0000-0000-000000000000. If this run is interrupted")));
+
+    // an interrupted run leaves its owners row, and the cluster stack published its id
+    const settings = rows[`${clusterName}.cluster-settings`]!;
+    settings.push(setting("cluster.upgrade_module_set_owners", {}), setting("cluster.deployment_id", "run-1"));
+    ids.length = 0;
+    events.length = 0;
+    await upgradeCluster(deps, options);
+    assert.deepEqual(ids, ["run-1"]);
+    assert.ok(events.includes("Deployment id run-1, reused from the upgrade that did not finish: stacks it deployed show no changes."));
+
+    // an explicit id wins
+    settings.push(setting("cluster.upgrade_module_set_owners", {}));
+    ids.length = 0;
+    await upgradeCluster(deps, { ...options, deploymentId: "operator-id" });
+    assert.deepEqual(ids, ["operator-id"]);
+  });
+});
+
 test("ECR token and manifest requests honor proxy environment and NO_PROXY without network", async () => {
   const savedEnv = process.env;
   try {
