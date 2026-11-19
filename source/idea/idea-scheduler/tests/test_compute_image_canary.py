@@ -13,6 +13,7 @@ from ideadatamodel import (
     Project,
     SocaComputeNode,
     SocaJob,
+    SocaJobState,
     SubmitJobResult,
     User,
     exceptions,
@@ -32,13 +33,26 @@ def home_present(monkeypatch):
     """the canary paths here use a home that is not on this machine"""
     real = module.wait_for_home
     monkeypatch.setattr(module, 'wait_for_home', lambda home: None)
+    # each test probes the home afresh
+    module._home_probes.clear()
     return real
 
 
 @pytest.mark.parametrize('maintenance', [False, True])
 @pytest.mark.parametrize(
     'failure',
-    [None, 'ami', 'mount', 'output', 'exit', 'timeout', 'pbs', 'identity', 'cleanup'],
+    [
+        None,
+        'ami',
+        'mount',
+        'output',
+        'unreadable',
+        'exit',
+        'timeout',
+        'pbs',
+        'identity',
+        'cleanup',
+    ],
 )
 def test_canary_uses_validation_identity_and_requires_every_check(
     context, monkeypatch, failure, maintenance
@@ -172,6 +186,14 @@ def test_canary_uses_validation_identity_and_requires_every_check(
         ],
     }
     monkeypatch.setattr(Path, 'read_text', lambda self: json.dumps(evidence))
+    if failure == 'unreadable':
+        # the output never reads back; the clock runs on until the ready gate passes
+        def unreadable(self):
+            raise OSError('no such file')
+
+        monkeypatch.setattr(Path, 'read_text', unreadable)
+        clock = iter(range(10**6))
+        monkeypatch.setattr(module.time, 'monotonic', lambda: next(clock))
     monkeypatch.setattr(Path, 'unlink', lambda *args, **kwargs: None)
     candidate = row(image_id='ami-candidate')
 
@@ -183,6 +205,18 @@ def test_canary_uses_validation_identity_and_requires_every_check(
         with pytest.raises(exceptions.SocaException):
             ComputeImageCanary(context).validate(candidate, progress)
         assert any(check.ok is False for check in candidate.checks)
+        failed = next(check for check in candidate.checks if check.ok is False)
+        if failure == 'timeout':
+            # no node had launched: the environment, said so
+            assert failed.name == 'compute_timeout'
+            assert failed.detail.startswith(
+                'No node was launched for the validation job within 0 seconds.'
+            )
+            assert 'not the image' in failed.detail
+        if failure == 'unreadable':
+            assert failed.name == 'compute_output'
+            assert 'could not be read within 300 seconds' in failed.detail
+            assert 'the environment' in failed.detail
     else:
         ComputeImageCanary(context).validate(candidate, progress)
         assert all(check.ok is True for check in candidate.checks)
@@ -756,3 +790,80 @@ def test_a_home_check_that_never_returns_fails_the_validation_within_the_limit(
         raised.value.message
     )
     never.set()
+
+
+def _job(state, error_message=None):
+    return SocaJob(job_id='1', state=state, error_message=error_message)
+
+
+@pytest.mark.parametrize(
+    'last_job, node, instance, expected, cause',
+    [
+        (
+            _job(SocaJobState.QUEUED, 'no capacity for c7i.large'),
+            None,
+            None,
+            'the scheduler reported "no capacity for c7i.large"',
+            'the environment',
+        ),
+        (
+            _job(SocaJobState.QUEUED),
+            None,
+            None,
+            'No node was launched',
+            'the environment',
+        ),
+        (
+            _job(SocaJobState.QUEUED),
+            None,
+            'i-candidate',
+            'A node (i-candidate) launched on the candidate image but did not register',
+            'The image is the likely cause',
+        ),
+        (
+            _job(SocaJobState.RUNNING),
+            SocaComputeNode(host='10.0.0.7', instance_id='i-candidate'),
+            'i-candidate',
+            'started on 10.0.0.7 but did not finish within 600 seconds',
+            'the environment',
+        ),
+    ],
+    ids=['launch-refused', 'never-launched', 'never-registered', 'did-not-finish'],
+)
+def test_a_timed_out_validation_names_its_phase_and_the_likely_cause(
+    monkeypatch, last_job, node, instance, expected, cause
+):
+    svc = service()
+    monkeypatch.setattr(module, 'find_job_instance', lambda context, job_id: instance)
+    reason = ComputeImageCanary(svc.context)._timeout_reason('1', last_job, node, 600)
+    assert expected in reason and cause in reason
+    assert 'timed out before completion' not in reason
+
+
+def test_one_probe_of_the_home_serves_every_row(monkeypatch, tmp_path):
+    # a rebake validates its rows at once: a home that stopped answering is probed once
+    # and every row fails within that one probe, with the storage reason
+    import threading
+
+    probes = []
+    gate = threading.Event()
+
+    def probe(path, timeout):
+        probes.append(path)
+        gate.wait(1)
+        return False
+
+    monkeypatch.setattr(module, 'path_answers', probe)
+    module._home_probes.clear()
+    results = []
+    rows = [
+        threading.Thread(target=lambda: results.append(module.home_answers(tmp_path)))
+        for _ in range(5)
+    ]
+    for thread in rows:
+        thread.start()
+    gate.set()
+    for thread in rows:
+        thread.join(5)
+    assert results == [False] * 5
+    assert probes == [str(tmp_path)]
