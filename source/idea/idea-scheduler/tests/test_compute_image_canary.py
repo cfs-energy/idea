@@ -896,3 +896,17 @@ def test_one_probe_of_the_home_serves_every_row(monkeypatch, tmp_path):
         thread.join(5)
     assert results == [False] * 5
     assert probes == [str(tmp_path)]
+
+
+def test_each_home_probe_and_each_reuse_is_logged(monkeypatch, tmp_path):
+    # D16: the shared probe wrote nothing, so its use could not be seen on a cluster
+    module._home_probes.clear()
+    monkeypatch.setattr(module, 'path_answers', lambda path, timeout: True)
+    logger = Mock()
+    assert module.home_answers(tmp_path, logger) is True
+    assert module.home_answers(tmp_path, logger) is True
+    lines = [call.args[0] for call in logger.info.call_args_list]
+    assert len(lines) == 2
+    assert lines[0].startswith(f'home probe {tmp_path}: answered in ')
+    assert lines[0].endswith(' seconds')
+    assert lines[1].startswith(f'home probe {tmp_path}: cached result used, answered ')
