@@ -1,8 +1,12 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import MyVirtualDesktopSessions, { needsQuickRefresh } from './my-virtual-desktop-sessions';
+import createWrapper, { ModalWrapper } from '@cloudscape-design/components/test-utils/dom';
+import { POPUP_BLOCKED_MESSAGE } from './desktop-connection';
+import MyVirtualDesktopSessions, { matchesOsFilter, mergeSessions, needsQuickRefresh } from './my-virtual-desktop-sessions';
 import { initTestAppContext } from '../../test-support';
+import { AppContext } from '../../common';
 
 const STOPPED_SESSION = {
     idea_session_id: 'session-1',
@@ -20,7 +24,7 @@ const AI_ACCESS_PENDING_TEXT = /cannot use the project's AI models yet/;
 
 /** Renders the page with one stopped session and returns the flashbar items raised by the page, which
  * is where a failed session action has to end up. */
-async function startSessionAndCaptureFlashbar(resumeSessionsResult: any) {
+async function startSessionAndCaptureFlashbar(resumeSessionsResult: any, getProject?: any) {
     const context = initTestAppContext();
 
     const clusterSettings = context.getClusterSettingsService();
@@ -35,7 +39,7 @@ async function startSessionAndCaptureFlashbar(resumeSessionsResult: any) {
 
     const projects = context.client().projects();
     vi.spyOn(projects, 'getUserProjects').mockResolvedValue({ projects: [] } as any);
-    vi.spyOn(projects, 'getProject').mockResolvedValue({ project: undefined } as any);
+    vi.spyOn(projects, 'getProject').mockImplementation(getProject ?? (() => Promise.resolve({ project: undefined } as any)));
 
     const virtualDesktop = context.client().virtualDesktop();
     // a STOPPED session is skipped by fetchSessionScreenshots, so no screenshot API is needed.
@@ -95,13 +99,19 @@ describe('my virtual desktop sessions', () => {
         expect(screen.getByRole('button', { name: 'Launch desktop' })).toBeInTheDocument();
         const user = userEvent.setup();
         await user.click(screen.getByRole('button', { name: /Actions/i }));
-        for (const item of ['Connect', 'Session permissions', 'Show info', 'Schedule', 'Update session']) {
+        for (const item of ['Connect', 'Share desktop', 'Show info', 'Schedule', 'Rename or resize']) {
             expect(screen.getAllByText(item).length).toBeGreaterThan(0);
         }
         await user.click(screen.getByText('Desktop state'));
         for (const item of ['Stop', 'Reboot', 'Terminate']) {
             expect(screen.getByText(item)).toBeInTheDocument();
         }
+    });
+
+    it('does not request a project on page load, which fails for anyone outside it', async () => {
+        const getProject = vi.fn();
+        await startSessionAndCaptureFlashbar({ success: [STOPPED_SESSION], failed: [] }, getProject);
+        expect(getProject).not.toHaveBeenCalled();
     });
 
     it('reports a session action the controller refused', async () => {
@@ -126,7 +136,7 @@ describe('my virtual desktop sessions', () => {
         const errors = items.filter((item) => item.type === 'error');
         expect(errors).toHaveLength(1);
         expect(flashbarText(errors[0])).toContain(
-            'Could not start virtual desktop session-1. No reason was returned, contact your administrator.'
+            'Could not start this desktop. No reason was returned, contact your administrator.'
         );
     });
 
@@ -141,7 +151,7 @@ describe('my virtual desktop sessions', () => {
     });
 });
 
-async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/', state = 'STOPPED') {
+async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKING_HOURS', path = '/', state = 'STOPPED', session: object = {}) {
     const context = initTestAppContext();
 
     const clusterSettings = context.getClusterSettingsService();
@@ -163,6 +173,7 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
     vi.spyOn(virtualDesktop, 'listSessions').mockResolvedValue({
         listing: [{
             ...STOPPED_SESSION,
+            ...session,
             state,
             idle_autostop_delay: 30,
             schedule: {
@@ -196,7 +207,7 @@ async function renderSessionWithSchedule(scheduleType: 'START_ALL_DAY' | 'WORKIN
         </MemoryRouter>
     );
 
-    await screen.findByText('my-desktop', {}, { timeout: 10000 });
+    await screen.findByText((session as any).name ?? 'my-desktop', {}, { timeout: 10000 });
     return { virtualDesktop, flashbarItems };
 }
 
@@ -336,6 +347,275 @@ describe('desktop connection failures', () => {
     });
 });
 
+/** Renders the page with whatever the listing answers, for 20 desktops or none. */
+async function renderListing(listSessions: any, setup?: (virtualDesktop: any) => void) {
+    const context = initTestAppContext();
+    const clusterSettings = context.getClusterSettingsService();
+    vi.spyOn(clusterSettings, 'getDirectoryServiceSettings').mockResolvedValue({ provider: 'openldap' });
+    vi.spyOn(clusterSettings, 'getVirtualDesktopSettings').mockResolvedValue({
+        dcv_session: { idle_autostop_delay_max: 0, max_root_volume_memory: { value: 500, unit: 'gb' }, working_hours: {} }
+    });
+    vi.spyOn(context.client().projects(), 'getUserProjects').mockResolvedValue({ projects: [] } as any);
+    const virtualDesktop = context.client().virtualDesktop();
+    vi.spyOn(virtualDesktop, 'listSessions').mockImplementation(listSessions);
+    setup?.(virtualDesktop);
+    const flashbarItems: any[] = [];
+    render(
+        <MemoryRouter>
+            <MyVirtualDesktopSessions
+                ideaPageId="my-virtual-desktop-sessions"
+                toolsOpen={false}
+                tools={null}
+                onToolsChange={() => {}}
+                onPageChange={() => {}}
+                sideNavHeader={{ text: 'IDEA', href: '#/' }}
+                sideNavItems={[]}
+                onSideNavChange={() => {}}
+                onFlashbarChange={(event: any) => flashbarItems.push(...event.items)}
+                flashbarItems={[]}
+            />
+        </MemoryRouter>
+    );
+    return { virtualDesktop, flashbarItems };
+}
+
+const twentyLinuxDesktops = Array.from({ length: 20 }, (_, index) => ({
+    ...STOPPED_SESSION,
+    idea_session_id: `session-${index}`,
+    name: `desktop-${index}`,
+    updated_on: '2020-01-01T00:00:00Z'
+}));
+
+describe('a listing that failed', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('never says there are no desktops when the first load failed, and can try again', async () => {
+        const list = vi.fn().mockRejectedValueOnce(new Error('Service Unavailable')).mockResolvedValue({ listing: twentyLinuxDesktops });
+        const { flashbarItems } = await renderListing(list);
+        expect(await screen.findByText('Your desktops could not be loaded. They are not affected.', {}, { timeout: 10000 })).toBeInTheDocument();
+        expect(screen.queryByText('No desktops yet')).not.toBeInTheDocument();
+        expect(flashbarItems).toEqual([]);
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }));
+        expect(await screen.findByText('desktop-19')).toBeInTheDocument();
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the rows and says so when a later refresh fails', async () => {
+        const list = vi.fn().mockResolvedValueOnce({ listing: twentyLinuxDesktops }).mockRejectedValue(new Error('Service Unavailable'));
+        await renderListing(list);
+        await screen.findByText('desktop-19', {}, { timeout: 10000 });
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh desktops' }));
+        expect(await screen.findByText('Could not refresh. Showing the last known state.')).toBeInTheDocument();
+        expect(screen.getByText('desktop-19')).toBeInTheDocument();
+    });
+});
+
+describe('the operating system filter', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    const filter = async (name: string) => {
+        const user = userEvent.setup();
+        await user.click(createWrapper().findSegmentedControl()!.findSegments().find(segment => segment.getElement().textContent === name)!.getElement());
+    };
+
+    it('keeps the cards on screen while a filter loads', async () => {
+        let answer: (value: any) => void = () => {};
+        const list = vi.fn(({ filters }: any) => filters[0].value === 'windows'
+            ? new Promise(resolve => { answer = resolve; })
+            : Promise.resolve({ listing: twentyLinuxDesktops }));
+        await renderListing(list);
+        await screen.findByText('desktop-19', {}, { timeout: 10000 });
+        await filter('Windows');
+        expect(createWrapper().findCards()!.findLoadingText()).toBeNull();
+        answer({ listing: [] });
+    });
+
+    it('says a filter matched nothing, and offers the way back', async () => {
+        const list = vi.fn(({ filters }: any) => Promise.resolve({ listing: filters[0].value === 'windows' ? [] : twentyLinuxDesktops }));
+        await renderListing(list);
+        await screen.findByText('desktop-19', {}, { timeout: 10000 });
+        await filter('Windows');
+        expect(await screen.findByText('No Windows desktops.')).toBeInTheDocument();
+        expect(screen.queryByText('No desktops yet')).not.toBeInTheDocument();
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Show all desktops' }));
+        expect(await screen.findByText('desktop-19')).toBeInTheDocument();
+    });
+
+    it('hides a recently changed row the filter excludes, which the merge keeps on purpose', async () => {
+        const fresh = { ...STOPPED_SESSION, name: 'just-changed', updated_on: new Date().toISOString() };
+        expect(mergeSessions(new Map([['session-1', fresh as any]]), [], true).size).toBe(1);
+        const list = vi.fn(({ filters }: any) => Promise.resolve({ listing: filters[0].value === 'windows' ? [] : [fresh] }));
+        await renderListing(list);
+        await screen.findByText('just-changed', {}, { timeout: 10000 });
+        await filter('Windows');
+        expect(await screen.findByText('No Windows desktops.')).toBeInTheDocument();
+        expect(screen.queryByText('just-changed')).not.toBeInTheDocument();
+    });
+
+    it('ignores the answer to an older filter that arrives late', async () => {
+        let answerAll: (value: any) => void = () => {};
+        const list = vi.fn()
+            .mockResolvedValueOnce({ listing: [] })
+            .mockResolvedValueOnce({ listing: [] })
+            .mockImplementationOnce(() => new Promise(resolve => { answerAll = resolve; }))
+            .mockResolvedValue({ listing: [{ ...STOPPED_SESSION, name: 'win', base_os: 'windows2022' }] });
+        await renderListing(list);
+        await screen.findByText('No desktops yet', {}, { timeout: 10000 });
+        await filter('Linux');
+        await filter('All');
+        await filter('Windows');
+        await screen.findByText('win');
+        answerAll({ listing: [] });
+        await act(async () => {});
+        expect(screen.getByText('win')).toBeInTheDocument();
+    });
+
+    it('sorts every operating system', () => {
+        expect(matchesOsFilter({ base_os: 'windows2022' } as any, 'windows')).toBe(true);
+        expect(matchesOsFilter({ base_os: 'rocky9' } as any, 'windows')).toBe(false);
+        expect(matchesOsFilter({ software_stack: { base_os: 'windows2025' } } as any, 'linux')).toBe(false);
+        expect(matchesOsFilter({ base_os: 'ubuntu2604' } as any, 'linux')).toBe(true);
+        expect(matchesOsFilter({ base_os: 'ubuntu2604' } as any, '$all')).toBe(true);
+    });
+});
+
+describe('launching with projects that failed to load', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('tries again when the form opens, so a passing failure does not read as no projects', async () => {
+        let getUserProjects: any;
+        await renderListing(vi.fn().mockResolvedValue({ listing: [] }), () => {
+            const clients = AppContext.get().client();
+            getUserProjects = vi.spyOn(clients.projects(), 'getUserProjects')
+                .mockRejectedValueOnce(new Error('Service Unavailable'))
+                .mockResolvedValue({ projects: [{ project_id: 'p1', title: 'Physics' }] } as any);
+            vi.spyOn(clients.auth(), 'listUsersInGroup').mockResolvedValue({ listing: [] } as any);
+            vi.spyOn(clients.virtualDesktopUtils(), 'listSupportedOS').mockResolvedValue({ listing: [] } as any);
+            vi.spyOn(clients.virtualDesktop(), 'listSoftwareStacks').mockResolvedValue({ listing: [] } as any);
+        });
+        await screen.findByText('No desktops yet', {}, { timeout: 10000 });
+        expect(getUserProjects).toHaveBeenCalledTimes(1);
+        await userEvent.setup().click(screen.getAllByRole('button', { name: 'Launch desktop' })[0]);
+        await waitFor(() => expect(getUserProjects).toHaveBeenCalledTimes(2));
+        expect(await screen.findByText('Physics')).toBeInTheDocument();
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+    });
+});
+
+describe('connecting with pop-ups blocked', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('says the browser blocked the tab, and only then', async () => {
+        const { virtualDesktop, flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'READY');
+        vi.spyOn(virtualDesktop, 'getSessionConnectionInfo').mockResolvedValue({ connection_info: { endpoint: 'https://cluster.example', web_url_path: '/dcv', access_token: 'token', dcv_session_id: 'dcv-1' } } as any);
+        const open = vi.spyOn(window, 'open').mockReturnValueOnce(null).mockReturnValueOnce({} as any);
+        const user = userEvent.setup();
+        const connect = screen.getByRole('button', { name: 'Connect' });
+        await user.click(connect);
+        await waitFor(() => expect(flashbarItems.map(flashbarText)).toContain(POPUP_BLOCKED_MESSAGE));
+        const raised = flashbarItems.length;
+        await waitFor(() => expect(createWrapper(connect.parentElement!).findButton()!.findLoadingIndicator()).toBeNull());
+        await user.click(connect);
+        await waitFor(() => expect(open).toHaveBeenCalledTimes(2));
+        expect(flashbarItems).toHaveLength(raised);
+    });
+});
+
+describe('opening rename or resize', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('reports a failed request instead of doing nothing', async () => {
+        const { flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY');
+        vi.spyOn(AppContext.get().client().virtualDesktopUtils(), 'listAllowedInstanceTypesForSession').mockRejectedValue(new Error('Service Unavailable'));
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Actions' }));
+        await user.click(screen.getByText('Rename or resize'));
+        await waitFor(() => expect(flashbarItems.map(flashbarText)).toContain('Could not update virtual desktop: Service Unavailable'));
+    });
+
+    const resize = async (legacyName: string, newName?: string) => {
+        const { virtualDesktop } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'STOPPED', { name: legacyName, server: { instance_id: 'i-marker', instance_type: 't3.large' } });
+        vi.spyOn(AppContext.get().client().virtualDesktopUtils(), 'listAllowedInstanceTypesForSession').mockResolvedValue({ listing: [] } as any);
+        const updateSession = vi.spyOn(virtualDesktop, 'updateSession').mockResolvedValue({ session: { ...STOPPED_SESSION, name: legacyName } } as any);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Actions' }));
+        await user.click(screen.getByText('Rename or resize'));
+        const name = await screen.findByDisplayValue(legacyName);
+        if (newName !== undefined) {
+            await user.clear(name);
+            await user.type(name, newName);
+        }
+        await user.click(screen.getByRole('button', { name: 'Submit' }));
+        return updateSession;
+    };
+
+    it('keeps an older desktop name the current rule would refuse', async () => {
+        const legacyName = "Marker's desktop (2019) with a name longer than the old limit";
+        const updateSession = await resize(legacyName);
+        await waitFor(() => expect(updateSession).toHaveBeenCalledTimes(1));
+        expect(updateSession.mock.calls[0][0].session!.name).toBe(legacyName);
+    });
+
+    it('checks a changed name against the server rule', async () => {
+        const updateSession = await resize('marker-desktop', 'marker (copy)');
+        // the rule shows as help text and, once refused, as the field's error
+        await waitFor(() => expect(screen.getAllByText('Use 1 to 64 letters, digits, spaces, dots, underscores or hyphens.')).toHaveLength(2));
+        expect(updateSession).not.toHaveBeenCalled();
+    });
+});
+
+describe('previews at scale', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('keeps fetching after one batch fails, and says which previews are unavailable', async () => {
+        const ready = twentyLinuxDesktops.slice(0, 6).map((session, index) => ({ ...session, state: 'READY', dcv_session_id: `dcv-${index}` }));
+        let getSessionScreenshot: any;
+        await renderListing(vi.fn().mockResolvedValue({ listing: ready }), (virtualDesktop) => {
+            getSessionScreenshot = vi.spyOn(virtualDesktop, 'getSessionScreenshot')
+                .mockRejectedValueOnce(new Error('Service Unavailable'))
+                .mockResolvedValue({ success: [{ dcv_session_id: 'dcv-3', image_data: 'aaaa' }, { dcv_session_id: 'dcv-4', image_data: 'aaaa' }, { dcv_session_id: 'dcv-5', image_data: 'aaaa' }] });
+        });
+        await waitFor(() => expect(screen.getAllByText('Preview unavailable. You can still connect.')).toHaveLength(3), { timeout: 10000 });
+        await waitFor(() => expect(getSessionScreenshot).toHaveBeenCalledTimes(2), { timeout: 5000 });
+        await waitFor(() => expect(screen.getAllByAltText('Desktop preview')).toHaveLength(3));
+    });
+});
+
+describe('a refused stop or terminate', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    const stop = async (failed: any) => {
+        const { virtualDesktop, flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'READY');
+        const stopSessions = vi.spyOn(virtualDesktop, 'stopSessions').mockResolvedValue({ success: [], failed: [failed] } as any);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Actions' }));
+        await user.click(screen.getByText('Desktop state'));
+        await user.click(screen.getByText('Stop'));
+        // the confirm modal
+        const dialog = await screen.findByText(/Are you sure you want to stop/);
+        await user.click(within(dialog.closest('[role="dialog"]') as HTMLElement).getByRole('button', { name: 'Yes' }));
+        await waitFor(() => expect(stopSessions).toHaveBeenCalled());
+        return { stopSessions, flashbarItems, user };
+    };
+
+    it('shows the real reason, not a connections warning, when nobody is connected', async () => {
+        const { flashbarItems, stopSessions } = await stop({ ...STOPPED_SESSION, failure_reason: "This desktop isn't running, so it can't be stopped right now." });
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes("This desktop isn't running"))).toBe(true));
+        const modal = new ModalWrapper(screen.getByText('This desktop is in use').closest<HTMLElement>(`.${ModalWrapper.rootSelector}`)!);
+        expect(modal.isVisible()).toBe(false);
+        expect(stopSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks only when someone is connected, then stops with force', async () => {
+        const { stopSessions, user } = await stop({ ...STOPPED_SESSION, connection_count: 2, failure_reason: '2 connection(s) are open on this desktop.' });
+        const warning = await screen.findByText(/There are 2 open connections/);
+        await waitFor(() => expect(warning).toBeVisible());
+        await user.click(within(warning.closest('[role="dialog"]') as HTMLElement).getByRole('button', { name: 'Yes' }));
+        await waitFor(() => expect(stopSessions).toHaveBeenCalledTimes(2));
+        expect(stopSessions.mock.calls[1][0].sessions![0].force).toBe(true);
+    });
+});
+
 describe('needsQuickRefresh', () => {
     const desktops = (...states: string[]) => new Map(states.map((state, i) => [`s${i}`, { idea_session_id: `s${i}`, dcv_session_id: `d${i}`, state } as any]));
 
@@ -353,5 +633,78 @@ describe('needsQuickRefresh', () => {
 
     it('stops once the preview has arrived', () => {
         expect(needsQuickRefresh(desktops('READY'), { d0: { data: 'x' } }, {}, 0)).toBe(false);
+    });
+});
+
+describe('screenshot order', () => {
+    it('puts a desktop never captured after the captured ones, whichever side it is on', async () => {
+        const {screenshotOrder} = await import('./my-virtual-desktop-sessions');
+        const moment = (await import('moment')).default;
+        const order = screenshotOrder({seen: {time: moment('2026-01-01')}} as any);
+        const seen = {dcv_session_id: 'seen', create_time: '2026-01-01'} as any;
+        const fresh = {dcv_session_id: 'fresh', create_time: '2026-01-02'} as any;
+        expect([fresh, seen].sort(order).map(item => item.dcv_session_id)).toEqual(['seen', 'fresh']);
+        expect([seen, fresh].sort(order).map(item => item.dcv_session_id)).toEqual(['seen', 'fresh']);
+    });
+});
+
+describe('a desktop whose owner left its project', () => {
+    afterEach(() => vi.restoreAllMocks());
+    // the controller's words (sessions/virtual_desktop_session_utils.py OWNER_LEFT_PROJECT_MESSAGE)
+    const LEFT = "You are no longer a member of this desktop's project, so it cannot be started or connected to. Ask an administrator to move it to one of your projects or to add you back to the project. You can still delete it.";
+
+    it('says why it cannot start', async () => {
+        const flashbarItems = await startSessionAndCaptureFlashbar({ success: [], failed: [{ ...STOPPED_SESSION, failure_reason: LEFT }] });
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes(LEFT))).toBe(true));
+    });
+
+    it('says why it cannot connect', async () => {
+        const { virtualDesktop, flashbarItems } = await renderSessionWithSchedule('START_ALL_DAY', '/', 'READY');
+        vi.spyOn(virtualDesktop, 'getSessionConnectionInfo').mockResolvedValue({ connection_info: { failure_reason: LEFT } } as any);
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Connect' }));
+        await waitFor(() => expect(flashbarItems.some(item => flashbarText(item).includes(LEFT))).toBe(true));
+    });
+
+    it('says why there is no preview when the controller holds the desktop for its project', async () => {
+        const ready = [{ ...twentyLinuxDesktops[0], state: 'READY', dcv_session_id: 'dcv-0' }];
+        await renderListing(vi.fn().mockResolvedValue({ listing: ready }), (virtualDesktop) => {
+            // as the controller answers: the refused request object, dcv_session_id cleared, idea_session_id kept
+            vi.spyOn(virtualDesktop, 'getSessionScreenshot').mockImplementation(async (request: any) => ({
+                success: [],
+                failed: request.screenshots.map((screenshot: any) => ({ ...screenshot, dcv_session_id: undefined, failure_reason: LEFT }))
+            }));
+        });
+        expect(await screen.findByText(LEFT, {}, { timeout: 10000 })).toBeInTheDocument();
+        expect(screen.queryByText('Preview unavailable. You can still connect.')).toBeNull();
+    });
+
+    it('never shows the broker\'s own failure text on a preview', async () => {
+        const ready = [{ ...twentyLinuxDesktops[0], state: 'READY', dcv_session_id: 'dcv-0' }];
+        await renderListing(vi.fn().mockResolvedValue({ listing: ready }), (virtualDesktop) => {
+            vi.spyOn(virtualDesktop, 'getSessionScreenshot').mockResolvedValue({ success: [], failed: [{ dcv_session_id: 'dcv-0', failure_reason: 'marker broker text' }] });
+        });
+        expect(await screen.findByText('Preview unavailable. You can still connect.', {}, { timeout: 10000 })).toBeInTheDocument();
+        expect(screen.queryByText('marker broker text')).toBeNull();
+    });
+});
+
+describe('the hold messages the preview card shows', () => {
+    // the controller's list, read from its source: on the merged tree it must match string for string
+    const path = '../../idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller/app/sessions/virtual_desktop_session_utils.py';
+    const source = readFileSync(path, 'utf8');
+    const block = (name: string) => source.match(new RegExp(`^${name} = \\(\\n([\\s\\S]*?)^\\)`, 'm'))?.[1];
+    const literal = (text: string) => [...text.matchAll(/(['"])((?:\\.|(?!\1).)*)\1/g)].map(match => match[2].replace(/\\(.)/g, '$1')).join('');
+    const list = block('PROJECT_HOLD_MESSAGES');
+    const server = list?.split(',').map(entry => entry.trim()).filter(Boolean).map(name => literal(block(name) ?? ''));
+
+    if (list == null) {
+        // shortcut: this branch carries an older controller without the list, merge with fix20-vdc to run this
+        console.warn(`SKIPPED: PROJECT_HOLD_MESSAGES not in ${path}; the drift check runs on the merged tree`);
+    }
+
+    it.skipIf(list == null)('are the controller\'s PROJECT_HOLD_MESSAGES, string for string', async () => {
+        const { PROJECT_HOLD_MESSAGES } = await import('./my-virtual-desktop-sessions');
+        expect(server!.every(message => message.length > 40)).toBe(true);
+        expect(PROJECT_HOLD_MESSAGES).toEqual(server);
     });
 });

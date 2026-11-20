@@ -8,11 +8,23 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock
 
+import pytest
+
+from ideadatamodel import errorcodes, exceptions
+
 from ideaclustermanager.app.api.cluster_settings_api import ClusterSettingsAPI
 from ideadatamodel.cluster_settings import GetModuleSettingsRequest
 
 VDC_SETTINGS = {
     'aws_ssm': {'path': '/idea/vdc'},
+    'dcv_connection_gateway': {
+        'certificate': {
+            'provided': True,
+            'custom_dns_name': 'gateway.example.invalid',
+            'certificate_secret_arn': 'arn:aws:secretsmanager:us-east-1:123456789012:secret:marker-cert',
+            'private_key_secret_arn': 'arn:aws:secretsmanager:us-east-1:123456789012:secret:marker-key',
+        }
+    },
     'client_id': 'vdc-client-id',
     'client_secret': 'vdc-client-secret',
     'controller': {
@@ -36,6 +48,10 @@ VDC_SETTINGS = {
             'start_up_time': '09:00',
             'shut_down_time': '17:00',
         },
+    },
+    'opensearch': {
+        'dcv_session': {'alias': 'sample_vdc_user_sessions'},
+        'software_stack': {'alias': 'sample_vdc_software_stacks'},
     },
 }
 
@@ -155,7 +171,11 @@ class TestClusterSettingsScoping(unittest.TestCase):
                         'start_up_time': '09:00',
                         'shut_down_time': '17:00',
                     },
-                }
+                },
+                # whether a gateway certificate is provided, and none of its siblings
+                'dcv_connection_gateway': {'certificate': {'provided': True}},
+                # the desktop overview charts send this index to Analytics.OpenSearchQuery
+                'opensearch': {'dcv_session': {'alias': 'sample_vdc_user_sessions'}},
             },
         )
 
@@ -298,7 +318,14 @@ class TestClusterSettingsScoping(unittest.TestCase):
         settings = self.invoke_get_module_settings(
             'vdc', {'dcv_session': {'idle_timeout': 60}}, elevated=False
         )
-        self.assertEqual(settings, {'dcv_session': {'working_hours': {}}})
+        self.assertEqual(
+            settings,
+            {
+                'dcv_session': {'working_hours': {}},
+                'dcv_connection_gateway': {'certificate': {}},
+                'opensearch': {'dcv_session': {}},
+            },
+        )
 
 
 def test_administrator_reads_reconcile_rows_instead_of_stale_config():
@@ -425,8 +452,8 @@ class TestEffectiveSettingsValidation(unittest.TestCase):
             'apps': {'provider': 'efs'},
             'data': {'provider': 'fsx_netapp_ontap'},
         }
-        self.context.config.return_value.get_config.side_effect = (
-            lambda key, **kwargs: storage if key == 'shared-storage' else None
+        self.context.config.return_value.get_config.side_effect = lambda key, **kwargs: (
+            storage if key == 'shared-storage' else None
         )
         with patch(
             'ideaclustermanager.app.api.cluster_settings_api.settings_catalog',
@@ -437,9 +464,23 @@ class TestEffectiveSettingsValidation(unittest.TestCase):
             catalog.call_args.args[0], {'apps': 'efs', 'data': 'fsx_netapp_ontap'}
         )
 
+    def test_email_master_skips_a_module_this_cluster_does_not_have(self):
+        config = self.context.config.return_value
+        config.is_module_enabled.side_effect = lambda module: module != 'scheduler'
+
+        def module_id(module):
+            if module == 'scheduler':
+                raise exceptions.general_exception('not in the module set')
+            return 'vdc' if module == 'virtual-desktop-controller' else module
+
+        config.get_module_id.side_effect = module_id
+        self.api.validate_schedule_and_templates(
+            'cluster-manager', {'notifications': {'email': {'enabled': True}}}
+        )
+
     def test_email_master_validates_enabled_events_without_cross_module_writes(self):
-        self.context.config.return_value.get_module_id.side_effect = (
-            lambda module: 'vdc' if module == 'virtual-desktop-controller' else module
+        self.context.config.return_value.get_module_id.side_effect = lambda module: (
+            'vdc' if module == 'virtual-desktop-controller' else module
         )
         self.stored['vdc.dcv_session.notifications.ready.enabled'] = True
         self.stored['vdc.dcv_session.notifications.ready.email_template'] = 'missing'
@@ -484,8 +525,8 @@ def test_fetch_application_scope_is_module_read():
     invocation.is_administrator.return_value = False
     invocation.is_manager.return_value = False
     invocation.is_authorized_app.return_value = True
-    invocation.is_scope_authorized.side_effect = (
-        lambda scope: scope == 'cluster-manager/read'
+    invocation.is_scope_authorized.side_effect = lambda scope: (
+        scope == 'cluster-manager/read'
     )
     invocation.is_authorized = lambda **kwargs: ApiInvocationContext.is_authorized(
         invocation, **kwargs
@@ -791,3 +832,217 @@ def test_maintenance_end_time_is_validated_before_persistence():
     with pytest.raises(exceptions.SocaException):
         ClusterSettingsAPI(app).update_module_settings(invocation)
     app.config().db.sync_cluster_settings_in_db.assert_not_called()
+
+
+class _ReachedValidation(Exception):
+    pass
+
+
+def _update_settings(settings, administrator, module='scheduler'):
+    from unittest.mock import patch
+    from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
+
+    api = ClusterSettingsAPI(Mock())
+    invocation = Mock()
+    invocation.is_authorized.return_value = True
+    invocation.is_administrator.return_value = administrator
+    invocation.get_request_payload_as.return_value = UpdateModuleSettingsRequest(
+        module_id=module, settings=settings
+    )
+    with (
+        patch.object(api, 'get_module_name', return_value=module),
+        patch.object(api, 'catalog_module_name', return_value=module),
+        patch.object(api, 'validate_settings_allowed', side_effect=_ReachedValidation),
+    ):
+        api.update_module_settings(invocation)
+
+
+@pytest.mark.parametrize(
+    'settings',
+    [
+        {'scratch_cleanup': {'enabled': True}},
+        {'scratch_cleanup': {'dry_run': False}},
+        {'scratch_cleanup': {'file_systems': ['scratch']}},
+        {'scratch_cleanup': {'kill_switch': False}},
+        {'scratch_cleanup': {'kill_switch': True, 'enabled': True}},
+        {'scratch_cleanup.enabled': True},
+        {'scratch_cleanup.kill_switch': False},
+    ],
+)
+def test_only_an_administrator_can_arm_scratch_cleanup(settings):
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False)
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True)
+
+
+def test_a_module_administrator_can_stop_scratch_cleanup():
+    with pytest.raises(_ReachedValidation):
+        _update_settings(
+            {'scratch_cleanup': {'kill_switch': True}}, administrator=False
+        )
+
+
+def test_other_scheduler_settings_stay_with_module_administrators():
+    with pytest.raises(_ReachedValidation):
+        _update_settings({'compute_node_ami': 'ami-1'}, administrator=False)
+
+
+def test_a_dotted_key_cannot_reach_administrator_only_settings():
+    with pytest.raises(exceptions.SocaException):
+        _update_settings({'iam.roles': {}}, administrator=False, module='cluster')
+
+
+@pytest.mark.parametrize(
+    'settings',
+    [
+        {'data': {'mount_dir': '/marker'}},
+        {'data': {'mount_options': 'defaults'}},
+        {'home': {'mount_drive': 'Z'}},
+        {'data.mount_dir': '/marker'},
+        {'data': {'title': 'Data', 'mount_dir': '/marker'}},
+    ],
+)
+def test_only_an_administrator_moves_or_remounts_shared_storage(settings):
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False, module='shared-storage')
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True, module='shared-storage')
+
+
+def test_a_manager_still_edits_other_shared_storage_settings():
+    with pytest.raises(_ReachedValidation):
+        _update_settings(
+            {'data': {'title': 'Data'}}, administrator=False, module='shared-storage'
+        )
+
+
+@pytest.mark.parametrize(
+    'module, settings',
+    [
+        ('scheduler', {'scratch_storage': {'ebs': {'mount_point': '/marker'}}}),
+        ('scheduler', {'scratch_storage.fsx_lustre.mount_point': '/marker'}),
+        (
+            'virtual-desktop-controller',
+            {'instance_storage': {'mount_point': '/marker'}},
+        ),
+    ],
+)
+def test_only_an_administrator_moves_scratch_storage(module, settings):
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False, module=module)
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True, module=module)
+
+
+@pytest.mark.parametrize(
+    'module, settings',
+    [
+        ('cluster', {'network': {'https_proxy': 'http://proxy.example.invalid:3128'}}),
+        ('cluster', {'network': {'no_proxy': 'localhost'}}),
+        ('cluster', {'network.ssh_key_pair': 'marker'}),
+        ('cluster-manager', {'web_portal': {'logo': 'assets/marker.png'}}),
+        ('cluster-manager', {'web_portal.logo': 'assets/marker.png'}),
+    ],
+)
+def test_only_an_administrator_edits_bootstrap_network_and_sign_in_logo(
+    module, settings
+):
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False, module=module)
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True, module=module)
+
+
+def test_a_manager_still_edits_the_portal_title():
+    with pytest.raises(_ReachedValidation):
+        _update_settings(
+            {'web_portal': {'title': 'Portal'}},
+            administrator=False,
+            module='cluster-manager',
+        )
+
+
+def test_module_administrators_reach_only_their_own_module_settings():
+    from ideadatamodel.cluster_settings import UpdateModuleSettingsRequest
+
+    writes = {
+        'portal': {'maintenance': {'enabled': True}},
+        'batch': {'compute_node_ami': 'ami-0123456789abcdef0'},
+        'desk': {'dcv_session': {'idle_timeout': 30}},
+    }
+    owner = {
+        'cluster-manager': 'portal',
+        'scheduler': 'batch',
+        'virtual-desktop-controller': 'desk',
+    }
+    for role, own in owner.items():
+        app, invocation = scoped_invocation(role)
+        api = ClusterSettingsAPI(app)
+        api.describe_settings_catalog(invocation)
+        assert {
+            item.module for item in invocation.success.call_args.args[0].settings
+        } == {role}
+        for module_id, settings in writes.items():
+            app.config().db.sync_cluster_settings_in_db.reset_mock()
+            invocation.get_request_payload_as.return_value = (
+                UpdateModuleSettingsRequest(module_id=module_id, settings=settings)
+            )
+            if module_id == own:
+                api.update_module_settings(invocation)
+                app.config().db.sync_cluster_settings_in_db.assert_called_once()
+            else:
+                with pytest.raises(exceptions.SocaException) as raised:
+                    api.update_module_settings(invocation)
+                assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+                app.config().db.sync_cluster_settings_in_db.assert_not_called()
+            stored = Mock()
+            stored.as_plain_ordered_dict.return_value = {'client_secret': 'marker'}
+            app.config().get_config.return_value = stored
+            invocation.get_request_payload_as.return_value = GetModuleSettingsRequest(
+                module_id=module_id
+            )
+            api.get_module_settings(invocation)
+            visible = invocation.success.call_args.args[0].settings
+            assert ('client_secret' in visible) is (module_id == own)
+            app.config().get_config.return_value = None
+
+
+def test_settings_of_a_module_with_no_stored_tree_read_as_empty():
+    app, invocation = scoped_invocation('administrator')
+    app.config().get_config.return_value = None
+    invocation.get_request_payload_as.return_value = GetModuleSettingsRequest(
+        module_id='batch'
+    )
+    ClusterSettingsAPI(app).get_module_settings(invocation)
+    assert invocation.success.call_args.args[0].settings == {}
+
+
+def test_only_an_administrator_sets_the_bastion_site_hook_checksum():
+    settings = {'site_hook_sha256': 'a' * 64}
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False, module='bastion-host')
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True, module='bastion-host')
+
+
+@pytest.mark.parametrize(
+    'module, settings',
+    [
+        ('scheduler', {'compute_node_site_hook_sha256': 'b' * 64}),
+        ('scheduler', {'ami_builder_site_hook_sha256': ''}),
+        ('virtual-desktop-controller', {'dcv_host_site_hook_sha256': 'b' * 64}),
+        ('virtual-desktop-controller', {'ami_builder_site_hook_sha256': 'b' * 64}),
+    ],
+)
+def test_only_an_administrator_sets_a_host_site_hook_checksum(module, settings):
+    with pytest.raises(exceptions.SocaException) as raised:
+        _update_settings(settings, administrator=False, module=module)
+    assert raised.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    with pytest.raises(_ReachedValidation):
+        _update_settings(settings, administrator=True, module=module)

@@ -155,6 +155,8 @@ Write one or more typed settings keys.
 
 **Reads:** nothing local. **Changes:** DynamoDB settings rows via `setConfigEntry`. **Exit codes:** 1 on a malformed entry; 0 if the confirm prompt is declined.
 
+An exact `Value=` on a `str` key writes an empty string. Any other type, and a blank `Value= `, is refused.
+
 **Example:** `ideactl config set --cluster-name sample-cluster --aws-region us-east-2 --force 'Key=cluster.locale,Type=str,Value=en_US'`
 
 `list<bool>` is accepted and stored as a list of strings. Keys may not contain `,` or `:`.
@@ -533,6 +535,8 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--no-rollback` | no | none | no |
 | `--optimize-deployment` | no | `true` | no |
 | `--no-optimize-deployment` | no | none | no |
+| `--serial` | no | none | no |
+| `--max-parallel <count>` | yes | `"4"` | no |
 | `--module-set <module-set>` | yes | `"default"` | no |
 | `--force` | no | none | no |
 | `--accept-config-drift` | no | none | no |
@@ -541,7 +545,7 @@ After the ECS stack deploys, a configured directory provider checks the host poo
 | `--skip-global-settings-update` | no | none | no |
 | `--disable-eol-stacks-in-use` | no | none | no |
 
-Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. `--no-optimize-deployment` deploys one stack at a time.
+Module stacks of one deployment priority deploy together (the scheduler beside the desktop stack, the four settings-only stacks after `cluster` together); groups still run in priority order. On an upgrade, a deployed bastion deploys with the scheduler and desktop stacks, after the cluster manager, and a deployed analytics module deploys with the settings-only stacks once every deployed cluster manager, scheduler and desktop controller publishes its own OpenSearch rule (otherwise it follows them). `--max-parallel` bounds the stacks of one group in flight. When a stack fails, the others of its group finish, nothing else starts, values.yml is saved to the cluster bucket, and the error names every failed stack. Lines from stacks deploying together are prefixed with the stack name. `--serial` keeps the earlier groups (analytics and the bastion each on their own). `--no-optimize-deployment` deploys one stack at a time. Each phase and stack prints a timestamp and its elapsed time, and the run ends with a timing table.
 
 Before any write, the upgrade refuses a missing or unverifiable release image. `--skip-release-image-check` skips that lookup, logs that the image was not verified, and keeps the image move, except on GovCloud when `ecs.image_repositories.aws-us-gov` is unset: the public fallback is always resolved to a manifest digest and written as `tag@sha256:...`.
 
@@ -550,6 +554,25 @@ A leftover `*.maintenance.upgrade_baseline` or `cluster.upgrade_historical_pendi
 **Example:** `ideactl upgrade-cluster --cluster-name sample-cluster --aws-region us-east-2 --base-os amazonlinux2023 --force`
 
 `awsvpcTrunking` is checked whenever the run reaches the `ecs` module, which includes an all-module upgrade of a cluster that has it. `--disable-eol-stacks-in-use` disables in-use EOL eVDI stacks instead of refusing. The drift preview asks before overwriting differing operator or unknown-source rows; `--force` skips other confirmations, while `--accept-config-drift` accepts these reviewed overwrites. An older release tag in this partition's release repository moves to the tool's release tag automatically and is reported without drift acceptance. Private images remain unchanged and visible in the preview. Global rows stamped `source=template` by settings sync are listed as "Template defaults updated" and rewritten without acceptance. CLI and API edits stamp `cli` and `api`; stack writes stamp `stack`. The 26.09.4 sync set no marker and retained existing markers, so differing legacy defaults still require review on the first upgrade. Once rewritten and stamped `template`, later template default changes need no drift acceptance.
+
+## `verify-cluster`
+
+Read-only check of a cluster's deployed state, printed as one table with one exit status. `upgrade-cluster` runs it after its last deploy (and after a failed deploy). It reads AWS APIs only, never the cluster's own endpoints, so it works when the VPN has dropped, and it changes nothing, so it is safe to re-run.
+
+**Usage:** `ideactl verify-cluster [options]`
+
+| Flag | Value | Default | Required |
+| --- | --- | --- | --- |
+| `--cluster-name <cluster-name>` | yes | none | yes |
+| `--aws-region <aws-region>` | yes | none | yes |
+| `--aws-profile <aws-profile>` | yes | none | no |
+| `--since-minutes <minutes>` | yes | `"60"` | no |
+
+Lines: the CloudFormation status of every deployed module's stack; every ECS service of the cluster with running and desired counts, the primary deployment's rollout state, and whether each container from the release repository runs `ecs.image` (sidecars from other repositories are not held to it); target health of every target group tagged with the cluster name (`unhealthy` or `initial` fails; `draining` and `unused` do not); the container health of the scheduler and bastion tasks; and AccessDenied-class CloudTrail management events from roles whose name starts with `<cluster-name>-`, from `--since-minutes` ago (the upgrade passes its own start), reading at most the newest 500 events. CloudTrail delivers events up to about 15 minutes late. A lookup the credentials may not make, or that fails, reads `not checked` and never fails the check.
+
+**Reads:** DynamoDB cluster config and modules, CloudFormation stacks, ECS services, task definitions and tasks, the tagging API and target health, CloudTrail `LookupEvents`. **Changes:** nothing. **Exit codes:** 1 when any line is `FAIL`.
+
+**Example:** `ideactl verify-cluster --cluster-name sample-cluster --aws-region us-east-2`
 
 ## `delete-cluster`
 
@@ -680,7 +703,7 @@ No command-specific options. **Example:** `ideactl shared-storage -h`
 
 ## `shared-storage add-file-system`
 
-Interactive questionnaire to create a new file system in cluster settings, then optionally deploy the shared-storage module.
+This command is not available in `ideactl`: its adapters were not carried over. It fails with an error and changes nothing. Write the same `shared-storage.<NAME>.*` rows with `config set` instead; see [storage management](../../../../docs/modules/storage/storage-management.md).
 
 **Usage:** `ideactl shared-storage add-file-system [options]`
 
@@ -691,11 +714,10 @@ Interactive questionnaire to create a new file system in cluster settings, then 
 | `--aws-profile <aws-profile>` | yes | none | no |
 | `--kms-key-id <kms-key-id>` | yes | none | no |
 
-**Reads:** prompts; optional EFS/FSx describe calls. The live adapter still requires a cluster name even though the parser does not. **Changes:** shared-storage settings keys, and a module deploy if the operator picks that next step. **Example:** `ideactl shared-storage add-file-system --cluster-name sample-cluster --aws-region us-east-2`
 
 ## `shared-storage attach-file-system`
 
-Same questionnaire as add-file-system, for an existing file system (`use_existing_fs: true`).
+This command is not available in `ideactl`: its adapters were not carried over. It fails with an error and changes nothing. Write the same `shared-storage.<NAME>.*` rows with `config set` instead; see [storage management](../../../../docs/modules/storage/storage-management.md).
 
 **Usage:** `ideactl shared-storage attach-file-system [options]`
 
@@ -706,7 +728,6 @@ Same questionnaire as add-file-system, for an existing file system (`use_existin
 | `--aws-profile <aws-profile>` | yes | none | no |
 | `--kms-key-id <kms-key-id>` | yes | none | no |
 
-**Reads:** prompts plus EFS/FSx describe. **Changes:** shared-storage settings. Does not offer the deploy next step. **Example:** `ideactl shared-storage attach-file-system --cluster-name sample-cluster --aws-region us-east-2`
 
 ## `utils`
 
@@ -916,7 +937,7 @@ Deploy standalone account spend collection in a commercial billing account, with
 | `--datadog-api-key-secret-arn <arn>` | yes | none | yes |
 | `--subnet-ids <ids...>` | yes | none | yes |
 | `--interval-hours <hours>` | yes | `6` | no |
-| `--lookback-days <days>` | yes | `3` | no |
+| `--lookback-days <days>` | yes | `7` | no |
 | `--module-tag <key>` | yes | `"idea:ModuleId"` | no |
 | `--project-tag <key>` | yes | `"idea:Project"` | no |
 | `--owner-tag <key>` | yes | `"idea:JobOwner"` | no |

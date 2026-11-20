@@ -10,53 +10,31 @@
 #  and limitations under the License.
 
 from ideasdk.context import SocaContext, SocaContextOptions
-from ideasdk.artwork import ascii_banner
 from ideasdk.shell import ShellInvoker
 from ideasdk.utils import Utils
 from ideasdk.client import SocaClient, SocaClientOptions
 from ideadatamodel import (
     exceptions,
     errorcodes,
-    SocaKeyValue,
     SocaUserInputChoice,
-    SocaUserInputParamMetadata,
-    SocaUserInputSectionMetadata,
-    SocaUserInputModuleMetadata,
-    SocaInputParamSpec,
 )
 from ideasdk.aws import (
     AwsClientProvider,
     AWSUtil,
     AWSClientProviderOptions,
-    AwsResources,
-)
-from ideasdk.user_input.framework import (
-    SocaUserInputArgs,
-    SocaUserInputParamRegistry,
-    SocaUserInputModule,
-    SocaUserInputSection,
-    SocaPromptRegistry,
-    SocaPrompt,
 )
 
 from typing import Any, Union, Optional, Dict, List
 from pydantic import BaseModel
 import os
-import sys
 from rich.console import Console
 from rich.text import Text
-from rich.rule import Rule
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.style import Style
 from questionary import unsafe_prompt, Choice
 from contextlib import contextmanager
 import arrow
-
-if sys.version_info >= (3, 8):
-    from typing import Literal
-else:
-    from typing_extensions import Literal  # pragma: no cover
 
 
 class SocaCliContext(SocaContext):
@@ -71,9 +49,6 @@ class SocaCliContext(SocaContext):
         self._console = Console()
         self._api_context_path = api_context_path
         self._unix_socket_client: Optional[SocaClient] = None
-        self._aws_resources = AwsResources(
-            context=self, aws=self._aws, aws_util=self._aws_util
-        )
         self._unix_socket_timeout: Optional[int] = unix_socket_timeout
 
     @property
@@ -113,16 +88,6 @@ class SocaCliContext(SocaContext):
     def console(self) -> Console:
         return self._console
 
-    def print_banner(self, meta_info: List[SocaKeyValue] = None):
-        if self.is_windows():
-            # todo - need to investigate why rich banner printing on windows gives index out of bounds error
-            banner = ascii_banner(meta_info=meta_info, rich=False)
-            print(banner)
-        else:
-            banner = ascii_banner(meta_info=meta_info, rich=True)
-            self.console.print(banner)
-        self.new_line()
-
     def spinner(self, message: Any):
         return self.console.status(status=message)
 
@@ -155,22 +120,6 @@ class SocaCliContext(SocaContext):
 
     def new_line(self, count: int = 1):
         self.console.line(count)
-
-    def print_rule(
-        self,
-        title: Optional[str] = None,
-        align: Literal['left', 'center', 'right'] = 'left',
-        style=None,
-    ):
-        if Utils.is_empty(title):
-            text = ''
-        else:
-            text = Text(
-                text=title, style=Style(bold=True, italic=True, color='bright_white')
-            )
-        if style is None:
-            style = 'rule.line'
-        self.print(Rule(text, align=align, style=style))
 
     def print_json(self, payload: Union[str, BaseModel, Any]):
         if isinstance(payload, str):
@@ -324,9 +273,6 @@ class SocaCliContext(SocaContext):
                 options=AWSClientProviderOptions(profile=aws_profile, region=aws_region)
             )
             self._aws_util = AWSUtil(context=self, aws=self._aws)
-            self._aws_resources = AwsResources(
-                context=self, aws=self._aws, aws_util=self._aws_util
-            )
 
         except Exception as e:
             if self._aws_util is None:
@@ -340,68 +286,7 @@ class SocaCliContext(SocaContext):
             return
         self.aws_init(self._aws.aws_profile(), self._aws.aws_region())
 
-    def get_aws_resources(self):
-        return self._aws_resources
-
     def aws(self) -> AwsClientProvider:
         if self._aws.are_credentials_expired():
             self.aws_init(self._options.aws_profile, self._options.aws_region)
         return self._aws
-
-    def ask(
-        self,
-        questions: List[SocaUserInputParamMetadata],
-        title: str = None,
-        description: str = None,
-        module_name: str = None,
-    ) -> Dict:
-        if Utils.is_empty(module_name):
-            module_name = 'default'
-
-        spec = SocaInputParamSpec(
-            params=questions,
-            modules=[
-                SocaUserInputModuleMetadata(
-                    name=module_name,
-                    title=title,
-                    description=description,
-                    sections=[
-                        SocaUserInputSectionMetadata(name='default', params=questions)
-                    ],
-                )
-            ],
-        )
-
-        param_registry = SocaUserInputParamRegistry(context=self, spec=spec)
-        args = SocaUserInputArgs(context=self, param_registry=param_registry)
-        prompt_registry = SocaPromptRegistry(context=self, param_spec=param_registry)
-
-        module_meta = param_registry.get_module(module=module_name)
-
-        section_prompts = []
-        params = param_registry.get_params(module=module_name)
-        for param_meta in params:
-            section_prompts.append(
-                SocaPrompt(
-                    context=self, args=args, param=param_meta, registry=prompt_registry
-                )
-            )
-
-        sections = []
-        for section_meta in module_meta.sections:
-            sections.append(
-                SocaUserInputSection(
-                    context=self, section=section_meta, prompts=section_prompts
-                )
-            )
-
-        user_input_module = SocaUserInputModule(
-            context=self,
-            module=module_meta,
-            sections=sections,
-            restart_errorcodes=[errorcodes.INSTALLER_MISSING_PERMISSIONS],
-        )
-
-        user_input_module.safe_ask()
-
-        return args.build()

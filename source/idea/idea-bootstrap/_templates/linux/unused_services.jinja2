@@ -62,8 +62,12 @@ if [ "$(systemctl is-enabled cups-browsed.service 2>/dev/null)" = masked ]; then
 fi
 for idea_unit in postgresql sendmail; do
   [ -f "/var/lib/idea/stopped-${idea_unit}" ] || continue
-  systemctl enable --now "${idea_unit}.service" > /dev/null 2>&1 || log_warning "unable to start ${idea_unit}"
-  rm -f "/var/lib/idea/stopped-${idea_unit}"
+  # the marker goes only once the service is back, so a failed start is retried next time
+  if systemctl enable --now "${idea_unit}.service" > /dev/null 2>&1; then
+    rm -f "/var/lib/idea/stopped-${idea_unit}"
+  else
+    log_warning "unable to start ${idea_unit}"
+  fi
 done
 {% endif %}
 {% endif %}

@@ -1,0 +1,22 @@
+# Begin: OpenSSH update
+{# The distribution's newest OpenSSH, whatever the base image shipped. Nothing else pulls it:
+   compute bakes upgrade only what the package list names (the kernel is on it, OpenSSH is not),
+   the dnf family's upgrade is an opt-in flag, and AL2023's
+   repositories are locked to the base image's release unless asked for the latest. A bake that
+   cannot get it fails, as a stale image must not be published; a host that is booting keeps
+   the version it has and says so. #}
+{% if context.base_os in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}
+if ! { apt_update && DEBIAN_FRONTEND=noninteractive package_transaction apt-get install -y --only-upgrade -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold openssh-server openssh-client openssh-sftp-server; }; then
+{% elif context.base_os == 'amazonlinux2023' %}
+if ! package_transaction dnf -y upgrade --releasever=latest 'openssh*'; then
+{% else %}
+if ! package_transaction dnf -y upgrade 'openssh*'; then
+{% endif %}
+{% if openssh_required | default(false) %}
+  log_error "Unable to update OpenSSH to the distribution's newest version"
+  exit 1
+{% else %}
+  log_warning "Unable to update OpenSSH; keeping the installed version"
+{% endif %}
+fi
+# End: OpenSSH update

@@ -96,6 +96,29 @@ def test_spend_over_the_limit_is_rejected(context, monkeypatch):
     assert exc_info.value.error_code == errorcodes.BUDGETS_LIMIT_EXCEEDED
 
 
+def test_over_budget_refusal_gives_the_numbers_and_who_can_fix_it(context, monkeypatch):
+    helper = build_helper(context, monkeypatch, actual_spend=101.0)
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        helper.check_budget_availability()
+    assert exc_info.value.message.startswith('Project ')
+    assert 'has used its budget ($101.00 of $100.00).' in exc_info.value.message
+    assert (
+        "Jobs can't start until your project lead or an administrator raises the "
+        'budget or the next budget period starts.'
+    ) in exc_info.value.message
+    assert 'AWS Budgets Console' not in exc_info.value.message
+
+
+def test_a_missing_budget_refusal_does_not_quote_made_up_amounts(context, monkeypatch):
+    helper = build_helper(context, monkeypatch, actual_spend=200.0)
+    helper.get_budget().is_missing = True
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        helper.check_budget_availability()
+    assert exc_info.value.error_code == errorcodes.BUDGETS_LIMIT_EXCEEDED
+    assert "budget can't be found" in exc_info.value.message
+    assert '$' not in exc_info.value.message
+
+
 def test_a_held_job_is_told_what_share_of_the_spend_was_bedrock(context, monkeypatch):
     helper = build_helper(
         context,

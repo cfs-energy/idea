@@ -188,22 +188,16 @@ class BootstrapContext:
                 return True
             return self.vars.queue_profile in queue_profiles
 
-        if 'module' in scope and 'project' in scope:
-            return eval_module() and eval_project()
-
-        if 'project' in scope and 'scheduler:queue-profile' in scope:
-            return eval_project() and eval_scheduler_queue_profile()
-
-        if 'module' in scope:
-            return eval_module()
-
-        if 'project' in scope:
-            return eval_project()
-
-        if 'scheduler:queue-profile' in scope:
-            return eval_scheduler_queue_profile()
-
-        return False
+        # every scope named must match: module, project and queue profile narrow together
+        checks = {
+            'module': eval_module,
+            'project': eval_project,
+            'scheduler:queue-profile': eval_scheduler_queue_profile,
+        }
+        present = [checks[name] for name in checks if name in scope]
+        if not present:
+            return False
+        return all(check() for check in present)
 
     def is_gpu_instance_type(self) -> bool:
         instance_family = self.instance_type.split('.')[0]
@@ -271,7 +265,7 @@ class BootstrapContext:
         collect_list = Utils.get_value_as_list('collect_list', files)
         if collect_list is None:
             collect_list = []
-            files['collect_list'] = files
+            files['collect_list'] = collect_list
         collect_list += additional_log_files
         return agent_config
 

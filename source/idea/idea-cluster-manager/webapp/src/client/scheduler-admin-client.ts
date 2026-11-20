@@ -29,12 +29,6 @@ import {
     GetQueueProfileResult,
     UpdateQueueProfileRequest,
     UpdateQueueProfileResult,
-    DeleteQueueProfileRequest,
-    DeleteQueueProfileResult,
-    CreateQueuesRequest,
-    CreateQueuesResult,
-    DeleteQueuesRequest,
-    DeleteQueuesResult,
     ListHpcApplicationsRequest,
     ListHpcApplicationsResult,
     CreateHpcApplicationRequest,
@@ -55,8 +49,6 @@ import {
     GetHpcLicenseResourceResult,
     UpdateHpcLicenseResourceRequest,
     UpdateHpcLicenseResourceResult,
-    DeleteHpcLicenseResourceRequest,
-    DeleteHpcLicenseResourceResult,
     ListHpcLicenseResourcesRequest,
     ListHpcLicenseResourcesResult,
     CheckHpcLicenseResourceAvailabilityRequest,
@@ -73,6 +65,18 @@ import {
     RefreshImagesResponse,
     RollbackImageRequest,
     RollbackImageResponse,
+    GetScratchCleanupStatusRequest,
+    GetScratchCleanupStatusResult,
+    PreviewScratchCleanupRequest,
+    PreviewScratchCleanupResult,
+    ListScratchCleanupPreviewRequest,
+    ListScratchCleanupPreviewResult,
+    BackfillScratchCleanupRequest,
+    BackfillScratchCleanupResult,
+    ListScratchCleanupUpcomingRequest,
+    ListScratchCleanupUpcomingResult,
+    ListScratchCleanupAuditRequest,
+    ListScratchCleanupAuditResult,
     SetImagePinnedRequest,
     SetImagePinnedResponse,
     GetImageScheduleRequest,
@@ -142,13 +146,6 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
         )
     }
 
-    deleteQueueProfile(req: DeleteQueueProfileRequest): Promise<DeleteQueueProfileResult> {
-        return this.apiInvoker.invoke_alt<DeleteQueueProfileRequest, DeleteQueueProfileResult>(
-            'SchedulerAdmin.DeleteQueueProfile',
-            req
-        )
-    }
-
     enableQueueProfile(req: EnableQueueProfileRequest): Promise<EnableQueueProfileResult> {
         return this.apiInvoker.invoke_alt<EnableQueueProfileRequest, EnableQueueProfileResult>(
             'SchedulerAdmin.EnableQueueProfile',
@@ -166,20 +163,6 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     listQueueProfiles(req: ListQueueProfilesRequest): Promise<ListQueueProfilesResult> {
         return this.apiInvoker.invoke_alt<ListQueueProfilesRequest, ListQueueProfilesResult>(
             'SchedulerAdmin.ListQueueProfiles',
-            req
-        )
-    }
-
-    createQueues(req: CreateQueuesRequest): Promise<CreateQueuesResult> {
-        return this.apiInvoker.invoke_alt<CreateQueuesRequest, CreateQueuesResult>(
-            'SchedulerAdmin.CreateQueues',
-            req
-        )
-    }
-
-    deleteQueues(req: DeleteQueuesRequest): Promise<DeleteQueuesResult> {
-        return this.apiInvoker.invoke_alt<DeleteQueuesRequest, DeleteQueuesResult>(
-            'SchedulerAdmin.DeleteQueues',
             req
         )
     }
@@ -243,13 +226,6 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     updateHpcLicenseResource(req: UpdateHpcLicenseResourceRequest): Promise<UpdateHpcLicenseResourceResult> {
         return this.apiInvoker.invoke_alt<UpdateHpcLicenseResourceRequest, UpdateHpcLicenseResourceResult>(
             'SchedulerAdmin.UpdateHpcLicenseResource',
-            req
-        )
-    }
-
-    deleteHpcLicenseResource(req: DeleteHpcLicenseResourceRequest): Promise<DeleteHpcLicenseResourceResult> {
-        return this.apiInvoker.invoke_alt<DeleteHpcLicenseResourceRequest, DeleteHpcLicenseResourceResult>(
-            'SchedulerAdmin.DeleteHpcLicenseResource',
             req
         )
     }
@@ -322,6 +298,48 @@ class SchedulerAdminClient extends IdeaBaseClient<SchedulerAdminClientProps> {
     getImageSchedule(req: GetImageScheduleRequest): Promise<GetImageScheduleResponse> {
         return this.apiInvoker.invoke_alt<GetImageScheduleRequest, GetImageScheduleResponse>(
             'SchedulerAdmin.GetImageSchedule',
+            req
+        )
+    }
+
+    getScratchCleanupStatus(req: GetScratchCleanupStatusRequest): Promise<GetScratchCleanupStatusResult> {
+        return this.apiInvoker.invoke_alt<GetScratchCleanupStatusRequest, GetScratchCleanupStatusResult>(
+            'SchedulerAdmin.GetScratchCleanupStatus',
+            req
+        )
+    }
+
+    previewScratchCleanup(req: PreviewScratchCleanupRequest): Promise<PreviewScratchCleanupResult> {
+        return this.apiInvoker.invoke_alt<PreviewScratchCleanupRequest, PreviewScratchCleanupResult>(
+            'SchedulerAdmin.PreviewScratchCleanup',
+            req
+        )
+    }
+
+    listScratchCleanupPreview(req: ListScratchCleanupPreviewRequest): Promise<ListScratchCleanupPreviewResult> {
+        return this.apiInvoker.invoke_alt<ListScratchCleanupPreviewRequest, ListScratchCleanupPreviewResult>(
+            'SchedulerAdmin.ListScratchCleanupPreview',
+            req
+        )
+    }
+
+    backfillScratchCleanup(req: BackfillScratchCleanupRequest): Promise<BackfillScratchCleanupResult> {
+        return this.apiInvoker.invoke_alt<BackfillScratchCleanupRequest, BackfillScratchCleanupResult>(
+            'SchedulerAdmin.BackfillScratchCleanup',
+            req
+        )
+    }
+
+    listScratchCleanupUpcoming(req: ListScratchCleanupUpcomingRequest): Promise<ListScratchCleanupUpcomingResult> {
+        return this.apiInvoker.invoke_alt<ListScratchCleanupUpcomingRequest, ListScratchCleanupUpcomingResult>(
+            'SchedulerAdmin.ListScratchCleanupUpcoming',
+            req
+        )
+    }
+
+    listScratchCleanupAudit(req: ListScratchCleanupAuditRequest): Promise<ListScratchCleanupAuditResult> {
+        return this.apiInvoker.invoke_alt<ListScratchCleanupAuditRequest, ListScratchCleanupAuditResult>(
+            'SchedulerAdmin.ListScratchCleanupAudit',
             req
         )
     }

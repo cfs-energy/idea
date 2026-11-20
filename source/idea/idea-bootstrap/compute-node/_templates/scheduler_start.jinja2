@@ -1,5 +1,8 @@
 # Begin: Scheduler Start
 {% if context.config.get_string('scheduler.provider') == 'openpbs' %}
+# a baked image carries the unit disabled (the bake disables it): enable it, so the node
+# also rejoins after a later reboot
+systemctl enable pbs
 systemctl start pbs
 {% endif %}
 # Begin: Scheduler Start

@@ -1,5 +1,5 @@
 import {render, screen} from '@testing-library/react';
-import {JOB_TABLE_COLUMN_DEFINITIONS} from './jobs';
+import {JOB_TABLE_COLUMN_DEFINITIONS, JobInfo} from './jobs';
 import {SocaJob} from '../../client/data-model';
 import {initTestAppContext} from '../../test-support';
 
@@ -131,5 +131,26 @@ describe('job status column', () => {
         };
         renderStatus(job);
         expect(screen.getByText('Running')).toBeInTheDocument();
+    });
+});
+
+describe('job details once scratch data is gone', () => {
+    it('says the scratch folder was removed', () => {
+        initTestAppContext();
+        render(<JobInfo job={{job_id: '123', state: 'finished', scratch_removed_at: '2026-11-06T10:00:00Z'} as SocaJob}/>);
+        expect(screen.getByText('Scratch Folder')).toBeInTheDocument();
+        expect(screen.getByText(/Removed by scratch cleanup on/)).toBeInTheDocument();
+    });
+
+    it('says when the folder was only partly removed', () => {
+        initTestAppContext();
+        render(<JobInfo job={{job_id: '125', state: 'finished', scratch_partly_removed_at: '2026-11-06T10:00:00Z'} as SocaJob}/>);
+        expect(screen.getByText(/Partly removed by scratch cleanup on/)).toBeInTheDocument();
+    });
+
+    it('says nothing when the folder was not removed', () => {
+        initTestAppContext();
+        render(<JobInfo job={{job_id: '124', state: 'finished'} as SocaJob}/>);
+        expect(screen.queryByText('Scratch Folder')).toBeNull();
     });
 });

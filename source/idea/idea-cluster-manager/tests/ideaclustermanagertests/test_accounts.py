@@ -16,10 +16,16 @@ Test Cases for AccountsService
 from ideaclustermanager import AppContext
 from ideaclustermanager.app.accounts.db.user_dao import UserDAO
 from ideadatamodel import exceptions, errorcodes, User, ListUsersRequest
+from ideaclustermanagertests.fake_secrets_manager import client_error
 
 import botocore.exceptions
+import ldap
+import os
 import pytest
+import re
+import time
 from typing import Optional
+from unittest.mock import Mock
 
 
 class AccountsTestContext:
@@ -150,7 +156,7 @@ def test_accounts_crud_create_user(context: AppContext):
     assert user.enabled is True
     assert user.uid is not None
     assert user.gid is not None
-    assert user.sudo is not None or user.sudo is False
+    assert user.sudo is False
     assert user.home_dir is not None
     assert user.login_shell is not None
     assert user.password is None
@@ -435,18 +441,28 @@ def test_accounts_create_user_pool_failure_after_create_deletes_pool_user(
 
 
 @pytest.mark.parametrize('administrator', [False, True])
-def test_group_listing_redacts_other_user_instance_type_exceptions(administrator):
+def test_group_listing_gives_members_only_what_the_pickers_use(administrator):
     from unittest.mock import Mock
     from ideadatamodel import ListUsersInGroupRequest, ListUsersInGroupResult
     from ideaclustermanager.app.api.auth_api import AuthAPI
 
     users = [
-        User(username=username, instance_type_exceptions=['m6a.large'])
+        User(
+            username=username,
+            email=f'{username}@example.com',
+            uid=7001,
+            gid=7002,
+            home_dir=f'/home/{username}',
+            sudo=False,
+            enabled=True,
+            additional_groups=['team-project-group', 'vdc-users-module-group'],
+            instance_type_exceptions=['m6a.large'],
+        )
         for username in ['user-a', 'user-b']
     ]
     invocation = Mock()
     invocation.namespace = 'Auth.ListUsersInGroup'
-    invocation.is_authenticated.return_value = True
+    invocation.is_authenticated_user.return_value = True
     invocation.is_administrator.return_value = administrator
     invocation.get_username.return_value = 'user-a'
     invocation.get_request_payload_as.return_value = ListUsersInGroupRequest(
@@ -459,11 +475,61 @@ def test_group_listing_redacts_other_user_instance_type_exceptions(administrator
     )
     api.invoke(invocation)
     listing = invocation.success.call_args.args[0].listing
-    assert listing[0].instance_type_exceptions == ['m6a.large']
-    assert listing[1].instance_type_exceptions == (
-        ['m6a.large'] if administrator else None
-    )
+    # the caller's own record, and every record for an administrator, is whole
+    assert listing[0] == users[0]
+    if administrator:
+        assert listing[1] == users[1]
+        return
+    assert listing[1].model_dump(exclude_none=True) == {
+        'username': 'user-b',
+        'email': 'user-b@example.com',
+        'enabled': True,
+        'sudo': False,
+        'additional_groups': ['vdc-users-module-group'],
+    }
     assert users[1].instance_type_exceptions == ['m6a.large']
+
+
+def test_group_listing_is_for_people_not_app_tokens(context: AppContext):
+    from unittest.mock import Mock
+    from ideaclustermanager.app.api.auth_api import AuthAPI
+    from ideasdk.api import ApiInvocationContext
+    from ideasdk.auth.token_service import ApiAuthorization, ApiAuthorizationType
+    from ideasdk.utils import GroupNameHelper
+
+    tokens = Mock()
+    tokens.decode_token.return_value = {}
+    tokens.get_authorization.return_value = ApiAuthorization(
+        type=ApiAuthorizationType.APP, scopes=['cluster-manager/read']
+    )
+    invocation = ApiInvocationContext(
+        context=context,
+        request={
+            'header': {'namespace': 'Auth.ListUsersInGroup'},
+            'payload': {'group_names': ['group-a']},
+        },
+        invocation_source='http',
+        group_name_helper=GroupNameHelper(context),
+        logger=Mock(),
+        token={'token_type': 'Bearer', 'token': 'marker'},
+        token_service=tokens,
+    )
+    with pytest.raises(exceptions.SocaException) as refused:
+        AuthAPI(context).invoke(invocation)
+    assert refused.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+
+
+@pytest.fixture(autouse=True)
+def lenient_password_policy(context: AppContext, monkeypatch):
+    from ideadatamodel import CognitoUserPoolPasswordPolicy
+
+    # the user pool is a stand-in in most tests: its policy is taken as read
+    monkeypatch.setattr(
+        context.accounts,
+        '_password_policy',
+        (CognitoUserPoolPasswordPolicy(minimum_length=1), time.monotonic() + 1e9),
+        raising=False,
+    )
 
 
 @pytest.fixture
@@ -517,6 +583,8 @@ def reporting_accounts():
     )
     accounts.group_dao.convert_to_db.side_effect = GroupDAO.convert_to_db
     accounts.group_dao.convert_from_db.side_effect = GroupDAO.convert_from_db
+    # no other group holds a gid the sequence gives
+    accounts.group_dao.table.scan.return_value = {'Items': []}
     accounts.user_dao = Mock()
     accounts.user_dao.get_user.return_value = {'username': 'admin-user'}
     accounts.sequence_config_dao = Mock()
@@ -771,3 +839,1635 @@ def test_repair_home_ownership_request_defaults_and_validation():
         RepairHomeOwnershipRequest(username='user', dry_run='false')
     with pytest.raises(ValueError):
         RepairHomeOwnershipRequest(username='')
+
+
+def test_a_repeated_membership_change_is_not_dropped_as_a_duplicate(
+    context: AppContext, monkeypatch
+):
+    # the queue drops a repeated dedupe id for five minutes: remove, add, remove
+    sent = []
+    monkeypatch.setattr(
+        context.accounts.task_manager,
+        'send',
+        lambda **kwargs: sent.append(kwargs),
+    )
+    for operation in ('remove', 'add', 'remove'):
+        context.accounts.send_group_membership_updated('group', 'user', operation)
+    dedupe_ids = [message['message_dedupe_id'] for message in sent]
+    assert all(dedupe_ids)
+    assert len(set(dedupe_ids)) == 3
+
+
+def deletable_user(context, monkeypatch, username):
+    context.accounts.create_user(
+        user=User(
+            username=username,
+            email=f'{username}@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
+    directory = Mock(wraps=context.ldap_client)
+    directory.is_readonly.return_value = False
+    directory.is_existing_user.return_value = True
+    directory.is_existing_group.return_value = True
+    directory.is_sudo_user.return_value = False
+    monkeypatch.setattr(context, 'ldap_client', directory)
+    monkeypatch.setattr(context.accounts, 'ldap_client', directory)
+    return directory
+
+
+def test_deleting_a_user_removes_the_directory_account_without_the_queue(
+    context: AppContext, monkeypatch
+):
+    # the queue drops a deleted user's tasks, so nothing queued can be relied on
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted1')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    context.accounts.delete_user('accounts_deleted1')
+    directory.delete_user.assert_called_once_with('accounts_deleted1')
+    directory.remove_user_from_group.assert_called_once_with(
+        ['accounts_deleted1'], 'default-project-group'
+    )
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted1'
+    )
+    assert context.accounts.user_dao.get_user('accounts_deleted1') is None
+
+
+def test_deleting_a_user_stops_while_the_directory_refuses(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted2')
+    directory.delete_user.side_effect = RuntimeError('directory down')
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user('accounts_deleted2')
+    left = context.accounts.user_dao.get_user('accounts_deleted2')
+    assert left['enabled'] is False
+    # the memberships did go, and the record says so should the user be enabled again
+    assert 'default-project-group' not in left['additional_groups']
+    # a member the directory does not have is no reason to stop
+    directory.delete_user.side_effect = None
+    directory.remove_user_from_group.side_effect = ldap.NO_SUCH_ATTRIBUTE()
+    context.accounts.delete_user('accounts_deleted2')
+    assert context.accounts.user_dao.get_user('accounts_deleted2') is None
+
+
+def test_deleting_a_disabled_user_leaves_no_group_membership(
+    context: AppContext, monkeypatch
+):
+    # removal from groups is refused for a disabled user, so delete does it itself
+    deletable_user(context, monkeypatch, 'accounts_deleted3')
+    context.accounts.disable_user('accounts_deleted3')
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert 'accounts_deleted3' in members('default-project-group')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    context.accounts.delete_user('accounts_deleted3')
+    assert 'accounts_deleted3' not in members('default-project-group')
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted3'
+    )
+
+
+def test_deleting_a_user_survives_its_queued_copy_removing_the_account_first(
+    context: AppContext, monkeypatch
+):
+    # disabling queues the same removal; the consumer can win between check and delete
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted4')
+    directory.is_sudo_user.return_value = True
+    for removal in ('delete_group', 'delete_user', 'remove_sudo_user'):
+        getattr(directory, removal).side_effect = ldap.NO_SUCH_OBJECT()
+    context.accounts.delete_user('accounts_deleted4')
+    directory.delete_user.assert_called_once_with('accounts_deleted4')
+    assert context.accounts.user_dao.get_user('accounts_deleted4') is None
+
+
+def test_deleting_a_user_again_resumes_the_group_removal(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted5')
+    removed_from_projects = Mock()
+    monkeypatch.setattr(
+        context.projects.user_projects_dao,
+        'group_member_removed',
+        removed_from_projects,
+    )
+    directory.remove_user_from_group.side_effect = ldap.SERVER_DOWN()
+    with pytest.raises(ldap.SERVER_DOWN):
+        context.accounts.delete_user('accounts_deleted5')
+    removed_from_projects.assert_not_called()
+    left = context.accounts.user_dao.get_user('accounts_deleted5')
+    assert 'default-project-group' in left['additional_groups']
+
+    directory.remove_user_from_group.reset_mock(side_effect=True)
+    context.accounts.delete_user('accounts_deleted5')
+    directory.remove_user_from_group.assert_called_once_with(
+        ['accounts_deleted5'], 'default-project-group'
+    )
+    removed_from_projects.assert_called_once_with(
+        group_name='default-project-group', username='accounts_deleted5'
+    )
+    assert context.accounts.user_dao.get_user('accounts_deleted5') is None
+
+
+@pytest.mark.parametrize(
+    'provider, kept', [('aws_managed_activedirectory', True), ('openldap', False)]
+)
+def test_deleting_a_user_whose_directory_account_is_kept_leaves_its_memberships(
+    context: AppContext, monkeypatch, provider, kept
+):
+    username = 'accounts_kept_ad' if kept else 'accounts_kept_ldap'
+    directory = deletable_user(context, monkeypatch, username)
+    config = context.config()
+    get_string = config.get_string
+    monkeypatch.setattr(
+        config,
+        'get_string',
+        lambda key, *args, **kwargs: (
+            provider
+            if key == 'directoryservice.provider'
+            else get_string(key, *args, **kwargs)
+        ),
+    )
+    # as the reconciler disables a user it found disabled in the directory
+    context.accounts.disable_user(username, preserve_directory=True)
+    send = Mock(wraps=context.accounts.task_manager.send)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    context.accounts.delete_user(username)
+    assert directory.remove_user_from_group.called is not kept
+    assert directory.delete_user.called is not kept
+    # the account's own directory group stays or goes with the account
+    queued_groups = [
+        call.kwargs['payload']['group_name']
+        for call in send.call_args_list
+        if call.kwargs['task_name'] == 'accounts.sync-group'
+    ]
+    assert (f'{username}-user-group' in queued_groups) is not kept
+    # the cluster's own records go either way
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert username not in members('default-project-group')
+    assert context.accounts.group_dao.get_group(f'{username}-user-group') is None
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def in_cluster_group(context, monkeypatch, username, group_name):
+    # administrators and managers are user pool groups; sign-in reads them there
+    from ideadatamodel import constants
+
+    context.accounts.group_dao.create_group(
+        {
+            'group_name': group_name,
+            'title': group_name,
+            'gid': 5990,
+            'group_type': constants.GROUP_TYPE_CLUSTER,
+            'enabled': True,
+        }
+    )
+    context.accounts.add_users_to_group([username], group_name)
+    remove = Mock()
+    monkeypatch.setattr(
+        context.aws().cognito_idp(),
+        'admin_remove_user_from_group',
+        remove,
+        raising=False,
+    )
+    return remove
+
+
+def test_a_stopped_delete_does_not_leave_user_pool_rights_the_record_no_longer_lists(
+    context: AppContext, monkeypatch
+):
+    username, group_name = 'accounts_deleted6', 'accounts-deleted6-cluster-group'
+    directory = deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    directory.delete_user.side_effect = RuntimeError('directory down')
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user(username)
+    assert (
+        group_name
+        not in context.accounts.user_dao.get_user(username)['additional_groups']
+    )
+    removed_from_pool.assert_called_once()
+    assert removed_from_pool.call_args.kwargs['Username'] == username
+    assert removed_from_pool.call_args.kwargs['GroupName'] == group_name
+
+
+@pytest.mark.parametrize('gone', ['UserNotFoundException', 'ResourceNotFoundException'])
+def test_deleting_a_user_the_user_pool_no_longer_has_still_finishes(
+    context: AppContext, monkeypatch, gone
+):
+    username = f'accounts_deleted7{gone[0].lower()}'
+    group_name = f'{username}-cluster-group'
+    deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    removed_from_pool.side_effect = botocore.exceptions.ClientError(
+        {'Error': {'Code': gone}}, 'AdminRemoveUserFromGroup'
+    )
+    context.accounts.delete_user(username)
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def test_a_user_pool_that_refuses_the_group_removal_stops_the_delete_with_the_group_listed(
+    context: AppContext, monkeypatch
+):
+    username, group_name = 'accounts_deleted8', 'accounts-deleted8-cluster-group'
+    deletable_user(context, monkeypatch, username)
+    removed_from_pool = in_cluster_group(context, monkeypatch, username, group_name)
+    removed_from_pool.side_effect = botocore.exceptions.ClientError(
+        {'Error': {'Code': 'TooManyRequestsException'}}, 'AdminRemoveUserFromGroup'
+    )
+    with pytest.raises(botocore.exceptions.ClientError):
+        context.accounts.delete_user(username)
+    # record and member list agree on what is left
+    left = context.accounts.user_dao.get_user(username)
+    assert group_name in left['additional_groups']
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert username in members(group_name)
+
+    removed_from_pool.side_effect = None
+    context.accounts.delete_user(username)
+    assert username not in members(group_name)
+    assert context.accounts.user_dao.get_user(username) is None
+
+
+def test_a_directory_that_refuses_a_group_removal_leaves_the_member_list_showing_it(
+    context: AppContext, monkeypatch
+):
+    directory = deletable_user(context, monkeypatch, 'accounts_deleted9')
+    directory.remove_user_from_group.side_effect = ldap.SERVER_DOWN()
+    with pytest.raises(ldap.SERVER_DOWN):
+        context.accounts.delete_user('accounts_deleted9')
+    members = context.accounts.group_members_dao.get_usernames_in_group
+    assert 'accounts_deleted9' in members('default-project-group')
+
+
+def stopped_after_the_user_group_went(context, monkeypatch, username):
+    deletable_user(context, monkeypatch, username)
+    delete_record = context.accounts.user_dao.delete_user
+    monkeypatch.setattr(
+        context.accounts.user_dao,
+        'delete_user',
+        Mock(side_effect=RuntimeError('table throttled')),
+    )
+    with pytest.raises(RuntimeError):
+        context.accounts.delete_user(username)
+    monkeypatch.setattr(context.accounts.user_dao, 'delete_user', delete_record)
+    assert context.accounts.group_dao.get_group(f'{username}-user-group') is None
+
+
+def test_a_delete_that_stopped_after_the_user_group_went_can_be_run_again(
+    context: AppContext, monkeypatch
+):
+    stopped_after_the_user_group_went(context, monkeypatch, 'accounts_deleted10')
+    context.accounts.delete_user('accounts_deleted10')
+    assert context.accounts.user_dao.get_user('accounts_deleted10') is None
+
+
+def test_a_user_whose_delete_stopped_after_its_accounts_went_cannot_be_enabled(
+    context: AppContext, monkeypatch
+):
+    stopped_after_the_user_group_went(context, monkeypatch, 'accounts_deleted11')
+    with pytest.raises(exceptions.SocaException) as refused:
+        context.accounts.enable_user('accounts_deleted11')
+    assert refused.value.error_code == errorcodes.AUTH_INVALID_OPERATION
+    assert context.accounts.user_dao.get_user('accounts_deleted11')['enabled'] is False
+
+
+@pytest.fixture
+def secrets(context: AppContext, monkeypatch, tmp_path):
+    # no file is ever written for a password set by this release
+    monkeypatch.setattr(context.accounts, 'ds_automation_dir', str(tmp_path))
+    monkeypatch.setattr(context.accounts, '_next_password_secret_sweep', 0.0)
+    fake = context.aws().secretsmanager()
+    monkeypatch.setattr(fake, 'secrets', {})
+    monkeypatch.setattr(fake, 'created', [])
+    monkeypatch.setattr(fake, 'deleted', [])
+    monkeypatch.setattr(fake, 'list_calls', [])
+    monkeypatch.setattr(fake, 'failing', {})
+    monkeypatch.setattr(fake, 'undeletable', set())
+    return fake
+
+
+PASSWORD_TAGS = {
+    # not idea:ModuleName: the role may overwrite any secret of the cluster that has it
+    'idea:ClusterName': 'idea-mock',
+    'idea:Purpose': 'password-sync',
+}
+
+
+@pytest.mark.parametrize('kms_key_id', [None, 'customer-key-id'])
+def test_a_password_waits_for_its_task_in_a_secret_and_never_in_a_file(
+    context: AppContext, monkeypatch, tmp_path, secrets, kms_key_id
+):
+    send = Mock()
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    if kms_key_id:
+        context.config().put('cluster.secretsmanager.kms_key_id', kms_key_id)
+    try:
+        context.accounts.change_ldap_password('user', 'secret-value')
+    finally:
+        context.config().put('cluster.secretsmanager.kms_key_id', None)
+
+    (request,) = secrets.created
+    assert re.fullmatch(r'idea-mock-password-sync-[0-9a-f-]{36}', request['Name'])
+    assert request['SecretString'] == 'secret-value'
+    assert {tag['Key']: tag['Value'] for tag in request['Tags']} == PASSWORD_TAGS
+    # the cluster's key when it has one, else the account's default key
+    assert request.get('KmsKeyId') == kms_key_id
+    assert set(request) == {'Name', 'SecretString', 'Tags'} | (
+        {'KmsKeyId'} if kms_key_id else set()
+    )
+    (arn,) = secrets.secrets
+    queued = send.call_args_list[-1].kwargs
+    assert queued['task_name'] == 'accounts.sync-password'
+    assert queued['payload'] == {'username': 'user', 'password_secret': arn}
+    assert 'secret-value' not in str(send.call_args_list)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('failing', ['directory', 'queue'])
+def test_a_password_that_could_not_be_queued_leaves_no_secret(
+    context: AppContext, monkeypatch, tmp_path, secrets, failing
+):
+    if failing == 'directory':
+        monkeypatch.setattr(
+            context.accounts.ldap_client,
+            'is_existing_user',
+            Mock(side_effect=RuntimeError('directory down')),
+        )
+    else:
+        monkeypatch.setattr(
+            context.accounts.task_manager,
+            'send',
+            Mock(side_effect=RuntimeError('queue unavailable')),
+        )
+    with pytest.raises(RuntimeError):
+        context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_secret_that_cannot_be_deleted_does_not_hide_why_the_queue_failed(
+    context: AppContext, monkeypatch, secrets
+):
+    monkeypatch.setattr(
+        context.accounts.task_manager,
+        'send',
+        Mock(side_effect=RuntimeError('queue unavailable')),
+    )
+    secrets.failing['DeleteSecret'] = client_error('InternalServiceError', 'Delete')
+    with pytest.raises(RuntimeError, match='queue unavailable'):
+        context.accounts.change_ldap_password('user', 'secret-value')
+
+
+def test_only_this_clusters_password_secrets_past_the_queues_reach_are_swept(
+    context: AppContext, secrets
+):
+    prefix = 'idea-mock-password-sync-'
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=9.1)
+    kept = [
+        # a task moved into the password lane can be queued for twice the 4 days
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=8.9),
+        # each of the name and the two tags is required
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=9.1),
+        secrets.add(f'{prefix}untagged', age_days=9.1),
+        *(
+            secrets.add(
+                f'{prefix}{n}', tags={**PASSWORD_TAGS, key: 'other'}, age_days=9.1
+            )
+            for n, key in enumerate(PASSWORD_TAGS)
+        ),
+    ]
+
+    context.accounts.change_ldap_password('user', 'secret-value')
+
+    assert secrets.deleted == [old]
+    assert set(kept) < set(secrets.secrets)
+    assert secrets.list_calls == [
+        {
+            'Filters': [
+                {'Key': 'name', 'Values': [prefix]},
+                {'Key': 'tag-key', 'Values': ['idea:Purpose']},
+            ]
+        }
+    ]
+    # not on every password: the next look is an hour away
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+
+
+def test_a_cluster_where_nobody_sets_a_password_still_sweeps(
+    context: AppContext, secrets
+):
+    """the secrets health collector, on its own thread, sweeps with the list it made"""
+    from ideaclustermanager.app.metrics.health_collectors import SecretsCollector
+
+    prefix = 'idea-mock-password-sync-'
+    old = secrets.add(f'{prefix}old', tags=PASSWORD_TAGS, age_days=9.1)
+    kept = [
+        secrets.add(f'{prefix}waiting', tags=PASSWORD_TAGS, age_days=8.9),
+        # the collector's tag filter matches by prefix: another cluster's
+        secrets.add(
+            'idea-mock2-password-sync-old',
+            tags={**PASSWORD_TAGS, 'idea:ClusterName': 'idea-mock2'},
+            age_days=9.1,
+        ),
+        secrets.add('idea-mock-other-old', tags=PASSWORD_TAGS, age_days=9.1),
+    ]
+    metrics = Mock()
+
+    SecretsCollector(context).collect(metrics)
+
+    assert secrets.deleted == [old]
+    assert set(kept) <= set(secrets.secrets)
+    # one list served the gauges and the sweep
+    assert secrets.list_calls == [
+        {
+            'Filters': [
+                {'Key': 'tag-key', 'Values': ['idea:ClusterName']},
+                {'Key': 'tag-value', 'Values': ['idea-mock']},
+            ]
+        }
+    ]
+    # counted as it was listed, before the sweep
+    metrics.level.assert_any_call('secret.password_sync_waiting', 3)
+    # a password set within the hour does not look again
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+
+
+def test_the_collectors_sweep_does_not_wait_for_the_hour_a_password_set_started(
+    context: AppContext, secrets
+):
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.list_calls) == 1
+    old = secrets.add('idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1)
+    listed = [dict(secret) for secret in secrets.secrets.values()]
+
+    context.accounts.remove_stray_password_secrets(listed=listed)
+
+    assert secrets.deleted == [old]
+    assert len(secrets.list_calls) == 1
+
+
+def test_a_sweep_while_another_is_looking_is_skipped(context: AppContext, secrets):
+    old = secrets.add('idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1)
+    listed = [dict(secret) for secret in secrets.secrets.values()]
+    with context.accounts._password_secret_sweep:
+        context.accounts.remove_stray_password_secrets(listed=listed)
+        context.accounts.remove_stray_password_secrets()
+    assert (secrets.deleted, secrets.list_calls) == ([], [])
+    context.accounts.remove_stray_password_secrets(listed=listed)
+    assert secrets.deleted == [old]
+
+
+def test_a_stray_secret_that_cannot_be_deleted_does_not_keep_the_others(
+    context: AppContext, monkeypatch, secrets
+):
+    prefix = 'idea-mock-password-sync-'
+    stuck, old = (
+        secrets.add(f'{prefix}{name}', tags=PASSWORD_TAGS, age_days=10)
+        for name in ('a-stuck', 'b-old')
+    )
+    secrets.undeletable.add(stuck)
+    warning = Mock()
+    monkeypatch.setattr(context.accounts.logger, 'warning', warning)
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert secrets.deleted == [old]
+    warning.assert_called_once_with(
+        'could not delete a stray password secret: AccessDeniedException'
+    )
+
+
+def user_pool_password_changes(context, user_pool):
+    from ideadatamodel.auth import RespondToAuthChallengeRequest
+
+    accounts = context.accounts
+    return {
+        'change': (
+            user_pool.change_password,
+            lambda: accounts.change_password('token', 'user', 'old', 'secret-value'),
+        ),
+        'forgot': (
+            user_pool.confirm_forgot_password,
+            # from one address, as the server records it
+            lambda: accounts.confirm_forgot_password(
+                'user', 'secret-value', '123456', '192.0.2.1'
+            ),
+        ),
+        'challenge': (
+            user_pool.respond_to_auth_challenge,
+            lambda: accounts.respond_to_auth_challenge(
+                RespondToAuthChallengeRequest(
+                    username='user',
+                    challenge_name='NEW_PASSWORD_REQUIRED',
+                    session='session',
+                    new_password='secret-value',
+                ),
+                '192.0.2.1',
+            ),
+        ),
+    }
+
+
+@pytest.fixture
+def password_change(context: AppContext, monkeypatch, secrets, request):
+    user_pool, send = Mock(), Mock()
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    in_user_pool, change = user_pool_password_changes(context, user_pool)[request.param]
+    # the sign-in page's paths set a password only for an account with a record
+    users = context.accounts.user_dao.table
+    users.put_item(Item={'username': 'user', 'enabled': True})
+    context.accounts._password_refusals.clear()
+    monkeypatch.setattr(context.accounts, '_password_sets_paused_until', 0.0)
+    yield secrets, in_user_pool, change, send
+    users.delete_item(Key={'username': 'user'})
+
+
+every_password_change = pytest.mark.parametrize(
+    'password_change', ['change', 'forgot', 'challenge'], indirect=True
+)
+
+
+@every_password_change
+def test_a_password_the_secret_cannot_hold_is_not_given_to_the_user_pool(
+    context: AppContext, password_change, request
+):
+    secrets, in_user_pool, change, send = password_change
+    secrets.failing['CreateSecret'] = client_error(
+        'AccessDeniedException', 'CreateSecret', 'arn:aws:iam::123456789012:role/r'
+    )
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    # the sign-in page answers it as it answers an unknown account; a signed-in change
+    # is told to try again. Nothing of the AWS error reaches either.
+    assert (
+        refused.value.message
+        == {
+            'change': 'The password could not be set right now. Try again.',
+            'forgot': context.accounts.CODE_REFUSED,
+            'challenge': context.accounts.SESSION_REFUSED,
+        }[request.node.callspec.params['password_change']]
+    )
+    assert 'arn:' not in str(refused.value) and 'Access' not in str(refused.value)
+    assert refused.value.__suppress_context__
+    # nothing changed: sign-in and the directory still agree on the old password
+    in_user_pool.assert_not_called()
+    send.assert_not_called()
+
+
+@every_password_change
+def test_a_password_the_user_pool_refuses_leaves_no_secret(password_change):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = RuntimeError('wrong old password')
+    with pytest.raises(RuntimeError):
+        change()
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    send.assert_not_called()
+
+
+@every_password_change
+def test_refused_passwords_stop_making_secrets_until_the_window_passes(
+    context: AppContext, monkeypatch, password_change, request
+):
+    secrets, in_user_pool, change, send = password_change
+    path = request.node.callspec.params['password_change']
+    # the sign-in page's paths answer a username out of attempts as they answer one
+    # with no account; only the signed-in change says why
+    turned_away = {
+        'change': 'Too many attempts. Try again in 15 minutes.',
+        'forgot': context.accounts.CODE_REFUSED,
+        'challenge': context.accounts.SESSION_REFUSED,
+    }[path]
+    allowed = context.accounts.PASSWORD_REFUSALS_ALLOWED
+    clock = [1000.0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    in_user_pool.side_effect = RuntimeError('wrong code')
+    for _ in range(100):
+        with pytest.raises((RuntimeError, exceptions.SocaException)):
+            change()
+    # 100 refused attempts made no more secrets than the username is allowed
+    assert len(secrets.created) == allowed
+    assert in_user_pool.call_count == allowed
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    assert refused.value.message == turned_away
+    if path != 'change':
+        context.accounts.user_dao.table.delete_item(Key={'username': 'user'})
+        with pytest.raises(exceptions.SocaException) as unknown:
+            change()
+        assert unknown.value.message == turned_away
+        context.accounts.user_dao.table.put_item(
+            Item={'username': 'user', 'enabled': True}
+        )
+    # the window passes: the right code sets the password and clears the count
+    clock[0] += context.accounts.PASSWORD_REFUSALS_WINDOW_SECONDS
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    assert len(secrets.created) == allowed + 1
+    assert context.accounts._password_refusals == {}
+    send.assert_called()
+
+
+@every_password_change
+def test_a_busy_user_pool_is_no_refusal_and_pauses_new_secrets(
+    context: AppContext, monkeypatch, password_change, request
+):
+    secrets, in_user_pool, change, send = password_change
+    path = request.node.callspec.params['password_change']
+    # the sign-in page answers a busy user pool as it answers an unknown account
+    busy = {
+        'change': 'The password could not be set right now. Try again.',
+        'forgot': context.accounts.CODE_REFUSED,
+        'challenge': context.accounts.SESSION_REFUSED,
+    }[path]
+    pause = context.accounts.PASSWORD_SET_WAIT_SECONDS
+    clock = [1000.0]
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    in_user_pool.side_effect = client_error('TooManyRequestsException', 'Throttle')
+    for _ in range(context.accounts.PASSWORD_REFUSALS_ALLOWED + 1):
+        with pytest.raises(exceptions.SocaException) as first:
+            change()
+        assert first.value.message == busy
+        # while it is busy, no attempt makes a secret
+        for _ in range(100):
+            with pytest.raises(exceptions.SocaException) as paused:
+                change()
+            assert paused.value.message == busy
+        clock[0] += pause
+    assert len(secrets.created) == context.accounts.PASSWORD_REFUSALS_ALLOWED + 1
+    # more busy answers than the refusals allowed, and the username is not turned away
+    assert context.accounts._password_refusals == {}
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    send.assert_called()
+
+
+@pytest.mark.parametrize('password_change', ['forgot'], indirect=True)
+def test_an_administrator_reset_lets_the_emailed_code_work_at_once(
+    context: AppContext, password_change
+):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = RuntimeError('wrong code')
+    for _ in range(context.accounts.PASSWORD_REFUSALS_ALLOWED):
+        with pytest.raises(RuntimeError):
+            change()
+    with pytest.raises(exceptions.SocaException):
+        change()
+    context.accounts.reset_password('user')
+    context.accounts.user_pool.admin_reset_password.assert_called_once_with('user')
+    in_user_pool.side_effect = None
+    change()
+    send.assert_called()
+
+
+def test_forgot_password_waits_only_a_few_at_once_and_answers_the_rest_alike(
+    context: AppContext, monkeypatch
+):
+    import threading
+    from ideaclustermanager.app.accounts import accounts_service
+
+    accounts = context.accounts
+    user_pool = Mock()
+    monkeypatch.setattr(accounts, 'user_pool', user_pool)
+    waiting, done_waiting = threading.Semaphore(0), threading.Event()
+
+    def held_wait(_):
+        waiting.release()
+        done_waiting.wait(30)
+
+    monkeypatch.setattr(accounts_service.time, 'sleep', held_wait)
+    limit = accounts.FORGOT_PASSWORD_WAITS_AT_ONCE
+    # known and unknown usernames take the same path while there are places
+    names = (['user', 'nobody'] * limit)[:limit]
+    held = [
+        threading.Thread(target=accounts.forgot_password, args=(name,))
+        for name in names
+    ]
+    for thread in held:
+        thread.start()
+    for _ in held:
+        assert waiting.acquire(timeout=10)
+    try:
+        answers = []
+        for name in ('user', 'nobody'):
+            # no place: told to try again at once, alike for every username, and the
+            # user pool is not asked
+            with pytest.raises(exceptions.SocaException) as busy:
+                accounts.forgot_password(name)
+            answers.append((busy.value.error_code, busy.value.message))
+        assert answers[0] == answers[1]
+        assert 'Try again' in answers[0][1]
+        asked = [c.args[0] for c in user_pool.forgot_password.call_args_list]
+        assert sorted(asked) == sorted(names)
+    finally:
+        done_waiting.set()
+        for thread in held:
+            thread.join(timeout=10)
+    # the places come back once the waits end
+    accounts.forgot_password('nobody')
+    assert user_pool.forgot_password.call_count == limit + 1
+
+
+@pytest.mark.parametrize('password_change', ['challenge'], indirect=True)
+def test_a_challenge_logs_neither_the_password_nor_the_session(
+    context: AppContext, monkeypatch, password_change
+):
+    secrets, in_user_pool, change, send = password_change
+    logger = Mock()
+    monkeypatch.setattr(context.accounts, 'logger', logger)
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    logged = str(logger.mock_calls)
+    assert 'secret-value' not in logged and "'session'" not in logged
+
+
+def test_a_directory_change_logs_no_password_or_hash(context: AppContext, monkeypatch):
+    from contextlib import nullcontext
+    from ideaclustermanager.app.accounts.ldapclient.abstract_ldap_client import (
+        AbstractLDAPClient,
+    )
+
+    client = context.ldap_client
+    logger = Mock()
+    monkeypatch.setattr(client, 'logger', logger)
+    monkeypatch.setattr(client, 'get_ldap_root_connection', lambda: nullcontext(Mock()))
+    AbstractLDAPClient.modify_s(
+        client,
+        'uid=user',
+        [
+            (ldap.MOD_REPLACE, 'userPassword', [b'{CRYPT}$6$salt$hash']),
+            (ldap.MOD_REPLACE, 'mail', [b'user@example.invalid']),
+        ],
+    )
+    AbstractLDAPClient.add_s(
+        client,
+        'cn=user',
+        [('unicodePwd', [b'"secret-value"']), ('cn', [b'user'])],
+    )
+    logged = str(logger.mock_calls)
+    assert '$6$' not in logged and 'secret-value' not in logged
+    # the other attributes are traced as before
+    assert 'mail=user@example.invalid' in logged and 'cn=user' in logged
+
+
+@every_password_change
+def test_a_password_the_user_pool_took_is_queued_with_the_secret_made_before(
+    password_change,
+):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = lambda *_, **__: Mock(held=list(secrets.secrets))
+    result = change()
+    (arn,) = secrets.secrets
+    if result is not None:
+        # the secret was there when the user pool was asked
+        assert result.held == [arn]
+    assert send.call_args_list[-1].kwargs['payload'] == {
+        'username': 'user',
+        'password_secret': arn,
+    }
+
+
+@pytest.mark.parametrize('password_change', ['challenge'], indirect=True)
+def test_a_challenge_that_sets_no_password_leaves_no_secret(password_change):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.return_value = Mock(auth=None)
+    assert change().auth is None
+    assert len(secrets.created) == 1
+    assert secrets.secrets == {}
+    send.assert_not_called()
+
+
+sign_in_page_password_changes = pytest.mark.parametrize(
+    'password_change', ['forgot', 'challenge'], indirect=True
+)
+
+
+@sign_in_page_password_changes
+@pytest.mark.parametrize('record', [None, {'enabled': False}])
+def test_a_sign_in_page_password_for_no_enabled_account_makes_nothing(
+    context: AppContext, tmp_path, password_change, record
+):
+    secrets, in_user_pool, change, send = password_change
+    users = context.accounts.user_dao.table
+    if record is None:
+        users.delete_item(Key={'username': 'user'})
+    else:
+        users.put_item(Item={'username': 'user', **record})
+    old_file = stranded(tmp_path / 'tmpold', 15)
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    # what the sign-in page answers a code or session the user pool did not give
+    assert refused.value.message in (
+        context.accounts.CODE_REFUSED,
+        context.accounts.SESSION_REFUSED,
+    )
+    assert (secrets.created, secrets.list_calls) == ([], [])
+    assert old_file.exists()
+    in_user_pool.assert_not_called()
+    send.assert_not_called()
+
+
+@pytest.mark.parametrize('path', ['forgot', 'challenge'])
+@pytest.mark.parametrize(
+    'typed, account',
+    [
+        ('user@example.com', 'user'),
+        (' User@Example.com ', 'user'),
+        ('USER', 'user'),
+        ('nobody@example.com', None),
+    ],
+)
+def test_a_sign_in_page_password_typed_as_the_email_reaches_the_account(
+    context: AppContext, monkeypatch, secrets, path, typed, account
+):
+    from ideadatamodel.auth import RespondToAuthChallengeRequest
+
+    # the sign-in page sends what the user typed, and the user pool signs in by email
+    real_user_pool = context.accounts.user_pool
+    user_pool, send = Mock(), Mock()
+    user_pool.admin_get_user = real_user_pool.admin_get_user
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    monkeypatch.setattr(context.ldap_client, 'is_existing_user', lambda _: True)
+
+    def cognito_admin_get_user(UserPoolId, Username):
+        # the user pool answers to a username or an email alias, in any case
+        if Username.lower() in ('user', 'user@example.com'):
+            return {
+                'Username': 'user',
+                'Enabled': True,
+                'UserAttributes': [{'Name': 'email', 'Value': 'user@example.com'}],
+            }
+        raise client_error('UserNotFoundException', 'AdminGetUser')
+
+    monkeypatch.setattr(
+        context.aws().cognito_idp(), 'admin_get_user', cognito_admin_get_user
+    )
+    users = context.accounts.user_dao.table
+    users.put_item(
+        Item={'username': 'user', 'email': 'user@example.com', 'enabled': True}
+    )
+    if path == 'forgot':
+        in_user_pool, refused_with = (
+            user_pool.confirm_forgot_password,
+            context.accounts.CODE_REFUSED,
+        )
+
+        def change():
+            context.accounts.confirm_forgot_password(typed, 'secret-value', '123456')
+
+    else:
+        in_user_pool, refused_with = (
+            user_pool.respond_to_auth_challenge,
+            context.accounts.SESSION_REFUSED,
+        )
+
+        def change():
+            context.accounts.respond_to_auth_challenge(
+                RespondToAuthChallengeRequest(
+                    username=typed,
+                    challenge_name='NEW_PASSWORD_REQUIRED',
+                    session='session',
+                    new_password='secret-value',
+                )
+            )
+
+    try:
+        if account is None:
+            with pytest.raises(exceptions.SocaException) as refused:
+                change()
+            assert refused.value.message == refused_with
+            assert secrets.created == []
+            in_user_pool.assert_not_called()
+            send.assert_not_called()
+            return
+        change()
+    finally:
+        users.delete_item(Key={'username': 'user'})
+    # the user pool is asked for the account's own name
+    (asked,) = in_user_pool.call_args_list
+    if path == 'forgot':
+        assert asked.args == (account, 'secret-value', '123456')
+    else:
+        assert asked.args[0].username == account
+        assert asked.args[0].new_password == 'secret-value'
+    # the password is queued for the account's own name, in its own group
+    (queued,) = send.call_args_list
+    assert queued.kwargs['task_name'] == 'accounts.sync-password'
+    assert queued.kwargs['payload']['username'] == account
+    assert queued.kwargs['message_group_id'] == account
+    assert len(secrets.created) == 1
+
+
+@every_password_change
+def test_only_a_signed_in_password_change_sweeps(request, tmp_path, password_change):
+    secrets, in_user_pool, change, _ = password_change
+    old_secret = secrets.add(
+        'idea-mock-password-sync-old', tags=PASSWORD_TAGS, age_days=9.1
+    )
+    old_file = stranded(tmp_path / 'tmpold', 15)
+    # the sign-in page's paths need no session: a wrong code is the common request
+    in_user_pool.side_effect = RuntimeError('wrong code')
+    with pytest.raises(RuntimeError):
+        change()
+    swept = request.node.callspec.params['password_change'] == 'change'
+    assert (old_secret in secrets.deleted) is swept
+    assert old_file.exists() is not swept
+    # the password's own secret is gone either way
+    assert len(secrets.created) == 1
+    assert list(secrets.secrets) == ([] if swept else [old_secret])
+
+
+@sign_in_page_password_changes
+def test_password_sets_past_the_limit_wait_then_fail_with_nothing_made(
+    context: AppContext, monkeypatch, password_change
+):
+    import threading
+
+    secrets, in_user_pool, change, _ = password_change
+    limit = context.accounts.PASSWORD_SETS_AT_ONCE
+    inside, release = threading.Semaphore(0), threading.Event()
+
+    def slow_user_pool(*_, **__):
+        inside.release()
+        release.wait(10)
+        raise RuntimeError('wrong code')
+
+    in_user_pool.side_effect = slow_user_pool
+    monkeypatch.setattr(context.accounts, 'PASSWORD_SET_WAIT_SECONDS', 0.2)
+    errors = []
+
+    def attempt():
+        try:
+            change()
+        except Exception as error:
+            errors.append(error)
+
+    running = [threading.Thread(target=attempt) for _ in range(limit)]
+    for thread in running:
+        thread.start()
+    try:
+        for _ in running:
+            assert inside.acquire(timeout=10)
+        with pytest.raises(exceptions.SocaException) as refused:
+            change()
+        # the sign-in page's one answer, whatever turned the attempt away
+        assert refused.value.message in (
+            context.accounts.CODE_REFUSED,
+            context.accounts.SESSION_REFUSED,
+        )
+        assert len(secrets.created) == limit
+    finally:
+        release.set()
+        for thread in running:
+            thread.join(10)
+    assert [str(error) for error in errors] == ['wrong code'] * limit
+    # the places are given back, a failed attempt's included
+    in_user_pool.side_effect = None
+    in_user_pool.return_value = Mock(auth=Mock())
+    change()
+    assert len(secrets.created) == limit + 1
+
+
+def test_a_sweep_that_cannot_list_secrets_does_not_stop_a_password_change(
+    context: AppContext, secrets
+):
+    secrets.failing['ListSecrets'] = client_error('AccessDeniedException', 'List')
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.secrets) == 1
+
+
+def stranded(folder, age_days, names=('password.txt',)):
+    folder.mkdir()
+    for name in names:
+        (folder / name).write_text('secret-value')
+    then = time.time() - age_days * 24 * 3600
+    for path in (*folder.iterdir(), folder):
+        os.utime(path, (then, then))
+    return folder
+
+
+def test_a_password_file_no_task_is_left_to_read_is_removed(
+    context: AppContext, tmp_path, secrets
+):
+    # a release that gave up on a task without cleaning up after it left the file
+    old = stranded(tmp_path / 'tmpold', 15)
+    # the queue can still hold the task of anything younger than its longest retention
+    waiting = stranded(tmp_path / 'tmpwaiting', 13)
+    # only what a password change makes is removed
+    other = stranded(tmp_path / 'tmpother', 15, names=('password.txt', 'notes'))
+    not_a_password = stranded(tmp_path / 'tmpnotes', 15, names=('notes',))
+    (tmp_path / 'elsewhere').mkdir()
+    target = stranded(tmp_path / 'elsewhere' / 'kept', 15)
+    (tmp_path / 'tmplink').symlink_to(target, target_is_directory=True)
+    linked = tmp_path / 'tmplinked'
+    linked.mkdir()
+    (linked / 'password.txt').symlink_to(target / 'password.txt')
+
+    context.accounts.change_ldap_password('user', 'secret-value')
+
+    assert not old.exists()
+    for kept in (waiting, other, not_a_password, target, linked):
+        assert kept.exists(), kept
+    assert (target / 'password.txt').read_text() == 'secret-value'
+    assert len(list(tmp_path.glob('*/password.txt'))) == 4
+
+
+def test_a_sweep_that_cannot_read_the_folder_does_not_stop_a_password_change(
+    context: AppContext, monkeypatch, secrets
+):
+    monkeypatch.setattr(os, 'scandir', Mock(side_effect=OSError('stale file handle')))
+    context.accounts.change_ldap_password('user', 'secret-value')
+    assert len(secrets.secrets) == 1
+
+
+def test_a_new_user_does_not_inherit_rows_an_earlier_user_of_the_name_left(
+    context: AppContext,
+):
+    # before 26.11.2 deleting a disabled user left its group and project rows
+    username = 'accounts_reused1'
+    members = context.accounts.group_members_dao
+    projects = context.projects.user_projects_dao
+    members.create_membership('leftover-group', username)
+    members.create_membership('leftover-group', 'accounts_someone_else')
+    projects.create_user_project(project_id='leftover-project', username=username)
+    context.accounts.create_user(
+        user=User(
+            username=username,
+            email=f'{username}@example.com',
+            password='MockPassword_123',
+        ),
+        email_verified=True,
+    )
+    assert members.get_usernames_in_group('leftover-group') == ['accounts_someone_else']
+    assert not projects.is_user_in_project(username, 'leftover-project')
+    assert username in members.get_usernames_in_group('default-project-group')
+
+
+def test_forgot_password_gives_one_address_only_a_few_places(
+    context: AppContext, monkeypatch
+):
+    import threading
+    from ideaclustermanager.app.accounts import accounts_service
+
+    accounts = context.accounts
+    monkeypatch.setattr(accounts, 'user_pool', Mock())
+    waiting, done_waiting = threading.Semaphore(0), threading.Event()
+
+    def held_wait(_):
+        waiting.release()
+        done_waiting.wait(30)
+
+    monkeypatch.setattr(accounts_service.time, 'sleep', held_wait)
+    per_source = accounts.FORGOT_PASSWORD_WAITS_PER_SOURCE
+    held = [
+        threading.Thread(target=accounts.forgot_password, args=('user', '192.0.2.1'))
+        for _ in range(per_source)
+    ]
+    for thread in held:
+        thread.start()
+    for _ in held:
+        assert waiting.acquire(timeout=10)
+    other = None
+    try:
+        with pytest.raises(exceptions.SocaException):
+            accounts.forgot_password('user', '192.0.2.1')
+        # another address still has a place
+        other = threading.Thread(
+            target=accounts.forgot_password, args=('user', '198.51.100.1')
+        )
+        other.start()
+        assert waiting.acquire(timeout=10)
+    finally:
+        done_waiting.set()
+        for thread in held + ([other] if other else []):
+            thread.join(timeout=10)
+    assert accounts._forgot_password_waits == {}
+
+
+@pytest.fixture
+def sign_in_page(context: AppContext, monkeypatch, secrets):
+    user_pool, send = Mock(), Mock()
+    monkeypatch.setattr(context.accounts, 'user_pool', user_pool)
+    monkeypatch.setattr(context.accounts.task_manager, 'send', send)
+    monkeypatch.setattr(context.accounts, '_password_sets_paused_until', 0.0)
+    context.accounts._password_refusals.clear()
+    users = context.accounts.user_dao.table
+    users.put_item(Item={'username': 'user', 'enabled': True})
+    user_pool.confirm_forgot_password.side_effect = client_error(
+        'CodeMismatchException', 'ConfirmForgotPassword'
+    )
+
+    def confirm(source=None, username='user'):
+        context.accounts.confirm_forgot_password(
+            username, 'secret-value', '123456', source
+        )
+
+    yield context.accounts, user_pool, confirm
+    users.delete_item(Key={'username': 'user'})
+    context.accounts._password_refusals.clear()
+
+
+@pytest.mark.parametrize(
+    'code',
+    [
+        'CodeMismatchException',
+        'ExpiredCodeException',
+        'LimitExceededException',
+        'TooManyRequestsException',
+    ],
+)
+def test_the_sign_in_page_answers_a_refused_code_as_it_answers_no_account(
+    sign_in_page, code
+):
+    accounts, user_pool, confirm = sign_in_page
+    user_pool.confirm_forgot_password.side_effect = client_error(
+        code, 'ConfirmForgotPassword'
+    )
+    answers = []
+    for username in ('user', 'nobody'):
+        with pytest.raises(exceptions.SocaException) as refused:
+            confirm(username=username)
+        # what the server turns into the response: code, message and any root cause
+        answers.append(
+            (refused.value.error_code, refused.value.message, refused.value.ref)
+        )
+    assert (
+        answers[0]
+        == answers[1]
+        == (
+            errorcodes.GENERAL_ERROR,
+            accounts.CODE_REFUSED,
+            None,
+        )
+    )
+
+
+def test_refusals_from_one_address_do_not_turn_away_another(sign_in_page):
+    accounts, user_pool, confirm = sign_in_page
+    for _ in range(accounts.PASSWORD_REFUSALS_ALLOWED + 3):
+        with pytest.raises(exceptions.SocaException):
+            confirm('192.0.2.1')
+    assert user_pool.confirm_forgot_password.call_count == (
+        accounts.PASSWORD_REFUSALS_ALLOWED
+    )
+    # the user's own address still reaches the user pool, and the right code works
+    user_pool.confirm_forgot_password.side_effect = None
+    confirm('198.51.100.1')
+    assert user_pool.confirm_forgot_password.call_count == (
+        accounts.PASSWORD_REFUSALS_ALLOWED + 1
+    )
+    assert accounts._password_refusals == {}
+
+
+def test_refusals_from_many_addresses_reach_a_per_username_ceiling(sign_in_page):
+    accounts, user_pool, confirm = sign_in_page
+    ceiling = accounts.PASSWORD_REFUSALS_PER_USERNAME
+    for attempt in range(ceiling):
+        with pytest.raises(exceptions.SocaException):
+            confirm(f'192.0.2.{attempt % 250}:{attempt}')
+    assert user_pool.confirm_forgot_password.call_count == ceiling
+    with pytest.raises(exceptions.SocaException) as refused:
+        confirm('198.51.100.1')
+    assert refused.value.message == accounts.CODE_REFUSED
+    assert user_pool.confirm_forgot_password.call_count == ceiling
+
+
+def test_a_signed_in_change_is_never_turned_away_by_sign_in_page_refusals(
+    sign_in_page,
+):
+    accounts, user_pool, confirm = sign_in_page
+    for attempt in range(accounts.PASSWORD_REFUSALS_PER_USERNAME + 1):
+        with pytest.raises(exceptions.SocaException):
+            confirm(None if attempt % 2 else f'192.0.2.{attempt}')
+    accounts.change_password('token', 'user', 'old', 'secret-value')
+    user_pool.change_password.assert_called_once()
+
+
+def strict_policy(accounts, monkeypatch):
+    from ideadatamodel import CognitoUserPoolPasswordPolicy
+
+    monkeypatch.setattr(accounts, '_password_policy', None, raising=False)
+    accounts.user_pool.describe_password_policy.return_value = (
+        CognitoUserPoolPasswordPolicy(
+            minimum_length=12,
+            require_uppercase=True,
+            require_lowercase=True,
+            require_numbers=True,
+            require_symbols=True,
+        )
+    )
+
+
+def confirm_through_the_handler(context, username, password):
+    from ideaclustermanager.app.api.auth_api import AuthAPI
+    from ideasdk.api import ApiInvocationContext
+    from ideasdk.utils import GroupNameHelper
+
+    invocation = ApiInvocationContext(
+        context=context,
+        request={
+            'header': {'namespace': 'Auth.ConfirmForgotPassword'},
+            'payload': {
+                'username': username,
+                'password': password,
+                'confirmation_code': '123456',
+            },
+        },
+        invocation_source='http',
+        group_name_helper=GroupNameHelper(context),
+        logger=Mock(),
+        token=None,
+        token_service=Mock(),
+    )
+    with pytest.raises(exceptions.SocaException) as refused:
+        AuthAPI(context).invoke(invocation)
+    return refused.value.error_code, refused.value.message, refused.value.ref
+
+
+@pytest.mark.parametrize(
+    'password, pool_code',
+    [
+        # too short: refused before the account is looked up
+        ('Sh0rt!', None),
+        # passes the policy, and the pool refuses it (a password used before)
+        ('Lo0ng-enough-pass', 'InvalidPasswordException'),
+    ],
+)
+def test_a_refused_new_password_on_the_sign_in_page_is_answered_alike(
+    sign_in_page, monkeypatch, context: AppContext, password, pool_code
+):
+    accounts, user_pool, _ = sign_in_page
+    strict_policy(accounts, monkeypatch)
+    if pool_code:
+        user_pool.confirm_forgot_password.side_effect = client_error(
+            pool_code, 'ConfirmForgotPassword'
+        )
+    answers = [
+        confirm_through_the_handler(context, name, password)
+        for name in ('user', 'nobody')
+    ]
+    assert answers[0] == answers[1]
+    if pool_code is None:
+        assert answers[0][0] == errorcodes.INVALID_PARAMS
+        assert 'at least 12 characters' in answers[0][1]
+        user_pool.confirm_forgot_password.assert_not_called()
+    else:
+        assert answers[0] == (errorcodes.GENERAL_ERROR, accounts.CODE_REFUSED, None)
+
+
+def test_a_challenge_password_under_the_policy_is_refused_for_every_name(
+    sign_in_page, monkeypatch
+):
+    from ideadatamodel.auth import RespondToAuthChallengeRequest
+
+    accounts, user_pool, _ = sign_in_page
+    strict_policy(accounts, monkeypatch)
+    answers = []
+    for name in ('user', 'nobody'):
+        with pytest.raises(exceptions.SocaException) as refused:
+            accounts.respond_to_auth_challenge(
+                RespondToAuthChallengeRequest(
+                    username=name,
+                    challenge_name='NEW_PASSWORD_REQUIRED',
+                    session='session',
+                    new_password='weakpassword',
+                )
+            )
+        answers.append((refused.value.error_code, refused.value.message))
+    assert answers[0] == answers[1]
+    assert answers[0][0] == errorcodes.INVALID_PARAMS
+    user_pool.respond_to_auth_challenge.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'code, error_code, says',
+    [
+        ('NotAuthorizedException', errorcodes.GENERAL_ERROR, 'current password'),
+        ('InvalidPasswordException', errorcodes.INVALID_PARAMS, 'password policy'),
+        ('LimitExceededException', errorcodes.GENERAL_ERROR, 'Too many attempts'),
+        ('TooManyRequestsException', errorcodes.GENERAL_ERROR, 'right now'),
+    ],
+)
+def test_a_signed_in_change_tells_why_the_user_pool_refused(
+    sign_in_page, code, error_code, says
+):
+    accounts, user_pool, _ = sign_in_page
+    user_pool.change_password.side_effect = client_error(code, 'ChangePassword')
+    with pytest.raises(exceptions.SocaException) as refused:
+        accounts.change_password('token', 'user', 'old', 'secret-value')
+    assert refused.value.error_code == error_code
+    assert says in refused.value.message
+    assert refused.value.ref is None
+
+
+@pytest.mark.parametrize(
+    'code',
+    [
+        'UserNotFoundException',
+        'InvalidParameterException',
+        'LimitExceededException',
+        'NotAuthorizedException',
+        'CodeDeliveryFailureException',
+        'AccessDeniedException',
+        'InternalErrorException',
+    ],
+)
+def test_forgot_password_answers_every_per_account_refusal_as_success(
+    context: AppContext, monkeypatch, code
+):
+    from ideaclustermanager.app.accounts import accounts_service
+    from ideaclustermanager.app.accounts.cognito_user_pool import CognitoUserPool
+
+    monkeypatch.setattr(accounts_service.time, 'sleep', lambda _: None)
+    pool = CognitoUserPool.__new__(CognitoUserPool)
+    pool._context, pool._logger = Mock(), Mock()
+    pool.options = Mock(client_id='client', client_secret='secret')
+    pool._context.aws().cognito_idp().forgot_password.side_effect = client_error(
+        code, 'ForgotPassword'
+    )
+    monkeypatch.setattr(context.accounts, 'user_pool', pool)
+    context.accounts.forgot_password('user')
+    # one account's refusal is a warning; one that reaches every user is an error
+    outage = (
+        'CodeDeliveryFailureException',
+        'AccessDeniedException',
+        'InternalErrorException',
+    )
+    logged = pool._logger.error if code in outage else pool._logger.warning
+    logged.assert_called_once()
+    assert code in logged.call_args.args[0]
+    assert 'user' not in logged.call_args.args[0].replace('any user', '')
+    pool._context.aws().cognito_idp().forgot_password.side_effect = client_error(
+        'TooManyRequestsException', 'ForgotPassword'
+    )
+    with pytest.raises(exceptions.SocaException) as busy:
+        context.accounts.forgot_password('user')
+    assert 'Try again' in busy.value.message
+
+
+def test_the_password_symbol_rule_matches_its_message_and_compiles_without_warnings():
+    import re
+    import warnings
+    from pathlib import Path
+    from ideaclustermanager.app.accounts import accounts_service
+
+    accounts = accounts_service.AccountsService
+    # the message as the earlier string literal evaluated; the pattern now takes the
+    # backslash it lists, as the user pool does
+    assert accounts.PASSWORD_SYMBOLS_MESSAGE == (
+        'Password should include at least 1 of these special characters: '
+        + '^ $ * . [ ] { } ( ) ? " ! @ # % & / '
+        + chr(92)
+        + " , > < ' : ; | _ ~ ` = + -"
+    )
+    accepted = [
+        chr(c) for c in range(32, 127) if re.search(accounts.PASSWORD_SYMBOLS, chr(c))
+    ]
+    assert ''.join(accepted) == '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~'
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        compile(
+            Path(accounts_service.__file__).read_text(),
+            accounts_service.__file__,
+            'exec',
+        )
+
+
+@pytest.mark.parametrize(
+    'password',
+    [
+        # its only uppercase letter is one the user pool does not count
+        'lowercase-pass1Ä',
+        # its only symbol is one the user pool does not count
+        'Lowercasepass1€',
+    ],
+)
+def test_the_sign_in_page_checks_the_policy_in_the_pools_own_characters(
+    sign_in_page, monkeypatch, context: AppContext, password
+):
+    accounts, user_pool, _ = sign_in_page
+    strict_policy(accounts, monkeypatch)
+    answers = [
+        confirm_through_the_handler(context, name, password)
+        for name in ('user', 'nobody')
+    ]
+    assert answers[0] == answers[1]
+    assert answers[0][0] == errorcodes.INVALID_PARAMS
+    assert 'at least 12 characters' in answers[0][1]
+    user_pool.confirm_forgot_password.assert_not_called()
+    assert accounts._password_refusals == {}
+
+
+def test_a_signed_in_change_is_told_the_policy_before_the_pool_is_asked(
+    sign_in_page, monkeypatch
+):
+    accounts, user_pool, _ = sign_in_page
+    strict_policy(accounts, monkeypatch)
+    with pytest.raises(exceptions.SocaException) as refused:
+        accounts.change_password('token', 'user', 'old', 'weakpassword')
+    assert refused.value.error_code == errorcodes.INVALID_PARAMS
+    assert 'at least 12 characters' in refused.value.message
+    user_pool.change_password.assert_not_called()
+
+
+@every_password_change
+def test_a_directory_fault_stops_the_change_before_the_user_pool_is_asked(
+    context: AppContext, password_change, monkeypatch, request
+):
+    secrets, in_user_pool, change, send = password_change
+    monkeypatch.setattr(
+        context.accounts.ldap_client,
+        'is_existing_user',
+        Mock(side_effect=RuntimeError('directory unreachable')),
+    )
+    path = request.node.callspec.params['password_change']
+    with pytest.raises(Exception) as stopped:
+        change()
+    if path != 'change':
+        # the sign-in page: the one answer an unknown account gets
+        assert stopped.value.message in (
+            context.accounts.CODE_REFUSED,
+            context.accounts.SESSION_REFUSED,
+        )
+    in_user_pool.assert_not_called()
+    assert secrets.created == []
+
+
+@every_password_change
+def test_a_send_that_fails_after_the_user_pool_took_the_password_keeps_its_secret(
+    context: AppContext, password_change, monkeypatch
+):
+    secrets, in_user_pool, change, send = password_change
+    monkeypatch.setattr(
+        context.accounts.ldap_client, 'is_existing_user', lambda username: True
+    )
+    send.side_effect = RuntimeError('queue timed out')
+    with pytest.raises(exceptions.SocaException) as told:
+        change()
+    assert 'changed for signing in to the portal' in told.value.message
+    in_user_pool.assert_called_once()
+    # the send may have been taken: its task still finds the secret
+    assert len(secrets.created) == 1 and secrets.deleted == []
+
+
+@every_password_change
+def test_a_password_the_pools_history_refuses_is_answered_plainly(
+    context: AppContext, password_change, request
+):
+    secrets, in_user_pool, change, send = password_change
+    in_user_pool.side_effect = client_error(
+        'PasswordHistoryPolicyViolationException', 'ChangePassword'
+    )
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    assert refused.value.message.endswith(
+        {
+            'change': 'The new password was used recently. Choose another.',
+            'forgot': context.accounts.CODE_REFUSED,
+            'challenge': context.accounts.SESSION_REFUSED,
+        }[request.node.callspec.params['password_change']]
+    )
+
+
+@pytest.mark.parametrize(
+    'method, args',
+    [
+        ('change_password', ('user', 'token', 'old', 'new')),
+        ('confirm_forgot_password', ('user', 'new', '123456')),
+    ],
+)
+def test_a_failed_set_time_record_does_not_undo_a_password_the_pool_took(method, args):
+    from ideaclustermanager.app.accounts.cognito_user_pool import (
+        CognitoUserPool,
+        CognitoUserPoolOptions,
+    )
+    from ideasdk.config.soca_config import SocaConfig
+
+    context = Mock()
+    context.config.return_value = SocaConfig(
+        {
+            'directoryservice': {'provider': 'activedirectory', 'password_max_age': 90},
+        }
+    )
+    context.aws().cognito_idp().admin_update_user_attributes.side_effect = RuntimeError(
+        'attribute write failed'
+    )
+    pool = CognitoUserPool(
+        context,
+        CognitoUserPoolOptions(
+            user_pool_id='pool',
+            admin_group_name='admins',
+            client_id='client',
+            client_secret='secret-marker',
+        ),
+    )
+    getattr(pool, method)(*args)
+
+
+@every_password_change
+def test_with_every_place_taken_only_a_signed_in_change_waits(
+    context: AppContext, monkeypatch, password_change, request
+):
+    secrets, in_user_pool, change, _ = password_change
+    wait = 0.3
+    monkeypatch.setattr(context.accounts, 'PASSWORD_SET_WAIT_SECONDS', wait)
+    held = 0
+    while context.accounts._password_sets.acquire(blocking=False):
+        held += 1
+    try:
+        started = time.monotonic()
+        with pytest.raises(exceptions.SocaException) as refused:
+            change()
+        elapsed = time.monotonic() - started
+        if request.node.callspec.params['password_change'] == 'change':
+            assert elapsed >= wait
+        else:
+            # the sign-in page answers at once, alike for every cause
+            assert elapsed < wait
+            assert refused.value.message in (
+                context.accounts.CODE_REFUSED,
+                context.accounts.SESSION_REFUSED,
+            )
+        assert secrets.created == []
+        in_user_pool.assert_not_called()
+    finally:
+        for _ in range(held):
+            context.accounts._password_sets.release()
+    assert held == context.accounts.PASSWORD_SETS_AT_ONCE
+
+
+@sign_in_page_password_changes
+def test_a_session_or_code_botocore_refuses_gets_the_sign_in_pages_answer(
+    context: AppContext, password_change
+):
+    secrets, in_user_pool, change, _ = password_change
+    in_user_pool.side_effect = botocore.exceptions.ParamValidationError(report='marker')
+    with pytest.raises(exceptions.SocaException) as refused:
+        change()
+    assert refused.value.message in (
+        context.accounts.CODE_REFUSED,
+        context.accounts.SESSION_REFUSED,
+    )
+
+
+@pytest.mark.parametrize('path', ['remove_users_from_group', 'remove_user_from_groups'])
+def test_a_membership_removal_whose_task_is_not_sent_changes_nothing(
+    context: AppContext, monkeypatch, path
+):
+    from ideadatamodel import Group
+
+    accounts = context.accounts
+    group_name = f'unsent-{path.replace("_", "-")}'
+    accounts.create_group(Group(name=group_name, group_type='project', title='marker'))
+    accounts.create_user(
+        user=User(username='unsent9', email='unsent9@example.com'),
+    )
+    try:
+        accounts.add_users_to_group(['unsent9'], group_name)
+
+        def send(**_):
+            raise RuntimeError('queue unavailable')
+
+        monkeypatch.setattr(accounts.task_manager, 'send', send)
+        with pytest.raises(RuntimeError):
+            if path == 'remove_users_from_group':
+                accounts.remove_users_from_group(['unsent9'], group_name)
+            else:
+                accounts.remove_user_from_groups('unsent9', [group_name])
+        row = accounts.user_dao.get_user('unsent9')
+        assert group_name in row['additional_groups']
+        assert 'unsent9' in accounts.group_members_dao.get_usernames_in_group(
+            group_name
+        )
+    finally:
+        monkeypatch.undo()
+        accounts.delete_user('unsent9')
+        accounts.group_dao.delete_group(group_name)
+
+
+def test_without_an_address_only_the_per_username_bound_applies(sign_in_page):
+    accounts, user_pool, confirm = sign_in_page
+    for _ in range(accounts.PASSWORD_REFUSALS_ALLOWED + 2):
+        with pytest.raises(exceptions.SocaException):
+            confirm(None)
+    # every attempt still reached the user pool: the low per-address bound is not
+    # shared by every request with no address
+    assert user_pool.confirm_forgot_password.call_count == (
+        accounts.PASSWORD_REFUSALS_ALLOWED + 2
+    )

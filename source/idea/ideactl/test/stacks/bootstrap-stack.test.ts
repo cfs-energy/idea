@@ -83,16 +83,19 @@ describe("repository hygiene", () => {
 });
 
 describe("elbAccountIdForRegion", () => {
-  it("reads PyYAML-compatible scalar values from a supplied mapping", () => {
+  it("keeps twelve-digit account ids as written and refuses anything else", () => {
     assert.equal(existsSync(regionElbAccountIdPath()), true);
+    // the shipped file: the one all-octal-digit id keeps its leading zero
+    assert.match(elbAccountIdForRegion("me-south-1") ?? "", /^0\d{11}$/);
     const directory = mkdtempSync(join(tmpdir(), "ideactl-bootstrap-stack-"));
     const path = join(directory, "region-elb-account-id.yml");
     try {
-      writeFileSync(path, "sample-region: 123456789012\noctal-scalar: 0123\nstring-scalar: 0890\n", "utf-8");
+      writeFileSync(path, "sample-region: 123456789012\nleading-zero: 000000000000\n", "utf-8");
       assert.equal(elbAccountIdForRegion("sample-region", path), "123456789012");
-      assert.equal(elbAccountIdForRegion("octal-scalar", path), "83");
-      assert.equal(elbAccountIdForRegion("string-scalar", path), "0890");
+      assert.equal(elbAccountIdForRegion("leading-zero", path), "000000000000");
       assert.equal(elbAccountIdForRegion("missing-region", path), undefined);
+      writeFileSync(path, "short-region: 0123\n", "utf-8");
+      assert.throws(() => elbAccountIdForRegion("short-region", path), /not a twelve-digit account id/);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

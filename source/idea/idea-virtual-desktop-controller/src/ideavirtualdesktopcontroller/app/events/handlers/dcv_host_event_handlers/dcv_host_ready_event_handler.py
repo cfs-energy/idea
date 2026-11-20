@@ -25,7 +25,8 @@ from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_
 
 
 class DCVHostReadyEventHandler(BaseVirtualDesktopControllerEventHandler):
-    SESSION_CREATION_THRESHOLD_COUNT = 30
+    # below the queue redrive (16 receives): the desktop reaches ERROR before its message is moved
+    SESSION_CREATION_THRESHOLD_COUNT = 12
 
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
         super().__init__(context, 'dcv-host-state-handler')

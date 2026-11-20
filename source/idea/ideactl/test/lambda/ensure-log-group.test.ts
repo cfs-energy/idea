@@ -93,7 +93,7 @@ test("exports index.handler as a function", async () => {
         console.info = originalInfo;
     }
     assert.equal(typeof handler, "function");
-    assert.equal(infos[0], `ReceivedEvent: ${JSON.stringify(event)}`);
+    assert.equal(infos[0], `ReceivedEvent: ${JSON.stringify({ ...event, ResponseURL: "[omitted]" })}`);
     assert.ok(
         infos.includes(`leaving log group in place on delete: ${logGroupName}`),
     );
@@ -150,7 +150,7 @@ test("Create creates the group, applies integer retention, and returns created",
     });
     assert.equal(
         capturedLogger.infoMessages[0],
-        `ReceivedEvent: ${JSON.stringify(makeEvent("Create", "30"))}`,
+        `ReceivedEvent: ${JSON.stringify({ ...makeEvent("Create", "30"), ResponseURL: "[omitted]" })}`,
     );
 });
 

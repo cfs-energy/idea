@@ -11,6 +11,15 @@
       "http_proxy": "http://proxy.example:3128"
     }
   },
+  "windows-ami-builder": {
+    "baseOs": "windows2022",
+    "awsRegion": "us-gov-west-1",
+    "bootstrapPackageUri": "s3://example-bucket/bootstrap/bootstrap-example.tar.gz",
+    "installCommands": [
+      "cd $BootstrapDir\\idea-test1-ami-builder-windows\\",
+      "powershell.exe -File .\\setup.ps1"
+    ]
+  },
   "linux-substitution": {
     "baseOs": "amazonlinux2023",
     "awsRegion": "us-west-2",

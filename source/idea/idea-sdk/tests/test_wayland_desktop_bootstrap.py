@@ -836,3 +836,83 @@ systemctl() {{ echo "$*" >> {calls}; }}
     assert commands[0] == 'generate'
     assert ('mask systemd-networkd-wait-online.service' in commands) == masked
     assert ('enable NetworkManager-wait-online.service' in commands) == masked
+
+
+def run_check(text, name, stubs):
+    function = f'{name}() {{' + text.split(f'{name}() {{')[1].split('\n}\n')[0] + '\n}'
+    return subprocess.run(
+        ['bash', '-c', stubs + '\n' + function + f'\n{name}'],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def launcher_stub(tmp_path, canceled_times, then=0):
+    count = tmp_path / 'starts'
+    count.write_text('0')
+    return (
+        'sleep() { :; }\n'
+        'systemctl() {\n'
+        '  if [[ "$1" == show ]]; then echo loaded; return 0; fi\n'
+        '  if [[ "$1" == is-active ]]; then return 0; fi\n'
+        f'  n=$(($(cat "{count}") + 1)); echo $n > "{count}"\n'
+        f'  if ((n <= {canceled_times})); then\n'
+        '    echo "Job for dcvsessionlauncher.service canceled."; return 1\n'
+        '  fi\n'
+        f'  return {then}\n'
+        '}\n'
+    ), count
+
+
+def test_bake_asks_again_when_systemd_cancels_the_launcher_start(tmp_path):
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'rocky10')
+    stubs, count = launcher_stub(tmp_path, 1)
+    result = run_check(text, 'dcv_launcher_ok', stubs)
+    assert result.returncode == 0, result.stdout
+    assert count.read_text().strip() == '2'
+
+
+def test_bake_fails_a_launcher_start_that_stays_canceled(tmp_path):
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'rocky10')
+    stubs, count = launcher_stub(tmp_path, 9)
+    result = run_check(text, 'dcv_launcher_ok', stubs)
+    assert result.returncode == 1
+    assert 'canceled' in result.stdout and 'failed to start' in result.stdout
+    assert count.read_text().strip() == '3'
+
+
+def test_bake_does_not_retry_a_launcher_that_failed_outright(tmp_path):
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'rocky10')
+    stubs, count = launcher_stub(tmp_path, 0, then=1)
+    assert run_check(text, 'dcv_launcher_ok', stubs).returncode == 1
+    assert count.read_text().strip() == '1'
+
+
+@pytest.mark.parametrize(
+    'snap_output',
+    ['error: cannot communicate with server: timeout', 'error: no matching snaps'],
+)
+def test_the_ssm_check_reports_what_snap_said(snap_output):
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'ubuntu2404')
+    stubs = (
+        f'snap() {{ echo "{snap_output}"; return 1; }}\n'
+        'unit_installed() { return 0; }\nunit_enabled() { return 0; }\n'
+    )
+    result = run_check(text, 'ssm_ok', stubs)
+    assert result.returncode == 1
+    assert snap_output in result.stdout
+    assert 'not installed' not in result.stdout
+
+
+def test_the_ssm_check_still_requires_the_unit_once_snap_answers():
+    text = render('dcv-host-ami-builder/image_checks.sh.jinja2', 'ubuntu2404')
+    good = 'snap() { return 0; }\nunit_enabled() { return 0; }\n'
+    assert (
+        run_check(text, 'ssm_ok', good + 'unit_installed() { return 0; }').returncode
+        == 0
+    )
+    assert (
+        run_check(text, 'ssm_ok', good + 'unit_installed() { return 1; }').returncode
+        == 1
+    )

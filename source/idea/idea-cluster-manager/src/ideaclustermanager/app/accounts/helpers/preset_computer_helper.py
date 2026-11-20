@@ -208,37 +208,31 @@ class PresetComputeHelper:
                     message='DeleteComputer target is not a terminated ECS host in this cluster',
                 )
 
-        # for Windows instances, there is no way to fetch the hostname from describe instances API.
-        # request payload from windows instances will contain hostname. e.g. EC2AMAZ-6S29U5P
-        hostname = target_computer or (
+        # The computer acted on is named from the sender's own identity, never by the payload.
+        # A Windows desktop names the SHA-256 form it renames itself to; any other name is ignored.
+        names = self.instance_computer_names(self.instance_id)
+        requested = (
             None if task_arn else Utils.get_value_as_string('hostname', payload)
+        ) or ''
+        self.hostname = target_computer or next(
+            (name for name in names if name.casefold() == requested.casefold()),
+            names[0],
         )
-        if Utils.is_empty(hostname):
-            hostname = self.generate_hostname(self.instance_id)
-
-        self.hostname = hostname
         self.logger.info(f'Using hostname for AD operation: {self.hostname}')
 
         # DeleteComputer uses the verified identity and OU, then deletes an exact LDAP DN.
+        # Control-plane deletes come from a verified task or a retired ECS host; instance tags
+        # are not trusted for this, so any EC2 sender may delete only its own computer.
         if target_computer:
-            if not task_arn and not terminated_instance_id:
-                infra_sender = (
-                    self.ec2_instance.soca_node_type == 'infra'
-                    and self.ec2_instance.idea_module_id
-                    in (
-                        self.context.config().get_module_id(
-                            'virtual-desktop-controller'
-                        ),
-                        self.context.config().get_module_id('scheduler'),
-                    )
+            if (
+                not task_arn
+                and not terminated_instance_id
+                and not self.is_instance_computer(self.instance_id, target_computer)
+            ):
+                raise exceptions.soca_exception(
+                    error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
+                    message='EC2 sender may only delete its own computer',
                 )
-                if not infra_sender and not self.is_instance_computer(
-                    self.instance_id, target_computer
-                ):
-                    raise exceptions.soca_exception(
-                        error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                        message='EC2 sender may only delete its own computer',
-                    )
             return
 
         self._shell = ShellInvoker(logger=self.logger)
@@ -285,18 +279,30 @@ class PresetComputeHelper:
         )
         return hostname
 
+    def instance_computer_names(self, instance_id: str) -> List[str]:
+        """
+        the computer names that belong to an instance, both derived from its id: the name
+        Linux hosts join with, then the SHA-256 form Windows desktops rename themselves to
+        (Get-IdeaHostname in virtual-desktop-host-windows/Configure.ps1).
+        """
+        generated = self.generate_hostname(instance_id)
+        prefix = self.context.config().get_string(
+            'directoryservice.ad_automation.hostname_prefix', default='IDEA-'
+        )
+        data = f'{self.aws_region}|{self.aws_account}|{self.cluster_name}|{instance_id}'
+        windows = f'{prefix}{Utils.sha256(data)[len(prefix) - 15 :]}'.upper()
+        return [generated, windows]
+
     def is_instance_computer(self, instance_id: str, computer_name: str) -> bool:
-        if self.generate_hostname(instance_id).casefold() == computer_name.casefold():
-            return True
-        return any(
-            entry.get('status') == 'success'
-            and (entry.get('hostname') or '').casefold() == computer_name.casefold()
-            for entry in self.ad_automation_dao.list_entries_by_instance_id(instance_id)
+        return computer_name.casefold() in (
+            name.casefold() for name in self.instance_computer_names(instance_id)
         )
 
     @property
     def log_tag(self) -> str:
-        return f'(Host: {self.hostname}, InstanceId: {self.instance_id}, Nonce: {self.nonce})'
+        # never the nonce: with the instance id it is the key of the row holding the
+        # one-time join password
+        return f'(Host: {self.hostname}, InstanceId: {self.instance_id})'
 
     def get_ldap_computers_base(self) -> str:
         ou_computers = self.context.config().get_string(
@@ -395,7 +401,7 @@ class PresetComputeHelper:
             domain_query[result_key] = result_value
 
         # Sanity check our query results
-        # todo - should domain-controller-flags be evaluated for writeable or other health flags?
+        # todo - should domain-controller-flags be evaluated for writable or other health flags?
 
         # domain-name must be present and match our configuration
         domain_name = Utils.get_value_as_string(
@@ -537,7 +543,8 @@ class PresetComputeHelper:
                 message=f'{self.log_tag} Internal error - Failed to generate a strong domain OTP password',
             )
 
-        preset_computer_result = self._shell.invoke(
+        # no logger: the command line carries the one-time password
+        preset_computer_result = ShellInvoker().invoke(
             cmd_input=self.ldap_client.ldap_root_password,
             cmd=[
                 self.ADCLI,
@@ -557,7 +564,10 @@ class PresetComputeHelper:
         if preset_computer_result.returncode != 0:
             raise exceptions.soca_exception(
                 error_code=errorcodes.AD_AUTOMATION_PRESET_COMPUTER_FAILED,
-                message=f'{self.log_tag} failed to preset-computer. details: {preset_computer_result}',
+                # adcli's output only: the command line carries the one-time password
+                message=f'{self.log_tag} failed to preset-computer. details: '
+                f'returncode: {preset_computer_result.returncode} >> '
+                f'{preset_computer_result.stderr or preset_computer_result.stdout}',
             )
 
         # We cannot issue an immediate update as the modify_s aims at the domain
@@ -582,6 +592,17 @@ class PresetComputeHelper:
         call adcli preset-computer and update the ad-automation dynamodb table with applicable status
         """
 
+        # a message delivered again after it succeeded (the queue gives FIFO order, not
+        # exactly-once) must not delete and preset the account the host already joined
+        if any(
+            entry.get('nonce') == self.nonce and entry.get('status') == 'success'
+            for entry in self.ad_automation_dao.list_entries_by_instance_id(
+                self.instance_id
+            )
+        ):
+            self.logger.info(f'{self.log_tag} already preset for this request. skip.')
+            return
+
         try:
             # fetch a domain controller IP to "pin" all adcli operations to ensure we don't run into synchronization problems
             # We also want to return this to the requesting client via the AD Automation queue so that they perform join
@@ -589,9 +610,8 @@ class PresetComputeHelper:
             domain_controller_ip = self.get_any_domain_controller_ip()
 
             if self.is_existing_computer_account():
-                # if computer already exists in AD
-                # it is likely the case where the private IP is being reused in the VPC where an old cluster node was deleted without removing entry from AD.
-                # delete and create preset-computer
+                # the name is derived from the sender's own identity, so an existing account is
+                # this sender's earlier join (a host joining again): delete and preset it anew
                 self.logger.warning(
                     f'{self.log_tag} found existing computer account. deleting using DC: {domain_controller_ip} ...'
                 )

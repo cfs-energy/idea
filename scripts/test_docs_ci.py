@@ -1,6 +1,7 @@
 """Check release guidance against the shipped ECS-only commands and tasks."""
 
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,23 @@ class DocsCiTests(unittest.TestCase):
 
     def test_pre_floor_migration_is_removed(self):
         self.assertFalse((ROOT / 'scripts/pre-upgrade-317.sh').exists())
+
+    def test_install_commands_name_files_that_exist(self):
+        guide = (
+            ROOT / 'docs/first-time-users/install-idea/standard-installation.md'
+        ).read_text()
+        blocks = re.findall(r'```[a-z]*\n(.*?)```', guide, re.S)
+        named = set(re.findall(r'\./([\w.-]+\.(?:sh|ps1))\b', '\n'.join(blocks)))
+        self.assertIn('idea-admin.sh', named)
+        for name in named:
+            self.assertTrue((ROOT / name).is_file(), name)
+        for block in blocks:
+            if 'git clone' in block:
+                self.assertIn(
+                    '--branch v<VERSION>',
+                    block,
+                    'a clone of the default branch is not the release',
+                )
 
 
 if __name__ == '__main__':

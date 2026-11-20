@@ -11,6 +11,8 @@
  * and limitations under the License.
  */
 
+import {IdeaFormValidate} from "../../components/form-field/form-field";
+import {GROUP_OR_PROJECT_NAME_PATTERN} from "../../common/form-patterns";
 import React, {Component, RefObject} from "react";
 import IdeaForm from "../../components/form";
 import {AppContext} from "../../common";
@@ -19,6 +21,7 @@ import IdeaListView from "../../components/list-view";
 import IdeaSplitPanel from "../../components/split-panel";
 import {USER_TABLE_COLUMN_DEFINITIONS} from "./users";
 import Utils from "../../common/utils";
+import {listAllUsersInGroups} from "../../common/paging";
 import IdeaConfirm from "../../components/modals";
 import {AccountsClient} from "../../client";
 import {IdeaSideNavigationProps} from "../../components/side-navigation";
@@ -34,6 +37,12 @@ export interface GroupsState {
     splitPanelOpen: boolean
     groupSelected: boolean
     userInGroupSelected: boolean
+    memberCount?: number
+}
+
+/** The list is read a page at a time, and this count sees the first page. */
+export function memberCountLabel(count: number): string {
+    return count >= 1000 ? `${count}+` : `${count}`
 }
 
 class Groups extends Component<GroupsProps, GroupsState> {
@@ -115,7 +124,7 @@ class Groups extends Component<GroupsProps, GroupsState> {
                               return
                           }
                           const values = this.getCreateGroupForm().getValues()
-                          AppContext.get().client().accounts().createGroup({
+                          return AppContext.get().client().accounts().createGroup({
                               group: {
                                   name: values.name.trim(),
                                   title: values.title.trim(),
@@ -150,8 +159,9 @@ class Groups extends Component<GroupsProps, GroupsState> {
                               help_text: 'Group name cannot contain white spaces or special characters. (hyphens [-] are ok)',
                               validate: {
                                   required: true,
-                                  regex: '^([a-z0-9-]+){3,64}$'
-                              }
+                                  regex: GROUP_OR_PROJECT_NAME_PATTERN,
+                                  message: 'Use at least 3 lowercase letters, digits or hyphens.'
+                              } as IdeaFormValidate
                           },
                           {
                               name: 'group_type',
@@ -293,8 +303,10 @@ class Groups extends Component<GroupsProps, GroupsState> {
                 ref={this.listing}
                 title="Groups"
                 preferencesKey={'groups'}
+                filteringPlaceholder="Search by group name"
                 showPreferences={false}
-                description="Cluster user group management"
+                description="Cluster user groups. Search matches group names."
+                empty={<Box textAlign="center" color="inherit">No groups found. Search looks at group names, not titles.</Box>}
                 enableExportToCsv={true}
                 csvFilename={`idea_groups_export_${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('Z')[0]}.csv`}
                 primaryAction={{
@@ -343,12 +355,22 @@ class Groups extends Component<GroupsProps, GroupsState> {
                 }}
                 selectionType="single"
                 onSelectionChange={_ => {
+                    // the panel fetches for itself the first time it mounts
+                    const panelMounted = this.userListing.current != null
                     this.setState({
                         groupSelected: true,
-                        userInGroupSelected: false
+                        userInGroupSelected: false,
+                        splitPanelOpen: true,
+                        memberCount: undefined
                     }, () => {
-                        this.getUserListing().fetchRecords()
+                        if (panelMounted) {
+                            this.getUserListing().fetchRecords()
+                        }
                     })
+                }}
+                onRecordsFetched={() => {
+                    // a fetch clears the row selection, so the actions and the panel must follow
+                    this.setState({groupSelected: false, userInGroupSelected: false, splitPanelOpen: false})
                 }}
                 onFetchRecords={() => {
                     return AppContext.get().client().accounts().listGroups({
@@ -405,7 +427,7 @@ class Groups extends Component<GroupsProps, GroupsState> {
     buildSplitPanelContent() {
         return (this.isSelected() &&
             <IdeaSplitPanel
-                title={`Users in ${this.getSelected()?.name}`}
+                title={`Users in ${this.getSelected()?.name}${this.state.memberCount == null ? '' : ` (${memberCountLabel(this.state.memberCount)})`}`}
             >
                 <IdeaListView
                     ref={this.userListing}
@@ -425,18 +447,17 @@ class Groups extends Component<GroupsProps, GroupsState> {
                         if (this.getSelected() == null) {
                             return Promise.resolve({})
                         }
-                        return AppContext.get().client().accounts().listUsersInGroup({
-                            group_names: [this.getSelected()!.name!],
-                            paginator: {
-                                page_size: 1000
-                            }
-                        })
+                        return listAllUsersInGroups(request => AppContext.get().client().accounts().listUsersInGroup(request), [this.getSelected()!.name!])
+                            .then(listing => ({listing}))
                     }}
                     selectionType="multi"
                     onSelectionChange={(event) => {
                         this.setState({
                             userInGroupSelected: event.detail.selectedItems.length > 0
                         })
+                    }}
+                    onRecordsFetched={(listing: any[]) => {
+                        this.setState({memberCount: listing.length, userInGroupSelected: false})
                     }}
                     columnDefinitions={USER_TABLE_COLUMN_DEFINITIONS}
                 />

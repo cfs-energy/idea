@@ -34,6 +34,63 @@ templates:
       </ul>
       <hr>
       <i> This is an automated email, please do not respond.</i>
+  - name: "scheduler.scratch-cleanup-digest"
+    title: "Weekly Scratch Folder Digest"
+    template_type: jinja2
+    subject: "[{{cluster_name}}] Your scratch folders this week"
+    body: |
+      Hello <b>{{owner}}</b>, <br><br>
+      {% if first_count %}<b>{{first_count}}</b> scratch folders from your finished jobs ({{first_gb}} GB) will be removed in about two weeks. This is the first notice.<br>{% endif %}
+      {% if final_count %}<b>{{final_count}}</b> scratch folders ({{final_gb}} GB) will be removed within the next week. This is the final notice.<br>{% endif %}
+      {% if soonest %}The soonest goes after {{soonest}}.<br>{% endif %}
+      {% if removed_count %}<b>{{removed_count}}</b> folders ({{removed_gb}} GB) went since the last digest and cannot be recovered.{% if partly_removed_count %} Removing {{partly_removed_count}} of them stopped part way, so some of their files are gone and the rest are still there.{% endif %}<br>{% endif %}
+
+      {% if largest %}
+      <h3>Largest</h3>
+      <ul>
+      {% for folder in largest %}
+          <li> {{folder.path}}: job {{folder.job_id}}, {{folder.size_gb}} GB</li>
+      {% endfor %}
+      </ul>
+      <h3>To keep a folder</h3>
+      <ul>
+          <li> Copy what you need to your home directory.</li>
+          <li> Rename the folder to anything that is not just a number. Named folders are never removed.</li>
+          <li> Change a file in it. A folder that changed after its job ended stays.</li>
+      </ul>
+      These folders are under /lustre, which Linux desktops and SSH can reach. Windows desktops do not mount it, so use a Linux desktop or SSH.<br>
+      {% endif %}
+      {% if page_url %}<a href="{{page_url}}">Your completed jobs</a>{% endif %}
+      <hr>
+      <i> This is an automated email, please do not respond.</i>
+  - name: "scheduler.scratch-cleanup-admin-summary"
+    title: "Weekly Scratch Cleanup Summary"
+    template_type: jinja2
+    subject: "[{{cluster_name}}] Scratch cleanup this week on {{file_system}}"
+    body: |
+      <b>{{scheduled_folders}}</b> folders are scheduled for removal. {{removed_count}} folders ({{removed_gb}} GB) went this week.<br>
+      {% if waiting_message %}<br>{{waiting_message}}<br>{% endif %}
+      {% if failures %}
+      <h3>What stopped</h3>
+      <ul>
+      {% for failure in failures %}
+          <li> {{failure}}</li>
+      {% endfor %}
+      </ul>
+      {% if more_failures %}And {{more_failures}} more.<br>{% endif %}
+      {% endif %}
+      {% if page_url %}<a href="{{page_url}}">Open Scratch cleanup</a>{% endif %}
+      <hr>
+      <i> This is an automated email, please do not respond.</i>
+    # Templates are only added to a cluster, never overwritten, so a fix to one above does
+    # not reach a cluster that already stores it. To let it: list the sha256 of
+    # "<subject>\n<body>" of each text the template shipped with before. A stored template
+    # that still equals one was never edited and takes the new subject and body; an edited
+    # one is left alone. ideaclustermanager.app.email_templates.email_templates_service
+    # .default_text_hash(subject, body) gives the value.
+    superseded:
+      # 26.11.2-rc.2 and rc.3: named a count the service does not send
+      - b22e94075284b650d7608a6e3a5d879d56b40cc50deb574c604571dcca1a76e2
   - name: "virtual-desktop-controller.session-provisioning"
     title: "Virtual Desktop Provisioning"
     template_type: jinja2
@@ -146,6 +203,25 @@ templates:
       <br>
       <hr>
       <i> This is an automated email, please do not respond.</i>
+  - name: "virtual-desktop-controller.software-stack-expiry-digest"
+    title: "Software Stacks Past or Near Their Expiry Date"
+    template_type: jinja2
+    subject: "[{{cluster_name}}] Software stacks that need a decision"
+    body: |
+      Hello <b>{{username}}</b>, <br><br>
+      These software stacks are not rebuilt each month, and are past or near their expiry date:
+      <ul>
+      {% for stack in stacks %}<li><b>{{stack.name}}</b>: {% if stack.state == 'expired' %}expired{% else %}expires{% endif %} {{stack.expires_on}}</li>
+      {% endfor %}</ul>
+      {% if hiding %}Expired stacks are no longer offered for new desktops.{% else %}They are still offered for new desktops, with a warning.{% endif %} Desktops already running on them keep working.
+      <br><br>
+      <b>To keep one:</b> ask an administrator to extend it on the Software Stacks page, or to exempt its image.
+      <br>
+      <b>If you no longer need one:</b> ask an administrator to disable it. Nothing else is needed.
+      <br>
+      <br>
+      <hr>
+      <i> This is an automated email, once a week at most. Please do not respond.</i>
   - name: "virtual-desktop-controller.session-cleanup-warning"
     title: "Virtual Desktop Scheduled for Deletion"
     template_type: jinja2

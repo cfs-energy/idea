@@ -26,8 +26,8 @@ def api_token_environment(module_id='cluster-manager'):
     users.get_item.return_value = {
         'Item': {'username': 'user-a', 'enabled': True, 'created_on': 1000}
     }
-    context.aws().dynamodb_table().Table.side_effect = (
-        lambda name: users if name.endswith('.accounts.users') else table
+    context.aws().dynamodb_table().Table.side_effect = lambda name: (
+        users if name.endswith('.accounts.users') else table
     )
     groups = context.aws().cognito_idp().admin_list_groups_for_user
     groups.return_value = {'Groups': [{'GroupName': f'{module_id}-users-module-group'}]}

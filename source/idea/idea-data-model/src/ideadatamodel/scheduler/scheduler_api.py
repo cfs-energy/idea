@@ -92,6 +92,20 @@ from ideadatamodel.aws import (
     GetImageScheduleRequest,
     GetImageScheduleResponse,
 )
+from ideadatamodel.scheduler.scratch_cleanup_model import (
+    GetScratchCleanupStatusRequest,
+    GetScratchCleanupStatusResult,
+    ListScratchCleanupAuditRequest,
+    ListScratchCleanupAuditResult,
+    ListScratchCleanupPreviewRequest,
+    ListScratchCleanupPreviewResult,
+    PreviewScratchCleanupRequest,
+    PreviewScratchCleanupResult,
+    BackfillScratchCleanupRequest,
+    BackfillScratchCleanupResult,
+    ListScratchCleanupUpcomingRequest,
+    ListScratchCleanupUpcomingResult,
+)
 from ideadatamodel.scheduler.scheduler_model import (
     SocaComputeNodeState,
     SocaComputeNode,
@@ -303,6 +317,8 @@ class SubmitJobResult(SocaPayload):
     service_quota_unavailable: Optional[bool] = Field(default=None)
     estimated_bom_cost: Optional[SocaJobEstimatedBOMCost] = Field(default=None)
     budget_usage: Optional[SocaJobEstimatedBudgetUsage] = Field(default=None)
+    # where the submitted script was kept; unset when it was not kept
+    job_script_path: Optional[str] = Field(default=None)
 
     @property
     def job_uid(self) -> Optional[str]:
@@ -774,6 +790,48 @@ OPEN_API_SPEC_ENTRIES_SCHEDULER = [
         request=CheckHpcLicenseResourceAvailabilityRequest,
         result=CheckHpcLicenseResourceAvailabilityResult,
         is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.GetScratchCleanupStatus',
+        request=GetScratchCleanupStatusRequest,
+        result=GetScratchCleanupStatusResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.PreviewScratchCleanup',
+        request=PreviewScratchCleanupRequest,
+        result=PreviewScratchCleanupResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.ListScratchCleanupPreview',
+        request=ListScratchCleanupPreviewRequest,
+        result=ListScratchCleanupPreviewResult,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.BackfillScratchCleanup',
+        request=BackfillScratchCleanupRequest,
+        result=BackfillScratchCleanupResult,
+        is_listing=False,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.ListScratchCleanupUpcoming',
+        request=ListScratchCleanupUpcomingRequest,
+        result=ListScratchCleanupUpcomingResult,
+        is_listing=True,
+        is_public=False,
+    ),
+    IdeaOpenAPISpecEntry(
+        namespace='SchedulerAdmin.ListScratchCleanupAudit',
+        request=ListScratchCleanupAuditRequest,
+        result=ListScratchCleanupAuditResult,
+        is_listing=True,
         is_public=False,
     ),
 ]

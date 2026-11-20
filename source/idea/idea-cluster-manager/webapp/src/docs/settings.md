@@ -6,7 +6,7 @@ The groups are **General**, **Desktops**, **Jobs**, **AI access**, **Notificatio
 
 Choose **Edit** for one card, then **Save** or **Cancel**. Only changed values are submitted, validation errors preserve drafts, and secret fields store references rather than secret contents.
 
-Runtime cards have no badge. A card shows at most one badge: **Applies after restart**, or **Applies on next upgrade** when it contains a deployment setting. Saving does not perform that restart or upgrade.
+Runtime cards have no badge. A card shows at most one badge: **Applies after restart**, **Applies on next ideactl bootstrap** when it contains a setting only `ideactl bootstrap` applies, or **Applies on next upgrade** when it contains a deployment setting. Saving does not perform that restart, bootstrap or upgrade.
 
 Install-time values, generated resource identities, internal wiring, and package or driver pins can be read-only because changing the stored value would not replace deployed infrastructure or installed software. Use the related installation, image, migration, or upgrade workflow.
 

@@ -17,6 +17,7 @@ from ideasdk.protocols import (
 )
 from ideasdk.metrics.metrics_provider_factory import MetricsProviderFactory
 from ideasdk.metrics.dogstatsd.dogstatsd_metrics import DogStatsdMetrics
+from ideasdk.metrics.cloudwatch.cloudwatch_metrics import CloudWatchMetrics
 from ideasdk.utils import Utils
 
 from typing import Optional, List, Dict
@@ -50,6 +51,7 @@ class MetricsService(SocaService, MetricsServiceProtocol):
         )
         self._factory = MetricsProviderFactory(context=self._context)
         self._metrics_backlog_queue = queue.Queue(maxsize=BACKLOG_MAX_SIZE)
+        self.dropped_publications = 0
 
         self._backlog_processor_thread = Thread(
             name='metrics-backlog', target=self._poll_backlog
@@ -138,7 +140,9 @@ class MetricsService(SocaService, MetricsServiceProtocol):
 
         for namespace, namespace_metrics in namespaces.items():
             provider = self._factory.get_provider(namespace)
-            if synchronous and isinstance(provider, DogStatsdMetrics):
+            if synchronous and isinstance(
+                provider, (DogStatsdMetrics, CloudWatchMetrics)
+            ):
                 provider.log(metric_data=namespace_metrics, raise_on_error=True)
             else:
                 provider.log(metric_data=namespace_metrics)
@@ -150,8 +154,18 @@ class MetricsService(SocaService, MetricsServiceProtocol):
         # Queue acceptance alone cannot establish that a socket send succeeded.
         if synchronous:
             self._publish(metric_data, synchronous=True)
-        else:
-            self._metrics_backlog_queue.put(metric_data)
+            return
+        try:
+            # called on the request path: a provider that has stopped answering must not
+            # stop the API with it
+            self._metrics_backlog_queue.put_nowait(metric_data)
+        except queue.Full:
+            self.dropped_publications += 1
+            if self.dropped_publications % 1000 == 1:
+                self._logger.warning(
+                    f'metrics backlog is full, {self.dropped_publications} publications '
+                    'dropped so far'
+                )
 
     def register_accumulator(self, accumulator: MetricsAccumulatorProtocol):
         self._logger.info(

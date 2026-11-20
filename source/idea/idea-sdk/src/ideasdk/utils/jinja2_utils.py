@@ -9,7 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
-from jinja2 import Environment, FileSystemLoader, PackageLoader, BaseLoader
+from jinja2 import Environment, FileSystemLoader, PackageLoader
 
 
 class Jinja2Utils:
@@ -30,7 +30,3 @@ class Jinja2Utils:
             loader=PackageLoader(package_name=package_name, package_path=package_path),
             autoescape=auto_escape,
         )
-
-    @staticmethod
-    def env_using_base_loader(auto_escape: bool = False) -> Environment:
-        return Environment(loader=BaseLoader(), autoescape=auto_escape)

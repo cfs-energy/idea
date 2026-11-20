@@ -719,3 +719,88 @@ def test_any_other_file_that_cannot_be_removed_still_fails_the_archive(tmp_path)
     assert result.returncode != 0
     assert 'sched.log' in result.stderr
     assert stuck.exists()
+
+
+def run_archive_script(tmp_path, fail=0):
+    harness = """aws() { printf '%s\\n' "$*" >> "$CALLS"; return "$FAIL"; }
+flock() { return 0; }
+""" + SCRIPT.read_text()
+    calls = tmp_path / 'aws.log'
+    calls.write_text('')
+    result = subprocess.run(
+        ['bash', '-c', harness],
+        env={
+            **os.environ,
+            'PBS_HOME': str(tmp_path / 'pbs'),
+            'IDEA_CLUSTER_HOME': str(tmp_path / 'apps'),
+            'IDEA_MODULE_ID': 'scheduler',
+            'IDEA_CLUSTER_S3_BUCKET': 'cluster-bucket',
+            'CALLS': str(calls),
+            'FAIL': str(fail),
+        },
+        capture_output=True,
+        text=True,
+    )
+    return result, calls.read_text().splitlines()
+
+
+def test_archive_script_copies_only_changed_files_after_a_successful_run(tmp_path):
+    import time
+
+    server = tmp_path / 'pbs/server_logs'
+    compute = tmp_path / 'apps/scheduler/compute_node/logs'
+    server.mkdir(parents=True)
+    (compute / 'node-a').mkdir(parents=True)
+    (server / '20260101').write_text('archived already')
+    os.utime(server / '20260101', (time.time() - 5 * 86400,) * 2)
+
+    # nothing to go on: the whole directory is synced, as it always was
+    first, calls = run_archive_script(tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert any(call.startswith(f's3 sync {server}/') for call in calls)
+    assert (tmp_path / 'pbs/.idea-log-archive.last-success').exists()
+
+    (server / '20260105').write_text('today')
+    (compute / 'node-a/boot.log').write_text('new')
+    second, calls = run_archive_script(tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert not any(' sync ' in call for call in calls)
+    copied = [call for call in calls if ' cp ' in call]
+    assert any(
+        call.endswith(
+            f'{server}/20260105 s3://cluster-bucket/logs/scheduler/server_logs/20260105'
+        )
+        for call in copied
+    )
+    assert any(
+        call.endswith(
+            's3://cluster-bucket/logs/scheduler/compute_nodes/node-a/boot.log'
+        )
+        for call in copied
+    )
+    assert not any('20260101' in call for call in copied)
+
+
+def test_archive_script_catches_up_after_a_failed_run(tmp_path):
+    import time
+
+    server = tmp_path / 'pbs/server_logs'
+    server.mkdir(parents=True)
+    (server / '20260101').write_text('never uploaded')
+    os.utime(server / '20260101', (time.time() - 5 * 86400,) * 2)
+    assert run_archive_script(tmp_path)[0].returncode == 0
+
+    # three days without a good run: a file from two days ago is still picked up
+    marker = tmp_path / 'pbs/.idea-log-archive.last-success'
+    marker.write_text(str(int(time.time()) - 3 * 86400))
+    (server / '20260103').write_text('missed')
+    os.utime(server / '20260103', (time.time() - 2 * 86400,) * 2)
+    failing, _ = run_archive_script(tmp_path, fail=1)
+    assert failing.returncode == 1
+    assert marker.read_text() == str(int(marker.read_text()))
+    assert int(marker.read_text()) < time.time() - 2 * 86400
+
+    ok, calls = run_archive_script(tmp_path)
+    assert ok.returncode == 0, ok.stderr
+    assert any(call.endswith('server_logs/20260103') for call in calls)
+    assert int(marker.read_text()) > time.time() - 60

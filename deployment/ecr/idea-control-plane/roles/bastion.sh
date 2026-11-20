@@ -4,8 +4,12 @@ set -euo pipefail
 node /opt/idea/ideactl/dist/src/container/bastion.js
 unset IDEA_LDAP_CERTIFICATE
 install -d -m 0755 /run/sshd
-# Container sessions have no host audit login UID to set.
-sed -i '/pam_loginuid.so/d' /etc/pam.d/sshd
+/opt/idea/roles/bastion_pam.sh /etc/pam.d/sshd
+# Each user's tmux directory sits under a parent only root writes (TMUX_TMPDIR below), made at
+# login by the session hook, so no user can take another's name first as under the shared /tmp.
+# The wrapper falls back to tmux's default location, with a warning, if the hook could not.
+install -d -m 0755 -o root -g root /run/idea-tmux
+install -m 0755 /opt/idea/roles/tmux.sh /usr/local/bin/tmux
 cat > /etc/ssh/sshd_config <<'EOF'
 Port 22
 HostKey /etc/ssh/ssh_host_rsa_key
@@ -28,18 +32,22 @@ UseDNS no
 ClientAliveInterval 60
 ClientAliveCountMax 3
 Subsystem sftp internal-sftp
+SetEnv TMUX_TMPDIR=/run/idea-tmux
 # Per-source limits stand in for the EC2 host's fail2ban, set so only brute force reaches them:
-# many users can share one NAT address. A source may hold 30 unauthenticated connections, below
-# the 50 where random drops start for everyone. Each connection that fails authentication adds
-# 2 seconds of refusal, and the address is refused only once more than 30 seconds are pending, so
-# about 15 failed connections in quick succession, or a failure more than every 2 seconds
-# sustained; refusals stop at most 10 minutes after the attempts do.
+# many users can share one NAT address. No PerSourceMaxStartups: it refused the health check's
+# own loopback connections, and the failed checks killed the task. Penalties add up per address
+# and drain in real time; the address is refused only once more than 30 seconds are pending, and
+# refusals stop at most 10 minutes after the attempts do. Each connection adds: 2 seconds if it
+# fails authentication (set here), and sshd's defaults of 1 second if it closes without trying
+# to authenticate, 10 seconds if it outlasts LoginGraceTime and 90 seconds if it crashes sshd. So
+# about 15 failed logins in quick succession, or about 30 connections that never authenticate
+# (a port scanner, ssh-keyscan), or 3 left open past the grace time; sustained, a failed login
+# more than every 2 seconds or such a connection more than every second.
 MaxStartups 50:30:200
-PerSourceMaxStartups 30
 PerSourceNetBlockSize 32:128
 PerSourcePenalties authfail:2s min:30s max:10m
 EOF
-# Never penalize the task's own ssh-keyscan check, the load balancer's TCP checks (from its
+# Never penalize the task's own health checks, the load balancer's TCP checks (from its
 # private addresses) or the browser terminals (from the cluster manager): loopback and the VPC.
 # Nor the SSH allowlist (ssh_client_ip): an office reaches the bastion through one NAT address,
 # and a penalty there would refuse every user in it. An entry wider than /8 stays penalized: no
@@ -99,8 +107,9 @@ if [[ -n "${IDEA_PBS_SERVER:-}" ]]; then
   if [[ "${PRIVATE_ZONE}" != "${IDEA_PBS_SERVER}" ]] && ! grep -q "^search .*${PRIVATE_ZONE}" /etc/resolv.conf; then
     # rewritten in place: the runtime bind-mounts resolv.conf, so sed -i cannot rename over it
     RESOLV="$(cat /etc/resolv.conf)"
-    SEARCH="$(grep -m1 '^search ' <<< "${RESOLV}" | cut -d' ' -f2-)"
-    { grep -v '^search ' <<< "${RESOLV}"; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
+    # a file with no search line is normal (a DHCP option set without a domain name)
+    SEARCH="$(sed -n 's/^search //p' <<< "${RESOLV}" | head -n 1)"
+    { grep -v '^search ' <<< "${RESOLV}" || true; echo "search ${PRIVATE_ZONE}${SEARCH:+ ${SEARCH}}"; } > /etc/resolv.conf
   fi
   # the server's own server_name (roles/scheduler.sh): qsub completes a short job id with it,
   # and the server releases a dependency only on that exact id
@@ -118,19 +127,54 @@ EOF
   echo 'export PATH=/opt/pbs/bin:/opt/pbs/sbin:$PATH' > /etc/profile.d/pbs.sh
 fi
 # Site customizations, as compute nodes and desktops run theirs from the shared /apps file
-# system: tools users expect on the login node. It runs as root, so only a file root owns and
-# no one else can write (a desktop user with sudo can write to /apps); it gets two minutes,
-# its output goes to the task log, and sshd starts whatever it did.
+# system: tools users expect on the login node. It runs as root, so only a file root owns and no
+# one else can write (a desktop user with sudo can write to /apps). Any client of that file system
+# that has root can still replace it, so a site can pin it: with bastion-host.site_hook_sha256
+# configured (given to this task as IDEA_SITE_HOOK_SHA256) it runs only when its SHA-256 matches,
+# and what runs is the checked task-local copy. Without one it runs as before, with a warning
+# that prints the value to set. It gets two minutes, its output goes to the task log, and sshd
+# starts whatever it did.
 SITE_HOOK="${IDEA_CLUSTER_HOME:-}/${IDEA_MODULE_ID:-bastion-host}/userdata_customizations.sh"
 if [[ -n "${IDEA_CLUSTER_HOME:-}" && -f "${SITE_HOOK}" ]]; then
   # stat -L: the file the hook path leads to is the one that runs
   read -r HOOK_UID HOOK_MODE < <(stat -L -c '%u %a' "${SITE_HOOK}") || HOOK_UID=
-  if [[ "${HOOK_UID}" != 0 ]] || (( 8#${HOOK_MODE:-777} & 8#022 )); then
-    echo "skipping site hook ${SITE_HOOK}: it must be owned by root and writable by no one else (owner ${HOOK_UID:-unknown}, mode ${HOOK_MODE:-unknown})"
-  else
-    echo "running site hook ${SITE_HOOK}"
-    timeout 120 /bin/bash "${SITE_HOOK}" || echo "site hook failed with status $?; continuing"
+  # trimmed of surrounding whitespace (a pasted value may carry spaces or a newline), any case
+  HOOK_WANT="${IDEA_SITE_HOOK_SHA256:-}"
+  HOOK_WANT="${HOOK_WANT#"${HOOK_WANT%%[![:space:]]*}"}"
+  HOOK_WANT="${HOOK_WANT%"${HOOK_WANT##*[![:space:]]}"}"
+  HOOK_WANT="$(tr 'A-F' 'a-f' <<< "${HOOK_WANT}")"
+  # task-local, readable only by root; a hook that cannot be read in 30 seconds is skipped
+  HOOK_COPY="$(mktemp)"
+  HOOK_GOT=
+  if timeout 30 cat "${SITE_HOOK}" > "${HOOK_COPY}"; then
+    HOOK_GOT="$(sha256sum "${HOOK_COPY}" | cut -d' ' -f1)"
   fi
+  HOOK_RUN=
+  if [[ -z "${HOOK_GOT}" ]]; then
+    echo "skipping site hook ${SITE_HOOK}: it cannot be read"
+  elif [[ "${HOOK_UID}" != 0 ]] || (( 8#${HOOK_MODE:-777} & 8#022 )); then
+    echo "skipping site hook ${SITE_HOOK}: it must be owned by root and writable by no one else (owner ${HOOK_UID:-unknown}, mode ${HOOK_MODE:-unknown})"
+  elif [[ -z "${HOOK_WANT}" ]]; then
+    echo "WARNING: site hook ${SITE_HOOK} runs without a checksum; set bastion-host.site_hook_sha256 to ${HOOK_GOT} so only this content runs (set it again after each edit)"
+    echo "running site hook ${SITE_HOOK}"
+    HOOK_RUN="${SITE_HOOK}"
+  elif [[ "${HOOK_GOT}" != "${HOOK_WANT}" ]]; then
+    echo "skipping site hook ${SITE_HOOK}: its SHA-256 ${HOOK_GOT} is not the configured ${HOOK_WANT}"
+  else
+    echo "running site hook ${SITE_HOOK} (sha256 ${HOOK_GOT})"
+    HOOK_RUN="${HOOK_COPY}"
+  fi
+  if [[ -n "${HOOK_RUN}" ]]; then
+    timeout 120 /bin/bash "${HOOK_RUN}" || echo "site hook failed with status $?; continuing"
+    # A package update by the hook can put back a bit the image build cleared; only those files
+    # are cleared again, so a tool the hook installs keeps its modes. A hook may install in the
+    # background, so the same check repeats every minute while the task runs.
+    echo "clearing set-id bits the site hook may have restored on image files"
+    /opt/idea/roles/setid_strip.sh --image-list || echo "set-id strip failed; continuing"
+    ( while sleep "${IDEA_SETID_RECHECK_INTERVAL:-60}"; do /opt/idea/roles/setid_strip.sh --image-list || true; done ) &
+    setid_recheck_pid=$!
+  fi
+  rm -f "${HOOK_COPY}"
 fi
 /usr/sbin/sshd -t
 /usr/sbin/sssd -i --logger=stderr &
@@ -138,16 +182,103 @@ sssd_pid=$!
 # Health checks connect to sshd without logging in and sshd reports each one on stderr, which
 # the log shipper files as an error: about 1.2M lines a week, every error IDEA logged. Two shapes
 # are dropped before they leave the container, and nothing else:
-#   the task's ssh-keyscan on 127.0.0.1, which closes after the key exchange:
+#   the task's own checks on 127.0.0.1 (bastion_health.sh and the metrics process), which read
+#     the banner and close, and any other loopback client that leaves before authenticating:
+#     Connection closed by 127.0.0.1 port N
 #     Connection closed by 127.0.0.1 port N [preauth]
-#   the load balancer's TCP check from its private addresses, which closes before sending an SSH
-#     identification string (no [preauth]: no session existed):
+#   the load balancer's TCP check, which closes before sending an SSH identification string (no
+#     [preauth]: no session existed), from an address in the VPC or a cluster subnet
+#     (IDEA_VPC_CIDRS, the load balancer's own networks):
 #     Connection closed by 10.x.y.z port N
-# Logins, failed and invalid-user attempts, disconnects after authentication, any close from a
-# public address and every other sshd line still reach the task log.
-SSHD_HEALTH_CHECK_LINES='^Connection closed by (127\.0\.0\.1 port [0-9]+ \[preauth\]|(10(\.[0-9]{1,3}){3}|(172\.(1[6-9]|2[0-9]|3[01])|192\.168)(\.[0-9]{1,3}){2}) port [0-9]+)$'
-sshd_log_filter() { grep --line-buffered -v -E "${SSHD_HEALTH_CHECK_LINES}" >&2 || true; }
-/usr/sbin/sshd -D -e 2> >(sshd_log_filter) &
+#     The same close from any other address, private ones included (a VPN, a peered network, a
+#     port scan from the office), reaches the task log. With no IDEA_VPC_CIDRS only the loopback
+#     lines are dropped.
+#     ponytail: any host in the VPC that connects and leaves without a word is dropped as well;
+#     pass the load balancer's subnets or node addresses if those closes are ever wanted.
+# Logins, failed and invalid-user attempts, disconnects after authentication and every other sshd
+# line still reach the task log.
+# sshd -e ends each line in CR LF, so the CR is allowed before the end. An entry that is not an
+# IPv4 network, or is wider than /8 (no VPC is), is passed over.
+# shellcheck disable=SC2016  # an awk program, not shell
+SSHD_HEALTH_CHECK_LINES='
+function number(address,  octet) {
+  split(address, octet, ".")
+  return ((octet[1] * 256 + octet[2]) * 256 + octet[3]) * 256 + octet[4]
+}
+BEGIN {
+  entries = split(networks, entry, ",")
+  for (i = 1; i <= entries; i++) {
+    if (entry[i] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) continue
+    split(entry[i], part, "/")
+    if (part[2] < 8 || part[2] > 32) continue
+    size[++count] = 2 ^ (32 - part[2])
+    network[count] = int(number(part[1]) / size[count])
+  }
+}
+{
+  line = $0
+  sub(/\r$/, "", line)
+  if (line ~ /^Connection closed by 127\.0\.0\.1 port [0-9]+( \[preauth\])?$/) next
+  if (line ~ /^Connection closed by [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ port [0-9]+$/) {
+    split(line, word, " ")
+    address = number(word[4])
+    for (i = 1; i <= count; i++) if (int(address / size[i]) == network[i]) next
+  }
+  print
+  fflush()
+}'
+# Connections sshd dropped go to a tally for the metrics process: only the phrase, and the
+# address only when it is loopback, so the file holds nothing about anyone. tee -p and a local file: a
+# dead tally costs a count, never sshd's stderr. At its default log level sshd names only some
+# drops ("past Maxstartups" on 9.9, "Maxstartups" on 10.5) and counts the rest in a summary: 9.9
+# "in|exited MaxStartups throttling ..., N connections dropped" (the episode so far), 10.5
+# "Maxstartups logging rate-limited: additional N connections dropped", matched whole so that
+# its first word is not taken for a named drop. Matched in any case: sshd's own spelling differs
+# between those messages and between releases.
+# sshd gives those counts late, so the remote count is exact for an episode but not minute by
+# minute. 9.9 names the first drop and logs the total when the episode ends ("exited"): its "in"
+# line needs five minutes without a drop inside an episode, a gap a flood never has. 10.5
+# logs its count every five minutes and when its rate limit ends. While a flood lasts the count
+# of remote drops reads 1; the checks' own refusals are noted as they happen.
+# sshd also logs the name a client offers, as it came and before any login ("Invalid user NAME
+# from ..."), so the phrases are taken only from lines sshd itself begins with them, cut where
+# its own words end: a name never reaches the second pattern. A name may hold a line break too,
+# which sshd -e does not escape; sshd_stderr.py below keeps each message on one line, so a line
+# begins only where sshd began a message.
+SSHD_DROP_SOURCES='^(drop connection #[0-9]+ from \[[^] ]+\]:[0-9]+ on \[[^] ]+\]:[0-9]+ (past )?Maxstartups|(in|exited) MaxStartups throttling (for|after) [^ ]+, [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication for |Timeout, client not responding from )'
+SSHD_DROP_LINES='from \[127\.0\.0\.1\].*Maxstartups|(past )?Maxstartups|(in|exited) MaxStartups throttling.* [0-9]+ connections dropped|Maxstartups logging rate-limited: additional [0-9]+ connections dropped|Timeout before authentication|Timeout, client not responding'
+sshd_drop_phrases() {
+  grep --line-buffered -ioE "${SSHD_DROP_SOURCES}" | grep --line-buffered -ioE "${SSHD_DROP_LINES}"
+}
+# Each kept line is written as it arrives: the program calls fflush() after every print, which
+# gawk, BSD awk and mawk all have. mawk alone also fills a whole input block before it runs the
+# program, so a quiet sshd's lines would wait for more; -W interactive makes it read line by line.
+# gawk and BSD awk handle each line as the pipe delivers it and are given no extra option.
+sshd_health_check_filter() {
+  local interactive=()
+  if awk -W version </dev/null 2>&1 | grep -q '^mawk'; then interactive=(-W interactive); fi
+  LC_ALL=C awk ${interactive[@]+"${interactive[@]}"} -v networks="${IDEA_VPC_CIDRS:-}" "${SSHD_HEALTH_CHECK_LINES}"
+}
+sshd_log_filter() {
+  tee -p >(sshd_drop_phrases >> "${SSHD_DROPS_FILE:-/dev/null}" || true) \
+    | sshd_health_check_filter >&2 || true
+}
+metrics_pid=
+if [[ "${IDEA_BASTION_METRICS:-false}" == true ]]; then
+  export SSHD_DROPS_FILE=/run/idea-sshd-drops
+  : > "${SSHD_DROPS_FILE}"
+  (
+    while true; do
+      # it returns 0 only with nowhere to send: nothing a respawn would change
+      python3.13 -I -S /opt/idea/roles/bastion_metrics.py && break
+      sleep 30
+    done
+  ) &
+  metrics_pid=$!
+fi
+# started by sshd_stderr.py, which execs it (the pid is sshd's) and writes each message it logs
+# as one line: a CR or LF inside a message reaches the filter and the task log as \r or \n
+python3.13 -I -S /opt/idea/roles/sshd_stderr.py /usr/sbin/sshd -D -e 2> >(sshd_log_filter) &
 sshd_pid=$!
 # Initialize and retry terminal trust without blocking ordinary SSH.
 (
@@ -165,7 +296,7 @@ sshd_pid=$!
   fi
 ) &
 trust_pid=$!
-trap 'kill "$trust_pid" "$sshd_pid" "$sssd_pid" 2>/dev/null || true; wait || true' EXIT
+trap 'kill "$trust_pid" "$sshd_pid" "$sssd_pid" ${metrics_pid} ${setid_recheck_pid:-} 2>/dev/null || true; wait || true' EXIT
 trap 'exit 0' TERM INT
 # Losing directory authentication is a service failure, even if port 22 still answers.
 wait -n "$sshd_pid" "$sssd_pid"

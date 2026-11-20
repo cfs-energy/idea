@@ -24,8 +24,6 @@ import {
     GetBasePermissionsResponse,
     ListSupportedGPURequest,
     ListSupportedGPUResponse,
-    ListScheduleTypesRequest,
-    ListScheduleTypesResponse,
     GetPermissionProfileRequest,
     GetPermissionProfileResponse
 } from './data-model'
@@ -46,13 +44,6 @@ class VirtualDesktopUtilsClient extends IdeaBaseClient<VirtualDesktopUtilsClient
     listSupportedGPUs(req: ListSupportedGPURequest): Promise<ListSupportedGPUResponse> {
         return this.apiInvoker.invoke_alt<ListSupportedGPURequest, ListSupportedGPUResponse>(
             'VirtualDesktopUtils.ListSupportedGPU',
-            req
-        )
-    }
-
-    listScheduleTypes(req: ListScheduleTypesRequest): Promise<ListScheduleTypesResponse> {
-        return this.apiInvoker.invoke_alt<ListScheduleTypesRequest, ListScheduleTypesResponse>(
-            'VirtualDesktopUtils.ListScheduleTypes',
             req
         )
     }

@@ -10,6 +10,7 @@
 #  and limitations under the License.
 
 import ideavirtualdesktopcontroller
+from ideadatamodel import exceptions
 from ideadatamodel import VirtualDesktopSessionState, VirtualDesktopSession
 from ideasdk.utils import Utils, DateTimeUtils
 
@@ -28,7 +29,8 @@ class ValidateDCVSessionDeletionEventHandler(BaseVirtualDesktopControllerEventHa
         # This prevents instances from running indefinitely when DCV broker validation gets stuck
         # Reduced default from 10 minutes to 2 minutes for faster cleanup of stuck sessions
         self.dcv_validation_timeout_minutes = context.config().get_int(
-            'dcv_session.validation_timeout_minutes', default=2
+            'virtual-desktop-controller.dcv_session.validation_timeout_minutes',
+            default=2,
         )
 
     def _continue_stop_session(self, message_id: str, session: VirtualDesktopSession):
@@ -144,9 +146,10 @@ class ValidateDCVSessionDeletionEventHandler(BaseVirtualDesktopControllerEventHa
             # delete session entry
             self.session_db.delete(session)
         except Exception as e:
-            self.log_error(
-                message_id=message_id,
-                message=f'Exception during session deletion for {session.idea_session_id}: {str(e)}',
+            # the host is gone; the message is redelivered so the row's cleanup is retried,
+            # until the queue's redrive moves it to the dead-letter queue
+            raise exceptions.general_exception(
+                f'Exception during session deletion for {session.idea_session_id}: {str(e)}'
             )
 
     def _has_exceeded_validation_timeout(self, session: VirtualDesktopSession) -> bool:

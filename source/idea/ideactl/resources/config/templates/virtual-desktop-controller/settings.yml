@@ -71,7 +71,8 @@ dcv_connection_gateway:
     private_key_secret_arn: {{ dcv_connection_gateway_custom_certificate_private_key_secret_arn if dcv_connection_gateway_custom_certificate_private_key_secret_arn else '~' }}
 
 external_nlb:
-  # external NLB access logs are enabled by default
+  # Network Load Balancer access logs record TLS listeners only. The DCV gateway listeners are TCP
+  # (and UDP for QUIC) and TLS ends in the gateway, so this writes no records today.
   access_logs: true
 
 opensearch:
@@ -223,7 +224,14 @@ dcv_session:
 # image pipeline: bake, validate and promote one image per OS / architecture / variant.
 # clusters deployed before these keys existed run on the same defaults (ImagePipelineSettings)
 software_stacks:
-  # the monthly vendor check (rebakes only rows whose vendor base image changed).
+  # stacks the monthly rebuild does not feed get an owner and a date.
+  expiry:
+    default_days: 90     # counted from creation, for a stack with no date of its own, once enforce_from is set
+    warn_days: 14        # the picker warns from this many days before
+    exempt_amis: []      # images that never expire
+    enforce_from: ""     # YYYY-MM-DD. stacks with no date of their own start to warn once this is set; from this day expired stacks are not offered for new desktops. empty: only stacks given a date warn
+    digest_enabled: true # one email per owner per week at most
+  # the monthly rebuild (every desktop and compute row, changed or not; pinned and held rows are skipped).
   # the scheduler reads this key for compute rows too. hour is in cluster.timezone
   image_refresh_schedule:
     enabled: true
@@ -235,6 +243,9 @@ software_stacks:
     # seconds from request acceptance to READY for a test launch; slower fails the bake
     ready_gate_seconds_linux: 600
     ready_gate_seconds_windows: 900
+    # minutes a bake attempt may work before it fails and is cleaned up. the queue and waits for
+    # EC2 capacity do not count; a capacity wait gives up after five tries, about four hours
+    bake_time_limit_minutes: 120
     # the service user and hidden project test launches (and compute test jobs) run as
     validation_user: idea-validate
     validation_project: idea-validate
@@ -286,3 +297,16 @@ vdi_host_backup:
         schedule_expression: "cron(0 5 * * ? *)"
         start_window_minutes: 60 # 1 hour
         completion_window_minutes: 480 # 8 hours
+
+# SHA-256 of <cluster home>/dcv_host/userdata_customizations.sh (sha256sum of the file).
+# The hook runs once, while a new desktop is provisioned; resumed or rebooted desktops do not re-check it.
+# Set, the hook runs only when it matches (case and surrounding spaces ignored); a mismatch STOPS the new
+# desktop before its owner can connect and fails the session with site-hook-mismatch. Empty, the hook runs as before with a logged warning naming the value to set.
+# Recommended; set it again after every edit of the hook.
+dcv_host_site_hook_sha256: ~
+
+# SHA-256 of <cluster home>/<module id>/ami_builder/userdata_customizations.sh (sha256sum of the file).
+# Set, desktop image bakes run the hook only when it matches; a mismatch STOPS that host's bootstrap with
+# site-hook-mismatch. Empty, the hook runs as before with a logged warning naming the value to set.
+# Recommended; set it again after every edit of the hook.
+ami_builder_site_hook_sha256: ~

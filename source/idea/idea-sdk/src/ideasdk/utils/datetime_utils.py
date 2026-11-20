@@ -43,7 +43,7 @@ class DateTimeUtils:
     @staticmethod
     def to_minutes(hours: int = None, seconds: int = None, millis: int = None):
         if hours is not None:
-            return int(hours / (60 * 60 * 1000))
+            return int(hours * 60)
         if seconds is not None:
             return int(seconds / 60)
         if millis is not None:

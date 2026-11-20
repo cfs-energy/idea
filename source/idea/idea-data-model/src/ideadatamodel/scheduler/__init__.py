@@ -10,4 +10,5 @@
 #  and limitations under the License.
 
 from .scheduler_model import *
+from .scratch_cleanup_model import *
 from .scheduler_api import *

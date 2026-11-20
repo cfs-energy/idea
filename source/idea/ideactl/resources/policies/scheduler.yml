@@ -9,10 +9,18 @@ Statement:
     Action:
       - dynamodb:GetItem
       - dynamodb:Query
-      - dynamodb:UpdateItem
     Resource:
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
       - '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}/index/*'
+
+  # A token's use is recorded; its owner, scope and expiry are written only by the cluster manager.
+  - Effect: Allow
+    Action:
+      - dynamodb:UpdateItem
+    Resource: '{{ context.arns.get_ddb_table_arn("cluster-manager.api-tokens") }}'
+    Condition:
+      ForAllValues:StringEquals:
+        dynamodb:Attributes: [token_id, last_used_on]
 
   - Effect: Allow
     Action:
@@ -33,7 +41,6 @@ Statement:
       - autoscaling:DetachInstances
       - ec2:DeleteLaunchTemplate
       - ec2:CreateLaunchTemplate
-      - fsx:CreateDataRepositoryTask
     Resource: '*'
     Effect: Allow
 
@@ -42,17 +49,47 @@ Statement:
     Resource:
       - '{{ context.arns.get_arn("ec2", "volume/*", aws_region="*") }}'
       - '{{ context.arns.get_arn("ec2", "network-interface/*", aws_region="*") }}'
-      - '{{ context.arns.get_arn("ec2", "instance/*", aws_region="*") }}'
       - '{{ context.arns.get_arn("ec2", "spot-instances-request/*", aws_region="*") }}'
     Effect: Allow
 
+  # An instance is tagged by the call that launches it, or later only if it is already this
+  # cluster's, so the ownership tags Run Command trusts cannot be put on another instance.
   - Action:
-      - cloudformation:CreateStack
-      - cloudformation:DeleteStack
+      - ec2:CreateTags
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      'Null':
+        ec2:CreateAction: 'false'
+    Effect: Allow
+  - Action:
+      - ec2:CreateTags
+    Resource: '{{ context.arns.get_arn("ec2", "instance/*") }}'
+    Condition:
+      StringEquals:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+    Effect: Allow
+
+  # Job stacks only: a stack is created carrying this cluster's job tags, and only a stack that
+  # carries them is deleted. Module stacks share the name prefix and carry no StackType=job.
+  - Action:
       - cloudformation:DescribeStackResources
       - cloudformation:DescribeStacks
       - cloudformation:GetTemplate
     Resource: '*'
+    Effect: Allow
+  - Action: cloudformation:CreateStack
+    Resource: '*'
+    Condition:
+      StringEquals:
+        aws:RequestTag/idea:ClusterName: '{{ context.cluster_name }}'
+        aws:RequestTag/idea:StackType: job
+    Effect: Allow
+  - Action: cloudformation:DeleteStack
+    Resource: '*'
+    Condition:
+      StringEquals:
+        aws:ResourceTag/idea:ClusterName: '{{ context.cluster_name }}'
+        aws:ResourceTag/idea:StackType: job
     Effect: Allow
 
   - Condition:
@@ -68,12 +105,6 @@ Statement:
       - ec2:ModifyInstanceAttribute
     Resource:
       {{ context.utils.to_yaml(context.arns.ec2_common_arns) | indent(6) }}
-    Effect: Allow
-
-  - Action:
-      - lambda:InvokeFunction
-    Resource:
-      - '{{ context.arns.get_lambda_arn() }}'
     Effect: Allow
 
   - Action:
@@ -115,10 +146,16 @@ Statement:
   - Action:
       - s3:GetObject
       - s3:ListBucket
-      - s3:PutObject
       - s3:GetBucketAcl
     Resource:
       {{ context.utils.to_yaml(context.arns.s3_bucket_arns) | indent(6) }}
+    Effect: Allow
+  # The scheduler writes its own host packages (job stacks, image builds) and its log archive
+  # (send_logs_s3.sh), nothing else in the bucket.
+  - Action: s3:PutObject
+    Resource:
+      - '{{ context.arns.s3_bucket_arns[1] }}/idea/{{ context.module_id }}/bootstrap/*'
+      - '{{ context.arns.s3_bucket_arns[1] }}/logs/{{ context.module_id }}/*'
     Effect: Allow
 
   - Action:
@@ -139,6 +176,7 @@ Statement:
       - '{{ context.arns.get_ddb_table_arn(context.module_id + ".applications") }}'
       - '{{ context.arns.get_ddb_table_arn(context.module_id + ".license-resources") }}'
       - '{{ context.arns.get_ddb_table_arn(context.module_id + ".image-builds") }}'
+      - '{{ context.arns.get_ddb_table_arn(context.module_id + ".scratch-cleanup") }}'
     Effect: Allow
 
   - Condition:
@@ -219,9 +257,19 @@ Statement:
     Effect: Allow
     Sid: SendUserNotifications
 
+  # Job log groups are created with their retention when the job is provisioned, so hosts need no
+  # retention call (one group per job: /<cluster>/<scheduler>/job-*).
   - Action:
+      - logs:CreateLogGroup
       - logs:PutRetentionPolicy
-    Resource: '*'
+    Resource: '{{ context.arns.get_log_group_arn("/" + context.module_id + "/job-*") }}'
+    Effect: Allow
+
+  # A job stack created before 26.09.1 with anonymous metrics on carries a custom resource whose
+  # service token is this function; deleting the stack invokes it with the scheduler's credentials.
+  # cluster.ts keeps the function for exactly those stacks.
+  - Action: lambda:InvokeFunction
+    Resource: '{{ context.arns.get_lambda_arn("solution-metrics") }}'
     Effect: Allow
 
   - Action:
@@ -231,11 +279,16 @@ Statement:
       - '{{ context.arns.get_kinesis_arn() }}'
     Effect: Allow
 
-  # The scheduler points its stable DNS name at the task running the server.
+  # The scheduler points its stable DNS name at the task running the server, in the cluster's
+  # private zone only (roles/scheduler.sh, IDEA_ROUTE53_ZONE_ID). Without the zone the script
+  # makes no call.
+  {% set zone = context.config.get_string('cluster.route53.private_hosted_zone_id') %}
+  {% if zone %}
   - Effect: Allow
     Action: route53:ChangeResourceRecordSets
-    Resource: '{{ context.arns.get_route53_hostedzone_arn() }}'
+    Resource: 'arn:{{ context.config.get_string("cluster.aws.partition", required=True) }}:route53:::hostedzone/{{ zone }}'
     Sid: SchedulerDnsRecord
+  {% endif %}
 
 {% include '_templates/aws-managed-ad.yml' %}
 

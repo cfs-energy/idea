@@ -24,6 +24,10 @@ Refer to [#jinja2-variables](email-templates.md#jinja2-variables "mention") if y
 Refer to [#jinja2-variables](email-templates.md#jinja2-variables "mention") if you need to customize the email body with pre-defined IDEA variables
 {% endhint %}
 
+### Templates and upgrades
+
+An upgrade adds the templates a release introduces and never overwrites one you have edited. A default template whose subject and body you have not changed takes the corrected text when a release fixes it.
+
 ### Jinja2 Variables
 
 {% tabs %}

@@ -1,65 +1,91 @@
-import {render, screen, within} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router-dom';
-import {AppContext} from '../../common';
-import {initTestAppContext} from '../../test-support';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import Users from './users';
+import {initTestAppContext} from '../../test-support';
 
-const renderPage = () => {
-    render(
-        <MemoryRouter>
-            <Users
-                ideaPageId="users"
-                toolsOpen={false}
-                tools={null}
-                onToolsChange={() => {}}
-                onPageChange={() => {}}
-                sideNavHeader={{text: 'IDEA', href: '#/'}}
-                sideNavItems={[]}
-                onSideNavChange={() => {}}
-                onFlashbarChange={() => {}}
-                flashbarItems={[]}
-            />
-        </MemoryRouter>
-    );
+const pageProps: any = {
+    ideaPageId: 'users', toolsOpen: false, tools: null, onToolsChange: vi.fn(), onPageChange: vi.fn(), sideNavItems: [],
+    sideNavHeader: {text: '', href: '#/'}, onSideNavChange: vi.fn(), flashbarItems: []
+};
+const person = {username: 'person-a', enabled: true, sudo: false, additional_groups: ['group-a']};
+
+let accounts: ReturnType<ReturnType<typeof initTestAppContext>['client']>['accounts'] extends () => infer R ? R : never;
+let flash: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+    const context = initTestAppContext();
+    vi.spyOn(context.getClusterSettingsService(), 'fetchMaintenance').mockResolvedValue({enabled: false, message: '', ends_at: ''});
+    accounts = context.client().accounts();
+    vi.spyOn(accounts, 'listUsers').mockResolvedValue({listing: [person], paginator: {}} as any);
+    flash = vi.fn();
+});
+afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+});
+
+const mount = async () => {
+    render(<MemoryRouter><Users {...pageProps} onFlashbarChange={flash}/></MemoryRouter>);
+    await screen.findByText('person-a');
+};
+const select = async () => {
+    await userEvent.click(within(screen.getByText('person-a').closest('tr')!).getByRole('radio'));
+};
+const actions = () => screen.getByRole('button', {name: 'Actions'});
+// every modal stays in the document, so reach the open one by its heading
+const dialog = async (title: string) => within((await screen.findAllByRole('heading', {name: title}))[0].closest<HTMLElement>('[role="dialog"]')!);
+const pick = async (name: string) => {
+    await userEvent.click(actions());
+    await userEvent.click(await screen.findByRole('menuitem', {name}));
 };
 
-describe('users page', () => {
-    afterEach(() => {
-        vi.restoreAllMocks();
+describe('selection follows the list', () => {
+    it('disables Actions once a refetch has cleared the row', async () => {
+        vi.spyOn(accounts, 'disableUser').mockResolvedValue({} as any);
+        await mount();
+        expect(actions()).toBeDisabled();
+        await select();
+        expect(actions()).toBeEnabled();
+        await pick('Disable User');
+        await userEvent.click((await dialog('Disable User')).getByRole('button', {name: 'Yes'}));
+        await waitFor(() => expect(accounts.listUsers).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(actions()).toBeDisabled());
     });
+});
 
-    it('saves virtual desktop instance type exceptions for the selected user', async () => {
-        const context: AppContext = initTestAppContext();
-        vi.spyOn(context.client().accounts(), 'listUsers').mockResolvedValue({
-            listing: [{username: 'desktop-user', enabled: true, instance_type_exceptions: ['m6a.large']}],
-            paginator: {total: 1}
-        });
-        const modifyUser = vi.spyOn(context.client().accounts(), 'modifyUser').mockResolvedValue({
-            user: {username: 'desktop-user', instance_type_exceptions: ['g5.xlarge']}
-        });
-        vi.spyOn(context.getClusterSettingsService(), 'getInstanceTypes').mockResolvedValue([
-            {InstanceType: 'g5.xlarge'},
-            {InstanceType: 'm6a.large'}
-        ]);
-        renderPage();
+describe('reset password', () => {
+    it('says what it does before and after', async () => {
+        vi.spyOn(accounts, 'resetPassword').mockResolvedValue({} as any);
+        await mount();
+        await select();
+        await pick('Reset Password');
+        expect(await screen.findByText(/a password reset and revokes their API tokens/)).toBeInTheDocument();
+        await userEvent.click((await dialog('Reset Password')).getByRole('button', {name: 'Yes'}));
+        await waitFor(() => expect(flash).toHaveBeenCalled());
+        expect(flash.mock.calls[0][0].items[0].content).toBe('Reset email sent to person-a. Their API tokens were revoked.');
+    });
+});
 
-        expect(await screen.findByText('desktop-user')).toBeInTheDocument();
-        await userEvent.click(screen.getByRole('radio'));
-        await userEvent.click(screen.getByRole('button', {name: 'Actions'}));
-        await userEvent.click(await screen.findByText('Set virtual desktop instance types'));
+describe('searching', () => {
+    it('says which field search looks at when nothing matches', async () => {
+        vi.mocked(accounts.listUsers).mockResolvedValue({listing: [], paginator: {}} as any);
+        render(<MemoryRouter><Users {...pageProps} onFlashbarChange={flash}/></MemoryRouter>);
+        expect(await screen.findByText('No users found. Search looks at usernames only.')).toBeInTheDocument();
+    });
+});
 
-        const dialog = await screen.findByRole('dialog', {name: 'Virtual desktop instance type exceptions'});
-        const multiselect = within(dialog).getByRole('button', {name: /Choose instance types|m6a.large/});
-        await userEvent.click(multiselect);
-        await userEvent.click(await screen.findByText('g5.xlarge'));
-        await userEvent.click(within(dialog).getByRole('button', {name: 'Save'}));
-
-        expect(modifyUser).toHaveBeenCalledWith({
-            user: {
-                username: 'desktop-user',
-                instance_type_exceptions: ['m6a.large', 'g5.xlarge']
-            }
-        });
+describe('add to group lookup', () => {
+    it('looks up in lowercase and says when choices could not load', async () => {
+        const list = vi.spyOn(accounts, 'listGroups').mockRejectedValue({message: 'nope'});
+        await mount();
+        await select();
+        await pick('Add user to Group');
+        const input = await screen.findByRole('combobox');
+        fireEvent.focus(input);
+        fireEvent.change(input, {target: {value: 'Group-A'}});
+        await waitFor(() => expect(list.mock.calls.at(-1)![0]!.filters).toEqual([{key: 'group_name', like: 'group-a'}]));
+        expect(await screen.findByText('Choices could not be loaded. Try again.')).toBeInTheDocument();
     });
 });

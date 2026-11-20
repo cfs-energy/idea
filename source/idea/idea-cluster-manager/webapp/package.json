@@ -1,6 +1,6 @@
 {
   "name": "web-portal",
-  "version": "26.11.1",
+  "version": "26.11.2",
   "private": true,
   "dependencies": {
     "@cloudscape-design/collection-hooks": "^1.0.0",
@@ -43,18 +43,18 @@
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
-    "@testing-library/user-event": "14.6.8",
+    "@testing-library/user-event": "14.6.10",
     "@types/node": "26.6.6",
     "@types/nunjucks": "3.2.6",
-    "@vitejs/plugin-react": "5.2.0",
-    "fake-indexeddb": "6.2.7",
-    "jsdom": "26.1.0",
-    "sass": "1.107.1",
-    "source-map-explorer": "2.5.3",
-    "typescript": "5.9.3",
-    "vite": "8.3.5",
+    "@vitejs/plugin-react": "6.2.1",
+    "fake-indexeddb": "6.2.8",
+    "jsdom": "31.0.0",
+    "oxc-parser": "0.158.0",
+    "sass": "1.108.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
     "vite-plugin-pwa": "2.0.0",
-    "vitest": "5.0.5",
+    "vitest": "5.1.0",
     "workbox-build": "7.4.1",
     "workbox-core": "7.4.1",
     "workbox-precaching": "7.4.1",
@@ -67,7 +67,6 @@
     "serve": "vite --port 3000",
     "start": "vite --port 3000",
     "build": "tsc && vite build",
-    "analyze": "source-map-explorer 'build/static/js/*.js'",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "node build-support/lint-cloudscape-usage.mjs",
@@ -75,9 +74,6 @@
     "sass": "sass src/Sass:src/Css --watch --no-source-map"
   },
   "resolutions": {
-    "nth-check": ">=2.0.1",
-    "d3-color": ">=3.1.0",
-    "minimist": ">=1.2.6",
-    "moment": ">=2.29.4"
+    "**/workbox-build/glob": "^14.0.2"
   }
 }

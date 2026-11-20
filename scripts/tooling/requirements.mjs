@@ -39,7 +39,8 @@ export function compileRequirements() {
       inputs = [`${name}.in`];
     }
     const commands = inputs.map(input => {
-      const args = ['--strip-extras', '--no-emit-index-url', `--output-file=${input.replace(/\.in$/, '.txt')}`];
+      // Hashes for every pin, setuptools included (sanic needs it), so installs can require them.
+      const args = ['--generate-hashes', '--allow-unsafe', '--strip-extras', '--no-emit-index-url', `--output-file=${input.replace(/\.in$/, '.txt')}`];
       if (values.upgrade) args.push('--upgrade');
       if (values.package || values['package-name']) args.push('--upgrade-package', values.package ?? values['package-name']);
       return [...args, input];
@@ -64,4 +65,5 @@ export function compileRequirements() {
   }
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) compileRequirements();
+// true however the path was spelled: spaces, symlinks, relative
+if (import.meta.main) compileRequirements();

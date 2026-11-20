@@ -9,6 +9,7 @@
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
 
+{% from '_templates/windows/ps_text.jinja2' import ps_text %}
 {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
 {% include '_templates/windows/join_activedirectory.jinja2' %}
 {% endif %}
@@ -21,10 +22,10 @@
 {% include '_templates/windows/cloudwatch_agent.jinja2' %}
 
 # Get AWS region and account info for hostname generation
-$AWS_REGION = "{{ context.config.get_string('cluster.aws.region', required=True) }}"
-$AWS_ACCOUNT = "{{ context.config.get_string('cluster.aws.account_id', required=True) }}"
-$CLUSTER_NAME = "{{ context.config.get_string('cluster.cluster_name', required=True) }}"
-$HOSTNAME_PREFIX = "{{ context.config.get_string('directoryservice.ad_automation.hostname_prefix', default='IDEA-') }}"
+$AWS_REGION = '{{ ps_text(context.config.get_string('cluster.aws.region', required=True)) }}'
+$AWS_ACCOUNT = '{{ ps_text(context.config.get_string('cluster.aws.account_id', required=True)) }}'
+$CLUSTER_NAME = '{{ ps_text(context.config.get_string('cluster.cluster_name', required=True)) }}'
+$HOSTNAME_PREFIX = '{{ ps_text(context.config.get_string('directoryservice.ad_automation.hostname_prefix', default='IDEA-')) }}'
 
 # Generate hostname using the IDEA algorithm
 function Get-IdeaHostname {
@@ -51,6 +52,166 @@ function Get-IdeaHostname {
 
     Write-ToLog -Message "Generated IDEA hostname: $idea_hostname"
     return $idea_hostname
+}
+
+function New-LocalPassword {
+    # 24 characters from the OS CSPRNG (rejection sampling keeps them uniform), drawn again until
+    # the Windows complexity policy accepts it: all four character classes, and no account name
+    Param([Parameter(Mandatory=$true)] [String] $UserName)
+    $Alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#%+-.:=?@^_~'
+    $Limit = 256 - (256 % $Alphabet.Length)
+    $Rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $Byte = New-Object byte[] 1
+    do {
+        $Chars = for ($i = 0; $i -lt 24; $i++) {
+            do { $Rng.GetBytes($Byte) } while ($Byte[0] -ge $Limit)
+            $Alphabet[$Byte[0] % $Alphabet.Length]
+        }
+        $Password = -join $Chars
+    } until ($Password -cmatch '[A-Z]' -and $Password -cmatch '[a-z]' -and $Password -match '[0-9]' -and
+             $Password -match '[^A-Za-z0-9]' -and $Password.IndexOf($UserName, [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    $Rng.Dispose()
+    $Password
+}
+
+function Set-AutoLogonPassword {
+    # Stores the auto-logon password as the LSA secret Winlogon reads, instead of the
+    # Winlogon DefaultPassword registry value, which holds it in clear text
+    Param([Parameter(Mandatory=$true)] [String] $Password)
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class IdeaLsaSecret {
+    [StructLayout(LayoutKind.Sequential)]
+    struct LSA_UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct LSA_OBJECT_ATTRIBUTES { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+    [DllImport("advapi32.dll")] static extern uint LsaOpenPolicy(IntPtr SystemName, ref LSA_OBJECT_ATTRIBUTES ObjectAttributes, uint DesiredAccess, out IntPtr PolicyHandle);
+    [DllImport("advapi32.dll")] static extern uint LsaStorePrivateData(IntPtr PolicyHandle, ref LSA_UNICODE_STRING KeyName, ref LSA_UNICODE_STRING PrivateData);
+    [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr PolicyHandle);
+    [DllImport("advapi32.dll")] static extern int LsaNtStatusToWinError(uint Status);
+    static LSA_UNICODE_STRING Unicode(string value) {
+        LSA_UNICODE_STRING s = new LSA_UNICODE_STRING();
+        s.Buffer = Marshal.StringToHGlobalUni(value);
+        s.Length = (ushort)(value.Length * 2);
+        s.MaximumLength = (ushort)(value.Length * 2 + 2);
+        return s;
+    }
+    public static void Store(string key, string value) {
+        LSA_OBJECT_ATTRIBUTES attributes = new LSA_OBJECT_ATTRIBUTES();
+        attributes.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
+        IntPtr policy;
+        uint status = LsaOpenPolicy(IntPtr.Zero, ref attributes, 0x20 /* POLICY_CREATE_SECRET */, out policy);
+        if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+        LSA_UNICODE_STRING name = Unicode(key);
+        LSA_UNICODE_STRING data = Unicode(value);
+        try {
+            status = LsaStorePrivateData(policy, ref name, ref data);
+            if (status != 0) throw new Win32Exception(LsaNtStatusToWinError(status));
+        } finally {
+            Marshal.ZeroFreeGlobalAllocUnicode(data.Buffer);
+            Marshal.FreeHGlobal(name.Buffer);
+            LsaClose(policy);
+        }
+    }
+}
+'@
+    [IdeaLsaSecret]::Store('DefaultPassword', $Password)
+}
+
+function Set-IdeaLocalAccounts {
+    # Both local passwords are made here at first boot and kept only in memory, the SAM and the
+    # LSA secret store: the package is built on the controller and must carry no secret. The
+    # transcript is off while a password is in a variable and resumes on every path. A failure
+    # stops the bootstrap before the desktop reports ready; only the error message is logged.
+    Param(
+        [Parameter(Mandatory=$true)] [String] $LocalUser,
+        [Parameter(Mandatory=$true)] [String] $TranscriptPath
+    )
+    $ErrorActionPreference = 'Stop'
+    $Failure = $null
+    try { Stop-Transcript | Out-Null } catch { }
+    try {
+        $LocalPasswordInput = New-LocalPassword -UserName $LocalUser
+        $LocalPassword = ConvertTo-SecureString -String $LocalPasswordInput -AsPlainText -Force
+        if (Get-LocalUser -Name $LocalUser -ErrorAction SilentlyContinue) {
+            Set-LocalUser -Name $LocalUser -Password $LocalPassword
+        } else {
+            New-LocalUser -Name $LocalUser -Password $LocalPassword -PasswordNeverExpires -AccountNeverExpires | Out-Null
+        }
+        # The Administrators group and the built-in administrator are found by their well-known
+        # SIDs (S-1-5-32-544, RID 500): their names differ on localized and hardened images.
+        try {
+            Add-LocalGroupMember -SID 'S-1-5-32-544' -Member $LocalUser
+            Write-ToLog -Message "Added $LocalUser to the Administrators group"
+        } catch {
+            if ($_.FullyQualifiedErrorId -notlike 'MemberExists*') { throw }
+        }
+
+        # Auto-logon signs the owner in to the console session DCV serves. Winlogon reads the
+        # password from the LSA secret DefaultPassword; the registry value is readable by every
+        # local account, so a value left by an image made from an older desktop is removed.
+        $Winlogon = 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        Remove-ItemProperty -Path $Winlogon -Name 'DefaultPassword' -ErrorAction SilentlyContinue
+        Set-AutoLogonPassword -Password $LocalPasswordInput
+        New-ItemProperty -Path $Winlogon -Name 'AutoAdminLogon' -PropertyType 'DWord' -Value 1 -Force | Out-Null
+        New-ItemProperty -Path $Winlogon -Name 'DefaultUserName' -PropertyType 'String' -Value $LocalUser -Force | Out-Null
+
+        # The owner is a local administrator, so nothing needs the built-in administrator's
+        # password: it is replaced with one nobody is told.
+        $BuiltInAdmin = Get-LocalUser | Where-Object { "$($_.SID)" -like 'S-1-5-21-*-500' } | Select-Object -First 1
+        if ($BuiltInAdmin) {
+            $AdminPassword = ConvertTo-SecureString -String (New-LocalPassword -UserName $BuiltInAdmin.Name) -AsPlainText -Force
+            $BuiltInAdmin | Set-LocalUser -Password $AdminPassword
+        } else {
+            Write-ToLog -Message 'This image has no built-in administrator account (RID 500); no administrator password was changed' -Level 'Warn'
+        }
+    } catch {
+        $Failure = $_.Exception.Message
+    } finally {
+        Remove-Variable LocalPasswordInput, LocalPassword, AdminPassword -ErrorAction SilentlyContinue
+        Start-Transcript -Path $TranscriptPath -Append | Out-Null
+    }
+    if ($Failure) {
+        Write-ToLog -Message "Local account setup for $LocalUser stopped with an error, the desktop is not configured: $Failure" -Level 'Error'
+        exit 1
+    }
+    Write-ToLog -Message "Set first-boot passwords for $LocalUser (auto-logon)$(if ($BuiltInAdmin) { " and $($BuiltInAdmin.Name)" })"
+}
+
+function Install-OwnerPasswordScript {
+    # Nobody is told the first-boot password, so the owner sets their own from inside the session
+    # to unlock the desktop or sign back in: a shortcut on the public desktop runs this script
+    # elevated (the owner is a local administrator). It sets the account password and, for the
+    # auto-logon account, the LSA secret Winlogon reads, so a restart still signs the owner in.
+    $ScriptsDirectory = 'C:\IDEA\LocalScripts'
+    $ScriptPath = "$ScriptsDirectory\Set-MyWindowsPassword.ps1"
+    $Body = @'
+$ErrorActionPreference = 'Stop'
+$First = Read-Host -AsSecureString "New Windows password for $env:USERNAME"
+$Second = Read-Host -AsSecureString 'Type the same password again'
+$Plain = [Net.NetworkCredential]::new('', $First).Password
+if ($Plain -cne [Net.NetworkCredential]::new('', $Second).Password) {
+    Write-Host 'The two passwords differ; nothing was changed.'
+    exit 1
+}
+Set-LocalUser -Name $env:USERNAME -Password $First
+$Winlogon = 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
+if ((Get-ItemProperty -Path $Winlogon -Name 'DefaultUserName' -ErrorAction SilentlyContinue).DefaultUserName -eq $env:USERNAME) {
+    Set-AutoLogonPassword -Password $Plain
+}
+Remove-Variable Plain, First, Second
+Write-Host 'Your password is set. Use it to unlock this desktop or to sign back in.'
+'@
+    $Content = "function Set-AutoLogonPassword {`r`n" + ${function:Set-AutoLogonPassword}.ToString() + "`r`n}`r`n" + $Body
+    [IO.Directory]::CreateDirectory($ScriptsDirectory) | Out-Null
+    [IO.File]::WriteAllText($ScriptPath, $Content)
+    $Shell = New-Object -ComObject WScript.Shell
+    $Shortcut = $Shell.CreateShortcut("$env:PUBLIC\Desktop\Set my Windows password.lnk")
+    $Shortcut.TargetPath = 'powershell.exe'
+    $Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File $ScriptPath'`""
+    $Shortcut.Save()
 }
 
 
@@ -102,22 +263,34 @@ function Configure-WindowsEC2Instance {
     }
 
     Write-ToLog -Message "Restarting Computer ..."
+    Stop-Transcript
     Restart-Computer -Force
     exit
   }
 
-  $IDEASessionID = "{{ context.vars.idea_session_id }}"
-  $LocalUser = "{{ context.vars.session_owner }}"
-  $VdcRequestQueueURL = "{{ context.config.get_string('virtual-desktop-controller.events_sqs_queue_url', required=True) }}"
-  $IdeaWebPortalURL = "{{ context.config.get_cluster_external_endpoint() }}"
+  $IDEASessionID = '{{ ps_text(context.vars.idea_session_id) }}'
+  $LocalUser = '{{ ps_text(context.vars.session_owner) }}'
+  $VdcRequestQueueURL = '{{ ps_text(context.config.get_string('virtual-desktop-controller.events_sqs_queue_url', required=True)) }}'
+  $IdeaWebPortalURL = '{{ ps_text(context.config.get_cluster_external_endpoint()) }}'
+
+  # Earlier releases left the local passwords in the Winlogon DefaultPassword value (readable by
+  # every local account) and in this file. An image taken from such a desktop carries both, on
+  # either directory provider, so both are removed here.
+  Remove-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'DefaultPassword' -ErrorAction SilentlyContinue
+  Remove-Item 'C:\LOCAL_ADMINS_PASSWORD.txt' -Force -ErrorAction SilentlyContinue
 
   {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
   $ServerInAD = (Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain
-  $DomainUserName = "{{ context.config.get_string('directoryservice.ad_short_name', required=True) }}\$LocalUser"
+  if ($ServerInAD -and $env:COMPUTERNAME -ne $DesktopHostname) {
+    # A desktop from a "Create Stack from Session" image boots already joined under the source
+    # desktop's name and machine account. As in earlier releases the join is skipped and the
+    # desktop keeps that identity; the shared machine account is reported so it can be traced.
+    Write-ToLog -Message "This instance is already joined to the domain as $env:COMPUTERNAME, an identity it took from its image (this desktop's own name would be $DesktopHostname); it shares that computer account with the source desktop. The join is skipped." -Level 'Warn'
+  }
+  $DomainUserName = '{{ ps_text(context.config.get_string('directoryservice.ad_short_name', required=True)) }}\' + $LocalUser
   if ($ServerInAD -eq $false)
   {
-    Start-ADAutomationAuthorization -Hostname $DesktopHostname
-    Start-ADAutomationWaitForAuthorizationAndJoin
+    Join-IdeaDirectory -Hostname $DesktopHostname -TranscriptPath $ConfigureEVDI
 
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -PropertyType "DWord" -Value 1 -Force
     New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultUserName" -PropertyType "String" -Value $DomainUserName -Force
@@ -127,62 +300,8 @@ function Configure-WindowsEC2Instance {
   Start-Sleep -Seconds 5
   Write-ToLog -Message "Creating new local IDEA user: $LocalUser"
   $DomainUserName = $LocalUser
-  $LocalPasswordInput = "{{ context.utils.generate_password() }}"
-  $LocalPassword  = ConvertTo-SecureString -String $LocalPasswordInput -AsPlainText -Force
-  $LocalUserExist = Get-LocalUser $LocalUser
-  if ($LocalUserExist) {
-    Set-LocalUser $LocalUser -Password $LocalPassword
-  } else {
-    New-LocalUser $LocalUser -Password $LocalPassword -PasswordNeverExpires -AccountNeverExpires
-  }
-
-  $isInGroup = (Get-LocalGroupMember -Group "Administrators").Name -Contains "$env:COMPUTERNAME\$LocalUser"
-  Write-ToLog -Message "Checking if $LocalUser is in Administrators Group:  $isInGroup"
-
-  if ($isInGroup -eq $false) {
-    Write-ToLog -Message "Adding $LocalUser to the Administrators Group"
-    Add-LocalGroupMember -Group "Administrators" -Member $LocalUser
-  }
-
-  # Set OS Properties, AutoLogin
-  New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -PropertyType "DWord" -Value 1 -Force
-  New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultUserName" -PropertyType "String" -Value $LocalUser -Force
-  New-ItemProperty -Path "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "DefaultPassword" -PropertyType "String" -Value $LocalPasswordInput -Force
-
-  Write-ToLog -Message "Creating unique password for local Admin user"
-  $AdminPasswordInput = "{{ context.utils.short_uuid() }}"
-  $AdminPassword = ConvertTo-SecureString -String $AdminPasswordInput -AsPlainText -Force
-  Get-LocalUser -Name "Administrator" | Set-LocalUser -Password $AdminPassword
-
-  Write-ToLog -Message "Write LOCAL users password and make it readable only by the user. This file will be overridden if an AMI is created."
-  $LocalPasswordFile="C:\LOCAL_ADMINS_PASSWORD.txt"
-
-  if (Test-Path $LocalPasswordFile ) {
-    Write-ToLog -Message "$LocalPasswordFile exists. Removing it first."
-    Remove-Item $LocalPasswordFile
-  }
-  New-Item $LocalPasswordFile -Value "Local User(s) credentials for this machine $env:COMPUTERNAME only `r`n=========`r`r$LocalUser : $LocalPasswordInput `r`nAdministrator : $AdminPasswordInput" -Force
-  Write-ToLog -Message "Disable inheritance (required to remove all users read-only access) for $LocalPasswordFile"
-  $DisableInheritance = Get-Acl -Path $LocalPasswordFile
-  $DisableInheritance.SetAccessRuleProtection($true, $true)
-  Set-Acl -Path $LocalPasswordFile -AclObject $DisableInheritance
-
-  Write-ToLog -Message "Restrict this file to local user and admin groups only"
-
-  $DeleteAcl = (Get-Item $LocalPasswordFile).GetAccessControl('Access')
-  $UserAccessToRemove = $DeleteAcl.Access | ?{ $_.IsInherited -eq $false -and $_.IdentityReference -eq 'BUILTIN\Users' }
-  $DeleteAcl.RemoveAccessRuleAll($UserAccessToRemove)
-  Set-Acl -AclObject $DeleteAcl $LocalPasswordFile
-
-  #$AdminAccessToRemove = $DeleteAcl.Access | ?{ $_.IsInherited -eq $false -and $_.IdentityReference -eq 'BUILTIN\Administrators' }
-  #$DeleteAcl.RemoveAccessRuleAll($AdminAccessToRemove)
-  #Set-Acl -AclObject $DeleteAcl $LocalPasswordFile
-
-  Write-ToLog -Message "Restrict Viewing to local user & Admin group only for $LocalPasswordFile"
-  $NewAcl = Get-Acl -Path $LocalPasswordFile
-  $GrantAccessToLocalUser = New-Object -TypeName System.Security.AccessControl.FileSystemAccessRule("$env:COMPUTERNAME\$LocalUser", "FullControl", "Allow")
-  $NewAcl.SetAccessRule($GrantAccessToLocalUser)
-  Set-Acl -AclObject $NewAcl $LocalPasswordFile
+  Set-IdeaLocalAccounts -LocalUser $LocalUser -TranscriptPath $ConfigureEVDI
+  Install-OwnerPasswordScript
   {% endif %}
 
   # Disable User Access Control (UAC)"
@@ -252,22 +371,18 @@ Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody `$RebootMessage -Mess
   $Message = "{{ context.vars.dcv_host_ready_message }}"
   # todo - support vpc endpoint
   # image validation reads this line from the bootstrap_<instance id> CloudWatch stream;
+  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
+  # a desktop that is not in the domain never reports ready, and gets no repeat-run marker
+  if (-not ($ServerInAD -or $global:IdeaDomainJoined)) {
+    Write-ToLog -Message "Instance $InstanceId is not joined to the domain; the desktop is not configured" -Level 'Error'
+    exit 1
+  }
+  {% endif %}
   # written before the restart below so the agent ships it first
   Write-ToLog -Message "IDEA_BOOTSTRAP_COMPLETE release={{ context.module_version }}"
   Send-SQSMessage -QueueUrl $VdcRequestQueueURL -MessageBody $Message -MessageGroupId $IDEASessionID
-
-  {% if context.config.get_string('directoryservice.provider', required=True) in ['aws_managed_activedirectory', 'activedirectory'] %}
-  # a failed join must run again on the next boot: no marker until the instance is joined
-  $Joined = $ServerInAD -or $global:IdeaDomainJoined -or (Get-WmiObject -Class Win32_ComputerSystem).PartOfDomain
-  {% else %}
-  $Joined = $true
-  {% endif %}
-  if ($Joined) {
-    [IO.Directory]::CreateDirectory((Split-Path $ConfiguredMarker)) | Out-Null
-    [IO.File]::WriteAllText($ConfiguredMarker, "{{ context.module_version }}")
-  } else {
-    Write-ToLog -Message "Instance $InstanceId did not join the domain; the next boot runs the user data again"
-  }
+  [IO.Directory]::CreateDirectory((Split-Path $ConfiguredMarker)) | Out-Null
+  [IO.File]::WriteAllText($ConfiguredMarker, "{{ context.module_version }}")
 
   Stop-Transcript
   Restart-Computer -Force

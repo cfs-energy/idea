@@ -4,6 +4,7 @@ puttygen produced, so PuTTY, WinSCP and MobaXterm load it.
 """
 
 import base64
+import os
 import hashlib
 import hmac
 import struct
@@ -150,11 +151,26 @@ def test_other_key_types_are_refused():
         to_ppk(data)
 
 
+@pytest.fixture(autouse=True)
+def read_in_process(monkeypatch):
+    """these tests are about the key's format: the account's worker runs in place"""
+
+    class InPlace:
+        def __init__(self, accounts, username):
+            self.uid, self.gid = os.getuid(), os.getgid()
+
+        def run(self, operation, *args, **kwargs):
+            return operation(*args, **kwargs)
+
+    monkeypatch.setattr(user_home_directory, 'UserIdentity', InPlace)
+
+
 def _home(puttygen):
     import os
 
     home = UserHomeDirectory.__new__(UserHomeDirectory)
-    home.user = SimpleNamespace(uid=os.getuid(), gid=os.getgid())
+    home._context = Mock()
+    home.user = SimpleNamespace(uid=os.getuid(), gid=os.getgid(), username='user')
     home._shell = Mock()
     home._shell.invoke.return_value = SimpleNamespace(
         returncode=0 if puttygen else 1, stdout=f'{puttygen}\n' if puttygen else ''

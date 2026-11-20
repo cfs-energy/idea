@@ -222,3 +222,56 @@ def test_invalid_module_override_falls_back_to_info_not_cluster_level(
         )
         == 1
     )
+
+
+def test_service_log_files_are_closed_to_other_users(logging_factory, tmp_path):
+    import os
+    import stat
+
+    from ideadatamodel import CustomFileLoggerParams
+
+    logs = tmp_path / 'logs'
+    logs.mkdir()
+    logs.chmod(0o755)  # as an image or a fresh volume may leave it
+    setup, config = logging_factory(
+        {
+            'cluster-manager.logging.logs_directory': str(logs),
+            'cluster-manager.logging.default_log_file_name': 'application.log',
+            'cluster.logging.handlers.file': {
+                'class': 'logging.handlers.TimedRotatingFileHandler',
+                'when': 'midnight',
+                'interval': 1,
+                'backupCount': 2,
+            },
+            'cluster.logging.profiles.default.loggers.app.handlers': ['file'],
+        }
+    )
+    old = os.umask(0)  # the modes come from the code, not the umask
+    try:
+        logger = app_logger(setup)
+        logger.info('hello')
+        events = setup.get_custom_file_logger(
+            CustomFileLoggerParams(
+                logger_name=f'events-{uuid4()}',
+                log_dir_name='events',
+                log_file_name='events.log',
+                when='midnight',
+                interval=1,
+                backupCount=2,
+            )
+        )
+        events.critical('event')
+        [handler] = [h for h in logger.handlers if hasattr(h, 'doRollover')]
+        handler.doRollover()
+        logger.info('after rotation')
+    finally:
+        os.umask(old)
+
+    def mode(path):
+        return stat.S_IMODE(path.stat().st_mode)
+
+    assert mode(logs) == 0o750
+    assert mode(logs / 'events') == 0o750
+    assert mode(logs / 'application.log') == 0o640
+    assert mode(logs / 'events' / 'events.log') == 0o640
+    assert [mode(p) for p in logs.glob('application.log.*')] == [0o640]

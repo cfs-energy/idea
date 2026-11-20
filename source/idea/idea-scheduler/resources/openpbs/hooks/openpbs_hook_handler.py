@@ -228,6 +228,8 @@ def get_local_node_name() -> str:
 #   > queuejob, modifyjob, runjob: r -> -
 #   sw_index
 #   > modifyjob, runjob: r -> -
+#   Executable
+#   > movejob: r -> - (reading it raised AttributeError on every qmove, OpenPBS server log)
 JOB_PARAM_EVENT_TYPE_MATRIX = """
 Job Attribute,queuejob,modifyjob,movejob,runjob,resvsub,resv_end,periodic,execjob_begin,execjob_attach,execjob_prologue,execjob_launch,execjob_postsuspend,execjob_preresume,execjob_end,execjob_epilogue,execjob_preterm,exechost_startup,exechost_periodic,
 accounting_id,-,r,r,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
@@ -253,7 +255,7 @@ Error_Path,rs,rs,r,rs,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
 estimated,-,r,r,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
 etime,-,r,r,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
 euser,-,r,r,r,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
-Executable,s,-,r,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
+Executable,s,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,
 Execution_Time,rs,rs,r,r,-,-,-,rs,r,rs,rs,r,r,r,rs,rs,-,rs,
 exec_host,-,-,r,-,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
 exec_vnode,-,-,r,r,-,-,-,r,r,r,r,r,r,r,r,r,-,r,
@@ -420,10 +422,80 @@ EXECUTION_HOOKS = [
 ]
 
 
+# the resources PBS defines for a job; the cluster's own are in resourcedef
+PBS_JOB_RESOURCES = (
+    'select',
+    'place',
+    'ncpus',
+    'nodect',
+    'nodes',
+    'mem',
+    'vmem',
+    'ngpus',
+    'mpiprocs',
+    'ompthreads',
+    'walltime',
+    'cput',
+    'pcput',
+    'pmem',
+    'pvmem',
+    'arch',
+    'host',
+    'vnode',
+    'naccelerators',
+    'accelerator',
+    'accelerator_memory',
+    'accelerator_model',
+    'file',
+    'software',
+    'site',
+    'start',
+    'min_walltime',
+    'max_walltime',
+    'soft_walltime',
+    'preempt_targets',
+)
+
+
+def job_resource_names() -> list:
+    names = list(PBS_JOB_RESOURCES)
+    try:
+        home = pbs.pbs_conf.get('PBS_HOME') or '/var/spool/pbs'
+        with open(os.path.join(home, 'server_priv', 'resourcedef')) as f:
+            for line in f:
+                tokens = line.split('#', 1)[0].split()
+                if tokens:
+                    names.append(tokens[0])
+    except Exception as e:
+        # an execution host keeps no resourcedef: PBS's own resources are read there
+        log_debug(f'resourcedef not read: {e}')
+    return names
+
+
+def plain(value):
+    """a value json can write: a PBS object (a queue, a size, a duration, a resource list)
+    becomes its name or its text, so no PBS type reaches json.dumps"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(plain(k)): plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(v) for v in value]
+    name = getattr(value, 'name', None)
+    if isinstance(name, str):
+        return name
+    return str(value)
+
+
 class OpenPBSJob:
-    def __init__(self, event_type: str, job):
+    def __init__(self, event_type: str, job, whole: bool = False):
         self.event_type = event_type
         self.job = job
+        # whole: the job's full current request. on the cluster's PBS the job object of a
+        # movejob and the pre-edit job of a modifyjob list no resource keys but answer a
+        # lookup by name, so their resources are read by name. only a modifyjob's edited
+        # job is not whole: it lists the resources the edit sets, and no others
+        self.whole = whole
         self.matrix = self.build_matrix()
 
     def build_matrix(self):
@@ -880,9 +952,18 @@ class OpenPBSJob:
         if self.event_type in self.matrix['Resource_List']:
             if self.job.Resource_List is None:
                 return None
+            resources = self.job.Resource_List
+            keys = list(resources.keys())
+            if not keys and self.whole:
+                keys = job_resource_names()
             response = {}
-            for key in self.job.Resource_List.keys():
-                response[key] = str(self.job.Resource_List[key])
+            for key in keys:
+                try:
+                    value = resources[key]
+                except (KeyError, ValueError, AttributeError):
+                    continue
+                if value is not None:
+                    response[str(key)] = str(value)
             return response
         return None
 
@@ -1021,81 +1102,96 @@ class OpenPBSJob:
             return response
         return None
 
+    # the attributes sent to the scheduler, in this order
+    ATTRIBUTES = (
+        'id',
+        'accounting_id',
+        'Account_Name',
+        'accrue_type',
+        'alt_id',
+        'argument_list',
+        'array',
+        'array_id',
+        'array_index',
+        'array_indices_remaining',
+        'array_indices_submitted',
+        'array_state_count',
+        'block',
+        'Checkpoint',
+        'comment',
+        'create_resv_from_job',
+        'ctime',
+        'depend',
+        'egroup',
+        'eligible_time',
+        'Error_Path',
+        'estimated',
+        'etime',
+        'euser',
+        'Executable',
+        'Execution_Time',
+        'exec_host',
+        'exec_vnode',
+        'Exit_status',
+        'group_list',
+        'hashname',
+        'Hold_Types',
+        'interactive',
+        'jobdir',
+        'Job_Name',
+        'Job_Owner',
+        'job_state',
+        'Join_Path',
+        'Keep_Files',
+        'Mail_Points',
+        'Mail_Users',
+        'mtime',
+        'no_stdio_sockets',
+        'Output_Path',
+        'Priority',
+        'project',
+        'qtime',
+        'queue',
+        'queue_rank',
+        'queue_type',
+        'release_nodes_on_stageout',
+        'Rerunable',
+        'resources_released',
+        'resources_released_list',
+        'resources_used',
+        'Resource_List',
+        'run_count',
+        'run_version',
+        'sandbox',
+        'schedselect',
+        'sched_hint',
+        'server',
+        'session_id',
+        'Shell_Path_List',
+        'stagein',
+        'stageout',
+        'Stageout_status',
+        'stime',
+        'Submit_arguments',
+        'substate',
+        'sw_index',
+        'umask',
+        'User_List',
+    )
+
+    def _read(self, name: str):
+        # a job object holds only the attributes its event carries, and reading another
+        # raises AttributeError (a movejob job has no Executable): it is left out, as an
+        # unset one is
+        try:
+            return getattr(self, name)
+        except AttributeError:
+            if DEBUG_MODE:
+                log_fine(f'{self.event_type}: job has no {name}')
+            return None
+
     def build(self):
-        pbs_job = {}
-        pbs_job['id'] = self.id
-        pbs_job['accounting_id'] = self.accounting_id
-        pbs_job['Account_Name'] = self.Account_Name
-        pbs_job['accrue_type'] = self.accrue_type
-        pbs_job['alt_id'] = self.alt_id
-        pbs_job['argument_list'] = self.argument_list
-        pbs_job['array'] = self.array
-        pbs_job['array_id'] = self.array_id
-        pbs_job['array_index'] = self.array_index
-        pbs_job['array_indices_remaining'] = self.array_indices_remaining
-        pbs_job['array_indices_submitted'] = self.array_indices_submitted
-        pbs_job['array_state_count'] = self.array_state_count
-        pbs_job['block'] = self.block
-        pbs_job['Checkpoint'] = self.Checkpoint
-        pbs_job['comment'] = self.comment
-        pbs_job['create_resv_from_job'] = self.create_resv_from_job
-        pbs_job['ctime'] = self.ctime
-        pbs_job['depend'] = self.depend
-        pbs_job['egroup'] = self.egroup
-        pbs_job['eligible_time'] = self.eligible_time
-        pbs_job['Error_Path'] = self.Error_Path
-        pbs_job['estimated'] = self.estimated
-        pbs_job['etime'] = self.etime
-        pbs_job['euser'] = self.euser
-        pbs_job['Executable'] = self.Executable
-        pbs_job['Execution_Time'] = self.Execution_Time
-        pbs_job['exec_host'] = self.exec_host
-        pbs_job['exec_vnode'] = self.exec_vnode
-        pbs_job['Exit_status'] = self.Exit_status
-        pbs_job['group_list'] = self.group_list
-        pbs_job['hashname'] = self.hashname
-        pbs_job['Hold_Types'] = self.Hold_Types
-        pbs_job['interactive'] = self.interactive
-        pbs_job['jobdir'] = self.jobdir
-        pbs_job['Job_Name'] = self.Job_Name
-        pbs_job['Job_Owner'] = self.Job_Owner
-        pbs_job['job_state'] = self.job_state
-        pbs_job['Join_Path'] = self.Join_Path
-        pbs_job['Keep_Files'] = self.Keep_Files
-        pbs_job['Mail_Points'] = self.Mail_Points
-        pbs_job['Mail_Users'] = self.Mail_Users
-        pbs_job['mtime'] = self.mtime
-        pbs_job['no_stdio_sockets'] = self.no_stdio_sockets
-        pbs_job['Output_Path'] = self.Output_Path
-        pbs_job['Priority'] = self.Priority
-        pbs_job['project'] = self.project
-        pbs_job['qtime'] = self.qtime
-        pbs_job['queue'] = self.queue
-        pbs_job['queue_rank'] = self.queue_rank
-        pbs_job['queue_type'] = self.queue_type
-        pbs_job['release_nodes_on_stageout'] = self.release_nodes_on_stageout
-        pbs_job['Rerunable'] = self.Rerunable
-        pbs_job['resources_released'] = self.resources_released
-        pbs_job['resources_released_list'] = self.resources_released_list
-        pbs_job['resources_used'] = self.resources_used
-        pbs_job['Resource_List'] = self.Resource_List
-        pbs_job['run_count'] = self.run_count
-        pbs_job['run_version'] = self.run_version
-        pbs_job['sandbox'] = self.sandbox
-        pbs_job['schedselect'] = self.schedselect
-        pbs_job['sched_hint'] = self.sched_hint
-        pbs_job['server'] = self.server
-        pbs_job['session_id'] = self.session_id
-        pbs_job['Shell_Path_List'] = self.Shell_Path_List
-        pbs_job['stagein'] = self.stagein
-        pbs_job['stageout'] = self.stageout
-        pbs_job['Stageout_status'] = self.Stageout_status
-        pbs_job['stime'] = self.stime
-        pbs_job['Submit_arguments'] = self.Submit_arguments
-        pbs_job['substate'] = self.substate
-        pbs_job['sw_index'] = self.sw_index
-        pbs_job['umask'] = self.umask
-        pbs_job['User_List'] = self.User_List
+        pbs_job = {name: self._read(name) for name in self.ATTRIBUTES}
         # pbs_job['Variable_List'] = self.Variable_List
 
         result = {}
@@ -1111,6 +1207,17 @@ class OpenPBSJob:
                     result['dry_run'] = value['dry_run']
 
         return result
+
+
+def current_job(event_type: str, job) -> dict:
+    """the job's full current request, from the job object of any event: every way the
+    hook sends a job goes through here or edited_job, so the two cannot drift again"""
+    return OpenPBSJob(event_type=event_type, job=job, whole=True).build()
+
+
+def edited_job(event_type: str, job) -> dict:
+    """a modifyjob's edited job: only what the edit sets"""
+    return OpenPBSJob(event_type=event_type, job=job, whole=False).build()
 
 
 class OpenPBSNode:
@@ -1234,7 +1341,7 @@ class OpenPBSEvent:
             response = []
             for key in self.event.job_list.keys():
                 pbs_job = self.event.job_list[key]
-                job = OpenPBSJob(event_type=self.type, job=pbs_job).build()
+                job = current_job(self.type, pbs_job)
                 response.append(job)
             return response
         return None
@@ -1307,8 +1414,9 @@ class OpenPBSEvent:
 
     @property
     def src_queue(self):
-        if self.type in ['movejob']:
-            return self.event.src_queue
+        # a PBS queue object, not its name: json could not write it and every qmove failed
+        if self.type in ['movejob'] and self.event.src_queue is not None:
+            return plain(self.event.src_queue)
         return None
 
     @property
@@ -1342,10 +1450,14 @@ class OpenPBSEvent:
 
         job = self.job
         if job:
-            pbs_event['job'] = OpenPBSJob(event_type=self.type, job=job).build()
+            pbs_event['job'] = (
+                edited_job(self.type, job)
+                if self.type == 'modifyjob'
+                else current_job(self.type, job)
+            )
         job_o = self.job_o
         if job_o:
-            pbs_event['job_o'] = OpenPBSJob(event_type=self.type, job=job_o).build()
+            pbs_event['job_o'] = current_job(self.type, job_o)
 
         result = {}
         for key in pbs_event:
@@ -1354,7 +1466,7 @@ class OpenPBSEvent:
             if DEBUG_MODE:
                 log_fine('pbs_event: %s = %s' % (key, type(pbs_event[key])))
             result[key] = pbs_event[key]
-        return result
+        return plain(result)
 
 
 def get_env(key, env_type='str', default=None):
@@ -1389,9 +1501,63 @@ def get_socket():
     return socket_client, soca_daemon_unix_socket
 
 
+# what a person submitting a job reads; the detail goes to the PBS server log
+INTERNAL_ERROR_MESSAGE = (
+    'The scheduler hit an internal error. Try again; if it repeats, tell an '
+    'administrator and quote the job name.'
+)
+
+
 def sanitize_error_message(message: str):
     # remove all double quotes - json parsing fails as pbs does not escape the quotes
     return message.replace('"', '')
+
+
+SCRATCH_HOLDS_DIR = '/run/idea-scratch-holds'
+SCRATCH_HOLD_TTL_SECS = 300
+
+
+def scratch_hold_reason(e, directory=SCRATCH_HOLDS_DIR):
+    """
+    why this job cannot start yet: scratch cleanup is removing a folder of its owner's. Read from
+    a file so it holds even if the scheduler is too busy to answer. A hold past its time, or a
+    task that was replaced, lets the job start, because the removal stops itself by then.
+    """
+    message = (
+        'Scratch cleanup is removing a folder from a finished job of this user. '
+        'This job will start when that ends, within 30 minutes.'
+    )
+    try:
+        owner = str(e.job.Job_Owner or e.job.euser or '').split('@')[0].lower()
+    except Exception:
+        # whose job this is cannot be said, so it waits while anyone's folder is being removed
+        try:
+            return message if os.listdir(directory) else None
+        except OSError:
+            return None
+    if not owner or '/' in owner or owner.startswith('.'):
+        return None
+    path = os.path.join(directory, owner)
+    try:
+        with open(path) as stream:
+            content = stream.read()
+    except OSError:
+        return None
+    except ValueError:
+        content = ''
+    try:
+        return message if time.time() < float(content) else None
+    except ValueError:
+        pass
+    # being written, or damaged: held, but not for longer than a hold can last
+    try:
+        return (
+            message
+            if time.time() - os.path.getmtime(path) < SCRATCH_HOLD_TTL_SECS
+            else None
+        )
+    except OSError:
+        return None
 
 
 def is_always_success_event(e):
@@ -1476,10 +1642,10 @@ def invoke_soca_scheduler(e) -> dict:
         ConnectionResetError,
         ConnectionAbortedError,
     ) as exc:
-        raise SocaException(
-            f'Could not connect to idea-scheduler at {address}. '
-            f'Please contact administrator to investigate the problem. Err: {exc}'
+        pbs.logmsg(
+            pbs.LOG_ERROR, f'Could not connect to idea-scheduler at {address}: {exc}'
         )
+        raise SocaException(INTERNAL_ERROR_MESSAGE)
     finally:
         if client:
             client.close()
@@ -1492,6 +1658,12 @@ try:
         raise SystemExit
 
     event_type = e.type
+
+    if event_type == HOOK_EVENT_RUNJOB:
+        hold_reason = scratch_hold_reason(e)
+        if hold_reason:
+            # PBS keeps the job queued and tries it again on its next cycle
+            e.reject(hold_reason)
 
     if event_type in PRE_EXECUTION_HOOKS:
         # if event is generated due to qsub, qalter etc, and scheduler is invoked via unix socket
@@ -1522,14 +1694,21 @@ try:
                 if queue_name is not None and event_type == HOOK_EVENT_QUEUEJOB:
                     e.job.queue = pbs.server().queue(queue_name)
 
+                # a movejob may only read the job (project and Resource_List are r in the
+                # matrix): writing either refused every move. the job's group and selector
+                # are brought up to date when the scheduler next reads the job
+                read_only = event_type == HOOK_EVENT_MOVEJOB
+
                 project = payload.get('project', None)
-                if project is not None and (
-                    event_type != HOOK_EVENT_MODIFYJOB or e.job.project
+                if (
+                    project is not None
+                    and not read_only
+                    and (event_type != HOOK_EVENT_MODIFYJOB or e.job.project)
                 ):
                     e.job.project = project
 
                 resources_updated = payload.get('resources_updated', None)
-                if resources_updated is not None:
+                if resources_updated is not None and not read_only:
                     job = e.job
                     for name, value in resources_updated.items():
                         if name == 'select':
@@ -1588,7 +1767,13 @@ except Exception as exc:
             error_message = sanitize_error_message(exc.message)
         else:
             exc_type, exc_obj, exc_tb = sys.exc_info()
-            error_message = f'{pbs.event().hook_name} failed with {sys.exc_info()[:2]}, lineno: {exc_tb.tb_lineno}'
+            pbs.logmsg(
+                pbs.LOG_ERROR,
+                sanitize_error_message(
+                    f'{pbs.event().hook_name} failed with {sys.exc_info()[:2]}, lineno: {exc_tb.tb_lineno}'
+                ),
+            )
+            error_message = INTERNAL_ERROR_MESSAGE
     finally:
         if error_message is None:
             error_message = 'Unknown Error'

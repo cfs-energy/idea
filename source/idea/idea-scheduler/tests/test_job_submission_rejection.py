@@ -7,7 +7,6 @@ the same refusal - still returns its report.
 """
 
 import os
-import shutil
 
 import pytest
 
@@ -42,7 +41,7 @@ class MockShell:
         self.result.stdout = stdout
         self.result.stderr = stderr
 
-    def invoke(self, *_args, **_kwargs):
+    def invoke_as_user(self, *_args, **_kwargs):
         return self.result
 
 
@@ -74,7 +73,8 @@ def build_api(context, monkeypatch, tmp_path, returncode, stdout, recorded, stde
         api.group_name_helper, 'get_user_group', lambda _user: 'mockgroup'
     )
     # the tests do not run as root and ownership is not what is under test
-    monkeypatch.setattr(shutil, 'chown', lambda *_a, **_k: None)
+    monkeypatch.setattr(scheduler_api_module, 'account_uid', lambda _u: os.geteuid())
+    os.makedirs(os.path.join(mount_dir, 'home', 'mockuser'), exist_ok=True)
     monkeypatch.setattr(scheduler_api_module, 'chown_fd', lambda *_a, **_k: None)
     return api
 
@@ -106,7 +106,7 @@ def test_refused_submission_raises_job_submission_failed(
     assert exc_info.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
     # the hook's text verbatim: the shell result repr would also contain it, so the
     # equality is what tells the two apart
-    assert exc_info.value.message == f'Failed to submit job: {QSUB_REFUSAL}'
+    assert exc_info.value.message == QSUB_REFUSAL.removeprefix('qsub: ')
     assert submitted_scripts(tmp_path) == []
 
 
@@ -151,7 +151,7 @@ def test_accepted_submission_returns_the_job_id(context, monkeypatch, tmp_path):
     assert result.accepted is True
     assert result.job.job_id == '1234'
     # a queued job keeps its script in the owner's jobs dir; a refused one is removed
-    assert submitted_scripts(tmp_path) == []
+    assert submitted_scripts(tmp_path) == [os.path.basename(result.job_script_path)]
 
 
 def test_refused_submission_leaves_no_job_id_on_the_result(
@@ -173,5 +173,5 @@ def test_refused_submission_leaves_no_job_id_on_the_result(
         api._submit_job(request=build_request(), job_owner='mockuser', dry_run=None)
 
     # qsub wrote to stdout rather than stderr; the reason must still reach the caller
-    assert exc_info.value.message == f'Failed to submit job: {QSUB_REFUSAL}'
+    assert exc_info.value.message == QSUB_REFUSAL.removeprefix('qsub: ')
     assert submitted_scripts(tmp_path) == []

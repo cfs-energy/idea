@@ -7,7 +7,6 @@ from ideadatamodel import (
     VirtualDesktopSessionState,
     DayOfWeek,
     VirtualDesktopScheduleType,
-    SocaPaginator,
 )
 from ideavirtualdesktopcontroller.app.events.handlers.user_management_event_handlers.user_disabled_event_handler import (
     UserDisabledEventHandler,
@@ -34,26 +33,33 @@ def handler():
     return result
 
 
-def test_disable_clears_schedules_stops_sessions_and_paginates():
+def test_disable_reaches_every_desktop_of_the_owner_on_every_page():
+    from stored_session import session_table_reader, stored_row
+
+    reader = session_table_reader()
+    rows = [
+        stored_row(session_id=f's-{n:02d}', state='STOPPED' if n == 0 else 'READY')
+        for n in range(11)
+    ]
+    reader._table_obj = Mock()
+    # the table answers in two pages; the search index would have shown the first 10 only
+    reader._table_obj.query.side_effect = [
+        {'Items': rows[:6], 'LastEvaluatedKey': {'owner': 'user-a'}},
+        {'Items': rows[6:]},
+    ]
     h = handler()
-    sessions = [
-        VirtualDesktopSession(owner='user', idea_session_id=str(i), state=state)
-        for i, state in enumerate(
-            (VirtualDesktopSessionState.READY, VirtualDesktopSessionState.STOPPED)
-        )
-    ]
-    h.session_db.list_all_for_user.side_effect = [
-        SimpleNamespace(listing=[sessions[0]], paginator=SocaPaginator(cursor='next')),
-        SimpleNamespace(listing=[sessions[1]], paginator=None),
-    ]
+    h.session_db.list_for_owner = reader.list_for_owner
+
     h.handle_event(
-        'message', 'role:session', SimpleNamespace(detail={'username': 'user'})
+        'message', 'role:session', SimpleNamespace(detail={'username': 'user-a'})
     )
-    assert h.schedule_utils.delete_schedules_for_session.call_count == 2
-    assert h.session_utils.stop_sessions.call_count == 1
-    assert sessions[0].force is True
-    assert h.session_db.list_all_for_user.call_args.kwargs['request'].cursor == 'next'
-    for session in sessions:
+
+    assert h.schedule_utils.delete_schedules_for_session.call_count == 11
+    assert h.session_utils.stop_sessions.call_count == 10
+    assert reader._table_obj.query.call_args_list[0].kwargs['ConsistentRead'] is True
+    for call in h.session_db.update.call_args_list:
+        session = call.args[0]
+        assert call.kwargs == {'check_version': True}
         for day in DayOfWeek:
             schedule = getattr(session.schedule, day.value)
             assert schedule.schedule_type == VirtualDesktopScheduleType.NO_SCHEDULE
@@ -67,7 +73,7 @@ def test_untrusted_role_is_rejected_before_any_write():
         h.handle_event(
             'message', 'wrong-role', SimpleNamespace(detail={'username': 'user'})
         )
-    h.session_db.list_all_for_user.assert_not_called()
+    h.session_db.list_for_owner.assert_not_called()
 
 
 def test_stop_failure_keeps_event_retryable():
@@ -75,9 +81,7 @@ def test_stop_failure_keeps_event_retryable():
     session = VirtualDesktopSession(
         owner='user', idea_session_id='1', state=VirtualDesktopSessionState.READY
     )
-    h.session_db.list_all_for_user.return_value = SimpleNamespace(
-        listing=[session], paginator=None
-    )
+    h.session_db.list_for_owner.return_value = [session]
     h.session_utils.stop_sessions.return_value = ([], [session])
     with pytest.raises(Exception) as error:
         h.handle_event(
@@ -98,7 +102,7 @@ def test_already_queued_resume_cannot_restart_disabled_owner():
     util._server_utils = Mock()
     result = util.resume_sessions([session])
     assert result == ([], [session])
-    util._server_utils.start_servers.assert_not_called()
+    util._server_utils.start_dcv_hosts.assert_not_called()
 
 
 def test_retry_reissues_ec2_stop_after_stopping_was_persisted():
@@ -111,16 +115,14 @@ def test_retry_reissues_ec2_stop_after_stopping_was_persisted():
         state=VirtualDesktopSessionState.READY,
         server=VirtualDesktopServer(instance_id='i-example'),
     )
-    h.session_db.list_all_for_user.return_value = SimpleNamespace(
-        listing=[session], paginator=None
-    )
+    h.session_db.list_for_owner.return_value = [session]
     util = VirtualDesktopSessionUtils.__new__(VirtualDesktopSessionUtils)
     util.context = Mock()
     util.context.dcv_broker_client.delete_sessions.return_value = ([], [])
     util._logger = Mock()
     util._session_db = h.session_db
     util._session_db.get_from_db.return_value = session
-    util._session_db.update.side_effect = lambda value: value
+    util._session_db.update.side_effect = lambda value, **kwargs: value
     util._server_utils = Mock()
     util._server_utils.stop_or_hibernate_servers.side_effect = [
         RuntimeError('transient stop failure'),

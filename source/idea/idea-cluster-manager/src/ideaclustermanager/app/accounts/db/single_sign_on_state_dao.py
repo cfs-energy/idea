@@ -15,9 +15,13 @@ from ideasdk.context import SocaContext
 
 from typing import Optional, Dict
 from boto3.dynamodb.conditions import Attr
+import botocore.exceptions
 
 
 class SingleSignOnStateDAO:
+    # how long a sign-in has to come back from the identity provider and be redeemed
+    STATE_SECONDS = 10 * 60
+
     def __init__(self, context: SocaContext, logger=None):
         self.context = context
         if logger is not None:
@@ -64,7 +68,8 @@ class SingleSignOnStateDAO:
 
         created_state = {
             **sso_state,
-            'ttl': Utils.current_time_ms() + (10 * 60 * 1000),  # 10 minutes
+            # DynamoDB expires rows by epoch seconds
+            'ttl': Utils.current_time() + self.STATE_SECONDS,
             'created_on': Utils.current_time_ms(),
             'updated_on': Utils.current_time_ms(),
         }
@@ -110,7 +115,24 @@ class SingleSignOnStateDAO:
         result = self.table.get_item(Key={'state': state})
         return Utils.get_value_as_dict('Item', result)
 
-    def delete_sso_state(self, state: str):
-        if Utils.is_empty(state):
-            raise exceptions.invalid_params('state is required')
-        self.table.delete_item(Key={'state': state})
+    def redeem_sso_state(self, state: str, browser_key_hash: str) -> Optional[Dict]:
+        """
+        Deletes the state and returns what it held, once: only when it has tokens, has
+        not expired and was started by the browser whose key hashes to browser_key_hash.
+        :return: None when any of those is not so, or another call redeemed it first
+        """
+        if Utils.is_empty(state) or Utils.is_empty(browser_key_hash):
+            return None
+        try:
+            result = self.table.delete_item(
+                Key={'state': state},
+                ConditionExpression=Attr('browser_key_hash').eq(browser_key_hash)
+                & Attr('access_token').exists()
+                & Attr('ttl').gt(Utils.current_time()),
+                ReturnValues='ALL_OLD',
+            )
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                return None
+            raise
+        return Utils.get_value_as_dict('Attributes', result)

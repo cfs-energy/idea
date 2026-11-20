@@ -73,9 +73,9 @@ def test_the_image_listing_carries_the_compute_os_and_the_supported_set():
     context = Mock()
     context.module_id.return_value = 'scheduler'
     context.config.return_value.get_string.side_effect = (
-        lambda key, default=None, required=False: 'amazonlinux2023'
-        if key == 'scheduler.compute_node_os'
-        else default
+        lambda key, default=None, required=False: (
+            'amazonlinux2023' if key == 'scheduler.compute_node_os' else default
+        )
     )
     api = SchedulerAdminAPI(context=context)
     api._compute_images = Mock()
@@ -134,3 +134,41 @@ def test_only_an_administrator_can_force_a_rebake(administrator):
             api.refresh_images(invocation)
         assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
         api._compute_images.refresh_images.assert_not_called()
+
+
+LICENSE_WRITES = [
+    'SchedulerAdmin.CreateHpcLicenseResource',
+    'SchedulerAdmin.UpdateHpcLicenseResource',
+    'SchedulerAdmin.DeleteHpcLicenseResource',
+]
+
+
+@pytest.mark.parametrize('namespace', LICENSE_WRITES)
+@pytest.mark.parametrize('scope', ['scheduler/read', 'scheduler/write'])
+def test_an_app_token_cannot_change_a_license_check(namespace, scope):
+    api = api_with_recording_handlers()
+    context = AppTokenContext(namespace, scope)
+    with pytest.raises(exceptions.SocaException) as exc_info:
+        api.invoke(context)
+    assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+    assert context.handled is False
+
+
+@pytest.mark.parametrize('namespace', LICENSE_WRITES)
+@pytest.mark.parametrize('administrator', [False, True])
+def test_only_an_administrator_can_change_a_license_check(namespace, administrator):
+    context = Mock()
+    context.module_id.return_value = 'scheduler'
+    api = SchedulerAdminAPI(context=context)
+    invocation = Mock()
+    invocation.namespace = namespace
+    invocation.is_authorized.return_value = True
+    invocation.is_administrator.return_value = administrator
+    if administrator:
+        api.invoke(invocation)
+        invocation.success.assert_called_once()
+    else:
+        with pytest.raises(exceptions.SocaException) as exc_info:
+            api.invoke(invocation)
+        assert exc_info.value.error_code == errorcodes.UNAUTHORIZED_ACCESS
+        assert context.license_service.mock_calls == []

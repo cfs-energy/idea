@@ -30,12 +30,16 @@ def ready(refresh):
     sessions = {}
     handler.session_db = Mock()
     handler.session_db.get_from_db.side_effect = (
-        lambda idea_session_owner, idea_session_id: (sessions[idea_session_id])
+        lambda idea_session_owner, idea_session_id: sessions[idea_session_id]
     )
     handler.session_db.update.side_effect = lambda session: session
     refresh.context.dcv_broker_client.describe_sessions.side_effect = lambda found: {
-        'sessions': {session.dcv_session_id: {'state': 'READY'} for session in found}
+        'sessions': {
+            session.dcv_session_id: {'state': 'READY', 'server': {'ip': '10.0.0.5'}}
+            for session in found
+        }
     }
+    refresh.context.dcv_broker_client.desktop_host_addresses.return_value = {'10.0.0.5'}
 
     def resume(version=None, base_os=VirtualDesktopBaseOS.ROCKY9):
         session = refresh.add_session(

@@ -11,6 +11,7 @@
  * and limitations under the License.
  */
 
+import ClientErrorsClient from './client-errors-client'
 import AuthClient from "./auth-client";
 import AccountsClient from "./accounts-client";
 import SchedulerAdminClient from "./scheduler-admin-client";
@@ -28,7 +29,7 @@ import Utils from "../common/utils";
 import {Constants} from "../common/constants";
 import VirtualDesktopUtilsClient from "./virtual-desktop-utils-client";
 import VirtualDesktopDCVClient from "./virtual-desktop-dcv-client";
-import {IdeaAuthenticationContext} from "../common/authentication-context";
+import {IdeaAuthenticationContext, LONG_REQUEST_TIMEOUT} from "../common/authentication-context";
 import IdeaBaseClient, {IdeaBaseClientProps} from "./base-client";
 
 export interface IdeaClientsProps {
@@ -48,6 +49,7 @@ class IdeaClients {
     private readonly virtualDesktopClient: VirtualDesktopClient
     private readonly virtualDesktopAdminClient: VirtualDesktopAdminClient
     private readonly virtualDesktopUtilsClient: VirtualDesktopUtilsClient
+    private readonly clientErrorsClient: ClientErrorsClient
     private readonly virtualDesktopDCVClient: VirtualDesktopDCVClient
     private readonly clusterSettingsClient: ClusterSettingsClient
     private readonly analyticsClient: AnalyticsClient
@@ -97,8 +99,19 @@ class IdeaClients {
         })
         this.clients.push(this.authClient)
 
+        this.clientErrorsClient = new ClientErrorsClient({
+            name: 'client-errors-client',
+            baseUrl: props.baseUrl,
+            authContext: props.authContext,
+            apiContextPath: Utils.getApiContextPath(Constants.MODULE_CLUSTER_MANAGER),
+            serviceWorkerRegistration: props.serviceWorkerRegistration
+        })
+        this.clients.push(this.clientErrorsClient)
+
         this.fileBrowserClient = new FileBrowserClient({
             name: 'file-browser-client',
+            // preparing a download or deleting a large folder scales with the files, not the request
+            requestTimeout: LONG_REQUEST_TIMEOUT,
             baseUrl: props.baseUrl,
             authContext: props.authContext,
             apiContextPath: Utils.getApiContextPath(Constants.MODULE_CLUSTER_MANAGER),
@@ -197,6 +210,10 @@ class IdeaClients {
 
     auth(): AuthClient {
         return this.authClient
+    }
+
+    clientErrors(): ClientErrorsClient {
+        return this.clientErrorsClient
     }
 
     accounts(): AccountsClient {

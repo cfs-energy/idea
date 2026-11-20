@@ -63,6 +63,9 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       props.ctx.config.setEntry('cluster.aws.partition', 'aws-us-gov');
       props.ctx.config.setEntry('cluster-manager.bedrock.enabled', true);
       props.ctx.config.setEntry('cluster-manager.metrics.cost.enabled', true);
+      // the operator's own instance policies fill the five free slots, and appear twice in the template
+      props.ctx.config.setEntry('cluster.iam.ec2_managed_policy_arns', Array.from({ length: 5 }, (_, index) =>
+        `arn:aws-us-gov:iam::123456789012:policy/org/platform/security-baseline/${'operator-instance-policy'}-${index}-${'x'.repeat(40)}`));
       props.ctx.config.setEntry('ecs.datadog.api_key_secret_arn', 'arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:test-key-abcdef');
       expected = (renderPolicy('cluster-manager.yml', { config: props.ctx.config, moduleId: 'cluster-manager' }) as Json).Statement;
       return buildStack(props);
@@ -83,10 +86,60 @@ test('GovCloud Bedrock task policies fit IAM limits and preserve all template st
       }
     }
     assert.ok(inlineBytes < 10240, `inline total: ${inlineBytes}`);
+    // IAM attaches 10 managed policies to a role. 26.11.1 left room for 5 of the operator's own
+    // (cluster.iam.ec2_managed_policy_arns) on a Bedrock cluster; a grant added since must not take one.
     assert.equal(managed.length, 3);
+    // with all five operator slots used the role is at IAM's limit of 10 and no further
+    assert.ok(role.Properties.ManagedPolicyArns.length <= 10, `attached: ${role.Properties.ManagedPolicyArns.length}`);
+    assert.ok(10 - role.Properties.ManagedPolicyArns.filter((arn: unknown) => !JSON.stringify(arn).includes('operator-instance-policy')).length >= 5);
     assert.ok(managed.some((doc) => JSON.stringify(doc).includes('bedrock:CreateInferenceProfile')));
+    // the health collectors read metadata; with the password secrets, the grants outside the template
+    const statements = managed.flatMap((doc) => doc.Statement as Json[]);
+    const health = statements.filter((statement) => JSON.stringify(statement).includes('acm:DescribeCertificate'));
+    assert.equal(health.length, 1);
+    assert.deepEqual(health[0]!.Action.sort(), [
+      'acm:DescribeCertificate',
+      'ds:DescribeDirectories',
+      // the API server's load balancer subnet read for the forwarded client address
+      'ec2:DescribeSubnets',
+      'elasticloadbalancing:DescribeListenerCertificates',
+      'secretsmanager:ListSecrets',
+    ]);
+    // A password waits for its sync task in a secret: this name only, made only with its two tags
+    // and no other, in the partition the cluster is in. The read and the delete carry no condition:
+    // one on the secret's tags answers AccessDenied for a secret that is gone, not ResourceNotFound.
+    const passwords = statements.filter((statement) => JSON.stringify(statement).includes('-password-sync-'));
+    const named = 'arn:aws-us-gov:secretsmanager:us-gov-west-1:123456789012:secret:idea-test1-password-sync-*';
+    const tagged = (key: string) => ({ [`${key}/idea:ClusterName`]: 'idea-test1', [`${key}/idea:Purpose`]: 'password-sync' });
+    assert.deepEqual(resolve(passwords), [
+      {
+        Effect: 'Allow', Action: ['secretsmanager:CreateSecret', 'secretsmanager:TagResource'], Resource: named,
+        Condition: { StringEquals: tagged('aws:RequestTag'), 'ForAllValues:StringEquals': { 'aws:TagKeys': ['idea:ClusterName', 'idea:Purpose'] } },
+      },
+      { Effect: 'Allow', Action: ['secretsmanager:GetSecretValue', 'secretsmanager:DeleteSecret'], Resource: named },
+    ]);
+    // No other statement on the role creates, tags, untags, deletes or re-policies a secret. This
+    // says nothing of reading or writing a secret's value: the template grants both by tag, and
+    // cluster-services-policy.test.ts shows those tags are not a password secret's.
+    const everyStatement = Object.values(resources)
+      .filter((resource) => ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy'].includes(resource.Type))
+      .flatMap((resource) => resource.Properties.PolicyDocument.Statement as Json[]);
+    const manages = /^(\*|secretsmanager:(\*|Create.*|Tag.*|Untag.*|Delete.*|Update.*|PutResourcePolicy))$/;
+    assert.deepEqual(everyStatement.filter((statement) => [statement.Action].flat().some((action: string) => manages.test(action)) && !passwords.includes(statement)), []);
+    // the password secret sweep waits 9 days, which is safe only while the tasks queue keeps 4
+    const tasks = Object.values(resources).find((resource) => resource.Properties?.QueueName === 'idea-test1-cluster-manager-tasks.fifo')!;
+    assert.equal(tasks.Properties.MessageRetentionPeriod, 4 * 24 * 3600);
     const normalize = (statements: Json[]) => statements.map((statement) => JSON.stringify(resolve(iam.PolicyStatement.fromJson(statement).toStatementJson()))).sort();
-    assert.deepEqual(normalize(managed.flatMap((doc) => doc.Statement)), normalize(expected));
+    // the bucket write limit is the third grant outside the template, in the cluster's partition
+    const bucketWrites = statements.filter((statement) => statement.Sid === 'DeploymentObjectsWrittenByDeployment');
+    assert.equal(bucketWrites.length, 1);
+    assert.ok([resolve(bucketWrites[0]!.Resource)].flat().every((arn) => String(arn).startsWith('arn:aws-us-gov:s3:::')));
+    // and the notice delivery receipts, one statement over the two cleanup tables, rows `delivered` only
+    const receipts = statements.filter((statement) => statement.Sid === 'NoticeDeliveryReceipts');
+    assert.equal(receipts.length, 1);
+    assert.deepEqual(receipts[0]!.Condition, { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['delivered'] } });
+    const outside = [...health, ...passwords, ...bucketWrites, ...receipts];
+    assert.deepEqual(normalize(statements.filter((statement) => !outside.includes(statement))), normalize(expected));
     console.log(`GovCloud task inline: ${inlineBytes}; managed: ${managed.map(size).join(', ')} bytes`);
   } finally {
     IdeaCodeAsset.prototype.assetPath = originalAssetPath;

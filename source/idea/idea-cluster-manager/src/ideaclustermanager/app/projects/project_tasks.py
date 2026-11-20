@@ -89,12 +89,12 @@ class ProjectGroupsUpdatedTask(BaseTask):
     def invoke(self, payload: Dict):
         project_id = payload['project_id']
         project = self.context.projects.projects_dao.get_project_by_id(project_id)
-        if project['enabled']:
+        if project is not None and Utils.get_value_as_bool('enabled', project, False):
             groups_added = Utils.get_value_as_list('groups_added', payload, [])
             groups_removed = Utils.get_value_as_list('groups_removed', payload, [])
 
             for ldap_group_name in groups_removed:
-                self.context.projects.user_projects_dao.ldap_group_added(
+                self.context.projects.user_projects_dao.ldap_group_removed(
                     project_id=project_id, group_name=ldap_group_name
                 )
                 # perform full refresh to ensure if users existed in multiple groups, and one of the group

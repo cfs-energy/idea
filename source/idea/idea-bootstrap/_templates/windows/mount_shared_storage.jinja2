@@ -1,4 +1,5 @@
 # Begin: Mount Shared Storage
+{% from '_templates/windows/ps_text.jinja2' import ps_text %}
 function Mount-SharedStorage
 {
   <#
@@ -15,22 +16,32 @@ function Mount-SharedStorage
   {% for name, storage in context.config.get_config('shared-storage').items() %}
   {% if context.eval_shared_storage_scope(shared_storage=storage) %}
   {% if storage['provider'] == 'fsx_netapp_ontap' and 'mount_drive' in storage and 'cifs_share_name' in storage['fsx_netapp_ontap']['volume'] %}
-  $shares.Add(@{MountDrive='{{ storage['mount_drive'] }}:'; Path='\\{{ storage['fsx_netapp_ontap']['svm']['smb_dns'] }}\{{ storage['fsx_netapp_ontap']['volume']['cifs_share_name'] }}'}) | Out-Null
+  {# one separator between parts: a share name stored with doubled backslashes is not a path net use is known to take #}
+  $shares.Add(@{Name='{{ ps_text(name) }}'; MountDrive='{{ ps_text(storage['mount_drive']) }}:'; Path='\\{{ ps_text(storage['fsx_netapp_ontap']['svm']['smb_dns']) }}\{{ ps_text(storage['fsx_netapp_ontap']['volume']['cifs_share_name'].split('\\') | reject('equalto', '') | join('\\')) }}'}) | Out-Null
   {% endif %}
   {% if storage['provider'] == 'fsx_windows_file_server' and 'mount_drive' in storage %}
-  $shares.Add(@{MountDrive='{{ storage['mount_drive'] }}:'; Path='\\{{ storage['fsx_windows_file_server']['dns'] }}\share'}) | Out-Null
+  $shares.Add(@{Name='{{ ps_text(name) }}'; MountDrive='{{ ps_text(storage['mount_drive']) }}:'; Path='\\{{ ps_text(storage['fsx_windows_file_server']['dns']) }}\share'}) | Out-Null
   {% endif %}
   {% endif %}
   {% endfor %}
 
-  # create batch file and scheduled task only if any shared storage mounts are applicable
-  if ($shares.Count -gt 0)
-  {
-
-    $batchFileCommands = [System.Collections.ArrayList]::new()
-    for($i=0; $i -lt $shares.Count; $i++) {
-      $batchFileCommands.Add("if not exist $($shares[$i].MountDrive) (net use $($shares[$i].MountDrive) $($shares[$i].Path) /persistent:yes)") | Out-Null
+  # Each value is a double-quoted argument in the batch file, which carries spaces and & | < > ^ ( )
+  # as text. cmd expands a percent sign even inside quotes: the one documented use is the per-user
+  # home share token %UserName%, which cmd expands at logon to the signed-in user and is carried as
+  # it is. Any other percent sign, a double quote or a control character cannot be carried safely,
+  # so a share holding one is left out and logged.
+  $batchFileCommands = [System.Collections.ArrayList]::new()
+  foreach ($share in $shares) {
+    if ((($share.MountDrive + $share.Path) -ireplace '%UserName%', '') -match '["%\x00-\x1f\x7f]') {
+      Write-ToLog -Message "Shared storage $($share.Name) is not mounted: its drive or path has a character the logon batch file cannot carry (double quote, a percent sign other than %UserName%, or a control character)" -Level 'Error'
+      continue
     }
+    $batchFileCommands.Add("if not exist `"$($share.MountDrive)`" (net use `"$($share.MountDrive)`" `"$($share.Path)`" /persistent:yes)") | Out-Null
+  }
+
+  # create batch file and scheduled task only if any shared storage mounts are applicable
+  if ($batchFileCommands.Count -gt 0)
+  {
     $batchFileContent = $batchFileCommands -join "`n"
     $batchFile = "C:\IDEA\LocalScripts\MountSharedStorage.bat"
     New-Item $batchFile -ItemType File -Value $batchFileContent -Force
@@ -38,8 +49,12 @@ function Mount-SharedStorage
     # create a scheduled task to execute after the domain user logs in
     $action = New-ScheduledTaskAction -Execute $batchFile
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $DomainUserName
-    Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "MountSharedStorage" -Description "Mount Shared Storage" -User $DomainUserName
+    # -Force: an image taken from a desktop already has this task, registered for its owner
+    Register-ScheduledTask -Action $action -Trigger $trigger -TaskName "MountSharedStorage" -Description "Mount Shared Storage" -User $DomainUserName -Force
 
+  } else {
+    # nothing to map for this owner: a task inherited from the image's source desktop is removed
+    Unregister-ScheduledTask -TaskName "MountSharedStorage" -Confirm:$false -ErrorAction SilentlyContinue
   }
 
 }

@@ -316,3 +316,8 @@ export function wrapCfnHandler<Event extends CfnResourceEvent>(
         }
     };
 }
+
+/** A custom-resource event as logged: everything but the presigned response URL. */
+export function eventForLog(event: object): string {
+    return JSON.stringify(event, (key, value: unknown) => (key === "ResponseURL" ? "[omitted]" : value));
+}

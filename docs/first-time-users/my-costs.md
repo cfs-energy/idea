@@ -26,7 +26,7 @@ Memory efficiency compares peak memory use with requested memory. Without a memo
 
 Job hints can suggest fewer requested cores when less than half were used. For multi-node jobs, the suggestion is per node. Low memory use without a memory request can suggest a smaller instance type.
 
-**Desktops** shows desktop spend, estimated hours, daily costs, and costs by project. **Storage** shows shared-storage spend and measured storage use. Open **Storage usage: folders and quotas** on the Storage tab for folder sizes, file ages, bytes unchanged for 90 days, and available quotas. This view loads only when opened.
+**Desktops** shows desktop spend, estimated hours, daily costs, and costs by project. **Storage** shows shared-storage spend and measured storage use. Open **Storage usage: folders and quotas** on the Storage tab for your storage quota, folder sizes largest first with file counts, **Last changed**, and bytes unchanged for 90 days (3 months or more when analytics is on). Select a folder to look inside it. **Refresh** rereads storage and shows its progress. This view loads only when opened.
 
 | Tile | Calculation |
 | --- | --- |
@@ -52,11 +52,11 @@ The monthly costs, summary, and ticker read stored results without waiting for b
 
 My costs and the month-to-date ticker share saved monthly results in the browser. The browser checks every 15 seconds while collection is pending. After two minutes, checks slow to once a minute. It ordinarily checks every five minutes while visible. Billing source reads are cached for six hours. Disk rates are cached for a day. Requesting refresh cannot make upstream billing arrive sooner.
 
-A user without saved monthly results sees **Collecting · about N min**. The estimate uses the next scheduled collection and the last measured run duration. The initial assumed duration is 20 minutes. An overdue collector shows **Collecting delayed** with an updated estimate. Missing sources leave service costs unavailable.
+A user without saved monthly results sees **Collecting · about N min**. The estimate uses the next scheduled collection and the last measured run duration. The initial assumed duration is 20 minutes. A collector more than a minute past that estimate, or by as long as its last run took when that is longer, shows **Taking longer than usual** instead. Missing sources leave service costs unavailable.
 
 ## Storage evidence
 
-Today's byte share is never reused to fill last month. Historical days without a dated share remain missing. ONTAP shares use the sum of all user quota bytes rather than volume usage after storage savings. The sum includes root and unresolved identities whose costs remain unassigned. Dated shares and disk observations are retained for 400 days from collection onward. Disk observations account for at most 15 minutes each. Earlier observations survive deletion. Missed collection intervals remain unknown.
+Today's byte share is never reused to fill last month. Historical days without a dated share remain missing. ONTAP shares use the sum of all user quota bytes rather than volume usage after storage savings. The sum includes root and unresolved identities whose costs remain unassigned. Dated shares and disk observations are retained for 400 days from collection onward. Disk observations hold until the next one, for at most 17 minutes each. Earlier observations survive deletion. Missed collection intervals remain unknown.
 
 Complete home-directory scans can establish measured bytes. A home-directory listing alone cannot establish the filesystem total needed to calculate a cost share. The collector verifies the mounted filesystem before retaining home measurements. For a verifiable EFS root mount, a complete filesystem scan can supply that total. Users receive only their byte share. System or unrelated bytes remain unassigned. Subdirectory mounts, unverifiable proxy mounts, and partial root scans cannot establish that total. Shared-storage costs stay unavailable when user storage cannot be separated from system space or unrelated directories.
 

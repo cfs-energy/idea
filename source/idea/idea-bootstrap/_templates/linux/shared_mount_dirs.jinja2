@@ -1,9 +1,17 @@
+{# values from cluster settings are data: single-quoted for the shell, embedded quotes escaped #}
 {#- the mount points this cluster's shared storage writes to fstab: only these must be mounted; any other
     entry (a leftover from an image or another cluster) is warned about and ignored by mount_shared_filesystems -#}
 IDEA_SHARED_MOUNT_DIRS=(
 {% for name, storage in context.config.get_config('shared-storage').items() %}
 {% if context.eval_shared_storage_scope(shared_storage=storage) and (storage['provider'] in ('efs', 'fsx_cache', 'fsx_lustre', 'fsx_openzfs') or (storage['provider'] == 'fsx_netapp_ontap' and storage['fsx_netapp_ontap']['volume']['security_style'])) %}
-  "{{ storage['mount_dir'] }}"
+  '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
+{% endif %}
+{% endfor %}
+)
+IDEA_SHARED_LUSTRE_DIRS=(
+{% for name, storage in context.config.get_config('shared-storage').items() %}
+{% if context.eval_shared_storage_scope(shared_storage=storage) and storage['provider'] in ('fsx_cache', 'fsx_lustre') %}
+  '{{ storage['mount_dir'] | default('', true) | string | replace("'", "'\\''") }}'
 {% endif %}
 {% endfor %}
 )

@@ -35,6 +35,20 @@ Force Change Password: User will be required to change his/her password after th
 * Select a user with Status set to "Enabled"
 * Click "**Actions**" then "**Disable User**"
 
+Disabling a user renames `~/.ssh/authorized_keys` to `authorized_keys.disabled`, so key sign-in to the bastion stops even where the directory keeps the account enabled. Every key in the file is set aside, including keys added by hand. Enabling the user renames the file back. If the user was given keys while disabled, those stay in `authorized_keys` and the old file stays aside. A key file that is a link or has a second name is renamed aside the same way, without following it, and an empty read-only file takes its place. A `.ssh` folder that is a link is set aside as a whole. `authorized_keys2` is handled like `authorized_keys`. At every start, the cluster manager also sets aside the keys of each disabled user, in the background.
+
+Signing a user out everywhere, resetting their password or disabling them also ends any browser terminal opened with an earlier sign-in, within 15 seconds, and no new terminal opens from it. API tokens created before a user's sessions were ended stop working.
+
+### Delete a user
+
+Deleting a user removes the account from IDEA and the user pool. On a directory IDEA writes, it also removes the directory account, and the user's home folder is renamed aside so a later account with the same name starts with a new home and key:
+
+* `/data/home/<username>` is renamed to `/data/home/<username>_<timestamp>`, owned by root with mode 700.
+* A home that is a link, or that is its own mount, is left where it is and the cluster manager logs a warning.
+* On a read-only directory the account stays in the directory, and its home is left in place.
+
+To give the files back, an administrator renames the folder and sets its owner on a host that mounts `/data`, for example `sudo mv /data/home/<username>_<timestamp> /data/home/<username>` and `sudo chown -R <username>: /data/home/<username>` once the account exists again. To remove them, delete the renamed folder.
+
 ### Give user Cluster Admin privileges
 
 * Select a standard user

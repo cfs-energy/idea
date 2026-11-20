@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import re
+import time
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -170,8 +172,11 @@ def test_api_auth_and_redaction():
     invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
     invocation.get_username.return_value = 'alice'
     invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
+    context.accounts.session_signed_in_ms.return_value = 1_700_000_000_000
     TerminalAPI(context).invoke(invocation)
-    context.terminal.create_ticket.assert_called_once_with('alice', 'bastion', 'a' * 64)
+    context.terminal.create_ticket.assert_called_once_with(
+        'alice', 'bastion', 'a' * 64, 1_700_000_000_000
+    )
     invocation.has_access_token.return_value = False
     with pytest.raises(Exception):
         TerminalAPI(context).invoke(invocation)
@@ -184,6 +189,43 @@ def test_api_auth_and_redaction():
     assert invoker.get_response_logging_payload(invocation)['payload'] == {
         'redacted': True
     }
+
+
+@pytest.mark.parametrize(
+    'missing',
+    [
+        'has_access_token',
+        'is_authenticated_user',
+        'is_authorized_user',
+        'not is_unix_domain_socket_invocation',
+        None,
+    ],
+)
+def test_a_ticket_needs_every_part_of_a_signed_in_session(missing):
+    # through the load balancer a caller with no token is refused before any API is
+    # chosen, so that answer says nothing about this API. each condition is refused here,
+    # by this API, and the same call with nothing missing gets its ticket
+    context = MagicMock()
+    invocation = MagicMock(
+        namespace='Terminal.CreateTicket',
+        request_payload={'target': 'bastion', 'client': 'a' * 64},
+    )
+    invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
+    invocation.get_username.return_value = 'alice'
+    context.accounts.session_signed_in_ms.return_value = 1_700_000_000_000
+    if missing is None:
+        TerminalAPI(context).invoke(invocation)
+        context.terminal.create_ticket.assert_called_once_with(
+            'alice', 'bastion', 'a' * 64, 1_700_000_000_000
+        )
+        return
+    name = missing.removeprefix('not ')
+    getattr(invocation, name).return_value = missing.startswith('not ')
+    with pytest.raises(exceptions.SocaException) as error:
+        TerminalAPI(context).invoke(invocation)
+    assert error.value.error_code == 'UNAUTHORIZED_ACCESS'
+    context.terminal.create_ticket.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -254,6 +296,9 @@ class Socket:
         'lease-login',
         'lease-watchdog',
         'account-deleted',
+        'sessions-ended',
+        'sessions-ended-earlier',
+        'empty-input',
     ],
 )
 def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, mode):
@@ -322,7 +367,16 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
         )
         service.context.config().get_int.side_effect = lambda name, default: (
             1
-            if (mode in {'idle-timeout', 'stalled-stdin'} and 'idle' in name)
+            if (
+                mode
+                in {
+                    'idle-timeout',
+                    'stalled-stdin',
+                    'sessions-ended-earlier',
+                    'empty-input',
+                }
+                and 'idle' in name
+            )
             or (mode == 'max-duration' and 'duration' in name)
             else default
         )
@@ -344,16 +398,25 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             accounts.user_dao.get_user.return_value = None
             service.context.accounts = accounts
             service.user = TerminalService.user.__get__(service)
+        # the user row as DynamoDB returns it: numbers are Decimal, in milliseconds
+        row = {'username': 'alice', 'enabled': True, 'created_on': Decimal(1000)}
+        if mode == 'sessions-ended-earlier':
+            row['sessions_revoked_on'] = Decimal(int(time.time() * 1000) - 60000)
+        service.context.accounts.user_dao.get_user.return_value = row
         ticket = store.issue('alice', 'bastion', 'client')
         ws = Socket(
             dict(ticket=ticket, username='alice', target='bastion', client='client')
         )
+        background = []
         if mode != 'shell-exited':
 
             async def send(value):
                 ws.sent.append(value)
                 if mode == 'lease-watchdog' and value == json.dumps({'type': 'ready'}):
                     store.clock = lambda: 1061
+                if mode == 'sessions-ended' and value == json.dumps({'type': 'ready'}):
+                    # a global sign-out or password reset while the shell is open
+                    row['sessions_revoked_on'] = Decimal(int(time.time() * 1000) + 1)
                 if isinstance(value, bytes) and mode in {
                     'disconnected',
                     'socket-closed',
@@ -379,6 +442,8 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
                 elif isinstance(value, bytes) and mode in {
                     'idle-timeout',
                     'max-duration',
+                    'sessions-ended',
+                    'sessions-ended-earlier',
                 }:
                     ws.incoming.put_nowait(json.dumps({'type': 'ack'}))
                 if mode == 'surrogate-input' and isinstance(value, bytes):
@@ -396,6 +461,17 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
                         else {'type': 'resize', 'cols': 90, 'rows': 30, 'seq': 1}
                     )
                     ws.incoming.put_nowait(json.dumps(frame))
+                if mode == 'empty-input' and isinstance(value, bytes):
+                    ws.incoming.put_nowait(json.dumps({'type': 'ack'}))
+
+                    async def empty_frames():
+                        while True:
+                            ws.incoming.put_nowait(
+                                json.dumps({'type': 'input', 'data': ''})
+                            )
+                            await asyncio.sleep(0.05)
+
+                    background.append(asyncio.create_task(empty_frames()))
                 if mode == 'bad-frame' and isinstance(value, bytes):
                     ws.incoming.put_nowait('x' * (module.FRAME_LIMIT + 1))
 
@@ -420,6 +496,8 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             if mode == 'stalled-stdin':
                 assert connections and connections[0].is_closed()
         finally:
+            for task in background:
+                task.cancel()
             for conn in connections:
                 conn.abort()
             handler.cancel()
@@ -443,12 +521,17 @@ def test_real_ssh_bridge_and_audit_without_content(store, monkeypatch, caplog, m
             'lease-login': 'unavailable',
             'lease-watchdog': 'unavailable',
             'account-deleted': 'access-denied',
+            'sessions-ended': 'access-denied',
+            # sessions ended before this shell opened: it renews until idle
+            'sessions-ended-earlier': 'idle-timeout',
+            # empty input frames are not activity
+            'empty-input': 'idle-timeout',
         }.get(mode, mode)
         if mode in {'disconnected', 'socket-closed'}:
             assert ws.closed['code'] == 1000
         if mode in {'lease-login', 'lease-watchdog', 'trust-not-ready'}:
             assert ws.closed['code'] == 4002
-        if mode == 'account-deleted':
+        if mode in {'account-deleted', 'sessions-ended'}:
             assert ws.closed['code'] == 4003
         if mode == 'ack-timeout':
             assert ws.closed['code'] == 4005
@@ -1369,11 +1452,22 @@ def test_whole_handshake_has_a_deadline(store, monkeypatch):
 def pre_auth_service(store):
     service = target_service(store)
     service.store = store
+    service._server = LoadBalancerRule()
     service.logger = logging.getLogger('terminal-pre-auth-test')
     service.context.config().get_cluster_external_endpoint.return_value = (
         'https://portal.example'
     )
     return service
+
+
+class LoadBalancerRule:
+    """the server's rule: the last forwarded-for hop only from the load balancer"""
+
+    @staticmethod
+    def client_address(request):
+        if request.ip.startswith('10.0.0.'):
+            return request.headers['x-forwarded-for'].split(',')[-1].strip()
+        return request.ip
 
 
 def pre_auth_request(source):
@@ -1543,6 +1637,7 @@ def test_slow_target_after_valid_ticket_keeps_the_long_window(store, monkeypatch
         'slash-disabled',
     ],
 )
+@pytest.mark.usefixtures('no_leftover_server_app')
 @pytest.mark.parametrize('unix_socket', [False, True])
 def test_real_soca_server_stop_drains_terminal(
     store, monkeypatch, caplog, mode, unix_socket
@@ -1804,7 +1899,8 @@ def test_ttl_failure_recovers_with_real_table_helpers(monkeypatch):
 
 @pytest.mark.parametrize(
     'forwarded, peer',
-    [(None, '192.0.2.5'), ('', '192.0.2.5'), ('spoofed, 198.51.100.7', '198.51.100.7')],
+    # a forwarded-for header from a caller that is not the load balancer is not read
+    [(None, '192.0.2.5'), ('', '192.0.2.5'), ('spoofed, 198.51.100.7', '192.0.2.5')],
 )
 def test_rejected_ticket_logs_claims_and_peer_not_authenticated_user(
     store, caplog, forwarded, peer
@@ -2154,3 +2250,115 @@ def test_instance_state_uses_real_ec2_response(store, state):
         # My desktops still shows READY, with no Start action, until VDC reconciles.
         assert type(caught.value).__name__ == 'TerminalUnavailable'
         stubber.assert_no_pending_responses()
+
+
+def test_callers_the_server_cannot_place_share_only_the_total_bound(store, monkeypatch):
+    async def run():
+        service = pre_auth_service(store)
+        # behind an internal load balancer the server gives no address
+        service._server = SimpleNamespace(client_address=lambda request: None)
+        monkeypatch.setattr(module, 'PRE_AUTH_PER_SOURCE', 2, raising=False)
+        monkeypatch.setattr(module, 'PRE_AUTH_TOTAL', 3, raising=False)
+        loop = asyncio.get_running_loop()
+        proceed = asyncio.Event()
+
+        def target(*_):
+            asyncio.run_coroutine_threadsafe(proceed.wait(), loop).result()
+            raise TerminalDenied('done')
+
+        service.target = target
+        held = [SilentSocket() for _ in range(3)]
+        tasks = [
+            asyncio.create_task(
+                service.websocket(pre_auth_request('198.51.100.1'), socket)
+            )
+            for socket in held
+        ]
+        await asyncio.sleep(0)
+        # three unplaced callers pass the per-source bound of two
+        assert all(socket.closed is None for socket in held)
+        full = SilentSocket()
+        await service.websocket(pre_auth_request('198.51.100.2'), full)
+        assert full.closed == {'code': 1013, 'reason': 'pre-auth-limit'}
+        proceed.set()
+        for socket in held:
+            socket.incoming.put_nowait(None)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+@pytest.fixture
+def no_leftover_server_app():
+    """another test's stopped server leaves its app name registered; a real one here needs it"""
+    import sanic
+
+    for name in ('http-server', 'unix-server'):
+        sanic.Sanic._app_registry.pop(name, None)
+    yield
+
+
+def session_accounts(**row):
+    from decimal import Decimal
+
+    from ideaclustermanager.app.accounts.accounts_service import AccountsService
+
+    accounts = AccountsService.__new__(AccountsService)
+    accounts.user_dao = MagicMock()
+    # the row as the table returns it
+    accounts.user_dao.get_user.return_value = {
+        'username': 'alice',
+        **{key: Decimal(value) for key, value in row.items()},
+    }
+    return accounts
+
+
+@pytest.mark.parametrize(
+    'row, auth_time, refused',
+    [
+        # a session from before a sign-out everywhere or password reset
+        (
+            {'created_on': 1000, 'sessions_revoked_on': 1_800_000_000_000},
+            1_700_000_000,
+            True,
+        ),
+        # a session issued to an earlier account of the same name
+        ({'created_on': 1_800_000_000_000}, 1_700_000_000, True),
+        # a session signed in after both
+        (
+            {'created_on': 1000, 'sessions_revoked_on': 1_600_000_000_000},
+            1_700_000_000,
+            False,
+        ),
+    ],
+)
+def test_a_ticket_is_bound_to_a_session_still_in_force(row, auth_time, refused):
+    context = MagicMock()
+    context.accounts = session_accounts(**row)
+    invocation = MagicMock(
+        namespace='Terminal.CreateTicket',
+        request_payload={'target': 'bastion', 'client': 'a' * 64},
+    )
+    invocation.is_unix_domain_socket_invocation.return_value = False
+    invocation.get_authorization.return_value = SimpleNamespace(token_id=None)
+    invocation.get_username.return_value = 'alice'
+    # refreshed after the revocation: a late iat, an early sign-in
+    invocation.get_decoded_token.return_value = {
+        'auth_time': auth_time,
+        'iat': 1_900_000_000,
+    }
+    if refused:
+        with pytest.raises(exceptions.SocaException) as error:
+            TerminalAPI(context).invoke(invocation)
+        assert error.value.error_code == 'UNAUTHORIZED_ACCESS'
+        context.terminal.create_ticket.assert_not_called()
+    else:
+        TerminalAPI(context).invoke(invocation)
+        assert context.terminal.create_ticket.call_args.args[3] == auth_time * 1000
+
+
+def test_a_ticket_carries_the_sessions_sign_in_time(store):
+    ticket = store.issue('alice', 'bastion', 'a' * 64, 1_700_000_000_000)
+    assert store.consume(ticket, 'alice', 'bastion', 'a' * 64) == 1_700_000_000_000

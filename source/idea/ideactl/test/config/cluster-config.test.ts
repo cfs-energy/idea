@@ -299,11 +299,11 @@ describe('ClusterConfig (synthetic)', () => {
   });
 
   // Numeric top-level lists use checkAndConvertDecimalValue.
-  describe('the check_and_convert_decimal_value quirk', () => {
-    it('appends the whole original list after every converted element', () => {
-      assert.deepEqual(config.get('virtual-desktop-controller.number_list'), [1, [1, 2], 2, [1, 2]]);
-      assert.deepEqual(config.getList('virtual-desktop-controller.number_list'), [1, [1, 2], 2, [1, 2]]);
-      assert.deepEqual(config.getList('virtual-desktop-controller.float_list'), [1.5, [1.5]]);
+  describe('numeric top-level lists', () => {
+    it('come back as the numbers stored, without the old copy of the list after each element', () => {
+      assert.deepEqual(config.get('virtual-desktop-controller.number_list'), [1, 2]);
+      assert.deepEqual(config.getList('virtual-desktop-controller.number_list'), [1, 2]);
+      assert.deepEqual(config.getList('virtual-desktop-controller.float_list'), [1.5]);
     });
 
     it('leaves a list that does not start with a number alone', () => {

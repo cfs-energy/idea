@@ -315,22 +315,14 @@ class VirtualDesktopPermissionProfileDB(VirtualDesktopNotifiableDB):
         if Utils.is_not_empty(request.cursor):
             last_evaluated_key = Utils.from_json(Utils.base64_decode(request.cursor))
             if Utils.is_not_empty(last_evaluated_key):
-                list_request['LastEvaluatedKey'] = last_evaluated_key
+                list_request['ExclusiveStartKey'] = last_evaluated_key
 
-        list_result = self._table.scan(**list_request)
-        profile_entries = Utils.get_value_as_list('Items', list_result, [])
+        profile_entries = Utils.scan_all(self._table, list_request)
         result = []
         for profile in profile_entries:
             result.append(self.convert_db_dict_to_permission_profile_object(profile))
 
-        response_cursor = None
-        last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', list_result)
-        if last_evaluated_key is not None:
-            response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
-
-        return ListPermissionProfilesResponse(
-            listing=result, paginator=SocaPaginator(cursor=response_cursor)
-        )
+        return ListPermissionProfilesResponse(listing=result, paginator=SocaPaginator())
 
     def delete(self, profile_name: str):
         if Utils.is_empty(profile_name):

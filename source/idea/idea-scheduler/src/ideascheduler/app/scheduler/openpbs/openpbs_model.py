@@ -8,7 +8,7 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
-from pydantic import Field
+from pydantic import Field, field_validator
 
 import ideascheduler
 from ideadatamodel import (
@@ -22,20 +22,72 @@ from ideadatamodel import (
     SocaJobExecutionRun,
     SocaJobExecutionResourcesUsed,
     SocaJobNotifications,
+    SocaJobSubjob,
     HpcQueueProfile,
 )
 from ideasdk.utils import Utils
 
 from ideascheduler.app.scheduler import SocaJobBuilder
 
+from ideascheduler.app.scheduler.openpbs import openpbs_constants
 from ideascheduler.app.scheduler.pbs_select import select_chunks, chunk_resources
 
 from typing import Optional, Union, Dict, List
 import arrow
+import logging
+import re
 from datetime import datetime
 
 DATE_FORMAT = 'ddd MMM D HH:mm:ss YYYY'
+
+_logger = logging.getLogger('openpbs-model')
+
+
+def epoch_millis_time(value: Optional[Union[int, str]]) -> Optional[datetime]:
+    """
+    a time IDEA stores in a PBS string resource as epoch milliseconds (provisioning_time):
+    a number from qstat, text from the hook, which sends every value as text
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text in ('', '0'):
+        return None
+    if Utils.is_int(text):
+        # arrow reads a millisecond timestamp as one
+        return arrow.get(int(text)).datetime
+    return arrow.get(text).datetime
+
+
+def read_soft(job_id: Optional[str], field: str, read, default=None):
+    """
+    one field of a job that does not parse is logged and left out: a status update or a
+    listing must not be dropped for an attribute it does not need
+    """
+    try:
+        return read()
+    except Exception as e:
+        _logger.warning(f'job {job_id}: {field} not read: {e}')
+        return default
+
+
 DEFAULT_QUEUE_NAME = 'normal'
+
+
+_DEPEND_JOB_ID = re.compile(r':([0-9]{1,18}(?:\[[0-9]*\])?)', re.ASCII)
+
+
+STARTED_JOB_STATES = (
+    SocaJobState.RUNNING,
+    SocaJobState.SUBJOB_BEGUN,
+    SocaJobState.EXIT,
+)
+# how the PBS scheduler begins the comment of a job it did not run in a cycle
+WAIT_COMMENT_PREFIXES = ('Not Running', 'Can Never Run')
+
+
+def is_wait_comment(comment: Optional[str]) -> bool:
+    return bool(comment) and comment.startswith(WAIT_COMMENT_PREFIXES)
 
 
 class OpenPBSJob(SocaBaseModel):
@@ -116,6 +168,24 @@ class OpenPBSJob(SocaBaseModel):
     User_List: Optional[dict] = Field(default=None)
     Variable_List: Optional[dict] = Field(default=None)
 
+    @field_validator(
+        'Account_Name',
+        'array_index',
+        'array_indices_remaining',
+        'array_indices_submitted',
+        'comment',
+        'project',
+        mode='before',
+    )
+    @classmethod
+    def _number_as_text(cls, value):
+        # qstat's JSON writes a value that reads as a number bare: "array_index":1,
+        # "array_indices_remaining":3 while one index is left, and the same for an account
+        # or project named in digits. One such job must not fail every listing.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(int(value)) if float(value).is_integer() else str(value)
+        return value
+
     @staticmethod
     def to_soca_job_state(state: str) -> Optional[SocaJobState]:
         _token = state.lower()
@@ -154,6 +224,19 @@ class OpenPBSJob(SocaBaseModel):
             return SocaJobState.SUSPENDED
 
         return None
+
+    def get_dependent_job_ids(self) -> Optional[List[str]]:
+        """
+        the jobs a before* dependency names: beforeok:348.server@server:349.server. A server
+        port can read as a number too, which only over-matches.
+        """
+        found = [
+            job_id
+            for part in (self.depend or '').split(',')
+            if part.strip().startswith('before')
+            for job_id in _DEPEND_JOB_ID.findall(part)
+        ]
+        return found or None
 
     @property
     def soca_job_state(self) -> Optional[SocaJobState]:
@@ -320,7 +403,7 @@ class OpenPBSJob(SocaBaseModel):
             return None
         if 'provisioning_time' not in resources:
             return None
-        return arrow.get(resources['provisioning_time']).datetime
+        return epoch_millis_time(resources['provisioning_time'])
 
     def capacity_added(self) -> Optional[bool]:
         resources = self.Resource_List
@@ -479,6 +562,55 @@ class OpenPBSJob(SocaBaseModel):
             )
         return Utils.get_value_as_string('walltime', resources_used)
 
+    def get_end_time(
+        self, state: Optional[SocaJobState], start_time: Optional[datetime]
+    ) -> Optional[datetime]:
+        # end time computation using wall time from resources used.
+        # a job terminated before its execution host reported resources_used has no walltime.
+        # mtime is the time such a job entered the finished state.
+        if (
+            state not in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+            or start_time is None
+        ):
+            return None
+        resources_used_walltime = self.get_resources_used_wall_time()
+        if Utils.is_not_empty(resources_used_walltime):
+            total_seconds = Utils.walltime_to_seconds(resources_used_walltime)
+            return arrow.get(start_time).shift(seconds=total_seconds).datetime
+        modified_time = self.parse_pbs_datetime(self.mtime)
+        if modified_time is not None and modified_time >= start_time:
+            return modified_time
+        return None
+
+    def as_subjob(self) -> SocaJobSubjob:
+        """
+        one subjob's outcome for its array's record. Read straight from the PBS fields: an
+        array can have thousands, and none of them is provisioned or priced on its own.
+        """
+        state = self.soca_job_state
+        start_time = self.parse_pbs_datetime(self.stime)
+        terminated = None
+        done = state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
+        if done and Utils.is_empty(self.exec_host) and Utils.is_empty(self.exec_vnode):
+            # deleted while it was queued. Once its array has begun PBS lists it as done
+            # with status 0, the comment 'Subjob finished' and the array's start and end,
+            # the same as one that ran and passed. Only a subjob that ran has a host, so
+            # this one is recorded as ended by qdel with no status and no times of its own.
+            return SocaJobSubjob(
+                job_id=self.id.split('.')[0], state=state, terminated=True
+            )
+        # a done subjob reads X while its array is active and F in history, same substates
+        if done and self.substate is not None:
+            terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
+        return SocaJobSubjob(
+            job_id=self.id.split('.')[0],
+            state=state,
+            exit_status=self.Exit_status,
+            terminated=terminated,
+            start_time=start_time,
+            end_time=self.get_end_time(state=state, start_time=start_time),
+        )
+
     def as_soca_job(
         self,
         context: ideascheduler.AppContext,
@@ -514,34 +646,35 @@ class OpenPBSJob(SocaBaseModel):
 
         # exit status
         exit_status = self.Exit_status
+        dependent_job_ids = read_soft(job_id, 'depend', self.get_dependent_job_ids)
+
+        # a job qdel ended can still exit 0; only a finished job's substate says so
+        terminated = None
+        if state == SocaJobState.FINISHED and self.substate is not None:
+            terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
 
         params = self.get_soca_job_params()
-        execution_hosts = self.get_soca_execution_hosts(event=event)
+        execution_hosts = read_soft(
+            job_id, 'exec_host', lambda: self.get_soca_execution_hosts(event=event)
+        )
 
         # "qtime":"Wed Oct 20 01:41:21 2021"
         # "qtime": "1635187450" from execution hosts
-        queue_time = self.parse_pbs_datetime(self.qtime)
+        queue_time = read_soft(
+            job_id, 'qtime', lambda: self.parse_pbs_datetime(self.qtime)
+        )
 
         # "stime":"Wed Oct 20 01:41:21 2021"
         # "stime": "1635187450" from execution hosts
-        start_time = self.parse_pbs_datetime(self.stime)
+        start_time = read_soft(
+            job_id, 'stime', lambda: self.parse_pbs_datetime(self.stime)
+        )
 
-        # end time computation using wall time from resources used.
-        # a job terminated before its execution host reported resources_used has no walltime.
-        # mtime is the time such a job entered the finished state.
-        end_time = None
-        if (
-            state in (SocaJobState.FINISHED, SocaJobState.SUBJOB_EXPIRED)
-            and start_time is not None
-        ):
-            resources_used_walltime = self.get_resources_used_wall_time()
-            if Utils.is_not_empty(resources_used_walltime):
-                total_seconds = Utils.walltime_to_seconds(resources_used_walltime)
-                end_time = arrow.get(start_time).shift(seconds=total_seconds).datetime
-            else:
-                modified_time = self.parse_pbs_datetime(self.mtime)
-                if modified_time is not None and modified_time >= start_time:
-                    end_time = modified_time
+        end_time = read_soft(
+            job_id,
+            'end time',
+            lambda: self.get_end_time(state=state, start_time=start_time),
+        )
 
         if job_builder is None:
             # the project is passed so params are rebuilt against the project's current
@@ -553,6 +686,7 @@ class OpenPBSJob(SocaBaseModel):
                 queue_profile=queue_profile,
                 project=project,
                 job_id=job_id,
+                at_submission=False,
             )
 
         job_params, provisioning_options = job_builder.build()
@@ -562,7 +696,9 @@ class OpenPBSJob(SocaBaseModel):
         # put the select expression as is for later use during provisioning
         job_params.custom_params = {'select': select}
 
-        provisioning_time = self.provisioning_time()
+        provisioning_time = read_soft(
+            job_id, 'provisioning_time', self.provisioning_time
+        )
 
         provisioned = False
         if select is not None:
@@ -570,18 +706,26 @@ class OpenPBSJob(SocaBaseModel):
 
         job_group = self.get_job_group()
 
-        comment = self.get_error_message()
+        # a job that has started is past whatever kept it waiting. PBS leaves its last
+        # wait comment on a begun array until the next subjob starts, and refuses to
+        # clear a provisioning error from a job that runs: neither is shown for one.
+        started = state in STARTED_JOB_STATES or (
+            state == SocaJobState.FINISHED and start_time is not None
+        )
+        comment = None if started else self.get_error_message()
         if comment is None:
             comment = self.comment
+            if started and is_wait_comment(comment):
+                comment = None
 
-        notifications = self.get_notifications()
+        notifications = read_soft(job_id, 'Mail_Points', self.get_notifications)
 
-        cluster_name = Utils.get_as_string(
-            self.get_cluster_name(), context.cluster_name()
-        )
+        # always this cluster's name: a job_uid-like resource the submitter can set must
+        # not name the stack and tag of another cluster (SJP-09)
+        cluster_name = context.cluster_name()
 
         # capacity_added
-        capacity_added = self.capacity_added()
+        capacity_added = read_soft(job_id, 'capacity_added', self.capacity_added)
 
         queue_type = None
         scaling_mode = None
@@ -606,6 +750,8 @@ class OpenPBSJob(SocaBaseModel):
             owner=owner,
             state=state,
             exit_status=exit_status,
+            terminated=terminated,
+            dependent_job_ids=dependent_job_ids,
             provisioned=provisioned,
             queue_time=queue_time,
             start_time=start_time,

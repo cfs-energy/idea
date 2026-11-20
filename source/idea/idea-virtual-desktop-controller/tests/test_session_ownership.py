@@ -9,8 +9,11 @@ import boto3
 from botocore.stub import Stubber
 
 from ideadatamodel import (
+    Project,
     VirtualDesktopServer,
     VirtualDesktopSession,
+    VirtualDesktopSessionConnectionInfo,
+    VirtualDesktopSessionPermission,
     VirtualDesktopSessionState,
 )
 from ideasdk.api import ApiInvocationContext
@@ -33,6 +36,10 @@ from ideavirtualdesktopcontroller.app.virtual_desktop_controller_utils import (
 def api():
     api = VirtualDesktopUserAPI.__new__(VirtualDesktopUserAPI)
     api.context = Mock()
+    # every owner is still in the desktop's project (an owner who left is in test_panel_findings)
+    api.context.projects_client.get_user_projects.return_value = [
+        Project(project_id='project-1')
+    ]
     api._logger = Mock()
     rows = {
         (owner, f'session-{owner}'): VirtualDesktopSession(
@@ -69,7 +76,7 @@ def api():
 
     api.session_db.get_from_index.side_effect = index_entry
 
-    def save_session(session):
+    def save_session(session, **kwargs):
         rows[(session.owner, session.idea_session_id)] = deepcopy(session)
         return deepcopy(session)
 
@@ -326,7 +333,9 @@ def test_ownership_api_changes_are_documented_for_upgrades():
     assert "session info returns only the caller's stored desktop" in note
 
 
-def test_screenshot_resolves_dcv_id_from_owned_session(api):
+def test_screenshot_resolves_dcv_id_from_owned_session(connectable):
+    # the stored broker id is used only for a READY desktop
+    api = connectable
     context = invocation(
         api,
         {
@@ -384,7 +393,9 @@ def test_update_returns_the_saved_session_shape(api):
     ) == payload_session(saved)
 
 
-def test_screenshot_returns_the_broker_shape(api):
+def test_screenshot_returns_the_broker_shape(connectable):
+    # the stored broker id is used only for a READY desktop
+    api = connectable
     context = invocation(api, {'screenshots': [{'idea_session_id': 'session-b'}]})
     api.get_session_screenshots(context)
     (sent,) = api.context.dcv_broker_client.get_session_screenshots.call_args.args
@@ -397,3 +408,90 @@ def test_screenshot_returns_the_broker_shape(api):
     ]
     assert context.response['payload']['failed'] == []
     assert len(context.response['payload']['success']) == 1
+
+
+@pytest.fixture
+def connectable(api):
+    stored = api.session_db.get_from_db.side_effect
+
+    def ready(idea_session_owner, idea_session_id):
+        session = stored(idea_session_owner, idea_session_id)
+        if session is not None:
+            session.state = VirtualDesktopSessionState.READY
+            session.project = Project(project_id='project-1')
+        return session
+
+    api.session_db.get_from_db.side_effect = ready
+    # a share recipient's project membership is checked in test_panel_findings
+    api._validate_user_and_project_membership = lambda username, project_id: (
+        True,
+        '',
+    )
+    api.session_permissions_db = Mock()
+    api.session_permissions_db.get.return_value = None
+    api.session_permissions_db.get_for_session.return_value = []
+    api.context.dcv_broker_client.get_session_connection_data.side_effect = (
+        lambda dcv_session_id, username: VirtualDesktopSessionConnectionInfo(
+            dcv_session_id=dcv_session_id, access_token=f'token-{username}'
+        )
+    )
+    return api
+
+
+def connect(api, connection_info):
+    context = invocation(api, {'connection_info': connection_info})
+    api.get_session_connection_info(context)
+    return context
+
+
+@pytest.mark.parametrize(
+    'connection_info',
+    [
+        {'idea_session_id': 'session-a', 'idea_session_owner': 'a'},
+        {'dcv_session_id': 'dcv-a'},
+        {'dcv_session_id': 'dcv-a', 'idea_session_owner': 'a'},
+    ],
+)
+def test_connection_info_refuses_a_desktop_the_caller_neither_owns_nor_shares(
+    connectable, connection_info
+):
+    context = connect(connectable, connection_info)
+    assert not context.is_success()
+    assert context.response['message'] == 'The desktop could not be found.'
+    connectable.context.dcv_broker_client.get_session_connection_data.assert_not_called()
+
+
+def test_connection_info_refuses_a_share_on_another_owners_desktop(connectable):
+    connectable.session_permissions_db.get.return_value = (
+        VirtualDesktopSessionPermission(
+            idea_session_id='session-a', idea_session_owner='c'
+        )
+    )
+    context = connect(
+        connectable, {'idea_session_id': 'session-a', 'idea_session_owner': 'a'}
+    )
+    assert not context.is_success()
+    connectable.context.dcv_broker_client.get_session_connection_data.assert_not_called()
+
+
+def test_connection_info_for_the_owner_and_a_shared_user(connectable):
+    own = connect(
+        connectable, {'idea_session_id': 'session-b', 'dcv_session_id': 'dcv-a'}
+    )
+    assert own.is_success()
+    # the stored desktop decides the dcv session, not the one the caller named
+    assert own.response['payload']['connection_info']['dcv_session_id'] == 'dcv-b'
+
+    connectable.session_permissions_db.get.return_value = (
+        VirtualDesktopSessionPermission(
+            idea_session_id='session-a', idea_session_owner='a', actor_type='USER'
+        )
+    )
+    shared = connect(
+        connectable, {'idea_session_id': 'session-a', 'idea_session_owner': 'a'}
+    )
+    assert shared.is_success()
+    assert shared.response['payload']['connection_info']['access_token'] == 'token-b'
+    connectable.session_permissions_db.get.assert_called_with(
+        idea_session_id='session-a', actor='b'
+    )

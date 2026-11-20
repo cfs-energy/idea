@@ -16,6 +16,7 @@
  * - the private hosted zone's `Name` tag carries the cluster prefix twice.
  */
 
+import { WIDE_BROKER_CLIENT_RULE } from '../broker-rules.ts';
 import { CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as backup from 'aws-cdk-lib/aws-backup';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -33,7 +34,7 @@ import type { ClusterConfig } from '../../config/cluster-config.ts';
 import type { StackBuildProps } from '../app.ts';
 import { IdeaBaseStack } from '../base-stack.ts';
 import { IdeaCodeAsset } from '../code-asset.ts';
-import { kmsKeyArn } from '../constructs/base.ts';
+import { kmsKeyArn, removalPolicyByName } from '../constructs/base.ts';
 import { BackupPlan } from '../constructs/backup.ts';
 import {
   LambdaFunction,
@@ -60,16 +61,24 @@ import {
 const LOG_RETENTION_ROLE_NAME = 'log-retention';
 const MODULE_VIRTUAL_DESKTOP_CONTROLLER = 'virtual-desktop-controller';
 const DEFAULT_SSL_POLICY = 'ELBSecurityPolicy-FS-1-2-Res-2020-10';
+/**
+ * Whether the broker client and gateway listeners still need their VPC-wide rule: only while a
+ * desktop controller stack is deployed without its own rules for the controller and the gateway.
+ *
+ * The controller stack's published rule ids prove it holds them; a rollback removes the row. A
+ * release string cannot, since a release candidate reports the final release. With module rows
+ * loaded, a desktop module that is not deployed (a fresh install) runs nothing that needs the wide
+ * rule, and its stack adds the narrow ones when it deploys. Without module rows (`cdk
+ * --config-file`) the wide rule stays, as it does for any state not known to be safe.
+ */
+export function vpcWideBrokerRuleNeeded(config: Pick<ClusterConfig, 'getList' | 'isModuleEnabled' | 'moduleId' | 'moduleInfoById'>): boolean {
+  if (config.getList<string>('virtual-desktop-controller.dcv_broker.listener_ingress_rules', []).length === 2) return false;
+  if (!config.isModuleEnabled('virtual-desktop-controller')) return true;
+  const module = config.moduleInfoById(config.moduleId('virtual-desktop-controller'));
+  return module === undefined || module.status === 'deployed';
+}
 /** `constants.CAVEATS['ROUTE53_CROSS_ZONE_ALIAS_RESTRICTED_REGION_LIST']`. */
 const ROUTE53_CROSS_ZONE_ALIAS_RESTRICTED_REGIONS = ['us-gov-east-1', 'us-gov-west-1'];
-
-/** `cdk.RemovalPolicy(value)` takes the member name; the TS enum values are other strings. */
-function removalPolicyByName(name: string): RemovalPolicy {
-  if (!Object.prototype.hasOwnProperty.call(RemovalPolicy, name)) {
-    throw new Error(`'${name}' is not a valid RemovalPolicy`);
-  }
-  return RemovalPolicy[name as keyof typeof RemovalPolicy];
-}
 
 /** `config.get_int(key, required=True)` / `get_bool(key, required=True)`: missing or NULL raises. */
 function requiredInt(config: ClusterConfig, key: string): number {
@@ -894,7 +903,7 @@ export class ClusterStack extends IdeaBaseStack {
         'dcv-broker-client-listener',
         'client',
         internalAcmCertificateArn,
-        'Allow HTTPS traffic from DCV Clients to DCV Broker',
+        WIDE_BROKER_CLIENT_RULE,
       );
       this.internalAlbDcvBrokerAgentListener = this.buildDcvBrokerListener(
         'dcv-broker-agent-listener',
@@ -936,13 +945,16 @@ export class ClusterStack extends IdeaBaseStack {
       defaultActions,
     });
     listener.node.addDependency(this.internalCertificate as CustomResource);
-    (this.securityGroups['internal-load-balancer'] as SecurityGroup).addIngressRule(
-      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
-      ec2.Port.tcp(port),
-      ingressDescription,
-    );
+    if (kind === 'agent' || vpcWideBrokerRuleNeeded(this.config)) {
+      (this.securityGroups['internal-load-balancer'] as SecurityGroup).addIngressRule(
+        ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+        ec2.Port.tcp(port),
+        ingressDescription,
+      );
+    }
     return listener;
   }
+
 
   // --- cluster settings --------------------------------------------------------------------------
 

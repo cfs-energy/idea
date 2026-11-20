@@ -281,7 +281,7 @@ test("release automation builds all operator targets and parses", { skip: !canBu
   assert.doesNotMatch(releaseWorkflow, /--clobber/);
   assert.match(
     releaseWorkflow,
-    /needs:\s*\n\s+- build_ideactl_artifacts\s*\n\s+- build_ideactl_linux_artifact\s*\n\s+- build_ideactl_windows_artifact\s*\n\s+- build_push_ideactl/,
+    /needs:\s*\n\s+- build_ideactl_artifacts\s*\n\s+- build_ideactl_linux_artifact\s*\n\s+- build_ideactl_windows_artifact\s*\n\s+- publish_image/,
   );
   assert.match(releaseWorkflow, /secrets\.ECR_ROLE/);
 });

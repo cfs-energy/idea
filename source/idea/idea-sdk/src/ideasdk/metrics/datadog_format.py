@@ -5,6 +5,10 @@ from ideasdk.utils import Utils
 
 METRIC_PREFIX = 'idea'
 _TAG_UNSAFE = re.compile(r'[,|#\n\r\t ]+')
+# Infrastructure totals: only idea_cluster, and never the identity of the collecting task.
+COLLECTOR_PREFIXES = ('cost.', 'storage.', 'session.', 'health.')
+# a module's own health: which module read it is part of what it means
+HEALTH_PREFIX = 'health.'
 
 
 class DatadogFormat:
@@ -41,12 +45,16 @@ class DatadogFormat:
 
     def name_and_tags(self, entry):
         name = entry['MetricName']
-        collector = name.startswith(('cost.', 'storage.'))
+        collector = name.startswith(COLLECTOR_PREFIXES)
         # Preserve formatter tags; DogStatsD agent enrichment can add live-only tags.
         tags = [
             tag
             for tag in self.base_tags
-            if (not collector or tag.startswith('idea_cluster:'))
+            if (
+                not collector
+                or tag.startswith('idea_cluster:')
+                or (name.startswith(HEALTH_PREFIX) and tag.startswith('idea_module:'))
+            )
             and not (name.startswith('job.') and tag.startswith('env:'))
         ]
         for dimension in Utils.get_value_as_list('Dimensions', entry, []):

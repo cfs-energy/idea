@@ -195,8 +195,8 @@ test("each service gets a start allowance sized from its own start, not the libr
   assert.equal(checked[0]?.["HealthCheck"]["Interval"], 5, "container check interval");
   assert.equal(checked[0]?.["HealthCheck"]["Retries"], 3, "container check retries");
   assert.ok(
-    JSON.stringify(checked[0]).includes("qstat -B && curl"),
-    "the scheduler health check calls qstat before the module API",
+    JSON.stringify(checked[0]).includes("qstat -B && pgrep -x pbs_sched >/dev/null && curl"),
+    "the scheduler health check calls qstat and checks the job scheduler before the module API",
   );
   assert.ok(
     JSON.stringify(checked[0]).includes("--unix-socket /run/idea.sock"),

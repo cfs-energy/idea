@@ -60,7 +60,6 @@ export const Constants = {
         IDEA_AUTH_TOKEN_CLAIMS: 'IDEA.Auth.GetTokenClaims',
         IDEA_AUTH_IS_LOGGED_IN: 'IDEA.Auth.IsLoggedIn',
         IDEA_AUTH_LOGOUT: 'IDEA.Auth.Logout',
-        IDEA_AUTH_DEBUG: 'IDEA.Auth.Debug',
         IDEA_AUTH_ACCESS_TOKEN: 'IDEA.Auth.GetAccessToken',
         IDEA_API_INVOCATION: 'IDEA.InvokeApi',
         IDEA_HTTP_FETCH: 'IDEA.HttpFetch'

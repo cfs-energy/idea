@@ -288,19 +288,11 @@ class ProjectsDAO:
         if scan_filter is not None:
             scan_request['ScanFilter'] = scan_filter
 
-        scan_result = self.table.scan(**scan_request)
+        db_projects = Utils.scan_all(self.table, scan_request)
 
-        db_projects = Utils.get_value_as_list('Items', scan_result, [])
         projects = []
         for db_project in db_projects:
             project = self.convert_from_db(db_project)
             projects.append(project)
 
-        response_cursor = None
-        last_evaluated_key = Utils.get_any_value('LastEvaluatedKey', scan_result)
-        if last_evaluated_key is not None:
-            response_cursor = Utils.base64_encode(Utils.to_json(last_evaluated_key))
-
-        return ListProjectsResult(
-            listing=projects, paginator=SocaPaginator(cursor=response_cursor)
-        )
+        return ListProjectsResult(listing=projects, paginator=SocaPaginator())

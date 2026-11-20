@@ -8,6 +8,7 @@ import type {
 import {
     errorMessage,
     sendCfnResponse,
+    eventForLog,
 } from "../commons/cfn-response.ts";
 
 const DIRECTORY_SERVICE_CLIENT_PACKAGE =
@@ -153,7 +154,7 @@ export function createHandler(
         context: CfnResourceContext,
     ): Promise<void> => {
         try {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
 
             // Delete is an immediate no-op and must not construct an AWS client.
             if (event.RequestType === "Delete") {

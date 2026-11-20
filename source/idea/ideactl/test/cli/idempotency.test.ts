@@ -480,7 +480,7 @@ function deletionDeps(state: DeleteState): DeleteClusterDeps {
     },
     getTaggedStacks: async () => ({ stacks: [...state.stacks] }),
     describeStack: async (stackName) => {
-      if (!state.stacks.has(stackName)) throw new Error("ValidationError: stack not found");
+      if (!state.stacks.has(stackName)) throw Object.assign(new Error(`Stack with id ${stackName} does not exist`), { name: "ValidationError" });
       return { stackName, stackStatus: "CREATE_COMPLETE", terminationProtection: false };
     },
     disableStackTerminationProtection: async () => { },

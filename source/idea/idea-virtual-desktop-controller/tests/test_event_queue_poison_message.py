@@ -155,17 +155,19 @@ def test_a_failing_message_is_left_on_the_queue_for_the_first_two_receives():
     assert handler.calls == ['msg-1', 'msg-1']
 
 
-def test_the_third_receive_deletes_the_message_that_never_succeeds():
+@pytest.mark.parametrize('receive_count', [3, 15])
+def test_a_message_that_keeps_failing_is_left_for_the_queues_redrive(receive_count):
+    # the redrive policy moves it to the dead-letter queue, where it stays for an operator
     handler = FakeHandler(fail_times=99)
-    sqs = FakeSQS([[a_message('msg-1', receive_count=3)]])
+    sqs = FakeSQS([[a_message('msg-1', receive_count=receive_count)]])
     thread = build_thread(handler, sqs)
 
     thread.poll_and_process_queue()
 
-    assert sqs.deleted == ['msg-1']
+    assert sqs.deleted == []
 
 
-def test_the_dropped_message_is_logged_with_its_id_event_type_and_session():
+def test_a_failing_message_is_logged_with_its_id_event_type_and_session():
     handler = FakeHandler(fail_times=99)
     sqs = FakeSQS([[a_message('msg-1', idea_session_id='sess-42', receive_count=3)]])
     thread = build_thread(handler, sqs)
@@ -178,14 +180,33 @@ def test_the_dropped_message_is_logged_with_its_id_event_type_and_session():
     assert 'sess-42' in logged
 
 
-def test_a_configured_max_receive_count_is_honored():
-    handler = FakeHandler(fail_times=99)
-    sqs = FakeSQS([[a_message('msg-1', receive_count=3)]])
-    thread = build_thread(handler, sqs, max_receive_count=5)
+def test_an_undecodable_message_does_not_hold_up_the_batch():
+    # any desktop host may send to the queue; one message that is not an event is removed
+    # and the messages around it are handled and acknowledged
+    handler = FakeHandler()
+    body = 'not an event'
+    bad = {
+        'MessageId': 'msg-bad',
+        'Body': body,
+        'MD5OfBody': Utils.md5(body),
+        'ReceiptHandle': 'receipt-bad',
+        'Attributes': {'MessageGroupId': 'sess-x', 'SenderId': 'host-role:i-1'},
+    }
+    sqs = FakeSQS(
+        [
+            [
+                a_message('msg-a', idea_session_id='sess-a'),
+                bad,
+                a_message('msg-c', idea_session_id='sess-c'),
+            ]
+        ]
+    )
+    thread = build_thread(handler, sqs)
 
     thread.poll_and_process_queue()
 
-    assert sqs.deleted == [], 'the operator raised the bound, so keep retrying'
+    assert handler.calls == ['msg-a', 'msg-c']
+    assert sqs.deleted == ['msg-a', 'msg-bad', 'msg-c']
 
 
 def test_other_messages_in_the_same_batch_are_still_handled():

@@ -35,7 +35,8 @@ from ideascheduler.app.scheduler.openpbs.openpbs_constants import (
     CONFIG_FILE_RESOURCE_DEF,
 )
 
-from typing import Tuple, Optional
+from typing import Dict, Tuple, Optional
+import os
 import pwd
 import re
 
@@ -53,6 +54,22 @@ AVAIL_CHECK_DENIED_KEYWORDS = [
     'cd',
     '&&',
 ]
+
+
+def service_check_environment(account) -> Dict[str, str]:
+    """
+    what `su <service account> --shell /bin/bash --command` passed a license check before:
+    the whole service environment, with the account's HOME, USER and LOGNAME. stored
+    commands rely on it for license server variables and tools on the service PATH.
+    """
+    env = dict(os.environ)
+    env.update(
+        HOME=account.pw_dir,
+        USER=account.pw_name,
+        LOGNAME=account.pw_name,
+        SHELL='/bin/bash',
+    )
+    return env
 
 
 class LicenseService(LicenseServiceProtocol):
@@ -284,7 +301,8 @@ class LicenseService(LicenseServiceProtocol):
                 message=f'Invalid Configuration: {result}',
             )
 
-        reserved_count = Utils.get_as_int(license_resource.reserved_count, 0)
+        # a negative reserve would add seats (SLP-15)
+        reserved_count = max(Utils.get_as_int(license_resource.reserved_count, 0), 0)
 
         available_count = max((actual_available_count - reserved_count), 0)
 
@@ -303,27 +321,32 @@ class LicenseService(LicenseServiceProtocol):
         self, cmd: str
     ) -> Tuple[int, Optional[ShellInvocationResult], Optional[Exception]]:
         """
-        execute the cmd as shell
+        run the availability check command through bash, as the service account (never as root: a missing account is an error), with the
+        environment su gave it before 26.11.2: this service's environment (license server
+        variables, PATH) with HOME, USER and LOGNAME of the account and SHELL=/bin/bash.
         """
         try:
             if Utils.is_empty(cmd):
                 raise exceptions.invalid_params('cmd is required')
             try:
-                pwd.getpwnam(constants.IDEA_SERVICE_ACCOUNT)
+                service_account = pwd.getpwnam(constants.IDEA_SERVICE_ACCOUNT)
             except KeyError:
-                # Containers already run under the application service identity.
-                cmd_tokens = ['/bin/bash', '-c', f'cd /tmp && {cmd}']
-            else:
-                cmd_tokens = [
-                    'su',
-                    constants.IDEA_SERVICE_ACCOUNT,
-                    '--shell',
-                    '/bin/bash',
-                    '--command',
-                    f'cd /tmp && {cmd}',
-                ]
-            result = self.context.shell.invoke(
-                cmd_tokens, timeout=self.avail_check_timeout_seconds
+                # the scheduler runs as root in the container image too; a stored command
+                # is never run as root, so a missing account is an error, not a fallback
+                raise exceptions.soca_exception(
+                    errorcodes.GENERAL_ERROR,
+                    f'license checks run as {constants.IDEA_SERVICE_ACCOUNT}, which does '
+                    f'not exist on this host',
+                )
+            # always through bash, as the published release ran it: a check of plain words
+            # that starts with a shell builtin (source, exec, eval, time) failed as an
+            # argument list and read as 0 seats (verify-scheduler #12)
+            argv = ['/bin/bash', '-c', f'cd /tmp && {cmd}']
+            result = self.context.shell.invoke_as_user(
+                constants.IDEA_SERVICE_ACCOUNT,
+                argv,
+                timeout=self.avail_check_timeout_seconds,
+                env=service_check_environment(service_account),
             )
             if result.returncode == 0:
                 return int(result.stdout), result, None
@@ -380,7 +403,10 @@ class LicenseService(LicenseServiceProtocol):
                     available_count=0, check_ok=False, error=error
                 )
 
-            reserved_count = Utils.get_as_int(license_resource.reserved_count, 0)
+            # a negative reserve would add seats (SLP-15)
+            reserved_count = max(
+                Utils.get_as_int(license_resource.reserved_count, 0), 0
+            )
 
             return LicenseAvailability(
                 available_count=max((available_count - reserved_count), 0),

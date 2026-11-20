@@ -150,7 +150,10 @@ def test_reboot_worker_wait_is_bounded_and_failures_are_visible(tmp_path, scenar
 BOOTSTRAP_DIR="{tmp_path}"
 attempt=0
 systemctl() {{
-  attempt=$(( $(cat "$COUNT" 2>/dev/null || echo 0) + 1 ))
+  # builtins only: the 60 polls already fork the check's own subshell and grep each time
+  attempt=0
+  [[ ! -f "$COUNT" ]] || read -r attempt < "$COUNT"
+  attempt=$(( attempt + 1 ))
   echo "$attempt" > "$COUNT"
   [[ "$SCENARIO" != status-error ]] || return 1
   if [[ "$SCENARIO" == stuck || "$attempt" -eq 1 ]]; then
@@ -188,7 +191,9 @@ echo continued
         ),
         capture_output=True,
         text=True,
-        timeout=5,
+        # a hang guard only: sleep is stubbed and count bounds the loop, but 60 polls that each
+        # fork a subshell and grep once took over 5 s on a loaded runner
+        timeout=60,
     )
     success = scenario == 'finishes'
     assert result.returncode == (0 if success else 1), result.stdout + result.stderr

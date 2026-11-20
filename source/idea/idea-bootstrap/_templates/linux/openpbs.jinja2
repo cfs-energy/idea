@@ -27,6 +27,13 @@ function check_openpbs_installed() {
   return 1
 }
 
+# pbs_iff authenticates clients and needs setuid root; file staging uses scp (PBS_SCP), so
+# pbs_rcp is an ordinary program. Applied on every path, also to an install the image carried.
+function set_openpbs_modes() {
+  chmod 4755 /opt/pbs/sbin/pbs_iff && chmod 0755 /opt/pbs/sbin/pbs_rcp \
+    || { log_error "could not set the OpenPBS binary modes"; return 1; }
+}
+
 function compile_and_install_openpbs() {
   local OPENPBS_VERSION=$1
   local OPENPBS_WORK_DIR=$2
@@ -43,15 +50,18 @@ function compile_and_install_openpbs() {
     return 1
   fi
   /opt/pbs/libexec/pbs_postinstall
-  chmod 4755 /opt/pbs/sbin/pbs_iff /opt/pbs/sbin/pbs_rcp
   popd || exit
+  set_openpbs_modes
 }
 
 function install_openpbs_release() {
   local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
 
   # Check if already installed with correct version
-  check_openpbs_installed "${OPENPBS_VERSION}" && return 0
+  if check_openpbs_installed "${OPENPBS_VERSION}"; then
+    set_openpbs_modes
+    return
+  fi
 
   install_openpbs_dependencies
   log_info "Installing OpenPBS version ${OPENPBS_VERSION} from release package..."
@@ -100,13 +110,16 @@ function check_openpbs_git_installed() {
 
 function install_openpbs_git() {
   local OPENPBS_VERSION="{{ context.config.get_string('global-settings.package_config.openpbs.version', required=True) }}"
-  local OPENPBS_COMMIT="{{ context.config.get_string('global-settings.package_config.openpbs.commit', required=True) }}"
+  local OPENPBS_COMMIT='{{ context.config.get_string('global-settings.package_config.openpbs.commit', required=True) | default('', true) | string | trim | replace("'", "'\\''") }}'
 
   # Check if already installed with correct version AND commit
-  check_openpbs_git_installed "${OPENPBS_VERSION}" "${OPENPBS_COMMIT}" && return 0
+  if check_openpbs_git_installed "${OPENPBS_VERSION}" "${OPENPBS_COMMIT}"; then
+    set_openpbs_modes
+    return
+  fi
 
   install_openpbs_dependencies
-  local OPENPBS_REPO_URL="{{ context.config.get_string('global-settings.package_config.openpbs.repo_url', required=True) }}"
+  local OPENPBS_REPO_URL='{{ context.config.get_string('global-settings.package_config.openpbs.repo_url', required=True) | default('', true) | string | trim | replace("'", "'\\''") }}'
   local OPENPBS_WORK_DIR="/root/bootstrap/openpbs"
 
   log_info "Installing OpenPBS version ${OPENPBS_VERSION} from git commit ${OPENPBS_COMMIT}..."
@@ -114,9 +127,27 @@ function install_openpbs_git() {
   # Clone repository
   mkdir -p "${OPENPBS_WORK_DIR}"
   pushd ${OPENPBS_WORK_DIR} || exit
-  git clone ${OPENPBS_REPO_URL} openpbs
+  rm -rf openpbs
+  git clone "${OPENPBS_REPO_URL}" openpbs
   cd openpbs || exit
-  git checkout ${OPENPBS_COMMIT}
+  # build only the commit the stored setting names: it may be a full or short hash, a tag or a
+  # branch (a branch other than the default exists after a clone only as origin/<name>), so it is
+  # resolved to a commit first; a failed clone, resolve or checkout must not build whatever is there
+  local OPENPBS_RESOLVED OPENPBS_LOWER
+  OPENPBS_LOWER=$(tr '[:upper:]' '[:lower:]' <<< "${OPENPBS_COMMIT}")
+  OPENPBS_RESOLVED=$(git rev-parse --verify --quiet "${OPENPBS_COMMIT}^{commit}" 2> /dev/null \
+    || git rev-parse --verify --quiet "refs/remotes/origin/${OPENPBS_COMMIT}^{commit}" 2> /dev/null \
+    || git rev-parse --verify --quiet "${OPENPBS_LOWER}^{commit}" 2> /dev/null)
+  # a hash is a pin; a branch or tag name can move, so the build is what it names today
+  if [[ -n "${OPENPBS_RESOLVED}" && ! ( "${OPENPBS_LOWER}" =~ ^[0-9a-f]{7,40}$ && "${OPENPBS_RESOLVED}" == "${OPENPBS_LOWER}"* ) ]]; then
+    log_warning "global-settings.package_config.openpbs.commit is ${OPENPBS_COMMIT}, a name that can move; building commit ${OPENPBS_RESOLVED}. Set the setting to that commit to pin the build."
+  fi
+  if [[ -z "${OPENPBS_RESOLVED}" ]] || ! git checkout --detach "${OPENPBS_RESOLVED}" \
+      || [[ "$(git rev-parse HEAD)" != "${OPENPBS_RESOLVED}" ]]; then
+    popd
+    fail_bootstrap download-unverified "OpenPBS checkout of ${OPENPBS_COMMIT} (commit ${OPENPBS_RESOLVED:-not found}) failed"
+  fi
+  log_info "OpenPBS ${OPENPBS_COMMIT} resolves to commit ${OPENPBS_RESOLVED}"
   popd || exit
 
   # the marker is what check_openpbs_git_installed trusts, so only record a build that succeeded

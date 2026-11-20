@@ -49,6 +49,8 @@ class ListFilesRequest(SocaListingPayload):
 class ListFilesResult(SocaListingPayload):
     cwd: Optional[str] = Field(default=None)
     listing: Optional[List[FileData]] = Field(default=None)
+    # the folder holds more entries than one answer lists
+    truncated: Optional[bool] = Field(default=None)
 
 
 # FileBrowser.ReadFile
@@ -101,11 +103,15 @@ class DownloadFilesRequest(SocaPayload):
 
 class DownloadFilesResult(SocaPayload):
     download_url: Optional[str] = Field(default=None)
+    skipped_files: Optional[int] = Field(default=None)
 
 
 # FileBrowser.DeleteFiles
 class DeleteFilesRequest(SocaPayload):
     files: Optional[List[str]] = Field(default=None)
+    # a folder is removed with everything in it only when asked for: the portal confirms
+    # files by name, and a file replaced by a folder of that name must not take the folder
+    include_folders: Optional[bool] = Field(default=None)
 
 
 class DeleteFilesResult(SocaPayload):

@@ -1,53 +1,61 @@
 # Begin: Scratch Storage
+# Each branch records in ${BOOTSTRAP_DIR}/job_scratch_source the device or file system it
+# provisioned for this job; Scratch Permissions opens up only a mount of that source.
 {% if context.vars.job.params.fsx_lustre.enabled %}
 {# this host mounts Lustre, so a failed client install stops it #}
 {% set lustre_required = true %}
 {% include '_templates/linux/fsx_lustre_client.jinja2' %}
 function setup_scratch_storage_fsx_for_lustre () {
-  FSX_MOUNTPOINT="{{ context.config.get_string('scheduler.scratch_storage.fsx_lustre.mount_point', '/fsx') }}"
+  FSX_MOUNTPOINT='{{ context.config.get_string('scheduler.scratch_storage.fsx_lustre.mount_point', '/fsx') | replace("'", "'\\''") }}'
   AWS_DNS_SUFFIX="{{ context.config.get_string('cluster.aws.dns_suffix', required=True) }}"
   mkdir -p ${FSX_MOUNTPOINT}
-  chmod 777 ${FSX_MOUNTPOINT}
   {% if context.vars.job.params.fsx_lustre.existing_fsx %}
-  add_fsx_lustre_to_fstab "{{ context.vars.job.params.fsx_lustre.existing_fsx }}" "${FSX_MOUNTPOINT}"
+  add_fsx_lustre_to_fstab '{{ context.vars.job.params.fsx_lustre.existing_fsx | default('', true) | string | replace("'", "'\\''") }}' "${FSX_MOUNTPOINT}"
   {% else %}
   # wait for new scratch FSx to be ready and then add to fstab
-  local COMPUTE_STACK="{{ context.vars.job.get_compute_stack() }}"
+  local COMPUTE_STACK='{{ context.vars.job.get_compute_stack() | default('', true) | string | replace("'", "'\\''") }}'
   local AWS_REGION="{{ context.aws_region }}"
   local AWS=$(command -v aws)
-  local FSX_ARN=$($AWS resourcegroupstaggingapi get-resources \
+  # The job's file system is created beside its fleet, so it may not be tagged or AVAILABLE yet:
+  # look it up and check its state every minute, for as long as the scheduler waits for the job's
+  # stack (scheduler.job_provisioning.stack_provisioning_timeout_seconds, at least ten minutes):
+  # past that the scheduler acts on the job anyway.
+  local FSX_ID="" FSX_DNS="" CHECK_FSX_STATUS="" FSX_ARN
+  local LOOP_COUNT=0
+  {% set fsx_wait_polls = context.config.get_int('scheduler.job_provisioning.stack_provisioning_timeout_seconds', default=1800) // 60 %}
+  local FSX_WAIT_POLLS={{ fsx_wait_polls if fsx_wait_polls > 10 else 10 }}
+  while [[ ${LOOP_COUNT} -lt ${FSX_WAIT_POLLS} ]]
+  do
+    if [[ -z "${FSX_ID}" ]]; then
+      FSX_ARN=$($AWS resourcegroupstaggingapi get-resources \
                   --tag-filters "Key=idea:FSx,Values=true" "Key=idea:StackId,Values=${COMPUTE_STACK}" \
                   --query ResourceTagMappingList[].ResourceARN \
                   --region "${AWS_REGION}" \
                   --output text)
-  local FSX_ID=$(echo ${FSX_ARN} | cut -d/ -f2)
-
-  local FSX_DNS="${FSX_ID}.fsx.${AWS_REGION}.${AWS_DNS_SUFFIX}"
-
-  local CHECK_FSX_STATUS=$($AWS fsx describe-file-systems \
+      [[ "${FSX_ARN}" == arn:* ]] && FSX_ID=$(echo ${FSX_ARN} | cut -d/ -f2)
+    fi
+    if [[ -n "${FSX_ID}" ]]; then
+      CHECK_FSX_STATUS=$($AWS fsx describe-file-systems \
                                 --file-system-ids "${FSX_ID}" \
                                 --query FileSystems[].Lifecycle \
                                 --region "${AWS_REGION}" \
                                 --output text)
-
-  local LOOP_COUNT=1
-  while [[ "${CHECK_FSX_STATUS}" != "AVAILABLE" ]] && [[ ${LOOP_COUNT} -lt 10 ]]
-  do
-    echo "FSX does not seem to be in AVAILABLE status yet ... waiting 60 secs"
+      [[ "${CHECK_FSX_STATUS}" != "AVAILABLE" ]] || break
+    fi
+    echo "FSx for this job is not AVAILABLE yet (${FSX_ID:-not found}: ${CHECK_FSX_STATUS:-unknown}) ... waiting 60 secs"
     sleep 60
-    CHECK_FSX_STATUS=$($AWS fsx describe-file-systems \
-                                      --file-system-ids "${FSX_ID}" \
-                                      --query FileSystems[].Lifecycle \
-                                      --region "${AWS_REGION}" \
-                                      --output text)
     ((LOOP_COUNT++))
   done
 
   if [[ "${CHECK_FSX_STATUS}" == "AVAILABLE" ]]; then
     echo "FSx is AVAILABLE"
+    FSX_DNS="${FSX_ID}.fsx.${AWS_REGION}.${AWS_DNS_SUFFIX}"
     add_fsx_lustre_to_fstab "${FSX_DNS}" "${FSX_MOUNTPOINT}"
+    awk -v dir="${FSX_MOUNTPOINT}/" '$2 == dir { print $1 }' /etc/fstab > "${BOOTSTRAP_DIR}/job_scratch_source"
   else
-    echo "FSx is not available even after 10 minutes timeout, ignoring FSx mount."
+    # the job asked for this file system: without it the node does not join the scheduler and
+    # the job does not run on the local disk; the scheduler holds it at the stack timeout
+    fail_bootstrap scratch-unavailable "the FSx for Lustre file system created for this job (${FSX_ID:-not found}) is not AVAILABLE after ${FSX_WAIT_POLLS} minutes"
   fi
   {% endif %}
 }
@@ -55,62 +63,64 @@ setup_scratch_storage_fsx_for_lustre
 {% elif context.vars.job.params.scratch_storage_size.value > 0 %}
 function setup_scratch_storage_ebs () {
   local SCRATCH_SIZE={{ context.vars.job.params.scratch_storage_size.int_val() }}
-  local SCRATCH_MOUNTPOINT="{{ context.config.get_string('scheduler.scratch_storage.ebs.mount_point', '/scratch') }}"
+  local SCRATCH_MOUNTPOINT='{{ context.config.get_string('scheduler.scratch_storage.ebs.mount_point', '/scratch') | replace("'", "'\\''") }}'
 
-  local LIST_ALL_DISKS=$(lsblk --list | grep disk | awk '{print $1}')
+  # A second run (after a driver reboot) finds the volume this job made already mounted
+  local PROVISIONED=$(cat "${BOOTSTRAP_DIR}/job_scratch_source" 2>/dev/null)
+  if [[ -n "${PROVISIONED}" ]] && [[ "$(findmnt -n -o SOURCE --mountpoint "${SCRATCH_MOUNTPOINT}" 2>/dev/null | tail -n 1)" == "${PROVISIONED}" ]]; then
+      echo "${SCRATCH_MOUNTPOINT} is already mounted from ${PROVISIONED}"
+      return 0
+  fi
+
+  # the job's volume is the first blank disk of the requested size: a disk with a partition,
+  # a signature or a mount (an image's data volume) is never formatted, and only one is taken
+  local LIST_ALL_DISKS=$(lsblk -dn -o NAME,TYPE | awk '$2 == "disk" {print $1}')
+  local SCRATCH_SIZE_IN_BYTES=$(( SCRATCH_SIZE * 1024 * 1024 * 1024 ))
   for disk in ${LIST_ALL_DISKS};
   do
-      local CHECK_IF_PARTITION_EXIST=$(lsblk -b /dev/${disk} | grep part | wc -l)
-      local CHECK_PARTITION_SIZE=$(lsblk -lnb /dev/${disk} -o SIZE)
-      let SCRATCH_SIZE_IN_BYTES=${SCRATCH_SIZE}*1024*1024*1024
-      if [[ ${CHECK_IF_PARTITION_EXIST} -eq 0 ]] && [[ ${CHECK_PARTITION_SIZE} -eq ${SCRATCH_SIZE_IN_BYTES} ]]; then
+      local CHECK_PARTITION_SIZE=$(lsblk -dnb /dev/${disk} -o SIZE)
+      # the launch template attaches the job's EBS volume, never an instance store disk; which
+      # NVMe name it gets is not known from here, so size, model and blankness pick it
+      if [[ "$(lsblk -dno MODEL "/dev/${disk}" 2> /dev/null | sed 's/[[:space:]]*$//')" == "Amazon EC2 NVMe Instance Storage" ]]; then
+        continue
+      fi
+      if [[ ${CHECK_PARTITION_SIZE} -eq ${SCRATCH_SIZE_IN_BYTES} ]] && block_device_blank "/dev/${disk}"; then
           echo "Detected /dev/${disk} with no partition as scratch device"
           mkfs -t ext4 /dev/${disk}
           mkdir -p ${SCRATCH_MOUNTPOINT}
-          chmod 777 ${SCRATCH_MOUNTPOINT}
 
           # Check for existing fstab entries for this mount point and remove them
-          if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+          if fstab_has_mount_dir "${SCRATCH_MOUNTPOINT}"; then
             echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
             remove_from_fstab "${SCRATCH_MOUNTPOINT}"
           fi
 
-          echo "/dev/${disk} ${SCRATCH_MOUNTPOINT} ext4 defaults 0 0" >> /etc/fstab
+          echo "/dev/${disk} ${SCRATCH_MOUNTPOINT} ext4 defaults,nodev 0 0" >> /etc/fstab
+          echo "/dev/${disk}" > "${BOOTSTRAP_DIR}/job_scratch_source"
+          break
       fi
   done
 }
 setup_scratch_storage_ebs
 {% else %}
+{# the default job: the scheduler writes enable_scratch false for every job that asked for no
+   EBS or FSx scratch (an explicit opt-out is the same value), and the documented default is
+   instance store scratch when the instance has it #}
 function setup_scratch_storage_instance_store () {
-  local SCRATCH_MOUNTPOINT="{{ context.config.get_string('scheduler.scratch_storage.instance_store.mount_point', '/scratch') }}"
+  local SCRATCH_MOUNTPOINT='{{ context.config.get_string('scheduler.scratch_storage.instance_store.mount_point', '/scratch') | replace("'", "'\\''") }}'
   {% raw %}
-  # Use Instance Store if possible.
-  local DEVICES=()
-  if [[ ! -z $(ls /dev/nvme[0-9]n1) ]]; then
-      echo 'Detected Instance Store: NVME'
-      DEVICES=$(ls /dev/nvme[0-9]n1)
-  elif [[ ! -z $(ls /dev/xvdc[a-z]) ]]; then
-      echo 'Detected Instance Store: SSD'
-      DEVICES=$(ls /dev/xvdc[a-z])
-  fi
-
-  if [[ -z ${DEVICES} ]]; then
-      echo 'No instance store detected on this machine.'
+  # A second run (after a driver reboot) finds the array or disk this job made already mounted:
+  # zeroing or re-creating its members would destroy the mounted file system.
+  local PROVISIONED=$(cat "${BOOTSTRAP_DIR}/job_scratch_source" 2>/dev/null)
+  if [[ -n "${PROVISIONED}" ]] && [[ "$(findmnt -n -o SOURCE --mountpoint "${SCRATCH_MOUNTPOINT}" 2>/dev/null | tail -n 1)" == "${PROVISIONED}" ]]; then
+      echo "${SCRATCH_MOUNTPOINT} is already mounted from ${PROVISIONED}"
       return 0
   fi
 
-  echo "Detected Instance Store with NVME: ${DEVICES}"
-
-  # Clear Devices which are already mounted (eg: when customer import their own AMI)
+  # Instance store disks only, and only blank ones: an image's data volume is never formatted
   local VOLUME_LIST=()
-  for device in ${DEVICES};
-  do
-    local CHECK_IF_PARTITION_EXIST=$(lsblk -b ${device} | grep part | wc -l)
-    if [[ ${CHECK_IF_PARTITION_EXIST} -eq 0 ]]; then
-        echo "${device} is free and can be used"
-        VOLUME_LIST+=(${device})
-    fi
-  done
+  mapfile -t VOLUME_LIST < <(free_instance_store_devices)
+  echo "Free instance store devices: ${VOLUME_LIST[*]:-none}"
 
   local VOLUME_COUNT=${#VOLUME_LIST[@]}
   if [[ ${VOLUME_COUNT} -eq 0 ]]; then
@@ -124,21 +134,26 @@ function setup_scratch_storage_instance_store () {
       echo "Detected 1 NVMe device available, formatting as ext4 .."
       mkfs -t ext4 ${VOLUME_LIST}
       mkdir -p ${SCRATCH_MOUNTPOINT}
-      chmod 777 ${SCRATCH_MOUNTPOINT}
 
       # Check for existing fstab entries for this mount point and remove them
-      if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+      if fstab_has_mount_dir "${SCRATCH_MOUNTPOINT}"; then
         echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
         remove_from_fstab "${SCRATCH_MOUNTPOINT}"
       fi
 
-      echo "${VOLUME_LIST} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail 0 0" >> /etc/fstab
+      echo "${VOLUME_LIST} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail,nodev 0 0" >> /etc/fstab
+      echo "${VOLUME_LIST}" > "${BOOTSTRAP_DIR}/job_scratch_source"
 
   elif [[ ${VOLUME_COUNT} -gt 1 ]]; then
 
     # When instance has more than 1 instance store, raid + mount them as /scratch
     echo "Detected more than 1 NVMe device available, creating XFS fs ..."
     local DEVICE_NAME="md0"
+    # an array the image already carries is not this host's scratch: nothing is overwritten
+    if [[ -e /dev/${DEVICE_NAME} ]]; then
+      log_error "/dev/${DEVICE_NAME} already exists; instance store scratch is not set up"
+      return 1
+    fi
     for dev in "${VOLUME_LIST[@]}";
     do
       dd if=/dev/zero of=${dev} bs=1M count=1
@@ -147,19 +162,20 @@ function setup_scratch_storage_instance_store () {
                      --force \
                      --verbose \
                      --level=0 \
-                     --raid-devices=${VOLUME_COUNT} /dev/${DEVICE_NAME} "${VOLUME_LIST[@]}"
+                     --raid-devices=${VOLUME_COUNT} /dev/${DEVICE_NAME} "${VOLUME_LIST[@]}" \
+      || { log_error "mdadm could not create /dev/${DEVICE_NAME}; instance store scratch is not set up"; return 1; }
     mkfs -t ext4 /dev/${DEVICE_NAME}
     mdadm --detail --scan | tee -a /etc/mdadm.conf
     mkdir -p ${SCRATCH_MOUNTPOINT}
-    chmod 777 ${SCRATCH_MOUNTPOINT}
 
     # Check for existing fstab entries for this mount point and remove them
-    if grep -q " ${SCRATCH_MOUNTPOINT}/" /etc/fstab; then
+    if fstab_has_mount_dir "${SCRATCH_MOUNTPOINT}"; then
       echo "Removing existing fstab entry for ${SCRATCH_MOUNTPOINT}"
       remove_from_fstab "${SCRATCH_MOUNTPOINT}"
     fi
 
-    echo "/dev/${DEVICE_NAME} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail 0 0" >> /etc/fstab
+    echo "/dev/${DEVICE_NAME} ${SCRATCH_MOUNTPOINT} ext4 defaults,nofail,nodev 0 0" >> /etc/fstab
+    echo "/dev/${DEVICE_NAME}" > "${BOOTSTRAP_DIR}/job_scratch_source"
   fi
   {% endraw %}
 }

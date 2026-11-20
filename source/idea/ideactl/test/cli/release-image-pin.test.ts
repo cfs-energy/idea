@@ -107,6 +107,25 @@ test('T-10: an operator digest pin is visible', async () => {
   const output: string[] = [];
   const pinned = [...settings.filter(row => row.key !== 'ecs.image'),
     { key: 'ecs.image', value: `${target}@${digest}` }];
-  assert.deepEqual(await verifyReleaseImage({ out: line => output.push(line) }, [], pinned), []);
+  assert.deepEqual(await verifyReleaseImage({ out: line => output.push(line) }, [], pinned, false, undefined, '26.11.1'), []);
   assert.match(output.join('\n'), /operator pin and does not follow releases/);
+});
+
+test('an operator pin on an older release refuses before any write; unreadable images keep the note', async () => {
+  const withImage = (image: string) => [...settings.filter(row => row.key !== 'ecs.image'), { key: 'ecs.image', value: image }];
+  for (const image of [`${repository}:26.10.9@${digest}`, `${repository}:26.11.1-rc.2@${digest}`]) {
+    const current = withImage(image);
+    const planned = planEcsImageFollowsRelease(current, '26.11.2');
+    assert.deepEqual(planned, []);
+    await assert.rejects(verifyReleaseImage({ out: () => {} }, planned, current, false, undefined, '26.11.2'),
+      /older than 26\.11\.2, so nothing was changed/);
+    const findings: string[] = [];
+    await verifyReleaseImage({ out: () => {} }, planned, current, false, message => findings.push(message), '26.11.2');
+    assert.equal(findings.length, 1);
+  }
+  for (const image of [`${repository}@${digest}`, `mirror.example/control:26.10.9@${digest}`, `${repository}:build-123@${digest}`]) {
+    const output: string[] = [];
+    assert.deepEqual(await verifyReleaseImage({ out: line => output.push(line) }, [], withImage(image), false, undefined, '26.11.2'), []);
+    assert.match(output.join('\n'), /operator pin and does not follow releases/);
+  }
 });

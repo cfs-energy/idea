@@ -34,7 +34,7 @@ test("the release automation covers all five native targets", () => {
     "utf8",
   );
   const start = workflow.indexOf("  build_ideactl_artifacts:");
-  const end = workflow.indexOf("  build_push_ideactl:", start);
+  const end = workflow.indexOf("  build_image:", start);
 
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -49,7 +49,13 @@ test("the release automation covers all five native targets", () => {
   assert.match(releaseJobs, /windows-2025/);
   assert.match(workflow, /release\/\*\.zip\.sha256/);
   assert.match(workflow, /release\/\*\.tar\.gz\.sha256/);
-  assert.match(workflow, /ideactl config generate/);
+  // the image smoke test, in the action the release build calls
+  const imageAction = readFileSync(
+    join(repositoryRoot, ".github", "actions", "build_control_plane_image", "action.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /uses: \.\/\.github\/actions\/build_control_plane_image/);
+  assert.match(imageAction, /ideactl config generate/);
 });
 
 test("the single-target builder rejects another processor architecture", () => {

@@ -4,6 +4,8 @@ The control plane runs only on ECS. Direct upgrades require 26.10.0 or newer on 
 
 By default, IDEA **automatically backs up tagged EFS filesystems, DynamoDB tables and virtual desktops every day and keeps the backups for 7 days** using AWS Backup.
 
+The cluster S3 bucket is not backed up. It holds bootstrap packages, load balancer access logs and the scheduler log archive, which deployment and the services write again. Backing up S3 needs AWS Backup's S3 opt-in for the account and versioning on the bucket; add the bucket to your own plan if you need it.
+
 During the installation, IDEA creates a new [#backup-vault](backup-idea-environment.md#backup-vault "mention") and one [#backup-plan](backup-idea-environment.md#backup-plan "mention") per module
 
 {% hint style="success" %}

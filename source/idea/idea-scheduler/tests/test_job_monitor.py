@@ -44,6 +44,10 @@ class FakeJobCache:
         self.jobs = {}
         self.synced_job_ids = []
         self.retry_counts = {}
+        self.license_job_ids = []
+
+    def add_active_licenses(self, jobs):
+        self.license_job_ids.extend(job.job_id for job in jobs)
 
     def get_job(self, job_id):
         return self.jobs.get(job_id)
@@ -471,3 +475,88 @@ def test_disabled_owner_is_deleted_with_a_reason(monitor, fake_context):
     assert saved['error_code'] == 'JOB_DELETED_DISABLED_OWNER'
     assert 'owner is disabled' in saved['message']
     assert fake_context.provisioning_queue.put_job_ids == []
+
+
+def test_start_restores_licenses_of_provisioned_jobs_a_restored_cache_lacks(
+    monitor, fake_context
+):
+    fake_context.queue_profiles.queue_profiles = [
+        SimpleNamespace(name='compute', enabled=True, queues=['normal']),
+    ]
+    provisioned = make_job('600')
+    provisioned.provisioned = True
+    fake_context.scheduler.jobs_by_id = {'600': provisioned, '601': make_job('601')}
+
+    monitor._sync_all_jobs()
+
+    assert fake_context.job_cache.license_job_ids == ['600']
+
+
+def test_start_drops_licenses_a_restored_cache_holds_for_a_job_that_holds_no_capacity(
+    monitor, fake_context, tmp_path, monkeypatch
+):
+    """
+    the housekeeper reset a licensed job whose stack failed and released its licenses,
+    and the task died before its next copy. The copy still counted them, so the job's
+    own row stood against it: asking for 2 of 3 it needed 4 and never provisioned, and
+    every other job asking for the license saw 2 fewer free.
+    """
+    from ideadatamodel import SocaJobLicenseAsk, SocaJobParams
+    from ideascheduler.app.provisioning import JobCache
+    from test_job_cache import FakeSchedulerContext
+
+    monkeypatch.setenv('PBS_HOME', str(tmp_path / 'pbs'))
+    job = make_job('700')
+    job.params = SocaJobParams(licenses=[SocaJobLicenseAsk(name='comsol', count=2)])
+    provisioned = job.model_copy(update={'provisioned': True})
+    lost = JobCache(FakeSchedulerContext(str(tmp_path / 'lost'), ecs_enabled=True))
+    lost.sync([provisioned])
+    lost.add_active_licenses([provisioned])
+    assert lost._jobs_db.backup(force=True)
+    lost.release_active_licenses('700')
+    lost._jobs_db._stop.set()  # killed: no copy on the way out
+
+    restored = JobCache(FakeSchedulerContext(str(tmp_path / 'new'), ecs_enabled=True))
+    assert restored.get_active_license_count('comsol') == 2
+    fake_context.job_cache = restored
+    fake_context.queue_profiles.queue_profiles = [
+        SimpleNamespace(name='compute', enabled=True, queues=['normal']),
+    ]
+    # PBS lists it queued with no stack, as the reset left it
+    fake_context.scheduler.jobs_by_id = {'700': job}
+
+    monitor._sync_all_jobs()
+
+    assert restored.get_active_license_count('comsol') == 0
+    restored.stop()
+
+
+def test_one_queue_that_cannot_be_read_does_not_end_the_sync_of_the_others():
+    # NM-14
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from ideascheduler.app.provisioning.job_monitor.job_monitor import JobMonitor
+
+    synced = []
+    monitor = JobMonitor.__new__(JobMonitor)
+    monitor._logger = Mock()
+    profile = SimpleNamespace(enabled=True, name='p', queues=['broken', 'fine'])
+
+    def list_jobs(queue):
+        if queue == 'broken':
+            raise Exception('qstat failed')
+        return []
+
+    monitor._context = SimpleNamespace(
+        queue_profiles=SimpleNamespace(
+            list_queue_profiles=lambda: [profile],
+            get_provisioning_queue=lambda queue_profile_name: Mock(),
+        ),
+        scheduler=SimpleNamespace(list_jobs=list_jobs),
+        job_cache=SimpleNamespace(
+            sync=lambda jobs: synced.append(jobs), add_active_licenses=lambda jobs: None
+        ),
+    )
+    monitor._sync_all_jobs()
+    assert synced == [[]]

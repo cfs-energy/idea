@@ -7,6 +7,8 @@ publisher accounts, so a pattern fix lands in both modules at once.
 import re
 from typing import List, Optional, Tuple
 
+from ideasdk.aws.image_builds import partition_unavailable_reason
+
 # AMI search patterns for different OS/architecture combinations.
 # Minor releases are wildcarded so these keep resolving across point releases; the
 # newest match by CreationDate wins. '_HVM-' excludes the '_HVM_BETA-' images.
@@ -60,8 +62,8 @@ AMI_OWNERS = {
     'ubuntu2604': ['099720109477'],
 }
 
-# The aws-us-gov partition has its own Red Hat and Canonical publisher accounts. Rocky is
-# there only through the Marketplace listing, so the first-party lookup finds nothing in GovCloud.
+# The aws-us-gov partition has its own Red Hat and Canonical publisher accounts. Rocky has no
+# publisher there: image_builds.partition_unavailable_reason keeps every lookup from asking.
 GOV_AMI_OWNERS = {
     'rhel8': ['219670896067'],
     'rhel9': ['219670896067'],
@@ -126,27 +128,6 @@ def stock_ami_pattern(base_os: str, architecture: str = 'x86_64') -> Optional[st
     return AMI_PATTERNS.get(key) or AMI_PATTERNS.get(f'{key}/base')
 
 
-def stock_unsupported_reason(
-    base_os: Optional[str], region: Optional[str]
-) -> Optional[str]:
-    """
-    why no stock image can be resolved for base_os in this region, or None. Rocky is only
-    published through the Marketplace in GovCloud, and a Marketplace id would put
-    OptInRequired in front of every launch.
-    """
-    if (
-        region
-        and region.startswith('us-gov-')
-        and base_os
-        and base_os.startswith('rocky')
-    ):
-        return (
-            'Rocky Linux is only available through the Marketplace in GovCloud; '
-            'base stacks and image builds for it are not supported there'
-        )
-    return None
-
-
 def get_owners(ami_type, region, fallback):
     """the publisher account(s) for an AMI type in a region; `fallback` when the type is unknown"""
     if region.startswith('us-gov-') and ami_type in GOV_AMI_OWNERS:
@@ -174,6 +155,11 @@ def find_latest_image(ec2_client, pattern, owners, logger, ami_type=None):
     when `ami_type` names no known publisher. Windows patterns carry no architecture token,
     so a caller updating a stack must compare Architecture before using the id.
     """
+    unavailable = partition_unavailable_reason(ami_type, ec2_client.meta.region_name)
+    if unavailable:
+        # unsupported, not a failed lookup: nothing is published for it to find
+        logger.info(f'{ami_type}: {unavailable}')
+        return None
     try:
         actual_owners = get_owners(ami_type, ec2_client.meta.region_name, owners)
 

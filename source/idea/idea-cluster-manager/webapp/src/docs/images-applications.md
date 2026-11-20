@@ -4,7 +4,7 @@ Desktop images manages the desktop catalog and project access. Images shows the 
 
 ### Images
 
-**Managed images** has one row per operating system, architecture and GPU variant. IDEA rebuilds each image from the newest vendor image after an upgrade, on the monthly vendor check, or when you click **Refresh and validate**. It test-launches a desktop or job from the new image and switches new launches to it only if every check passes. Running desktops and jobs are never touched.
+**Managed images** has one row per operating system, architecture and GPU variant. IDEA rebuilds each image from the newest vendor image after an upgrade, on the monthly rebuild, or when you click **Refresh and validate**. It test-launches a desktop or job from the new image and switches new launches to it only if every check passes. Running desktops and jobs are never touched.
 
 * **Current**: the image in use passed every check.
 * **Baking**: a new image is being built and checked.

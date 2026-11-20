@@ -90,12 +90,19 @@ def fail_project_reads(monkeypatch):
 
 def resolve_instance_profiles(monkeypatch):
     """a submitted instance_profile is looked up in IAM, which the tests do not reach"""
+    # IAM takes a profile's bare name and answers with its ARN, path included
+    known = {
+        PROJECT_INSTANCE_PROFILE_ARN.rsplit('/', 1)[-1]: PROJECT_INSTANCE_PROFILE_ARN
+    }
     monkeypatch.setattr(
         AWSUtil,
         'get_instance_profile_arn',
         lambda _self, instance_profile_name: {
             'success': True,
-            'arn': f'arn:aws:iam::123456789012:instance-profile/{instance_profile_name}',
+            'arn': known.get(
+                instance_profile_name,
+                f'arn:aws:iam::123456789012:instance-profile/{instance_profile_name}',
+            ),
         },
     )
 

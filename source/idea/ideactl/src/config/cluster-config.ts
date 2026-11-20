@@ -145,7 +145,6 @@ export function checkAndConvertDecimalValue(value: unknown): unknown {
       );
     }
     converted.push(item);
-    converted.push(value);
   }
   return converted;
 }

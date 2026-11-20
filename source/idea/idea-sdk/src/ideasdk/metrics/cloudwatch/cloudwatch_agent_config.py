@@ -107,6 +107,9 @@ class CloudWatchAgentLogFileOptions(SocaBaseModel):
     # Specifies what to use as the log group name in CloudWatch Logs.
     log_group_name: str
     log_stream_name: str
+    # shortcut: kept so existing callers still validate, never rendered; drop it once none set it
+    # Hosts may not set retention: the deploy and the scheduler set it when they create the
+    # group, so an agent asking for it only logs a refused call.
     retention_in_days: Optional[int] = Field(default=None)
     auto_removal: Optional[bool] = Field(default=None)
     filters: Optional[List[CloudWatchAgentLogFileFilter]] = Field(default=None)
@@ -153,9 +156,6 @@ class CloudWatchAgentConfig:
         )
         self.DEFAULT_LOGS_FORCE_FLUSH_INTERVAL = self.config.get_int(
             'cluster.cloudwatch_logs.force_flush_interval', 5
-        )
-        self.DEFAULT_LOGS_RETENTION_IN_DAYS = self.config.get_int(
-            'cluster.cloudwatch_logs.retention_in_days', 90
         )
 
         # module id
@@ -282,11 +282,9 @@ class CloudWatchAgentConfig:
             # Only process files if they exist
             if Utils.is_not_empty(options.logs.files):
                 for file_config in options.logs.files:
-                    if file_config.retention_in_days is None:
-                        file_config.retention_in_days = (
-                            self.DEFAULT_LOGS_RETENTION_IN_DAYS
-                        )
-                    collected_log_files.append(Utils.to_dict(file_config))
+                    entry = Utils.to_dict(file_config)
+                    entry.pop('retention_in_days', None)
+                    collected_log_files.append(entry)
             self.collected_log_files = collected_log_files
 
     def build(self) -> Dict:

@@ -29,6 +29,20 @@ from ideasdk.filesystem.filesystem_helper import FileSystemHelper
 
 
 class FileBrowserAPI(BaseAPI):
+    NAMESPACES = frozenset(
+        {
+            'FileBrowser.CheckFilesPermissions',
+            'FileBrowser.CreateFile',
+            'FileBrowser.DeleteFiles',
+            'FileBrowser.DownloadFiles',
+            'FileBrowser.ListFiles',
+            'FileBrowser.ReadFile',
+            'FileBrowser.RenameFile',
+            'FileBrowser.SaveFile',
+            'FileBrowser.TailFile',
+        }
+    )
+
     def __init__(self, context: SocaContextProtocol):
         self.context = context
 
@@ -59,8 +73,10 @@ class FileBrowserAPI(BaseAPI):
     def download_files(self, context: ApiInvocationContext):
         helper = FileSystemHelper(self.context, context.get_username())
         request = context.get_request_payload_as(DownloadFilesRequest)
-        download_file = helper.download_files(request)
-        context.success(DownloadFilesResult(download_url=download_file))
+        download_file, skipped_files = helper.create_download_archive(request)
+        context.success(
+            DownloadFilesResult(download_url=download_file, skipped_files=skipped_files)
+        )
 
     def create_file(self, context: ApiInvocationContext):
         helper = FileSystemHelper(self.context, context.get_username())
@@ -71,7 +87,9 @@ class FileBrowserAPI(BaseAPI):
     def delete_files(self, context: ApiInvocationContext):
         helper = FileSystemHelper(self.context, context.get_username())
         request = context.get_request_payload_as(DeleteFilesRequest)
-        response = helper.delete_files(request)
+        response = helper.delete_files(
+            request, allow_directories=request.include_folders is True
+        )
         context.success(response)
 
     def rename_file(self, context: ApiInvocationContext):

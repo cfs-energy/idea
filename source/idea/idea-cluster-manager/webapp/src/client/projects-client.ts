@@ -16,8 +16,6 @@ import {
     CreateProjectResult,
     GetProjectRequest,
     GetProjectResult,
-    DeleteProjectRequest,
-    DeleteProjectResult,
     UpdateProjectRequest,
     UpdateProjectResult,
     ListProjectsRequest,
@@ -48,13 +46,6 @@ class ProjectsClient extends IdeaBaseClient<ProjectsClientProps> {
     getProject(req: GetProjectRequest): Promise<GetProjectResult> {
         return this.apiInvoker.invoke_alt<GetProjectRequest, GetProjectResult>(
             'Projects.GetProject',
-            req
-        )
-    }
-
-    deleteProject(req: DeleteProjectRequest): Promise<DeleteProjectResult> {
-        return this.apiInvoker.invoke_alt<DeleteProjectRequest, DeleteProjectResult>(
-            'Projects.DeleteProject',
             req
         )
     }

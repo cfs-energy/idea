@@ -8,9 +8,24 @@
 #  or in the 'license' file accompanying this file. This file is distributed on an 'AS IS' BASIS, WITHOUT WARRANTIES
 #  OR CONDITIONS OF ANY KIND, express or implied. See the License for the specific language governing permissions
 #  and limitations under the License.
+import threading
 from typing import Dict, Callable
 
 import ideavirtualdesktopcontroller
+from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_session_permission_utils import (
+    GROUP_UNREADABLE_MESSAGE,
+    group_state,
+)
+from ideavirtualdesktopcontroller.app.session_permissions.constants import (
+    GROUP_ACTOR_PREFIX,
+    bare_actor_name,
+)
+from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
+    PROJECT_HOLD_MESSAGES,
+    owner_project_refusal,
+)
+from python_dynamodb_lock.python_dynamodb_lock import DynamoDBLockError
+from ideadatamodel import GetUserRequest, VirtualDesktopSessionPermissionActorType
 from ideadatamodel import (
     CreateSessionRequest,
     CreateSessionResponse,
@@ -43,9 +58,25 @@ from ideadatamodel import (
 from ideadatamodel import errorcodes, exceptions
 from ideasdk.api import ApiInvocationContext
 from ideasdk.utils import Utils
+from ideavirtualdesktopcontroller.app.software_stacks.stack_expiry import StackExpiry
 from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesktopAPI
 from ideavirtualdesktopcontroller.app.software_stacks.constants import (
     SOFTWARE_STACK_DB_FILTER_PROJECT_ID_KEY,
+)
+from ideavirtualdesktopcontroller.app.session_permissions.virtual_desktop_session_permission_db import (
+    VirtualDesktopSessionPermissionDB,
+)
+
+
+# one create at a time per user in this process, so two threads never hold the same lock key
+# username -> [lock, requests holding or waiting]; an entry goes when its last request ends
+_CREATE_LOCKS: Dict[str, list] = {}
+_CREATE_LOCKS_GUARD = threading.Lock()
+# the distributed lock gives up after its lease (30 s) plus one heartbeat (5 s); the
+# in-process wait is bounded the same way
+CREATE_LOCK_WAIT_SECONDS = 35
+CREATE_BUSY_MESSAGE = (
+    'Another desktop request of yours is still being processed. Try again shortly.'
 )
 
 
@@ -140,8 +171,116 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
         message, is_valid = self._validate_owner(connection_info.username, context)
         if not is_valid:
             connection_info.failure_reason = message
+            return connection_info, False
 
-        return connection_info, is_valid
+        if not self._may_connect(connection_info, context.get_username()):
+            if connection_info.failure_reason not in (
+                *PROJECT_HOLD_MESSAGES,
+                GROUP_UNREADABLE_MESSAGE,
+            ):
+                connection_info.failure_reason = 'The desktop could not be found.'
+            return connection_info, False
+        return connection_info, True
+
+    def _may_connect(
+        self, connection_info: VirtualDesktopSessionConnectionInfo, username: str
+    ) -> bool:
+        # a broker token only for a desktop the caller owns or holds a share on;
+        # a dcv_session_id alone names no owner, so the desktop's id is required
+        if Utils.is_empty(connection_info.idea_session_id):
+            return False
+        owner = connection_info.idea_session_owner or username
+        session = self.session_db.get_from_db(
+            idea_session_owner=owner, idea_session_id=connection_info.idea_session_id
+        )
+        if session is None:
+            return False
+        # a desktop whose owner left its project waits for an administrator to move it;
+        # nobody starts a new connection to it, its owner or a share recipient
+        refusal = owner_project_refusal(self.context, session)
+        if refusal is not None:
+            connection_info.failure_reason = refusal
+            return False
+        if owner == username:
+            return True
+        permission = self.session_permissions_db.get(
+            idea_session_id=connection_info.idea_session_id, actor=username
+        )
+        # the row under the caller's own name must be a user share: a group row stored
+        # under a bare name before group shares were keyed admits nobody
+        if not (
+            permission is not None
+            and permission.actor_type == VirtualDesktopSessionPermissionActorType.USER
+            and self._share_admits(permission, owner)
+        ):
+            self._group_unreadable = False
+            permission = self._group_share_for(
+                connection_info.idea_session_id, owner, username
+            )
+            if permission is None and self._group_unreadable:
+                connection_info.failure_reason = GROUP_UNREADABLE_MESSAGE
+        if permission is None:
+            return False
+        # the share was checked against the desktop's project when it was made; a recipient
+        # who has since left the project, or lost desktop access, connects no more
+        if session.project is None:
+            return False
+        allowed, _ = self._validate_user_and_project_membership(
+            username, session.project.project_id
+        )
+        if (
+            allowed
+            and permission.actor_type == VirtualDesktopSessionPermissionActorType.GROUP
+        ):
+            # the host lists a group's members as of its last write: rewrite it now, so a
+            # member just added is admitted by the display server as well as by this check
+            try:
+                self.context.dcv_broker_client.enforce_session_permissions(session)
+            except Exception as e:
+                self._logger.warning(
+                    f'could not refresh the permissions of {session.idea_session_id} '
+                    f'for group member {username}: {e}'
+                )
+        return allowed
+
+    @staticmethod
+    def _share_admits(permission, owner: str) -> bool:
+        return (
+            permission is not None
+            and permission.idea_session_owner == owner
+            and not VirtualDesktopSessionPermissionDB.is_expired(permission)
+        )
+
+    def _group_share_for(self, idea_session_id: str, owner: str, username: str):
+        """
+        a group share on the desktop naming a group the caller is in now, by the accounts
+        service; it is read at every connection, so a member who was removed cannot connect
+        """
+        group_shares = [
+            permission
+            for permission in self.session_permissions_db.get_for_session(
+                idea_session_id
+            )
+            if permission.actor_type == VirtualDesktopSessionPermissionActorType.GROUP
+            and (permission.actor_name or '').startswith(GROUP_ACTOR_PREFIX)
+            and self._share_admits(permission, owner)
+        ]
+        if not group_shares:
+            return None
+        user = self.context.accounts_client.get_user(
+            GetUserRequest(username=username)
+        ).user
+        groups = set(Utils.get_as_list(user.additional_groups, []) if user else [])
+        for permission in group_shares:
+            group = bare_actor_name(permission.actor_name)
+            if group not in groups:
+                continue
+            state = group_state(self.context, group)
+            if state == 'enabled':
+                return permission
+            if state == 'unreadable':
+                self._group_unreadable = True
+        return None
 
     @staticmethod
     def _validate_update_session_permission_request(
@@ -180,10 +319,20 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
         ):
             return session, True
 
+        # the stack as an administrator now has it: the copy on the desktop is not refreshed
+        # when its allowed sizes change. a stack since deleted falls back to that copy.
+        software_stack = current_session.software_stack
+        if software_stack is not None and Utils.is_not_empty(software_stack.stack_id):
+            software_stack = (
+                self.software_stack_db.get(
+                    stack_id=software_stack.stack_id, base_os=software_stack.base_os
+                )
+                or software_stack
+            )
         failure_reason = self.controller_utils.get_instance_type_rejection_reason(
             instance_type_name=session.server.instance_type,
             hibernation_support=current_session.hibernation_enabled,
-            software_stack=current_session.software_stack,
+            software_stack=software_stack,
             username=session.owner,
         )
         if Utils.is_not_empty(failure_reason):
@@ -244,6 +393,22 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
             ) + str(error_message)
             self._logger.info(f'{screenshot.failure_reason}')
             validation_response = False
+        if validation_response:
+            session = self.session_db.get_from_db(
+                idea_session_owner=screenshot.idea_session_owner
+                or context.get_username(),
+                idea_session_id=screenshot.idea_session_id,
+            )
+            refusal = (
+                owner_project_refusal(self.context, session)
+                if session is not None
+                else None
+            )
+            if refusal is not None:
+                # returned in failed[] with this desktop's idea_session_id and this
+                # failure_reason; dcv_session_id is not set on a refused screenshot
+                screenshot.failure_reason = refusal
+                validation_response = False
         return screenshot, validation_response
 
     def _validate_resume_session_request(
@@ -267,6 +432,55 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
         self._logger.debug(
             f'received create session request from user: {context.get_username()}'
         )
+        # the per-user limit counts stored rows, and the row is written only after the host
+        # launches, so the count and the launch run under one lock per user
+        # the launch stays inside: the row the count reads is written only after it
+        username = context.get_username()
+        with _CREATE_LOCKS_GUARD:
+            entry = _CREATE_LOCKS.setdefault(username, [threading.Lock(), 0])
+            entry[1] += 1
+        try:
+            if not entry[0].acquire(timeout=CREATE_LOCK_WAIT_SECONDS):
+                self._create_busy(context)
+                return
+            try:
+                self._create_under_distributed_lock(context, username)
+            finally:
+                entry[0].release()
+        finally:
+            with _CREATE_LOCKS_GUARD:
+                entry[1] -= 1
+                if entry[1] == 0:
+                    del _CREATE_LOCKS[username]
+
+    def _create_under_distributed_lock(self, context: ApiInvocationContext, username):
+        lock = self.context.distributed_lock()
+        lock_key = f'create-session-{username}'
+        try:
+            lock.acquire(key=lock_key)
+        except DynamoDBLockError as e:
+            if e.code != DynamoDBLockError.ACQUIRE_TIMEOUT:
+                raise
+            self._create_busy(context)
+            return
+        try:
+            self._create_session(context)
+        finally:
+            lock.release(key=lock_key)
+
+    def _create_busy(self, context: ApiInvocationContext):
+        self._logger.info(
+            f'create session for {context.get_username()}: another create is in progress'
+        )
+        context.fail(
+            error_code=errorcodes.CREATE_SESSION_FAILED,
+            message=CREATE_BUSY_MESSAGE,
+            payload=CreateSessionResponse(
+                session=context.get_request_payload_as(CreateSessionRequest).session
+            ),
+        )
+
+    def _create_session(self, context: ApiInvocationContext):
         session = context.get_request_payload_as(CreateSessionRequest).session
         session, is_valid = self._validate_create_session_request(session, context)
         if not is_valid:
@@ -518,6 +732,26 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
             )
             return
 
+        # a person sees the stacks of their own projects. administrators and managers list every
+        # stack through the admin API already, and the admin create form lists here for the
+        # person it creates a desktop for.
+        if not (
+            context.is_administrator()
+            or context.is_manager()
+            or any(
+                project.project_id == project_id
+                for project in self.context.projects_client.get_user_projects(
+                    username=context.get_username()
+                )
+            )
+        ):
+            context.fail(
+                error_code=errorcodes.INVALID_PARAMS,
+                message="You aren't a member of this project.",
+                payload=request,
+            )
+            return
+
         project_filter_found = False
         if Utils.is_not_empty(request.filters):
             for listing_filter in request.filters:
@@ -533,6 +767,18 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
             )
 
         result = self._list_software_stacks(request)
+        # what a person may pick for a new desktop: their existing desktops never read this
+        # ponytail: removed from the page read, so a page may come back short; the form reads one
+        # page large enough for every stack. move this into the query if that ever changes.
+        try:
+            offered = StackExpiry(self.context).offered_for_new_desktops(
+                result.listing or []
+            )
+            if result.paginator is not None and result.paginator.total is not None:
+                result.paginator.total -= len(result.listing or []) - len(offered)
+            result.listing = offered
+        except Exception as e:
+            self._logger.warning(f'could not check stack expiry: {type(e).__name__}')
         context.success(result)
 
     def list_shared_permissions(self, context: ApiInvocationContext):
@@ -571,6 +817,10 @@ class VirtualDesktopUserAPI(VirtualDesktopAPI):
 
     def update_session_permission(self, context: ApiInvocationContext):
         request = context.get_request_payload_as(UpdateSessionPermissionRequest)
+        # a request may send any one of the three lists
+        request.create = request.create or []
+        request.update = request.update or []
+        request.delete = request.delete or []
         message, is_valid = self._validate_update_session_permission_request(
             request, context
         )

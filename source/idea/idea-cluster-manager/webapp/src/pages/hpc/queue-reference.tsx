@@ -12,14 +12,18 @@ const OS_LABELS: {[k: string]: string} = {
 };
 
 /** Which queue runs which processor architecture and operating system, so a script names a
- * queue that can run it. Renders nothing when the list cannot be read. */
+ * queue that can run it. */
 export default function QueueReference({queueName}: {queueName?: string}) {
     const [queues, setQueues] = useState<QueueSummary[]>();
+    const [failed, setFailed] = useState(false);
     useEffect(() => {
         AppContext.get().client().scheduler().listQueues()
             .then(result => setQueues(result.listing ?? []))
-            .catch(() => setQueues([]));
+            .catch(() => setFailed(true));
     }, []);
+    if (failed) {
+        return <Box color="text-body-secondary">Could not load the queue list. You can still set #PBS -q.</Box>;
+    }
     if (!queues || queues.length === 0) {
         return null;
     }
@@ -29,7 +33,7 @@ export default function QueueReference({queueName}: {queueName?: string}) {
             {selected?.instance_type_rules && <Box color="text-body-secondary">
                 Queue {selected.name}. {selected.instance_type_rules}
             </Box>}
-            <ExpandableSection headerText={`Queues you can use (${queues.length})`}
+            <ExpandableSection headerText={`Queues on this cluster (${queues.length})`}
                                headerDescription="Set one with #PBS -q. Instance types must match the queue's architecture.">
                 <Table variant="embedded" items={queues} trackBy="name" columnDefinitions={[
                     {id: 'name', header: 'Queue', cell: q => <Box variant="code">{q.name}</Box>},

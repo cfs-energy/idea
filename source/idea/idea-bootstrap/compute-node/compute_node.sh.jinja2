@@ -17,9 +17,8 @@ source "${SCRIPT_DIR}/../common/bootstrap_common.sh"
   {'Key':'Name', 'Value': 'JobId: ' + context.vars.job.job_id + ', Cluster: ' + context.cluster_name },
   {'Key':'idea:JobOwner', 'Value': context.vars.job.owner },
   {'Key':'idea:Project', 'Value': context.vars.job.project },
-  {'Key':'idea:JobQueue', 'Value': context.vars.job.queue },
-  {'Key':'idea:JobOwnerEmail', 'Value': context.vars.job.owner_email}
-] %}
+  {'Key':'idea:JobQueue', 'Value': context.vars.job.queue }
+] + ([{'Key':'idea:JobOwnerEmail', 'Value': context.vars.job.owner_email}] if context.vars.job.owner_email else []) %}
 
 {% with  ebs_volume_tags = TAGS %}
   {% include '_templates/linux/tag_ebs_volumes.jinja2' %}
@@ -34,8 +33,13 @@ if [[ "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION
 
   {% include '_templates/linux/disable_se_linux.jinja2' %}
 
+  {% with lustre_scratch = context.vars.job.params.fsx_lustre.enabled %}
+  {% include '_templates/linux/compute_kernel_hold.jinja2' %}
+  {% endwith %}
+
   {% include '_templates/linux/system_packages.jinja2' %}
 
+  {% include '_templates/linux/openssh_update.jinja2' %}
 
 else
    log_info "Baked release matches ${IDEA_MODULE_VERSION}; skipping package installation"
@@ -73,7 +77,18 @@ fi
   {% include '_templates/linux/motd.jinja2' %}
 {% endwith %}
 
+{# shortcut: a node serving one job admits only that job's owner; a shared-capacity node runs
+   other users' jobs too and stays as before, until PBS hooks keep the allowed users per job #}
+{% with ssh_allowed_users = [context.vars.job.owner] if not context.vars.job.is_shared_capacity() else [] %}
+  {% include '_templates/linux/ssh_access.jinja2' %}
+{% endwith %}
+
 {% include '_templates/linux/join_directoryservice.jinja2' %}
+
+{# applied again after the join, whose PAM tooling can rewrite /etc/pam.d/sshd #}
+{% with ssh_allowed_users = [context.vars.job.owner] if not context.vars.job.is_shared_capacity() else [] %}
+  {% include '_templates/linux/ssh_access.jinja2' %}
+{% endwith %}
 
 {% if context.config.get_string('scheduler.provider') == 'openpbs' %}
   {% include 'compute-node/_templates/configure_openpbs_compute_node.jinja2' %}
@@ -84,7 +99,9 @@ fi
 REBOOT_REQUIRED=$(cat /root/bootstrap/reboot_required.txt)
 if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   log_info "reboot required. compute_node_post_reboot.sh will be executed after reboot ..."
-  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh >> ${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log 2>&1") | crontab -
+  # the log directory is the job's value: the script redirects to it itself, so cron's shell
+  # never reads it as part of a command line
+  (crontab -l; echo "@reboot /bin/bash ${SCRIPT_DIR}/compute_node_post_reboot.sh crontab") | crontab -
   reboot_after_cloud_init
   exit 0
 else

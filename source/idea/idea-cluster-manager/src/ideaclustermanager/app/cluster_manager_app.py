@@ -10,6 +10,8 @@
 #  and limitations under the License.
 
 from ideaclustermanager.app.accounts.account_reconciler import AccountReconciler
+import threading
+
 import ideasdk.app
 from ideasdk.auth import TokenService, TokenServiceOptions
 from ideadatamodel import constants
@@ -21,6 +23,16 @@ import ideaclustermanager
 from ideaclustermanager.app.api.api_invoker import ClusterManagerApiInvoker
 from ideaclustermanager.app.projects.bedrock_usage_service import BedrockUsageService
 from ideaclustermanager.app.metrics import CostMetricsService, StorageMetricsService
+from ideaclustermanager.app.metrics.drift_checks import DriftCheckCollector
+from ideaclustermanager.app.metrics.health_collectors import (
+    AdAutomationCollector,
+    CertificatesCollector,
+    DirectoryCollector,
+    EcsTasksCollector,
+    HomeDirectoryCollector,
+    SecretsCollector,
+)
+from ideasdk.metrics.health import CollectorRunner, StorageMountsCollector
 from ideaclustermanager.app.projects.projects_service import ProjectsService
 from ideaclustermanager.app.projects.project_tasks import (
     ProjectEnabledTask,
@@ -102,6 +114,7 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.account_reconciler: Optional[AccountReconciler] = None
         self.cost_metrics: Optional[CostMetricsService] = None
         self.storage_metrics: Optional[StorageMetricsService] = None
+        self.health_collectors: Optional[CollectorRunner] = None
 
     def app_initialize(self):
         # group name helper
@@ -213,6 +226,19 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
         self.cost_metrics = CostMetricsService(context=self.context)
         self.storage_metrics = StorageMetricsService(context=self.context)
         self.context.storage_metrics = self.storage_metrics
+        self.health_collectors = CollectorRunner(
+            self.context,
+            [
+                CertificatesCollector(self.context),
+                EcsTasksCollector(self.context),
+                DirectoryCollector(self.context, self.storage_metrics),
+                HomeDirectoryCollector(self.context),
+                AdAutomationCollector(self.context),
+                SecretsCollector(self.context),
+                StorageMountsCollector(self.context),
+                DriftCheckCollector(self.context, self.storage_metrics),
+            ],
+        )
 
         self.context.token_service.initialize_api_tokens()
 
@@ -255,15 +281,62 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.account_reconciler.start()
         if self.storage_metrics is not None:
             self.storage_metrics.start()
+        if self.health_collectors is not None:
+            self.health_collectors.start()
+
+        self.report_stored_storage_refusals()
 
         try:
             self.context.distributed_lock().acquire(key='initialize-defaults')
             self.context.accounts.create_defaults()
             self.context.projects.create_defaults()
+            self.refresh_project_memberships()
             self.context.email_templates.create_defaults()
         finally:
             self.context.distributed_lock().release(key='initialize-defaults')
         self.personal_costs.start()
+        # home file system work, off the start path so the API listens at once
+        threading.Thread(
+            target=self.set_aside_keys_of_disabled_users,
+            name='disabled-accounts-keys',
+            daemon=True,
+        ).start()
+
+    def set_aside_keys_of_disabled_users(self):
+        try:
+            self.context.accounts.set_aside_keys_of_disabled_users()
+        except Exception as error:
+            self.logger.error(
+                f"disabled users' keys not checked: {type(error).__name__}"
+            )
+
+    def refresh_project_memberships(self):
+        # project rows follow each project's enabled groups: repairs rows left by
+        # group edits that earlier releases never applied
+        try:
+            self.context.projects.user_projects_dao.refresh_all_projects()
+        except Exception as error:
+            self.logger.error(
+                f'project memberships not refreshed: {type(error).__name__}'
+            )
+
+    def report_stored_storage_refusals(self):
+        # values saved before the mount rules existed stay in service; an operator
+        # learns of them here and corrects them through settings
+        from ideaclustermanager.app.settings_catalog import stored_storage_refusals
+
+        try:
+            refused = stored_storage_refusals(self.context.config())
+        except Exception as error:
+            self.logger.warning(
+                f'stored storage settings not checked: {type(error).__name__}'
+            )
+            return
+        for key, reason in refused:
+            self.logger.error(
+                f'stored setting {key} would be refused if saved now ({reason}); it '
+                'stays in service until it is corrected'
+            )
 
     def app_stop(self):
         if self.personal_costs is not None:
@@ -287,3 +360,5 @@ class ClusterManagerApp(ideasdk.app.SocaApp):
             self.cost_metrics.stop()
         if self.storage_metrics is not None:
             self.storage_metrics.stop()
+        if self.health_collectors is not None:
+            self.health_collectors.stop()

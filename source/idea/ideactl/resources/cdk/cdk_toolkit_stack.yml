@@ -236,12 +236,31 @@ Resources:
             Status: Enabled
             NoncurrentVersionExpiration:
               NoncurrentDays: 365
-      # [5] Tags to enable AWS Backup for Cluster S3 Bucket
+          {% if scheduler_log_archives %}
+          # [6] The scheduler uploads its logs to logs/<module id>/ once a day and nothing
+          # else removes them. Only that prefix expires: the load balancer access logs sit
+          # beside it under logs/ with their own module ids. Noncurrent versions of what
+          # expires are dropped after a day instead of the year above, or nothing is freed.
+          {% for archive in scheduler_log_archives %}
+          - Id: ExpireSchedulerLogArchive{{ loop.index }}
+            Status: Enabled
+            Prefix: logs/{{ archive.module_id }}/
+            ExpirationInDays: {{ archive.retention_days }}
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+          - Id: ExpireSchedulerLogDeleteMarkers{{ loop.index }}
+            Status: Enabled
+            Prefix: logs/{{ archive.module_id }}/
+            ExpiredObjectDeleteMarker: true
+          {% endfor %}
+          {% endif %}
+      # [5] Tags. The bucket is not in the cluster backup plan: it holds packages, load balancer
+      # logs and log archives, and S3 backup needs account opt-in and versioning.
       Tags:
         - Key: "idea:ClusterName"
           Value: "{{ cluster_name }}"
-        - Key: "idea:BackupPlan"
-          Value: "cluster"
     UpdateReplacePolicy: Retain
     DeletionPolicy: Retain
   StagingBucketPolicy:
@@ -268,6 +287,7 @@ Resources:
 
           # [1] ALB Access Logs - AwsSolutions-ELB2
           # refer: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html
+          # A load balancer writes <prefix>/AWSLogs/<account>/..., so only this account's logs are accepted.
           - Sid: IdeaAlbAccessLogs
             Effect: Allow
             Principal:
@@ -280,7 +300,7 @@ Resources:
             Action:
               - s3:PutObject
             Resource:
-              - Fn::Sub: ${StagingBucket.Arn}/logs/*
+              - Fn::Sub: ${StagingBucket.Arn}/logs/*/AWSLogs/${AWS::AccountId}/*
 
           - Sid: IdeaAlbAccessLogsOutpostsZones
             Effect: Allow
@@ -289,7 +309,7 @@ Resources:
             Action:
               - s3:PutObject
             Resource:
-              - Fn::Sub: ${StagingBucket.Arn}/logs/*
+              - Fn::Sub: ${StagingBucket.Arn}/logs/*/AWSLogs/${AWS::AccountId}/*
 
           # [2] NLB Access Logs
           # refer: https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-access-logs.html
@@ -300,10 +320,12 @@ Resources:
             Action:
               - s3:PutObject
             Resource:
-              - Fn::Sub: ${StagingBucket.Arn}/logs/*
+              - Fn::Sub: ${StagingBucket.Arn}/logs/*/AWSLogs/${AWS::AccountId}/*
             Condition:
               StringEquals:
                 s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
           - Sid: IdeaNlbAccessLogs-AWSLogDeliveryAclCheck
             Effect: Allow
             Principal:
@@ -312,6 +334,10 @@ Resources:
               - s3:GetBucketAcl
             Resource:
               - Fn::Sub: ${StagingBucket.Arn}
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
 
           ### End: IDEA Cluster S3 Bucket Policy Customizations
   ContainerAssetsRepository:

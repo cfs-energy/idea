@@ -93,6 +93,21 @@ test('the administrator account restores only the public EC2 key', async (t) => 
   });
 });
 
+test('the administrator account is created with a system id', async (t) => {
+  t.mock.method(EC2Client.prototype, 'send', async () => ({ KeyPairs: [{ PublicKey: 'ssh-ed25519 public-key' }] }));
+  await temporary(async (root) => {
+    mkdirSync(join(root, 'etc/sudoers.d'), { recursive: true });
+    const calls: string[][] = [];
+    let created = false;
+    await configureAdminAccount({ IDEA_SSH_KEY_PAIR: 'sample-key', AWS_DEFAULT_REGION: 'us-east-2' }, root, (command, args) => {
+      calls.push([command, ...args]);
+      if (command === 'useradd') { created = true; return ''; }
+      if (!created) throw new Error('no such account');
+      return 'ec2-user:x:991:991::/home/ec2-user:/bin/bash';
+    }, () => {});
+    assert.deepEqual(calls[1], ['useradd', '--system', '--create-home', '--shell', '/bin/bash', 'ec2-user']);
+  });
+});
 
 test('AD authorization binds task metadata, caller identity, nonce, and consistent read', async (t) => {
   const server = createServer((request, response) => {

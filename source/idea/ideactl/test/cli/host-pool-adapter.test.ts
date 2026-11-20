@@ -20,13 +20,15 @@ test("host adapter paginates attributes, batches descriptions and includes drain
     }
     const arns = command.input.containerInstances as string[];
     batches.push(arns.length);
-    return { containerInstances: arns.map((arn) => ({ containerInstanceArn: arn, ec2InstanceId: arn, status: "ACTIVE", attributes: [{ name: "idea.directory", value: "joined" }] })) };
+    return { containerInstances: arns.map((arn) => ({ containerInstanceArn: arn, ec2InstanceId: arn, status: "ACTIVE", agentConnected: arn !== "last", attributes: [{ name: "idea.directory", value: "joined" }] })) };
   });
   const hosts = await liveContainerHosts().containerInstances({ ...context, cluster: "fixture" });
   assert.equal(hosts.length, 103);
   assert.deepEqual(batches, [100, 3]);
   assert.equal(lists.length, 3);
   assert.equal(hosts[102].attributes?.["idea.directory"], "joined");
+  // the mount check skips a host whose agent is not connected
+  assert.deepEqual(hosts.filter((host) => host.agentConnected === false).map((host) => host.arn), ["last"]);
 });
 
 test("host adapter resolves the group template version and reads running templates", async (t) => {
@@ -69,4 +71,22 @@ test("host adapter fails closed when an ECS description is incomplete", async (t
     command.constructor.name === "ListContainerInstancesCommand" ? { containerInstanceArns: ["host"] }
       : { failures: [{ arn: "host", reason: "MISSING" }] });
   await assert.rejects(liveContainerHosts().containerInstances({ ...context, cluster: "fixture" }), /host.*MISSING/);
+});
+
+test("host adapter reads the fstab lines a launch template version mounts", async (t) => {
+  const script = [
+    "#!/bin/bash",
+    'grep -qF "svm.example.invalid:/projects /projects/ nfs4 nfsvers=4.1,nodev 0 0" /etc/fstab || echo "svm.example.invalid:/projects /projects/ nfs4 nfsvers=4.1,nodev 0 0" >> /etc/fstab',
+    "mount -a",
+  ].join("\n");
+  const inputs: unknown[] = [];
+  t.mock.method(EC2Client.prototype, "send", async (command: { input: unknown }) => {
+    inputs.push(command.input);
+    return { LaunchTemplateVersions: [{ LaunchTemplateData: { UserData: Buffer.from(script).toString("base64") } }] };
+  });
+  assert.deepEqual(await liveContainerHosts().launchTemplateMountLines({ ...context, id: "lt-host", version: "1" }),
+    ["svm.example.invalid:/projects /projects/ nfs4 nfsvers=4.1,nodev 0 0"]);
+  assert.deepEqual(inputs, [{ LaunchTemplateId: "lt-host", Versions: ["1"] }]);
+  t.mock.method(EC2Client.prototype, "send", async () => ({ LaunchTemplateVersions: [{ LaunchTemplateData: {} }] }));
+  assert.equal(await liveContainerHosts().launchTemplateMountLines({ ...context, id: "lt-host", version: "1" }), undefined);
 });

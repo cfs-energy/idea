@@ -179,7 +179,8 @@ export async function configureAdminAccount(env: Env, root = "/", execute: Run =
   if (!publicKey || !/^(ssh-rsa |ssh-ed25519 )/.test(publicKey) || publicKey.includes('\n')) throw new Error('Invalid EC2 key pair public key');
   let account: string;
   try { account = execute('getent', ['passwd', 'ec2-user']); } catch {
-    execute('useradd', ['--create-home', '--shell', '/bin/bash', 'ec2-user']);
+    // a system id: directory accounts may be given ids from 1000, and one must never share this one
+    execute('useradd', ['--system', '--create-home', '--shell', '/bin/bash', 'ec2-user']);
     account = execute('getent', ['passwd', 'ec2-user']);
   }
   const [, , uid, gid] = account.trim().split(':');

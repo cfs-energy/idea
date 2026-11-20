@@ -117,6 +117,31 @@ export class ArnBuilder {
     ];
   }
 
+  /**
+   * GPU driver sources an operator moved off AWS's driver buckets (`gpu_settings.<vendor>.<os>.
+   * s3_bucket_path`), as `{ bucket, objects, prefix }` for a prefix-limited list and read. A path
+   * into one of the fixed buckets adds nothing.
+   */
+  get gpuDriverMirrors(): Array<{ bucket: string; objects: string; prefix: string }> {
+    const fixed = new Set(['ec2-linux-nvidia-drivers', 'ec2-windows-nvidia-drivers', 'nvidia-gaming', 'nvidia-gaming-drivers',
+      'ec2-amd-linux-drivers', 'ec2-amd-windows-drivers']);
+    const mirrors = new Map<string, { bucket: string; objects: string; prefix: string }>();
+    for (const vendor of ['nvidia', 'amd']) {
+      for (const os of ['linux', 'windows']) {
+        const path = this.config.getString(`global-settings.gpu_settings.${vendor}.${os}.s3_bucket_path`);
+        const match = /^s3:\/\/([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])\/?(.*)$/.exec(path ?? '');
+        if (match === null || fixed.has(match[1]!)) continue;
+        const prefix = match[2]!.replace(/\*+$/, '');
+        mirrors.set(`${match[1]}/${prefix}`, {
+          bucket: this.getArn('s3', match[1]!, '', ''),
+          objects: this.getArn('s3', `${match[1]}/${prefix}*`, '', ''),
+          prefix: `${prefix}*`,
+        });
+      }
+    }
+    return [...mirrors.values()];
+  }
+
   get albListenerRuleArn(): string {
     return this.getArn('elasticloadbalancing', `listener-rule/app/${this.clusterName()}*/*/*`);
   }
@@ -206,7 +231,7 @@ export class ArnBuilder {
   }
 
   get dcvLicenseS3BucketArns(): string[] {
-    return [this.getArn('s3', 'dcv-license.*/*', '', ''), this.getArn('s3', 'dcv-license.*', '', '')];
+    return [this.getArn('s3', `dcv-license.${this.region()}/*`, '', ''), this.getArn('s3', `dcv-license.${this.region()}`, '', '')];
   }
 
   get s3BucketArns(): string[] {
@@ -264,8 +289,11 @@ export class ArnBuilder {
     return `arn:${partition}:route53:::hostedzone/*`;
   }
 
+  /** A key id or a full key ARN: the resource constructs accept either form in these settings. */
   private kmsKeyArnFor(keyIdSetting: string): string {
-    return this.getArn('kms', `key/${this.config.getString(keyIdSetting)}`, undefined, this.region());
+    const value = this.config.getString(keyIdSetting) ?? '';
+    if (value.startsWith('arn:')) return value;
+    return this.getArn('kms', `key/${value}`, undefined, this.region());
   }
 
   get kmsSecretsmanagerKeyArn(): string {

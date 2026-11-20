@@ -15,6 +15,9 @@ from ideavirtualdesktopcontroller.app.sessions.dcv_session_recovery import (
 
 import ideavirtualdesktopcontroller
 from ideadatamodel import VirtualDesktopSessionState
+from ideavirtualdesktopcontroller.app.clients.dcv_broker_client.dcv_broker_client_utils import (
+    DCVBrokerClientUtils,
+)
 from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.clients.events_client.events_client import (
     VirtualDesktopEvent,
@@ -22,13 +25,18 @@ from ideavirtualdesktopcontroller.app.clients.events_client.events_client import
 from ideavirtualdesktopcontroller.app.events.handlers.base_event_handler import (
     BaseVirtualDesktopControllerEventHandler,
 )
+from ideavirtualdesktopcontroller.app.sessions.session_metrics import (
+    publish_first_ready,
+    publish_provisioning_failure,
+)
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_counters_db import (
     VirtualDesktopSessionCounterType,
 )
 
 
 class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHandler):
-    VALIDATION_REQUEST_THRESHOLD = 30
+    # below the queue redrive (16 receives): the desktop reaches ERROR before its message is moved
+    VALIDATION_REQUEST_THRESHOLD = 12
     SESSION_DELETED_THRESHOLD = 4
 
     def __init__(self, context: ideavirtualdesktopcontroller.AppContext):
@@ -101,6 +109,15 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
             {},
         )
         state = Utils.get_value_as_string('state', current_session_info, None)
+        if state == 'READY' and not DCVBrokerClientUtils.runs_on_desktop_host(
+            current_session_info,
+            self.context.dcv_broker_client.desktop_host_addresses(session),
+        ):
+            self.log_error(
+                message_id=message_id,
+                message=f'DCV session {session.dcv_session_id} is not on the host of {session.idea_session_id}; not marking it ready',
+            )
+            state = None
 
         should_delete_message = True
         should_not_delete_message_text = ''
@@ -118,6 +135,7 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
             and state == 'DELETED'
         ):
             # session creation failed. Error state.
+            self._provisioning_failed(session, 'dcv_session_deleted')
             session.state = VirtualDesktopSessionState.ERROR
             session = self.session_db.update(session)
             self.log_error(
@@ -126,6 +144,7 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
             )
         elif counter_db_entry.counter > self.VALIDATION_REQUEST_THRESHOLD:
             # error
+            self._provisioning_failed(session, 'dcv_session_unstable')
             session.state = VirtualDesktopSessionState.ERROR
             session = self.session_db.update(session)
             self.log_error(
@@ -144,8 +163,17 @@ class ValidateDCVSessionCreationEventHandler(BaseVirtualDesktopControllerEventHa
         if not should_delete_message:
             raise self.do_not_delete_message_exception(should_not_delete_message_text)
 
+    def _provisioning_failed(self, session, reason: str):
+        # the same check serves a resume, which is not provisioning
+        if session.state != VirtualDesktopSessionState.RESUMING:
+            publish_provisioning_failure(self.context, session, reason)
+
     def mark_ready(self, session, **kwargs):
+        previous_state = session.state
         session.state = VirtualDesktopSessionState.READY
         session.failure_reason = None
         self.session_db.update(session, **kwargs)
+        # recovery passes the version it holds; that desktop has been ready before
+        if not kwargs:
+            publish_first_ready(self.context, session, previous_state)
         self.session_utils.refresh_bootstrap_on_ready(session)

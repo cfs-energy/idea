@@ -224,13 +224,14 @@ async function configureUserPoolClient(deps: SsoDeps, options: SsoConfigureOptio
 async function linkExistingUsers(
   deps: SsoDeps,
   configured?: { providerName: string; providerType: string; providerEmailAttribute: string },
-): Promise<void> {
+): Promise<string[]> {
   const userPoolId = deps.config.getString("identity-provider.cognito.user_pool_id", undefined, { required: true }) as string;
   const providerName = configured?.providerName ?? deps.config.getString("identity-provider.cognito.sso_idp_provider_name", undefined, { required: true }) as string;
   const providerType = configured?.providerType ?? deps.config.getString("identity-provider.cognito.sso_idp_provider_type", undefined, { required: true }) as string;
   const adminUsername = deps.config.getString("cluster.administrator_username", undefined, { required: true }) as string;
   const attribute = providerType === SSO_PROVIDER_OIDC ? "email" :
     configured?.providerEmailAttribute ?? deps.config.getString("identity-provider.cognito.sso_idp_provider_email_attribute", undefined, { required: true }) as string;
+  const failed: string[] = [];
   let token: string | undefined;
   do {
     const page = await deps.cognito.listUsers({ UserPoolId: userPoolId, PaginationToken: token });
@@ -238,13 +239,13 @@ async function linkExistingUsers(
       try {
         if (user.UserStatus === "EXTERNAL_PROVIDER") continue;
         const username = user.Username ?? "";
-        if (adminUsername.includes(username) || username.startsWith("clusteradmin")) {
+        // the one account that keeps local sign-in, as the server compares it: whole name
+        if (username === adminUsername) {
           deps.out(`system administration user found: ${username}. skip linking with IDP.`);
           continue;
         }
         const email = user.Attributes?.find((entry) => entry.Name === "email")?.Value;
-        // The JSON string identity attribute is not treated as a list.
-        const alreadyLinked = false;
+        const alreadyLinked = isLinked(user.Attributes?.find((entry) => entry.Name === "identities")?.Value, providerName);
         if (isEmpty(email)) continue;
         if (alreadyLinked) {
           deps.out(`user: ${username}, email: ${email} already linked. skip.`);
@@ -258,22 +259,41 @@ async function linkExistingUsers(
         });
         await deps.sleep(200);
       } catch (error) {
-        deps.out(`failed to link user: ${JSON.stringify(user)} with IDP: ${providerName} - ${String(error)}`);
+        failed.push(user.Username ?? "");
+        deps.out(`failed to link user: ${user.Username ?? ""} with IDP: ${providerName} - ${String(error)}`);
       }
     }
     token = page.PaginationToken;
   } while (!isEmpty(token));
+  return failed;
+}
+
+/** Whether the user pool's identities attribute (a JSON list) already names the provider. */
+function isLinked(identities: string | undefined, providerName: string): boolean {
+  if (isEmpty(identities)) return false;
+  try {
+    const parsed: unknown = JSON.parse(identities as string);
+    return Array.isArray(parsed) && parsed.some((entry) => (entry as { providerName?: unknown })?.providerName === providerName);
+  } catch {
+    return false;
+  }
 }
 
 /** Execute the identity-provider, client, linking and final enablement sequence. */
 export async function configureSso(deps: SsoDeps, options: SsoConfigureOptions): Promise<void> {
   await configureIdentityProvider(deps, options);
   await configureUserPoolClient(deps, options);
-  await linkExistingUsers(deps, {
+  const failed = await linkExistingUsers(deps, {
     providerName: options.providerName,
     providerType: options.providerType,
     providerEmailAttribute: options.providerEmailAttribute,
   });
+  if (failed.length > 0) {
+    // enabled now, these accounts could not sign in at all: local sign-in is refused
+    throw new ClusterConfigError(
+      `single sign-on was not enabled: ${failed.length} user(s) could not be linked: ${failed.join(", ")}. Fix them and run the command again.`,
+    );
+  }
   await save(deps, "cognito.sso_enabled", true);
 }
 

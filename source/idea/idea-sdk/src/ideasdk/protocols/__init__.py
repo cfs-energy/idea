@@ -30,6 +30,7 @@ from ideadatamodel import (
 
 from abc import ABC, abstractmethod
 from typing import (
+    Collection,
     Dict,
     Optional,
     Tuple,
@@ -655,6 +656,13 @@ class ApiInvokerProtocol(SocaBaseProtocol):
     @abstractmethod
     def invoke(self, context: ApiInvocationContextProtocol): ...
 
+    def get_namespaces(self) -> Collection[str]:
+        """
+        every namespace this invoker has a handler for. Each has its own metric series;
+        any other name a caller sends shares one, so it cannot add series.
+        """
+        return ()
+
     def get_request_logging_payload(
         self, context: ApiInvocationContextProtocol
     ) -> Optional[Dict]:
@@ -688,6 +696,10 @@ class DistributedLockProtocol(SocaBaseProtocol):
     @abstractmethod
     def release(self, key: str):
         pass
+
+    def is_held(self, key: str) -> bool:
+        """whether this process still holds the lease, without asking the store"""
+        return True
 
 
 class AnalyticsServiceProtocol(SocaBaseProtocol):

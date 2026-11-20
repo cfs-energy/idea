@@ -20,9 +20,12 @@ import IdeaWebPortal from "./App";
 import {ToastContainer} from "react-toastify";
 import 'react-toastify/dist/ReactToastify.css';
 import {AppContext} from "./common";
-import Utils from "./common/utils";
+import Utils, {decodeFileContent} from "./common/utils";
 import * as serviceWorkerRegistration from './service-worker-registration'
 import AppLogger from "./common/app-logger";
+import {notifyPortalUpdate} from "./components/update-notice";
+import {installClientErrorReporting} from "./common/client-error-reporter";
+import IdeaErrorBoundary from "./components/error-boundary";
 
 declare global {
     interface Window {
@@ -63,7 +66,8 @@ if (window.idea.app_init_data.startsWith('{{') && window.idea.app_init_data.ends
         default_log_level: 3
     }
 } else {
-    const appData = JSON.parse(window.atob(window.idea.app_init_data))
+    // the server encodes UTF-8 bytes: a title or message outside ASCII is decoded as text, not as Latin-1
+    const appData = JSON.parse(decodeFileContent(window.idea.app_init_data))
     // enable ability to disable sso, even if enabled from server
     const currentUrl = new URL(window.location.href)
     const ssoParam = currentUrl.searchParams.get('sso')
@@ -133,6 +137,11 @@ const initializeApp = (props: InitializeAppProps) => {
         LOGGER.debug('AppContext already initialized');
     }
 
+    installClientErrorReporting(
+        (report) => window.idea.context.client().clientErrors().report(report),
+        Utils.asString(window.idea.app.version, IDEA_RELEASE_VERSION)
+    );
+
     LOGGER.debug('Getting root element for ReactDOM');
     const root = ReactDOM.createRoot(
         document.getElementById('app') as HTMLElement
@@ -142,7 +151,9 @@ const initializeApp = (props: InitializeAppProps) => {
     root.render(
         <HashRouter>
             <ToastContainer />
-            <IdeaWebPortal />
+            <IdeaErrorBoundary>
+                <IdeaWebPortal />
+            </IdeaErrorBoundary>
         </HashRouter>
     );
 
@@ -161,6 +172,7 @@ if (sessionManagement === 'local-storage') {
         },
         onUpdate: () => {
             LOGGER.info('⚠ service worker updates available')
+            notifyPortalUpdate()
         },
         onReady: (registration) => {
             LOGGER.info('✓ service worker ready')
@@ -170,7 +182,7 @@ if (sessionManagement === 'local-storage') {
         },
         onError: (error) => {
             LOGGER.warn('✗ failed to initialize service worker. ', error)
-            LOGGER.info('✓ using local-storage based fallback mode ...')
+            LOGGER.info('✓ keeping the session in page memory: it ends when the tab closes or reloads')
             initializeApp({})
         }
     })

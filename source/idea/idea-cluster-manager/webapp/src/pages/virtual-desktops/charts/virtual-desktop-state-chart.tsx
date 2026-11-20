@@ -57,7 +57,8 @@ class VirtualDesktopStateChart extends VirtualDesktopBaseChart<VirtualDesktopSta
                         "aggs": {
                             "state": {
                                 "terms": {
-                                    "field": "state.raw"
+                                    "field": "state.raw",
+                                    "size": 100
                                 }
                             }
                         }

@@ -81,7 +81,7 @@ First, query your IDEA configuration to verify if the integration is active by c
 ```
 ./idea-admin.sh config show \
   --cluster-name <CLUSTER_NAME> \
-  --aws-region <REGION>
+  --aws-region <REGION> \
   --query "cluster.backups.enabled"
 +-----------------------------+-------+---------+
 | Key                         | Value | Version |
@@ -138,7 +138,7 @@ You can now re-run the `./idea-admin.sh config show` command to validate the con
 ```
 ./idea-admin.sh config show \
   --cluster-name <CLUSTER_NAME> \
-  --aws-region <REGION>
+  --aws-region <REGION> \
   --query "cluster.backups.enabled"
 +-----------------------------+-------+---------+
 | Key                         | Value | Version |

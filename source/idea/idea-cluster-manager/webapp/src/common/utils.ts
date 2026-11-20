@@ -89,18 +89,18 @@ class Utils {
         return result
     }
 
-    static asNumberArray(val?: any): number[] {
+    static asNumberArray(val?: any, decimal: boolean = false): number[] {
         if (val == null) {
             return []
         }
         if (!Array.isArray(val)) {
-            return [Utils.asNumber(val)]
+            return [Utils.asNumber(val, 0, decimal)]
         }
 
         const array: any[] = val
         const result: number[] = []
         array.forEach((entry) => {
-            result.push(Utils.asNumber(entry))
+            result.push(Utils.asNumber(entry, 0, decimal))
         })
 
         return result
@@ -260,14 +260,8 @@ class Utils {
             return true
         }
 
-        const getParamMeta = (param: string): SocaUserInputParamMetadata | null => {
-            fieldRegistry.list().forEach(field => {
-                if (field.getParamName() === param) {
-                    return field.getParamMeta()
-                }
-            })
-            return null
-        }
+        const getParamMeta = (param: string): SocaUserInputParamMetadata | null =>
+            fieldRegistry.list().find(field => field.getParamName() === param)?.getParamMeta() ?? null
 
         if (Utils.isNotEmpty(when.param)) {
             const paramName = when.param!
@@ -1023,7 +1017,10 @@ class Utils {
     }
 
     static hideLoadingAnimation() {
-        document.getElementById('app-loading')!.style.display = 'none'
+        const loading = document.getElementById('app-loading')
+        if (loading) {
+            loading.style.display = 'none'
+        }
     }
 
     static isSsoEnabled(): boolean {
@@ -1058,6 +1055,15 @@ class Utils {
         const _options = Intl.DateTimeFormat().resolvedOptions()
         return []
     }
+}
+
+// atob and btoa work on bytes as characters, so µ arrives as Âµ and → cannot be sent at all.
+export function decodeFileContent(base64: string): string {
+    return new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)))
+}
+
+export function encodeFileContent(content: string): string {
+    return btoa(Array.from(new TextEncoder().encode(content), (byte) => String.fromCharCode(byte)).join(''))
 }
 
 export default Utils

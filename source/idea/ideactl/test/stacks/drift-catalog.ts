@@ -108,7 +108,9 @@ export const EDITS: OperatorEdit[] = [
     key: "global-settings.operator_only",
     operatorValue: "keep me",
     predictedSurvive: false,
-    note: "Custom global row has no generated replacement and is removed once every stack has deployed.",
+    // An unmarked row (written before source markers): an api or cli row is kept instead.
+    source: "none",
+    note: "Unmarked custom global row has no generated replacement and is removed once every stack has deployed; an operator-marked one is kept.",
   },
   {
     id: "global-same",

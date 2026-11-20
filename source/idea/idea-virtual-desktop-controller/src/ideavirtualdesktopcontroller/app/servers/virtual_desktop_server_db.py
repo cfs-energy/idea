@@ -106,6 +106,9 @@ class VirtualDesktopServerDB(VirtualDesktopNotifiableDB):
             instance_id=Utils.get_value_as_string(
                 servers_constants.DCV_HOST_DB_HASH_KEY, db_entry
             ),
+            state=Utils.get_value_as_string(
+                servers_constants.DCV_HOST_DB_STATE_KEY, db_entry, None
+            ),
             instance_type=Utils.get_value_as_string(
                 servers_constants.DCV_HOST_DB_INSTANCE_TYPE_KEY, db_entry
             ),

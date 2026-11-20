@@ -211,3 +211,8 @@ class AnalyticsService(SocaService, AnalyticsServiceProtocol):
             and self._buffer_processing_thread.is_alive()
         ):
             self._buffer_processing_thread.join()
+        # what arrived since the worker's last send goes once more, not with the process
+        try:
+            self._post_entries_to_kinesis()
+        except Exception:
+            self._logger.exception('Failed to post analytics entries at stop')

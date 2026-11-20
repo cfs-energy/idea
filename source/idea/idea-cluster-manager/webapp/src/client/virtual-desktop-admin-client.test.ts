@@ -35,16 +35,6 @@ describe('VirtualDesktopAdminClient', () => {
         expect(invoke_alt).toHaveBeenCalledWith('VirtualDesktopAdmin.BuildDesktopImage', { base_os: 'rocky9', architecture: 'x86_64', update_stack: true })
     })
 
-    it('useBuiltDesktopImages invokes its namespace', async () => {
-        const invoke_alt = vi.fn().mockResolvedValue({ results: [] })
-        const client = Object.create(VirtualDesktopAdminClient.prototype) as VirtualDesktopAdminClient
-        ;(client as any).apiInvoker = { invoke_alt }
-
-        await client.useBuiltDesktopImages({ stack_ids: ['ss-base-a'] })
-
-        expect(invoke_alt).toHaveBeenCalledWith('VirtualDesktopAdmin.UseBuiltDesktopImages', { stack_ids: ['ss-base-a'] })
-    })
-
     it.each([
         ['listImageRows', 'ListImageRows', { filter: { base_os_family: 'rocky' } }],
         ['refreshImages', 'RefreshImages', { all: true }],
@@ -60,5 +50,18 @@ describe('VirtualDesktopAdminClient', () => {
         await client[method](req)
 
         expect(invoke_alt).toHaveBeenCalledWith(`VirtualDesktopAdmin.${api}`, req)
+    })
+})
+
+describe('VirtualDesktopAdminClient expiry and orphan calls', () => {
+    it.each([
+        ['extendSoftwareStack', 'VirtualDesktopAdmin.ExtendSoftwareStack', {stack_id: 's', base_os: 'rocky9'}],
+        ['listOrphanInstances', 'VirtualDesktopAdmin.ListOrphanInstances', {}],
+    ])('%s calls %s', async (method, namespace, request) => {
+        const invoke_alt = vi.fn().mockResolvedValue({})
+        const client = Object.create(VirtualDesktopAdminClient.prototype) as any
+        client.apiInvoker = {invoke_alt}
+        await client[method](request)
+        expect(invoke_alt).toHaveBeenCalledWith(namespace, request)
     })
 })

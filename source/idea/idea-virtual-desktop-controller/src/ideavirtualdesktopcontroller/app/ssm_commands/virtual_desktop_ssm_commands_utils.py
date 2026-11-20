@@ -24,7 +24,7 @@ from ideavirtualdesktopcontroller.app.ssm_commands.virtual_desktop_ssm_commands_
 
 
 # Bump whenever the refresh set or the contents of its templates change.
-BOOTSTRAP_REFRESH_VERSION = 8
+BOOTSTRAP_REFRESH_VERSION = 10
 BOOTSTRAP_REFRESH_TEMPLATES = (
     '_templates/linux/ssh_post_quantum_kex.jinja2',
     '_templates/linux/gnome_online_accounts.jinja2',
@@ -33,8 +33,24 @@ BOOTSTRAP_REFRESH_TEMPLATES = (
     '_templates/linux/kernel_net_hardening.jinja2',
     '_templates/linux/kernel_module_hardening.jinja2',
     '_templates/linux/unused_services.jinja2',
+    '_templates/linux/ssh_access.jinja2',
 )
-BOOTSTRAP_REFRESH_PRELUDE = 'log_info() { echo "$@"; }\nlog_warning() { echo "$@"; }\n'
+# every log helper the refresh templates call; openpbs_client_server calls log_error
+BOOTSTRAP_REFRESH_PRELUDE = (
+    'log_info() { echo "$@"; }\n'
+    'log_warning() { echo "$@"; }\n'
+    'log_error() { echo "$@" >&2; }\n'
+)
+# a desktop whose SSH access rule was not installed must not be recorded as refreshed;
+# ssh_access.jinja2 sets the flag when the rule is missing or sshd does not use PAM
+BOOTSTRAP_REFRESH_EPILOGUE = '\n[ -z "${IDEA_SSH_ACCESS_FAILED:-}" ] || exit 1\n'
+
+# the busy share of the last top sample: us + sy + ni, read by label
+CPU_BUSY_PIPELINE = (
+    "LC_ALL=C top -d 5 -b -n2 | grep 'Cpu(s)' | tail -n 1 | "
+    "awk -F'[:,]' '{t = 0; for (i = 2; i <= NF; i++) { split($i, p, \" \"); "
+    'if (p[2] == "us" || p[2] == "sy" || p[2] == "ni") t += p[1] } print t}\''
+)
 
 
 def render_bootstrap_refresh(bootstrap_dir: str, base_os, variables: dict) -> str:
@@ -45,11 +61,15 @@ def render_bootstrap_refresh(bootstrap_dir: str, base_os, variables: dict) -> st
     with open(os.path.join(bootstrap_dir, 'common', 'terminal_host.py'), 'rb') as f:
         archive = base64.b64encode(gzip.compress(f.read(), mtime=0)).decode()
     env = Jinja2Utils.env_using_file_system_loader(bootstrap_dir)
-    return BOOTSTRAP_REFRESH_PRELUDE + '\n'.join(
-        env.get_template(template).render(
-            context={'base_os': base_os}, terminal_host_archive=archive, **variables
+    return (
+        BOOTSTRAP_REFRESH_PRELUDE
+        + '\n'.join(
+            env.get_template(template).render(
+                context={'base_os': base_os}, terminal_host_archive=archive, **variables
+            )
+            for template in BOOTSTRAP_REFRESH_TEMPLATES
         )
-        for template in BOOTSTRAP_REFRESH_TEMPLATES
+        + BOOTSTRAP_REFRESH_EPILOGUE
     )
 
 
@@ -185,7 +205,8 @@ class VirtualDesktopSSMCommandsUtils:
             Comment='Enabling userdata execution for Windows EC2 Instance',
             Parameters={
                 'commands': [
-                    'Unregister-ScheduledTask -TaskName "Amazon Ec2 Launch - Instance Initialization" -Confirm$False'
+                    # the EC2Launch v1 task; an EC2Launch v2 host has none
+                    'Unregister-ScheduledTask -TaskName "Amazon Ec2 Launch - Instance Initialization" -Confirm:$false -ErrorAction SilentlyContinue'
                 ]
             },
             ServiceRoleArn=self.context.config().get_string(
@@ -245,11 +266,13 @@ class VirtualDesktopSSMCommandsUtils:
             'if (Test-Path $EC2LaunchV2Path) {',
             '    # For EC2Launch v2',
             '    & "C:\\Program Files\\Amazon\\EC2Launch\\EC2Launch.exe" reset',
+            '    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
             '} elseif (Test-Path $EC2LaunchPath) {',
             '    # For EC2 Launch',
             '    & "C:\\ProgramData\\Amazon\\EC2-Windows\\Launch\\Scripts\\InitializeInstance.ps1" -Schedule',
             '} else {',
             '    Write-Error "Neither EC2Launch nor EC2Launch v2 found on this instance"',
+            '    exit 1',
             '}',
         ]
 
@@ -305,7 +328,11 @@ class VirtualDesktopSSMCommandsUtils:
         script = render_bootstrap_refresh(
             self.context.get_bootstrap_dir(),
             session.base_os,
-            bootstrap_refresh_variables(self.context.config(), self._logger),
+            {
+                **bootstrap_refresh_variables(self.context.config(), self._logger),
+                # ssh_access.jinja2: SSH to a desktop is for its owner and administrators
+                'ssh_allowed_users': [session.owner],
+            },
         )
         response = self._ssm_client.send_command(
             InstanceIds=[session.server.instance_id],
@@ -352,9 +379,10 @@ class VirtualDesktopSSMCommandsUtils:
         if is_windows:
             document_name = 'AWS-RunPowerShellScript'
             commands = [
-                '$DCV_Session_JSON = Invoke-Expression "& \'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv\' list-sessions -j" | ConvertFrom-Json',
+                # dcv.exe is called directly: the session id it reports is one argument, never code
+                "$DCV_Session_JSON = & 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' list-sessions -j | ConvertFrom-Json",
                 '$DCV_Session_ID = $DCV_Session_JSON.id',
-                '$DCV_Describe_Session = Invoke-Expression "& \'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv\' describe-session $DCV_Session_ID -j" | ConvertFrom-Json',
+                "$DCV_Describe_Session = & 'C:\\Program Files\\NICE\\DCV\\Server\\bin\\dcv' describe-session $DCV_Session_ID -j | ConvertFrom-Json",
                 '$CPUAveragePerformanceLast10Secs = (GET-COUNTER -Counter "\\Processor(_Total)\\% Processor Time" -SampleInterval 2 -MaxSamples 5 |select -ExpandProperty countersamples | select -ExpandProperty cookedvalue | Measure-Object -Average).average',
                 '$output = @{}',
                 '$dcv = @{}',
@@ -372,7 +400,8 @@ class VirtualDesktopSSMCommandsUtils:
                 'export LC_ALL=C',
                 "DCV_Session_ID=$(dcv list-sessions -j | jq -r '.[].id')",
                 'DCV_Describe_Session=$(dcv describe-session $DCV_Session_ID -j)',
-                "CPUAveragePerformanceLast10Secs=$(top -d 5 -b -n2 | grep 'Cpu(s)' | tail -n 1 | awk '{print $2 + $4}')",
+                # by label: user, system and nice time; at 100.0 us top prints no space after the colon
+                'CPUAveragePerformanceLast10Secs=$(' + CPU_BUSY_PIPELINE + ')',
                 # logind distinguishes SSH logins from graphical desktop sessions.
                 'SSH_Sessions=$(loginctl list-sessions --no-legend --no-pager)',
                 'SSH_Login_Count=0',
@@ -383,7 +412,7 @@ class VirtualDesktopSSMCommandsUtils:
                 'SSH_Connection_Count=$SSH_Login_Count',
                 'if [ "$SSH_Established_Count" -gt "$SSH_Connection_Count" ]; then SSH_Connection_Count=$SSH_Established_Count; fi',
                 # Keep logout history where available, ordered by year before month.
-                "SSH_Last_Disconnect_Time=$(if command -v last >/dev/null 2>&1; then LC_ALL=C last -Fi; fi | LC_ALL=C awk '!/0\\.0\\.0\\.0|still logged in|wtmp|^[[:space:]]*$/ && $14 ~ /^[0-9][0-9][0-9][0-9]$/ {print $11, $12, $13, $14}' | LC_ALL=C sort -k4,4n -k1,1M -k2,2n -k3,3 | tail -n 1)",
+                "SSH_Last_Disconnect_Time=$(if command -v last >/dev/null 2>&1; then TZ=UTC LC_ALL=C last -Fi; fi | LC_ALL=C awk '!/0\\.0\\.0\\.0|still logged in|wtmp|^[[:space:]]*$/ && $14 ~ /^[0-9][0-9][0-9][0-9]$/ {print $11, $12, $13, $14}' | LC_ALL=C sort -k4,4n -k1,1M -k2,2n -k3,3 | tail -n 1)",
                 '[ -n "$SSH_Last_Disconnect_Time" ] && SSH_Last_Disconnect_ISO=$(date -u -d "$SSH_Last_Disconnect_Time" +"%Y-%m-%dT%H:%M:%S.%6NZ") || SSH_Last_Disconnect_ISO=""',
                 # Start the grace period when SSH closes, including hosts without wtmp.
                 'install -d -m 700 /run/idea-idle-detection',

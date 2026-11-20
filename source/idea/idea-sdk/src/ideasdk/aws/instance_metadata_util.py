@@ -38,6 +38,7 @@ class InstanceMetadataUtil(InstanceMetadataUtilProtocol):
             result = requests.put(
                 EC2_INSTANCE_METADATA_API_URL + '/token',
                 headers=EC2_IMDS_TOKEN_REQUEST_HEADERS,
+                timeout=1,
             )
             if result.status_code != 200:
                 raise exceptions.SocaException(
@@ -66,7 +67,8 @@ class InstanceMetadataUtil(InstanceMetadataUtilProtocol):
                 return True
             else:
                 return False
-        except requests.exceptions.ConnectionError:
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            # no answer in time is no instance metadata service
             return False
         except Exception as e:
             raise e
@@ -88,6 +90,7 @@ class InstanceMetadataUtil(InstanceMetadataUtilProtocol):
         response = requests.get(
             f'{EC2_INSTANCE_METADATA_URL_PREFIX}/iam/security-credentials',
             headers=self.get_imds_auth_header(),
+            timeout=5,
         )
         if response.status_code != 200:
             raise exceptions.SocaException(

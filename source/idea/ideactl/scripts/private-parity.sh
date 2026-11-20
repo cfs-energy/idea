@@ -20,7 +20,19 @@ set +e
   export IDEACTL_PUBLIC_CHECKOUT=1 IDEACTL_REQUIRE_PRIVATE_CAPTURES=1
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
   export AWS_EC2_METADATA_DISABLED=true
-  node --test --test-reporter=tap 'test/**/*.test.ts' > "$scratch/tests.tap" 2>&1
+  # Test code can read the captures, so it runs in a network namespace with only loopback
+  # (DynamoDB Local), as this user again, with only the variables it needs: nothing of the job's
+  # environment, such as the OIDC request token, reaches it. No namespace means no run. The
+  # redirect stays this user's, into the private scratch directory.
+  keep=(PATH="$PATH" HOME="$HOME" CI=true IDEACTL_PUBLIC_CHECKOUT=1 IDEACTL_REQUIRE_PRIVATE_CAPTURES=1
+    AWS_EC2_METADATA_DISABLED=true PYTHONPATH="$PWD/.parity-oracles")
+  for name in JAVA_HOME LANG TMPDIR; do
+    if [[ -n "${!name:-}" ]]; then keep+=("${name}=${!name}"); fi
+  done
+  # shellcheck disable=SC2024
+  sudo -n unshare --net -- bash -ec \
+    'ip link set lo up; exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -i "${@:3}" node --test --test-reporter=tap "test/**/*.test.ts"' \
+    private-parity "$(id -u)" "$(id -g)" "${keep[@]}" > "$scratch/tests.tap" 2>&1
 ) > "$scratch/setup.log" 2>&1
 status=$?
 set -e

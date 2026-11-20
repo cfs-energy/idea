@@ -15,7 +15,6 @@ Statement:
       - ec2:DescribeNetworkInterfaces
       - ec2:DescribeTags
       - ec2:DescribeVolumes
-      - fsx:CreateDataRepositoryTask
       - fsx:DescribeFileSystems
       - kms:CreateGrant
       - kms:Decrypt
@@ -27,7 +26,6 @@ Statement:
       - logs:DescribeLogGroups
       - logs:DescribeLogStreams
       - logs:PutLogEvents
-      - logs:PutRetentionPolicy
       - s3:GetObject
       - s3:ListBucket
       - secretsmanager:GetSecretValue
@@ -39,8 +37,6 @@ Statement:
       - sqs:SendMessage
       - sts:GetCallerIdentity
       - tag:GetResources
-      - tag:GetTagKeys
-      - tag:GetTagValues
     Resource: '*'
     Effect: Allow
     Sid: ProjectRoleServiceCeiling

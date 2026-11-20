@@ -132,6 +132,9 @@ class HpcQueueProfilesDAO:
         queue_management_params.allowed_instance_profiles = Utils.get_value_as_list(
             'allowed_instance_profiles', db_queue_profile
         )
+        queue_management_params.allow_new_fsx_lustre = Utils.get_value_as_bool(
+            'allow_new_fsx_lustre', db_queue_profile
+        )
 
         default_job_params = SocaJobParams()
         queue_profile.default_job_params = default_job_params
@@ -245,8 +248,16 @@ class HpcQueueProfilesDAO:
         default_job_params.job_group = Utils.get_value_as_string(
             'param_job_group', db_queue_profile
         )
+        default_job_params.walltime = Utils.get_value_as_string(
+            'param_walltime', db_queue_profile
+        )
+        default_job_params.keep_ebs_volumes = Utils.get_value_as_bool(
+            'param_keep_ebs_volumes', db_queue_profile
+        )
 
-        if 'param_fsx_lustre_enabled' in db_queue_profile:
+        # any stored FSx setting loads the config: a profile written through the API may
+        # carry only existing_fsx, with no enabled flag
+        if any(key.startswith('param_fsx_lustre_') for key in db_queue_profile):
             fsx_lustre = SocaFSxLustreConfig()
             default_job_params.fsx_lustre = fsx_lustre
             fsx_lustre.enabled = Utils.get_value_as_bool(
@@ -263,6 +274,9 @@ class HpcQueueProfilesDAO:
             )
             fsx_lustre.export_path = Utils.get_value_as_string(
                 'param_fsx_lustre_export_path', db_queue_profile
+            )
+            fsx_lustre.deployment_type = Utils.get_value_as_string(
+                'param_fsx_lustre_deployment_type', db_queue_profile
             )
             fsx_lustre.per_unit_throughput = Utils.get_value_as_int(
                 'param_fsx_lustre_per_unit_throughput', db_queue_profile
@@ -358,6 +372,10 @@ class HpcQueueProfilesDAO:
             if queue_management_params.allowed_instance_profiles is not None:
                 db_queue_profile['allowed_instance_profiles'] = (
                     queue_management_params.allowed_instance_profiles
+                )
+            if queue_management_params.allow_new_fsx_lustre is not None:
+                db_queue_profile['allow_new_fsx_lustre'] = (
+                    queue_management_params.allow_new_fsx_lustre
                 )
 
         job_params = queue_profile.default_job_params
@@ -544,7 +562,13 @@ class HpcQueueProfilesDAO:
                     return db_queue_profile
         return None
 
-    def update(self, queue_profile: Dict) -> Dict:
+    def update(
+        self, queue_profile: Dict, remove_keys: Optional[List[str]] = None
+    ) -> Dict:
+        """
+        set the given attributes; remove_keys are deleted from the stored row, which is how
+        a value the update leaves out is cleared rather than kept.
+        """
         queue_profile_id = queue_profile['queue_profile_id']
         if Utils.is_empty(queue_profile_id):
             raise exceptions.invalid_params('queue_profile_id is required')
@@ -561,10 +585,17 @@ class HpcQueueProfilesDAO:
             expression_attr_names[f'#{key}'] = key
             expression_attr_values[f':{key}'] = value
 
+        update_expression = 'SET ' + ', '.join(update_expression_tokens)
+        removed = [key for key in remove_keys or [] if key not in queue_profile]
+        if removed:
+            for key in removed:
+                expression_attr_names[f'#{key}'] = key
+            update_expression += ' REMOVE ' + ', '.join(f'#{key}' for key in removed)
+
         result = self.table.update_item(
             Key={'queue_profile_id': queue_profile_id},
             ConditionExpression=Attr('queue_profile_id').eq(queue_profile_id),
-            UpdateExpression='SET ' + ', '.join(update_expression_tokens),
+            UpdateExpression=update_expression,
             ExpressionAttributeNames=expression_attr_names,
             ExpressionAttributeValues=expression_attr_values,
             ReturnValues='ALL_NEW',

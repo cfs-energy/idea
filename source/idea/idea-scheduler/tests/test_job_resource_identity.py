@@ -17,7 +17,8 @@ def job(uid, shared=False):
     return SocaJob(
         job_id='42',
         job_uid=uid,
-        job_group='shared-group',
+        # a group a submission or the scheduler can produce (U03 checks it on read-back)
+        job_group='custom-shared',
         owner='testuser',
         params=SocaJobParams(base_os='amazonlinux2023', instance_types=['c5.large']),
         provisioning_options=SocaJobProvisioningOptions(
@@ -88,15 +89,15 @@ def test_shared_capacity_keeps_group_resource_names(context, monkeypatch, tmp_pa
     first = resources(context, monkeypatch, job('first', shared=True))
     second = resources(context, monkeypatch, job('second', shared=True))
     assert first == second
-    assert first[0] == str(tmp_path / 'jobs' / 'shared-group')
-    assert first[1].endswith('/job-shared-group')
-    assert first[2].endswith('/job-shared-group')
+    assert first[0] == str(tmp_path / 'jobs' / 'custom-shared')
+    assert first[1].endswith('/job-custom-shared')
+    assert first[2].endswith('/job-custom-shared')
 
 
 def test_ephemeral_resources_refuse_a_missing_unique_id(context):
     from ideadatamodel.exceptions import SocaException
 
-    with pytest.raises(SocaException, match='job_uid is required'):
+    with pytest.raises(SocaException, match='job_uid can only contain'):
         context.get_job_dir(job(None))
 
 
@@ -111,7 +112,7 @@ def test_fsx_export_identity_and_explicit_override(shared):
         )
         path = current.get_fsx_lustre_export_path()
         paths.append(path)
-        suffix = 'shared-group' if shared else f'42-{uid}'
+        suffix = 'custom-shared' if shared else f'42-{uid}'
         assert path == f's3://results/cluster-fsxoutput/job-{suffix}'
         current.params.fsx_lustre.export_path = 's3://explicit/output'
         assert current.get_fsx_lustre_export_path() == 's3://explicit/output'

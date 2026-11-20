@@ -30,11 +30,14 @@ SEEDED_PATHS = ('outputStyle', 'permissions.defaultMode', 'autoMode.environment'
 
 
 def read(path, fallback):
+    # only a missing file means "nothing yet": an unreadable or unparsable one is left alone
     try:
         with open(path) as handle:
             return json.load(handle)
-    except Exception:
+    except FileNotFoundError:
         return fallback
+    except Exception:
+        return None
 
 
 def get(tree, path):

@@ -36,7 +36,7 @@ NET="${TAG}-net"
 
 d() { docker --context "${CTX}" "$@"; }
 
-# shellcheck disable=SC2317  # invoked by the trap below
+# shellcheck disable=SC2317,SC2329  # invoked by the trap below
 cleanup() {
   d rm -f "${TAG}-ddb" "${TAG}-iam" "${TAG}-sched" "${TAG}-cluster-manager" "${TAG}-vdc" >/dev/null 2>&1 || true
   d volume rm -f "${TAG}-apps" "${TAG}-pbs" "${TAG}-apps2" >/dev/null 2>&1 || true
@@ -106,6 +106,8 @@ mk "${CLUSTER}.accounts.group-members" \
 put() { aws dynamodb put-item --table-name "$1" --item "$2" >/dev/null; }
 put "${CLUSTER}.cluster-settings" "{\"key\":{\"S\":\"cluster.home_dir\"},\"value\":{\"S\":\"${HOME_DIR}\"}}"
 put "${CLUSTER}.cluster-settings" "{\"key\":{\"S\":\"cluster.route53.private_hosted_zone_name\"},\"value\":{\"S\":\"${ZONE_NAME}\"}}"
+# roles/scheduler.sh requires the bucket before it writes its success marker
+put "${CLUSTER}.cluster-settings" "{\"key\":{\"S\":\"cluster.cluster_s3_bucket\"},\"value\":{\"S\":\"${CLUSTER}-prove-bucket\"}}"
 put "${CLUSTER}.accounts.users" '{"username":{"S":"testuser"},"uid":{"N":"5000"},"gid":{"N":"5000"},"enabled":{"BOOL":true},"home_dir":{"S":"/data/home/testuser"},"login_shell":{"S":"/bin/bash"},"additional_groups":{"L":[{"S":"testgroup"}]}}'
 put "${CLUSTER}.accounts.groups" '{"group_name":{"S":"testgroup"},"gid":{"N":"5000"},"enabled":{"BOOL":true}}'
 put "${CLUSTER}.accounts.group-members" '{"group_name":{"S":"testgroup"},"username":{"S":"testuser"}}'

@@ -389,6 +389,21 @@ Once your HTML form is done, simply click "**Next**" and copy/paste [#build-the-
 Job Script support Jinja2 templating. For example, **\{{ job\_name | upper \}}** will retrieve the HTML field named **job\_name** and enforce uppercase.
 {% endhint %}
 
+{% hint style="warning" %}
+Job scripts are written by scheduler administrators and are trusted content: the portal renders a Jinja2 job script in the browser of whoever previews or submits the job. The portal limits what a template can use as a safeguard, not as a security boundary, so give the right to edit submission forms only to people you trust with that.
+
+A Jinja2 job script can use variables, `if`, `for` (with `loop.index` and the other loop values), `set`, macros and call blocks, list and dict literals, the filters and tests listed below, `range` and `joiner`, and the usual text, number and list methods such as `split`, `replace`, `toFixed` and `join`. It cannot use:
+
+* `cycler`, the `callable` test, and the `forceescape`, `random` and `urlize` filters
+* list methods that take a function, such as `map` or `filter`
+* changing a list from the form in place: copy it first with `slice(0)`, or build one with `{% set out = [] %}`
+* `include`, `import` and `extends`
+* the names `loop` (as a variable), `constructor`, `prototype`, `__proto__` and the other built-in object member names
+* more than 1,000,000 loop steps or 10,000,000 characters of output in one render
+
+Filters: abs, batch, capitalize, center, default (d), dictsort, dump, escape (e), first, float, groupby, indent, int, join, last, length, list, lower, nl2br, reject, rejectattr, replace, reverse, round, safe, select, selectattr, slice, sort, string, striptags, sum, title, trim, truncate, upper, urlencode, wordcount. Tests: defined, undefined, null, number, string, iterable, mapping, odd, even, divisibleby, equalto (eq, sameas), ne, ge, gt (greaterthan), le, lt (lessthan), lower, upper, truthy, falsy, escaped.
+{% endhint %}
+
 Since this script is expected to be triggered by OpenPBS scheduler, keep the default "PBS Job Script" as interpreter. IDEA also gives you an easy way to determine if all the variables you have configured on the HTML form are being used in your job script
 
 <figure><img src="../../../.gitbook/assets/mods_hpc_admin_web_conf_vars.webp" alt=""><figcaption></figcaption></figure>

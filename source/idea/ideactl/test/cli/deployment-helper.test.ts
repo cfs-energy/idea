@@ -13,6 +13,7 @@ import {
   OPTIMIZED_DEPLOYMENT_STAGGER_MS,
   optimizedDeploymentOrder,
 } from '../../src/cli/deployment-helper.ts';
+import { prefixLines } from '../../src/cli/cdk-invoker.ts';
 import { resolveRequestedModules } from '../../src/cli/commands/deploy.ts';
 import type { Deps } from '../../src/cli/cdk-invoker.ts';
 import { fakeDeps, moduleRow, withTempIdeaHome, type FakeDeps } from '../support/deploy-harness.ts';
@@ -72,6 +73,36 @@ describe('deploymentOrder', () => {
     assert.ok(deploymentOrder(modules as never, ALL_IDS, true).includes('cluster'));
   });
 
+  it('an upgrade redeploys analytics after the services that admit themselves to OpenSearch', () => {
+    // analytics drops the VPC-wide rule; the services must have added theirs first, or the portal,
+    // scheduler and desktop controller lose the domain until their own stacks deploy
+    const deployed = MODULES.map((module) => ({ ...module, status: 'deployed' }));
+    const order = deploymentOrder(deployed as never, ALL_IDS, true);
+    for (const service of ['cluster-manager', 'scheduler', 'vdc']) {
+      assert.ok(order.indexOf('analytics') > order.indexOf(service), `analytics after ${service}: ${order.join(',')}`);
+    }
+    const groups = optimizedDeploymentOrder(deployed as never, ALL_IDS, true);
+    const groupOf = (id: string) => groups.findIndex((group) => group.includes(id));
+    assert.ok(groupOf('analytics') > groupOf('scheduler') && groupOf('analytics') > groupOf('vdc'));
+  });
+
+  it('refuses an analytics upgrade that leaves out a service without its own OpenSearch rule', () => {
+    // a release candidate reports the final release, so the version says nothing about the rule
+    const candidate = MODULES.map((module) => ({ ...module, status: 'deployed', version: '26.11.2' }));
+    assert.throws(() => deploymentOrder(candidate as never, ['analytics', 'cluster-manager'], true), /vdc, scheduler do not have their own rule/);
+    // with every service in the run
+    assert.ok(deploymentOrder(candidate as never, ['analytics', 'cluster-manager', 'scheduler', 'vdc'], true).includes('analytics'));
+    // or once each service stack has published its rule
+    const published = new Set(['cluster-manager', 'scheduler', 'vdc']);
+    assert.deepEqual(deploymentOrder(candidate as never, ['analytics'], true, (module) => published.has(module.module_id)), ['analytics']);
+    assert.throws(() => deploymentOrder(candidate as never, ['analytics'], true, (module) => module.module_id !== 'vdc'), /vdc does not have its own rule/);
+  });
+
+  it('a fresh install still deploys analytics before the services that read its settings', () => {
+    const order = deploymentOrder(MODULES as never, ALL_IDS, true);
+    assert.ok(order.indexOf('analytics') < order.indexOf('cluster-manager'));
+  });
+
   it('ignores a module id the modules table does not hold', () => {
     assert.deepEqual(deploymentOrder(MODULES as never, ['nosuchmodule'], false), []);
   });
@@ -101,6 +132,65 @@ describe('optimizedDeploymentOrder', () => {
       ['vdc', 'scheduler'],
       ['bastion-host'],
     ]);
+  });
+});
+
+describe('upgrade groups', () => {
+  const deployed: Array<Record<string, unknown>> = MODULES.map((module) => ({ ...module, status: 'deployed' }));
+  const allHold = () => true;
+
+  it('an upgrade deploys the bastion beside the scheduler and desktop controller, after the cluster manager', () => {
+    assert.deepEqual(optimizedDeploymentOrder(deployed as never, ALL_IDS, true), [
+      ['cluster'],
+      ['identity-provider', 'metrics', 'directoryservice'],
+      ['shared-storage'],
+      ['cluster-manager'],
+      ['vdc', 'scheduler', 'bastion-host'],
+      ['analytics'],
+    ]);
+  });
+
+  it('analytics joins the other cluster-settings stacks once every deployed service holds its own rule', () => {
+    assert.deepEqual(optimizedDeploymentOrder(deployed as never, ALL_IDS, true, allHold), [
+      ['cluster'],
+      ['analytics', 'identity-provider', 'metrics', 'directoryservice'],
+      ['shared-storage'],
+      ['cluster-manager'],
+      ['vdc', 'scheduler', 'bastion-host'],
+    ]);
+    // one service without its rule keeps analytics after all three
+    const groups = optimizedDeploymentOrder(deployed as never, ALL_IDS, true, (module) => module.module_id !== 'scheduler');
+    assert.deepEqual(groups.at(-1), ['analytics']);
+  });
+
+  it('--serial keeps the earlier groups', () => {
+    assert.deepEqual(optimizedDeploymentOrder(deployed as never, ALL_IDS, true, allHold, true), [
+      ['cluster'],
+      ['identity-provider', 'metrics', 'directoryservice'],
+      ['shared-storage'],
+      ['cluster-manager'],
+      ['vdc', 'scheduler'],
+      ['analytics'],
+      ['bastion-host'],
+    ]);
+  });
+
+  it('a bastion not yet deployed still waits for the scheduler group', () => {
+    const modules = deployed.map((module) => (module['module_id'] === 'bastion-host' ? { ...module, status: 'not-deployed' } : module));
+    assert.deepEqual(optimizedDeploymentOrder(modules as never, ALL_IDS, true).at(-1), ['bastion-host']);
+  });
+});
+
+describe('prefixLines', () => {
+  it('writes whole lines with the prefix and the last partial line on flush', () => {
+    const written: string[] = [];
+    const lines = prefixLines('[stack] ', (text) => written.push(text));
+    lines.push('one\ntw');
+    lines.push('o\n');
+    lines.push('three');
+    assert.deepEqual(written, ['[stack] one\n', '[stack] two\n']);
+    lines.flush();
+    assert.deepEqual(written, ['[stack] one\n', '[stack] two\n', '[stack] three\n']);
   });
 });
 
@@ -194,6 +284,79 @@ describe('DeploymentHelper.invoke', () => {
       deps,
     });
     await assert.rejects(() => helper.invoke(), /deployment failed\. could not deploy module\(s\): metrics/);
+  });
+
+  const group = [
+    moduleRow('analytics', 'analytics', 'stack'),
+    moduleRow('metrics', 'metrics', 'stack'),
+    moduleRow('identity-provider', 'identity-provider', 'stack'),
+  ];
+  const deployedAfterwards = (deps: FakeDeps) => {
+    deps.scan = async (input) => ({
+      Items: input.TableName === `${CLUSTER}.modules`
+        ? group.map((module) => ({ ...module, status: 'deployed' }))
+        : tablesWith(group)[input.TableName],
+    });
+  };
+  const moduleOf = (argv: string[]) => (argv.at(-1) ?? '').replace('cdk.out.', '');
+
+  it('holds at most --max-parallel stacks of a group in flight', async () => {
+    const { deps, helper } = await openHelper(group, { optimizeDeployment: true, allModules: true, maxParallel: 2 } as never);
+    deployedAfterwards(deps);
+    let inFlight = 0;
+    let most = 0;
+    deps.spawn = async (argv) => {
+      deps.spawns.push(argv);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      return 0;
+    };
+    await helper.invoke();
+    assert.equal(deps.spawns.length, 3);
+    assert.equal(most, 2);
+  });
+
+  it('a failed stack lets the rest of its group finish, starts nothing more, and names every failed stack', async () => {
+    const { deps, helper } = await openHelper(group, { optimizeDeployment: true, allModules: true } as never);
+    deps.spawn = async (argv) => {
+      deps.spawns.push(argv);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return moduleOf(argv) === 'analytics' ? 0 : 1;
+    };
+    await assert.rejects(() => helper.invoke(), (error: Error) => {
+      assert.match(error.message, /could not deploy module\(s\): .*metrics \(stack sample-cluster-metrics: /);
+      assert.match(error.message, /identity-provider \(stack sample-cluster-identity-provider: /);
+      return true;
+    });
+    assert.deepEqual(deps.spawns.map(moduleOf).sort(), ['analytics', 'identity-provider', 'metrics']);
+  });
+
+  it('a stack that fails before the next one starts keeps the rest of its group from starting', async () => {
+    const { deps, helper } = await openHelper(group, { optimizeDeployment: true, allModules: true, maxParallel: 1 } as never);
+    deps.spawn = async (argv) => {
+      deps.spawns.push(argv);
+      return 1;
+    };
+    await assert.rejects(() => helper.invoke(), /could not deploy module\(s\): analytics \(stack sample-cluster-analytics: .*\); not started: metrics, identity-provider$/);
+    assert.deepEqual(deps.spawns.map(moduleOf), ['analytics']);
+  });
+
+  it('prefixes every line of a group deploying together with its stack, its CDK run included', async () => {
+    const { deps, helper } = await openHelper(group.slice(0, 2), { optimizeDeployment: true, allModules: true } as never);
+    deployedAfterwards(deps);
+    const prefixes: Array<string | undefined> = [];
+    deps.spawn = async (argv, options) => {
+      deps.spawns.push(argv);
+      prefixes.push(options.linePrefix);
+      return 0;
+    };
+    await helper.invoke();
+    assert.deepEqual(prefixes.sort(), ['[sample-cluster-analytics] ', '[sample-cluster-metrics] ']);
+    assert.ok(deps.stdout.includes('[sample-cluster-analytics] deploying module: analytics, module id: analytics'));
+    assert.ok(deps.stdout.some((line) => line.startsWith('[sample-cluster-metrics] shell> ')));
+    assert.ok(!deps.stdout.some((line) => line.startsWith('deploying module')));
   });
 
   it('fails when a module in the group did not reach status deployed', async () => {

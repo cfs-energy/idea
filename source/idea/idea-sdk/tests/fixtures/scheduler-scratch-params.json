@@ -1,0 +1,58 @@
+{
+  "default": {
+    "enable_scratch": false,
+    "fsx_lustre": {
+      "enabled": false
+    },
+    "scratch_storage_size": {
+      "unit": "gb",
+      "value": 0.0
+    }
+  },
+  "ebs": {
+    "enable_scratch": true,
+    "fsx_lustre": {
+      "enabled": false
+    },
+    "scratch_storage_size": {
+      "unit": "gb",
+      "value": 100.0
+    }
+  },
+  "existing_fsx": {
+    "enable_scratch": true,
+    "fsx_lustre": {
+      "enabled": true,
+      "existing_fsx": "fs-0123456789abcdef0.fsx.us-east-1.amazonaws.com"
+    },
+    "scratch_storage_size": {
+      "unit": "gb",
+      "value": 0.0
+    }
+  },
+  "explicit_opt_out": {
+    "enable_scratch": false,
+    "fsx_lustre": {
+      "enabled": false
+    },
+    "scratch_storage_size": {
+      "unit": "gb",
+      "value": 0.0
+    }
+  },
+  "new_fsx": {
+    "enable_scratch": true,
+    "fsx_lustre": {
+      "deployment_type": "scratch_2",
+      "enabled": true,
+      "size": {
+        "unit": "gb",
+        "value": 1200.0
+      }
+    },
+    "scratch_storage_size": {
+      "unit": "gb",
+      "value": 0.0
+    }
+  }
+}

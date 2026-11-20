@@ -27,14 +27,20 @@ IDEA_CLUSTER_S3_BUCKET={{ context.cluster_s3_bucket }}
 IDEA_CLUSTER_NAME={{ context.cluster_name }}
 IDEA_CLUSTER_HOME={{ context.cluster_home_dir }}
 IDEA_JOB_ID={{ context.vars.job.job_id }}
-IDEA_JOB_UID={{ context.vars.job.job_uid }}
-IDEA_JOB_OWNER={{ context.vars.job.owner }}
-IDEA_JOB_GROUP={{ context.vars.job.job_group }}
-IDEA_JOB_NAME={{ context.vars.job.job_name }}
-IDEA_JOB_QUEUE={{ context.vars.job.queue }}
 IDEA_JOB_SCALING_MODE={{ context.vars.job.scaling_mode }}
-IDEA_COMPUTE_NODE_LOGS_DIR={{ context.vars.job_directory }}/logs/$(hostname -s)
 BOOTSTRAP_DIR=/root/bootstrap" > /etc/environment
+# The job's own values (a job queued before an upgrade was never checked by the current submit
+# hook) are data: single-quoted here, and written with %q so a shell sourcing the file reads
+# each one back unchanged.
+printf 'IDEA_JOB_UID=%q\nIDEA_JOB_OWNER=%q\nIDEA_JOB_GROUP=%q\nIDEA_JOB_NAME=%q\nIDEA_JOB_QUEUE=%q\n' \
+  '{{ context.vars.job.job_uid | default('', true) | string | replace("'", "'\\''") }}' \
+  '{{ context.vars.job.owner | default('', true) | string | replace("'", "'\\''") }}' \
+  '{{ context.vars.job.job_group | default('', true) | string | replace("'", "'\\''") }}' \
+  '{{ context.vars.job.name | default('', true) | string | replace("'", "'\\''") }}' \
+  '{{ context.vars.job.queue | default('', true) | string | replace("'", "'\\''") }}' >> /etc/environment
+# the job directory carries the job's uid or group: data too
+printf 'IDEA_COMPUTE_NODE_LOGS_DIR=%q\n' \
+  '{{ context.vars.job_directory | default('', true) | string | replace("'", "'\\''") }}/logs/'"$(hostname -s)" >> /etc/environment
 
 {% if context.https_proxy != '' %}
 echo -e "IDEA_HTTPS_PROXY={{ context.https_proxy }}
@@ -113,7 +119,8 @@ echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
 
 {% include '_templates/linux/mount_shared_storage.jinja2' %}
 
-mkdir -p ${IDEA_COMPUTE_NODE_LOGS_DIR}
+# the bootstrap trace lands on shared storage and carries host and job details: root only
+mkdir -p "${IDEA_COMPUTE_NODE_LOGS_DIR}" && chmod 0700 "${IDEA_COMPUTE_NODE_LOGS_DIR}"
 
 log_info "executing compute_node.sh ..."
 /bin/bash ${SCRIPT_DIR}/compute_node.sh >> "${IDEA_COMPUTE_NODE_LOGS_DIR}/compute_node_bootstrap.log" 2>&1

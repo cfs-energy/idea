@@ -62,15 +62,22 @@ export function normalizePathInput(value: string): {path: string, error: null} |
     return {path: collapsed.length === 0 ? '/' : collapsed, error: null}
 }
 
-/** Why a typed path did not open, in words rather than an error code. */
+/** Why a typed path did not open, in words rather than an error code. An empty path is the first
+ * listing, which asks for the home folder without naming it. */
 export function describeListingFailure(path: string, error: any): string {
+    const home = path === ''
+    const what = home ? 'your home folder' : path
     if (error != null && error.errorCode === 'UNAUTHORIZED_ACCESS') {
         // One error code covers "no such directory", "not a directory" and
         // "not yours", so the message must not claim to know which.
-        return `Cannot open ${path}. It does not exist, is not a directory, or you do not have access to it.`
+        return `Cannot open ${what}. It does not exist, is not a folder, or you do not have access. If you need it, ask ${home ? 'your cluster administrator' : "the folder's owner"}.`
+    }
+    if (error != null && error.errorCode === 'FILE_OPERATION_TIMED_OUT') {
+        const command = home ? 'ls ~' : `ls '${path.replace(/'/g, `'\\''`)}'`
+        return `${home ? 'Your home folder' : path} took too long to list. To see it, run this in a terminal: ${command}`
     }
     const message = error != null && typeof error.message === 'string' ? error.message.trim() : ''
-    return message.length > 0 ? `Cannot open ${path}: ${message}` : `Cannot open ${path}.`
+    return message.length > 0 ? `Cannot open ${what}: ${message}` : `Cannot open ${what}.`
 }
 
 /** Show the deep end of a long trail: the current directory is the part a user needs to see. jsdom

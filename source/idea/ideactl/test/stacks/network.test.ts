@@ -455,6 +455,7 @@ describe('module stack security groups', () => {
     });
     new network.VirtualDesktopBrokerSecurityGroup(ctx, 'vdc-broker-security-group', stack, cluster.vpc, {
       bastionHostSecurityGroup,
+      internalLoadBalancerSecurityGroup: cluster.getSecurityGroup('internal-load-balancer') as ec2.ISecurityGroup,
       publicLoadbalancerSecurityGroup,
       description: 'Security Group for Virtual Desktop DCV Broker',
       componentName: 'DCV Broker',
@@ -549,7 +550,7 @@ describe('module stack security groups', () => {
     assert.equal(rules[0]?.Properties.SourceSecurityGroupId, ctx.config.getString('cluster.network.security_groups.bastion-host'));
   });
 
-  test('non-consecutive broker ports produce one rule per port', () => {
+  test('the broker client and gateway ports admit only the internal load balancer; agents keep the VPC', () => {
     const { stack, ctx } = makeStack('vdc', {
       'vdc.dcv_broker.client_communication_port': { N: '8444' },
       'vdc.dcv_broker.agent_communication_port': { N: '8448' },
@@ -558,19 +559,20 @@ describe('module stack security groups', () => {
     const cluster = new ExistingSocaCluster(ctx, stack);
     new network.VirtualDesktopBrokerSecurityGroup(ctx, 'vdc-broker-security-group', stack, cluster.vpc, {
       bastionHostSecurityGroup: cluster.getSecurityGroup('bastion-host') as ec2.ISecurityGroup,
+      internalLoadBalancerSecurityGroup: cluster.getSecurityGroup('internal-load-balancer') as ec2.ISecurityGroup,
       publicLoadbalancerSecurityGroup: cluster.getSecurityGroup('external-load-balancer') as ec2.ISecurityGroup,
       description: 'Security Group for Virtual Desktop DCV Broker',
       componentName: 'DCV Broker',
     });
-    const group = resources(stack).vdcbrokersecuritygroupF5DE1FEA;
+    const mine = resources(stack);
+    const group = mine.vdcbrokersecuritygroupF5DE1FEA;
     assert.deepEqual(
-      group.Properties.SecurityGroupIngress.map((rule: Json) => [rule.FromPort, rule.ToPort, rule.Description]),
-      [
-        [8444, 8444, 'Allow VPC to broker port 8444'],
-        [8446, 8446, 'Allow VPC to broker port 8446'],
-        [8448, 8448, 'Allow VPC to broker port 8448'],
-      ],
+      group.Properties.SecurityGroupIngress.map((rule: Json) => [rule.FromPort, rule.ToPort, rule.CidrIp !== undefined, rule.Description]),
+      [[8448, 8448, true, 'Allow VPC to broker port 8448']],
     );
+    const fromBalancer = (Object.values(mine) as Json[]).filter((resource) => resource.Type === 'AWS::EC2::SecurityGroupIngress'
+      && resource.Properties.SourceSecurityGroupId === ctx.config.getString('cluster.network.security_groups.internal-load-balancer'));
+    assert.deepEqual(fromBalancer.map((rule) => rule.Properties.FromPort).sort(), [8444, 8446]);
   });
 
   test('a missing broker port is a config error', () => {
@@ -580,6 +582,7 @@ describe('module stack security groups', () => {
       () =>
         new network.VirtualDesktopBrokerSecurityGroup(ctx, 'vdc-broker-security-group', stack, cluster.vpc, {
           bastionHostSecurityGroup: cluster.getSecurityGroup('bastion-host') as ec2.ISecurityGroup,
+          internalLoadBalancerSecurityGroup: cluster.getSecurityGroup('internal-load-balancer') as ec2.ISecurityGroup,
           publicLoadbalancerSecurityGroup: cluster.getSecurityGroup('external-load-balancer') as ec2.ISecurityGroup,
           description: 'Security Group for Virtual Desktop DCV Broker',
           componentName: 'DCV Broker',

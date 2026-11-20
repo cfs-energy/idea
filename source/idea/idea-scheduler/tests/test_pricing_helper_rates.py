@@ -15,7 +15,7 @@ def currency(monkeypatch):
     monkeypatch.setattr(locale, 'get_currency_code', lambda: 'USD')
 
 
-def helper(lustre=False):
+def helper(lustre=False, existing_fsx=None):
     config = ConfigFactory.from_dict(
         {
             'scheduler': {
@@ -35,7 +35,9 @@ def helper(lustre=False):
         root_storage_size=SocaMemory(value=10, unit=SocaMemoryUnit.GB),
         scratch_storage_size=SocaMemory(value=100, unit=SocaMemoryUnit.GB),
         scratch_storage_iops=1000,
-        fsx_lustre=SimpleNamespace(enabled=lustre, size=None),
+        fsx_lustre=SimpleNamespace(
+            enabled=lustre, size=None, existing_fsx=existing_fsx
+        ),
     )
     job.desired_nodes.return_value = 1
     job.ondemand_nodes.return_value = 1
@@ -168,3 +170,13 @@ def test_spot_fallback_is_capped_at_scaled_on_demand(multiplier, expected, mixed
         line for line in bom.line_items if line.product.endswith('lifecycle=spot')
     )
     assert spot.unit_price.amount == pytest.approx(expected)
+
+
+def test_mounting_an_existing_fsx_is_not_priced_as_a_new_one():
+    pricing = helper(
+        lustre=True, existing_fsx='fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com'
+    )
+    bom = pricing.compute_estimated_bom_cost()
+    assert not [
+        item for item in bom.line_items if item.product == 'scratch_storage=lustre'
+    ]

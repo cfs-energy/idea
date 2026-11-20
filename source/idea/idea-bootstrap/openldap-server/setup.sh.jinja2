@@ -130,3 +130,5 @@ if [[ "${REBOOT_REQUIRED}" == "yes" ]]; then
   reboot_after_cloud_init
   exit 0
 fi
+# no reboot now, but the next one boots whatever is the default
+ensure_boot_kernel_bootable

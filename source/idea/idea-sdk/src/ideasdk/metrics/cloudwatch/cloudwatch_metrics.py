@@ -45,7 +45,7 @@ class CloudWatchMetrics(MetricsProviderProtocol):
         self.storage_resolution = storage_resolution
         self.buffers = {}
 
-    def _send_metrics_to_cloudwatch(self, metric_data):
+    def _send_metrics_to_cloudwatch(self, metric_data, raise_on_error=False):
         if not metric_data or len(metric_data) == 0:
             return
         try:
@@ -55,6 +55,8 @@ class CloudWatchMetrics(MetricsProviderProtocol):
             )
         except Exception as e:
             self._logger.error(f'failed to send metrics to cloudwatch: {e}')
+            if raise_on_error:
+                raise
 
     def _record_metric(self, metric_data):
         size = self._size()
@@ -96,10 +98,9 @@ class CloudWatchMetrics(MetricsProviderProtocol):
                 self._logger.debug(f'published {len(page)} metrics to cloudwatch')
 
             start = full_pages * PAGE_SIZE
-            end = len(buffer) % PAGE_SIZE
             if send_partial:
                 # ship remaining items
-                page = buffer[start:end]
+                page = buffer[start:]
                 if len(page) > 0:
                     # ship it
                     self._send_metrics_to_cloudwatch(page)
@@ -118,7 +119,12 @@ class CloudWatchMetrics(MetricsProviderProtocol):
 
         return self
 
-    def log(self, metric_data: List[Dict]):
+    def log(self, metric_data: List[Dict], raise_on_error: bool = False):
+        """
+        :param raise_on_error: send now, page by page, and raise if a page is refused: for a
+            caller that deletes its own copy once this returns. Otherwise the points join
+            the buffer, which sends full pages and keeps at most max_items.
+        """
         for entry in metric_data:
             if self.storage_resolution is not None:
                 entry['StorageResolution'] = self.storage_resolution
@@ -129,4 +135,10 @@ class CloudWatchMetrics(MetricsProviderProtocol):
                 del entry['MetricType']
             if 'Namespace' in entry:
                 del entry['Namespace']
+        if raise_on_error:
+            for start in range(0, len(metric_data), PAGE_SIZE):
+                self._send_metrics_to_cloudwatch(
+                    metric_data[start : start + PAGE_SIZE], raise_on_error=True
+                )
+            return
         self._record_metric(metric_data)

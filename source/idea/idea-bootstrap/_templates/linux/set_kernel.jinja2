@@ -1,10 +1,16 @@
 # Begin: Kernel Version Management
 
-# rhel10, rocky10, ubuntu2604 are absent: only the eVDI setup includes this template, none has eVDI support.
+# Desktops and their bakes include this template. Compute includes it through
+# compute_kernel_hold.jinja2, on EL when the cluster uses FSx for Lustre.
 function fail_kernel_bootstrap() {
   local bootstrap_status="${1}"
   log_error "${2}"
   echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+{% if compute_image_bake | default(false) %}
+  # compute bakes have no ERR trap: record the reason and tag the builder failed now
+  echo "${bootstrap_status}: ${2}" >> /var/lib/idea/bake-failed
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh"
+{% else %}
   local AWS
   local AWS_INSTANCE_ID
   AWS=$(command -v aws)
@@ -13,6 +19,7 @@ function fail_kernel_bootstrap() {
       --resources "${AWS_INSTANCE_ID}" \
       --region "{{ context.aws_region }}" \
       --tags "Key=idea:BootstrapStatus,Value=${bootstrap_status}" || log_warning "unable to tag ${AWS_INSTANCE_ID} with idea:BootstrapStatus=${bootstrap_status}"
+{% endif %}
   exit 1
 }
 
@@ -22,11 +29,13 @@ function fail_kernel_bootstrap() {
 # Add the repository here because kernel management runs before client installation.
 TARGET_KERNEL_ABI=$(uname -r)
 {% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') %}
+{% include '_templates/linux/fsx_lustre_keys.jinja2' %}
 # A baked image of this release already has the repository and passed the Lustre module
 # check for this kernel in the bake; an apt-get update here cost its first boot the gate.
 if [[ -z "${IDEA_MODULE_VERSION}" || "$(cat /var/lib/idea/baked-release 2>/dev/null)" != "${IDEA_MODULE_VERSION}" ]]; then
   . /etc/os-release
-  wget -q -O - https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc | gpg --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg
+  # the repository key is the one carried in this bundle, never fetched at boot
+  fsx_lustre_key fsx-ubuntu-public-key | idea_gpg "" --dearmor > /usr/share/keyrings/fsx-ubuntu-public-key.gpg || exit 1
   echo "deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/fsxlustreclientrepo.list
   apt_update || exit 1
 {% if ubuntu_desktop_bake | default(false) %}  if [[ -n "${BAKE_STAGE:-}" ]]; then
@@ -110,15 +119,58 @@ if ! rpm -q --provides -f "/boot/vmlinuz-${TARGET_KERNEL_ABI}" 2>/dev/null | gre
   fail_kernel_bootstrap lustre-module-missing "The running kernel ${TARGET_KERNEL_ABI} does not provide kmod-lustre-client, the FSx for Lustre module."
 fi
 TARGET_KERNEL_VERSION="$(echo "${TARGET_KERNEL_ABI}" | cut -d. -f1-2)*"
-{% elif context.base_os in ('rhel8', 'rocky8') %}
+{% elif context.base_os in ('rhel8', 'rocky8') and not (keep_kernel_series | default(false)) %}
 TARGET_KERNEL_VERSION="4.18.0-553*"
-{% elif context.base_os in ('rhel9', 'rocky9') %}
-{# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm #}
+{% elif context.base_os in ('rhel9', 'rocky9') and not (keep_kernel_series | default(false)) %}
+{# 5.14.0-687 is the EL 9.8 kernel series; fsx_lustre_client.jinja2 carries the matching arm.
+   An image on the EL 9.9 series (741) keeps it: its client is in el/9.9, and Rocky's repository
+   no longer carries 687 once 9.9 ships. #}
 TARGET_KERNEL_VERSION="5.14.0-687*"
-{% elif context.base_os in ('rhel10', 'rocky10') %}
+[[ "$(uname -r)" != 5.14.0-741.* ]] || TARGET_KERNEL_VERSION="5.14.0-741*"
+{% elif context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
 {# the series the image boots: fsx_lustre_client.jinja2 has a client for the 10.1 and 10.2 series,
-   and pinning it keeps a package upgrade from moving the host to a kernel without one #}
+   and pinning it keeps a package upgrade from moving the host to a kernel without one. Compute
+   (keep_kernel_series) does the same on every EL release: its client is installed for the kernel
+   the image boots, and the FSx repository has none for a series Red Hat has only just shipped. #}
 TARGET_KERNEL_VERSION="$(uname -r | cut -d. -f1-3)*"
+{% endif %}
+{# Bakes and desktops on a cluster that uses FSx for Lustre move a host whose image boots a kernel
+   series newer than any the client has a build for (Rocky 10.3, 6.12.0-264, in 2026-11) to the
+   newest kernel of the newest series it supports, and reboot, before the client is installed.
+   Unbaked compute nodes do not: their client step already ran. #}{% set fsx_kernel_move = context.base_os in ('rhel9', 'rocky9', 'rhel10', 'rocky10') and ((compute_image_bake | default(false)) if (keep_kernel_series | default(false)) else (context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache'))) %}
+{% if fsx_kernel_move %}
+{# the newest series fsx_lustre_client.jinja2 has an arm for, and the minor release it shipped in:
+   change both files together when FSx publishes the next point release #}
+{% if context.base_os in ('rhel10', 'rocky10') %}
+FSX_NEWEST_SERIES="6.12.0-211"
+FSX_NEWEST_MINOR="10.2"
+{% else %}
+FSX_NEWEST_SERIES="5.14.0-741"
+FSX_NEWEST_MINOR="9.9"
+{% endif %}
+# the minor release whose repository carries the target series: the running kernel's, unless it moves
+KERNEL_SERIES_MINOR=$(uname -r | sed -n 's/.*\.el\([0-9]*\)_\([0-9]*\)[.].*/\1.\2/p')
+KERNEL_SERIES_MOVE=""
+if [[ "$(printf '%s\n%s\n' "$(uname -r | cut -d. -f1-3)" "${FSX_NEWEST_SERIES}" | sort -V | tail -1)" != "${FSX_NEWEST_SERIES}" ]]; then
+  KERNEL_SERIES_MOVE="Kernel $(uname -r) is newer than any FSx for Lustre client build"
+  log_warning "${KERNEL_SERIES_MOVE}; moving to the newest ${FSX_NEWEST_SERIES} kernel (EL ${FSX_NEWEST_MINOR})"
+  TARGET_KERNEL_VERSION="${FSX_NEWEST_SERIES}*"
+  KERNEL_SERIES_MINOR="${FSX_NEWEST_MINOR}"
+fi
+{% endif %}
+{% if fsx_kernel_move and context.base_os in ('rocky9', 'rocky10') %}
+# Rocky's repositories carry the kernels of the current minor release only and its vault keeps the
+# earlier ones; Red Hat's keep every kernel of the major release, so RHEL needs nothing here.
+function add_kernel_vault_repo() {
+  [[ -n "${KERNEL_SERIES_MINOR}" ]] || return 0
+  [[ -z "$(dnf -q repoquery --latest-limit 1 "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | head -1)" ]] || return 0
+  log_info "Kernel ${TARGET_KERNEL_VERSION} is not in Rocky's repositories; adding the Rocky ${KERNEL_SERIES_MINOR} vault for kernel packages"
+  local section
+  for section in BaseOS AppStream; do
+    printf '[idea-rocky-kernel-vault-%s]\nname=Rocky Linux %s %s vault, kernel packages only\nbaseurl=https://dl.rockylinux.org/vault/rocky/%s/%s/$basearch/os/\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-{{ '10' if context.base_os == 'rocky10' else '9' }}\nincludepkgs=kernel*\nenabled=1\n# a host that cannot reach the vault still runs every other package operation\nskip_if_unavailable=1\n\n' \
+        "${section}" "${KERNEL_SERIES_MINOR}" "${section}" "${KERNEL_SERIES_MINOR}" "${section}"
+  done > /etc/yum.repos.d/idea-rocky-kernel-vault.repo
+}
 {% endif %}
 
 
@@ -249,6 +301,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel8', 'rocky8') %}
   # RHEL8/Rocky8 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
+  make_boot_room_for_kernel
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
@@ -259,6 +312,7 @@ function install_target_kernel() {
 {% elif context.base_os in ('rhel9', 'rhel10', 'rocky9', 'rocky10') %}
   # RHEL9/Rocky9 install latest in target series
   log_info "Installing latest kernel in ${target_version} series"
+  make_boot_room_for_kernel
   if package_transaction dnf install -y kernel-${TARGET_KERNEL_VERSION} kernel-core-${TARGET_KERNEL_VERSION} kernel-devel-${TARGET_KERNEL_VERSION} kernel-headers-${TARGET_KERNEL_VERSION}; then
     log_info "Latest kernel in ${target_version} series installed successfully"
   else
@@ -269,6 +323,13 @@ function install_target_kernel() {
 }
 
 {% if context.base_os in ('amazonlinux2023', 'rhel8', 'rhel9', 'rhel10', 'rocky8', 'rocky9', 'rocky10') %}
+# Installing a kernel package can already have made it the default. When that kernel must not boot,
+# the running one has to be the default again, and a host that cannot say so must not carry on to a
+# reboot it may not come back from.
+function keep_running_kernel_default() {
+  restore_default_kernel "${1}" || fail_kernel_bootstrap kernel-boot-mismatch "The default boot kernel could not be set back to ${1}."
+}
+
 # The host already runs the target series, which is not the newest kernel of it: install the
 # newest (a security fix ships as a new release in the series, CVE-2026-98432 among them) and
 # boot it. The host's existing reboot activates it, so this adds none.
@@ -291,18 +352,62 @@ function update_within_target_series() {
   newest=$(dnf repoquery -q --latest-limit 1 --qf '%{version}-%{release}.%{arch}' "kernel-core-${TARGET_KERNEL_VERSION}" 2>/dev/null | tail -1)
   [[ -n "${newest}" && "${newest}" != "${current_kernel}" ]] || return 0
   [[ "$(printf '%s\n%s\n' "${current_kernel}" "${newest}" | sort -V | tail -1)" == "${newest}" ]] || return 0
+  # already installed (the Lustre client package can pull it in): it needs no more room
+  rpm -q "kernel-core-${newest}" >/dev/null 2>&1 || make_boot_room_for_kernel
   if ! package_transaction dnf install -y "kernel-${newest}" "kernel-core-${newest}" "kernel-devel-${newest}"; then
 {% endif %}
     log_warning "Unable to install kernel ${newest}; keeping ${current_kernel}"
     return 0
   fi
+  # Installing the package can already have made it the default, so keeping the running kernel
+  # means saying so.
+  if ! kernel_initramfs_ready "${newest}"; then
+    log_warning "Kernel ${newest} has no initramfs; keeping ${current_kernel}"
+    keep_running_kernel_default "${current_kernel}"
+    return 0
+  fi
+  # The Lustre client's module is linked into a new kernel only when their symbols still match.
+  if kernel_has_lustre_module "${current_kernel}" && ! kernel_has_lustre_module "${newest}"; then
+    log_warning "Kernel ${newest} has no FSx for Lustre module; keeping ${current_kernel}, which has one"
+    keep_running_kernel_default "${current_kernel}"
+    return 0
+  fi
   if [[ ! -f "/boot/vmlinuz-${newest}" ]] || ! grubby --set-default "/boot/vmlinuz-${newest}"; then
     log_warning "Kernel ${newest} is installed but not the default boot kernel; keeping ${current_kernel}"
+    keep_running_kernel_default "${current_kernel}"
     return 0
   fi
   TARGET_KERNEL_RELEASE="${newest}"
   set_reboot_required "Kernel update to ${newest}"
 }
+{% if context.base_os in ('rhel8', 'rocky8', 'rhel9', 'rocky9', 'rhel10', 'rocky10') %}
+
+# Before a kernel is installed. Rescue images always go. A bake also drops the kernels older than
+# the one it runs, which its dcv stage removed only after the reboot (remove_superseded_kernels),
+# and stops with the reason when the 1 GB /boot still cannot hold another kernel: the Rocky 9
+# desktop bake ran out of room writing the new initramfs.
+function make_boot_room_for_kernel() {
+  drop_rescue_images
+{% if not (compute_image_bake | default(false)) %}  [[ -n "${BAKE_STAGE:-}" ]] || return 0
+{% endif %}  local boot="${KERNEL_BOOT_DIR:-/boot}" running package version older=() need free
+  running=$(uname -r)
+  while read -r package version; do
+    [[ -n "${version}" && "${version}" != "${running}" ]] || continue
+    [[ "$(printf '%s\n%s\n' "${version}" "${running}" | sort -V | head -1)" == "${version}" ]] && older+=("${package}")
+  done < <(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH} %{VERSION}-%{RELEASE}.%{ARCH}\n' kernel kernel-core kernel-modules kernel-modules-core kernel-modules-extra kernel-devel 2>/dev/null | grep -v 'is not installed' || true)
+  if [[ -n "${older[*]}" ]]; then
+    package_transaction dnf remove -y --noautoremove "${older[@]}" || log_warning "Unable to remove superseded kernels: ${older[*]}"
+  fi
+  # what the running kernel takes in /boot (kernel, initramfs, kdump initrd, map), with a margin
+  need=$(du -cb "${boot}"/*"${running}"* 2>/dev/null | tail -1 | cut -f1)
+  need=$(( ${need:-0} * 12 / 10 ))
+  free=$(df -B1 --output=avail "${boot}" 2>/dev/null | tail -1 | tr -d ' ')
+  [[ "${free}" =~ ^[0-9]+$ ]] || { log_warning "Free space on ${boot} could not be read"; return 0; }
+  if (( free < need )); then
+    fail_kernel_bootstrap kernel-install-failed "${boot} has $(( free / 1048576 )) MB free after removing rescue images and older kernels, and kernel ${TARGET_KERNEL_VERSION} needs about $(( need / 1048576 )) MB. To fix: bake from a base image with a larger /boot partition."
+  fi
+}
+{% endif %}
 {% endif %}
 
 function set_kernel_version() {
@@ -320,6 +425,11 @@ function set_kernel_version() {
   log_info "Current kernel: $current_kernel"
   log_info "Target kernel version: $target_version"
 
+{% if fsx_kernel_move and context.base_os in ('rocky9', 'rocky10') %}  add_kernel_vault_repo
+{% endif %}
+{% if kernel_ahead_only | default(false) %}  # this pass runs before the Lustre client install and only moves a host off a series it has no build for
+  [[ -n "${KERNEL_SERIES_MOVE:-}" && "$current_kernel" != "${target_base}"[.-]* ]] || return 0
+{% endif %}
 {% if context.base_os not in ('ubuntu2204', 'ubuntu2404', 'ubuntu2604') %}  # Check if we're already running the target kernel series
   if [[ "$current_kernel" == "${target_base}"[.-]* ]]; then
     log_info "Confirmed running target kernel series $target_base"
@@ -356,8 +466,12 @@ function set_kernel_version() {
   # Install target kernel if not already installed
   if [[ "$kernel_installed" != "true" ]]; then
     log_info "Target kernel ${target_version} not installed, installing..."
-    install_target_kernel || fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
-  else
+{% if fsx_kernel_move %}    if ! install_target_kernel; then
+      [[ -z "${KERNEL_SERIES_MOVE}" ]] || fail_kernel_bootstrap lustre-module-missing "${KERNEL_SERIES_MOVE}, and no ${target_version} kernel could be installed{{ ' from the Rocky ${KERNEL_SERIES_MINOR} vault' if context.base_os in ('rocky9', 'rocky10') else '' }}. To fix: use a base image on the ${FSX_NEWEST_SERIES} series, or rebuild once FSx publishes a client for this one (reason code: lustre-module-missing)."
+      fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
+    fi
+{% else %}    install_target_kernel || fail_kernel_bootstrap kernel-install-failed "Kernel ${target_version} could not be installed, so the host cannot boot it."
+{% endif %}  else
     log_info "Target kernel ${target_version} already installed"
   fi
 
@@ -369,6 +483,12 @@ function set_kernel_version() {
   if [[ -f /etc/default/grub ]]; then
     # Select by title because a positional entry changes as kernels are added or removed.
     # The exact ABI keeps the boot choice aligned with the installed Lustre module.
+    # update-grub writes an entry for a kernel with no initrd, and that entry panics on boot.
+    if [[ ! -s "/boot/initrd.img-${TARGET_KERNEL_ABI}" ]]; then
+      log_warning "Kernel ${TARGET_KERNEL_ABI} has no initrd; building it"
+      timeout 300 update-initramfs -c -k "${TARGET_KERNEL_ABI}" || true
+    fi
+    [[ -s "/boot/initrd.img-${TARGET_KERNEL_ABI}" ]] || fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${TARGET_KERNEL_ABI} has no initrd, so it cannot be selected."
     sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${TARGET_KERNEL_ABI}\"/" /etc/default/grub
     update-grub || fail_kernel_bootstrap kernel-boot-mismatch "Unable to update GRUB for ${TARGET_KERNEL_ABI}."
     log_info "Updated GRUB to boot kernel ${target_version} by default"
@@ -379,7 +499,12 @@ function set_kernel_version() {
   local target_kernel
   target_kernel=$(find /boot -maxdepth 1 -type f -name "vmlinuz-*${target_base}.*" -print | sort -V | tail -1)
   if [[ -n "${target_kernel}" ]]; then
-    grubby --set-default "${target_kernel}" || log_warning "Unable to make ${target_kernel} the default boot kernel"
+    # the package may have selected it already: a host that cannot boot the target stays on what
+    # it runs, and stops, since it cannot reach the kernel this image needs
+    if ! kernel_initramfs_ready "${target_kernel#/boot/vmlinuz-}" || ! grubby --set-default "${target_kernel}"; then
+      keep_running_kernel_default "${current_kernel}"
+      fail_kernel_bootstrap kernel-boot-mismatch "Kernel ${target_kernel#/boot/vmlinuz-} cannot be made the default boot kernel."
+    fi
     log_info "Updated GRUB to boot ${target_kernel} by default"
   fi
 {% endif %}

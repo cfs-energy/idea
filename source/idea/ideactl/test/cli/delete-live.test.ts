@@ -182,6 +182,9 @@ test("a missing stack is classified from the service error code, not only its me
   assert.equal(isMissingStackError(serviceError("AccessDeniedException", "not authorized to perform: cloudformation:DescribeStacks")), false);
   assert.equal(isMissingStackError(serviceError("ThrottlingException", "Rate exceeded")), false);
   assert.equal(isMissingStackError("not an error"), false);
+  // a validation failure that is not about a missing stack does not mark the stack deleted
+  assert.equal(isMissingStackError(serviceError("ValidationError", "1 validation error detected: Value at 'stackName' failed to satisfy constraint")), false);
+  assert.equal(isMissingStackError(serviceError("GeneralException", `stack not found: ${target}-metrics`)), true);
 });
 
 test("a stack that disappears during discovery does not stop the teardown", async () => {

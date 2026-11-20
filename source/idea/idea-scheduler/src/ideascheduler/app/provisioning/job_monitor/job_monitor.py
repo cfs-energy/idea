@@ -16,8 +16,19 @@ from ideascheduler.app.accounts_guard import (
 )
 import ideascheduler
 
-from ideadatamodel import exceptions, SocaJob, SocaJobState, JobUpdates, JobUpdate
+from ideadatamodel import (
+    constants,
+    exceptions,
+    SocaJob,
+    SocaJobState,
+    SocaJobExecutionHost,
+    SocaJobExecutionRun,
+    JobUpdates,
+    JobUpdate,
+)
+from ideadatamodel.model_utils import ModelUtils
 from ideasdk.service import SocaService
+from ideasdk.metrics.health import HealthMetrics
 from ideasdk.utils import Utils
 from ideascheduler.app.app_protocols import JobMonitorProtocol
 from ideascheduler.app.provisioning.job_monitor.finished_job_processor import (
@@ -171,6 +182,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         # queues with a recent queuejob event, watched with short rescans
         self._queued_sweep_expiry: Dict[str, arrow.Arrow] = {}
         self._queued_sweep_last_attempt: Dict[str, arrow.Arrow] = {}
+        # arrays whose start was announced before the cache showed them begun
+        self._begun_arrays: Set[str] = set()
+        self._begun_arrays_lock = RLock()
 
     def _initialize(self):
         self._job_submission_monitor = Thread(
@@ -216,7 +230,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
             if provisioning_queue is None:
                 continue
 
-            if job.state == SocaJobState.RUNNING:
+            if job.state in (SocaJobState.RUNNING, SocaJobState.SUBJOB_BEGUN):
                 # if job execution has started running, ensure the job is deleted from provisioning queue.
                 provisioning_queue.delete(job_id=job.job_id)
                 continue
@@ -256,9 +270,31 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                     if provisioning_queue is None:
                         continue
 
-                    jobs = self._context.scheduler.list_jobs(queue=queue)
+                    # one queue that cannot be read must not end the sync of the others
+                    # (NM-14): the cache is marked ready after this either way
+                    try:
+                        jobs = self._context.scheduler.list_jobs(queue=queue)
+                    except Exception as e:
+                        self._logger.exception(
+                            f'sync of queue {queue} failed, other queues go on: {e}'
+                        )
+                        continue
 
                     self._context.job_cache.sync(jobs=jobs)
+                    # a restored cache can predate a job's provisioning, and only that
+                    # records its licenses. without this the license check over-admits.
+                    self._context.job_cache.add_active_licenses(
+                        [job for job in jobs if job.is_provisioned()]
+                    )
+                    # and it can predate a reset that released them: a job with no
+                    # stack holds none, and its own stale row would count against it
+                    for job in jobs:
+                        if (
+                            not job.is_provisioned()
+                            and job.params
+                            and job.params.licenses
+                        ):
+                            self._context.job_cache.release_active_licenses(job.job_id)
 
                     for job in jobs:
                         if self._provisioning_retries_exhausted(job):
@@ -313,6 +349,19 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         if len(jobs) == 0:
                             continue
 
+                        if job_type == 'running':
+                            for job in jobs:
+                                # a subjob's run event is filed under its array, and PBS
+                                # can still list the array as queued in the second its
+                                # first subjob starts. The event is the proof it has begun.
+                                if (
+                                    ModelUtils.is_array_job_id(job.job_id)
+                                    and job.state == SocaJobState.QUEUED
+                                ):
+                                    job.state = SocaJobState.SUBJOB_BEGUN
+                                    # read as queued, so its comment is why it waited
+                                    job.comment = None
+
                         self._context.job_cache.sync(jobs=jobs)
 
                         if job_type == 'modified':
@@ -323,7 +372,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             # job runs; left in place it gets re-attached to the finished record as a failure.
                             for job in jobs:
                                 self._context.job_cache.clear_job_provisioning_error(
-                                    job_id=job.job_id
+                                    job_id=job.job_id, job_started=True
                                 )
 
                         self._logger.info(
@@ -453,6 +502,9 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                             queue=queue, log_tag='job-reconciler'
                         )
                         if adopted > 0:
+                            HealthMetrics(self._context).add(
+                                'orphan_sweep', adopted, kind='job'
+                            )
                             self._logger.info(
                                 f'job reconciler adopted {adopted} orphaned job(s) in queue: {queue}'
                             )
@@ -533,6 +585,7 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         QueueUrl=self._job_status_queue_url,
                         MaxNumberOfMessages=10,
                         WaitTimeSeconds=5,
+                        AttributeNames=['SenderId'],
                     )
                 )
                 messages = Utils.get_value_as_list('Messages', result)
@@ -560,6 +613,18 @@ class JobMonitor(SocaService, JobMonitorProtocol):
                         job = pbs_event.as_soca_job(
                             context=self._context, queue_profile=queue_profile
                         )
+
+                        sender_id = Utils.get_value_as_string(
+                            'SenderId', sqs_message.get('Attributes') or {}, ''
+                        )
+                        if not self._is_job_status_sender(
+                            sender_id, pbs_event.instance_id, job.job_id
+                        ):
+                            self._logger.warning(
+                                f'{job.log_tag} ignoring {pbs_event.type} from {sender_id}: '
+                                f'the sender is not a compute node of this job'
+                            )
+                            continue
 
                         self._logger.info(
                             f'{job.log_tag} {pbs_event.type} on host: {pbs_event.requestor_host}'
@@ -589,6 +654,61 @@ class JobMonitor(SocaService, JobMonitorProtocol):
             except Exception as e:
                 self._logger.exception(f'failed to process job execution event: {e}')
 
+    def _is_job_status_sender(
+        self, sender_id: str, instance_id: Optional[str], job_id: str
+    ) -> bool:
+        """
+        a job status event is accepted from the scheduler task, or from a compute node of the
+        job: the SQS SenderId of an instance's own credentials ends in its instance id, which
+        must be the instance the event names, a compute node of this cluster provisioned for
+        the job, or a shared-capacity node of the job group a shared-capacity job runs in. an
+        ephemeral node reports only its own job: the computed group leaves out the owner.
+        """
+        role_id, _, session = sender_id.partition(':')
+        if role_id and role_id == self._context.config().get_string(
+            'scheduler.task_role_id'
+        ):
+            return True
+        if not session.startswith('i-') or session != instance_id:
+            return False
+        instance = self._context.instance_cache.get_instance(session)
+        if instance is None:
+            # a node that started after the last cache sync
+            instance = next(
+                iter(
+                    self._context.aws_util().ec2_describe_instances(
+                        filters=[{'Name': 'instance-id', 'Values': [session]}]
+                    )
+                    or []
+                ),
+                None,
+            )
+        if (
+            instance is None
+            or instance.instance_id != session
+            or instance.soca_cluster_name != self._context.cluster_name()
+            or instance.soca_node_type != constants.NODE_TYPE_COMPUTE
+        ):
+            return False
+        job_id = ModelUtils.array_parent_id(job_id) or job_id
+        if instance.soca_job_id == job_id:
+            return True
+        cached = self._context.job_cache.get_job(job_id)
+        if (
+            cached is None
+            or not cached.is_shared_capacity()
+            or instance.is_soca_ephemeral_capacity
+        ):
+            return False
+        job_group = getattr(getattr(cached, 'params', None), 'job_group', None)
+        # a group name can be reused in another shared profile: the node must be of the
+        # job's own queue too (SCH-33)
+        return (
+            job_group is not None
+            and instance.soca_job_group == job_group
+            and instance.soca_job_queue == cached.queue
+        )
+
     def job_queued(self, job: SocaJob):
         """
         should be called when job is validated successfully and accepted (qsub)
@@ -599,6 +719,39 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         """
         self._state.job_queued(job=job)
 
+    @staticmethod
+    def _as_array(job: SocaJob) -> Optional[SocaJob]:
+        """
+        a subjob's event, renamed to its array: PBS reports a subjob's run, begin and end
+        under 123[4], and the array 123[] is the job the cache, its stack and its record
+        know. None for any other job.
+        """
+        parent_id = ModelUtils.array_parent_id(job.job_id)
+        if parent_id is None:
+            return None
+        return job.model_copy(update={'job_id': parent_id})
+
+    def _first_start_of_array(self, job_id: str, cached_job: Optional[SocaJob]) -> bool:
+        """
+        whether this is the first subjob of an array to start, as far as this process and
+        the cache can tell. An array is started once, however many subjobs it has.
+        """
+        if cached_job is not None and cached_job.state == SocaJobState.SUBJOB_BEGUN:
+            return False
+        with self._begun_arrays_lock:
+            if job_id in self._begun_arrays:
+                return False
+            if len(self._begun_arrays) >= 256:
+                # the cache says begun soon after the first start; forget what it covers
+                self._begun_arrays = {
+                    begun
+                    for begun in self._begun_arrays
+                    if getattr(self._context.job_cache.get_job(begun), 'state', None)
+                    not in (None, SocaJobState.SUBJOB_BEGUN)
+                }
+            self._begun_arrays.add(job_id)
+            return True
+
     def job_modified(self, job: SocaJob):
         """
         should be called when job modifications are validated successfully (qalter)
@@ -606,15 +759,23 @@ class JobMonitor(SocaService, JobMonitorProtocol):
 
         :param job: SocaJob built using the event received from Scheduler
         """
-        self._state.job_modified(job=job)
+        self._state.job_modified(job=self._as_array(job) or job)
 
     def job_running(self, job: SocaJob):
         """
         should be called when job is running
         """
+        array = self._as_array(job)
+        if array is not None:
+            job = array
+
+        # for a subjob this re-reads its array, which PBS now reports as begun
         self._state.job_running(job=job)
 
         cached_job = self._context.job_cache.get_job(job.job_id)
+
+        if array is not None and not self._first_start_of_array(job.job_id, cached_job):
+            return
 
         if cached_job is not None:
             job = cached_job
@@ -640,9 +801,40 @@ class JobMonitor(SocaService, JobMonitorProtocol):
         job_id = job.job_id
         execution_host = execution_hosts[0]
 
+        parent_id = ModelUtils.array_parent_id(job_id)
+        if parent_id is not None:
+            job_id = parent_id
+            execution_host = self._array_execution_host(parent_id, execution_host)
+
         self._context.job_cache.log_job_execution(
             job_id=job_id, execution_host=execution_host
         )
+
+    def _array_execution_host(
+        self, job_id: str, execution_host: SocaJobExecutionHost
+    ) -> SocaJobExecutionHost:
+        """
+        a subjob's begin or end on a host, folded into its array's one run there: from the
+        first subjob to begin on the host to the last to end. Each subjob's own result comes
+        from PBS history when the array finishes, so none is kept here, and an array of
+        thousands stays one small row per host.
+        """
+        if execution_host.execution is None or not execution_host.execution.runs:
+            return execution_host
+        runs = list(execution_host.execution.runs)
+        for known in self._context.job_cache.get_job_execution_hosts(job_id) or []:
+            if known.host == execution_host.host and known.execution is not None:
+                runs.extend(known.execution.runs or [])
+        starts = [run.start for run in runs if run.start is not None]
+        ends = [run.end for run in runs if run.end is not None]
+        execution_host.execution.runs = [
+            SocaJobExecutionRun(
+                run_id='1',
+                start=min(starts) if starts else None,
+                end=max(ends) if ends else None,
+            )
+        ]
+        return execution_host
 
     def start(self):
         if self._is_running:

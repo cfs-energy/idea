@@ -127,7 +127,7 @@ const ATTRIBUTED: Attribution[] = [
   { stack: 'vdc', path: 'vdc-host-policy/Resource', demo1Id: 'vdchostpolicy897A655B', template: 'virtual-desktop-dcv-host.yml' },
   { stack: 'vdc', path: '{cluster}-vdc-controller-policy/Resource', demo1Id: 'ideademo1vdccontrollerpolicyF192F909', template: 'virtual-desktop-controller.yml', vars: 'component-role' },
   { stack: 'vdc', path: '{cluster}-vdc-broker-policy/Resource', demo1Id: 'ideademo1vdcbrokerpolicy56B86FB2', template: 'virtual-desktop-dcv-broker.yml', vars: 'component-role' },
-  { stack: 'vdc', path: '{cluster}-vdc-gateway-policy/Resource', demo1Id: 'ideademo1vdcgatewaypolicyA538391B', template: 'virtual-desktop-dcv-connection-gateway.yml', vars: 'component-role' },
+  { stack: 'vdc', path: '{cluster}-vdc-gateway-policy/Resource', demo1Id: 'ideademo1vdcgatewaypolicyA538391B', template: 'virtual-desktop-dcv-connection-gateway.yml', vars: 'component-role', retired: 'the gateway calls no AWS API; its task role carries only the instance managed policies' },
   {
     stack: 'vdc',
     path: 'vdc-controller-role/DefaultPolicy/Resource',

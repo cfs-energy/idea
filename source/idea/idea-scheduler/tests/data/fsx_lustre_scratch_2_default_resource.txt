@@ -1,0 +1,53 @@
+  FSxForLustre:
+    Properties:
+      FileSystemType: LUSTRE
+      FileSystemTypeVersion: '2.15'
+      LustreConfiguration:
+        DeploymentType: SCRATCH_2
+      SecurityGroupIds:
+        - sg-mock123123123
+      StorageCapacity: 1200
+      SubnetIds:
+        - subnet-private1
+      Tags:
+        - Key: CostCenter
+          Value: MockCostCenter
+        - Key: Name
+          Value: idea-mock-normal-ondemand-1
+        - Key: custom:MyTagName
+          Value: MyTagValue
+        - Key: idea:CapacitySignature
+          Value: sfbf274f0ff7898d0
+        - Key: idea:CapacityType
+          Value: on-demand
+        - Key: idea:ClusterName
+          Value: idea-mock
+        - Key: idea:FSx
+          Value: 'true'
+        - Key: idea:JobGroup
+          Value: gfbf274f0
+        - Key: idea:JobId
+          Value: '1'
+        - Key: idea:JobName
+          Value: fsx-default
+        - Key: idea:JobOwner
+          Value: mockuser
+        - Key: idea:JobQueue
+          Value: normal
+        - Key: idea:KeepForever
+          Value: 'false'
+        - Key: idea:ModuleId
+          Value: scheduler
+        - Key: idea:Project
+          Value: default
+        - Key: idea:QueueType
+          Value: normal
+        - Key: idea:ScalingMode
+          Value: single-job
+        - Key: idea:StackId
+          Value: idea-mock-normal-ondemand-1
+        - Key: idea:StackType
+          Value: job
+        - Key: idea:TerminateWhenIdle
+          Value: '0'
+    Type: AWS::FSx::FileSystem

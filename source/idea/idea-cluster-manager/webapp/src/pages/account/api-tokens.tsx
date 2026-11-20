@@ -15,13 +15,17 @@ export default function ApiTokens() {
     const [name, setName] = useState('')
     const [expiry, setExpiry] = useState(EXPIRIES[0])
     const [created, setCreated] = useState<CreateApiTokenResult | null>(null)
+    const [loadFailed, setLoadFailed] = useState(false)
+    const [toRevoke, setToRevoke] = useState<ApiToken | null>(null)
     const client = AppContext.get().client().auth()
 
     const load = () => {
         setLoading(true)
         setError('')
+        setLoadFailed(false)
         client.listApiTokens().then(result => setTokens(result.listing ?? [])).catch(error => {
             setError(error?.message ?? 'Could not load API tokens.')
+            setLoadFailed(true)
         }).finally(() => setLoading(false))
     }
     useEffect(load, [client])
@@ -49,6 +53,7 @@ export default function ApiTokens() {
         }
     }
     const revoke = async (token: ApiToken) => {
+        setToRevoke(null)
         setBusy(true)
         setError('')
         try {
@@ -64,7 +69,7 @@ export default function ApiTokens() {
     return <Container header={<Header variant="h2" actions={<Button disabled={loading || busy} onClick={() => {setError(''); setVisible(true)}}>Create token</Button>}>API tokens</Header>}>
         <SpaceBetween size="m">
             <Box>Tokens use your current permissions for automation. Revocation takes effect across services within 60 seconds.</Box>
-            {error && !visible && <Alert type="error" action={<Button onClick={load}>Retry</Button>}>{error}</Alert>}
+            {error && !visible && <Alert type="error" action={loadFailed ? <Button onClick={load}>Retry</Button> : undefined}>{error}</Alert>}
             <Table variant="embedded" items={tokens} loading={loading} loadingText="Loading API tokens" trackBy="token_id"
                 empty={<Box>No API tokens</Box>}
                 columnDefinitions={[
@@ -72,8 +77,15 @@ export default function ApiTokens() {
                     {id: 'created', header: 'Created', cell: item => date(item.created_on)},
                     {id: 'expires', header: 'Expires', cell: item => date(item.expires_on)},
                     {id: 'last-used', header: 'Last used', cell: item => date(item.last_used_on)},
-                    {id: 'revoke', header: 'Actions', cell: item => <Button disabled={busy} ariaLabel={`Revoke ${item.name}`} onClick={() => revoke(item)}>Revoke</Button>}
+                    {id: 'revoke', header: 'Actions', cell: item => <Button disabled={busy} ariaLabel={`Revoke ${item.name}`} onClick={() => setToRevoke(item)}>Revoke</Button>}
                 ]}/>
+            <Modal visible={toRevoke != null} onDismiss={() => setToRevoke(null)} header="Revoke token"
+                footer={<SpaceBetween direction="horizontal" size="s">
+                    <Button onClick={() => setToRevoke(null)}>Cancel</Button>
+                    <Button variant="primary" onClick={() => revoke(toRevoke!)}>Revoke</Button>
+                </SpaceBetween>}>
+                Revoke {toRevoke?.name}? Anything using this token stops working within 60 seconds.
+            </Modal>
             <Modal visible={visible} onDismiss={close} header={created ? 'API token created' : 'Create API token'}
                 footer={<SpaceBetween direction="horizontal" size="s">
                     <Button disabled={busy} onClick={close}>{created ? 'Done' : 'Cancel'}</Button>

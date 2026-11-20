@@ -7,7 +7,10 @@
   "schedule": [
     "* 0-6 * * 1"
   ],
-  "dependencyDashboard": true,
+  "updateNotScheduled": false,
+  "dependencyDashboard": {
+    "enabled": true
+  },
   "gitIgnoredAuthors": [
     "idea-locks@example.invalid"
   ],
@@ -118,7 +121,7 @@
     },
     {
       "customType": "regex",
-      "description": "Keep the image uv version aligned with the mise toolchain",
+      "description": "Keep the image uv version aligned with the mise toolchain; the Dockerfile's UV_SHA256_AARCH64 and UV_SHA256_X86_64 wheel hashes move by hand from PyPI, or the image build fails closed",
       "managerFilePatterns": [
         "/^deployment/ecr/idea-control-plane/Dockerfile$/"
       ],
@@ -127,6 +130,32 @@
       ],
       "depNameTemplate": "uv",
       "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "The image scanner the control-plane image check pins; its checksum moves by hand",
+      "managerFilePatterns": [
+        "/^\\.github/actions/build_control_plane_image/action\\.yml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=github-releases depName=aquasecurity/trivy\\s+SCANNER_VERSION: (?<currentValue>[^\\s]+)"
+      ],
+      "depNameTemplate": "aquasecurity/trivy",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "PowerShell for the sdk suite's Windows bootstrap parse; its checksums move by hand",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/unit_tests\\.yaml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=github-releases depName=PowerShell/PowerShell\\s+POWERSHELL_VERSION: (?<currentValue>[^\\s]+)"
+      ],
+      "depNameTemplate": "PowerShell/PowerShell",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
     }
   ],
   "packageRules": [
@@ -219,6 +248,50 @@
       "automerge": false,
       "groupName": null,
       "groupSlug": null
+    },
+    {
+      "description": "opensearch-py 3.1 and later hard-require opensearch-protobufs, which pulls grpcio and protobuf for a gRPC transport this codebase never constructs",
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchDepNames": [
+        "opensearch-py"
+      ],
+      "allowedVersions": "<3.1"
+    },
+    {
+      "description": "boto3 1.44 changes the default retry mode; boto3 and the botocore it requires stay on 1.43 until that is tested",
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "matchDepNames": [
+        "boto3",
+        "botocore"
+      ],
+      "allowedVersions": "<1.44"
+    },
+    {
+      "description": "Cloudscape components 3.0.1410 gave Toggle role switch, which 3.0.1411 reverted",
+      "matchPackageNames": [
+        "@cloudscape-design/components"
+      ],
+      "allowedVersions": "!/^3\\.0\\.1410$/"
+    },
+    {
+      "description": "Scanner updates await Dependency Dashboard approval: take SCANNER_SHA256 from the release's trivy_<version>_checksums.txt (Linux-ARM64) in the same PR",
+      "matchDepNames": [
+        "aquasecurity/trivy"
+      ],
+      "dependencyDashboardApproval": true,
+      "automerge": false
+    },
+    {
+      "description": "PowerShell updates await Dependency Dashboard approval: take both Linux lines of the release's hashes.sha256 and the Check PowerShell version in the same PR",
+      "matchDepNames": [
+        "PowerShell/PowerShell"
+      ],
+      "dependencyDashboardApproval": true,
+      "automerge": false
     }
   ],
   "mise": {

@@ -132,6 +132,42 @@ Example:
 
 * scratch\_size, instance\_type: End users are not authorized to override `scratch_size` and `instance_type` parameters for their jobs and have to use the defaults value specified at the queue profile
 
+Any job can mount an existing FSx for Lustre file system by naming its DNS name in `fsx_lustre`. To stop that on a queue:
+
+1. Go to **Administration** > **Manage jobs** > **Queues**, select the queue profile, and choose **Edit Queue Profile**.
+2. In **Restricted Parameters** (`queue_management_params.restricted_parameters`), add `fsx_lustre`.
+3. Choose **Update Queue Profile**. A job on that queue that sets `-l fsx_lustre=fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com` is now refused at submission with `Queue <queue> doesn't let jobs set fsx_lustre. Remove it from your job script.`
+
+This blocks every `fsx_lustre` request on the queue, including requests for a new FSx for Lustre file system. The queue's own **Existing FSx for Lustre** (see [Existing FSx for Lustre](queue-profiles.md#existing-fsx-for-lustre)) still applies: jobs can't choose a file system, and every job on the queue mounts the one you set.
+
+A job can also name any machine image the cluster's AWS account can launch, with `-l instance_ami=<ami id>`. Its nodes boot that image with the job's instance role and mount the cluster's shared storage, so the image's contents are trusted with both. To allow only the queue's own image:
+
+1. Go to **Administration** > **Manage jobs** > **Queues**, select the queue profile, and choose **Edit Queue Profile**.
+2. In **Restricted Parameters** (`queue_management_params.restricted_parameters`), add `instance_ami`.
+3. Choose **Update Queue Profile**. A job on that queue that sets `-l instance_ami=ami-0123456789abcdef0` is now refused at submission with `Queue <queue> doesn't let jobs set instance_ami. Remove it from your job script.` Jobs that don't set it still boot the queue profile's image.
+
+#### Jobs may create a new FSx for Lustre
+
+Controls whether a job on this queue can create its own FSx for Lustre file system for scratch storage. That covers `-l fsx_lustre=true` and `-l fsx_lustre=<bucket>` or `s3://<bucket>`. The file system is billed from creation until IDEA deletes it with the job's compute stack. The setting is saved as `queue_management_params.allow_new_fsx_lustre`.
+
+It doesn't affect mounting an existing file system: a job can still name one by DNS name (unless `fsx_lustre` is a restricted parameter), and the queue's **Existing FSx for Lustre** still applies.
+
+A job that asks for a new file system on a queue that doesn't allow it is refused at submission with `Queue <queue> doesn't let jobs create a new FSx for Lustre file system. Ask an administrator to allow it on the queue, or set fsx_lustre to the DNS name of an existing file system.`
+
+Defaults:
+
+* A queue profile an administrator creates from IDEA 26.11.2 on (portal or API) starts with the box unchecked (not allowed).
+* A queue profile that existed before the upgrade has no stored value and allows it, as before. The form shows it checked, so saving the profile changes nothing.
+* The built-in queue profiles IDEA creates itself (`compute`, `job-shared` and `test`, at install or when one is re-created after being deleted) are created with it allowed, as they were before.
+
+To turn it off on existing queues after upgrading (for example on a cluster where per-job file systems are a cost you don't want):
+
+1. Go to **Administration** > **Manage jobs** > **Queues**, select the queue profile, and choose **Edit Queue Profile**.
+2. Clear **Jobs may create a new FSx for Lustre**.
+3. Choose **Update Queue Profile**. New submissions that ask for a new file system are refused.
+
+To see what these file systems cost, an account owner can activate these tags as cost allocation tags in the AWS Billing console. Every file system a job creates carries them: `idea:Project`, `idea:JobId`, `idea:JobOwner`, `idea:JobQueue`, `idea:ClusterName` and `idea:FSx` (`true`). The project's own tags are added too. Cost Explorer can then group FSx spend by `idea:Project`.
+
 #### Allowed Security Groups
 
 List of additional security group(s) users can override via [#security\_groups](../user-documentation/supported-ec2-parameters.md#security\_groups "mention") parameter.
@@ -257,6 +293,26 @@ Associated Job Resource: [#scratch\_size](../user-documentation/supported-ec2-pa
 Choose what type of storage provider you want to use for your scratch partition (EBS, FSx ...)
 
 Associated Job Resource: None if EBS, [#fsx\_lustre](../user-documentation/supported-ec2-parameters.md#fsx\_lustre "mention")/ [#fsx\_lustre\_deployment\_type](../user-documentation/supported-ec2-parameters.md#fsx\_lustre\_deployment\_type "mention") for FSx
+
+#### Existing FSx for Lustre
+
+Shown when **Scratch Provider** is **FSx for Lustre (Existing)**. Enter the file system's DNS name, for example `fs-0123456789abcdef0.fsx.us-east-2.amazonaws.com`. It is saved as `default_job_params.fsx_lustre.existing_fsx`.
+
+Every job on the queue that names no file system mounts this one at the FSx mount point (`/fsx` by default). That is a job that sets nothing, or only `-l fsx_lustre=true`. The file system is written to the job when it is submitted, so changing the queue later doesn't change jobs already queued or running.
+
+When `fsx_lustre` isn't a restricted parameter, the job's own request wins:
+
+* `-l fsx_lustre=<another DNS name>` mounts that file system instead.
+* `-l fsx_lustre=<bucket>` creates a new FSx for Lustre linked to the bucket, with the new-FSx defaults for size and deployment type. The queue must allow jobs to create one.
+* `-l fsx_lustre=false` mounts none.
+
+When `fsx_lustre` is restricted, jobs can't set it and every job mounts the queue's file system.
+
+The default applies only while **Scratch Provider** is **FSx for Lustre (Existing)**. Switching the provider to EBS or to a new FSx removes it. A queue profile written through the API with an existing file system but no scratch provider also applies it.
+
+{% hint style="info" %}
+Before IDEA 26.11.2 this setting was saved but never reached the job. After upgrading, new jobs on such a queue start mounting the file system.
+{% endhint %}
 
 #### Scratch Storage Size
 

@@ -72,7 +72,7 @@ class AccountsClient:
 
     def get_group(self, request: GetGroupRequest) -> GetGroupResult:
         return self.client.invoke_alt(
-            namespace='Accounts.GetUserGroup',
+            namespace='Accounts.GetGroup',
             payload=request,
             result_as=GetGroupResult,
             access_token=self.get_access_token(),

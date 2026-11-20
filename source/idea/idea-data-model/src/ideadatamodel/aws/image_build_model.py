@@ -12,7 +12,7 @@ ImageRowKey.range_key), so every existing record is already a valid CPU row.
 from ideadatamodel.base import SocaBaseModel
 from ideadatamodel.api import SocaPayload
 
-from typing import Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime, timedelta, timezone, tzinfo
 from enum import Enum
 from pydantic import Field
@@ -183,7 +183,7 @@ class ImageRowFilter(SocaBaseModel):
 
 class ImageRefreshSchedule(SocaBaseModel):
     """
-    the monthly vendor check, stored at vdc.software_stacks.image_refresh_schedule.
+    the monthly rebuild, stored at vdc.software_stacks.image_refresh_schedule.
     the scheduler reads the same key for compute rows. hour is in cluster.timezone
     """
 
@@ -240,8 +240,20 @@ class ImagePipelineSettings(SocaBaseModel):
     keep_generations: Optional[int] = Field(default=2)
     ready_gate_seconds_linux: Optional[int] = Field(default=600)
     ready_gate_seconds_windows: Optional[int] = Field(default=900)
+    # past this a bake attempt fails, whatever state it is working in and whether or not a
+    # worker still runs it. the queue and a wait for EC2 capacity are not on the clock: a
+    # capacity wait is bounded by its five tries. a value below 1 means the default
+    bake_time_limit_minutes: Optional[int] = Field(default=120)
     validation_user: Optional[str] = Field(default='idea-validate')
     validation_project: Optional[str] = Field(default='idea-validate')
+    # read from vdc by both pipelines: the builder type for CPU bakes, by architecture
+    # (x86_64, arm64). empty means the pipeline default (Linux c7i.2xlarge / c8g.2xlarge,
+    # Windows m7i.large); GPU bakes keep their GPU builder
+    builder_instance_types: Optional[Dict[str, Optional[str]]] = Field(default=None)
+
+    def bake_time_limit(self) -> timedelta:
+        minutes = self.bake_time_limit_minutes
+        return timedelta(minutes=minutes if minutes and minutes > 0 else 120)
 
 
 class ImageBuildRecord(SocaBaseModel):
@@ -272,6 +284,8 @@ class ImageBuildRecord(SocaBaseModel):
     error: Optional[str] = Field(default=None)
     started_on: Optional[datetime] = Field(default=None)
     finished_on: Optional[datetime] = Field(default=None)
+    # when this attempt left the queue; the bake time limit counts from here
+    attempt_started_on: Optional[datetime] = Field(default=None)
 
     # 26.10.1 image row fields
     kind: Optional[ImageKind] = Field(default=None)
@@ -288,6 +302,10 @@ class ImageBuildRecord(SocaBaseModel):
     validated_on: Optional[datetime] = Field(default=None)
     promoted_on: Optional[datetime] = Field(default=None)
     checks: Optional[List[ImageCheck]] = Field(default=None)
+    # the type this attempt's builder launched on, and why it is not the chosen one when
+    # a capacity or quota refusal sent it to the fallback (None otherwise)
+    builder_instance_type: Optional[str] = Field(default=None)
+    builder_fallback: Optional[str] = Field(default=None)
     # CloudWatch console link for the run's log stream
     log_link: Optional[str] = Field(default=None)
     attempts: Optional[int] = Field(default=None)

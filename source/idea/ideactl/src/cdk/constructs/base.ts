@@ -3,7 +3,7 @@
  */
 
 import type { IConstruct } from 'constructs';
-import { Aws, CfnResource, Stack, Tags, Validations } from 'aws-cdk-lib';
+import { Aws, CfnResource, RemovalPolicy, Stack, Tags, Validations } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 import type { ClusterConfig } from '../../config/cluster-config.ts';
@@ -201,4 +201,12 @@ export function addNagSuppression(
     const l1 = child.node.defaultChild ?? child;
     if (CfnResource.isCfnResource(l1)) l1.addMetadata('cdk_nag', mergeNagRules(l1.getMetadata('cdk_nag'), rules));
   }
+}
+
+/** A removal policy named in cluster settings (`DESTROY`, `RETAIN`, ...); an unknown name throws. */
+export function removalPolicyByName(name: string): RemovalPolicy {
+  if (!Object.prototype.hasOwnProperty.call(RemovalPolicy, name)) {
+    throw new Error(`'${name}' is not a valid RemovalPolicy`);
+  }
+  return RemovalPolicy[name as keyof typeof RemovalPolicy];
 }

@@ -23,14 +23,17 @@ PBS_CORE_LIMIT=unlimited
 PBS_SCP=/usr/bin/scp
 " > /etc/pbs.conf
 
-echo -e "
-\$clienthost {{ pbs_server_name }}
-\$usecp *:/dev/null /dev/null
-\$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
-\$usecp *:{{ context.config.get_string('shared-storage.apps.mount_dir') }} {{ context.config.get_string('shared-storage.apps.mount_dir') }}
+# a quoted here-document: the stored mount paths are data, not shell
+cat > /var/spool/pbs/mom_priv/config <<'IDEA_MOM_CONFIG'
+
+$clienthost {{ pbs_server_name }}
+$usecp *:/dev/null /dev/null
+$usecp *:{{ context.config.get_string('shared-storage.data.mount_dir') }} {{ context.config.get_string('shared-storage.data.mount_dir') }}
+$usecp *:{{ context.config.get_string('shared-storage.apps.mount_dir') }} {{ context.config.get_string('shared-storage.apps.mount_dir') }}
 # Shared scratch directories should also be added here
-\$usecp *:/fsx /fsx
-" > /var/spool/pbs/mom_priv/config
+$usecp *:/fsx /fsx
+
+IDEA_MOM_CONFIG
 
 {% include '_templates/linux/openpbs_client_server.jinja2' %}
 

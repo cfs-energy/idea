@@ -18,12 +18,16 @@ Tokens also work with the scheduler and virtual desktop controller API endpoints
 They act as your user, with your current groups and permissions checked on every
 call. An administrator token has administrator rights. Group removal removes that
 access on the next call, and disabled or deleted accounts cannot use tokens.
-Tokens cannot grant permissions beyond those of their owner. They cannot open the
-web terminal; that needs a signed-in session.
+Tokens cannot grant permissions beyond those of their owner.
 
-Choose **Revoke** beside a token to delete it. Revocation takes effect across services
-within 60 seconds. Expired tokens are refused even while cached. Create a replacement
-before expiry when automation must continue. Only a SHA-256 hash is stored; a lost
+A token can do anything your account can do through the API, including submitting
+jobs, starting desktops that run as you, and fetching your SSH key. It cannot open
+the web terminal; that needs a signed-in session. Keep a token as safe as a password.
+
+Choose **Revoke** beside a token to delete it. Revocation takes effect at once on the task
+that handles it. Any other task, of the same service or another, can keep accepting the revoked token for up to 30
+seconds, because each task keeps authorization answers for that long. Expired tokens are refused even while cached.
+Create a replacement before expiry when automation must continue. Only a SHA-256 hash is stored; a lost
 token must be replaced. Last used is recorded at most once per minute.
 
 The Auth API offers `CreateApiToken` (`name`, `expires_in_days`, from 1 to 365),

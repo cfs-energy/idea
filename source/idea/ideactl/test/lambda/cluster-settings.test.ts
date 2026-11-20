@@ -233,3 +233,15 @@ test("reports FAILED with the stable physical id when DynamoDB rejects a write",
     );
     assert.equal(recorder.responses[0].reason, undefined);
 });
+
+test("the received event is logged without its presigned response URL", async () => {
+    const lines: string[] = [];
+    const logger = { info: (line: string) => lines.push(line), error: (line: string) => lines.push(line) };
+    await createHandler({
+        dynamoDb: (): ClusterSettingsDynamoDb => ({ send: async () => ({}) }),
+        responseSender: makeResponseRecorder().sender,
+        logger: logger as never,
+    })(makeEvent("Create", { text: "value" }), context);
+    assert.ok(lines.some((line) => line.startsWith("ReceivedEvent:")));
+    assert.ok(!lines.some((line) => line.includes("https://example.invalid/response")), lines.join("\n"));
+});

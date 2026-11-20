@@ -9,7 +9,7 @@ test('the project boundary covers every desktop and attached managed-policy acti
         'global-settings.module_sets.default.cluster-manager.module_id': 'cluster-manager',
         'cluster.cluster_name': 'example', 'cluster.aws.region': 'us-gov-west-1',
         'cluster.aws.partition': 'aws-us-gov', 'cluster.aws.account_id': '123456789012',
-        'cluster.aws.dns_suffix': 'amazonaws.com', 'cluster.s3.bucket': 'example',
+        'cluster.aws.dns_suffix': 'amazonaws.com', 'cluster.s3.bucket': 'example', 'cluster.cluster_s3_bucket': 'example',
         'cluster.kms.key_type': 'customer-managed',
         'cluster.dynamodb.kms_key_id': '00000000-0000-0000-0000-000000000000',
         'cluster.kms.key_id': '00000000-0000-0000-0000-000000000000',

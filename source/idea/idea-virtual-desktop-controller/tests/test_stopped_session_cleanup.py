@@ -7,8 +7,11 @@ keep tag or admin exemption, a stop time that does not parse, an ec2 answer that
 be read, a desktop running again by the time it is acted on, and a dry run.
 """
 
+import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -30,6 +33,7 @@ from ideavirtualdesktopcontroller.app.api.virtual_desktop_api import VirtualDesk
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
     CLEANUP_EXEMPT_TAG,
     CLEANUP_WARNING_NOTIFICATION_PREFIX,
+    cleanup_warning_receipt,
     STATE_TRANSITION_TIME_FORMAT,
     STOPPED_SESSION_CLEANUP_CONFIG_PREFIX,
     VirtualDesktopSessionUtils,
@@ -151,12 +155,21 @@ class FakeSessionDB:
                     return f'{page_index}:{offset + 1}'
         return None
 
-    def update(self, session: VirtualDesktopSession) -> VirtualDesktopSession:
+    def update(
+        self, session: VirtualDesktopSession, **conditions
+    ) -> VirtualDesktopSession:
         self.updated.append(session)
         return session
 
     def get_from_db(self, idea_session_owner: str, idea_session_id: str):
-        return self.existing
+        if self.existing is not None:
+            return self.existing
+        # the row as listed, as the table would return it on a re-read
+        for page in self.pages:
+            for candidate in page:
+                if candidate.idea_session_id == idea_session_id:
+                    return candidate
+        return None
 
 
 class FakeClock:
@@ -221,6 +234,10 @@ class FakeClusterConfig:
     def get_int(self, key: str, default: int = None, required: bool = False):
         return self.values.get(key, default)
 
+    @staticmethod
+    def get_module_id(module_name: str) -> str:
+        return module_name
+
     def get_list(self, key: str, default: list = None, required: bool = False):
         return self.values.get(key, default)
 
@@ -231,6 +248,29 @@ class FakeContext:
         self.accounts_client.get_user.return_value.user.enabled = True
         self._config = config
         self.notification_async_client = FakeNotificationClient()
+        # receipts the cluster manager recorded after SES accepted a notice
+        self.receipts = set()
+        self.receipt_tables = []
+
+    def aws(self):
+        context = self
+
+        class Table:
+            def __init__(self, name):
+                context.receipt_tables.append(name)
+
+            def get_item(self, Key, **kwargs):
+                # receipts: a set of sent receipts, or receipt -> the row's extra fields
+                if Key['sk'] not in context.receipts:
+                    return {}
+                extra = (
+                    context.receipts.get(Key['sk'], {})
+                    if isinstance(context.receipts, dict)
+                    else {}
+                )
+                return {'Item': {**Key, **extra}}
+
+        return SimpleNamespace(dynamodb_table=lambda: SimpleNamespace(Table=Table))
 
     def config(self) -> FakeClusterConfig:
         return self._config
@@ -238,6 +278,10 @@ class FakeContext:
     @staticmethod
     def cluster_name() -> str:
         return 'idea-test'
+
+    @staticmethod
+    def module_id() -> str:
+        return 'vdc'
 
 
 def a_config(**values) -> FakeClusterConfig:
@@ -847,10 +891,63 @@ def test_deletion_proceeds_once_the_warning_window_has_elapsed():
         config=a_config(stopped_after_days=30, warn_days_before=7),
         delete_path=delete_path,
     )
+    utils.context.receipts.add(
+        cleanup_warning_receipt(session.idea_session_id, stopped_at)
+    )
 
     assert sweep(utils)['deleted'] == 1
     assert delete_path.deleted == [session]
     assert notices_sent(utils) == []
+    assert utils.context.receipt_tables == ['idea-test.vdc.desktop-cleanup']
+
+
+def email_on(config):
+    config.values['cluster.ses.enabled'] = True
+    config.values['cluster-manager.notifications.email.enabled'] = True
+    return config
+
+
+def test_a_notice_that_was_never_delivered_is_sent_again_with_a_new_window():
+    # email is on and the owner can be reached: the send failed for a reason that may pass
+    stopped_at = a_stop_time(40)
+    session = warned_session(stopped_at, warned_days_ago=30)
+    delete_path = FakeDeletePath()
+    utils = build_utils(
+        FakeSessionDB(pages=[[session]]),
+        FakeEc2Client(an_instance(stopped_at=stopped_at)),
+        config=email_on(a_config(stopped_after_days=30, warn_days_before=7)),
+        delete_path=delete_path,
+    )
+    utils.context.accounts_client.get_user.return_value.user.email = 'owner@marker.test'
+
+    counters = sweep(utils)
+
+    assert counters['deleted'] == 0 and counters['warned'] == 1
+    assert delete_path.deleted == []
+    (notice,) = notices_sent(utils)
+    assert notice.params['deletion_date'].startswith(
+        (now() + 7 * DAY).strftime('%Y-%m-%d')
+    )
+
+
+def test_the_notice_carries_its_receipt():
+    stopped_at = a_stop_time(40)
+    utils = build_utils(
+        FakeSessionDB(pages=[[a_session()]]),
+        FakeEc2Client(an_instance(stopped_at=stopped_at)),
+        config=a_config(stopped_after_days=30, warn_days_before=7),
+    )
+    sweep(utils)
+    (notice,) = notices_sent(utils)
+    receipt = notice.params['delivery_receipt']
+    # the form the cluster manager's record_delivery accepts, from a sha256 of the stop episode
+    assert re.fullmatch(r'[0-9a-f]{32}', receipt)
+    assert (
+        receipt
+        == hashlib.sha256(
+            f'{a_session().idea_session_id}:{Utils.to_milliseconds(stopped_at)}'.encode()
+        ).hexdigest()[:32]
+    )
 
 
 def test_a_desktop_already_past_the_cutoff_is_warned_first_and_given_the_whole_window():
@@ -1039,9 +1136,8 @@ def test_a_create_request_cannot_carry_the_exemption_in():
     api = object.__new__(VirtualDesktopAPI)
     session = VirtualDesktopSession(cleanup_exempt=True, cleanup_exempt_reason='mine')
 
-    # a request with no project fails before anything else is looked at
-    session, is_valid = api.validate_create_session_request(session)
-    assert is_valid is False
+    # every create builds the new desktop from the fields a creator may choose
+    session = api.creatable_session(session)
     assert session.cleanup_exempt is None
     assert session.cleanup_exempt_reason is None
 
@@ -1060,3 +1156,111 @@ def test_an_update_request_cannot_carry_the_exemption_in():
     )
     assert old_session.cleanup_exempt is None
     assert session_db.updated == []
+
+
+def a_warned_desktop(warned_days_ago, config):
+    stopped_at = a_stop_time(40)
+    session = warned_session(stopped_at, warned_days_ago=warned_days_ago)
+    delete_path = FakeDeletePath()
+    utils = build_utils(
+        FakeSessionDB(pages=[[session]]),
+        FakeEc2Client(an_instance(stopped_at=stopped_at)),
+        config=config,
+        delete_path=delete_path,
+    )
+    utils.context.accounts_client.get_user.return_value.user.email = 'owner@marker.test'
+    return session, stopped_at, utils, delete_path
+
+
+@pytest.mark.parametrize('warned_days_ago, deleted', [(6.5, 0), (7.5, 1)])
+def test_with_cluster_email_off_the_desktop_goes_after_the_window_not_before(
+    warned_days_ago, deleted
+):
+    # the shipped cluster: cluster.ses.enabled is false, no receipt is ever written
+    _, _, utils, delete_path = a_warned_desktop(
+        warned_days_ago, a_config(stopped_after_days=30, warn_days_before=7)
+    )
+    assert sweep(utils)['deleted'] == deleted
+    assert len(delete_path.deleted) == deleted
+
+
+@pytest.mark.parametrize('owner', ['disabled', 'no address'])
+def test_an_owner_who_cannot_be_emailed_does_not_hold_the_desktop(owner):
+    _, _, utils, delete_path = a_warned_desktop(
+        7.5, email_on(a_config(stopped_after_days=30, warn_days_before=7))
+    )
+    user = utils.context.accounts_client.get_user.return_value.user
+    if owner == 'disabled':
+        user.enabled = False
+    else:
+        user.email = ''
+    assert sweep(utils)['deleted'] == 1
+    assert notices_sent(utils) == []
+
+
+def test_a_cannot_notify_receipt_lets_the_desktop_go_after_the_window():
+    session, stopped_at, utils, delete_path = a_warned_desktop(
+        7.5, email_on(a_config(stopped_after_days=30, warn_days_before=7))
+    )
+    # the row as fix20-cm-accounts 996e771f record_delivery writes it
+    utils.context.receipts = {
+        cleanup_warning_receipt(session.idea_session_id, stopped_at): {
+            'at': '2026-11-18T00:00:00+00:00',
+            'outcome': 'cannot-notify',
+            'reason': 'owner-disabled',
+            'expires_at': 1900000000,
+        }
+    }
+    assert sweep(utils)['deleted'] == 1
+    logged = ' '.join(str(c) for c in utils._logger.warning.call_args_list)
+    assert 'owner-disabled' in logged
+
+
+def test_a_row_written_before_outcomes_counts_as_sent():
+    session, stopped_at, utils, delete_path = a_warned_desktop(
+        7.5, email_on(a_config(stopped_after_days=30, warn_days_before=7))
+    )
+    utils.context.receipts = {
+        cleanup_warning_receipt(session.idea_session_id, stopped_at): {
+            'at': '2026-11-01T00:00:00+00:00',
+            'expires_at': 1900000000,
+        }
+    }
+    assert sweep(utils)['deleted'] == 1
+
+
+@pytest.mark.parametrize('warned_days_ago, deleted', [(6.5, 0), (7.5, 1)])
+def test_with_deletion_notices_off_the_desktop_goes_after_the_window(
+    warned_days_ago, deleted
+):
+    # this controller's own switch: no request goes out, so no row ever comes
+    config = email_on(a_config(stopped_after_days=30, warn_days_before=7))
+    config.values[f'{CLEANUP_WARNING_NOTIFICATION_PREFIX}.enabled'] = False
+    _, _, utils, delete_path = a_warned_desktop(warned_days_ago, config)
+    assert sweep(utils)['deleted'] == deleted
+    if deleted:
+        logged = ' '.join(str(c) for c in utils._logger.warning.call_args_list)
+        assert 'deletion notices are off' in logged
+
+
+def test_a_sent_receipt_lets_the_desktop_go_after_the_window():
+    session, stopped_at, utils, delete_path = a_warned_desktop(
+        7.5, email_on(a_config(stopped_after_days=30, warn_days_before=7))
+    )
+    utils.context.receipts = {
+        cleanup_warning_receipt(session.idea_session_id, stopped_at): {
+            'outcome': 'sent'
+        }
+    }
+    assert sweep(utils)['deleted'] == 1
+
+
+@pytest.mark.parametrize('email, deleted, warned', [(False, 1, 0), (True, 0, 1)])
+def test_a_desktop_warned_before_the_upgrade(email, deleted, warned):
+    # warned long ago, before receipts existed: no row at all
+    config = a_config(stopped_after_days=30, warn_days_before=7)
+    if email:
+        email_on(config)
+    _, _, utils, delete_path = a_warned_desktop(60, config)
+    counters = sweep(utils)
+    assert counters['deleted'] == deleted and counters['warned'] == warned

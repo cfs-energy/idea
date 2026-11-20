@@ -34,6 +34,7 @@ import type {
 import {
     errorMessage,
     wrapCfnHandler,
+    eventForLog,
 } from "../commons/cfn-response.ts";
 
 const ENDPOINT_NAME_TAG = "idea:EndpointName";
@@ -224,7 +225,7 @@ export function createHandler(
 
     return wrapCfnHandler(
         async (event: ClusterEndpointsEvent): Promise<void> => {
-            logger.info(`ReceivedEvent: ${JSON.stringify(event)}`);
+            logger.info(`ReceivedEvent: ${eventForLog(event)}`);
             const resourceProperties = event.ResourceProperties;
             const name = endpointName(event);
             if (name === null || name === NOT_PROVIDED) {

@@ -25,6 +25,9 @@ from ideasdk.utils import Utils
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_db import (
     VirtualDesktopSessionDB,
 )
+from ideavirtualdesktopcontroller.app.sessions import (
+    virtual_desktop_session_utils as session_utils_module,
+)
 from ideavirtualdesktopcontroller.app.sessions.virtual_desktop_session_utils import (
     PROVISIONING_TIMEOUT_CONFIG_KEY,
     PROVISIONING_TIMEOUT_SECONDS_DEFAULT,
@@ -660,6 +663,19 @@ def a_failed_host(instance_id: str, status: str) -> Dict:
     return {'InstanceId': instance_id, 'Tags': [a_bootstrap_status_tag(status)]}
 
 
+def test_the_failure_line_finds_the_desktop_by_id_and_names_nobody():
+    session = a_session(provisioning_for_minutes=3)
+    ec2_client = FakePaginatedEc2Client(
+        [a_failed_host(INSTANCE_ID, KERNEL_BOOT_MISMATCH)]
+    )
+    utils, _, _ = build_aborted_sweep([session], ec2_client)
+    utils.fail_bootstrap_aborted_sessions()
+    logged = [call.args[0] for call in utils._logger.error.call_args_list]
+    line = next(text for text in logged if 'failed while provisioning' in text)
+    assert session.idea_session_id in line
+    assert session.owner not in line
+
+
 def test_an_aborted_bootstrap_fails_the_desktop_well_inside_the_timeout():
     session = a_session(provisioning_for_minutes=3)
     ec2_client = FakePaginatedEc2Client(
@@ -741,3 +757,62 @@ def test_an_aborted_desktop_names_its_bootstrap_log_only_when_logs_ship():
     utils.context = FakeContext(FakeClusterConfig(logs_enabled=True))
     assert utils.fail_bootstrap_aborted_sessions() == 1
     assert f'stream bootstrap_{INSTANCE_ID}' in session.failure_reason
+
+
+# what the host said, read before it is released
+
+
+def test_a_desktop_that_panicked_says_so_and_the_console_is_read_before_the_release(
+    monkeypatch,
+):
+    ec2_client = FakeEc2Client()
+    session_db = FakeSessionDB()
+    server_utils = FakeServerUtils()
+    utils = build_utils(session_db, ec2_client, server_utils)
+    utils.context.module_version = lambda: '26.11.2'
+    seen = []
+
+    def capture(context, logger, host):
+        seen.append((host, len(server_utils.terminated), len(session_db.updated)))
+        return (
+            'Likely cause: the operating system crashed while starting (kernel panic).'
+        )
+
+    monkeypatch.setattr(session_utils_module, 'capture_failure', capture)
+    session = a_session()
+
+    assert utils.fail_stuck_provisioning_session(session, 1800) is True
+
+    host, released_before, saved_before = seen[0]
+    assert (released_before, saved_before) == (0, 0)
+    assert host.kind == 'desktop' and host.identifier == 'sess-1'
+    assert host.instance_id == INSTANCE_ID and host.instance_type == 'g5.xlarge'
+    assert host.release == '26.11.2'
+    assert 'never reported back' in session.failure_reason
+    assert session.failure_reason.endswith('(kernel panic).')
+    assert len(server_utils.terminated) == 1
+
+
+def test_a_capture_that_blows_up_still_fails_and_releases_the_desktop(monkeypatch):
+    server_utils = FakeServerUtils()
+    utils = build_utils(FakeSessionDB(), FakeEc2Client(), server_utils)
+    monkeypatch.setattr(
+        session_utils_module,
+        'capture_failure',
+        Mock(side_effect=RuntimeError('aws is gone')),
+    )
+    session = a_session()
+    assert utils.fail_stuck_provisioning_session(session, 1800) is True
+    assert session.state == VirtualDesktopSessionState.ERROR
+    assert 'never reported back' in session.failure_reason
+    assert len(server_utils.terminated) == 1
+
+
+def test_a_real_capture_with_no_grant_leaves_the_message_as_it_was():
+    # the context here has no aws at all: the same as every read failing
+    server_utils = FakeServerUtils()
+    utils = build_utils(FakeSessionDB(), FakeEc2Client(), server_utils)
+    session = a_session()
+    assert utils.fail_stuck_provisioning_session(session, 1800) is True
+    assert 'Likely cause' not in session.failure_reason
+    assert len(server_utils.terminated) == 1

@@ -1,7 +1,8 @@
-import {render, screen, waitFor, within} from '@testing-library/react';
+import {act, render, screen, waitFor, within} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
-import {ActiveJobs, ActiveJobsEmpty, AdminActiveJobs, CompletedJobs, jobColumns, MY_JOBS_PREFERENCES_KEY} from './jobs';
+import createWrapper from '@cloudscape-design/components/test-utils/dom';
+import {ActiveJobs, ActiveJobsEmpty, AdminActiveJobs, AdminCompletedJobs, CompletedJobs, jobColumns, MY_JOBS_PREFERENCES_KEY} from './jobs';
 import {SocaJob} from '../../client/data-model';
 import {initTestAppContext} from '../../test-support';
 
@@ -35,6 +36,98 @@ describe('jobs table columns', () => {
         expect(cellText('completed', 'cost', {estimated_bom_cost: {line_items_total: {amount: 12.5, unit: 'USD'}, total: {amount: 9.25, unit: 'USD'}}})).toContain('12.5');
         expect(cellText('completed', 'cost', {estimated_bom_cost: {price_unavailable: true, line_items_total: {amount: 0, unit: 'USD'}}})).toBe('–');
         expect(cellText('completed', 'cost', {})).toBe('–');
+    });
+
+    it('exports the status a person reads, not the raw state', () => {
+        const status = jobColumns('completed').find(column => column.id === 'status')!;
+        const started = {state: 'finished', start_time: '2026-08-19T09:00:00Z'};
+        expect(status.exportValue!({...started, exit_status: 271} as any)).toBe('Failed (exit 271)');
+        expect(status.exportValue!({...started, exit_status: 0} as any)).toBe('Finished');
+        expect(status.exportValue!({state: 'finished'} as any)).toBe('Deleted');
+    });
+
+    it('offers sort only on columns the scheduler orders across every job', async () => {
+        const context = initTestAppContext();
+        const listCompletedJobs = vi.spyOn(context.client().scheduler(), 'listCompletedJobs').mockImplementation(async (request: any) => ({
+            listing: [{job_id: '999', name: 'Protein study', state: 'finished', queue_time: '2026-08-19T09:00:00Z'}],
+            paginator: {...request.paginator, total: 412}
+        }) as any);
+        const {container} = render(<MemoryRouter><CompletedJobs {...props}/></MemoryRouter>);
+        await screen.findByText('Protein study');
+        expect(listCompletedJobs.mock.calls[0][0].sort_by).toEqual({key: 'queue_time', order: 'desc'});
+        const table = createWrapper(container).findTable()!;
+        expect(table.findDescSortedColumn()!.getElement()).toHaveTextContent('Submitted');
+        const sortArea = (header: string) => Array.from(container.querySelectorAll('th'))
+            .find(th => th.textContent?.includes(header))?.querySelector<HTMLElement>('[role="button"]') ?? null;
+        for (const header of ['Job ID', 'Status', 'Runtime', 'Cost estimate', 'Exit status']) {
+            expect(sortArea(header)).toBeNull();
+        }
+
+        listCompletedJobs.mockClear();
+        await act(async () => sortArea('Name')!.click());
+        await waitFor(() => expect(listCompletedJobs).toHaveBeenCalled());
+        expect(listCompletedJobs.mock.calls[0][0].sort_by).toEqual({key: 'name', order: 'asc'});
+    });
+
+    const search = async (container: HTMLElement, text: string) => {
+        await act(async () => createWrapper(container).findTextFilter()!.findInput().setInputValue(text));
+    };
+
+    it('sends a comma list as job ids only when every token is a job id', async () => {
+        const context = initTestAppContext();
+        const list = vi.spyOn(context.client().scheduler(), 'listActiveJobs').mockImplementation(async (request: any) => ({listing: [], paginator: request.paginator}) as any);
+        const {container} = render(<MemoryRouter><ActiveJobs {...props}/></MemoryRouter>);
+        await screen.findByText('You have no active jobs.');
+
+        await search(container, '2345, 2346,');
+        await waitFor(() => expect(list.mock.lastCall![0].filters).toEqual([{key: 'job_id', value: ['2345', '2346']}]));
+
+        await search(container, 'plasma, run 2');
+        await waitFor(() => expect(list.mock.lastCall![0].filters).toEqual([{key: '$all', value: 'plasma, run 2'}]));
+        expect(await screen.findByText('No active jobs match your search.')).toBeInTheDocument();
+    });
+
+    it('tells a person where older completed jobs went', async () => {
+        const context = initTestAppContext();
+        vi.spyOn(context.client().scheduler(), 'listCompletedJobs').mockImplementation(async (request: any) => ({listing: [], paginator: {...request.paginator, total: 0}}) as any);
+        render(<MemoryRouter><CompletedJobs {...props}/></MemoryRouter>);
+        expect(await screen.findByText('No completed jobs in this date range. Older jobs may still be here: widen the range above.')).toBeInTheDocument();
+    });
+
+    it('sends the range on its own field and none once it is cleared', async () => {
+        const context = initTestAppContext();
+        const list = vi.spyOn(context.client().scheduler(), 'listCompletedJobs').mockImplementation(async (request: any) => ({listing: [], paginator: request.paginator}) as any);
+        render(<MemoryRouter><CompletedJobs {...props}/></MemoryRouter>);
+        await waitFor(() => expect(list).toHaveBeenCalled());
+        expect(list.mock.calls[0][0].date_range?.key).toBe('queue_time');
+        expect(list.mock.calls[0][0].date_range?.start).toBeTruthy();
+    });
+
+    const exportCompleted = async (total: number, rows: number) => {
+        const context = initTestAppContext();
+        (URL as any).createObjectURL = vi.fn(() => 'blob:csv');
+        vi.spyOn(context.client().schedulerAdmin(), 'listCompletedJobs').mockImplementation(async (request: any) => ({
+            listing: Array.from({length: Math.min(rows, request.paginator.page_size)}, (_, index) => ({job_id: `${index}`, name: `job-${index}`, state: 'finished'})),
+            paginator: {...request.paginator, total}
+        }) as any);
+        const onFlashbarChange = vi.fn();
+        render(<MemoryRouter><AdminCompletedJobs {...props} onFlashbarChange={onFlashbarChange}/></MemoryRouter>);
+        await screen.findByText('job-0');
+        await userEvent.click(screen.getByRole('button', {name: 'CSV Export'}));
+        await waitFor(() => expect(onFlashbarChange).toHaveBeenCalled());
+        return onFlashbarChange.mock.calls[0][0].items[0];
+    };
+
+    it('warns with both numbers when an export hits the cap', async () => {
+        const item = await exportCompleted(23456, 10000);
+        expect(item.type).toBe('warning');
+        expect(item.content).toBe('Exported 10000 of 23456 completed jobs from the last month. Narrow the date range to export the rest.');
+    });
+
+    it('reports a full export as a success and states the range', async () => {
+        const item = await exportCompleted(412, 412);
+        expect(item.type).toBe('success');
+        expect(item.content).toBe('Exported 412 completed jobs from the last month.');
     });
 
     it('shows a dash rather than an invalid date when the submit time is missing', () => {

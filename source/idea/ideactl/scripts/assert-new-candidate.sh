@@ -21,3 +21,13 @@ if ! grep -q '(HTTP 404)' "$ERROR_FILE"; then
   echo '::error::Could not verify that the release candidate is absent. Publication stopped.' >&2
   exit 1
 fi
+# A leftover tag (a deleted prerelease keeps its tag) would carry the candidate to an older commit.
+if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>"$ERROR_FILE"; then
+  echo "::error::Tag ${TAG} exists without a release candidate. Use the next number."
+  exit 1
+fi
+if ! grep -q '(HTTP 404)' "$ERROR_FILE"; then
+  cat "$ERROR_FILE" >&2
+  echo '::error::Could not verify that the release candidate tag is absent. Publication stopped.' >&2
+  exit 1
+fi

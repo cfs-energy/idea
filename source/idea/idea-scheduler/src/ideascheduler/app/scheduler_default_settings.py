@@ -17,6 +17,7 @@ from ideadatamodel.scheduler import (
     SocaQueueMode,
     HpcApplication,
     HpcQueueProfile,
+    SocaQueueManagementParams,
     ListHpcApplicationsRequest,
     CreateHpcApplicationRequest,
 )
@@ -30,9 +31,20 @@ from ideadatamodel import (
     SocaPaginator,
 )
 from ideasdk.utils import Utils
+from ideascheduler.app.applications.hpc_applications_dao import STOCK_JOB_NAME_PATTERN
 
 from typing import List
 import os
+
+# owner to confirm: set False to start the built-in queues with per-job FSx off too
+BUILT_IN_QUEUES_ALLOW_NEW_FSX_LUSTRE = True
+
+# the queues of each built-in profile, as created below
+BUILT_IN_QUEUES = {
+    'compute': ['high', 'normal', 'low'],
+    'job-shared': ['job-shared'],
+    'test': ['test'],
+}
 
 
 class SchedulerDefaultSettings:
@@ -59,6 +71,31 @@ class SchedulerDefaultSettings:
                 return False
             raise e
 
+    def queues_are_free(self, profile_name: str, queues: List[str]) -> bool:
+        """
+        a built-in profile is re-created only when none of its queues belongs to another
+        profile: a deleted built-in whose queue name was reused must not stop the start
+        (A-B1). it is skipped with a warning an operator can act on.
+        """
+        taken = []
+        for queue in queues:
+            try:
+                owner = self.context.queue_profiles.queue_profile_dao.get_queue_profile_by_queue(
+                    queue
+                )
+            except Exception as e:
+                self.logger.warning(f'queue {queue}: owner not read ({e})')
+                return False
+            if owner is not None:
+                taken.append(f'{queue} ({owner.get("name")})')
+        if taken:
+            self.logger.warning(
+                f'built-in queue profile {profile_name} is not re-created: its queues '
+                f'already belong to other profiles: {", ".join(taken)}'
+            )
+            return False
+        return True
+
     def create_queue_profiles(self):
         compute_node_os = self.context.config().get_string(
             'scheduler.compute_node_os', required=True
@@ -69,14 +106,16 @@ class SchedulerDefaultSettings:
         project = self.context.projects_client.get_default_project().project
 
         # queue profile: compute
-        if not self.is_existing_queue_profile(queue_profile_name='compute'):
+        if not self.is_existing_queue_profile(
+            queue_profile_name='compute'
+        ) and self.queues_are_free('compute', BUILT_IN_QUEUES['compute']):
             queue_profile_compute = self.context.queue_profiles.create_queue_profile(
                 queue_profile=HpcQueueProfile(
                     title='Compute',
                     name='compute',
                     description='Compute queue profile for provisioning ephemeral jobs. EC2 instances will be provisioned using'
                     ' a new CloudFormation stack for each Job submitted to any queue in this queue profile.',
-                    queues=['high', 'normal', 'low'],
+                    queues=BUILT_IN_QUEUES['compute'],
                     queue_mode=SocaQueueMode.FIFO,
                     scaling_mode=SocaScalingMode.SINGLE_JOB,
                     terminate_when_idle=0,
@@ -88,6 +127,11 @@ class SchedulerDefaultSettings:
                         enable_placement_group=True,
                     ),
                     projects=[Project(project_id=project.project_id)],
+                    # built-in queues keep per-job FSx for Lustre, as before 26.11.2;
+                    # only profiles an administrator creates start with it off
+                    queue_management_params=SocaQueueManagementParams(
+                        allow_new_fsx_lustre=BUILT_IN_QUEUES_ALLOW_NEW_FSX_LUSTRE
+                    ),
                 )
             )
             self.context.queue_profiles.enable_queue_profile(
@@ -98,14 +142,16 @@ class SchedulerDefaultSettings:
             )
 
         # queue profile: job-shared
-        if not self.is_existing_queue_profile(queue_profile_name='job-shared'):
+        if not self.is_existing_queue_profile(
+            queue_profile_name='job-shared'
+        ) and self.queues_are_free('job-shared', BUILT_IN_QUEUES['job-shared']):
             queue_profile_job_shared = self.context.queue_profiles.create_queue_profile(
                 queue_profile=HpcQueueProfile(
                     title='Job Shared',
                     name='job-shared',
                     description='Job Shared queue profile for provisioning shared jobs. Similar jobs will re-use '
                     'existing provisioned capacity if available, or new EC2 instances will be launched.',
-                    queues=['job-shared'],
+                    queues=BUILT_IN_QUEUES['job-shared'],
                     queue_mode=SocaQueueMode.FIFO,
                     scaling_mode=SocaScalingMode.BATCH,
                     terminate_when_idle=3,
@@ -117,6 +163,11 @@ class SchedulerDefaultSettings:
                         enable_placement_group=False,
                     ),
                     projects=[Project(project_id=project.project_id)],
+                    # built-in queues keep per-job FSx for Lustre, as before 26.11.2;
+                    # only profiles an administrator creates start with it off
+                    queue_management_params=SocaQueueManagementParams(
+                        allow_new_fsx_lustre=BUILT_IN_QUEUES_ALLOW_NEW_FSX_LUSTRE
+                    ),
                 )
             )
             self.context.queue_profiles.enable_queue_profile(
@@ -127,13 +178,15 @@ class SchedulerDefaultSettings:
             )
 
         # queue profile: test
-        if not self.is_existing_queue_profile(queue_profile_name='test'):
+        if not self.is_existing_queue_profile(
+            queue_profile_name='test'
+        ) and self.queues_are_free('test', BUILT_IN_QUEUES['test']):
             queue_profile_test = self.context.queue_profiles.create_queue_profile(
                 queue_profile=HpcQueueProfile(
                     title='Test',
                     name='test',
                     description='Queue profile to be used for testing',
-                    queues=['test'],
+                    queues=BUILT_IN_QUEUES['test'],
                     queue_mode=SocaQueueMode.FIFO,
                     scaling_mode=SocaScalingMode.SINGLE_JOB,
                     terminate_when_idle=0,
@@ -145,6 +198,11 @@ class SchedulerDefaultSettings:
                         enable_placement_group=False,
                     ),
                     projects=[Project(project_id=project.project_id)],
+                    # built-in queues keep per-job FSx for Lustre, as before 26.11.2;
+                    # only profiles an administrator creates start with it off
+                    queue_management_params=SocaQueueManagementParams(
+                        allow_new_fsx_lustre=BUILT_IN_QUEUES_ALLOW_NEW_FSX_LUSTRE
+                    ),
                 )
             )
             self.context.queue_profiles.enable_queue_profile(
@@ -248,7 +306,7 @@ class SchedulerDefaultSettings:
                                             'data_type': 'str',
                                             'validate': {
                                                 'required': True,
-                                                'regex': '^([A-Za-z0-9_-]+){3,50}$',
+                                                'regex': STOCK_JOB_NAME_PATTERN,
                                             },
                                         }
                                     ),

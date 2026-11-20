@@ -10,8 +10,17 @@
   {% if context.config.get_string('cluster.dynamodb.kms_key_id') %}
   - Action:
       - kms:DescribeKey
+    Resource:
+      - '{{ context.arns.kms_dynamodb_key_arn }}'
+    Effect: Allow
+  # DynamoDB creates the grant it needs for a table on the caller's behalf; the caller cannot
+  # create a grant of its own on the key.
+  - Action:
       - kms:CreateGrant
     Resource:
       - '{{ context.arns.kms_dynamodb_key_arn }}'
+    Condition:
+      Bool:
+        kms:GrantIsForAWSResource: 'true'
     Effect: Allow
   {% endif %}

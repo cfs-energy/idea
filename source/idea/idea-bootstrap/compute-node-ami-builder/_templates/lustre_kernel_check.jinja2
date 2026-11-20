@@ -1,0 +1,15 @@
+{# A bake of a cluster that uses FSx for Lustre stops, with the reason, on a kernel that has no
+   Lustre module: before the reboot for the kernel it would boot, after it for the one it runs.
+   One builder that booted such a kernel hung at its Lustre mount, never ran the next stage, and
+   the bake failed an hour later as a step timeout. #}
+{% if context.has_storage_provider('fsx_lustre') or context.has_storage_provider('fsx_cache') or 'fsx_lustre' in (context.vars.enabled_drivers or ()) %}
+LUSTRE_KERNEL="{{ lustre_kernel }}"
+if [[ -n "${LUSTRE_KERNEL}" ]] && ! kernel_has_lustre_module "${LUSTRE_KERNEL}"; then
+  LUSTRE_KERNEL_MESSAGE="Kernel ${LUSTRE_KERNEL} has no FSx for Lustre client module. Lustre filesystems cannot be mounted on this node (reason code: lustre-module-missing)."
+  log_error "${LUSTRE_KERNEL_MESSAGE}"
+  echo -n "no" > ${BOOTSTRAP_DIR}/reboot_required.txt
+  echo "lustre: ${LUSTRE_KERNEL_MESSAGE}" >> /var/lib/idea/bake-failed
+  /bin/bash "${SCRIPT_DIR}/image_checks.sh"
+  exit 1
+fi
+{% endif %}

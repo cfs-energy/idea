@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { evaluateChangeSet } from '../../src/cli/cdk-invoker.ts';
 import { byType, cleanupWorkdirs, onlyOne, resourcesOf, synthBastion } from '../support/ecs-harness.ts';
@@ -140,3 +144,105 @@ test('sshd exempts the SSH allowlist the bastion prefix list holds', () => {
     '23.23.20.238/32,198.51.100.0/24,0.0.0.0/0');
   assert.equal(environmentOf({}), '');
 });
+
+test('the image takes the newest OpenSSH past its base release, and the release proves it', () => {
+  const root = new URL('../../../../../', import.meta.url);
+  const dockerfile = readFileSync(new URL('deployment/ecr/idea-control-plane/Dockerfile', root), 'utf8');
+  // the image build both the release and the pull request check run
+  const workflow = readFileSync(new URL('.github/actions/build_control_plane_image/action.yml', root), 'utf8');
+  const finalStage = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
+  assert.match(finalStage, /ARG IDEA_PACKAGE_REFRESH=[^]*?\$\{IDEA_PACKAGE_REFRESH\}[^]*?dnf upgrade -y --releasever=latest 'openssh\*'/);
+  assert.match(finalStage, /dnf upgrade -y --releasever=latest --security/);
+  // the layer has to run on each release build, or the cache keeps the first answer
+  assert.match(workflow, /--build-arg IDEA_PACKAGE_REFRESH="\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/);
+  assert.match(workflow, /dnf -q check-update --releasever=latest 'openssh\*'/);
+});
+
+test('ideactl in a task shell is the documented CLI, and the scheduler commands still work', () => {
+  const root = new URL('../../../../../', import.meta.url);
+  const dockerfile = readFileSync(new URL('deployment/ecr/idea-control-plane/Dockerfile', root), 'utf8');
+  const finalStage = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
+  // after the module install, whose console script of the same name it replaces
+  const wrapper = finalStage.indexOf('COPY deployment/ecr/idea-control-plane/ideactl.sh /usr/local/bin/ideactl');
+  const modules = finalStage.indexOf('pip install --no-cache-dir --no-deps --no-build-isolation --check-build-dependencies "${PKG}"');
+  assert.ok(wrapper >= 0 && modules >= 0, 'both steps are in the final stage');
+  assert.ok(wrapper > modules);
+  const bin = mkdtempSync(join(tmpdir(), 'ideactl-'));
+  try {
+    for (const name of ['node', 'idea-scheduler-cli', 'idea-cluster-manager-cli', 'idea-vdc-cli']) {
+      writeFileSync(join(bin, name), `#!/bin/bash\necho ${name} "$@"\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+    const run = (...args: string[]) => execFileSync('bash', [new URL('deployment/ecr/idea-control-plane/ideactl.sh', root).pathname, ...args], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, IDEACTL_MAIN: 'main.js' },
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(run('about'), 'node main.js about');
+    assert.equal(run(), 'node main.js');
+    assert.equal(run('jobs', 'list'), 'idea-scheduler-cli jobs list');
+    assert.equal(run('ami-builder'), 'idea-scheduler-cli ami-builder');
+    // they reach the scheduler running in its own task; anywhere else they say where to go
+    const inTask = (role: string, ...args: string[]) => spawnSync('bash', [new URL('deployment/ecr/idea-control-plane/ideactl.sh', root).pathname, ...args], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, IDEACTL_MAIN: 'main.js', IDEA_CONTAINER_ROLE: role },
+      encoding: 'utf8',
+    });
+    assert.equal(inTask('scheduler', 'jobs', 'list').stdout.trim(), 'idea-scheduler-cli jobs list');
+    for (const role of ['cluster-manager', 'bastion-host']) {
+      const refused = inTask(role, 'jobs', 'list');
+      assert.equal(refused.status, 2);
+      assert.equal(refused.stdout, '');
+      assert.equal(refused.stderr.trim(), `ideactl jobs runs in the scheduler task's shell (container scheduler-container); this is the ${role} task`);
+      assert.equal(inTask(role, 'about').stdout.trim(), 'node main.js about');
+    }
+    // logs and app-module-clean-up exist in each module's CLI, and the cluster manager and the desktop controller have commands of their own
+    for (const [role, cli, own] of [['scheduler', 'idea-scheduler-cli', 'provision-always-on-nodes'], ['cluster-manager', 'idea-cluster-manager-cli', 'accounts'], ['cluster-manager', 'idea-cluster-manager-cli', 'groups'], ['cluster-manager', 'idea-cluster-manager-cli', 'ldap'], ['vdc', 'idea-vdc-cli', 'update-base-stacks'], ['vdc', 'idea-vdc-cli', 'build-desktop-image']] as const) {
+      for (const command of ['logs', 'app-module-clean-up', own]) assert.equal(inTask(role, command, '--help').stdout.trim(), `${cli} ${command} --help`);
+    }
+    assert.equal(run('logs'), 'idea-scheduler-cli logs');
+    assert.equal(inTask('scheduler', 'accounts').stderr.trim(), "ideactl accounts runs in the cluster-manager task's shell (container cluster-manager-container); this is the scheduler task");
+    assert.equal(inTask('cluster-manager', 'reindex-software-stacks').stderr.trim(), "ideactl reindex-software-stacks runs in the vdc task's shell (container controller-container); this is the cluster-manager task");
+    const nowhere = inTask('bastion-host', 'logs');
+    assert.equal(nowhere.status, 2);
+    assert.equal(nowhere.stderr.trim(), "ideactl logs runs in the cluster-manager, vdc or scheduler task's shell; this is the bastion-host task");
+    // every command a module CLI registers is routed, so none falls through to the administrator as unknown
+    const wrapper = readFileSync(new URL('deployment/ecr/idea-control-plane/ideactl.sh', root), 'utf8');
+    for (const module of ['idea-scheduler/src/ideascheduler', 'idea-cluster-manager/src/ideaclustermanager', 'idea-virtual-desktop-controller/src/ideavirtualdesktopcontroller']) {
+      const registered = [...readFileSync(new URL(`source/idea/${module}/cli/cli_main.py`, root), 'utf8').matchAll(/^main\.add_command\((\w+)\)/gm)].map((match) => match[1]!.replace(/_commands$/, '').replaceAll('_', '-'));
+      assert.ok(registered.length >= 5);
+      for (const command of registered) assert.match(wrapper, new RegExp(`[ |]${command}[|)]`), command);
+    }
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+for (const [what, keys] of [
+  ['separate table and queue keys', { 'cluster.dynamodb.kms_key_id': 'table-key-id', 'cluster.sqs.kms_key_id': 'queue-key-id' }],
+  ['a queue key alone', { 'cluster.sqs.kms_key_id': 'queue-key-id' }],
+] as const) {
+  test(`an AD bastion can send its join request to a queue with ${what}`, () => {
+    const resources = resourcesOf(synthBastion({ 'directoryservice.provider': 'activedirectory', ...keys }));
+    const role = byType(resources, 'AWS::IAM::Role').find(([, resource]) => resource.Properties.RoleName.includes('bastion-host-task-role'))!;
+    const statements = byType(resources, 'AWS::IAM::Policy').filter(([, policy]) => policy.Properties.Roles.some((entry: any) => entry.Ref === role[0]))
+      .flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement);
+    const queueKey = statements.filter((entry: any) => JSON.stringify(entry.Resource).includes('queue-key-id'));
+    assert.equal(queueKey.length, 1, JSON.stringify(statements));
+    assert.deepEqual(queueKey[0].Action, ['kms:Decrypt', 'kms:GenerateDataKey']);
+    assert.match(JSON.stringify(queueKey[0].Condition), /kms:ViaService/);
+  });
+}
+
+for (const digest of [undefined, 'a'.repeat(64)]) {
+  test(`the bastion task carries the configured site hook digest (${digest === undefined ? 'unset' : 'set'})`, () => {
+    const resources = resourcesOf(synthBastion(digest === undefined ? {} : { 'bastion-host.site_hook_sha256': digest }));
+    const container = one(resources, 'AWS::ECS::TaskDefinition')[1].Properties.ContainerDefinitions[0];
+    const value = (container.Environment as Array<{ Name: string; Value: string }>).find((entry) => entry.Name === 'IDEA_SITE_HOOK_SHA256')?.Value;
+    assert.equal(value, digest ?? '');
+  });
+}
+
+for (const digest of ['not-a-digest', 'a'.repeat(63)]) {
+  test(`a site hook checksum that is not 64 hex characters stops the bastion synth (${digest.length} characters)`, () => {
+    assert.throws(() => synthBastion({ 'bastion-host.site_hook_sha256': digest }), /must be empty or a 64-character hex SHA-256/);
+  });
+}

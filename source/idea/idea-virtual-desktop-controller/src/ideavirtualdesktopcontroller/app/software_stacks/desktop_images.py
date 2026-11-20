@@ -36,8 +36,9 @@ from ideasdk.aws.image_builds import (
     image_state,
     new_record,
     promote_gate,
+    partition_unavailable_reason,
 )
-from ideasdk.aws.stock_amis import find_latest_stock_ami, stock_unsupported_reason
+from ideasdk.aws.stock_amis import find_latest_stock_ami
 from ideavirtualdesktopcontroller.app.software_stacks.dcv_host_image_builder import (
     BUILD_SUPPORTED_BASE_OS,
     DcvHostImageBuilder,
@@ -313,7 +314,7 @@ class DesktopImageService:
                 'a custom build cannot repoint a base stack: it is not validated. '
                 'use Refresh and validate on the Images page to update base stacks'
             )
-        unsupported = stock_unsupported_reason(
+        unsupported = partition_unavailable_reason(
             base_os, self.context.aws().ec2().meta.region_name
         )
         if unsupported:

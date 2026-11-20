@@ -1,0 +1,59 @@
+# Begin: SSH access
+{# SSH to this host is for the users in ssh_allowed_users (the desktop owner or the job owner),
+   cluster administrators (whoever sudo admits here: the directory's sudoers group or its LDAP
+   sudo rules, so the two cannot drift) and local accounts (root, the image's default user,
+   ssm-user), which keep the access they had. It is a PAM account rule in the sshd stack only:
+   sssd access control also governs DCV and every other PAM service, so it is left alone. Every
+   bootstrap rewrites the allowed users, so an image made from a host never carries its owner.
+   With no allowed users (shared-capacity compute) the rule is removed and SSH stays as before. #}
+{% if ssh_allowed_users %}
+mkdir -p /etc/idea /usr/local/libexec
+cat > /etc/idea/ssh-allowed-users <<'IDEA_SSH_ALLOWED_USERS'
+{% for user in ssh_allowed_users %}{{ user }}
+{% endfor %}IDEA_SSH_ALLOWED_USERS
+cat > /usr/local/libexec/idea-ssh-access <<'IDEA_SSH_ACCESS'
+#!/bin/sh
+# Run by pam_exec in the sshd account stack; written by the IDEA bootstrap (ssh_access.jinja2).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+user="${PAM_USER:-}"
+[ -n "${user}" ] || exit 1
+getent -s files passwd "${user}" >/dev/null 2>&1 && exit 0
+grep -qxF -- "${user}" /etc/idea/ssh-allowed-users 2>/dev/null && exit 0
+sudo -n -l -U "${user}" true >/dev/null 2>&1 && exit 0
+logger -p authpriv.notice -t idea-ssh-access "refused SSH for ${user} from ${PAM_RHOST:-unknown}: not this host's owner or a cluster administrator"
+exit 1
+IDEA_SSH_ACCESS
+chmod 0755 /usr/local/libexec/idea-ssh-access
+# only an active rule counts: a commented line or a rule elsewhere in the file is not one
+IDEA_SSH_ACCESS_RULE='^[[:space:]]*account[[:space:]]+requisite[[:space:]]+pam_exec\.so[[:space:]]+quiet[[:space:]]+/usr/local/libexec/idea-ssh-access[[:space:]]*$'
+if ! grep -Eq "${IDEA_SSH_ACCESS_RULE}" /etc/pam.d/sshd 2>/dev/null; then
+  # first in the account stack, so every later account check still runs for an allowed user
+  awk -v rule='account    requisite    pam_exec.so quiet /usr/local/libexec/idea-ssh-access' '
+    !done && /^[[:space:]]*(-?account[[:space:]]|@include[[:space:]]+common-account)/ { print rule; done = 1 }
+    { print }
+    END { if (!done) print rule }
+  ' /etc/pam.d/sshd > /etc/pam.d/sshd.idea && cat /etc/pam.d/sshd.idea > /etc/pam.d/sshd
+  rm -f /etc/pam.d/sshd.idea
+fi
+# the rule is consulted only when sshd uses PAM; a refresh reads IDEA_SSH_ACCESS_FAILED and
+# reports the host as not refreshed, while a first boot logs the gap and continues
+IDEA_SSH_USEPAM=$(sshd -T 2>/dev/null | awk 'tolower($1) == "usepam" { print tolower($2) }')
+if ! grep -Eq "${IDEA_SSH_ACCESS_RULE}" /etc/pam.d/sshd 2>/dev/null; then
+  IDEA_SSH_ACCESS_FAILED=1
+  log_warning "Could not add the SSH access rule to /etc/pam.d/sshd; SSH is not limited on this host"
+elif [ "${IDEA_SSH_USEPAM}" = no ]; then
+  IDEA_SSH_ACCESS_FAILED=1
+  log_warning "sshd runs with UsePAM no, so the SSH access rule in /etc/pam.d/sshd is not consulted; SSH is not limited on this host"
+else
+  [ -n "${IDEA_SSH_USEPAM}" ] || log_info "sshd -T did not report UsePAM; the SSH access rule assumes sshd uses PAM"
+  log_info "SSH limited to /etc/idea/ssh-allowed-users, cluster administrators and local accounts"
+fi
+{% else %}
+if [ -f /etc/pam.d/sshd ] && grep -q 'idea-ssh-access' /etc/pam.d/sshd; then
+  grep -v 'idea-ssh-access' /etc/pam.d/sshd > /etc/pam.d/sshd.idea && cat /etc/pam.d/sshd.idea > /etc/pam.d/sshd
+  rm -f /etc/pam.d/sshd.idea
+fi
+rm -f /etc/idea/ssh-allowed-users
+log_info "SSH is not limited to an owner on this host"
+{% endif %}
+# End: SSH access

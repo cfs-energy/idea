@@ -166,6 +166,34 @@ def test_connection_failure_keeps_payload_for_another_replica(collector, monkeyp
     assert contexts[1].published() == published
 
 
+def test_undeliverable_batches_do_not_stop_collection(collector, monkeypatch):
+    kind, clock, source, contexts, services = collector
+    context = contexts[0]
+    db = context.config().db
+    store = context.aws().s3()
+    monkeypatch.setattr(
+        context.metrics_service,
+        'publish',
+        Mock(side_effect=ConnectionError('unavailable')),
+    )
+    for run in range(2):
+        clock['now'] += services[0].get_interval_seconds()
+        saved = set(store.values)
+        with pytest.raises(ConnectionError, match='unavailable'):
+            services[0].run_once()
+        assert source.calls == run + 1
+        assert set(store.values) - saved
+    written = {}
+    for key, value in db.writes:
+        written.setdefault(key, []).append(value)
+    prefix = f'cluster-manager.metrics.{kind}.'
+    assert written[prefix + 'last_collected'][-1] == clock['now']
+    assert len(written[prefix + 'last_collected']) == 2
+    if kind == 'storage':
+        assert len(written[prefix + 'usage_snapshot']) == 2
+    assert any('not delivered' in line for line in context.logger().lines)
+
+
 def test_outbox_paginates_and_keeps_latest_correction(collector, monkeypatch):
     import json
     from ideaclustermanager.app.metrics.collector_outbox import CollectorOutbox
