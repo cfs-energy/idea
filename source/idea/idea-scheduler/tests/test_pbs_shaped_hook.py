@@ -176,6 +176,8 @@ def test_an_unbound_move_is_accepted(hook, submit):  # noqa: F811
         queue_settings={},
     )
     assert result.accept is True, result.formatted_user_message
+    before, after = stored_selector(sent['job'], result, 'movejob')
+    assert after == before == ('1:ncpus=4:compute_node=tbd',) * 2
 
 
 def test_a_bound_move_reaches_its_refusal(hook, submit):  # noqa: F811
@@ -251,6 +253,9 @@ def test_an_owners_edit_is_checked_against_the_jobs_own_request(hook, submit):  
     assert result.accept is True, result.formatted_user_message
     assert result.resources_updated['job_uid'] == 'uid536keep'
     assert result.resources_updated['job_group'] != 'g06692ffa'
+    sent['job_o']['schedselect'] = CURRENT['select']
+    before, after = stored_selector(sent['job_o'], result)
+    assert after == before == (CURRENT['select'],) * 2
 
 
 def test_an_owners_edit_that_is_really_invalid_is_refused_with_its_reason(hook, submit):  # noqa: F811
@@ -389,6 +394,8 @@ def test_h1_a_job_that_turned_efa_off_keeps_its_choice_in_the_destination(
     # its own choices, not the destination's defaults
     assert context.job.params.instance_types == ['c5.large']
     assert context.job.params.enable_efa_support is False
+    before, after = stored_selector(sent['job'], result, 'movejob')
+    assert after == before == ('1:ncpus=1:compute_node=tbd',) * 2
 
 
 @pytest.mark.parametrize('select_names_node', [True, False])
@@ -470,3 +477,119 @@ def test_h3_a_move_carrying_the_source_queues_fsx_into_a_restricting_queue_is_re
     assert f'uses the FSx for Lustre file system {dns}, the default of queue test' in (
         result.formatted_user_message
     )
+
+
+# the stored selector before and after an accepted edit or move. PBS keeps the request's
+# select and rebuilds schedselect from it whenever select is written
+
+
+def stored_selector(sent_job, result, event_type='modifyjob'):
+    """(select, schedselect) before, and after the hook applies the scheduler's writes;
+    the hook writes nothing back on a move (movejob may only read the job)"""
+    before_select = (sent_job.get('Resource_List') or {}).get('select')
+    before_sched = sent_job.get('schedselect') or before_select
+    written = (result.resources_updated or {}).get('select')
+    if written is None or event_type == 'movejob':
+        return (before_select, before_sched), (before_select, before_sched)
+    return (before_select, before_sched), (written, written)
+
+
+TWO_CHUNKS = (
+    '1:ncpus=2:mem=8gb:mpiprocs=2:compute_node=tbd'
+    '+1:ncpus=4:mem=16gb:mpiprocs=4:compute_node=tbd'
+)
+
+
+def edited(hook, submit, edit, current, **kwargs):  # noqa: F811
+    sent = owner_edit(hook, edit, current)
+    sent['job_o']['schedselect'] = current['select']
+    result, _ = submit(
+        sent['job']['Resource_List'],
+        event_type='modifyjob',
+        job_o=OpenPBSJob(**sent['job_o']),
+        **kwargs,
+    )
+    assert result.accept is True, result.formatted_user_message
+    return sent, result
+
+
+def test_a_walltime_edit_leaves_a_two_chunk_select_exactly_as_it_was(hook, submit):  # noqa: F811
+    # rc19 sign-off: the selector was rebuilt from the node count, '2:compute_node=tbd',
+    # dropping both chunks' CPUs, memory and MPI ranks
+    sent, result = edited(
+        hook,
+        submit,
+        {'walltime': '02:00:00'},
+        {**CURRENT, 'select': TWO_CHUNKS, 'instance_type': 'c5n.18xlarge'},
+        defaults=SocaJobParams(instance_types=['c5n.18xlarge']),
+    )
+    before, after = stored_selector(sent['job_o'], result)
+    assert after == before == (TWO_CHUNKS, TWO_CHUNKS)
+
+
+def test_an_instance_type_edit_keeps_the_jobs_cpus(hook, submit):  # noqa: F811
+    # live job 633: '1:ncpus=1:compute_node=tbd' became '1:compute_node=tbd'
+    sent, result = edited(
+        hook,
+        submit,
+        {'instance_type': 'c5.xlarge'},
+        CURRENT,
+        defaults=SocaJobParams(instance_types=['c5.large']),
+    )
+    before, after = stored_selector(sent['job_o'], result)
+    assert after == before == ('1:ncpus=1:compute_node=tbd',) * 2
+
+
+def test_an_edit_of_the_select_itself_is_applied_as_given(hook, submit):  # noqa: F811
+    sent, result = edited(
+        hook,
+        submit,
+        {'select': '2:ncpus=1:mem=2gb'},
+        CURRENT,
+        defaults=SocaJobParams(instance_types=['c5.large']),
+    )
+    _, after = stored_selector(sent['job_o'], result)
+    assert after == ('2:ncpus=1:mem=2gb:compute_node=tbd',) * 2
+
+
+def test_an_edit_of_a_bound_job_keeps_its_node_and_selector(hook, submit):  # noqa: F811
+    bound = '1:ncpus=1:compute_node=idea-mock-test-ondemand-5'
+    sent, result = edited(
+        hook,
+        submit,
+        {'walltime': '02:00:00'},
+        {**CURRENT, 'select': bound, 'job_group': 'g06692ffa'},
+        defaults=SocaJobParams(instance_types=['c5.large']),
+    )
+    before, after = stored_selector(sent['job_o'], result)
+    assert after == before == (bound, bound)
+    assert 'stack_id' not in result.resources_updated
+
+
+def test_an_accepted_move_of_a_two_chunk_job_keeps_its_chunks(hook, submit):  # noqa: F811
+    sent = payload(
+        hook,
+        moved(
+            select=TWO_CHUNKS,
+            queue='job-shared',
+            src='test',
+            instance_type='c5n.18xlarge',
+            efa_support='False',
+        ),
+    )
+    result, _ = submit(
+        {},
+        event_type='movejob',
+        queue='job-shared',
+        src_queue=sent['src_queue'],
+        job=OpenPBSJob(**sent['job']),
+        defaults=SocaJobParams(
+            instance_types=['c5n.18xlarge'], enable_efa_support=True
+        ),
+    )
+    assert result.accept is True, result.formatted_user_message
+    before, after = stored_selector(sent['job'], result, 'movejob')
+    assert after == before
+    assert before[0] == TWO_CHUNKS
+    # nor is one rebuilt for it: the answer names the job's own chunks
+    assert result.resources_updated['select'] == TWO_CHUNKS

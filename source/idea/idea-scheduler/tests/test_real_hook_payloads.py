@@ -173,6 +173,21 @@ def test_every_captured_submission_event_gets_an_answer_not_an_internal_error(
     message = result.formatted_user_message or ''
     assert JOB_INTERNAL_ERROR_MESSAGE not in message
     assert 'not found' not in message
+    if result.accept and name in ('modifyjob', 'movejob_unbound'):
+        # an accepted edit or move leaves the stored selector as it was, unless the edit
+        # itself set select (written as given, naming the node)
+        sent = request(name)['payload']['event']
+        stored = sent.get('job_o') or sent['job']
+        before = (stored.get('Resource_List') or {}).get('select')
+        edit = (sent['job'].get('Resource_List') or {}).get('select')
+        written = (result.resources_updated or {}).get('select')
+        if name == 'movejob_unbound':
+            # the hook writes nothing on a move, and the answer is the job's own chunks
+            assert written in (None, before, sent['job'].get('schedselect'))
+        elif edit:
+            assert written and written.startswith(edit)
+        else:
+            assert written is None, f'{before!r} rewritten as {written!r}'
     if name == 'movejob_bound':
         # job 587, bound to a node of queue test, moved to job-shared
         assert result.accept is False
