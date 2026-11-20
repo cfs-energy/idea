@@ -1411,10 +1411,116 @@ def test_a_script_that_could_not_be_written_is_removed(context, monkeypatch):
     # a write that fails partway (a full quota) left the partial script behind
     api = _prepare_submit(context, monkeypatch)
 
+    calls = []
+
     def full(fd, user, group):
-        raise OSError(122, 'Disk quota exceeded')
+        # the new jobs folder is handed over; the script then hits the full quota
+        calls.append(fd)
+        if len(calls) > 1:
+            raise OSError(122, 'Disk quota exceeded')
 
     monkeypatch.setattr(scheduler_api_module, 'chown_fd', full)
     with pytest.raises(OSError):
         api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
     assert os.listdir(_jobs_dir(context)) == []
+
+
+def test_an_account_the_host_cannot_resolve_is_refused_and_nothing_is_made(
+    context, monkeypatch
+):
+    # dev rc.18 N-S1: a user created seconds before submitting is not in the scheduler
+    # host's passwd until the next user sync; the submission failed with a general error
+    # and left a root-owned jobs folder that refused every later submission
+    api = _prepare_submit(context, monkeypatch)
+
+    def unknown(user):
+        raise KeyError(f"getpwnam(): name not found: '{user}'")
+
+    monkeypatch.setattr(scheduler_api_module, 'account_uid', unknown)
+    with pytest.raises(exceptions.SocaException) as raised:
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    assert raised.value.error_code == errorcodes.JOB_SUBMISSION_FAILED
+    assert raised.value.message == (
+        f'Your account {CONTEXT_USER} is not yet known to the scheduler host. Try '
+        f'again in a minute.'
+    )
+    assert not os.path.exists(_jobs_dir(context))
+    assert context.shell.commands == []
+
+
+def test_a_submission_retried_once_the_account_resolves_succeeds(context, monkeypatch):
+    from ideadatamodel.scheduler import SubmitJobResult
+
+    api = _prepare_submit(context, monkeypatch)
+    context.job_submission_tracker = _FakeTracker(
+        SubmitJobResult(accepted=True, job=SocaJob(job_uid='uid'))
+    )
+    known = {'yet': False}
+
+    def uid(user):
+        if not known['yet']:
+            raise KeyError(user)
+        return os.geteuid()
+
+    monkeypatch.setattr(scheduler_api_module, 'account_uid', uid)
+    with pytest.raises(exceptions.SocaException):
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    known['yet'] = True
+    result = api._submit_job(
+        request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None
+    )
+    assert result.accepted is True
+
+
+def test_a_jobs_folder_that_cannot_be_handed_over_is_removed(context, monkeypatch):
+    # the folder is made by the service (root on a cluster): one it cannot hand over must
+    # not stay behind owned by root
+    api = _prepare_submit(context, monkeypatch)
+
+    def no_group(fd, user, group):
+        raise KeyError(f"getgrnam(): name not found: '{group}'")
+
+    monkeypatch.setattr(scheduler_api_module, 'chown_fd', no_group)
+    with pytest.raises(KeyError):
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    assert not os.path.exists(_jobs_dir(context))
+
+
+def test_an_empty_jobs_folder_left_owned_by_the_service_is_handed_over(
+    context, monkeypatch
+):
+    # what an earlier release left behind for such a user: an empty folder in their own
+    # home, owned by the service. it is handed to them instead of refusing every job
+    from ideadatamodel.scheduler import SubmitJobResult
+
+    api = _prepare_submit(context, monkeypatch)
+    context.job_submission_tracker = _FakeTracker(
+        SubmitJobResult(accepted=True, job=SocaJob(job_uid='uid'))
+    )
+    os.mkdir(_jobs_dir(context))
+    # the owner is someone other than the service
+    monkeypatch.setattr(scheduler_api_module, 'account_uid', lambda u: os.geteuid() + 1)
+    handed = []
+    monkeypatch.setattr(
+        scheduler_api_module,
+        'chown_fd',
+        lambda fd, user, group: handed.append(os.fstat(fd).st_ino),
+    )
+    result = api._submit_job(
+        request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None
+    )
+    assert result.accepted is True
+    assert handed[0] == os.stat(_jobs_dir(context)).st_ino
+
+
+def test_a_jobs_folder_with_content_owned_by_someone_else_is_still_refused(
+    context, monkeypatch
+):
+    api = _prepare_submit(context, monkeypatch)
+    os.mkdir(_jobs_dir(context))
+    with open(os.path.join(_jobs_dir(context), 'kept'), 'w') as f:
+        f.write('x')
+    monkeypatch.setattr(scheduler_api_module, 'account_uid', lambda u: os.geteuid() + 1)
+    with pytest.raises(exceptions.SocaException) as raised:
+        api._submit_job(request=_pbs_request(), job_owner=CONTEXT_USER, dry_run=None)
+    assert 'does not belong to' in raised.value.message
