@@ -24,6 +24,8 @@ A job whose node stopped because a shared file system of the cluster did not mou
 
 If you change a waiting job with `qalter` and the scheduler still cannot match it to capacity, it counts toward the same retry limit and is held with the reason "The capacity of job group ... was built for another request".
 
+If a job stays queued with `Can Never Run: Insufficient amount of resource: ncpus` after you changed its instance type or its `select` with `qalter`, the job now asks for more CPUs than its instance type has. Edit `select` to a request that fits, for example `qalter -l select=1:ncpus=<n> <job_id>`, or delete the job with `qdel <job_id>` and submit it again. `qalter -l nodes=<n>` on its own does not change a submitted job: edit `select`.
+
 If you move a waiting job with `qmove`, the move is checked with the job's own request in the destination queue. A job that would not start there is refused with the reason, and stays in its queue. Fix the request or choose another queue. A job that already has a node is refused: delete it and submit it to the new queue, or move a job before it is given a node. A job that uses its queue's default FSx for Lustre file system is refused when the destination queue restricts it; submit it to the destination queue instead.
 
 IDEA does not report a queue position or an estimated start time. Compute capacity is
