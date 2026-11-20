@@ -20,9 +20,11 @@ stopped retrying and the job will not start on its own. Read the error message, 
 names, then release the job with `qrls <job_id>` or delete it with `qdel <job_id>` and
 resubmit.
 
-A job whose node stopped because a shared file system of the cluster did not mount (`idea:BootstrapStatus=shared-storage-unavailable`) is held at once, without retries. The reason reads "a shared file system configured for the cluster could not be mounted on the node. An administrator must check that file system and its network access. This is not a problem with the job or the image". Ask an administrator to fix the file system, then release the job with `qrls <job_id>`.
+A job whose node stopped because a shared file system of the cluster did not mount (`idea:BootstrapStatus=shared-storage-unavailable`) is held at once, without retries. The reason reads "a shared file system configured for the cluster could not be mounted on the node (<mount directories>). An administrator must check that file system and its network access. This is not a problem with the job or the image". The directories in brackets name the file systems that did not mount; give them to the administrator. Ask an administrator to fix the file system, then release the job with `qrls <job_id>`.
 
 If you change a waiting job with `qalter` and the scheduler still cannot match it to capacity, it counts toward the same retry limit and is held with the reason "The capacity of job group ... was built for another request".
+
+If you move a waiting job with `qmove`, the move is checked with the job's own request in the destination queue. A job that would not start there is refused with the reason, and stays in its queue. Fix the request or choose another queue. A job that already has a node is refused: delete it and submit it to the new queue, or move a job before it is given a node. A job that uses its queue's default FSx for Lustre file system is refused when the destination queue restricts it; submit it to the destination queue instead.
 
 IDEA does not report a queue position or an estimated start time. Compute capacity is
 created on demand rather than drawn from a fixed pool, so neither can be computed from

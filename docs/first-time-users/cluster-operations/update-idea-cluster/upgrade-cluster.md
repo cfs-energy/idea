@@ -357,8 +357,8 @@ In plain terms, most disruptive first.
 - At most half the scheduler's request workers (8 by default, `scheduler.server.max_workers`) take portal and API submissions at once. The next gets "The scheduler is busy with other job submissions. Try again in a few seconds." A bash submission script is ended after 300 s.
 - A job asking for a `terminate_when_idle` above its queue's is refused at submission; on the built-in `job-shared` queue that is above 3. Jobs already queued keep their value.
 - Queue profiles created from now on do not let jobs create a new FSx for Lustre until an administrator ticks **Jobs may create a new FSx for Lustre**. Existing and built-in profiles keep allowing it; clear the box on those where it is not wanted.
-- A job whose node stops with `shared-storage-unavailable` (a cluster share did not mount) is held at once, with no retries.
-- A job that took its queue's default existing FSx cannot be moved with `qmove` into a queue that restricts `fsx_lustre` and has a different default or none.
+- A job whose node stops with `shared-storage-unavailable` (a cluster share did not mount) is held at once, with no retries. The held job's reason and the scheduler log name the mount directories.
+- `qmove` checks the move with the job's own request in the destination queue. A job that would not start there, a job that already has a node, and a job that took its queue's default existing FSx into a queue that restricts `fsx_lustre` are refused, each with what to do.
 - Turning scratch off in a queue profile and saving clears its stored scratch and FSx defaults.
 - Job script templates that use a removed construct do not render (check 10).
 - A `job_uid` may hold letters, digits, underscores and dashes, up to 64 characters. A job queued before the upgrade is held with the reason only if its stored `job_uid` or `job_group` fails the submission rule; the other jobs go on. Delete it and submit it again.
@@ -399,6 +399,7 @@ In plain terms, most disruptive first.
 - Operator rows (`cli`, `api`) of global settings survive the end-of-upgrade cleanup. Rows with no source marker under a retired key are still removed.
 - At the end of the upgrade, the rows of every module set the cluster has are kept for the modules this release still has. Rows for a module the release no longer has are removed in every set.
 - Role changes are listed in the [changelog](../../../changelog.md). The gateway task role no longer carries `cluster.iam.ec2_managed_policy_arns`.
+- The compute node and desktop host roles may write one more tag key, `idea:BootstrapDetail`, on their own instance only, next to `idea:BootstrapStatus` and `idea:AmiBuilderStatus`. Until the roles are updated by this upgrade, a stopped host still writes its status tag and only the mount directories are missing from the held job's reason.
 
 **Checks after the upgrade**
 
