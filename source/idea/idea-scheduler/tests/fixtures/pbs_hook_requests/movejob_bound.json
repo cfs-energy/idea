@@ -1,62 +1,62 @@
 {
- "header": {
-  "namespace": "OpenPBSHook.movejob",
-  "request_id": "74693ec5-6bc7-4506-8106-52a3283a0321"
- },
- "payload": {
-  "event": {
-   "hook_name": "validate_job",
-   "hook_type": "site",
-   "job": {
-    "Checkpoint": "u",
-    "Error_Path": "scheduler.idea-test.us-east-2.local:/tmp/rc17h-j2.e587",
-    "Hold_Types": "u",
-    "Job_Name": "rc17h-j2",
-    "Job_Owner": "researcher2@scheduler.idea-test.us-east-2.local",
-    "Join_Path": "n",
-    "Keep_Files": "n",
-    "Mail_Points": "a",
-    "Output_Path": "scheduler.idea-test.us-east-2.local:/tmp/rc17h-j2.o587",
-    "Priority": "0",
-    "Rerunable": "1",
-    "Resource_List": {
-     "cluster_name": "idea-test",
-     "instance_type": "c5.large",
-     "job_group": "gab40a040",
-     "job_uid": "CMRaPd6ai7RQTjfrwjLW9J",
-     "ncpus": "1",
-     "nodect": "1",
-     "place": "free",
-     "provisioning_time": "1795131652765",
-     "select": "1:ncpus=1:compute_node=idea-test-test-ondemand-587",
-     "stack_id": "arn:aws:cloudformation:us-east-2:123456789012:stack/idea-test-test-ondemand-587/a845d6f0-e472-11f1-b161-06533ce35701"
-    },
-    "Submit_arguments": "<jsdl-hpcpa:Argument>-N</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>rc17h-j2</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>-q</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>test</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>-l</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>instance_type=c5.large</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>--</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>/bin/sleep</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>300</jsdl-hpcpa:Argument>",
-    "argument_list": "<jsdl-hpcpa:Argument>300</jsdl-hpcpa:Argument>",
-    "comment": "Job held by root on Thu Nov 19 23:41:41 2026",
-    "ctime": "1795131647",
-    "egroup": "researcher2-user-group",
-    "eligible_time": "00:00:00",
-    "estimated": "",
-    "euser": "researcher2",
-    "id": "587.scheduler",
-    "job_state": "H",
-    "mtime": "1795131701",
-    "project": "default",
-    "qtime": "1795131647",
-    "queue": "job-shared",
-    "queue_rank": "1795131648408232",
-    "queue_type": "1",
-    "resources_used": "",
-    "schedselect": "1:ncpus=1:compute_node=idea-test-test-ondemand-587",
-    "server": "scheduler",
-    "substate": "20"
-   },
-   "requestor": "root",
-   "requestor_host": "scheduler.idea-test.us-east-2.local",
-   "src_queue": "test",
-   "timestamp": 1795131701516,
-   "type": "movejob"
+  "header": {
+    "namespace": "OpenPBSHook.movejob",
+    "request_id": "74693ec5-6bc7-4506-8106-52a3283a0321"
+  },
+  "payload": {
+    "event": {
+      "hook_name": "validate_job",
+      "hook_type": "site",
+      "job": {
+        "Checkpoint": "u",
+        "Error_Path": "scheduler.idea-test.us-east-2.local:/tmp/rc17h-j2.e587",
+        "Hold_Types": "u",
+        "Job_Name": "rc17h-j2",
+        "Job_Owner": "researcher2@scheduler.idea-test.us-east-2.local",
+        "Join_Path": "n",
+        "Keep_Files": "n",
+        "Mail_Points": "a",
+        "Output_Path": "scheduler.idea-test.us-east-2.local:/tmp/rc17h-j2.o587",
+        "Priority": "0",
+        "Rerunable": "1",
+        "Resource_List": {
+          "cluster_name": "idea-test",
+          "instance_type": "c5.large",
+          "job_group": "gab40a040",
+          "job_uid": "CMRaPd6ai7RQTjfrwjLW9J",
+          "ncpus": "1",
+          "nodect": "1",
+          "place": "free",
+          "provisioning_time": "1795131652765",
+          "select": "1:ncpus=1:compute_node=idea-test-test-ondemand-587",
+          "stack_id": "arn:aws:cloudformation:us-east-2:123456789012:stack/idea-test-test-ondemand-587/a845d6f0-e472-11f1-b161-06533ce35701"
+        },
+        "Submit_arguments": "<jsdl-hpcpa:Argument>-N</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>rc17h-j2</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>-q</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>test</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>-l</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>instance_type=c5.large</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>--</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>/bin/sleep</jsdl-hpcpa:Argument><jsdl-hpcpa:Argument>300</jsdl-hpcpa:Argument>",
+        "argument_list": "<jsdl-hpcpa:Argument>300</jsdl-hpcpa:Argument>",
+        "comment": "Job held by root on Thu Nov 19 23:41:41 2026",
+        "ctime": "1795131647",
+        "egroup": "researcher2-user-group",
+        "eligible_time": "00:00:00",
+        "estimated": "",
+        "euser": "researcher2",
+        "id": "587.scheduler",
+        "job_state": "H",
+        "mtime": "1795131701",
+        "project": "default",
+        "qtime": "1795131647",
+        "queue": "job-shared",
+        "queue_rank": "1795131648408232",
+        "queue_type": "1",
+        "resources_used": "",
+        "schedselect": "1:ncpus=1:compute_node=idea-test-test-ondemand-587",
+        "server": "scheduler",
+        "substate": "20"
+      },
+      "requestor": "root",
+      "requestor_host": "scheduler.idea-test.us-east-2.local",
+      "src_queue": "test",
+      "timestamp": 1795131701516,
+      "type": "movejob"
+    }
   }
- }
 }
