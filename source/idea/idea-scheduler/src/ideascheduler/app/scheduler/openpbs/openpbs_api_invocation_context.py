@@ -336,17 +336,22 @@ class OpenPBSAPIInvocationContext:
             self._job.job_uid = job_uid
 
             self._job_validation_result: Optional[JobValidationResult] = None
-            self._job_validation_result = self.job_builder.validate()
-            if carried_group and (
-                self._bound_to_capacity() or self._moved_job_is_bound()
-            ):
+            moved_bound = self._moved_job_is_bound()
+            if moved_bound:
+                # decided first: the move cannot change the job's node, so its request is
+                # not checked in the destination queue and the owner reads one reason
+                self._job_validation_result = JobValidationResult(results=[])
+            else:
+                self._job_validation_result = self.job_builder.validate()
+            if carried_group and (self._bound_to_capacity() or moved_bound):
                 # a job on a stack keeps the group that names the stack
                 self._job.job_group = carried_group
                 self._job.params.job_group = carried_group
             self._refuse_move_of_bound_job(queue_name)
-            self._refuse_move_keeping_another_queues_fsx(
-                queue_profile, queue_name, moved_fsx
-            )
+            if not moved_bound:
+                self._refuse_move_keeping_another_queues_fsx(
+                    queue_profile, queue_name, moved_fsx
+                )
 
         except exceptions.SocaException as e:
             if e.error_code in (

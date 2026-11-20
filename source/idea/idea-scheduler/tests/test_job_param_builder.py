@@ -4007,3 +4007,47 @@ def test_an_unchanged_job_draws_the_same_subnet_on_every_read(context, monkeypat
     assert len({subnet(f'uid{n}', str(n)) for n in range(100, 120)}) > 1
     # submission has no PBS id yet, and draws what the first read draws (B13)
     assert subnet(job_id=None) == subnet()
+
+
+@pytest.mark.parametrize(
+    'cluster_name, stack',
+    [
+        ('idea-dev', 'idea-dev-test-ondemand-597'),
+        ('idea-dev', 'idea-dev-job-shared-ondemand-g06692ffa'),
+        ('idea2', 'idea2-normal-spot-1234'),
+        ('c1-prod-2', 'c1-prod-2-keepforever-abc12'),
+        ('ideamock', 'ideamock-normal-ondemand-77'),
+    ],
+)
+def test_a_stack_name_the_provisioner_makes_passes_the_compute_stack_check(
+    context, monkeypatch, cluster_name, stack
+):
+    # live run 3: the check stripped the hyphens from the cluster name, while stacks keep
+    # them (SocaJob.get_compute_stack), so a job carrying its real node was refused
+    monkeypatch.setattr(context, 'cluster_name', lambda: cluster_name)
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'compute_node': stack,
+        },
+    )
+    messages = [entry.message for entry in result.validation_result.results]
+    assert not any('compute_stack' in (message or '') for message in messages)
+
+
+def test_a_stack_of_another_cluster_is_still_refused(context, monkeypatch):
+    monkeypatch.setattr(context, 'cluster_name', lambda: 'idea-dev')
+    result = build_and_validate(
+        context=context,
+        params={
+            'nodes': 1,
+            'cpus': 1,
+            'instance_type': 'c5.large',
+            'compute_node': 'idea-other-test-ondemand-597',
+        },
+    )
+    messages = [entry.message for entry in result.validation_result.results]
+    assert any('compute_stack must match' in (message or '') for message in messages)

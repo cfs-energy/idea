@@ -177,3 +177,32 @@ def test_every_captured_submission_event_gets_an_answer_not_an_internal_error(
         # job 587, bound to a node of queue test, moved to job-shared
         assert result.accept is False
         assert 'This job already has a node from queue test' in message
+
+
+def test_a_bound_move_gets_exactly_the_one_guidance_line(context, profile, monkeypatch):
+    # live run 3 (N-R3-1): the refusal also listed the destination's EFA reason and a
+    # compute_stack pattern error that read as internal
+    from test_job_project_default import _validate_hook
+
+    monkeypatch.setattr(context, 'cluster_name', lambda: 'idea-test')
+    monkeypatch.setattr(context, 'job_monitor', Mock())
+    profile.default_job_params = SocaJobParams(
+        instance_types=['c5n.18xlarge'], enable_efa_support=True
+    )
+    api_context = Mock(context=context)
+    api_context.get_request_payload_as.return_value = OpenPBSHookRequest(
+        event=event('movejob_bound')
+    )
+    hook = OpenPBSAPIInvocationContext(api_context)
+    result = _validate_hook(context, monkeypatch, hook)
+    assert result.accept is False
+    lines = [
+        line[2:]
+        for line in result.formatted_user_message.splitlines()
+        if line.startswith('- ')
+    ]
+    assert lines == [
+        'This job already has a node from queue test, so it cannot be moved to queue '
+        'job-shared. Delete it and submit it to queue job-shared, or move a job before '
+        'it is given a node.'
+    ]

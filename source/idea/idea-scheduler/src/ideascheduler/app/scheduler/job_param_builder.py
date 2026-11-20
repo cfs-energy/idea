@@ -3915,13 +3915,17 @@ class ComputeStackParamBuilder(BaseParamBuilder):
         if compute_stack.strip().lower() == 'tbd':
             return True
 
-        def sanitize(token) -> str:
-            return token.strip().lower().replace('-', '').replace('_', '')
-
-        cluster_name = self.soca_context.cluster_name()
-        compute_stack_prefix = sanitize(cluster_name)
-
-        pattern = compute_stack_prefix + '-[a-z0-9-]{5,50}'
+        # the provisioner names a stack <cluster name>-... with the name as it is
+        # (SocaJob.get_compute_stack); the hyphen-less form is kept for any older stack
+        cluster_name = self.soca_context.cluster_name().strip().lower()
+        prefixes = sorted(
+            {cluster_name, cluster_name.replace('-', '').replace('_', '')}
+        )
+        pattern = (
+            '('
+            + '|'.join(re.escape(prefix) for prefix in prefixes)
+            + ')-[a-z0-9-]{5,50}'
+        )
         if not re.fullmatch(pattern, compute_stack):
             self.add_validation_entry(
                 param=constants.JOB_PARAM_COMPUTE_STACK,
