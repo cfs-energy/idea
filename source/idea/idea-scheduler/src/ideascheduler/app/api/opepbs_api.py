@@ -55,6 +55,21 @@ def edited_job_id(pbs_context) -> Optional[str]:
     return None
 
 
+def edit_select(pbs_context, compute_node: str) -> Optional[str]:
+    """
+    the selector to write, or None to leave the stored one exactly as it is. a modifyjob
+    writes one only when the edit sets select, as given, naming compute_node: the edit
+    object holds only what changed, and a selector rebuilt from it from the node count
+    dropped every chunk's CPUs, memory and MPI ranks (rc19: '1:ncpus=1' became '1')
+    """
+    if pbs_context.event.type != 'modifyjob':
+        return pbs_context.job_select(compute_node)
+    new_select = (pbs_context.event.job.Resource_List or {}).get('select')
+    if not new_select:
+        return None
+    return select_compute_node(new_select, compute_node)
+
+
 def pinned_fsx_lustre(job) -> Dict[str, str]:
     """
     a queue's default existing FSx is resolved here, at submission, and written to the
@@ -201,7 +216,7 @@ class OpenPBSAPI(BaseAPI):
                 )
 
             elif Utils.is_true(job.provisioning_options.keep_forever):
-                select = pbs_context.job_select(job.get_compute_stack())
+                select = edit_select(pbs_context, job.get_compute_stack())
 
                 # accepted must be True here, as below: an unset value rolls back the
                 # dedupe key and a retried submission queues a second copy
@@ -216,7 +231,7 @@ class OpenPBSAPI(BaseAPI):
                         project=job.project,
                         formatted_user_message=None,
                         resources_updated={
-                            'select': select,
+                            **({'select': select} if select else {}),
                             'job_uid': job.job_uid,
                             'job_group': job.get_job_group(),
                             'cluster_name': job.cluster_name,
@@ -262,7 +277,9 @@ class OpenPBSAPI(BaseAPI):
                         )
                     )
                 else:
-                    resources_updated['select'] = pbs_context.job_select('tbd')
+                    select = edit_select(pbs_context, 'tbd')
+                    if select:
+                        resources_updated['select'] = select
                     resources_updated['stack_id'] = 'tbd'
                     # signal the job monitor as late as possible: the job is not
                     # visible in the scheduler until this hook response is accepted
