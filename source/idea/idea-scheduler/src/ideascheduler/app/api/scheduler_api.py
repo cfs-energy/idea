@@ -250,7 +250,9 @@ def open_jobs_dir(jobs_dir: str, user: str, group: str) -> int:
     open the owner's jobs folder, creating it when missing. it is created and opened
     relative to the opened home folder, and a new one is handed to the owner through its
     descriptor. a link there is used only when the folder it reaches already belongs to the
-    owner. the caller works through the returned descriptor and closes it.
+    owner. the caller works through the returned descriptor and closes it. the caller
+    resolves the account first; a folder this call made and could not hand over is removed,
+    so nothing in the home is left owned by root.
     """
     home, name = os.path.split(jobs_dir)
     try:
@@ -259,12 +261,14 @@ def open_jobs_dir(jobs_dir: str, user: str, group: str) -> int:
         raise exceptions.general_exception(
             f'the home folder {home} does not exist. ask an administrator to create it.'
         )
+    created = False
+    fd = None
     try:
         try:
             os.mkdir(name, dir_fd=home_fd)
             created = True
         except FileExistsError:
-            created = False
+            pass
         try:
             fd = os.open(
                 name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home_fd
@@ -282,15 +286,19 @@ def open_jobs_dir(jobs_dir: str, user: str, group: str) -> int:
                     f'{jobs_dir} is not a folder or a link to one. remove it and try again.'
                 )
             linked = True
-    finally:
-        os.close(home_fd)
-    try:
         info = os.fstat(fd)
-        # a folder made here a moment ago belongs to this process and is still empty
-        fresh = created and not linked and info.st_uid == os.geteuid()
-        fresh = fresh and not os.listdir(fd)
+        # a folder in the home itself (not a link), owned by this process and empty: made
+        # here a moment ago, or left by an earlier submission that could not hand it over
+        # (before 26.11.2 a user the scheduler host could not resolve yet locked themself
+        # out this way). either is handed to the owner
+        fresh = (
+            stat.S_ISDIR(info.st_mode)
+            and not linked
+            and info.st_uid == os.geteuid()
+            and not os.listdir(fd)
+        )
         if not stat.S_ISDIR(info.st_mode) or (
-            info.st_uid != account_uid(user) and not fresh
+            not fresh and info.st_uid != account_uid(user)
         ):
             raise exceptions.general_exception(
                 f'{jobs_dir} does not belong to {user}. ask an administrator to fix its owner.'
@@ -299,8 +307,17 @@ def open_jobs_dir(jobs_dir: str, user: str, group: str) -> int:
             chown_fd(fd, user=user, group=group)
         return fd
     except BaseException:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
+        if created:
+            # never leave a root-owned folder behind in the owner's home
+            try:
+                os.rmdir(name, dir_fd=home_fd)
+            except OSError:
+                pass
         raise
+    finally:
+        os.close(home_fd)
 
 
 class JobSubmissionEntry:
@@ -690,6 +707,16 @@ class SchedulerAPI(BaseAPI):
         job_submit_script = os.path.join(job_submission_dir, script_name)
 
         group_name = self.group_name_helper.get_user_group(job_owner)
+        # the account is resolved before anything is made in the home: the scheduler host
+        # learns a new user at its next user sync (IDEA_USER_SYNC_INTERVAL, 60 s)
+        try:
+            account_uid(job_owner)
+        except KeyError:
+            raise exceptions.soca_exception(
+                errorcodes.JOB_SUBMISSION_FAILED,
+                f'Your account {job_owner} is not yet known to the scheduler host. Try '
+                f'again in a minute.',
+            )
 
         def write_script() -> int:
             # defense in depth: the resolved target must resolve to a direct child of the
