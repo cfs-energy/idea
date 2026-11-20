@@ -26,7 +26,10 @@ from ideadatamodel import (
     SocaScalingMode,
 )
 from ideasdk.utils import Utils
-from ideascheduler.app.scheduler.openpbs.openpbs_model import OpenPBSJob
+from ideascheduler.app.scheduler.openpbs.openpbs_model import (
+    OpenPBSJob,
+    epoch_millis_time,
+)
 
 from typing import Dict, Optional, List
 import arrow
@@ -220,11 +223,9 @@ class OpenPBSConverter:
             launch_time = arrow.get(launch_time).datetime
 
         # provisioning_time (millis)
-        provisioning_time = Utils.get_value_as_int(
-            'provisioning_time', pbs_resources_available
+        provisioning_time = epoch_millis_time(
+            (pbs_resources_available or {}).get('provisioning_time')
         )
-        if provisioning_time:
-            provisioning_time = arrow.get(provisioning_time).datetime
 
         compute_stack = Utils.get_value_as_string(
             'compute_node', pbs_resources_available
