@@ -269,7 +269,11 @@ def shared_storage_entries(config, logger=None) -> List[tuple]:
         storage = storage.as_plain_ordered_dict()
     entries = []
     for name, entry in storage.items():
-        if isinstance(entry, dict) and entry.get('provider'):
+        if not isinstance(entry, dict):
+            # a plain setting under shared-storage (deployment_id, security_group_id), not
+            # a file system
+            continue
+        if entry.get('provider'):
             entries.append((name, entry))
             continue
         if name not in _skipped_storage:

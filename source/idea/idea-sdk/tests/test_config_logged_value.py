@@ -210,3 +210,18 @@ def test_the_bake_inputs_read_storage_with_an_entry_being_removed():
     config.on_create(entry('fsx_lustre', 'shared-storage.scratch.provider'))
     config.on_create(entry('/half', 'shared-storage.half.mount_dir'))
     assert slow_inputs(config, None)['storage_providers'] == ['fsx_lustre']
+
+
+def test_plain_settings_under_shared_storage_are_not_file_systems():
+    # live run 2: every start warned for these two as file systems without a provider
+    from ideasdk.config import cluster_config
+
+    cluster_config._skipped_storage.clear()
+    config = following()
+    config.on_create(entry('efs', 'shared-storage.data.provider'))
+    config.on_create(entry('d-123', 'shared-storage.deployment_id'))
+    config.on_create(entry('sg-123', 'shared-storage.security_group_id'))
+    logger = Mock()
+    entries = cluster_config.shared_storage_entries(config, logger)
+    assert [name for name, _ in entries] == ['data']
+    logger.warning.assert_not_called()

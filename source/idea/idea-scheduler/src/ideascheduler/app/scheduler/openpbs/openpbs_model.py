@@ -34,10 +34,43 @@ from ideascheduler.app.scheduler.pbs_select import select_chunks, chunk_resource
 
 from typing import Optional, Union, Dict, List
 import arrow
+import logging
 import re
 from datetime import datetime
 
 DATE_FORMAT = 'ddd MMM D HH:mm:ss YYYY'
+
+_logger = logging.getLogger('openpbs-model')
+
+
+def epoch_millis_time(value: Optional[Union[int, str]]) -> Optional[datetime]:
+    """
+    a time IDEA stores in a PBS string resource as epoch milliseconds (provisioning_time):
+    a number from qstat, text from the hook, which sends every value as text
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text in ('', '0'):
+        return None
+    if Utils.is_int(text):
+        # arrow reads a millisecond timestamp as one
+        return arrow.get(int(text)).datetime
+    return arrow.get(text).datetime
+
+
+def read_soft(job_id: Optional[str], field: str, read, default=None):
+    """
+    one field of a job that does not parse is logged and left out: a status update or a
+    listing must not be dropped for an attribute it does not need
+    """
+    try:
+        return read()
+    except Exception as e:
+        _logger.warning(f'job {job_id}: {field} not read: {e}')
+        return default
+
+
 DEFAULT_QUEUE_NAME = 'normal'
 
 
@@ -370,7 +403,7 @@ class OpenPBSJob(SocaBaseModel):
             return None
         if 'provisioning_time' not in resources:
             return None
-        return arrow.get(resources['provisioning_time']).datetime
+        return epoch_millis_time(resources['provisioning_time'])
 
     def capacity_added(self) -> Optional[bool]:
         resources = self.Resource_List
@@ -613,7 +646,7 @@ class OpenPBSJob(SocaBaseModel):
 
         # exit status
         exit_status = self.Exit_status
-        dependent_job_ids = self.get_dependent_job_ids()
+        dependent_job_ids = read_soft(job_id, 'depend', self.get_dependent_job_ids)
 
         # a job qdel ended can still exit 0; only a finished job's substate says so
         terminated = None
@@ -621,17 +654,27 @@ class OpenPBSJob(SocaBaseModel):
             terminated = self.substate == openpbs_constants.JOB_SUBSTATE_TERMINATED
 
         params = self.get_soca_job_params()
-        execution_hosts = self.get_soca_execution_hosts(event=event)
+        execution_hosts = read_soft(
+            job_id, 'exec_host', lambda: self.get_soca_execution_hosts(event=event)
+        )
 
         # "qtime":"Wed Oct 20 01:41:21 2021"
         # "qtime": "1635187450" from execution hosts
-        queue_time = self.parse_pbs_datetime(self.qtime)
+        queue_time = read_soft(
+            job_id, 'qtime', lambda: self.parse_pbs_datetime(self.qtime)
+        )
 
         # "stime":"Wed Oct 20 01:41:21 2021"
         # "stime": "1635187450" from execution hosts
-        start_time = self.parse_pbs_datetime(self.stime)
+        start_time = read_soft(
+            job_id, 'stime', lambda: self.parse_pbs_datetime(self.stime)
+        )
 
-        end_time = self.get_end_time(state=state, start_time=start_time)
+        end_time = read_soft(
+            job_id,
+            'end time',
+            lambda: self.get_end_time(state=state, start_time=start_time),
+        )
 
         if job_builder is None:
             # the project is passed so params are rebuilt against the project's current
@@ -653,7 +696,9 @@ class OpenPBSJob(SocaBaseModel):
         # put the select expression as is for later use during provisioning
         job_params.custom_params = {'select': select}
 
-        provisioning_time = self.provisioning_time()
+        provisioning_time = read_soft(
+            job_id, 'provisioning_time', self.provisioning_time
+        )
 
         provisioned = False
         if select is not None:
@@ -673,14 +718,14 @@ class OpenPBSJob(SocaBaseModel):
             if started and is_wait_comment(comment):
                 comment = None
 
-        notifications = self.get_notifications()
+        notifications = read_soft(job_id, 'Mail_Points', self.get_notifications)
 
         # always this cluster's name: a job_uid-like resource the submitter can set must
         # not name the stack and tag of another cluster (SJP-09)
         cluster_name = context.cluster_name()
 
         # capacity_added
-        capacity_added = self.capacity_added()
+        capacity_added = read_soft(job_id, 'capacity_added', self.capacity_added)
 
         queue_type = None
         scaling_mode = None
