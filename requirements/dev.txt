@@ -16,12 +16,12 @@ asyncssh==2.24.1
     # via -r runtime.in
 blinker==1.9.0
     # via -r runtime.in
-boto3==1.43.123
+boto3==1.43.124
     # via
     #   -r runtime.in
     #   moto
     #   python-dynamodb-lock
-botocore==1.43.123
+botocore==1.43.124
     # via
     #   -r runtime.in
     #   boto3
@@ -45,7 +45,7 @@ click==8.5.0
     # via
     #   -r runtime.in
     #   cfn-flip
-coverage==7.17.0
+coverage==7.17.2
     # via pytest-cov
 cryptography==50.0.2
     # via
@@ -197,7 +197,7 @@ six==1.17.0
     # via
     #   cfn-flip
     #   python-dateutil
-sqlalchemy==2.1.6
+sqlalchemy==2.1.8
     # via
     #   alembic
     #   dataset
@@ -214,11 +214,11 @@ typing-extensions==4.16.0
     #   sanic
     #   sqlalchemy
     #   typing-inspection
-typing-inspection==0.4.4
+typing-inspection==0.4.5
     # via pydantic
 tzdata==2026.6
     # via arrow
-ujson==6.0.0
+ujson==6.1.0
     # via sanic
 urllib3==2.8.0
     # via
