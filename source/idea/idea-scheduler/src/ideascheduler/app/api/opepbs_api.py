@@ -281,6 +281,15 @@ class OpenPBSAPI(BaseAPI):
                     if select:
                         resources_updated['select'] = select
                     resources_updated['stack_id'] = 'tbd'
+                    if pbs_context.event.type == 'movejob':
+                        try:
+                            self._cache_moved_job(pbs_context, job)
+                        except Exception as e:
+                            # the move stands: the next read of the job corrects the cache,
+                            # and the source profile's queue skips a job no longer its own
+                            self.logger.warning(
+                                f'moved job not re-cached under queue {job.queue}: {e}'
+                            )
                     # signal the job monitor as late as possible: the job is not
                     # visible in the scheduler until this hook response is accepted
                     self.context.job_monitor.job_queued(job=job)
@@ -307,6 +316,26 @@ class OpenPBSAPI(BaseAPI):
                 OpenPBSHookResult(accept=False, formatted_user_message=message)
             )
             self.context.job_submission_tracker.fail(pbs_context.job_uid, e)
+
+    def _cache_moved_job(self, pbs_context: OpenPBSAPIInvocationContext, job):
+        """
+        a moved job is cached under its new queue and leaves the old queue's provisioning
+        queue: the cache kept the source queue, so the job was queued for provisioning under
+        the source profile again, its limits and scaling mode applied, and once read under
+        its new queue it could be provisioned a second time by the destination's
+        """
+        job_id = edited_job_id(pbs_context)
+        if not job_id:
+            return
+        cached = self.context.job_cache.get_job(job_id)
+        moved = job.model_copy(update={'job_id': job_id})
+        if cached is not None and cached.queue_type not in (None, moved.queue_type):
+            source = self.context.queue_profiles.get_provisioning_queue(
+                queue_profile_name=cached.queue_type
+            )
+            if source is not None:
+                source.delete(job_id=job_id)
+        self.context.job_cache.sync(jobs=[moved])
 
     def hook_job_status(self, pbs_context: OpenPBSAPIInvocationContext):
         try:
