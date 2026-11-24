@@ -506,6 +506,11 @@ class JobProvisioningQueue(JobProvisioningQueueProtocol):
                     if job.state != SocaJobState.QUEUED:
                         continue
 
+                    # taken out (it began running) or moved to a queue of another profile:
+                    # that profile's provisioning queue has it, with its own limits
+                    if queued_job.deleted or not self._is_queue_applicable(job.queue):
+                        continue
+
                     # decide if queue needs to be blocked
                     # if blocked, current job will be added to retry queue
                     if not self._check_limits(job=job, timeout=timeout):

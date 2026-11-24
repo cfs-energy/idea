@@ -430,6 +430,14 @@ def logged_alert(world):
     )
 
 
+def alert_lines(world):
+    return [
+        str(call.args[0])
+        for call in world.service._logger.error.call_args_list
+        if ALERT_MARKER in str(call)
+    ]
+
+
 def templates(world):
     return [notification.template_name for notification in world.sent]
 
@@ -854,19 +862,70 @@ def test_the_owner_folder_swapped_after_the_plan_is_not_followed(world, tmp_path
     assert (outside / '123' / 'precious').read_text() == 'keep'
 
 
-def test_a_removal_failure_stops_the_run_and_alerts(world, monkeypatch):
-    first = job_folder(world, '123')
-    second = job_folder(world, '124')
+def test_a_folder_that_fails_is_skipped_and_the_ones_behind_it_go(world, monkeypatch):
+    # review: one folder that kept failing (EPERM on an immutable file, EIO) stopped every
+    # run at that folder, so nothing behind it was ever removed and an alert fired each run
+    import errno
+
+    first = job_folder(world, '123', end_time=REAL_NOW + timedelta(minutes=1))
+    second = job_folder(world, '124', end_time=REAL_NOW + timedelta(minutes=2))
+    real = module.remove_folder
+
+    def immutable(parent_fd, name, *args, **kwargs):
+        if name == first.name:
+            raise PermissionError(errno.EPERM, 'Operation not permitted')
+        return real(parent_fd, name, *args, **kwargs)
+
+    monkeypatch.setattr(module, 'remove_folder', immutable)
+    outcome = run(world)
+    assert outcome['status'] == 'finished'
+    assert outcome['removed_folders'] == 1 and outcome['failed_folders'] == 1
+    assert first.exists() and not second.exists()
+    rows = [row for row in world.store.audit.values() if row['path'] == str(first)]
+    assert [row['status'] for row in rows] == ['started']
+    assert rows[0]['attempts'] == 1 and 'Operation not permitted' in rows[0]['message']
+    assert not logged_alert(world), 'no alert for a first try'
+
+
+def test_a_folder_that_keeps_failing_is_left_after_its_tries_with_one_alert(
+    world, monkeypatch
+):
+    import errno
+
+    folder = job_folder(world, '123')
     monkeypatch.setattr(
-        module, 'remove_folder', Mock(side_effect=OSError('input/output error'))
+        module,
+        'remove_folder',
+        Mock(side_effect=OSError(errno.EIO, 'Input/output error')),
     )
+    tries = []
+    for _ in range(module.MAX_REMOVAL_ATTEMPTS + 2):
+        outcome = run(world)
+        assert outcome['status'] == 'finished'
+        tries.append(outcome.get('failed_folders', 0))
+        world.now += timedelta(days=1)
+    assert tries == [1] * module.MAX_REMOVAL_ATTEMPTS + [0, 0], (
+        'no tries after the last'
+    )
+    rows = sorted(world.store.audit.values(), key=lambda row: row['started_at'])
+    assert [row['attempts'] for row in rows] == list(
+        range(1, module.MAX_REMOVAL_ATTEMPTS + 1)
+    )
+    assert rows[-1]['status'] == 'failed'
+    alerts = [line for line in alert_lines(world) if 'could not be removed in' in line]
+    assert len(alerts) == 1
+    assert str(folder) in alerts[0] and 'Input/output error' in alerts[0]
+    assert folder.exists()
+
+
+def test_a_safety_stop_during_removal_still_ends_the_run(world, monkeypatch):
+    job_folder(world, '123', end_time=REAL_NOW + timedelta(minutes=1))
+    second = job_folder(world, '124', end_time=REAL_NOW + timedelta(minutes=2))
+    _interrupt(world, monkeypatch, module.FolderInUse('written during removal'))
     outcome = run(world)
     assert outcome['status'] == 'stopped'
-    assert first.exists() and second.exists()
+    assert second.exists()
     assert logged_alert(world)
-    rows = list(world.store.audit.values())
-    assert [row['status'] for row in rows] == ['started'], 'an I/O error can be retried'
-    assert rows[0]['message'] == 'input/output error'
 
 
 def _interrupt(world, monkeypatch, error, entries=7):
