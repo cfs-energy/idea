@@ -448,8 +448,11 @@ class PbsServerSuffix(unittest.TestCase):
 class SiteHook(unittest.TestCase):
     """the login node runs the site's hook before sshd accepts; a failure never stops the start"""
 
-    def run_block(self, cluster_home, owner_uid=0, digest='match', unreadable=False):
-        """digest: 'match' configures the hook's own SHA-256, None none, anything else that value"""
+    def run_block(
+        self, cluster_home, owner_uid=0, digest='match', unreadable=False, swap=None
+    ):
+        """digest: 'match' configures the hook's own SHA-256, None none, anything else that value;
+        swap: content written over the shared hook as soon as a digest has been taken"""
         import hashlib
         import subprocess
 
@@ -472,6 +475,13 @@ class SiteHook(unittest.TestCase):
         if unreadable:
             # root reads any mode here, so the read failure is stood in
             stub += 'cat() { [[ "$1" != */userdata_customizations.sh ]] && command cat "$@"; }\n'
+        if swap is not None:
+            # someone who can write the shared directory replaces the hook between reads
+            stub += (
+                'sha256sum() { command sha256sum "$@"; printf %s '
+                + shlex.quote(swap)
+                + ' > "${SITE_HOOK}"; }\n'
+            )
         # the set-id strip changes the machine it runs on; SetIdStripModes and the image check
         # run the real one. The minute-by-minute recheck runs for the task's life; its line is
         # checked as text.
@@ -530,20 +540,35 @@ class SiteHook(unittest.TestCase):
             digest = self.digest(hook)
             result = self.run_block(tmp, digest=None)
         self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        # the task-local copy whose SHA-256 the warning printed, not the shared file
+        ran = lines.pop(2)
+        self.assertTrue(ran.startswith('ran /') and ran != f'ran {hook}', ran)
         self.assertEqual(
-            result.stdout.splitlines(),
+            lines,
             [
                 f'WARNING: site hook {hook} runs without a checksum; set'
                 f' bastion-host.site_hook_sha256 to {digest} so only this content runs'
                 ' (set it again after each edit)',
                 f'running site hook {hook}',
-                # the shared file itself, as before this release
-                f'ran {hook}',
                 'clearing set-id bits the site hook may have restored on image files',
                 'strip-ran --image-list',
                 'reached-sshd',
             ],
         )
+
+    def test_what_runs_is_the_content_whose_digest_was_logged(self):
+        for digest in (None, 'match'):
+            with self.subTest(digest=digest), tempfile.TemporaryDirectory() as tmp:
+                hook = self.write_hook(tmp, 'echo original\n')
+                logged = self.digest(hook)
+                result = self.run_block(tmp, digest=digest, swap='echo swapped\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lines = result.stdout.splitlines()
+                self.assertIn('original', lines)
+                self.assertNotIn('swapped', lines)
+                self.assertIn(logged, lines[0])
+                self.assertEqual(hook.read_text(), 'echo swapped\n')
 
     def test_the_checked_copy_runs_not_the_shared_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -130,9 +130,9 @@ fi
 # system: tools users expect on the login node. It runs as root, so only a file root owns and no
 # one else can write (a desktop user with sudo can write to /apps). Any client of that file system
 # that has root can still replace it, so a site can pin it: with bastion-host.site_hook_sha256
-# configured (given to this task as IDEA_SITE_HOOK_SHA256) it runs only when its SHA-256 matches,
-# and what runs is the checked task-local copy. Without one it runs as before, with a warning
-# that prints the value to set. It gets two minutes, its output goes to the task log, and sshd
+# configured (given to this task as IDEA_SITE_HOOK_SHA256) it runs only when its SHA-256 matches.
+# Without one it runs as before, with a warning that prints the value to set. Either way what
+# runs is the task-local copy whose SHA-256 was checked or printed. It gets two minutes, its output goes to the task log, and sshd
 # starts whatever it did.
 SITE_HOOK="${IDEA_CLUSTER_HOME:-}/${IDEA_MODULE_ID:-bastion-host}/userdata_customizations.sh"
 if [[ -n "${IDEA_CLUSTER_HOME:-}" && -f "${SITE_HOOK}" ]]; then
@@ -157,7 +157,8 @@ if [[ -n "${IDEA_CLUSTER_HOME:-}" && -f "${SITE_HOOK}" ]]; then
   elif [[ -z "${HOOK_WANT}" ]]; then
     echo "WARNING: site hook ${SITE_HOOK} runs without a checksum; set bastion-host.site_hook_sha256 to ${HOOK_GOT} so only this content runs (set it again after each edit)"
     echo "running site hook ${SITE_HOOK}"
-    HOOK_RUN="${SITE_HOOK}"
+    # the copy whose SHA-256 is printed, not a second read of the shared file
+    HOOK_RUN="${HOOK_COPY}"
   elif [[ "${HOOK_GOT}" != "${HOOK_WANT}" ]]; then
     echo "skipping site hook ${SITE_HOOK}: its SHA-256 ${HOOK_GOT} is not the configured ${HOOK_WANT}"
   else
